@@ -163,7 +163,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContext(ctx contex
 	}
 	if err := ctx.Err(); err != nil {
 		closeView()
-		return view, nil, err
+		return columnPhysicalScanSnapshotView{}, nil, err
 	}
 	return view, closeView, nil
 }
