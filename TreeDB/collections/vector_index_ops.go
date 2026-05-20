@@ -136,11 +136,14 @@ func (c *Collection) probeColumnGraphVectorIndexRebuild(name string, start time.
 		return VectorIndexStatus{}, true, err
 	}
 	if catalog == nil {
-		return VectorIndexStatus{}, true, errCollectionNotFound
+		// The pre-lock probe is opportunistic. A missing catalog/definition can
+		// still become visible after the native path takes the mutation barrier
+		// and flushes buffered writes, so fall through instead of failing early.
+		return VectorIndexStatus{}, false, nil
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
-		return VectorIndexStatus{}, true, ErrIndexNotFound
+		return VectorIndexStatus{}, false, nil
 	}
 	if vectorIndexDefinitionStrategy(def) != VectorIndexStrategyColumnGraph {
 		return VectorIndexStatus{}, false, nil
