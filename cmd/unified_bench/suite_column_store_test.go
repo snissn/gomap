@@ -635,6 +635,15 @@ func TestMarkdownCodeTableTextPreservesBoundaryWhitespaceM14C(t *testing.T) {
 	}
 }
 
+func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) {
+	if got, want := markdownTableText(`a\|b|c\\|d`), `a\|b\|c\\\|d`; got != want {
+		t.Fatalf("markdownTableText escaped pipes=%q want %q", got, want)
+	}
+	if got := markdownCodeTableText("\r\n"); got != markdownTableEmptyCell {
+		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)
+	}
+}
+
 func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
 		Profile:                "durable",
