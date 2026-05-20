@@ -380,6 +380,22 @@ func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing
 	}
 }
 
+func TestColumnStoreBenchRunFallsBackToRowsForLegacyArtifactsM14B(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", Rows: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
+			{Name: "q2", Rows: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if math.Abs(got-1000) > 1e-9 {
+		t.Fatalf("aggregate rows/sec=%f want 1000 from legacy rows fallback", got)
+	}
+}
+
 func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
 		Profile:                "durable",
@@ -1386,7 +1402,11 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 	manager := collections.NewCollectionManager(db)
 	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathSerialColumnScan)); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1417,8 +1437,21 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen collection: %v", err)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before asset removal: %v", err)
+	}
+	db = nil
 	if err := os.RemoveAll(backenddb.ColumnAssetRootDirPath(dir)); err != nil {
 		t.Fatalf("remove column asset root: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen after asset removal: %v", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	collection, err = manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection after asset removal: %v", err)
 	}
 	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan)
 	if !errors.Is(err, os.ErrNotExist) {
