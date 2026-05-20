@@ -120,9 +120,6 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.BytesEligible += entry.Bytes
 		eligible = append(eligible, entry)
 	}
-	if opts.DryRun {
-		return stats, nil
-	}
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
 		return stats, err
 	}
