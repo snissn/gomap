@@ -463,7 +463,47 @@ columns  declared column descriptors
 rows     versioned row payloads
 ```
 
-Version 2 row payloads are:
+Version 4 is the current writer format. It extends column descriptors with
+`vector_dims` so `float32_vector` assets can validate fixed-width row values:
+
+```text
+string   ColumnName
+string   ColumnPath
+string   ValueType          // bool, int64, float32, double, string,
+                            // float32_vector, adjacency_list
+bool     Nullable
+bool     Dictionary
+u64      VectorDims         // non-zero only for float32_vector
+```
+
+Within each non-deleted version 4 row, every declared column value entry is:
+
+```text
+string   ValueType
+bool     Null
+bool     Present            // false represents an omitted nullable JSON path
+payload  omitted when Present=false or Null=true
+```
+
+Payload encodings are:
+
+```text
+bool             bool
+u64              int64 bits
+u32              float32 bits
+u64              float64 bits
+string           string
+u64 + u32[N]     float32_vector bits
+u64 + u32[N]     adjacency_list uint32 ordinals
+```
+
+Version 3 row value entries added the `Present` flag shown above but did not
+encode `vector_dims` in column descriptors. Version 2 row value entries omitted
+`Present`; every non-deleted declared-column entry was encoded as `ValueType`,
+`Null`, and an optional payload when `Null=false`. Version 4 keeps the version 3
+row value-entry layout and extends each column descriptor with `VectorDims`.
+
+Version 2 and later row records include delete state:
 
 ```text
 bytes    RowID
@@ -485,7 +525,7 @@ values   declared column values
 ```
 
 M12C and later decoders may read version 1 as `Deleted=false` for pre-v2 assets.
-Writers emit version 2.
+Writers emit version 4.
 
 ## 8. Commit-Log Segment Format
 
