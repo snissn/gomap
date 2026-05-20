@@ -741,21 +741,17 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 				return nil, err
 			}
 		}
-		if entry.IsDir() {
-			continue
-		}
 		path := columnAssetReachabilitySegmentPath(segmentDir, entry.Name())
-		if entry.Type()&os.ModeSymlink != 0 {
-			info, err := os.Lstat(path)
-			if err != nil {
-				return nil, err
-			}
-			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
-			continue
-		}
-		info, err := entry.Info()
+		info, err := os.Lstat(path)
 		if err != nil {
 			return nil, err
+		}
+		if info.IsDir() {
+			continue
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			continue
 		}
 		if !info.Mode().IsRegular() {
 			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
@@ -923,6 +919,9 @@ func subtractColumnAssetReachabilityIntervals(in, exclude []columnAssetReachabil
 			excludeIdx++
 		}
 		for j := excludeIdx; j < len(exclude) && exclude[j].start < interval.end; j++ {
+			if exclude[j].end <= start {
+				continue
+			}
 			if exclude[j].start > start {
 				out = append(out, columnAssetReachabilityInterval{start: start, end: minColumnAssetReachabilityInt64(exclude[j].start, interval.end)})
 			}
@@ -932,6 +931,9 @@ func subtractColumnAssetReachabilityIntervals(in, exclude []columnAssetReachabil
 			if start >= interval.end {
 				break
 			}
+		}
+		for excludeIdx < len(exclude) && exclude[excludeIdx].end <= interval.end {
+			excludeIdx++
 		}
 		if start < interval.end {
 			out = append(out, columnAssetReachabilityInterval{start: start, end: interval.end})

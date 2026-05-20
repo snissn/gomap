@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -883,6 +884,30 @@ func TestColumnAssetReachabilityByteAccountingSaturatesM15A(t *testing.T) {
 		{start: 0, end: 1},
 	}); got != math.MaxInt64 {
 		t.Fatalf("interval length=%d want saturated MaxInt64", got)
+	}
+}
+
+func TestColumnAssetReachabilitySubtractIntervalsInterleavedM15A(t *testing.T) {
+	got := subtractColumnAssetReachabilityIntervals(
+		[]columnAssetReachabilityInterval{
+			{start: 0, end: 10},
+			{start: 20, end: 30},
+			{start: 40, end: 50},
+		},
+		[]columnAssetReachabilityInterval{
+			{start: 2, end: 4},
+			{start: 6, end: 22},
+			{start: 25, end: 45},
+		},
+	)
+	want := []columnAssetReachabilityInterval{
+		{start: 0, end: 2},
+		{start: 4, end: 6},
+		{start: 22, end: 25},
+		{start: 45, end: 50},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("subtract intervals=%+v want %+v", got, want)
 	}
 }
 
