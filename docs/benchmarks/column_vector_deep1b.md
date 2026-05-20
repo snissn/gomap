@@ -162,12 +162,15 @@ storage-order control and `ivf_kmeans` as a deterministic cosine k-means
 locality builder over the base prefix. In both modes, it ranks granules by
 centroid similarity and reports routing recall separately from codec recall
 inside the selected granule union. The codec rows include full-dim
-per-dimension scalar u8/u4, local PCA int8 ranks, and optional trained global
-8-bit PQ/OPQ-style lanes. The PQ/OPQ lanes use held-out base-prefix rows for
+per-dimension scalar u8/u4, local PCA int8 ranks, optional trained global
+8-bit PQ/OPQ-style lanes, and an optional per-buildable-granule local
+residual-PQ lane. The global PQ/OPQ lanes use held-out base-prefix rows for
 codebook and rotation training and evaluate on a disjoint base slice; they are
-production/buildable codebook probes, not top100 oracle fits. A global
-centroid-residual PQ scout is available; local residual-PQ/LOPQ remains
-pending.
+production/buildable codebook probes, not top100 oracle fits. The local
+residual-PQ lane fits one residual codebook per sealed buildable granule and
+then scores stored per-row codes, so it is a production-shaped granule probe.
+It is still LOPQ-lite, not full LOPQ: there is no learned local OPQ rotation
+yet.
 
 ## Manual Commands
 
@@ -430,8 +433,9 @@ Interpretation:
 - Global centroid-residual PQ is measured and does **not** move the frontier in
   this shape. Its candidate gates, score error, and scan cost are effectively
   the same as global PQ, with only the extra f16 residual centroid in metadata.
-  The next residual-codebook question is local residual PQ / LOPQ, not more
-  global-centroid subtraction.
+  The next residual-codebook question is per-granule residual coding, not more
+  global-centroid subtraction; the local residual-PQ section below starts that
+  LOPQ-lite comparison.
 - OPQ-style learned rotation is now measured, but it is not promoted yet. It
   slightly improves mean score error in some rows, but it adds about
   `0.56 B/vector` metadata at this eval size, takes roughly `3.9-4.3x` PQ
@@ -444,6 +448,77 @@ Interpretation:
   and `6048 ms`. The method build milliseconds in the table are per-run encode
   costs for selected rows; production query-time would read stored codes
   instead.
+
+IVF/k-means buildable granule scout with per-granule local residual-PQ
+(`LOPQ-lite`) lanes:
+
+```sh
+OUT=/tmp/gomap_deep1b_buildable_local_residual_pq_ivf_q0_9_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_SCOUT=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_kmeans \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS=32768 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=4096 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=8 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES=0,1,2,3,4,5,6,7,8,9 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES=1,4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS=32,48,64,80,96 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_BYTES=32,48,64,80,96 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_LOCAL_RESIDUAL_PQ_BYTES=32,48,64,80,96 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS=8192 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BBuildableGranuleScout$' \
+  -count 1 \
+  -timeout=60m \
+  -v
+```
+
+Representative artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_local_residual_pq_ivf_q0_9_20260519_222818/report.md
+```
+
+This run fits one residual PQ codebook per buildable IVF granule. It is a
+sealed-granule storage probe rather than a top100 oracle fit, but it is still
+LOPQ-lite: the lane has local residual codebooks without local OPQ rotations.
+
+Selected aggregate rows:
+
+| Method | Top granules | Row-code B/vector | Metadata B/vector | p50 compressed top10 | Worst compressed top10 | Worst top10@20 | Worst top10@50 | Worst top20@50 | Avg score err | Avg scan ns/vector |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| global PQ 32B x8 | 1 | `32` | `3.50` | `7/10` | `5/10` | `7/10` | `10/10` | `19/20` | `0.01829` | `16.27` |
+| local residual PQ 32B x8 | 1 | `32` | `13.51` | `8/10` | `7/10` | `9/10` | `10/10` | `20/20` | `0.01396` | `16.65` |
+| local PCA rank32 int8 | 1 | `32` | `3.49` | `6/10` | `5/10` | `6/10` | `7/10` | `14/20` | `0.02206` | `25.30` |
+| global PQ 48B x8 | 1 | `48` | `3.50` | `8/10` | `7/10` | `10/10` | `10/10` | `20/20` | `0.00851` | `25.54` |
+| local residual PQ 48B x8 | 1 | `48` | `13.51` | `9/10` | `8/10` | `9/10` | `10/10` | `20/20` | `0.00673` | `25.84` |
+| scalar u4 reconstructed | 1 | `48` | `0.18` | `8/10` | `8/10` | `10/10` | `10/10` | `20/20` | `0.00961` | `984.61` |
+| global PQ 64B x8 | 4 | `64` | `3.50` | `9/10` | `7/10` | `10/10` | `10/10` | `20/20` | `0.00662` | `34.48` |
+| local residual PQ 64B x8 | 4 | `64` | `14.13` | `9/10` | `8/10` | `10/10` | `10/10` | `20/20` | `0.00543` | `33.98` |
+| local PCA rank64 int8 | 4 | `64` | `5.10` | `9/10` | `8/10` | `9/10` | `10/10` | `19/20` | `0.01114` | `52.89` |
+| global PQ 96B x8 | 4 | `96` | `3.50` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `0.00146` | `56.07` |
+| local residual PQ 96B x8 | 4 | `96` | `14.13` | `9/10` | `9/10` | `10/10` | `10/10` | `20/20` | `0.00126` | `55.66` |
+| scalar u8 reconstructed | 4 | `96` | `0.19` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `0.00056` | `976.13` |
+
+Interpretation:
+
+- Local residual-PQ is now measured as a per-buildable-granule residual
+  codebook lane, not as an official top100 oracle method.
+- At 32B/48B/64B row-code budgets it improves candidate gates and score error
+  over both global PQ and local PCA in the weakest rows, with PQ-like LUT scan
+  costs around `16-34 ns/vector`.
+- The improvement is not free. The local codebooks add about
+  `12.05 B/eval-vector` of metadata in this slice, and selected rows show
+  roughly `13.5-14.1 B/vector` metadata versus `3.5 B/vector` for global PQ.
+- Local residual-PQ training cost is materially higher: the five budgets train
+  per-granule codebooks in about `2.8-4.9 s` on this 32K eval slice, versus
+  about `0.7-1.2 s` for the global PQ codebooks.
+- At 80B/96B, the quality edge narrows and full-dim scalar/local-PCA lanes
+  remain competitive. Local residual-PQ is still a candidate generator, not a
+  final-rank replacement.
 
 ## Scope
 
@@ -968,8 +1043,10 @@ benchmark path:
 - Same-byte PQ/residual-PQ/OPQ baselines now cover the fixed Deep1B `D=96`
   budgets: local PCA `K=32/48/64/80/96` competes against
   32/48/64/80/96-byte global PQ, global centroid-residual PQ, and OPQ-style
-  codes on buildable IVF/k-means granules. The next extension is larger
-  query/train/eval coverage and local residual PQ/LOPQ-style cells.
+  codes on buildable IVF/k-means granules. A per-buildable-granule local
+  residual-PQ lane is now also measured as LOPQ-lite. The next extensions are
+  larger query/train/eval coverage, true local OPQ/LOPQ, and actual
+  graph/TreeDB granules.
 - Prioritize granule-local residual encoders: `centroid + residual code +
   compressed scan + exact rerank`, which matches the LOPQ-style lesson that
   local residuals are easier to encode than raw global vectors.
@@ -1028,8 +1105,9 @@ IVF/k-means buildable scout:
 - This is a buildable locality probe, not a trained-codebook result. The
   PQ/residual-PQ/OPQ scout above adds the first real train/eval split and
   metadata-amortized codebook accounting; global centroid-residual PQ is already
-  measured and did not beat global PQ, while local/LOPQ-style residual encoders
-  remain pending.
+  measured and did not beat global PQ. The local residual-PQ lane is now
+  measured as a LOPQ-lite per-granule residual codebook; true local OPQ/LOPQ
+  remains pending.
 
 Granule-native int8 micro-kernel smoke:
 
