@@ -372,8 +372,9 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		return false, ColumnQueryPlan{}
 	}
-	diag.Reason = "selected aggregate metadata"
-	diag.ScheduledGranules = 0
+	diag.Reason = "selected scan-backed aggregate metadata"
+	diag.ScheduledGranules = req.Capabilities.GranuleCount
+	diag.WorkerCount = 1
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}
 }
 

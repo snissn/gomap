@@ -124,6 +124,14 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 			if !plan.Diagnostics.RecoveryAuthoritative && plan.Kind != ColumnQueryPlanRowStoreBaseline && plan.Kind != ColumnQueryPlanBTreeIndexBaseline {
 				t.Fatalf("physical plan did not record recovery-authoritative manifest: %+v", plan.Diagnostics)
 			}
+			if tc.want == ColumnQueryPlanAggregateMetadata {
+				if plan.Diagnostics.ScheduledGranules != base.Capabilities.GranuleCount || plan.Diagnostics.WorkerCount != 1 {
+					t.Fatalf("aggregate metadata diagnostics=%+v want scan-backed granules=%d worker=1", plan.Diagnostics, base.Capabilities.GranuleCount)
+				}
+				if !strings.Contains(plan.Diagnostics.Reason, "scan-backed") {
+					t.Fatalf("aggregate metadata reason=%q want scan-backed disclosure", plan.Diagnostics.Reason)
+				}
+			}
 		})
 	}
 }
@@ -1245,6 +1253,7 @@ func TestColumnQueryPlannerM14BRoutesForcedPhysicalPlansFromManifestCapabilities
 				ForceKind:             ColumnQueryPlanAggregateMetadata,
 			},
 			wantKind: ColumnQueryPlanAggregateMetadata,
+			workers:  1,
 		},
 	}
 	for _, tc := range tests {
