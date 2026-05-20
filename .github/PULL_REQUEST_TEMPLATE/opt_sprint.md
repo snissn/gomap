@@ -45,18 +45,21 @@ Explicitly list what is intentionally NOT being done in this PR.
 ## Column Graph Native Workstream (#1646, if applicable)
 
 ### Copied/Adapted From Old Stack
+
 - Copied:
 - Adapted:
 - Oracle/comparator only:
 - Quarantined/not copied:
 
 ### Path Identity
+
 - Native reader:
 - Decoded comparator:
 - Legacy/native vector index:
 - Unsupported/fail-closed:
 
 ### Base And Dependency State
+
 - Base branch:
 - Base commit:
 - Base PR/head:
@@ -65,6 +68,7 @@ Explicitly list what is intentionally NOT being done in this PR.
 - Parent review fixes propagated:
 
 ### Evidence
+
 - Tests:
 - Benchmarks:
 - Status/fallback proof:
@@ -72,12 +76,14 @@ Explicitly list what is intentionally NOT being done in this PR.
 - Local regressions found/fixed:
 
 ### Test Plan Start
+
 - Milestone tasks targeted:
 - Tests to add before or with implementation:
 - Existing tests to preserve:
 - #1646 test-list changes made before implementation:
 
 ### Performance Plan Start
+
 - Relevant benchmarks/metrics for this PR:
 - Baseline/comparator command or reason not applicable:
 - Expected setup/search/materialization boundary:
@@ -85,6 +91,7 @@ Explicitly list what is intentionally NOT being done in this PR.
 - Local performance risks to watch:
 
 ### Test Plan Close
+
 - Additional tests found during implementation/review:
 - Tests added or changed:
 - Failing tests fixed:
@@ -92,6 +99,7 @@ Explicitly list what is intentionally NOT being done in this PR.
 - Residual untested gaps, if any:
 
 ### Performance Plan Close
+
 - Benchmark commands run:
 - Results summary with throughput/latency/allocations:
 - Before/after or baseline comparison:
@@ -99,6 +107,7 @@ Explicitly list what is intentionally NOT being done in this PR.
 - Remaining upstream or deferred costs:
 
 ### AI Review Loop
+
 - Codex latest-head review:
 - Copilot latest-head review:
 - CodeRabbit latest-head review:
