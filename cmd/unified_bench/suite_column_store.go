@@ -1247,7 +1247,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	}
 	lines, err := columnStoreSuitePhysicalQueryLines(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
 	if err != nil {
-		return columnStoreQueryExecution{}, err
+		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s line mapping: %w", queryName, plan.Kind, err)
 	}
 	diag := result.Diagnostics
 	workers := plan.Diagnostics.WorkerCount
@@ -1993,11 +1993,7 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
 		}
 		queryDuration += duration
-		rowsProcessed := q.RowsProcessed
-		if rowsProcessed == 0 {
-			rowsProcessed = q.Rows
-		}
-		queryRowsProcessed += rowsProcessed
+		queryRowsProcessed += columnStoreQueryEffectiveRowsProcessed(q)
 		results[columnStoreSuiteBenchMetricPrefix+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if queryDuration > 0 {
@@ -2021,6 +2017,16 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		TreeDBStats: map[string]map[string]string{columnStoreSuiteBenchDisplayName: stats},
 		DiskUsage:   map[string]dirDiskUsage{columnStoreSuiteBenchDisplayName: {TotalBytes: uint64(report.ByteAccounting.DBTotalBytes), TotalFiles: report.ByteAccounting.DBTotalFiles}},
 	}
+}
+
+func columnStoreQueryEffectiveRowsProcessed(q columnStoreQueryMetric) int {
+	if q.RowsProcessed != 0 {
+		return q.RowsProcessed
+	}
+	if q.Rows > 0 && q.RowMaterializations > 0 {
+		return q.Rows
+	}
+	return 0
 }
 
 func columnStoreSuitePruneMissingRuntimeDeltaArtifacts(paths columnStoreArtifactPaths) columnStoreArtifactPaths {
