@@ -59,6 +59,12 @@ func (forgedStorageMaintenancePlan) StorageMaintenancePlanToken() storagemainten
 	return storagemaintenance.Plan{}
 }
 
+type typedNilStorageMaintenancePlan struct{}
+
+func (*typedNilStorageMaintenancePlan) StorageMaintenancePlanToken() storagemaintenance.Plan {
+	panic("typed nil maintenance plan should fail closed before token access")
+}
+
 func mustRawKVCommandWALIntent(tb testing.TB, db *DB, key, value string) *CommandWALIntent {
 	tb.Helper()
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
@@ -335,6 +341,34 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 		nil,
 		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			t.Fatalf("maintenance system builder should not run for a forged maintenance plan")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenancePlanMissing) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePlanMissing", err)
+	}
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsTypedNilPlan(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	var plan *typedNilStorageMaintenancePlan
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		plan,
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  0,
+			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for a typed nil maintenance plan")
 			return nil, nil
 		},
 	)
