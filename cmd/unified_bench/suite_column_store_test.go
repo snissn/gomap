@@ -1252,7 +1252,7 @@ func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 		msg := err.Error()
 		for _, want := range []string{
 			"future_alias",
-			"supported=",
+			"accepted=",
 			"aliases=",
 			"serial-column-scan",
 			"aggregate-metadata",
