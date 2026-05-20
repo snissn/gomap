@@ -653,7 +653,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	rootName := collectionColumnManifestRootName(catalog.meta.Name)
 	rootID := catalog.rootID(rootName)
 	if rootID == 0 {
-		return fmt.Errorf("%w: active column manifest generation %d for %q root %q", errColumnManifestRootDescriptorMissing, identity.Generation, catalog.meta.Name, rootName)
+		return fmt.Errorf("%w: active column manifest generation %d for %q is missing root descriptor %q", errColumnManifestRootDescriptorMissing, identity.Generation, catalog.meta.Name, rootName)
 	}
 	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
@@ -663,11 +663,11 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 		return fmt.Errorf("collections: active column manifest root %d for %q is unreadable: %w", rootID, catalog.meta.Name, err)
 	}
 	if entry.Flags&node.FlagTombstone != 0 {
-		return fmt.Errorf("%w: active column manifest root %d for %q", errColumnManifestIdentityDeleted, rootID, catalog.meta.Name)
+		return fmt.Errorf("%w: active column manifest root %d for %q has deleted identity record", errColumnManifestIdentityDeleted, rootID, catalog.meta.Name)
 	}
 	record, err := decodeColumnManifestIdentityRecord(entry.Value)
 	if err != nil {
-		return fmt.Errorf("%w: active column manifest root %d for %q: %w", errColumnManifestIdentityInvalid, rootID, catalog.meta.Name, err)
+		return fmt.Errorf("%w: active column manifest root %d for %q has invalid identity record: %w", errColumnManifestIdentityInvalid, rootID, catalog.meta.Name, err)
 	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
 		return fmt.Errorf("%w for %q", errColumnManifestIdentityMismatch, catalog.meta.Name)
