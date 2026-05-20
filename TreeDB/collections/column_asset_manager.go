@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -270,7 +271,7 @@ func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreCon
 }
 
 func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32, error) {
-	segments, err := listColumnAssetReachabilitySegments(namespace.SegmentDir)
+	segments, err := listColumnAssetReachabilitySegments(context.Background(), namespace.SegmentDir)
 	if err != nil {
 		return 0, err
 	}

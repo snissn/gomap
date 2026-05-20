@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -109,6 +110,16 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 }
 
 func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScanSnapshotView, func(), error) {
+	return c.prepareColumnPhysicalScanSnapshotViewWithContext(context.Background())
+}
+
+func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContext(ctx context.Context) (columnPhysicalScanSnapshotView, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return columnPhysicalScanSnapshotView{}, nil, err
+	}
 	if c == nil {
 		return columnPhysicalScanSnapshotView{}, nil, errCollectionNil
 	}
@@ -120,9 +131,17 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScan
 		return columnPhysicalScanSnapshotView{}, nil, errCollectionDBNil
 	}
 	closeView := func() { _ = snap.Close() }
+	if err := ctx.Err(); err != nil {
+		closeView()
+		return columnPhysicalScanSnapshotView{}, nil, err
+	}
 
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
+		closeView()
+		return columnPhysicalScanSnapshotView{}, nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		closeView()
 		return columnPhysicalScanSnapshotView{}, nil, err
 	}
@@ -140,6 +159,10 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScan
 
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled)
 	if err != nil {
+		closeView()
+		return view, nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		closeView()
 		return view, nil, err
 	}
