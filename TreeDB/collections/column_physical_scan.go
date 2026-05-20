@@ -308,12 +308,11 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	}
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
-	for ordinal, assetRef := range view.AssetRefs {
+	start, step := columnPhysicalScanRefOrdinalPartition(req)
+	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {
+		assetRef := view.AssetRefs[ordinal]
 		if req.ShouldCancel != nil && req.ShouldCancel() {
 			return diag, errColumnPhysicalScanCancelled
-		}
-		if !columnPhysicalScanIncludesRefOrdinal(req, ordinal) {
-			continue
 		}
 		diag.ScheduledGranules++
 		ref := assetRef.Ref
@@ -341,11 +340,11 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	return diag, nil
 }
 
-func columnPhysicalScanIncludesRefOrdinal(req columnPhysicalScanRequest, ordinal int) bool {
+func columnPhysicalScanRefOrdinalPartition(req columnPhysicalScanRequest) (start int, step int) {
 	if req.RefOrdinalModulo <= 1 {
-		return true
+		return 0, 1
 	}
-	return ordinal%req.RefOrdinalModulo == req.RefOrdinalRemainder
+	return req.RefOrdinalRemainder, req.RefOrdinalModulo
 }
 
 func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) (columnPhysicalScanProjection, error) {
