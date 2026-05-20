@@ -156,14 +156,15 @@ but they do not prove TreeDB can build equivalent production granules and they
 do not validate codebook-trained methods such as PQ, OPQ, residual PQ, LOPQ,
 ScaNN/AVQ, QINCo, or Matryoshka.
 
-`TestColumnVectorGraphDeep1BBuildableGranuleScout` is an opt-in first
-production/buildable granule scout. It currently uses row-id-contiguous
-granules as a weak but buildable control, ranks granules by centroid similarity,
-then reports routing recall separately from codec recall inside the selected
-granule union. The initial codec rows are full-dim per-dimension scalar u8/u4
-and local PCA int8 ranks. The scout is deliberately not a PQ/OPQ/residual-PQ
-tournament yet; those methods require real train/eval splits and trained
-codebooks.
+`TestColumnVectorGraphDeep1BBuildableGranuleScout` is an opt-in
+production/buildable granule scout. It supports `row_id_contiguous` as a weak
+storage-order control and `ivf_kmeans` as a deterministic cosine k-means
+locality builder over the base prefix. In both modes, it ranks granules by
+centroid similarity and reports routing recall separately from codec recall
+inside the selected granule union. The initial codec rows are full-dim
+per-dimension scalar u8/u4 and local PCA int8 ranks. The scout is deliberately
+not a PQ/OPQ/residual-PQ tournament yet; those methods require real train/eval
+splits and trained codebooks.
 
 ## Manual Commands
 
@@ -280,6 +281,7 @@ First buildable row-id-contiguous granule scout:
 OUT=/tmp/gomap_deep1b_buildable_scout_q0_32768_$(date +%Y%m%d_%H%M%S)
 COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_SCOUT=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=row_id_contiguous \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS=32768 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=4096 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES=0 \
@@ -297,6 +299,31 @@ This writes `results.json` and `report.md` under `$OUT`. The routing table is
 the first-order production signal: row-id-contiguous granules are buildable but
 not expected to have nearest-neighbor locality, so codec recall is reported as
 conditional on whichever exact winners reached the selected granule union.
+
+IVF/k-means buildable granule scout:
+
+```sh
+OUT=/tmp/gomap_deep1b_buildable_ivf_q0_9_32768_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_SCOUT=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_kmeans \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS=32768 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=4096 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=8 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES=0,1,2,3,4,5,6,7,8,9 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES=1,4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS=32,64 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BBuildableGranuleScout$' \
+  -count 1 \
+  -v
+```
+
+This builder is buildable from the base prefix and is a stronger production
+locality scout than row-id order, but it is still not a trained-codebook PQ/OPQ
+result.
 
 ## Scope
 
@@ -855,8 +882,29 @@ First buildable-granule control:
 
 This is not production locality proof. Its value is that the harness now
 separates **routing recall** from **conditional codec recall**, which is the
-required shape for comparing future IVF/k-means, graph-neighborhood,
-visited-set, graph-sorted, and actual TreeDB granules.
+required shape for comparing future graph-neighborhood, visited-set,
+graph-sorted, and actual TreeDB granules.
+
+IVF/k-means buildable scout:
+
+- Report:
+  `/tmp/gomap_deep1b_buildable_ivf_q0_9_32768_20260519_205538/report.md`.
+- Regime: deterministic cosine k-means over the same `32768` base-row prefix,
+  `4096` target rows/granule, `8` clusters, queries `0..9`, granules ranked by
+  centroid similarity.
+- Routing is much stronger than row-id order but still not solved: top1 IVF
+  granule routes p50 `9/10` global exact top10 but worst `3/10`; top4 IVF
+  granules route p50 `10/10` top10, worst `8/10`, p50 `50/50` top50, worst
+  `41/50`, while scanning about `17.3K` candidate rows on average.
+- Conditional codec result: scalar u4 at `48 B/vector` preserves top10@20,
+  top10@50, and top20@50 across the q0..q9 routed unions but scans around
+  `972 ns/vector` in the current Go reconstruct path. Local PCA rank64 scans
+  around `53 ns/vector` and preserves top10@50/top20@50 well, but compressed
+  final top10 is still not reliable. Rank32 is too fragile on less coherent
+  routed unions.
+- This is a buildable locality probe, not a PQ/OPQ/residual-PQ result. The next
+  production tournament must train codebooks on real train/eval splits and
+  count metadata-amortized bytes.
 
 Granule-native int8 micro-kernel smoke:
 

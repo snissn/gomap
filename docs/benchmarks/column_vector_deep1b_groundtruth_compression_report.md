@@ -376,6 +376,74 @@ The interpretation is deliberately conservative:
   real train/eval splits, trained codebooks, and metadata-amortized bytes before
   they can make production claims.
 
+## IVF/K-Means Buildable Granule Scout
+
+The harness now also supports `COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_kmeans`.
+This trains deterministic cosine k-means centroids over the base prefix and
+assigns rows to IVF-style granules. Unlike official top100 clouds, this is a
+TreeDB-buildable locality probe. It is still not a PQ/OPQ/residual-PQ result:
+those methods still require separate train/eval splits, trained codebooks, and
+metadata accounting.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_ivf_q0_9_32768_20260519_205538/report.md
+```
+
+Run shape:
+
+| Field | Value |
+| --- | ---: |
+| Regime | `buildable_granule_scout` |
+| Builder | `ivf_kmeans` |
+| Base rows | `32768` |
+| Dims | `96` |
+| Target granule rows | `4096` |
+| Granules | `8` |
+| K-means iterations | `8` |
+| Queries | `0..9` |
+| Top granules | `1,4` |
+
+Routing improves sharply versus the row-id control, but it is not solved:
+
+| Selection | Queries | Avg candidate rows | p50 top10 routed | Worst top10 routed | p50 top20 routed | Worst top20 routed | p50 top50 routed | Worst top50 routed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 IVF granule | `10` | `4294.5` | `9/10` | `3/10` | `14/20` | `6/20` | `34/50` | `17/50` |
+| top4 IVF granules | `10` | `17304.9` | `10/10` | `8/10` | `20/20` | `17/20` | `50/50` | `41/50` |
+
+Conditional on the routed candidate union, the codec comparison now looks like
+this:
+
+| Selection | Method | Row-code B/vector | Metadata B/vector | p50 compressed top10 | Worst compressed top10 | p50 top10@20 | Worst top10@20 | p50 top10@50 | Worst top10@50 | p50 top20@50 | Worst top20@50 | Scan ns/vector |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 | `buildable_ivf_kmeans_local_pca_i8_rank32` | `32` | `3.67` | `7/10` | `4/10` | `9/10` | `8/10` | `10/10` | `9/10` | `20/20` | `16/20` | `25` |
+| top1 | `buildable_ivf_kmeans_scalar_u4_affine_per_dim_reconstructed` | `48` | `0.20` | `9/10` | `8/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `972` |
+| top1 | `buildable_ivf_kmeans_local_pca_i8_rank64` | `64` | `5.30` | `9/10` | `8/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `19/20` | `53` |
+| top1 | `buildable_ivf_kmeans_scalar_u8_affine_per_dim_reconstructed` | `96` | `0.20` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `975` |
+| top4 | `buildable_ivf_kmeans_local_pca_i8_rank32` | `32` | `3.50` | `6/10` | `5/10` | `9/10` | `6/10` | `10/10` | `9/10` | `18/20` | `16/20` | `26` |
+| top4 | `buildable_ivf_kmeans_scalar_u4_affine_per_dim_reconstructed` | `48` | `0.18` | `9/10` | `8/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `972` |
+| top4 | `buildable_ivf_kmeans_local_pca_i8_rank64` | `64` | `4.95` | `9/10` | `7/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `20/20` | `53` |
+| top4 | `buildable_ivf_kmeans_scalar_u8_affine_per_dim_reconstructed` | `96` | `0.18` | `10/10` | `9/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `980` |
+
+The production interpretation is:
+
+- IVF/k-means is a much stronger buildable locality builder than row-id order on
+  this prefix, but top1 routing has bad worst-query misses and top4 routing
+  scans roughly half of the 32K prefix.
+- Full SQ8 and u4 scalar are robust candidate-generation lanes once the exact
+  winners have reached the routed union. The current Go kernel is slow because
+  it reconstructs/scans scalar codes naively.
+- Local PCA rank64 is the first fast buildable-lane candidate: around `64`
+  row-code B/vector plus `~5` metadata B/vector, with `~53 ns/vector` scan in
+  this harness. It preserves top10@50 and top20@50 well, but compressed final
+  top10 is still not reliable.
+- Local PCA rank32 is too fragile on these less coherent buildable unions unless
+  paired with a refinement/residual stage.
+- The next production tournament should add trained PQ/OPQ/residual-PQ on real
+  train/eval splits and compare them against scalar u4/u8 and PCA64 at the same
+  byte budgets.
+
 ## Concrete Research Tracks
 
 Track A now has a first completed top100-only tournament for queries `0..99`.
@@ -407,10 +475,10 @@ top100-only probes worth adding, if this path remains decision-relevant, are
 PCA plus tiny residual correction and low-rank-plus-tail progressive bound
 tests.
 
-Track A.5 is now started: a first buildable-granule control over
-row-id-contiguous blocks. It is not a production locality win, but it gives the
-right harness shape for the next builders by reporting both routing recall and
-conditional codec recall.
+Track A.5 is now started: buildable-granule scouts over both
+row-id-contiguous blocks and IVF/k-means clusters. Row-id order is a weak
+control; IVF/k-means gives the first buildable locality signal and shows why the
+next stage needs trained PQ/OPQ/residual-PQ against real splits.
 
 Track B is the same-byte PQ/OPQ tournament. Compare local PCA `K=32/48/64`
 against PQ/OPQ/residual-code layouts at the same byte budgets using the same

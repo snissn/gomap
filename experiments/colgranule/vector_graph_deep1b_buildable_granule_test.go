@@ -18,6 +18,8 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	queryIndexes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES", []int{0})
 	baseRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS", 100_000)
 	granuleRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS", 8192)
+	builder := columnVectorGraphDeep1BEnvString("COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER", "row_id_contiguous")
+	kmeansIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS", 8)
 	topGranulesList := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES", []int{1, 4})
 	ranks := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS", []int{32, 48, 64, 80, columnVectorGraphDeep1BDims})
 	scanIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS", 8)
@@ -48,9 +50,9 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		t.Fatalf("read Deep1B base prefix rows=%d: %v", baseRows, err)
 	}
 	invNorms := columnVectorGraphDeep1BInvNorms(vectors, columnVectorGraphDeep1BDims)
-	granules := columnVectorGraphDeep1BBuildRowIDContiguousGranules(vectors, baseRows, columnVectorGraphDeep1BDims, granuleRows)
+	granules, builderNotes := columnVectorGraphDeep1BBuildableGranules(t, builder, vectors, invNorms, baseRows, columnVectorGraphDeep1BDims, granuleRows, kmeansIters)
 	if len(granules) == 0 {
-		t.Fatalf("no granules for baseRows=%d granuleRows=%d", baseRows, granuleRows)
+		t.Fatalf("no granules for builder=%s baseRows=%d granuleRows=%d", builder, baseRows, granuleRows)
 	}
 
 	report := columnVectorGraphDeep1BBuildableGranuleScoutReport{
@@ -60,14 +62,15 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		QueryPath:        data.queryPath,
 		BaseRows:         baseRows,
 		Dims:             columnVectorGraphDeep1BDims,
-		Builder:          "row_id_contiguous",
+		Builder:          builder,
 		GranuleRows:      granuleRows,
 		GranuleCount:     len(granules),
+		KMeansIters:      kmeansIters,
 		RequestedQueries: append([]int(nil), queryIndexes...),
 		TopGranules:      append([]int(nil), topGranulesList...),
 		Ranks:            append([]int(nil), ranks...),
 		ScanIters:        scanIters,
-		Notes:            "first production/buildable granule scout; row-id-contiguous blocks are buildable storage units, but they are not expected to have nearest-neighbor locality",
+		Notes:            builderNotes,
 	}
 	for _, queryIndex := range queryIndexes {
 		if queryIndex < 0 || queryIndex >= data.queryHeader.Rows {
@@ -109,6 +112,7 @@ type columnVectorGraphDeep1BBuildableGranuleScoutReport struct {
 	Builder          string                                               `json:"builder"`
 	GranuleRows      int                                                  `json:"granule_rows"`
 	GranuleCount     int                                                  `json:"granule_count"`
+	KMeansIters      int                                                  `json:"kmeans_iters,omitempty"`
 	RequestedQueries []int                                                `json:"requested_queries"`
 	TopGranules      []int                                                `json:"top_granules"`
 	Ranks            []int                                                `json:"ranks"`
@@ -137,6 +141,8 @@ type columnVectorGraphDeep1BBuildableGranuleQueryReport struct {
 type columnVectorGraphDeep1BSelectedGranuleReport struct {
 	Ordinal            int     `json:"ordinal"`
 	FirstRow           int     `json:"first_row"`
+	RowIDMin           int     `json:"row_id_min"`
+	RowIDMax           int     `json:"row_id_max"`
 	Rows               int     `json:"rows"`
 	CentroidCosine     float64 `json:"centroid_cosine_to_query"`
 	GlobalTop10Overlap int     `json:"global_top10_overlap"`
@@ -145,37 +151,201 @@ type columnVectorGraphDeep1BSelectedGranuleReport struct {
 
 type columnVectorGraphDeep1BBuildableGranule struct {
 	Ordinal       int
+	Builder       string
 	FirstRow      int
 	Rows          int
+	RowIDs        []int
 	Centroid      []float32
 	CentroidInv   float32
 	CentroidScore float64
+}
+
+func columnVectorGraphDeep1BBuildableGranules(tb testing.TB, builder string, vectors []float32, invNorms []float32, rows int, dims int, granuleRows int, kmeansIters int) ([]columnVectorGraphDeep1BBuildableGranule, string) {
+	tb.Helper()
+	switch builder {
+	case "row_id_contiguous":
+		return columnVectorGraphDeep1BBuildRowIDContiguousGranules(vectors, rows, dims, granuleRows), "production/buildable granule scout; row-id-contiguous blocks are buildable storage units, but they are not expected to have nearest-neighbor locality"
+	case "ivf_kmeans":
+		if kmeansIters <= 0 {
+			tb.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_KMEANS_ITERS=%d must be positive for ivf_kmeans", kmeansIters)
+		}
+		return columnVectorGraphDeep1BBuildIVFKMeansGranules(vectors, invNorms, rows, dims, granuleRows, kmeansIters), "production/buildable granule scout; ivf_kmeans trains deterministic cosine k-means centroids on the base prefix and assigns rows to buildable IVF-style granules"
+	default:
+		tb.Fatalf("unknown COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=%q; supported: row_id_contiguous, ivf_kmeans", builder)
+		return nil, ""
+	}
+}
+
+func columnVectorGraphDeep1BEnvString(name string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func columnVectorGraphDeep1BBuildRowIDContiguousGranules(vectors []float32, rows int, dims int, granuleRows int) []columnVectorGraphDeep1BBuildableGranule {
 	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, (rows+granuleRows-1)/granuleRows)
 	for first := 0; first < rows; first += granuleRows {
 		count := min(granuleRows, rows-first)
-		centroid := make([]float32, dims)
-		for row := 0; row < count; row++ {
-			base := (first + row) * dims
-			for j := 0; j < dims; j++ {
-				centroid[j] += vectors[base+j]
-			}
+		rowIDs := make([]int, count)
+		for row := range rowIDs {
+			rowIDs[row] = first + row
 		}
-		invRows := float32(1 / float64(count))
-		for j := range centroid {
-			centroid[j] *= invRows
-		}
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
 		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     "row_id_contiguous",
 			Ordinal:     len(granules),
 			FirstRow:    first,
 			Rows:        count,
+			RowIDs:      rowIDs,
 			Centroid:    centroid,
 			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
 		})
 	}
 	return granules
+}
+
+func columnVectorGraphDeep1BBuildIVFKMeansGranules(vectors []float32, invNorms []float32, rows int, dims int, targetRows int, iterations int) []columnVectorGraphDeep1BBuildableGranule {
+	clusterCount := max(1, (rows+targetRows-1)/targetRows)
+	centroids := columnVectorGraphDeep1BInitKMeansCentroids(vectors, invNorms, rows, dims, clusterCount)
+	assignments := make([]int, rows)
+	counts := make([]int, clusterCount)
+	for iter := 0; iter < iterations; iter++ {
+		centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+		for i := range counts {
+			counts[i] = 0
+		}
+		for row := 0; row < rows; row++ {
+			cluster := columnVectorGraphDeep1BNearestCentroid(vectors[row*dims:(row+1)*dims], invNorms[row], centroids, centroidInvNorms, dims)
+			assignments[row] = cluster
+			counts[cluster]++
+		}
+		next := make([]float32, len(centroids))
+		for row, cluster := range assignments {
+			base := row * dims
+			dst := cluster * dims
+			for j := 0; j < dims; j++ {
+				next[dst+j] += vectors[base+j]
+			}
+		}
+		for cluster := 0; cluster < clusterCount; cluster++ {
+			if counts[cluster] == 0 {
+				row := (cluster * rows) / clusterCount
+				copy(next[cluster*dims:(cluster+1)*dims], vectors[row*dims:(row+1)*dims])
+				continue
+			}
+			invCount := float32(1 / float64(counts[cluster]))
+			for j := 0; j < dims; j++ {
+				next[cluster*dims+j] *= invCount
+			}
+		}
+		centroids = next
+	}
+	centroidInvNorms := columnVectorGraphDeep1BCentroidInvNorms(centroids, dims)
+	for row := 0; row < rows; row++ {
+		assignments[row] = columnVectorGraphDeep1BNearestCentroid(vectors[row*dims:(row+1)*dims], invNorms[row], centroids, centroidInvNorms, dims)
+	}
+	rowIDsByCluster := make([][]int, clusterCount)
+	for row, cluster := range assignments {
+		rowIDsByCluster[cluster] = append(rowIDsByCluster[cluster], row)
+	}
+	granules := make([]columnVectorGraphDeep1BBuildableGranule, 0, clusterCount)
+	for cluster, rowIDs := range rowIDsByCluster {
+		if len(rowIDs) == 0 {
+			continue
+		}
+		centroid := columnVectorGraphDeep1BCentroidForRowIDs(vectors, rowIDs, dims)
+		sort.Ints(rowIDs)
+		granules = append(granules, columnVectorGraphDeep1BBuildableGranule{
+			Builder:     "ivf_kmeans",
+			Ordinal:     cluster,
+			FirstRow:    rowIDs[0],
+			Rows:        len(rowIDs),
+			RowIDs:      rowIDs,
+			Centroid:    centroid,
+			CentroidInv: float32(columnVectorGraphDeep1BInvNorm(centroid)),
+		})
+	}
+	return granules
+}
+
+func columnVectorGraphDeep1BInitKMeansCentroids(vectors []float32, invNorms []float32, rows int, dims int, clusterCount int) []float32 {
+	centroids := make([]float32, clusterCount*dims)
+	first := 0
+	copy(centroids[:dims], vectors[first*dims:(first+1)*dims])
+	chosen := []int{first}
+	for cluster := 1; cluster < clusterCount; cluster++ {
+		bestRow := 0
+		bestNearest := float32(-math.MaxFloat32)
+		for row := 0; row < rows; row++ {
+			rowVector := vectors[row*dims : (row+1)*dims]
+			nearest := float32(math.MaxFloat32)
+			for _, chosenRow := range chosen {
+				var dot float32
+				chosenVector := vectors[chosenRow*dims : (chosenRow+1)*dims]
+				for j := 0; j < dims; j++ {
+					dot += rowVector[j] * chosenVector[j]
+				}
+				distance := 1 - dot*invNorms[row]*invNorms[chosenRow]
+				if distance < nearest {
+					nearest = distance
+				}
+			}
+			if nearest > bestNearest {
+				bestNearest = nearest
+				bestRow = row
+			}
+		}
+		copy(centroids[cluster*dims:(cluster+1)*dims], vectors[bestRow*dims:(bestRow+1)*dims])
+		chosen = append(chosen, bestRow)
+	}
+	return centroids
+}
+
+func columnVectorGraphDeep1BCentroidInvNorms(centroids []float32, dims int) []float32 {
+	centroidInvNorms := make([]float32, len(centroids)/dims)
+	for cluster := range centroidInvNorms {
+		centroid := centroids[cluster*dims : (cluster+1)*dims]
+		centroidInvNorms[cluster] = float32(columnVectorGraphDeep1BInvNorm(centroid))
+	}
+	return centroidInvNorms
+}
+
+func columnVectorGraphDeep1BNearestCentroid(vector []float32, vectorInvNorm float32, centroids []float32, centroidInvNorms []float32, dims int) int {
+	bestCluster := 0
+	bestScore := float32(-math.MaxFloat32)
+	for cluster := 0; cluster < len(centroids)/dims; cluster++ {
+		centroid := centroids[cluster*dims : (cluster+1)*dims]
+		var dot float32
+		for j := 0; j < dims; j++ {
+			dot += vector[j] * centroid[j]
+		}
+		score := dot * vectorInvNorm * centroidInvNorms[cluster]
+		if score > bestScore {
+			bestScore = score
+			bestCluster = cluster
+		}
+	}
+	return bestCluster
+}
+
+func columnVectorGraphDeep1BCentroidForRowIDs(vectors []float32, rowIDs []int, dims int) []float32 {
+	centroid := make([]float32, dims)
+	if len(rowIDs) == 0 {
+		return centroid
+	}
+	for _, rowID := range rowIDs {
+		base := rowID * dims
+		for j := 0; j < dims; j++ {
+			centroid[j] += vectors[base+j]
+		}
+	}
+	invRows := float32(1 / float64(len(rowIDs)))
+	for j := range centroid {
+		centroid[j] *= invRows
+	}
+	return centroid
 }
 
 func columnVectorGraphDeep1BRankGranulesByCentroid(query []float32, queryInvNorm float32, granules []columnVectorGraphDeep1BBuildableGranule, dims int) []int {
@@ -219,28 +389,35 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	candidateSet := make(map[int]struct{}, candidateRows)
 	selectedReports := make([]columnVectorGraphDeep1BSelectedGranuleReport, 0, len(selected))
 	for _, granule := range selected {
+		rowIDMin, rowIDMax := columnVectorGraphDeep1BRowIDRange(granule.RowIDs)
 		report := columnVectorGraphDeep1BSelectedGranuleReport{
 			Ordinal:        granule.Ordinal,
 			FirstRow:       granule.FirstRow,
+			RowIDMin:       rowIDMin,
+			RowIDMax:       rowIDMax,
 			Rows:           granule.Rows,
 			CentroidCosine: granule.CentroidScore,
 		}
-		for row := granule.FirstRow; row < granule.FirstRow+granule.Rows; row++ {
+		for _, row := range granule.RowIDs {
 			candidateSet[row] = struct{}{}
 			candidateExact = append(candidateExact, globalScores[row])
 		}
-		report.GlobalTop10Overlap = columnVectorGraphDeep1BCountTopRowsInRange(globalTopRows, 10, granule.FirstRow, granule.FirstRow+granule.Rows)
-		report.GlobalTop20Overlap = columnVectorGraphDeep1BCountTopRowsInRange(globalTopRows, 20, granule.FirstRow, granule.FirstRow+granule.Rows)
+		report.GlobalTop10Overlap = columnVectorGraphDeep1BCountRowsInSet(globalTopRows, 10, columnVectorGraphDeep1BRowIDSet(granule.RowIDs))
+		report.GlobalTop20Overlap = columnVectorGraphDeep1BCountRowsInSet(globalTopRows, 20, columnVectorGraphDeep1BRowIDSet(granule.RowIDs))
 		selectedReports = append(selectedReports, report)
+	}
+	builder := "unknown"
+	if len(selected) > 0 {
+		builder = selected[0].Builder
 	}
 	q := columnVectorGraphDeep1BBuildableGranuleQueryReport{
 		QueryIndex:            queryIndex,
-		Builder:               "row_id_contiguous",
+		Builder:               builder,
 		TopGranules:           topGranules,
 		CandidateRows:         candidateRows,
 		SelectedGranules:      selectedReports,
 		CandidateExactMargins: columnVectorGraphDeep1BScoreMarginMetrics(candidateExact),
-		Notes:                 "buildable row-id-contiguous granule scout; codec recalls are conditional on the routed candidate union, while routing recalls measure how many global exact winners reached that union",
+		Notes:                 "buildable granule scout; codec recalls are conditional on the routed candidate union, while routing recalls measure how many global exact winners reached that union",
 	}
 	q.RoutingTop10InCandidates = columnVectorGraphDeep1BCountRowsInSet(globalTopRows, 10, candidateSet)
 	q.RoutingTop20InCandidates = columnVectorGraphDeep1BCountRowsInSet(globalTopRows, 20, candidateSet)
@@ -248,19 +425,19 @@ func columnVectorGraphDeep1BAnalyzeBuildableGranuleSelection(tb testing.TB, vect
 	q.RoutingRecallAt10 = float64(q.RoutingTop10InCandidates) / float64(min(10, len(globalTopRows)))
 	q.RoutingRecallAt20 = float64(q.RoutingTop20InCandidates) / float64(min(20, len(globalTopRows)))
 	q.RoutingRecallAt50 = float64(q.RoutingTop50InCandidates) / float64(min(50, len(globalTopRows)))
-	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, 8, "per_dim", "reconstructed", scanIters))
-	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, 4, "per_dim", "reconstructed", scanIters))
+	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, 8, "per_dim", "reconstructed", scanIters))
+	q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, 4, "per_dim", "reconstructed", scanIters))
 	minSelectedRows := candidateRows
 	for _, granule := range selected {
 		minSelectedRows = min(minSelectedRows, granule.Rows)
 	}
 	for _, rank := range columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, minSelectedRows, dims) {
-		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, rank, scanIters))
+		q.Methods = append(q.Methods, columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb, vectors, invNorms, query, queryInvNorm, candidateExact, q.CandidateExactMargins, selected, builder, rank, scanIters))
 	}
 	return q
 }
 
-func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, bits int, policy string, normMode string, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
+func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, builder string, bits int, policy string, normMode string, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
 	dims := columnVectorGraphDeep1BDims
 	approxScores := make([]float32, 0, len(exactScores))
 	var totalRows int
@@ -271,8 +448,7 @@ func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, inv
 	var meanRelL2 float64
 	var maxRelL2 float64
 	for _, granule := range selected {
-		gVectors := columnVectorGraphDeep1BSliceRows(vectors, granule.FirstRow, granule.Rows, dims)
-		gInvNorms := invNorms[granule.FirstRow : granule.FirstRow+granule.Rows]
+		gVectors, gInvNorms := columnVectorGraphDeep1BGatherRows(vectors, invNorms, granule.RowIDs, dims)
 		start := time.Now()
 		encoding := columnVectorGraphDeep1BEncodeGroundtruthScalar(gVectors, gInvNorms, granule.Rows, dims, bits, policy, normMode)
 		buildNanos += time.Since(start).Nanoseconds()
@@ -295,11 +471,11 @@ func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, inv
 		"buildable_granule_scout",
 		"metadata_amortized_over_selected_buildable_granules",
 		"scalar_quantization",
-		fmt.Sprintf("buildable_rowid_scalar_u%d_affine_%s_%s", bits, policy, normMode),
+		fmt.Sprintf("buildable_%s_scalar_u%d_affine_%s_%s", builder, bits, policy, normMode),
 		rowCodeBytes/float64(totalRows),
 		metadataBytes/float64(totalRows),
 		buildNanos,
-		"production/buildable scout over row-id-contiguous granules; codec recall is conditional on centroid-routed candidate union",
+		fmt.Sprintf("production/buildable scout over %s granules; codec recall is conditional on centroid-routed candidate union", builder),
 	)
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
@@ -308,7 +484,7 @@ func columnVectorGraphDeep1BEvaluateBuildableScalarMethod(vectors []float32, inv
 	return method
 }
 
-func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, rank int, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
+func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, selected []columnVectorGraphDeep1BBuildableGranule, builder string, rank int, scanIters int) columnVectorGraphDeep1BGroundtruthMethodReport {
 	tb.Helper()
 	dims := columnVectorGraphDeep1BDims
 	approxScores := make([]float32, 0, len(exactScores))
@@ -323,8 +499,7 @@ func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []
 		if validRanks[0] != rank {
 			tb.Fatalf("rank=%d is not valid for selected granule rows=%d", rank, granule.Rows)
 		}
-		gVectors := columnVectorGraphDeep1BSliceRows(vectors, granule.FirstRow, granule.Rows, dims)
-		gInvNorms := invNorms[granule.FirstRow : granule.FirstRow+granule.Rows]
+		gVectors, gInvNorms := columnVectorGraphDeep1BGatherRows(vectors, invNorms, granule.RowIDs, dims)
 		buildStart := time.Now()
 		model := columnVectorGraphDeep1BFitLocalPCAModel(tb, gVectors, granule.Rows, dims, []int{rank})
 		encoding := columnVectorGraphDeep1BEncodeLocalPCARank(gVectors, gInvNorms, model, rank, query, queryInvNorm, granule.Rows, dims)
@@ -346,11 +521,11 @@ func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []
 		"buildable_granule_scout",
 		"metadata_amortized_over_selected_buildable_granules",
 		"local_pca",
-		fmt.Sprintf("buildable_rowid_local_pca_i8_rank%d", rank),
+		fmt.Sprintf("buildable_%s_local_pca_i8_rank%d", builder, rank),
 		float64(rank),
 		metadataBytes/float64(totalRows),
 		buildNanos,
-		"production/buildable scout over row-id-contiguous granules; local PCA metadata is amortized over each selected granule, and codec recall is conditional on centroid-routed candidate union",
+		fmt.Sprintf("production/buildable scout over %s granules; local PCA metadata is amortized over each selected granule, and codec recall is conditional on centroid-routed candidate union", builder),
 	)
 	method.ScanNanosPerVector = scanNanos / float64(totalRows)
 	method.MeanRelativeL2 = meanRelL2 / float64(totalRows)
@@ -359,10 +534,14 @@ func columnVectorGraphDeep1BEvaluateBuildablePCAMethod(tb testing.TB, vectors []
 	return method
 }
 
-func columnVectorGraphDeep1BSliceRows(vectors []float32, firstRow int, rows int, dims int) []float32 {
-	start := firstRow * dims
-	end := start + rows*dims
-	return vectors[start:end]
+func columnVectorGraphDeep1BGatherRows(vectors []float32, invNorms []float32, rowIDs []int, dims int) ([]float32, []float32) {
+	gathered := make([]float32, len(rowIDs)*dims)
+	gatheredInvNorms := make([]float32, len(rowIDs))
+	for i, rowID := range rowIDs {
+		copy(gathered[i*dims:(i+1)*dims], vectors[rowID*dims:(rowID+1)*dims])
+		gatheredInvNorms[i] = invNorms[rowID]
+	}
+	return gathered, gatheredInvNorms
 }
 
 func columnVectorGraphDeep1BCountRowsInSet(rows []int, topK int, set map[int]struct{}) int {
@@ -376,15 +555,29 @@ func columnVectorGraphDeep1BCountRowsInSet(rows []int, topK int, set map[int]str
 	return count
 }
 
-func columnVectorGraphDeep1BCountTopRowsInRange(rows []int, topK int, start int, end int) int {
-	topK = min(topK, len(rows))
-	var count int
-	for _, row := range rows[:topK] {
-		if row >= start && row < end {
-			count++
+func columnVectorGraphDeep1BRowIDSet(rowIDs []int) map[int]struct{} {
+	set := make(map[int]struct{}, len(rowIDs))
+	for _, rowID := range rowIDs {
+		set[rowID] = struct{}{}
+	}
+	return set
+}
+
+func columnVectorGraphDeep1BRowIDRange(rowIDs []int) (int, int) {
+	if len(rowIDs) == 0 {
+		return 0, 0
+	}
+	minRow := rowIDs[0]
+	maxRow := rowIDs[0]
+	for _, rowID := range rowIDs[1:] {
+		if rowID < minRow {
+			minRow = rowID
+		}
+		if rowID > maxRow {
+			maxRow = rowID
 		}
 	}
-	return count
+	return minRow, maxRow
 }
 
 func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVectorGraphDeep1BBuildableGranuleScoutReport) string {
@@ -398,8 +591,11 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Dims: `%d`\n", report.Dims)
 	fmt.Fprintf(&b, "- Granule rows: `%d`\n", report.GranuleRows)
 	fmt.Fprintf(&b, "- Granules: `%d`\n", report.GranuleCount)
+	if report.Builder == "ivf_kmeans" {
+		fmt.Fprintf(&b, "- K-means iterations: `%d`\n", report.KMeansIters)
+	}
 	fmt.Fprintf(&b, "- Scan iterations: `%d`\n\n", report.ScanIters)
-	fmt.Fprintf(&b, "This is the first **production/buildable granule** scout. It deliberately uses row-id-contiguous blocks because they are real storage units TreeDB can build without oracle labels. The result should not be read as a good locality builder; it is a control that separates routing/locality failure from codec failure. PQ/OPQ/residual-PQ/LOPQ are still pending because they require real train/eval splits and trained codebooks.\n\n")
+	fmt.Fprintf(&b, "%s\n\n", columnVectorGraphDeep1BBuildableBuilderMarkdown(report))
 	fmt.Fprintf(&b, "## Routing\n\n")
 	fmt.Fprintf(&b, "| Query | Builder | Top granules | Candidate rows | Global top10 routed | Global top20 routed | Global top50 routed |\n")
 	fmt.Fprintf(&b, "| ---: | --- | ---: | ---: | ---: | ---: | ---: |\n")
@@ -440,15 +636,17 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	}
 	columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(&b, report)
 	fmt.Fprintf(&b, "\n## Selected Granules\n\n")
-	fmt.Fprintf(&b, "| Query | Top granules | Granule | First row | Rows | Centroid cos(query) | Global top10 in granule | Global top20 in granule |\n")
-	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	fmt.Fprintf(&b, "| Query | Top granules | Granule | First row | Row-id min | Row-id max | Rows | Centroid cos(query) | Global top10 in granule | Global top20 in granule |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	for _, q := range report.Queries {
 		for _, granule := range q.SelectedGranules {
-			fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %.5f | %d/10 | %d/20 |\n",
+			fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %d | %d | %.5f | %d/10 | %d/20 |\n",
 				q.QueryIndex,
 				q.TopGranules,
 				granule.Ordinal,
 				granule.FirstRow,
+				granule.RowIDMin,
+				granule.RowIDMax,
 				granule.Rows,
 				granule.CentroidCosine,
 				granule.GlobalTop10Overlap,
@@ -457,6 +655,17 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 		}
 	}
 	return b.String()
+}
+
+func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDeep1BBuildableGranuleScoutReport) string {
+	switch report.Builder {
+	case "row_id_contiguous":
+		return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure; it should not be read as evidence that row-id order is a good ANN granule builder. PQ/OPQ/residual-PQ/LOPQ are still pending because they require real train/eval splits and trained codebooks."
+	case "ivf_kmeans":
+		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the base prefix. It is a buildable locality probe, unlike the official top100 oracle clouds, but it is still not a PQ/OPQ/residual-PQ tournament: codebook methods still require separate train/eval discipline and metadata accounting."
+	default:
+		return fmt.Sprintf("This is a **production/buildable granule** scout using `%s`. Codec metrics are conditional on the routed candidate union, and trained-codebook methods still require separate train/eval discipline before production claims.", report.Builder)
+	}
 }
 
 func columnVectorGraphDeep1BRenderBuildableAggregateMarkdown(b *strings.Builder, report columnVectorGraphDeep1BBuildableGranuleScoutReport) {
