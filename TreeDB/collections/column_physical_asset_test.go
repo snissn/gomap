@@ -1188,6 +1188,49 @@ func TestColumnManifestAggregateMetadataRequiresLivePartM1634(t *testing.T) {
 	}
 }
 
+func TestColumnAggregateMetadataDecodeRejectsNilAssetManagerM1634(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 99
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1AggregateMetadata,
+		Namespace:  cfg.AssetManager.Namespace,
+		Generation: 5,
+		PartID:     3,
+		FileID:     4,
+		Offset:     4096,
+		Length:     256,
+		Checksum:   0xdecafbad,
+	}
+	raw, err := encodeColumnAggregateMetadataAsset(columnAggregateMetadataAsset{
+		Collection:        "events",
+		Namespace:         cfg.AssetManager.Namespace,
+		Generation:        ref.Generation,
+		PartID:            ref.PartID,
+		AppliedCommandLSN: cfg.RecoveryAuthoritativeAppliedCommandLSN,
+		SchemaHash:        cfg.SchemaHash,
+		AggregateName:     "min_time_us",
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Rows:              1,
+		Entries: []columnAggregateMetadataEntry{
+			{Group: "d1", Count: 1, Min: 10, Max: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnAggregateMetadataAsset: %v", err)
+	}
+	ref.Length = int64(len(raw))
+	ref.Checksum = page.Checksum(raw)
+	cfg.AssetManager = nil
+	_, err = decodeColumnAggregateMetadataAsset(raw, ref, *cfg, "events", "min_time_us")
+	if err == nil || !strings.Contains(err.Error(), "requires column asset manager") {
+		t.Fatalf("decodeColumnAggregateMetadataAsset err=%v want asset-manager failure", err)
+	}
+}
+
 func TestColumnAssetRefRequiresNamespaceGenerationAndSegmentIDM12A(t *testing.T) {
 	ref := ColumnAssetRef{
 		Kind:       ColumnAssetKindTCS1PartImage,

@@ -512,6 +512,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 	d.Reset()
 	sawHeader := false
 	activeParts := uint64(0)
+	livePartNamespaces := make(map[[2]uint64]string)
 	for iter.Valid() {
 		key := iter.UnsafeKey()
 		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) &&
@@ -593,6 +594,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
+			livePartNamespaces[[2]uint64{ref.Generation, ref.PartID}] = ref.Namespace
 			if keyGeneration == header.generation {
 				activeParts++
 			}
@@ -614,6 +616,13 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			}
 			if metadata.AssetRef.Namespace != cfg.AssetManager.Namespace {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q want %q", metadata.AssetRef.Namespace, cfg.AssetManager.Namespace)
+			}
+			partNamespace, ok := livePartNamespaces[[2]uint64{metadata.AssetRef.Generation, metadata.AssetRef.PartID}]
+			if !ok {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", metadata.AssetRef.Generation, metadata.AssetRef.PartID)
+			}
+			if metadata.AssetRef.Namespace != partNamespace {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q does not match part namespace=%q", metadata.AssetRef.Namespace, partNamespace)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)

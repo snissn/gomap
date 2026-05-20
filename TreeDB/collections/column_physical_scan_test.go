@@ -727,6 +727,39 @@ func TestColumnManifestPlannerCapabilitiesRejectPartIDKeyMismatchM14A(t *testing
 	}
 }
 
+func TestColumnManifestPlannerCapabilitiesRejectOrphanAggregateMetadataM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, _, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	metadata := asset
+	metadata.Ref.Kind = ColumnAssetKindTCS1AggregateMetadata
+	metadata.Ref.PartID = asset.Ref.PartID + 1
+	metadata.Ref.Offset += metadata.Ref.Length
+	metadata.Ref.Length = 256
+	metadata.Bytes = metadata.Ref.Length
+	metadata.Reason = "min_time_us"
+	input.Prepared.Assets = []ColumnPreparedAsset{asset, metadata}
+	manifest, err := encodeColumnManifestForWrite(input)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, manifest.Records)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, manifest.Identity, "events")
+	if err == nil || !strings.Contains(err.Error(), "matching live part") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want matching live part failure", err)
+	}
+}
+
 func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {

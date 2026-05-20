@@ -120,7 +120,10 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 	if asset.Collection != collection {
 		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: aggregate metadata asset collection=%q want %q", asset.Collection, collection)
 	}
-	if cfg.AssetManager == nil || asset.Namespace != cfg.AssetManager.Namespace {
+	if cfg.AssetManager == nil {
+		return columnAggregateMetadataAsset{}, errors.New("collections: aggregate metadata asset requires column asset manager")
+	}
+	if asset.Namespace != cfg.AssetManager.Namespace {
 		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: aggregate metadata asset namespace=%q want %q", asset.Namespace, cfg.AssetManager.Namespace)
 	}
 	if asset.Generation != ref.Generation || asset.PartID != ref.PartID {
