@@ -15,6 +15,7 @@ type columnWritePublishInput struct {
 	baseSystemRoot     uint64
 	rootNames          []string
 	baseRootIDs        map[string]uint64
+	clearedRootNames   []string
 	commandWALIntent   *backenddb.CommandWALIntent
 	operation          ColumnPublishOperation
 	documents          []columnWriteDocument
@@ -114,7 +115,8 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	}
 	if !columnStoreWriteEnabled(input.meta) {
 		newSystemRoot, rootIDs, err := c.publishRootDeltaGroupWithoutColumn(ordered, input)
-		return newSystemRoot, rootIDs, input.meta, input.rootNames, err
+		publishRootNames, publishRootIDs := appendClearedCollectionRoots(input.rootNames, rootIDs, input.clearedRootNames)
+		return newSystemRoot, publishRootIDs, input.meta, publishRootNames, err
 	}
 	if input.commandWALIntent == nil {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
@@ -156,7 +158,8 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 				return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 			}
-			iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, input.clearedRootNames)
+			iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs, plan, input.clearedRootNames)
 			if err == nil {
 				updatedMeta = nextMeta
 			}
@@ -169,7 +172,8 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if updatedMeta.Name == "" {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
-	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
+	publishRootNames, publishRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, input.clearedRootNames)
+	return newSystemRoot, publishRootIDs, updatedMeta, publishRootNames, nil
 }
 
 func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaBatchPublishInput, preflight backenddb.OrderedRootGroupPreflight, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
@@ -181,7 +185,8 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	if !columnStoreWriteEnabled(input.meta) {
 		newSystemRoot, rootIDs, err := c.publishRootDeltaBatchGroupWithoutColumn(ordered, preflight, input)
-		return newSystemRoot, rootIDs, input.meta, input.rootNames, err
+		publishRootNames, publishRootIDs := appendClearedCollectionRoots(input.rootNames, rootIDs, input.clearedRootNames)
+		return newSystemRoot, publishRootIDs, input.meta, publishRootNames, err
 	}
 	if input.commandWALIntent == nil {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
@@ -221,7 +226,8 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
-		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+		descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, input.clearedRootNames)
+		iter, nextMeta, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, descriptorRootNames, baseRootIDs, descriptorRootIDs, plan, input.clearedRootNames)
 		if err == nil {
 			updatedMeta = nextMeta
 		}
@@ -239,7 +245,8 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if updatedMeta.Name == "" {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
 	}
-	return newSystemRoot, rootIDs, updatedMeta, rootNames, nil
+	publishRootNames, publishRootIDs := appendClearedCollectionRoots(rootNames, rootIDs, input.clearedRootNames)
+	return newSystemRoot, publishRootIDs, updatedMeta, publishRootNames, nil
 }
 
 func (c *Collection) columnPublishRootDescriptorPreflight(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
@@ -356,7 +363,8 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, error) {
 	if input.commandWALIntent != nil {
 		return c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(input.rootNames, rootIDs, input.clearedRootNames)
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, descriptorRootNames, input.baseRootIDs, descriptorRootIDs)
 		})
 	}
 	return c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -368,11 +376,13 @@ func (c *Collection) publishRootDeltaBatchGroupWithoutColumn(ordered []backenddb
 	if input.commandWALIntent != nil {
 		if preflight != nil {
 			return c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+				descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(input.rootNames, rootIDs, input.clearedRootNames)
+				return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, descriptorRootNames, input.baseRootIDs, descriptorRootIDs)
 			})
 		}
 		return c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, input.rootNames, input.baseRootIDs, rootIDs)
+			descriptorRootNames, descriptorRootIDs := appendClearedCollectionRoots(input.rootNames, rootIDs, input.clearedRootNames)
+			return c.buildRootDescriptorSystemDeltaIteratorForMeta(input.meta, input.baseCommitSeq, input.baseSystemRoot, descriptorRootNames, input.baseRootIDs, descriptorRootIDs)
 		})
 	}
 	if preflight != nil {
@@ -674,12 +684,12 @@ func columnPublishPhysicalMutationParts(base *ColumnStoreConfig, plan ColumnPubl
 	return parts, nil
 }
 
-func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, error) {
-	iter, _, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, rootIDs, plan)
+func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan, clearedRootNames []string) (iterator.UnsafeIterator, error) {
+	iter, _, err := c.buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta, expectedCommitSeq, expectedSystemRoot, rootNames, baseRootIDs, rootIDs, plan, clearedRootNames)
 	return iter, err
 }
 
-func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, CollectionMeta, error) {
+func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan, clearedRootNames []string) (iterator.UnsafeIterator, CollectionMeta, error) {
 	if len(rootIDs) != len(rootNames) {
 		return nil, CollectionMeta{}, unexpectedOrderedRootCountError(meta.Name, len(rootNames), len(rootIDs))
 	}
@@ -726,9 +736,15 @@ func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndM
 	}
 	updates := make(map[string][]byte, len(rootNames)+1)
 	updates[systemCollectionMetaKey(updatedMeta.Name)] = encodedMeta
+	cleared := make(map[string]struct{}, len(clearedRootNames))
+	for _, rootName := range clearedRootNames {
+		cleared[rootName] = struct{}{}
+	}
 	for i, rootName := range rootNames {
 		if rootIDs[i] == 0 {
-			return nil, CollectionMeta{}, fmt.Errorf("collections: ordered root publish returned zero root for %q", rootName)
+			if _, ok := cleared[rootName]; !ok {
+				return nil, CollectionMeta{}, fmt.Errorf("collections: ordered root publish returned zero root for %q", rootName)
+			}
 		}
 		updates[systemCollectionRootKey(rootName)] = encodeRootID(rootIDs[i])
 	}

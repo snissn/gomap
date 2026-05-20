@@ -1433,6 +1433,7 @@ func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *t
 		map[string]uint64{rootName: 0},
 		[]uint64{1},
 		plan,
+		nil,
 	)
 	if iter != nil {
 		_ = iter.Close()
@@ -1476,6 +1477,7 @@ func TestColumnManifestRootDescriptorSystemDeltaDoesNotReadPublishedRootBeforeCo
 		map[string]uint64{rootName: 0},
 		[]uint64{123456789},
 		plan,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta: %v", err)
@@ -1519,6 +1521,7 @@ func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t
 		map[string]uint64{rootName: 0},
 		[]uint64{99},
 		plan,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("buildRootDescriptorAndColumnManifestSystemDeltaIteratorAndMetaForMeta: %v", err)

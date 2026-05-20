@@ -713,6 +713,30 @@ The payload name and decoded metadata name must match. Replay is idempotent only
 when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
 
+Canonical collection metadata JSON is the normalized `collectionMetaDisk`
+payload:
+
+```json
+{
+  "version": 3,
+  "name": "collection",
+  "options": {},
+  "indexes": [],
+  "vector_indexes": []
+}
+```
+
+Version 3 adds first-class `vector_indexes` entries to the metadata envelope.
+Each vector index definition stores `name`, `field`, `metric`, `dimensions`,
+optional HNSW search/build settings (`m`, `ef_construction`, `ef_search`),
+`encoding`, optional `strategy`, and `schema_generation`. The omitted/default
+strategy is the existing native/runtime vector-index path; `column_graph`
+selects the column-backed vector-index contract seam and must not publish a
+native vector root. Decoders must reject metadata whose
+`version` differs from the implementation's current collection metadata
+version instead of silently accepting older layouts with missing vector-index
+state.
+
 Column-enabled collection metadata is stored inside the canonical collection
 metadata JSON under `options.column_store`. It is production-facing
 control-plane state, not a sidecar hint. Current normalized fields are:

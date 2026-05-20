@@ -574,6 +574,25 @@ func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	if changedMeta.Options.ColumnStore.SchemaHash == meta.Options.ColumnStore.SchemaHash {
 		t.Fatalf("schema hash did not include vector dims: %x", meta.Options.ColumnStore.SchemaHash)
 	}
+
+	changed = testColumnStoreConfig(nil)
+	changed.Columns = append(changed.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128},
+		ColumnStoreColumn{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueDouble},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	changed.SortKey = append(changed.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
+	changed.AggregateMetadata = append(changed.AggregateMetadata,
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMax},
+	)
+	changedMeta, err = normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: changed}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta changed scalar type: %v", err)
+	}
+	if changedMeta.Options.ColumnStore.SchemaHash == meta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash did not include scalar value type: %x", meta.Options.ColumnStore.SchemaHash)
+	}
 }
 
 func TestColumnStoreProfileSupportMatrix(t *testing.T) {

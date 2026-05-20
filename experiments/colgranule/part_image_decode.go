@@ -359,7 +359,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
-	columnTotal, err := dec.boundedCount(columnCount, 14, "descriptor columns")
+	columnTotal, err := dec.boundedCount(columnCount, 22, "descriptor columns")
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
@@ -384,12 +384,27 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
 		}
+		vectorDims64, err := dec.i64()
+		if err != nil {
+			return ColumnPartDescriptor{}, nil, err
+		}
+		if vectorDims64 < 0 || vectorDims64 > int64(int(^uint(0)>>1)) {
+			return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: invalid vector dims %d for %s", vectorDims64, name)
+		}
+		vectorDims := int(vectorDims64)
 		if columnType == ColumnTypeLowCardinalityCode {
 			if cardinality == 0 || cardinality > maxCodeCardinality {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: invalid low-cardinality cardinality %d for %s", cardinality, name)
 			}
 		} else if cardinality != 0 {
 			return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: column %s type=%s has cardinality %d", name, columnType, cardinality)
+		}
+		if columnType == ColumnTypeFloat32Vector {
+			if vectorDims <= 0 {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: vector column %s has invalid dims %d", name, vectorDims)
+			}
+		} else if vectorDims != 0 {
+			return ColumnPartDescriptor{}, nil, fmt.Errorf("colgranule: column %s type=%s has vector dims %d", name, columnType, vectorDims)
 		}
 		blockCount, err := dec.u32()
 		if err != nil {
@@ -399,12 +414,13 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		if err != nil {
 			return ColumnPartDescriptor{}, nil, err
 		}
-		columnDesc := ColumnPartColumnDescriptor{Name: name, Type: columnType, Blocks: make([]ColumnBlockDescriptor, 0, blocks)}
+		columnDesc := ColumnPartColumnDescriptor{Name: name, Type: columnType, VectorDims: vectorDims, Blocks: make([]ColumnBlockDescriptor, 0, blocks)}
 		column := ColumnPartColumn{
 			Definition: ColumnDefinition{
 				Name:        name,
 				Type:        columnType,
 				Cardinality: cardinality,
+				VectorDims:  vectorDims,
 			},
 			Blocks: make([]ColumnBlock, 0, blocks),
 		}
@@ -414,7 +430,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
-			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, j, blockDesc); err != nil {
+			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, vectorDims, j, blockDesc); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
 			if err := validateDecodedColumnBlockGranuleMetadata(name, j, granule); err != nil {
@@ -475,7 +491,7 @@ func validateDecodedGranuleDescriptors(desc ColumnPartDescriptor) error {
 	return nil
 }
 
-func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column string, columnType ColumnType, cardinality uint32, blockIndex int, block ColumnBlockDescriptor) error {
+func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column string, columnType ColumnType, cardinality uint32, vectorDims int, blockIndex int, block ColumnBlockDescriptor) error {
 	if block.RowCount <= 0 {
 		return fmt.Errorf("colgranule: descriptor column %s block %d has invalid row count %d", column, blockIndex, block.RowCount)
 	}
@@ -495,7 +511,7 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if block.FirstGranule != firstGranule || block.LastGranule != lastGranule {
 		return fmt.Errorf("colgranule: descriptor column %s block %d granule range [%d,%d] want [%d,%d] for rows [%d,%d)", column, blockIndex, block.FirstGranule, block.LastGranule, firstGranule, lastGranule, block.FirstRow, block.FirstRow+block.RowCount)
 	}
-	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, block.Encoding, block.RowCount)
+	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, vectorDims, block.Encoding, block.RowCount)
 	if err != nil {
 		return fmt.Errorf("colgranule: descriptor column %s block %d: %w", column, blockIndex, err)
 	}
@@ -560,7 +576,7 @@ func decodedGranuleIndexForRow(granules []GranuleDescriptor, row int) (int, bool
 	return 0, false
 }
 
-func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, encoding Encoding, rows int) (int, error) {
+func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, vectorDims int, encoding Encoding, rows int) (int, error) {
 	switch columnType {
 	case ColumnTypeInt64:
 		switch encoding {
@@ -592,6 +608,23 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, encoding
 			return 0, err
 		}
 		return checkedAddInt(2, rleBytes, "bool raw bytes")
+	case ColumnTypeFloat32Vector:
+		if encoding != EncodingRawFloat32Vector {
+			return 0, fmt.Errorf("unsupported float32 vector encoding %d", encoding)
+		}
+		if vectorDims <= 0 {
+			return 0, fmt.Errorf("invalid vector dims %d", vectorDims)
+		}
+		values, err := checkedMulInt(rows, vectorDims, "float32 vector values")
+		if err != nil {
+			return 0, err
+		}
+		return checkedMulInt(values, 4, "float32 vector raw bytes")
+	case ColumnTypeAdjacencyList:
+		if encoding != EncodingRawUint32AdjacencyList {
+			return 0, fmt.Errorf("unsupported adjacency-list encoding %d", encoding)
+		}
+		return int(^uint(0) >> 1), nil
 	default:
 		return 0, fmt.Errorf("unsupported column type %s", columnType)
 	}
@@ -1964,6 +1997,10 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 		return ColumnTypeLowCardinalityCode, nil
 	case 3:
 		return ColumnTypeBool, nil
+	case 4:
+		return ColumnTypeFloat32Vector, nil
+	case 5:
+		return ColumnTypeAdjacencyList, nil
 	default:
 		return "", fmt.Errorf("colgranule: unknown column type code %d", code)
 	}

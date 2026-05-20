@@ -56,6 +56,27 @@ func TestEstimateAdaptiveRowsPerMark(t *testing.T) {
 	}
 }
 
+func TestEstimateColumnBatchUncompressedBytesUsesUint32AdjacencyValues(t *testing.T) {
+	batch := ColumnBatch{
+		Rows: 3,
+		AdjacencyLists: map[string]AdjacencyListColumn{
+			"neighbors": {
+				Offsets: []uint32{0, 2, 4, 6},
+				Values:  []uint32{1, 2, 0, 2, 0, 1},
+			},
+		},
+	}
+	got, err := EstimateColumnBatchUncompressedBytes(batch, []ColumnDefinition{
+		{Name: "neighbors", Type: ColumnTypeAdjacencyList},
+	})
+	if err != nil {
+		t.Fatalf("EstimateColumnBatchUncompressedBytes: %v", err)
+	}
+	if want := 4*4 + 6*4; got != want {
+		t.Fatalf("raw bytes=%d want %d", got, want)
+	}
+}
+
 func TestBuildColumnPartUsesAdaptiveMarkSizing(t *testing.T) {
 	rows := 20
 	batch := ColumnBatch{Rows: rows, Columns: map[string][]int64{

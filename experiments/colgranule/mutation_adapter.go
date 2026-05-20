@@ -3,6 +3,7 @@ package colgranule
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"time"
@@ -264,20 +265,62 @@ func (a *ColumnMutationAdapter) mergeMutationRows(inserts ColumnBatch, updates C
 		return ColumnBatch{}, 0, 0, nil
 	}
 	columns := make(map[string][]int64, len(a.opts.Columns))
+	vectors := make(map[string]Float32VectorColumn)
+	adjacencyLists := make(map[string]AdjacencyListColumn)
 	for _, def := range a.opts.Columns {
-		dst := make([]int64, 0, total)
-		if insertRows != 0 {
-			dst = append(dst, inserts.Columns[def.Name]...)
+		switch def.Type {
+		case ColumnTypeInt64, ColumnTypeLowCardinalityCode, ColumnTypeBool:
+			dst := make([]int64, 0, total)
+			if insertRows != 0 {
+				dst = append(dst, inserts.Columns[def.Name]...)
+			}
+			if updateRows != 0 {
+				dst = append(dst, updates.Columns[def.Name]...)
+			}
+			columns[def.Name] = dst
+		case ColumnTypeFloat32Vector:
+			dst := Float32VectorColumn{Dims: def.VectorDims}
+			valueCap := total * def.VectorDims
+			dst.Values = make([]float32, 0, valueCap)
+			if insertRows != 0 {
+				dst.Values = append(dst.Values, inserts.Float32Vectors[def.Name].Values...)
+			}
+			if updateRows != 0 {
+				dst.Values = append(dst.Values, updates.Float32Vectors[def.Name].Values...)
+			}
+			vectors[def.Name] = dst
+		case ColumnTypeAdjacencyList:
+			dst := AdjacencyListColumn{Offsets: []uint32{0}}
+			if insertRows != 0 {
+				if err := appendAdjacencyRows(&dst, inserts.AdjacencyLists[def.Name]); err != nil {
+					return ColumnBatch{}, 0, 0, fmt.Errorf("colgranule: insert adjacency-list column %s: %w", def.Name, err)
+				}
+			}
+			if updateRows != 0 {
+				if err := appendAdjacencyRows(&dst, updates.AdjacencyLists[def.Name]); err != nil {
+					return ColumnBatch{}, 0, 0, fmt.Errorf("colgranule: update adjacency-list column %s: %w", def.Name, err)
+				}
+			}
+			adjacencyLists[def.Name] = dst
 		}
-		if updateRows != 0 {
-			dst = append(dst, updates.Columns[def.Name]...)
-		}
-		columns[def.Name] = dst
 	}
 	if err := validateDistinctPrimaryIDs(ColumnBatch{Rows: total, Columns: columns}, a.opts.LogicalPrimaryKey.Columns[0]); err != nil {
 		return ColumnBatch{}, 0, 0, err
 	}
-	return ColumnBatch{Rows: total, Columns: columns}, insertRows, updateRows, nil
+	return ColumnBatch{Rows: total, Columns: columns, Float32Vectors: vectors, AdjacencyLists: adjacencyLists}, insertRows, updateRows, nil
+}
+
+func appendAdjacencyRows(dst *AdjacencyListColumn, src AdjacencyListColumn) error {
+	for row := 0; row+1 < len(src.Offsets); row++ {
+		start := int(src.Offsets[row])
+		end := int(src.Offsets[row+1])
+		dst.Values = append(dst.Values, src.Values[start:end]...)
+		if len(dst.Values) > math.MaxUint32 {
+			return fmt.Errorf("adjacency values=%d exceed uint32 offsets", len(dst.Values))
+		}
+		dst.Offsets = append(dst.Offsets, uint32(len(dst.Values)))
+	}
+	return nil
 }
 
 func (a *ColumnMutationAdapter) publishManifest() error {
@@ -307,7 +350,7 @@ func (a *ColumnMutationAdapter) newManifest() (ColumnCollectionManifest, error) 
 }
 
 func validateOptionalColumnBatch(batch ColumnBatch, defs []ColumnDefinition) (int, error) {
-	if batch.Rows == 0 && len(batch.Columns) == 0 {
+	if batch.Rows == 0 && len(batch.Columns) == 0 && len(batch.Float32Vectors) == 0 && len(batch.AdjacencyLists) == 0 {
 		return 0, nil
 	}
 	return validateColumnBatch(batch, defs)

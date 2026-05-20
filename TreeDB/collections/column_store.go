@@ -46,6 +46,31 @@ var (
 	// ErrColumnManifestIdentityNonZeroReserved is returned when a column manifest
 	// identity record has non-zero reserved trailer bytes.
 	ErrColumnManifestIdentityNonZeroReserved = errors.New("collections: non-zero column manifest identity reserved trailer")
+	// ErrColumnManifestRootDescriptorMissing is returned when collection metadata
+	// references an active column manifest but the corresponding catalog root is
+	// absent.
+	ErrColumnManifestRootDescriptorMissing = errors.New("collections: column manifest root descriptor missing")
+	// ErrColumnManifestIdentityDeleted is returned when a published column
+	// manifest root has a tombstoned identity record.
+	ErrColumnManifestIdentityDeleted = errors.New("collections: column manifest identity record deleted")
+	// ErrColumnManifestIdentityInvalid wraps malformed identity-record decode
+	// failures observed while validating a published column manifest root.
+	ErrColumnManifestIdentityInvalid = errors.New("collections: invalid column manifest identity record")
+	// ErrColumnManifestIdentityMismatch is returned when the active manifest
+	// identity in collection metadata does not match the published root identity.
+	ErrColumnManifestIdentityMismatch = errors.New("collections: column manifest identity mismatch")
+)
+
+var (
+	errColumnManifestIdentityMissing            = ErrColumnManifestIdentityMissing
+	errColumnManifestIdentityMalformed          = ErrColumnManifestIdentityMalformed
+	errColumnManifestIdentityBadMagic           = ErrColumnManifestIdentityBadMagic
+	errColumnManifestIdentityUnsupportedVersion = ErrColumnManifestIdentityUnsupportedVersion
+	errColumnManifestIdentityNonZeroReserved    = ErrColumnManifestIdentityNonZeroReserved
+	errColumnManifestRootDescriptorMissing      = ErrColumnManifestRootDescriptorMissing
+	errColumnManifestIdentityDeleted            = ErrColumnManifestIdentityDeleted
+	errColumnManifestIdentityInvalid            = ErrColumnManifestIdentityInvalid
+	errColumnManifestIdentityMismatch           = ErrColumnManifestIdentityMismatch
 )
 
 type ColumnStoreValueType string
@@ -657,7 +682,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	rootName := collectionColumnManifestRootName(catalog.meta.Name)
 	rootID := catalog.rootID(rootName)
 	if rootID == 0 {
-		return fmt.Errorf("collections: active column manifest generation %d for %q is missing root descriptor %q", identity.Generation, catalog.meta.Name, rootName)
+		return fmt.Errorf("%w: active column manifest generation %d for %q is missing root descriptor %q", errColumnManifestRootDescriptorMissing, identity.Generation, catalog.meta.Name, rootName)
 	}
 	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
@@ -667,14 +692,14 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 		return fmt.Errorf("collections: active column manifest root %d for %q is unreadable: %w", rootID, catalog.meta.Name, err)
 	}
 	if entry.Flags&node.FlagTombstone != 0 {
-		return fmt.Errorf("collections: active column manifest root %d for %q has deleted identity record", rootID, catalog.meta.Name)
+		return fmt.Errorf("%w: active column manifest root %d for %q has deleted identity record", errColumnManifestIdentityDeleted, rootID, catalog.meta.Name)
 	}
 	record, err := decodeColumnManifestIdentityRecord(entry.Value)
 	if err != nil {
-		return fmt.Errorf("collections: active column manifest root %d for %q has invalid identity record: %w", rootID, catalog.meta.Name, err)
+		return fmt.Errorf("%w: active column manifest root %d for %q has invalid identity record: %w", errColumnManifestIdentityInvalid, rootID, catalog.meta.Name, err)
 	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
-		return fmt.Errorf("collections: active column manifest identity mismatch for %q", catalog.meta.Name)
+		return fmt.Errorf("%w for %q", errColumnManifestIdentityMismatch, catalog.meta.Name)
 	}
 	return nil
 }
