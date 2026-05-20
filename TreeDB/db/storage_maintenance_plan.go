@@ -23,7 +23,7 @@ func validStorageMaintenancePlan(plan StorageMaintenancePlan) bool {
 	}
 	value := reflect.ValueOf(plan)
 	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		if value.IsNil() {
 			return false
 		}
