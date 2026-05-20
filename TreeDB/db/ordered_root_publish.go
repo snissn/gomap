@@ -1596,7 +1596,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 			return 0, nil, preApplyErr(err)
 		}
 		if storageMaintenance && rootID == ordered[idx].BaseRoot {
-			return 0, nil, fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaEmpty, idx)
+			return 0, nil, preApplyErr(fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaEmpty, idx))
 		}
 		rootIDs[idx] = rootID
 		rootsObserved++

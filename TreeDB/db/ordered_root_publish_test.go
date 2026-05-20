@@ -423,8 +423,8 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing
 	if !errors.Is(err, ErrStorageMaintenanceRootDeltaEmpty) {
 		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRootDeltaEmpty", err)
 	}
-	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
-		t.Fatalf("maintenance publish error=%v unexpectedly marked pre-apply after root apply", err)
+	if !errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenancePublishPreApplyFailed", err)
 	}
 }
 
