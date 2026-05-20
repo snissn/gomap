@@ -112,14 +112,16 @@ Selected aggregate rows across queries `0..99`:
 
 | Method | Row-code B/vector | Metadata B/vector | Avg build ms | p50 compressed top10 | Worst compressed top10 | p50 top10@20 | Worst top10@20 | p50 top10@50 | Worst top10@50 | p50 top20@50 | Worst top20@50 | Avg score err | Avg err/gap10 | Avg scan ns/vector | Interpretation |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `scalar_u8_affine_per_dim_reconstructed` | `96` | `7.68` | `0.251` | `10/10` | `9/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00011` | `0.36` | `1114` | Conservative full-dim SQ8 lane; strong candidate survival and near-final quality. |
-| `scalar_u4_affine_per_dim_reconstructed` | `48` | `7.68` | `0.237` | `9/10` | `7/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00201` | `6.19` | `1077` | Strongest simple 48B top100 scalar lane; not a final ranker, but excellent candidate survival in this oracle universe. |
-| `scalar_u2_affine_per_dim_reconstructed` | `24` | `7.68` | `0.230` | `6/10` | `2/10` | `8/10` | `5/10` | `10/10` | `7/10` | `18/20` | `13/20` | `0.02048` | `66.42` | `1052` | Too lossy; not safe even for top50 candidate survival. |
-| `random_rotation_scalar_u4_affine_per_dim_reconstructed` | `48` | `7.76` | `1.653` | `9/10` | `7/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `19/20` | `0.00199` | `6.30` | `990` | Similar to plain u4; random rotation is worth keeping as a low-build challenger, but it is not a clear oracle win here. |
-| `local_pca_i8_rank64` | `64` | `128.08` | `5.711` | `8/10` | `4/10` | `10/10` | `7/10` | `10/10` | `9/10` | `20/20` | `18/20` | `0.00341` | `11.26` | `96` | Good scan shape and useful candidate generation, but worse candidate robustness than simple u4 scalar in this top100 probe. |
-| `boundary_weighted_pca_top20_hardneg_i8_rank64` | `64` | `128.08` | `4.451` | `9/10` | `6/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00342` | `11.68` | `70` | Recall-aware weighting improves candidate gates over variance PCA at the same rank, but it is oracle-trained on top100 boundaries. |
-| `pairwise_diff_pca_top10_vs_11_100_i8_rank64` | `64` | `128.08` | `10.595` | `9/10` | `6/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `17/20` | `0.00327` | `10.91` | `64` | Boundary-separating directions improve top10 survival, but top20 worst-case is weaker than boundary-weighted PCA. Oracle only. |
-| `query_axis_oracle_i8_projection_f16_norm` | `1` | `2.02` | `0.001` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00175` | `6.43` | `0.74` | Non-deployable query-specific upper bound. It proves score-aware projection has headroom, not that this exact method can ship. |
+| `scalar_u8_affine_per_dim_reconstructed` | `96` | `7.68` | `0.235` | `10/10` | `9/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00011` | `0.36` | `1036` | Conservative full-dim SQ8 lane; strong candidate survival and near-final quality. |
+| `scalar_u4_affine_per_dim_reconstructed` | `48` | `7.68` | `0.220` | `9/10` | `7/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00198` | `6.17` | `992` | Strongest simple 48B top100 scalar lane; not a final ranker, but excellent candidate survival in this oracle universe. |
+| `scalar_u2_affine_per_dim_reconstructed` | `24` | `7.68` | `0.217` | `6/10` | `2/10` | `8/10` | `4/10` | `10/10` | `7/10` | `18/20` | `14/20` | `0.02002` | `65.96` | `973` | Too lossy; not safe even for top50 candidate survival. |
+| `random_rotation_scalar_u4_affine_per_dim_reconstructed` | `48` | `7.76` | `1.565` | `9/10` | `7/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `19/20` | `0.00196` | `6.28` | `968` | Similar to plain u4; random rotation is worth keeping as a low-build challenger, but it is not a clear oracle win here. |
+| `local_pca_i8_rank64` | `64` | `128.08` | `6.252` | `8/10` | `4/10` | `10/10` | `7/10` | `10/10` | `9/10` | `20/20` | `18/20` | `0.00347` | `11.45` | `104` | Good scan shape and useful candidate generation, but worse candidate robustness than simple u4 scalar in this top100 probe. |
+| `boundary_weighted_pca_top20_hardneg_i8_rank64` | `64` | `128.08` | `5.114` | `9/10` | `6/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00350` | `11.94` | `74` | Recall-aware weighting improves candidate gates over variance PCA at the same rank, but it is oracle-trained on top100 boundaries. |
+| `pairwise_diff_pca_top10_vs_11_100_i8_rank64` | `64` | `128.08` | `11.818` | `9/10` | `6/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `17/20` | `0.00332` | `11.11` | `69` | Boundary-separating directions improve top10 survival, but top20 worst-case is weaker than boundary-weighted PCA. Oracle only. |
+| `local_pca_i8_rank64_residual_rp_i8_8` | `72` | `128.32` | `4.579` | `8/10` | `5/10` | `10/10` | `7/10` | `10/10` | `10/10` | `20/20` | `17/20` | `0.00330` | `11.07` | `67` | Tiny residual sketch improves score error and worst top10@50 versus rank64 PCA, but worsens worst top20@50 and costs extra row bytes. |
+| `local_pca_i8_rank80_residual_rp_i8_8` | `88` | `159.36` | `4.811` | `9/10` | `5/10` | `10/10` | `9/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00152` | `5.92` | `83` | Repairs rank80's worst top20@50 and lowers score error, but does not beat the 80B boundary-weighted/pairwise oracle gates. |
+| `query_axis_oracle_i8_projection_f16_norm` | `1` | `2.02` | `0.001` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00175` | `6.46` | `0.65` | Non-deployable query-specific upper bound. It proves score-aware projection has headroom, not that this exact method can ship. |
 
 The harness now also emits a `pca_residual_random_projection` family for the
 top100 oracle tournament. It scores local PCA plus a tiny deterministic int8
@@ -127,27 +129,26 @@ random-projection sketch of the PCA reconstruction residual at `+4`, `+8`, and
 `+16` row-code bytes. This directly tests whether a small residual correction
 can repair rank64/rank80 boundary flips without pretending to be a production
 residual-PQ method. It is intentionally labeled as an official top100
-local-neighborhood upper-bound probe; the archived `0..99` aggregate table
-above should be regenerated with the Deep1B groundtruth cache before drawing a
-Pareto conclusion from those rows.
+local-neighborhood upper-bound probe.
 
-A single-query smoke run verified the lane and gives a first, deliberately weak
-signal:
+The full residual-sketch top100 rerun was completed after the initial q0 smoke:
 
 ```text
+/tmp/gomap_deep1b_top100_residual_sketch_q0_99_20260519_234135/report.md
 /tmp/gomap_deep1b_top100_residual_sketch_q0_20260519_233746/report.md
 ```
 
-For query `0`, `rank64 + residual_rp_i8_8` improved compressed top10 from
-`7/10` to `8/10`, exact top20 in approx@50 from `19/20` to `20/20`, and mean
-score error from `0.00527` to `0.00512` at `72 B/vector` row-code. `rank64 +
-residual_rp_i8_16` improved exact top10 in approx@20 from `9/10` to `10/10`,
-but did not improve compressed top10. `rank80 + residual_rp_i8_16` lowered mean
-score error from `0.00198` to `0.00182`, with candidate gates unchanged because
-rank80 already cleared them for this query. This is not a promotion result yet:
-it says a tiny residual sketch can move individual boundary metrics, so it
-deserves the cached `0..99` rerun before deciding whether it belongs on the
-frontier.
+The aggregate result is useful but not a promotion. `rank64 + residual_rp_i8_8`
+improves worst exact top10-in-approx@50 from `9/10` to `10/10` and lowers mean
+score error from `0.00347` to `0.00330`, but it worsens worst exact top20 in
+approx@50 from `18/20` to `17/20` and spends `72 B/vector` instead of `64`.
+`rank80 + residual_rp_i8_8` repairs rank80's worst exact top20-in-approx@50
+from `19/20` to `20/20` and lowers mean score error from `0.00161` to
+`0.00152`, but it spends `88 B/vector` and still does not beat the stronger
+80B oracle basis-objective lanes on compressed-top10 robustness. Keep the lane
+as evidence that small residual corrections can move boundary metrics, but do
+not promote it above SQ8, u4 scalar, boundary-weighted PCA, or
+pairwise-difference PCA from the top100 oracle frontier.
 
 The top100-only tournament changes the immediate emphasis:
 
@@ -878,11 +879,12 @@ conservative compressed lane; plain per-dimension int4 is the strongest simple
 boundary-weighted or pairwise-difference PCA improves rank64 candidate gates
 over variance PCA but remains an oracle-locality result. The PCA plus tiny
 residual-correction lane is now present in the harness as
-`pca_residual_random_projection`. A query-0 smoke shows small boundary-metric
-improvements at rank64/rank80, but it still needs a full cached `0..99` rerun
-before it can be included in the frontier. The remaining top100-only probe worth
-adding, if this path remains decision-relevant, is a low-rank-plus-tail
-progressive bound test.
+`pca_residual_random_projection`, and the full `0..99` rerun shows it can move
+individual boundary metrics but does not become the top100 oracle frontier:
+rank64+8 fixes worst top10@50 while worsening worst top20@50, and rank80+8
+fixes worst top20@50 only by spending `88 B/vector`. The remaining top100-only
+probe worth adding, if this path remains decision-relevant, is a
+low-rank-plus-tail progressive bound test.
 
 Track A.5 is now started: buildable-granule scouts over row-id-contiguous
 blocks, IVF/k-means variable-size clusters, and IVF/k-means locality-sorted
@@ -932,9 +934,10 @@ local residual after the coarse locality unit, not the raw global vector.
 4. Extend the cascade benchmark beyond the existing rerank-recall gates:
    compressed scan top50/top100, full-dim int8 rerank, optional exact fp32
    rerank, plus p50/p95 latency and cache-aware bytes read/query.
-5. Rerun the top100-only tournament with the new PCA plus tiny residual
-   random-projection lane, then finish safe/progressive low-rank-plus-tail
-   bounds only if this path is still needed for method triage.
+5. Finish safe/progressive low-rank-plus-tail bounds only if the top100 oracle
+   path remains needed for method triage; the tiny residual sketch has now been
+   rerun on queries `0..99` and is not promoted above the current oracle
+   frontier.
 6. Add CPU-friendly scalar/low-build challengers after the first production
    frontier: LVQ/SVS-style scalar compression, RaBitQ-inspired and
    TurboQuant-inspired lanes, with honest labels when the implementation is
