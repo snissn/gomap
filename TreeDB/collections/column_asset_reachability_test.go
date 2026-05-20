@@ -317,12 +317,15 @@ func TestColumnAssetReachabilityPlanRetainsCanonicalSymlinkAsUnknownM15A(t *test
 	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.Reclaimable != 0 {
 		t.Fatalf("segments=%+v complete=%t want symlink retained as unknown", plan.Segments, plan.Complete)
 	}
+	if plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("segments=%+v want non-regular symlink bytes omitted from unknown byte totals", plan.Segments)
+	}
 	foundSymlink := false
 	for _, entry := range plan.SegmentEntries {
 		if entry.Path == linkPath {
 			foundSymlink = true
-			if entry.FileID != 0 || entry.Status != ColumnAssetReachabilitySegmentUnknown {
-				t.Fatalf("symlink entry=%+v want non-canonical unknown", entry)
+			if entry.FileID != 7 || entry.Status != ColumnAssetReachabilitySegmentUnknown || entry.Bytes != 0 || entry.UnknownBytes != 0 {
+				t.Fatalf("symlink entry=%+v want canonical fileID with zero-byte unknown diagnostics", entry)
 			}
 		}
 	}
@@ -359,7 +362,7 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 	if plan.Complete {
 		t.Fatalf("plan marked complete despite missing live segment: %+v", plan.Segments)
 	}
-	if plan.Segments.Missing == 0 || plan.Segments.Reclaimable != 0 {
+	if plan.Segments.Total == 0 || plan.Segments.Missing == 0 || plan.Segments.Reclaimable != 0 {
 		t.Fatalf("segment stats=%+v want missing retained and no reclaimable segment", plan.Segments)
 	}
 	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentMissing {
@@ -442,8 +445,8 @@ func TestColumnAssetReachabilityPlanCountsMissingSegmentsOnceM15A(t *testing.T) 
 	if err != nil {
 		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
 	}
-	if plan.Complete || plan.Segments.Missing != 1 || plan.Segments.OutOfBoundsRefs != 0 {
-		t.Fatalf("segments=%+v complete=%t want one missing segment and no out-of-bounds refs", plan.Segments, plan.Complete)
+	if plan.Complete || plan.Segments.Total != 1 || plan.Segments.Missing != 1 || plan.Segments.OutOfBoundsRefs != 0 {
+		t.Fatalf("segments=%+v complete=%t want one total missing segment and no out-of-bounds refs", plan.Segments, plan.Complete)
 	}
 	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].FileID != 7 || plan.SegmentEntries[0].RefCount != 2 {
 		t.Fatalf("segment entries=%+v want one missing segment entry with two refs", plan.SegmentEntries)
@@ -553,7 +556,7 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 }
 
 func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
-	if len(columnAssetReachabilitySourceBits) >= 64 {
+	if len(columnAssetReachabilitySourceBits) > 64 {
 		t.Fatalf("source mask table has %d entries; uint64 mask needs an explicit overflow strategy", len(columnAssetReachabilitySourceBits))
 	}
 	seen := make(map[columnAssetReachabilitySourceMask]ColumnAssetReachabilitySource, len(columnAssetReachabilitySourceBits))
@@ -576,6 +579,20 @@ func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
 	mask, ok := columnAssetReachabilitySourceBit(ColumnAssetReachabilitySource("future_source"))
 	if ok || mask != columnAssetReachabilitySourceUnknownMask {
 		t.Fatalf("unknown source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+	}
+	knownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(knownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate}) {
+		t.Fatalf("known source list=%v want candidate only without stray unknown sources", knownSources)
+	}
+	unknownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask|columnAssetReachabilitySourceUnknownMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(unknownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate, "future_source"}) {
+		t.Fatalf("unknown source list=%v want candidate plus original unknown source", unknownSources)
 	}
 }
 

@@ -587,6 +587,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 		}
 		ranges := rangesByFile[fileID]
+		plan.Segments.Total++
 		plan.Segments.Missing++
 		plan.Complete = false
 		if input.detailed || input.segmentDetails {
@@ -831,19 +832,22 @@ func columnAssetReachabilitySourcesForMaskWithUnknown(mask columnAssetReachabili
 		return nil
 	}
 	count := columnAssetReachabilitySourceMaskCount(mask)
-	if len(unknownSources) != 0 {
+	hasUnknown := mask&columnAssetReachabilitySourceUnknownMask != 0
+	if hasUnknown && len(unknownSources) != 0 {
 		count += len(unknownSources) - 1
 	}
 	sources := make([]ColumnAssetReachabilitySource, 0, count)
 	for _, entry := range columnAssetReachabilitySourceBits {
-		if entry.source == columnAssetReachabilitySourceUnknown && len(unknownSources) != 0 {
+		if entry.source == columnAssetReachabilitySourceUnknown && hasUnknown && len(unknownSources) != 0 {
 			continue
 		}
 		if mask&entry.mask != 0 {
 			sources = append(sources, entry.source)
 		}
 	}
-	sources = append(sources, unknownSources...)
+	if hasUnknown {
+		sources = append(sources, unknownSources...)
+	}
 	return sources
 }
 
@@ -900,15 +904,23 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		if info.IsDir() {
 			continue
 		}
+		fileID, ok := columnAssetReachabilitySegmentFileID(name)
 		if info.Mode()&os.ModeSymlink != 0 {
-			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
+			if ok {
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name})
+			} else {
+				segments = append(segments, columnAssetReachabilitySegment{name: name})
+			}
 			continue
 		}
 		if !info.Mode().IsRegular() {
-			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
+			if ok {
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name})
+			} else {
+				segments = append(segments, columnAssetReachabilitySegment{name: name})
+			}
 			continue
 		}
-		fileID, ok := columnAssetReachabilitySegmentFileID(name)
 		if !ok {
 			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
 			continue

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -205,7 +204,7 @@ func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetR
 		entry.ReclaimableBytes != entry.Bytes {
 		return false
 	}
-	expected := filepath.Join(segmentDir, columnAssetSegmentFileName(entry.FileID))
+	expected := columnAssetReachabilitySegmentPath(segmentDir, columnAssetSegmentFileName(entry.FileID))
 	if entry.Path != expected {
 		return false
 	}
