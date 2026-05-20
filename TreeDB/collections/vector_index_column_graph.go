@@ -2,7 +2,6 @@ package collections
 
 import (
 	"errors"
-	"strings"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -220,15 +219,12 @@ func columnGraphCatalogRootUnavailableReason(err error) string {
 		errors.Is(err, errColumnManifestIdentityMalformed) ||
 		errors.Is(err, errColumnManifestIdentityBadMagic) ||
 		errors.Is(err, errColumnManifestIdentityUnsupportedVersion) ||
-		errors.Is(err, errColumnManifestIdentityNonZeroReserved) {
-		return vectorIndexFallbackColumnGraphManifestInvalid
-	}
-	msg := err.Error()
-	if strings.Contains(msg, "missing root descriptor") ||
-		strings.Contains(msg, "deleted identity record") ||
-		strings.Contains(msg, "invalid identity record") ||
-		strings.Contains(msg, "identity mismatch") {
-		return vectorIndexFallbackColumnGraphManifestInvalid
+		errors.Is(err, errColumnManifestIdentityNonZeroReserved) ||
+		errors.Is(err, errColumnManifestRootDescriptorMissing) ||
+		errors.Is(err, errColumnManifestIdentityDeleted) ||
+		errors.Is(err, errColumnManifestIdentityInvalid) ||
+		errors.Is(err, errColumnManifestIdentityMismatch) {
+		return vectorIndexFallbackColumnGraphManifestRootMismatch
 	}
 	return ""
 }

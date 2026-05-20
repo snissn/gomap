@@ -55,9 +55,6 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err
 	}
-	if err := c.flushBufferedWrites(); err != nil {
-		return VectorIndexStatus{}, err
-	}
 	if status, handled, err := c.probeColumnGraphVectorIndexRebuild(name, start); err != nil || handled {
 		return status, err
 	}
@@ -82,14 +79,8 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		status.Duration = collectionObservedElapsedSince(start)
 		return status, nil
 	}
-	def, err = c.declaredVectorIndexDefinitionPrepared(name)
-	if err != nil {
+	if err := c.validateColumnStoreCatalogRootPrepared(); err != nil {
 		return VectorIndexStatus{}, err
-	}
-	if vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
-		status := columnGraphRebuildUnsupportedStatus(def, columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphReprobeRequired))
-		status.Duration = collectionObservedElapsedSince(start)
-		return status, nil
 	}
 	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false)
 	if err != nil {
@@ -187,6 +178,28 @@ func (c *Collection) declaredVectorIndexDefinitionPrepared(name string) (VectorI
 
 func (c *Collection) declaredVectorIndexDefinitionPreparedWithoutColumnRootValidation(name string) (VectorIndexDefinition, error) {
 	return c.declaredVectorIndexDefinitionPreparedFromCatalog(name, loadCollectionCatalogWithoutColumnRootValidation)
+}
+
+func (c *Collection) validateColumnStoreCatalogRootPrepared() error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalogWithoutColumnRootValidation(snap, c.meta.Name)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	return validateColumnStoreCatalogRoot(snap, catalog)
 }
 
 func (c *Collection) declaredVectorIndexDefinitionPreparedFromCatalog(name string, loadCatalog func(*backenddb.Snapshot, string) (*collectionCatalog, error)) (VectorIndexDefinition, error) {
@@ -306,7 +319,6 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return status, nil
 	}
 	probe.recordLoadedSnapshot(status.RootID, bytesDisk)
-	status.NativeRuntimeUsed = true
 	status.NativeRootLoaded = true
 	status.NativeRootBytes = bytesDisk
 	if !status.Registered || registeredRuntimeStale {

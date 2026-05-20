@@ -31,35 +31,38 @@ const (
 )
 
 const (
-	vectorIndexFallbackMissingVectorIndexMetadata = "missing_vector_index_metadata"
-	vectorIndexFallbackMissingGraphRoot           = "missing_graph_root"
-	vectorIndexFallbackMissingGraphRootEntry      = "missing_graph_root_entry"
-	vectorIndexFallbackInvalidGraphRootKey        = "invalid_graph_root_key"
-	vectorIndexFallbackInvalidGraphRootEntry      = "invalid_graph_root_entry"
-	vectorIndexFallbackStaleRuntimeIndex          = "stale_runtime_index_ignored"
-	vectorIndexFallbackMetaMismatch               = "meta_mismatch"
-	vectorIndexFallbackInvalidEncoding            = "invalid_encoding"
-	vectorIndexFallbackMetaEncodingMismatch       = "meta_encoding_mismatch"
-	vectorIndexFallbackMetaDimensionMismatch      = "meta_dimension_mismatch"
-	vectorIndexFallbackInvalidDimensions          = "invalid_dimensions"
-	vectorIndexFallbackInvalidEdgeNode            = "invalid_edge_node"
-	vectorIndexFallbackInvalidTombstone           = "invalid_tombstone"
-	vectorIndexFallbackInvalidDocMapNode          = "invalid_docmap_node"
-	vectorIndexFallbackInvalidEntry               = "invalid_entry"
-	vectorIndexFallbackMissingManifest            = "missing_manifest"
-	vectorIndexFallbackInvalidManifest            = "invalid_manifest"
-	vectorIndexFallbackStrategyMismatch           = "strategy_mismatch"
-	vectorIndexFallbackColumnGraphStrategyMissing = "column_graph_strategy_not_selected"
-	vectorIndexFallbackColumnGraphPhysicalMissing = "physical_column_asset_support_missing"
-	vectorIndexFallbackColumnGraphManifestMissing = "column_graph_manifest_root_missing"
-	vectorIndexFallbackColumnGraphManifestInvalid = "column_graph_manifest_root_mismatch"
-	vectorIndexFallbackColumnGraphMetric          = "column_graph_requires_cosine"
-	vectorIndexFallbackColumnGraphEncoding        = "column_graph_requires_float32"
-	vectorIndexFallbackColumnGraphReprobeRequired = "column_graph_reprobe_outside_native_rebuild"
-	vectorIndexFallbackColumnGraphHandleMissing   = "column_graph_requires_column_graph_handle"
+	vectorIndexFallbackMissingVectorIndexMetadata      = "missing_vector_index_metadata"
+	vectorIndexFallbackMissingGraphRoot                = "missing_graph_root"
+	vectorIndexFallbackMissingGraphRootEntry           = "missing_graph_root_entry"
+	vectorIndexFallbackInvalidGraphRootKey             = "invalid_graph_root_key"
+	vectorIndexFallbackInvalidGraphRootEntry           = "invalid_graph_root_entry"
+	vectorIndexFallbackStaleRuntimeIndex               = "stale_runtime_index_ignored"
+	vectorIndexFallbackMetaMismatch                    = "meta_mismatch"
+	vectorIndexFallbackInvalidEncoding                 = "invalid_encoding"
+	vectorIndexFallbackMetaEncodingMismatch            = "meta_encoding_mismatch"
+	vectorIndexFallbackMetaDimensionMismatch           = "meta_dimension_mismatch"
+	vectorIndexFallbackInvalidDimensions               = "invalid_dimensions"
+	vectorIndexFallbackInvalidEdgeNode                 = "invalid_edge_node"
+	vectorIndexFallbackInvalidTombstone                = "invalid_tombstone"
+	vectorIndexFallbackInvalidDocMapNode               = "invalid_docmap_node"
+	vectorIndexFallbackInvalidEntry                    = "invalid_entry"
+	vectorIndexFallbackMissingManifest                 = "missing_manifest"
+	vectorIndexFallbackInvalidManifest                 = "invalid_manifest"
+	vectorIndexFallbackStrategyMismatch                = "strategy_mismatch"
+	vectorIndexFallbackColumnGraphStrategyMissing      = "column_graph_strategy_not_selected"
+	vectorIndexFallbackColumnGraphPhysicalMissing      = "physical_column_asset_support_missing"
+	vectorIndexFallbackColumnGraphManifestMissing      = "column_graph_manifest_root_missing"
+	vectorIndexFallbackColumnGraphManifestRootMismatch = "column_graph_manifest_root_mismatch"
+	vectorIndexFallbackColumnGraphMetric               = "column_graph_requires_cosine"
+	vectorIndexFallbackColumnGraphEncoding             = "column_graph_requires_float32"
+	vectorIndexFallbackColumnGraphReprobeRequired      = "column_graph_reprobe_outside_native_rebuild"
+	vectorIndexFallbackColumnGraphHandleMissing        = "column_graph_requires_column_graph_handle"
 )
 
-var errVectorIndexStaleRuntime = errors.New("collections: vector index runtime handle is stale")
+var (
+	errVectorIndexStaleRuntime   = errors.New("collections: vector index runtime handle is stale")
+	errColumnGraphRequiresLoader = errors.New("collections: column_graph vector indexes require the column-backed graph loader, not the native runtime builder")
+)
 
 // VectorIndexEncoding selects the process-local ANN vector copy format. The
 // collection row remains canonical; float32 indexes can rerank directly from the
@@ -283,6 +286,9 @@ func (c *Collection) buildVectorIndexPrepared(opts VectorIndexOptions, register,
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if def, ok := findVectorIndex(c.meta.VectorIndexes, vectorIndexOptionName(opts)); ok && vectorIndexDefinitionStrategy(def) == VectorIndexStrategyColumnGraph {
+		return nil, errColumnGraphRequiresLoader
+	}
 	index, err := newVectorIndex(c, opts)
 	if err != nil {
 		return nil, err
@@ -341,7 +347,7 @@ func newVectorIndex(c *Collection, opts VectorIndexOptions) (*VectorIndex, error
 		return nil, err
 	}
 	if strategy == VectorIndexStrategyColumnGraph {
-		return nil, errors.New("collections: column_graph vector indexes require the column-backed graph loader, not the native runtime builder")
+		return nil, errColumnGraphRequiresLoader
 	}
 	fieldPath, err := parseVectorFieldPath(opts.Field)
 	if err != nil {

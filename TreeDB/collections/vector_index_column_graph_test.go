@@ -134,6 +134,40 @@ func TestLoadVectorIndexSnapshotColumnGraphDoesNotReportNativeLoaded(t *testing.
 	}
 }
 
+func TestBuildVectorIndexRejectsDeclaredColumnGraphWithoutStrategyOption(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	_, err = col.BuildVectorIndex(VectorIndexOptions{
+		Name:       def.Name,
+		Field:      def.Field,
+		Metric:     def.Metric,
+		Dimensions: def.Dimensions,
+	})
+	if err == nil || !strings.Contains(err.Error(), "column_graph vector indexes require the column-backed graph loader") {
+		t.Fatalf("BuildVectorIndex err=%v want column_graph loader boundary", err)
+	}
+	if col.hasRegisteredVectorIndex(def.Name) {
+		t.Fatalf("BuildVectorIndex registered native runtime for declared column_graph index")
+	}
+}
+
 func TestColumnGraphUnavailableStatusPreservesPhysicalSupportForLoaderFailures(t *testing.T) {
 	status := VectorIndexLoadStatus{
 		Strategy:                      VectorIndexStrategyColumnGraph,
@@ -141,13 +175,13 @@ func TestColumnGraphUnavailableStatusPreservesPhysicalSupportForLoaderFailures(t
 	}
 	mergeColumnGraphLoadStatus(&status, VectorIndexLoadStatus{
 		PhysicalColumnAssetsSupported: true,
-		ColumnGraphUnavailableReason:  vectorIndexFallbackColumnGraphManifestInvalid,
+		ColumnGraphUnavailableReason:  vectorIndexFallbackColumnGraphManifestRootMismatch,
 		BytesDisk:                     4096,
 	})
 	if status.PhysicalColumnAssetsSupported == false {
 		t.Fatalf("loader failure discarded physical column support: %+v", status)
 	}
-	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid {
+	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestRootMismatch || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestRootMismatch {
 		t.Fatalf("unexpected fallback reason: %+v", status)
 	}
 	if status.BytesDisk != 4096 || !status.RebuildNeeded {
@@ -201,14 +235,14 @@ func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.
 	if graph != nil {
 		t.Fatalf("loaded graph despite manifest mismatch")
 	}
-	if status.RootID == 0 || status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid {
+	if status.RootID == 0 || status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestRootMismatch || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestRootMismatch {
 		t.Fatalf("unexpected mismatch status: %+v", status)
 	}
 	rebuild, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		t.Fatalf("RebuildVectorIndex should report mismatch status, not error: %v", err)
 	}
-	if rebuild.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestInvalid || rebuild.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestInvalid || !rebuild.RebuildNeeded {
+	if rebuild.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestRootMismatch || rebuild.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestRootMismatch || !rebuild.RebuildNeeded {
 		t.Fatalf("unexpected rebuild mismatch status: %+v", rebuild)
 	}
 }
