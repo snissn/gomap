@@ -12,6 +12,15 @@ regime:        official top100 local-neighborhood codec probe
 source output: /tmp/gomap_deep1b_float_quant_v2_q0_99/report.md
 ```
 
+Next proposed experiment:
+
+```text
+docs/benchmarks/column_vector_u2_sparse_refinement_plan.md
+```
+
+That plan turns the current sparse-exception finding into a focused accuracy
+and storage-model tournament for a dense u2 base plus sparse correction sidecar.
+
 This document is the standalone home for the next codec-only Deep1B vector
 compression experiment. It defines the research framing, hypotheses, method
 families, evaluation gates, and report shape. The executable tournament is
