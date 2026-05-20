@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gonum.org/v1/gonum/mat"
 )
 
 func TestColumnVectorGraphDeep1BInt8StorageTournament(t *testing.T) {
@@ -85,7 +87,9 @@ func TestColumnVectorGraphDeep1BInt8StorageTournament(t *testing.T) {
 		ClickHouseAvailable: columnVectorGraphDeep1BClickHouseAvailable(),
 	}
 
-	orders := columnVectorGraphDeep1BInt8TournamentOrders(nearestRows, localVectors, exactScores, invNorms, columnVectorGraphDeep1BDims)
+	orders := columnVectorGraphDeep1BInt8TournamentOrders(nearestRows, vectors, localVectors, exactScores, invNorms, columnVectorGraphDeep1BDims)
+	pcaRanks := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_LOCAL_PCA_RANKS", []int{8, 16, 32, 64, columnVectorGraphDeep1BDims})
+	pcaModel := columnVectorGraphDeep1BFitLocalPCAModel(t, vectors, granuleRows, columnVectorGraphDeep1BDims, pcaRanks)
 	for _, order := range orders {
 		layout := columnVectorGraphDeep1BInt8TournamentLayout(t, order.localVectors, granuleRows, columnVectorGraphDeep1BDims)
 		stats := columnVectorGraphDeep1BComputeInt8TournamentStats(layout.raw, granuleRows, columnVectorGraphDeep1BDims)
@@ -101,6 +105,11 @@ func TestColumnVectorGraphDeep1BInt8StorageTournament(t *testing.T) {
 			ResultCount: len(results),
 		})
 		report.Results = append(report.Results, results...)
+		pcaResults, err := columnVectorGraphDeep1BRunLocalPCATournament(t, outDir, order, pcaModel, pcaRanks, query, queryInvNorm, topK, granuleRows, columnVectorGraphDeep1BDims)
+		if err != nil {
+			t.Fatalf("run local PCA tournament for order %s: %v", order.name, err)
+		}
+		report.LocalPCAResults = append(report.LocalPCAResults, pcaResults...)
 	}
 	sort.Slice(report.Results, func(i, j int) bool {
 		if report.Results[i].Order == report.Results[j].Order {
@@ -110,6 +119,18 @@ func TestColumnVectorGraphDeep1BInt8StorageTournament(t *testing.T) {
 			return report.Results[i].StoredBytes < report.Results[j].StoredBytes
 		}
 		return report.Results[i].Order < report.Results[j].Order
+	})
+	sort.Slice(report.LocalPCAResults, func(i, j int) bool {
+		if report.LocalPCAResults[i].Order == report.LocalPCAResults[j].Order {
+			if report.LocalPCAResults[i].Rank == report.LocalPCAResults[j].Rank {
+				if report.LocalPCAResults[i].TotalStoredBytes == report.LocalPCAResults[j].TotalStoredBytes {
+					return report.LocalPCAResults[i].Name < report.LocalPCAResults[j].Name
+				}
+				return report.LocalPCAResults[i].TotalStoredBytes < report.LocalPCAResults[j].TotalStoredBytes
+			}
+			return report.LocalPCAResults[i].Rank < report.LocalPCAResults[j].Rank
+		}
+		return report.LocalPCAResults[i].Order < report.LocalPCAResults[j].Order
 	})
 
 	if err := columnVectorGraphDeep1BWriteClickHouseFixtures(outDir, orders, granuleRows, columnVectorGraphDeep1BDims); err != nil {
@@ -139,6 +160,7 @@ type columnVectorGraphDeep1BInt8TournamentReport struct {
 	ClickHouseAvailable bool                                               `json:"clickhouse_available"`
 	Orders              []columnVectorGraphDeep1BInt8TournamentOrderReport `json:"orders"`
 	Results             []columnVectorGraphDeep1BInt8TournamentResult      `json:"results"`
+	LocalPCAResults     []columnVectorGraphDeep1BLocalPCAResult            `json:"local_pca_results,omitempty"`
 }
 
 type columnVectorGraphDeep1BInt8TournamentOrderReport struct {
@@ -152,6 +174,7 @@ type columnVectorGraphDeep1BInt8TournamentOrderReport struct {
 type columnVectorGraphDeep1BInt8TournamentOrder struct {
 	name         string
 	rowIDs       []int
+	vectors      []float32
 	localVectors []float32
 	exactScores  []float32
 	invNorms     []float32
@@ -182,7 +205,42 @@ type columnVectorGraphDeep1BInt8TournamentResult struct {
 	Notes          string  `json:"notes,omitempty"`
 }
 
-func columnVectorGraphDeep1BInt8TournamentOrders(rowIDs []int, localVectors []float32, exactScores []float32, invNorms []float32, dims int) []columnVectorGraphDeep1BInt8TournamentOrder {
+type columnVectorGraphDeep1BLocalPCAModel struct {
+	maxRank           int
+	centroid          []float32
+	centroidF16Bytes  []byte
+	basis             []float32
+	basisF16Bytes     []byte
+	varianceByRank    map[int]float64
+	centroidMetaBytes int
+}
+
+type columnVectorGraphDeep1BLocalPCAResult struct {
+	Order                string  `json:"order"`
+	Name                 string  `json:"name"`
+	Rank                 int     `json:"rank"`
+	Compression          string  `json:"compression"`
+	CodeBytes            int     `json:"code_bytes"`
+	CodeStoredBytes      int     `json:"code_stored_bytes"`
+	MetadataBytes        int     `json:"metadata_bytes"`
+	TotalStoredBytes     int     `json:"total_stored_bytes"`
+	CodeBytesPerVector   float64 `json:"code_bytes_per_vector"`
+	StoredBytesPerVector float64 `json:"stored_bytes_per_vector"`
+	TotalBytesPerVector  float64 `json:"total_bytes_per_vector"`
+	RatioVsFP32          float64 `json:"ratio_vs_fp32"`
+	RatioVsFullInt8      float64 `json:"ratio_vs_full_int8"`
+	VarianceCaptured     float64 `json:"variance_captured"`
+	Top10Overlap         int     `json:"top10_overlap"`
+	RecallAt10           float64 `json:"recall_at_10"`
+	MaxScoreError        float64 `json:"max_score_error"`
+	MeanScoreError       float64 `json:"mean_score_error"`
+	MeanRelativeL2       float64 `json:"mean_relative_l2"`
+	MaxRelativeL2        float64 `json:"max_relative_l2"`
+	EncodeNanos          int64   `json:"encode_nanos"`
+	Notes                string  `json:"notes,omitempty"`
+}
+
+func columnVectorGraphDeep1BInt8TournamentOrders(rowIDs []int, vectors []float32, localVectors []float32, exactScores []float32, invNorms []float32, dims int) []columnVectorGraphDeep1BInt8TournamentOrder {
 	rows := len(rowIDs)
 	nearestPerm := make([]int, rows)
 	for i := range nearestPerm {
@@ -218,6 +276,7 @@ func columnVectorGraphDeep1BInt8TournamentOrders(rowIDs []int, localVectors []fl
 		orders = append(orders, columnVectorGraphDeep1BInt8TournamentOrder{
 			name:         item.name,
 			rowIDs:       columnVectorGraphDeep1BPermuteInts(rowIDs, item.perm),
+			vectors:      columnVectorGraphDeep1BPermuteFloat32Rows(vectors, item.perm, dims),
 			localVectors: columnVectorGraphDeep1BPermuteFloat32Rows(localVectors, item.perm, dims),
 			exactScores:  columnVectorGraphDeep1BPermuteFloat32s(exactScores, item.perm),
 			invNorms:     columnVectorGraphDeep1BPermuteFloat32s(invNorms, item.perm),
@@ -331,6 +390,329 @@ func columnVectorGraphDeep1BInt8TournamentCompress(tb testing.TB, payload []byte
 		tb.Fatalf("compress tournament payload %s: %v", codecName, err)
 	}
 	return len(out), actual.name, nanos
+}
+
+func columnVectorGraphDeep1BFitLocalPCAModel(tb testing.TB, vectors []float32, rows int, dims int, ranks []int) columnVectorGraphDeep1BLocalPCAModel {
+	tb.Helper()
+	ranks = columnVectorGraphDeep1BValidateLocalPCARanks(tb, ranks, dims)
+	maxRank := ranks[len(ranks)-1]
+	if len(vectors) != rows*dims {
+		tb.Fatalf("local PCA vectors=%d want=%d", len(vectors), rows*dims)
+	}
+	centroid := make([]float32, dims)
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		for j := 0; j < dims; j++ {
+			centroid[j] += vectors[base+j]
+		}
+	}
+	invRows := float32(1.0 / float64(rows))
+	for j := range centroid {
+		centroid[j] *= invRows
+		centroid[j] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(centroid[j]))
+	}
+	residuals := make([]float64, rows*dims)
+	for row := 0; row < rows; row++ {
+		srcBase := row * dims
+		for j := 0; j < dims; j++ {
+			residuals[srcBase+j] = float64(vectors[srcBase+j] - centroid[j])
+		}
+	}
+	var svd mat.SVD
+	if ok := svd.Factorize(mat.NewDense(rows, dims, residuals), mat.SVDThinV); !ok {
+		tb.Fatalf("local PCA SVD failed for %d x %d residual matrix", rows, dims)
+	}
+	singularValues := svd.Values(nil)
+	var v mat.Dense
+	svd.VTo(&v)
+	basis := make([]float32, maxRank*dims)
+	for k := 0; k < maxRank; k++ {
+		for j := 0; j < dims; j++ {
+			value := float32(v.At(j, k))
+			basis[k*dims+j] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(value))
+		}
+	}
+	var totalVariance float64
+	for _, singular := range singularValues {
+		totalVariance += singular * singular
+	}
+	varianceByRank := make(map[int]float64, len(ranks))
+	var captured float64
+	nextRankIndex := 0
+	for k, singular := range singularValues {
+		captured += singular * singular
+		for nextRankIndex < len(ranks) && k+1 == ranks[nextRankIndex] {
+			if totalVariance == 0 {
+				varianceByRank[ranks[nextRankIndex]] = 1
+			} else {
+				varianceByRank[ranks[nextRankIndex]] = captured / totalVariance
+			}
+			nextRankIndex++
+		}
+	}
+	for nextRankIndex < len(ranks) {
+		if totalVariance == 0 {
+			varianceByRank[ranks[nextRankIndex]] = 1
+		} else {
+			varianceByRank[ranks[nextRankIndex]] = captured / totalVariance
+		}
+		nextRankIndex++
+	}
+	return columnVectorGraphDeep1BLocalPCAModel{
+		maxRank:           maxRank,
+		centroid:          centroid,
+		centroidF16Bytes:  columnVectorGraphDeep1BFloat32ToFloat16Bytes(centroid),
+		basis:             basis,
+		basisF16Bytes:     columnVectorGraphDeep1BFloat32ToFloat16Bytes(basis),
+		varianceByRank:    varianceByRank,
+		centroidMetaBytes: dims * 2,
+	}
+}
+
+func columnVectorGraphDeep1BValidateLocalPCARanks(tb testing.TB, ranks []int, dims int) []int {
+	tb.Helper()
+	seen := make(map[int]bool, len(ranks))
+	out := make([]int, 0, len(ranks))
+	for _, rank := range ranks {
+		if rank <= 0 {
+			tb.Fatalf("local PCA rank %d must be positive", rank)
+		}
+		if rank > dims {
+			tb.Fatalf("local PCA rank %d exceeds dims=%d", rank, dims)
+		}
+		if seen[rank] {
+			continue
+		}
+		seen[rank] = true
+		out = append(out, rank)
+	}
+	if len(out) == 0 {
+		tb.Fatal("local PCA selected no ranks")
+	}
+	sort.Ints(out)
+	return out
+}
+
+type columnVectorGraphDeep1BLocalPCAEncoding struct {
+	rank             int
+	codes            []byte
+	scales           []float32
+	scalesF16Bytes   []byte
+	invNorms         []float32
+	invNormsF16Bytes []byte
+	approxScores     []float32
+	meanRelativeL2   float64
+	maxRelativeL2    float64
+}
+
+func columnVectorGraphDeep1BRunLocalPCATournament(tb testing.TB, outDir string, order columnVectorGraphDeep1BInt8TournamentOrder, model columnVectorGraphDeep1BLocalPCAModel, ranks []int, query []float32, queryInvNorm float32, topK int, rows int, dims int) ([]columnVectorGraphDeep1BLocalPCAResult, error) {
+	tb.Helper()
+	exactTopRows := make([]int, topK)
+	exactTopScores := make([]float32, topK)
+	columnVectorGraphDeep1BTopKFromScores(order.exactScores, topK, exactTopRows, exactTopScores)
+	codecs := []string{"raw", "zstd_fast", "zstd_better"}
+	fp32Bytes := rows * dims * 4
+	fullInt8Bytes := rows * dims
+	var results []columnVectorGraphDeep1BLocalPCAResult
+	for _, rank := range columnVectorGraphDeep1BValidateLocalPCARanks(tb, ranks, dims) {
+		encoding := columnVectorGraphDeep1BEncodeLocalPCARank(order.vectors, order.invNorms, model, rank, query, queryInvNorm, rows, dims)
+		if err := columnVectorGraphDeep1BWriteLocalPCAArtifacts(outDir, order.name, model, encoding, rows, dims); err != nil {
+			return nil, err
+		}
+		approxTopRows := make([]int, topK)
+		approxTopScores := make([]float32, topK)
+		columnVectorGraphDeep1BTopKFromScores(encoding.approxScores, topK, approxTopRows, approxTopScores)
+		overlap := columnVectorGraphDeep1BTopKOverlap(exactTopRows, approxTopRows)
+		maxScoreError, meanScoreError := columnVectorGraphDeep1BScoreErrorMetrics(order.exactScores, encoding.approxScores)
+		metadataBytes := model.centroidMetaBytes + rank*dims*2 + rank*2 + rows*2
+		for _, codecName := range codecs {
+			stored, actualCodec, nanos := columnVectorGraphDeep1BInt8TournamentCompress(tb, encoding.codes, codecName)
+			totalStored := metadataBytes + stored
+			results = append(results, columnVectorGraphDeep1BLocalPCAResult{
+				Order:                order.name,
+				Name:                 fmt.Sprintf("local_pca_rank%d_i8_codes/%s", rank, actualCodec),
+				Rank:                 rank,
+				Compression:          actualCodec,
+				CodeBytes:            len(encoding.codes),
+				CodeStoredBytes:      stored,
+				MetadataBytes:        metadataBytes,
+				TotalStoredBytes:     totalStored,
+				CodeBytesPerVector:   float64(len(encoding.codes)) / float64(rows),
+				StoredBytesPerVector: float64(stored) / float64(rows),
+				TotalBytesPerVector:  float64(totalStored) / float64(rows),
+				RatioVsFP32:          float64(fp32Bytes) / float64(totalStored),
+				RatioVsFullInt8:      float64(fullInt8Bytes) / float64(totalStored),
+				VarianceCaptured:     model.varianceByRank[rank],
+				Top10Overlap:         overlap,
+				RecallAt10:           float64(overlap) / float64(topK),
+				MaxScoreError:        maxScoreError,
+				MeanScoreError:       meanScoreError,
+				MeanRelativeL2:       encoding.meanRelativeL2,
+				MaxRelativeL2:        encoding.maxRelativeL2,
+				EncodeNanos:          nanos,
+				Notes:                "fp16 centroid+basis+scales+inv_norms; dim-major int8 PCA coefficients",
+			})
+		}
+	}
+	return results, nil
+}
+
+func columnVectorGraphDeep1BEncodeLocalPCARank(vectors []float32, invNorms []float32, model columnVectorGraphDeep1BLocalPCAModel, rank int, query []float32, queryInvNorm float32, rows int, dims int) columnVectorGraphDeep1BLocalPCAEncoding {
+	if len(vectors) != rows*dims {
+		panic(fmt.Sprintf("local PCA vectors=%d want=%d", len(vectors), rows*dims))
+	}
+	if len(invNorms) < rows {
+		panic(fmt.Sprintf("local PCA invNorms=%d want at least %d", len(invNorms), rows))
+	}
+	if rank > model.maxRank {
+		panic(fmt.Sprintf("local PCA rank=%d exceeds model max rank=%d", rank, model.maxRank))
+	}
+	coefficients := make([]float32, rank*rows)
+	scales := make([]float32, rank)
+	for k := 0; k < rank; k++ {
+		basisBase := k * dims
+		var maxAbs float32
+		for row := 0; row < rows; row++ {
+			srcBase := row * dims
+			var coeff float32
+			for j := 0; j < dims; j++ {
+				coeff += (vectors[srcBase+j] - model.centroid[j]) * model.basis[basisBase+j]
+			}
+			coefficients[k*rows+row] = coeff
+			absCoeff := float32(math.Abs(float64(coeff)))
+			if absCoeff > maxAbs {
+				maxAbs = absCoeff
+			}
+		}
+		if maxAbs == 0 {
+			scales[k] = 1
+		} else {
+			scales[k] = maxAbs / 127
+		}
+		scales[k] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(scales[k]))
+		if scales[k] == 0 {
+			scales[k] = 1
+		}
+	}
+	codes := make([]byte, rank*rows)
+	for k := 0; k < rank; k++ {
+		scale := scales[k]
+		for row := 0; row < rows; row++ {
+			quantized := int(math.Round(float64(coefficients[k*rows+row] / scale)))
+			if quantized < -127 {
+				quantized = -127
+			} else if quantized > 127 {
+				quantized = 127
+			}
+			codes[k*rows+row] = byte(int8(quantized))
+		}
+	}
+	invNormsStored := make([]float32, rows)
+	for row := 0; row < rows; row++ {
+		invNormsStored[row] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(invNorms[row]))
+	}
+	queryProjection := make([]float32, rank)
+	var base float32
+	for j := 0; j < dims; j++ {
+		base += query[j] * model.centroid[j]
+	}
+	for k := 0; k < rank; k++ {
+		basisBase := k * dims
+		var projection float32
+		for j := 0; j < dims; j++ {
+			projection += query[j] * model.basis[basisBase+j]
+		}
+		queryProjection[k] = projection
+	}
+	approxScores := make([]float32, rows)
+	var relSum float64
+	var maxRel float64
+	recon := make([]float32, dims)
+	for row := 0; row < rows; row++ {
+		copy(recon, model.centroid)
+		dot := base
+		for k := 0; k < rank; k++ {
+			dequantized := float32(int8(codes[k*rows+row])) * scales[k]
+			dot += queryProjection[k] * dequantized
+			basisBase := k * dims
+			for j := 0; j < dims; j++ {
+				recon[j] += dequantized * model.basis[basisBase+j]
+			}
+		}
+		approxScores[row] = dot * queryInvNorm * invNormsStored[row]
+		srcBase := row * dims
+		var errSquared float64
+		var normSquared float64
+		for j := 0; j < dims; j++ {
+			diff := float64(vectors[srcBase+j] - recon[j])
+			errSquared += diff * diff
+			value := float64(vectors[srcBase+j])
+			normSquared += value * value
+		}
+		var rel float64
+		if normSquared > 0 {
+			rel = math.Sqrt(errSquared / normSquared)
+		}
+		relSum += rel
+		if rel > maxRel {
+			maxRel = rel
+		}
+	}
+	return columnVectorGraphDeep1BLocalPCAEncoding{
+		rank:             rank,
+		codes:            codes,
+		scales:           scales,
+		scalesF16Bytes:   columnVectorGraphDeep1BFloat32ToFloat16Bytes(scales),
+		invNorms:         invNormsStored,
+		invNormsF16Bytes: columnVectorGraphDeep1BFloat32ToFloat16Bytes(invNormsStored),
+		approxScores:     approxScores,
+		meanRelativeL2:   relSum / float64(rows),
+		maxRelativeL2:    maxRel,
+	}
+}
+
+func columnVectorGraphDeep1BWriteLocalPCAArtifacts(outDir string, orderName string, model columnVectorGraphDeep1BLocalPCAModel, encoding columnVectorGraphDeep1BLocalPCAEncoding, rows int, dims int) error {
+	rankDir := filepath.Join(outDir, "local_pca", orderName, fmt.Sprintf("rank_%d", encoding.rank))
+	if err := os.MkdirAll(rankDir, 0o755); err != nil {
+		return err
+	}
+	files := map[string][]byte{
+		"centroid.f16":           model.centroidF16Bytes,
+		"basis.f16":              model.basisF16Bytes[:encoding.rank*dims*2],
+		"scales.f16":             encoding.scalesF16Bytes,
+		"inv_norms.f16":          encoding.invNormsF16Bytes,
+		"codes_i8_dim_major.bin": encoding.codes,
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(rankDir, name), data, 0o644); err != nil {
+			return err
+		}
+	}
+	metadataBytes := model.centroidMetaBytes + encoding.rank*dims*2 + encoding.rank*2 + rows*2
+	metadata := map[string]any{
+		"order":                  orderName,
+		"encoding":               "local_pca_i8",
+		"rows":                   rows,
+		"dims":                   dims,
+		"rank":                   encoding.rank,
+		"centroid":               "centroid.f16",
+		"basis":                  "basis.f16",
+		"scales":                 "scales.f16",
+		"inv_norms":              "inv_norms.f16",
+		"codes_i8_dim_major":     "codes_i8_dim_major.bin",
+		"code_bytes":             len(encoding.codes),
+		"metadata_bytes":         metadataBytes,
+		"total_uncompressed_bpv": float64(len(encoding.codes)+metadataBytes) / float64(rows),
+	}
+	return columnVectorGraphDeep1BWriteJSON(filepath.Join(rankDir, "metadata.json"), metadata)
+}
+
+func columnVectorGraphDeep1BFloat32ToFloat16Bytes(values []float32) []byte {
+	out := make([]byte, len(values)*2)
+	for i, value := range values {
+		binary.LittleEndian.PutUint16(out[i*2:], columnVectorGraphDeep1BFloat32ToFloat16Bits(value))
+	}
+	return out
 }
 
 func columnVectorGraphDeep1BWriteInt8TournamentArtifacts(outDir string, order columnVectorGraphDeep1BInt8TournamentOrder, layout columnVectorGraphDeep1BGranuleNativeLayout, centroid []float32, localQuery []float32, stats columnVectorGraphDeep1BInt8TournamentStats) error {
@@ -581,6 +963,51 @@ func columnVectorGraphDeep1BRenderInt8TournamentMarkdown(report columnVectorGrap
 			))
 		}
 		b.WriteByte('\n')
+	}
+	if len(report.LocalPCAResults) > 0 {
+		b.WriteString("## Local PCA Quantization Add-On\n\n")
+		b.WriteString("This section fits one PCA basis over the granule's raw fp32 vectors, stores fp16 centroid/basis/scales/invNorm metadata, and stores per-row signed int8 PCA coefficients in dim-major order. Quality metrics compare the decoded approximate cosine scores with exact fp32 cosine scores for the same ordered rows.\n\n")
+		for _, order := range report.Orders {
+			var rows []columnVectorGraphDeep1BLocalPCAResult
+			for _, result := range report.LocalPCAResults {
+				if result.Order == order.Name {
+					rows = append(rows, result)
+				}
+			}
+			if len(rows) == 0 {
+				continue
+			}
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].Rank == rows[j].Rank {
+					if rows[i].TotalStoredBytes == rows[j].TotalStoredBytes {
+						return rows[i].Name < rows[j].Name
+					}
+					return rows[i].TotalStoredBytes < rows[j].TotalStoredBytes
+				}
+				return rows[i].Rank < rows[j].Rank
+			})
+			b.WriteString(fmt.Sprintf("### Order: %s\n\n", order.Name))
+			b.WriteString("| Candidate | Rank | Code stored B/vector | Metadata B/vector | Total B/vector | Ratio vs fp32 | Ratio vs 96B | Variance | Top10 | Mean rel L2 | Mean score err | Notes |\n")
+			b.WriteString("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+			for _, result := range rows {
+				b.WriteString(fmt.Sprintf("| `%s` | %d | %.2f | %.2f | %.2f | %.2fx | %.3fx | %.2f%% | %d/10 | %.4f | %.5f | %s |\n",
+					result.Name,
+					result.Rank,
+					result.StoredBytesPerVector,
+					float64(result.MetadataBytes)/float64(report.GranuleRows),
+					result.TotalBytesPerVector,
+					result.RatioVsFP32,
+					result.RatioVsFullInt8,
+					result.VarianceCaptured*100,
+					result.Top10Overlap,
+					result.MeanRelativeL2,
+					result.MeanScoreError,
+					result.Notes,
+				))
+			}
+			b.WriteByte('\n')
+		}
+		b.WriteString("Local PCA artifacts are written under `local_pca/<order>/rank_<K>/` with `centroid.f16`, `basis.f16`, `scales.f16`, `inv_norms.f16`, `codes_i8_dim_major.bin`, and `metadata.json`.\n\n")
 	}
 	b.WriteString("## ClickHouse Fixtures\n\n")
 	b.WriteString("Generated under `clickhouse/`:\n\n")

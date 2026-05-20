@@ -542,13 +542,17 @@ matrix as `matrix_i8_dim_major.bin`, `matrix_u8_dim_major.bin`,
 `matrix_u8_row_major.bin`, centroid/scales/query metadata, row ids, and exact
 scores. It then runs native Go storage candidates over three row orders
 (`nearest_ranked`, `row_id`, and `local_coord_sort`) and writes
-`results.json`, `report.md`, and ClickHouse TSV/SQL fixtures under
-`$OUT/clickhouse`. The ClickHouse fixture set includes wide `UInt8` rows,
-per-dimension blob rows, and whole-granule blob rows for later part-size tests
-with codecs such as `NONE`, `LZ4`, `ZSTD`, `T64+ZSTD`, `Delta+ZSTD`, and
-`DoubleDelta+ZSTD`. Blob fixtures are hex-encoded in TSV for transport, and
-the generated runner decodes them with `unhex()` before ClickHouse stores
-the raw byte strings.
+`results.json`, `report.md`, local PCA artifacts under `$OUT/local_pca`, and
+ClickHouse TSV/SQL fixtures under `$OUT/clickhouse`. The local PCA add-on fits
+one granule-local basis over the raw fp32 vectors, stores fp16
+centroid/basis/scales/invNorm metadata, and stores dim-major int8 row
+coefficients for configurable ranks (`COLUMN_VECTOR_DEEP1B_LOCAL_PCA_RANKS`,
+default `8,16,32,64,96`). The ClickHouse fixture set includes wide `UInt8`
+rows, per-dimension blob rows, and whole-granule blob rows for later part-size
+tests with codecs such as `NONE`, `LZ4`, `ZSTD`, `T64+ZSTD`, `Delta+ZSTD`, and
+`DoubleDelta+ZSTD`. Blob fixtures are hex-encoded in TSV for transport, and the
+generated runner decodes them with `unhex()` before ClickHouse stores the raw
+byte strings.
 
 The ClickHouse fixture runner is:
 
@@ -605,6 +609,36 @@ ClickHouse interpretation:
   substantially. This includes the wide table's `order_name`, `row_idx`, and
   `source_row` columns, but the gap is large enough that the important lesson
   is still table/column overhead, not just metadata bytes.
+
+Local PCA quantization add-on, same 8192-row nearest granule:
+
+| Rank | PCA variance | Code zstd-better B/vector | fp16 metadata B/vector | Total B/vector | Ratio vs fp32 | Ratio vs 96B int8 | Top10 overlap | Mean rel L2 | Mean score error |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 47.27% | 7.48 | 2.21 | 9.70 | 39.61x | 9.902x | 0/10 | 0.6076 | 0.03306 |
+| 16 | 63.91% | 14.69 | 2.40 | 17.09 | 22.47x | 5.616x | 0/10 | 0.5008 | 0.03264 |
+| 32 | 81.04% | 28.73 | 2.78 | 31.51 | 12.19x | 3.047x | 0/10 | 0.3611 | 0.03180 |
+| 64 | 95.21% | 56.11 | 3.54 | 59.65 | 6.44x | 1.609x | 7/10 | 0.1800 | 0.02182 |
+| 96 | 100.00% | 82.35 | 4.30 | 86.65 | 4.43x | 1.108x | 10/10 | 0.0074 | 0.00041 |
+
+Local PCA interpretation:
+
+- This is the first storage curve for the proposed
+  `centroid + local basis + per-row coordinate code` format. The bytes are
+  self-contained for approximate cosine scoring: fp16 centroid, fp16 basis,
+  fp16 coordinate scales, fp16 row invNorms, and zstd-better-compressed int8
+  coefficient columns.
+- The low-rank compression is real: rank 32 is only `31.51 B/vector` total, and
+  rank 64 is `59.65 B/vector`. The quality curve is also clear: rank 64 recovers
+  `7/10` exact top-10 rows on this query/granule, while ranks 8/16/32 recover
+  none of the exact top 10 despite preserving substantial variance. On this
+  block, preserving variance is not enough to preserve the query's nearest-row
+  ranking.
+- Full-rank local PCA is a sanity check. It lands at `86.65 B/vector` including
+  fp16 metadata and recovers `10/10`, essentially matching the previous full
+  local int8 residual byte-stream result. The interesting next gate is therefore
+  not "can PCA compress"; it is whether rank 64, or a query-aware/residual
+  variant, has enough candidate recall at wider cutoffs such as recall@100 or
+  recall@1000 before exact rerank.
 
 Granule-native int8 micro-kernel smoke:
 
@@ -780,6 +814,12 @@ Useful reported metrics:
   local-residual scoring evidence. These rows score directly from transposed
   residual streams and separate scalar Go time from a dot-equivalent native
   kernel estimate.
+- `local_pca_results` inside
+  `TestColumnVectorGraphDeep1BInt8StorageTournament`: storage and quality
+  evidence for the `centroid + basis + row coordinate code` representation.
+  It reports PCA rank, code bytes, compressed code bytes, fp16 metadata bytes,
+  total bytes/vector, variance captured, top-10 overlap, score error, and
+  reconstruction-relative L2 error.
 - `kernel_ms`, `candidates/s`, `kernel_scan_B/entry`, `dims_used`, and
   `native_raw_B/entry` inside
   `BenchmarkColumnVectorGraphDeep1BGranuleNativeMicroKernels`: int8 residual
