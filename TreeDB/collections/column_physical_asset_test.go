@@ -157,6 +157,105 @@ func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+			{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+			{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{
+		ID:       []byte("v1"),
+		Document: []byte(`{"embedding":[1.0,0.5,-0.25],"embedding_inv_norm":0.87287156,"embedding_neighbors":[7,11,13,17]}`),
+	}})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	if got := rows[0].Values[0].Float32Vector; len(got) != 3 || got[0] != 1 || got[1] != 0.5 || got[2] != -0.25 {
+		t.Fatalf("extracted vector=%v", got)
+	}
+	if got := rows[0].Values[1].Float32; math.Abs(float64(got-0.87287156)) > 1e-7 {
+		t.Fatalf("extracted inv_norm=%g", got)
+	}
+	if got := rows[0].Values[2].AdjacencyList; len(got) != 4 || got[0] != 7 || got[3] != 17 {
+		t.Fatalf("extracted adjacency=%v", got)
+	}
+
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "vectors",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        2,
+		PartID:            1,
+		AppliedCommandLSN: 9,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	if summary.RowCount != 1 || summary.ColumnCount != 3 || summary.PayloadBytes != int64(len(encoded)) {
+		t.Fatalf("unexpected summary=%+v len=%d", summary, len(encoded))
+	}
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+	}
+	if got := decoded.Columns[0].VectorDims; got != 3 {
+		t.Fatalf("decoded vector_dims=%d want 3", got)
+	}
+	if got := decoded.Rows[0].Values[0].Float32Vector; len(got) != 3 || got[2] != -0.25 {
+		t.Fatalf("decoded vector=%v", got)
+	}
+	if got := decoded.Rows[0].Values[2].AdjacencyList; len(got) != 4 || got[1] != 11 {
+		t.Fatalf("decoded adjacency=%v", got)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"embedding", "embedding_inv_norm", "embedding_neighbors"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	visited := 0
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		visited++
+		if got := row.Values[0].Float32Vector; len(got) != 3 || got[0] != 1 || got[2] != -0.25 {
+			t.Fatalf("scanned vector=%v", got)
+		}
+		if got := row.Values[1].Float32; math.Abs(float64(got-0.87287156)) > 1e-7 {
+			t.Fatalf("scanned inv_norm=%g", got)
+		}
+		if got := row.Values[2].AdjacencyList; len(got) != 4 || got[3] != 17 {
+			t.Fatalf("scanned adjacency=%v", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows: %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited=%d want 1", visited)
+	}
+}
+
 func TestColumnPhysicalAssetDecodeV1CompatibilityM12C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
@@ -253,6 +352,7 @@ func TestColumnPhysicalAssetRejectsUnsupportedOperationEmptyRowsM12C(t *testing.
 		writeManifestString(&raw, string(col.ValueType))
 		writeManifestBool(&raw, col.Nullable)
 		writeManifestBool(&raw, col.Dictionary)
+		writeManifestUint64(&raw, uint64(col.VectorDims))
 	}
 	encoded := raw.Bytes()
 	ref := ColumnAssetRef{

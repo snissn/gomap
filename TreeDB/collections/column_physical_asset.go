@@ -2,11 +2,13 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -16,7 +18,8 @@ const (
 	columnPhysicalAssetMagic     = uint32(0x54435041) // TCPA
 	columnPhysicalAssetVersionV1 = uint16(1)
 	columnPhysicalAssetVersionV2 = uint16(2)
-	columnPhysicalAssetVersion   = uint16(3)
+	columnPhysicalAssetVersionV3 = uint16(3)
+	columnPhysicalAssetVersion   = uint16(4)
 )
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
@@ -33,8 +36,13 @@ type columnDeclaredValue struct {
 	Null    bool
 	Bool    bool
 	Int64   int64
+	Float32 float32
 	Double  float64
 	String  string
+	// Float32Vector stores a decoded vector column value. It is used for first-
+	// class vector physical assets and is not part of scalar query hot paths.
+	Float32Vector []float32
+	AdjacencyList []uint32
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view; String remains the owned representation for full asset decoding.
 	StringBytes []byte
@@ -171,6 +179,16 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 			return columnDeclaredValue{}, err
 		}
 		value.Int64 = v
+	case ColumnStoreValueFloat32:
+		n, ok := raw.(json.Number)
+		if !ok {
+			return columnDeclaredValue{}, fmt.Errorf("expected float32 number got %T", raw)
+		}
+		v, err := parseJSONFloat32(n)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Float32 = v
 	case ColumnStoreValueDouble:
 		n, ok := raw.(json.Number)
 		if !ok {
@@ -187,10 +205,79 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 			return columnDeclaredValue{}, fmt.Errorf("expected string got %T", raw)
 		}
 		value.String = v
+	case ColumnStoreValueFloat32Vector:
+		values, err := convertJSONFloat32Vector(raw, col.VectorDims)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Float32Vector = values
+	case ColumnStoreValueAdjacencyList:
+		values, err := convertJSONUint32List(raw)
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.AdjacencyList = values
 	default:
 		return columnDeclaredValue{}, fmt.Errorf("unsupported declared value type %q", col.ValueType)
 	}
 	return value, nil
+}
+
+func parseJSONFloat32(n json.Number) (float32, error) {
+	v, err := strconv.ParseFloat(n.String(), 32)
+	if err != nil {
+		return 0, err
+	}
+	return float32(v), nil
+}
+
+func convertJSONFloat32Vector(raw any, dims int) ([]float32, error) {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected float32_vector array got %T", raw)
+	}
+	if dims <= 0 {
+		return nil, fmt.Errorf("invalid float32_vector dims %d", dims)
+	}
+	if len(values) != dims {
+		return nil, fmt.Errorf("float32_vector length=%d want dims=%d", len(values), dims)
+	}
+	out := make([]float32, len(values))
+	for i, rawValue := range values {
+		n, ok := rawValue.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("float32_vector[%d] expected number got %T", i, rawValue)
+		}
+		v, err := parseJSONFloat32(n)
+		if err != nil {
+			return nil, fmt.Errorf("float32_vector[%d]: %w", i, err)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+func convertJSONUint32List(raw any) ([]uint32, error) {
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected adjacency_list array got %T", raw)
+	}
+	out := make([]uint32, len(values))
+	for i, rawValue := range values {
+		n, ok := rawValue.(json.Number)
+		if !ok {
+			return nil, fmt.Errorf("adjacency_list[%d] expected integer got %T", i, rawValue)
+		}
+		v, err := n.Int64()
+		if err != nil {
+			return nil, fmt.Errorf("adjacency_list[%d]: %w", i, err)
+		}
+		if v < 0 || v > int64(1<<32-1) {
+			return nil, fmt.Errorf("adjacency_list[%d]=%d outside uint32 range", i, v)
+		}
+		out[i] = uint32(v)
+	}
+	return out, nil
 }
 
 func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, columnPhysicalAssetSummary, error) {
@@ -246,6 +333,7 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		writeManifestString(&b, string(col.ValueType))
 		writeManifestBool(&b, col.Nullable)
 		writeManifestBool(&b, col.Dictionary)
+		writeManifestUint64(&b, uint64(col.VectorDims))
 	}
 	for _, row := range input.Rows {
 		writeManifestBytes(&b, row.ID)
@@ -268,10 +356,16 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 				writeManifestBool(&b, value.Bool)
 			case ColumnStoreValueInt64:
 				writeManifestUint64(&b, uint64(value.Int64))
+			case ColumnStoreValueFloat32:
+				writeManifestUint32(&b, math.Float32bits(value.Float32))
 			case ColumnStoreValueDouble:
 				writeManifestUint64(&b, math.Float64bits(value.Double))
 			case ColumnStoreValueString:
 				writeManifestString(&b, value.String)
+			case ColumnStoreValueFloat32Vector:
+				writeManifestFloat32Slice(&b, value.Float32Vector)
+			case ColumnStoreValueAdjacencyList:
+				writeManifestUint32Slice(&b, value.AdjacencyList)
 			default:
 				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical value type %q", value.Type)
 			}
@@ -326,6 +420,13 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			Nullable:   cur.bool(),
 			Dictionary: cur.bool(),
 		}
+		if version >= columnPhysicalAssetVersion {
+			vectorDims := cur.u64()
+			if vectorDims > uint64(maxCollectionInt) {
+				return columnPhysicalAsset{}, errors.New("collections: column physical asset vector_dims overflow int")
+			}
+			asset.Columns[i].VectorDims = int(vectorDims)
+		}
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
 		row := columnDeclaredRow{
@@ -341,7 +442,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 					Type: ColumnStoreValueType(cur.string()),
 					Null: cur.bool(),
 				}
-				if version >= columnPhysicalAssetVersion {
+				if version >= columnPhysicalAssetVersionV3 {
 					value.Present = cur.bool()
 				} else {
 					value.Present = true
@@ -359,10 +460,16 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 						value.Bool = cur.bool()
 					case ColumnStoreValueInt64:
 						value.Int64 = int64(cur.u64())
+					case ColumnStoreValueFloat32:
+						value.Float32 = math.Float32frombits(cur.u32())
 					case ColumnStoreValueDouble:
 						value.Double = math.Float64frombits(cur.u64())
 					case ColumnStoreValueString:
 						value.String = cur.string()
+					case ColumnStoreValueFloat32Vector:
+						value.Float32Vector = cur.float32Slice()
+					case ColumnStoreValueAdjacencyList:
+						value.AdjacencyList = cur.uint32Slice()
 					default:
 						return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical value type %q", value.Type)
 					}
@@ -457,6 +564,21 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 			if value.Null && !cfg.Columns[colIdx].Nullable {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] is null but column is not nullable", rowIdx, colIdx)
 			}
+			if !value.Null && value.Present {
+				if err := validateColumnDeclaredPhysicalValueShape(cfg.Columns[colIdx], value); err != nil {
+					return fmt.Errorf("collections: column physical asset row[%d] column[%d]: %w", rowIdx, colIdx, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value columnDeclaredValue) error {
+	switch col.ValueType {
+	case ColumnStoreValueFloat32Vector:
+		if len(value.Float32Vector) != col.VectorDims {
+			return fmt.Errorf("float32_vector length=%d want dims=%d", len(value.Float32Vector), col.VectorDims)
 		}
 	}
 	return nil
@@ -464,7 +586,7 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersion:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersion:
 		return true
 	default:
 		return false
@@ -495,6 +617,24 @@ func writeManifestBool(b *bytes.Buffer, value bool) {
 func writeManifestBytes(b *bytes.Buffer, value []byte) {
 	writeManifestUint64(b, uint64(len(value)))
 	_, _ = b.Write(value)
+}
+
+func writeManifestFloat32Slice(b *bytes.Buffer, values []float32) {
+	writeManifestUint64(b, uint64(len(values)))
+	var raw [4]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint32(raw[:], math.Float32bits(value))
+		_, _ = b.Write(raw[:])
+	}
+}
+
+func writeManifestUint32Slice(b *bytes.Buffer, values []uint32) {
+	writeManifestUint64(b, uint64(len(values)))
+	var raw [4]byte
+	for _, value := range values {
+		binary.BigEndian.PutUint32(raw[:], value)
+		_, _ = b.Write(raw[:])
+	}
 }
 
 func (c *manifestCursor) bool() bool {
@@ -533,4 +673,48 @@ func (c *manifestCursor) bytesView() []byte {
 	value := c.raw[c.pos : c.pos+int(n)]
 	c.pos += int(n)
 	return value
+}
+
+func (c *manifestCursor) float32Slice() []float32 {
+	n := c.u64()
+	if c.err != nil {
+		return nil
+	}
+	if n > uint64(maxCollectionInt) {
+		c.err = errors.New("collections: column float32 slice length overflows int")
+		return nil
+	}
+	values := make([]float32, int(n))
+	for i := range values {
+		values[i] = math.Float32frombits(c.u32())
+	}
+	return values
+}
+
+func (c *manifestCursor) uint32Slice() []uint32 {
+	n := c.u64()
+	if c.err != nil {
+		return nil
+	}
+	if n > uint64(maxCollectionInt) {
+		c.err = errors.New("collections: column uint32 slice length overflows int")
+		return nil
+	}
+	values := make([]uint32, int(n))
+	for i := range values {
+		values[i] = c.u32()
+	}
+	return values
+}
+
+func (c *manifestCursor) skipUint32Slice() {
+	n := c.u64()
+	if c.err != nil {
+		return
+	}
+	if n > uint64((len(c.raw)-c.pos)/4) {
+		c.err = errors.New("collections: short column uint32 slice")
+		return
+	}
+	c.pos += int(n) * 4
 }
