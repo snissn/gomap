@@ -69,7 +69,7 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata currently executes only q5_metadata and remains scan-backed until real metadata assets land)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 	)
@@ -1276,8 +1276,8 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		SkippedGranules:   diag.SkippedGranules,
 		ScheduledGranules: diag.ScheduledGranules,
 		WorkerCount:       workers,
-		CacheHits:         plan.Diagnostics.DecodedBlockCacheHits,
-		CacheMisses:       plan.Diagnostics.DecodedBlockCacheMisses,
+		CacheHits:         diag.DecodedBlockCacheHits,
+		CacheMisses:       diag.DecodedBlockCacheMisses,
 		ScanDuration:      scanDuration,
 		ReduceDuration:    reduceDuration,
 	}, nil
@@ -1919,7 +1919,10 @@ func markdownCodeTableText(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return markdownTableEmptyCell
 	}
-	value = markdownTableText(value)
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
 	delimiter := "`"
 	for strings.Contains(value, delimiter) {
 		delimiter += "`"

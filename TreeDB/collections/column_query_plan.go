@@ -50,9 +50,11 @@ type ColumnQueryPlannerCapabilities struct {
 	SerialColumnScan   bool
 	AggregateMetadata  bool
 	ParallelColumnScan bool
-	// CapabilityError records why real physical capabilities could not be
-	// derived. When set, physical plans fail closed before checking route flags.
+	// CapabilityError mirrors an internally derived physical capability
+	// discovery failure for diagnostics. Caller-supplied values are ignored for
+	// gating so public requests cannot forge a planner fail-closed reason.
 	CapabilityError    string
+	capabilityError    string
 	PhysicalAssetCount int
 	// PartCount is a fallback schedulable-unit estimate when GranuleCount is
 	// not populated by the column asset layer.
@@ -171,6 +173,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.AggregateMetadata = false
 	caps.ParallelColumnScan = false
 	caps.CapabilityError = ""
+	caps.capabilityError = ""
 	caps.PhysicalAssetCount = 0
 	caps.PartCount = 0
 	caps.GranuleCount = 0
@@ -184,44 +187,44 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 		return caps
 	}
 	if c == nil || c.db == nil {
-		caps.CapabilityError = errCollectionDBNil.Error()
+		caps.setCapabilityError(errCollectionDBNil.Error())
 		return caps
 	}
 	if cfg.ActiveManifest == nil {
-		caps.CapabilityError = "physical column query requires active column manifest"
+		caps.setCapabilityError("collections: physical column query requires active column manifest")
 		return caps
 	}
 	if cfg.RecoveryAuthoritativeManifest == nil {
-		caps.CapabilityError = "physical column query requires recovery-authoritative column manifest"
+		caps.setCapabilityError("collections: physical column query requires recovery-authoritative column manifest")
 		return caps
 	}
 	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
-		caps.CapabilityError = "active column manifest is not recovery-authoritative"
+		caps.setCapabilityError("collections: active column manifest is not recovery-authoritative")
 		return caps
 	}
 	if cfg.AssetManager == nil {
-		caps.CapabilityError = "physical column query requires column asset manager metadata"
+		caps.setCapabilityError("collections: physical column query requires column asset manager metadata")
 		return caps
 	}
 	if rootID == 0 {
-		caps.CapabilityError = fmt.Sprintf("physical column query missing manifest root %q", collectionColumnManifestRootName(collectionName))
+		caps.setCapabilityError(fmt.Sprintf("collections: physical column query missing manifest root %q", collectionColumnManifestRootName(collectionName)))
 		return caps
 	}
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		caps.CapabilityError = errCollectionDBNil.Error()
+		caps.setCapabilityError(errCollectionDBNil.Error())
 		return caps
 	}
 	defer func() { _ = snap.Close() }()
 
 	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
-		caps.CapabilityError = fmt.Sprintf("physical column query planner capability discovery failed: %v", err)
+		caps.setCapabilityError(fmt.Sprintf("collections: physical column query planner capability discovery failed: %v", err))
 		return caps
 	}
 	manifestCaps, err := loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, cfg, *cfg.ActiveManifest, collectionName)
 	if err != nil {
-		caps.CapabilityError = fmt.Sprintf("physical column query planner capability discovery failed: %v", err)
+		caps.setCapabilityError(fmt.Sprintf("collections: physical column query planner capability discovery failed: %v", err))
 		return caps
 	}
 	caps.PhysicalAssetCount = manifestCaps.PhysicalAssetCount
@@ -249,13 +252,23 @@ func columnQueryForcedPhysicalExecution(kind ColumnQueryPlanKind) bool {
 	}
 }
 
+func (caps *ColumnQueryPlannerCapabilities) setCapabilityError(reason string) {
+	trimmed := strings.TrimSpace(reason)
+	caps.CapabilityError = trimmed
+	caps.capabilityError = trimmed
+}
+
+func (caps ColumnQueryPlannerCapabilities) effectiveCapabilityError() string {
+	return strings.TrimSpace(caps.capabilityError)
+}
+
 func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {
 	diag := ColumnQueryPlanDiagnostics{
 		CandidatePlans:          columnQueryPlannerCandidateCount(catalog, identity, identityOK, req),
 		ProjectedColumns:        len(req.ProjectedColumns),
 		Predicates:              len(req.Predicates),
 		RecoveryAuthoritative:   columnQueryManifestRecoveryAuthoritative(identity, identityOK),
-		CapabilityError:         req.Capabilities.CapabilityError,
+		CapabilityError:         req.Capabilities.effectiveCapabilityError(),
 		PhysicalAssetCount:      req.Capabilities.PhysicalAssetCount,
 		PartCount:               req.Capabilities.PartCount,
 		GranuleCount:            req.Capabilities.GranuleCount,
@@ -396,8 +409,8 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 
 func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
-	case strings.TrimSpace(req.Capabilities.CapabilityError) != "":
-		return strings.TrimSpace(req.Capabilities.CapabilityError)
+	case req.Capabilities.effectiveCapabilityError() != "":
+		return req.Capabilities.effectiveCapabilityError()
 	case req.Capabilities.PhysicalAssetCount <= 0:
 		return columnQueryUnsupportedNoPhysicalAssetsReason
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
@@ -427,7 +440,7 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 }
 
 func physicalColumnQueryBaseSupported(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) bool {
-	if strings.TrimSpace(req.Capabilities.CapabilityError) != "" {
+	if req.Capabilities.effectiveCapabilityError() != "" {
 		return false
 	}
 	if req.Capabilities.PhysicalAssetCount <= 0 {

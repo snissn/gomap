@@ -434,17 +434,18 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			status = ColumnAssetReachabilityUncertain
 		}
 		plan.Refs.Total++
-		plan.Refs.BytesTotal += positiveColumnAssetReachabilityLength(ref.Length)
+		refBytes := positiveColumnAssetReachabilityLength(ref.Length)
+		plan.Refs.BytesTotal = addColumnAssetReachabilityBytes(plan.Refs.BytesTotal, refBytes)
 		switch status {
 		case ColumnAssetReachabilityProtected:
 			plan.Refs.Protected++
-			plan.Refs.BytesProtected += positiveColumnAssetReachabilityLength(ref.Length)
+			plan.Refs.BytesProtected = addColumnAssetReachabilityBytes(plan.Refs.BytesProtected, refBytes)
 		case ColumnAssetReachabilityReclaimable:
 			plan.Refs.Reclaimable++
-			plan.Refs.BytesReclaimable += positiveColumnAssetReachabilityLength(ref.Length)
+			plan.Refs.BytesReclaimable = addColumnAssetReachabilityBytes(plan.Refs.BytesReclaimable, refBytes)
 		default:
 			plan.Refs.Uncertain++
-			plan.Refs.BytesUncertain += positiveColumnAssetReachabilityLength(ref.Length)
+			plan.Refs.BytesUncertain = addColumnAssetReachabilityBytes(plan.Refs.BytesUncertain, refBytes)
 			plan.Complete = false
 		}
 		if input.detailed {
@@ -509,7 +510,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		rangeSet := rangesByFile[segment.fileID]
 		delete(rangesByFile, segment.fileID)
 		plan.Segments.Total++
-		plan.Segments.BytesTotal += segment.bytes
+		plan.Segments.BytesTotal = addColumnAssetReachabilityBytes(plan.Segments.BytesTotal, segment.bytes)
 		segmentPlan := classifyColumnAssetReachabilitySegmentSet(segment, rangeSet)
 		if segmentPlan.outOfBoundsRefs != 0 {
 			plan.Segments.OutOfBoundsRefs += segmentPlan.outOfBoundsRefs
@@ -518,18 +519,18 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		if segmentPlan.unknownBytes != 0 || segmentPlan.status == ColumnAssetReachabilitySegmentUnknown {
 			plan.Complete = false
 		}
-		plan.Segments.BytesProtected += segmentPlan.protectedBytes
-		plan.Segments.BytesReclaimable += segmentPlan.reclaimableBytes
-		plan.Segments.BytesUnknown += segmentPlan.unknownBytes
+		plan.Segments.BytesProtected = addColumnAssetReachabilityBytes(plan.Segments.BytesProtected, segmentPlan.protectedBytes)
+		plan.Segments.BytesReclaimable = addColumnAssetReachabilityBytes(plan.Segments.BytesReclaimable, segmentPlan.reclaimableBytes)
+		plan.Segments.BytesUnknown = addColumnAssetReachabilityBytes(plan.Segments.BytesUnknown, segmentPlan.unknownBytes)
 		switch segmentPlan.status {
 		case ColumnAssetReachabilitySegmentProtected:
 			plan.Segments.Protected++
 		case ColumnAssetReachabilitySegmentReclaimable:
 			plan.Segments.Reclaimable++
-			plan.Segments.BytesWholeReclaimable += segment.bytes
+			plan.Segments.BytesWholeReclaimable = addColumnAssetReachabilityBytes(plan.Segments.BytesWholeReclaimable, segment.bytes)
 		case ColumnAssetReachabilitySegmentMixed:
 			plan.Segments.Mixed++
-			plan.RewriteDebtBytes += segmentPlan.reclaimableBytes
+			plan.RewriteDebtBytes = addColumnAssetReachabilityBytes(plan.RewriteDebtBytes, segmentPlan.reclaimableBytes)
 		default:
 			plan.Segments.Unknown++
 		}
@@ -774,22 +775,12 @@ func classifyColumnAssetReachabilitySingleRangeSegment(segment columnAssetReacha
 }
 
 func columnAssetReachabilitySourceBit(source ColumnAssetReachabilitySource) (columnAssetReachabilitySourceMask, bool) {
-	switch source {
-	case ColumnAssetReachabilitySourceCandidate:
-		return columnAssetReachabilitySourceCandidateMask, true
-	case ColumnAssetReachabilitySourceActiveManifest:
-		return columnAssetReachabilitySourceActiveManifestMask, true
-	case ColumnAssetReachabilitySourceRecoveryManifest:
-		return columnAssetReachabilitySourceRecoveryManifestMask, true
-	case ColumnAssetReachabilitySourcePendingPublish:
-		return columnAssetReachabilitySourcePendingPublishMask, true
-	case ColumnAssetReachabilitySourcePreparedAsset:
-		return columnAssetReachabilitySourcePreparedAssetMask, true
-	case ColumnAssetReachabilitySourcePinnedSnapshot:
-		return columnAssetReachabilitySourcePinnedSnapshotMask, true
-	default:
-		return columnAssetReachabilitySourceUnknownMask, false
+	for _, entry := range columnAssetReachabilitySourceBits {
+		if entry.source == source {
+			return entry.mask, source != columnAssetReachabilitySourceUnknown
+		}
 	}
+	return columnAssetReachabilitySourceUnknownMask, false
 }
 
 func columnAssetReachabilityStatusForSourceMask(mask columnAssetReachabilitySourceMask) ColumnAssetReachabilityStatus {
@@ -853,6 +844,10 @@ func listColumnAssetReachabilitySegments(segmentDir string) ([]columnAssetReacha
 			continue
 		}
 		name := info.Name()
+		if !info.Mode().IsRegular() {
+			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
+			continue
+		}
 		fileID, ok := columnAssetReachabilitySegmentFileID(name)
 		if !ok {
 			segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: info.Size()})
@@ -947,7 +942,7 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 			continue
 		}
 		if interval.start > cur.end {
-			covered += cur.end - cur.start
+			covered = addColumnAssetReachabilityBytes(covered, cur.end-cur.start)
 			cur = interval
 			continue
 		}
@@ -956,7 +951,7 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 		}
 	}
 	if haveCur {
-		covered += cur.end - cur.start
+		covered = addColumnAssetReachabilityBytes(covered, cur.end-cur.start)
 	}
 	return covered, outOfBounds
 }
@@ -1081,7 +1076,7 @@ func columnAssetReachabilityIntervalsLength(intervals []columnAssetReachabilityI
 	var total int64
 	for _, interval := range intervals {
 		if interval.end > interval.start {
-			total += interval.end - interval.start
+			total = addColumnAssetReachabilityBytes(total, interval.end-interval.start)
 		}
 	}
 	return total
@@ -1144,6 +1139,16 @@ func positiveColumnAssetReachabilityLength(length int64) int64 {
 		return length
 	}
 	return 0
+}
+
+func addColumnAssetReachabilityBytes(total, delta int64) int64 {
+	if delta <= 0 {
+		return total
+	}
+	if total > math.MaxInt64-delta {
+		return math.MaxInt64
+	}
+	return total + delta
 }
 
 func minColumnAssetReachabilityInt64(a, b int64) int64 {
