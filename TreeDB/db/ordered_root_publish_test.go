@@ -524,6 +524,61 @@ func TestPublishOrderedRootDeltaGroupMaintenanceWrapsRootDeltaIteratorErrorPreAp
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceDoesNotMarkPostRootApplyErrorPreApply(t *testing.T) {
+	dir := t.TempDir()
+	setupDB, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open setup DB: %v", err)
+	}
+	baseRootA, err := setupDB.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/a", "base-a").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root A: %v", err)
+	}
+	baseRootB, err := setupDB.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/b", "base-b").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root B: %v", err)
+	}
+	if err := setupDB.Close(); err != nil {
+		t.Fatalf("close setup DB: %v", err)
+	}
+
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	wantErr := errors.New("maintenance second root delta iterator failure")
+	iter := &closeCountingUnsafeIterator{err: wantErr}
+	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		storagemaintenance.ColumnAssetRewritePlan(),
+		[]OrderedRootDeltaPublishInput{
+			{
+				BaseRoot:                  baseRootA,
+				Iter:                      mustFrozenSystemMemtable(t, "root/a", "value-a").NewIterator(nil, nil),
+				StorageMaintenanceRewrite: true,
+			},
+			{
+				BaseRoot:                  baseRootB,
+				Iter:                      iter,
+				StorageMaintenanceRewrite: true,
+			},
+		},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run after post-root-apply failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("maintenance publish error=%v want %v", err, wantErr)
+	}
+	if errors.Is(err, ErrStorageMaintenancePublishPreApplyFailed) {
+		t.Fatalf("maintenance publish error=%v must not be marked pre-apply after a root delta was applied", err)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("root delta iterator closes=%d want 1", iter.closes)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
