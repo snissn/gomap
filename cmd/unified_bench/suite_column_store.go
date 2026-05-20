@@ -1509,7 +1509,15 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 }
 
 func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
-	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%d/%d bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", q.RowsProcessed, q.RowMaterializations, q.Rows, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
+	rowDenominator := q.Rows
+	if rowDenominator <= 0 {
+		rowDenominator = q.RowsProcessed
+	}
+	rowMaterializations := fmt.Sprintf("%d/unknown", q.RowMaterializations)
+	if rowDenominator > 0 {
+		rowMaterializations = fmt.Sprintf("%d/%d", q.RowMaterializations, rowDenominator)
+	}
+	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", q.RowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -1892,10 +1900,12 @@ func markdownCodeList(values []string) string {
 	return sb.String()
 }
 
+const markdownTableEmptyCell = "(empty)"
+
 func markdownTableText(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return "-"
+		return markdownTableEmptyCell
 	}
 	value = strings.ReplaceAll(value, "|", "\\|")
 	value = strings.ReplaceAll(value, "\r\n", " ")
@@ -1905,10 +1915,10 @@ func markdownTableText(value string) string {
 }
 
 func markdownCodeTableText(value string) string {
-	value = markdownTableText(value)
-	if value == "-" {
-		return "-"
+	if strings.TrimSpace(value) == "" {
+		return markdownTableEmptyCell
 	}
+	value = markdownTableText(value)
 	delimiter := "`"
 	for strings.Contains(value, delimiter) {
 		delimiter += "`"
