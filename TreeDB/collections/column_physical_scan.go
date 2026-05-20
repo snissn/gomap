@@ -271,6 +271,9 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	if req.RefOrdinalModulo < 0 {
 		return diag, errors.New("collections: physical column scan ref ordinal modulo cannot be negative")
 	}
+	if req.RefOrdinalModulo == 0 && req.RefOrdinalRemainder != 0 {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d requires non-zero modulo", req.RefOrdinalRemainder)
+	}
 	if req.RefOrdinalModulo > 0 && (req.RefOrdinalRemainder < 0 || req.RefOrdinalRemainder >= req.RefOrdinalModulo) {
 		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", req.RefOrdinalRemainder, req.RefOrdinalModulo)
 	}
