@@ -318,7 +318,7 @@ func TestColumnPhysicalSerialScannerDoesNotEnablePlannerRoutingM13A(t *testing.T
 	if plan.Supported {
 		t.Fatalf("forced serial plan supported before M14 routing: %+v", plan)
 	}
-	if got := plan.Diagnostics.UnsupportedPlanReason; got != "serial physical column scan capability is disabled" {
+	if got := plan.Diagnostics.UnsupportedPlanReason; got != ColumnQueryUnsupportedSerialPhysicalDisabledReason {
 		t.Fatalf("unsupported reason=%q want physical scanner disabled", got)
 	}
 }

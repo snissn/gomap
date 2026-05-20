@@ -483,8 +483,6 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 	if err := cur.err; err != nil {
 		return columnManifestHeaderRecordForScan{}, err
 	}
-	header.collection = bytes.Clone(header.collection)
-	header.operation = bytes.Clone(header.operation)
 	if header.rowCount > uint64(maxCollectionInt) {
 		return columnManifestHeaderRecordForScan{}, errors.New("collections: column manifest row count overflows int")
 	}
