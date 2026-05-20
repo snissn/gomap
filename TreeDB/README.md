@@ -160,6 +160,11 @@ The initial API lives in `TreeDB/collections`:
   expose live/deleted counts, memory and disk bytes, persisted epoch state,
   snapshot dirtiness, candidate counts, selected strategy, exact fallback
   reason, rebuild duration, and recall-at-k.
+- `VectorIndexDefinition.Strategy = VectorIndexStrategyColumnGraph` selects the
+  explicit column-backed graph path. This path loads vector, inverse-norm, and
+  adjacency-list physical column assets into `ColumnVectorGraph`, runs graph
+  search without fetching documents, then materializes documents after top-k
+  selection through `Collection.SearchVectorIndex`.
 
 Smoke benchmark:
 
@@ -192,6 +197,18 @@ The tiny BERT embedding demo in `../examples/vector_search/tiny_bert/` is a
 caller-side fixture/demo; TreeDB core does not generate embeddings. Export it
 with `--output-jsonl` and set `TREEDB_VECTOR_BENCH_JSONL` to run
 `BenchmarkCollectionVectorTinyBERTFixture`.
+
+The column-backed graph path is documented in
+`TreeDB/docs/spec/collections-column-graph-vector-search.md`. Start with:
+
+```sh
+GOWORK=off go run ./cmd/treedb_column_graph_demo -json
+scripts/bench_column_graph_main_path.sh
+```
+
+For opt-in public Deep1B/DEEP dataset evidence, use
+`scripts/bench_column_vector_deep1b.sh`; it downloads data outside the repo into
+`$COLUMN_VECTOR_DEEP1B_DIR`.
 
 Optional external engine baseline: build with `-tags usearch_bench` after
 installing the USearch C library and headers for the host. This runs the same

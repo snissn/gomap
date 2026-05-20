@@ -117,7 +117,11 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     collection ANN vector graph into a native persisted TreeDB secondary index.
 - `TreeDB/docs/spec/collections-column-vector-contract-seam.md`
   - current contract seam for explicit `column_graph` vector indexes; documents
-    status/fallback behavior and the missing physical column asset milestones.
+    physical column asset loading, status/fallback behavior, and remaining
+    build/rebuild plus mutation-maintenance milestones.
+- `TreeDB/docs/spec/collections-column-graph-vector-search.md`
+  - user-facing quickstart, demo, benchmark scripts, Deep1B dataset guidance,
+    current evidence, and caveats for explicit `column_graph` vector indexes.
 - `TreeDB/docs/spec/collections-native-fastpath-roadmap.md`
   - draft implementation roadmap for the native cached collections rewrite,
     including PR slices, acceptance criteria, and performance gates.
