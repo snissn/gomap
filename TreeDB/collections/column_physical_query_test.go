@@ -102,6 +102,9 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			if result.Diagnostics.AssetRefs == 0 || result.Diagnostics.PhysicalBytesScanned <= 0 {
 				t.Fatalf("%s missing physical diagnostics: %+v", tc.name, result.Diagnostics)
 			}
+			if result.Diagnostics.WorkerCount != 1 {
+				t.Fatalf("%s worker count=%d want 1 diagnostics=%+v", tc.name, result.Diagnostics.WorkerCount, result.Diagnostics)
+			}
 			if tc.name != "q5_metadata" && result.Diagnostics.DecodedBlocks == 0 {
 				t.Fatalf("%s decoded blocks=0 diagnostics=%+v", tc.name, result.Diagnostics)
 			}
@@ -241,6 +244,15 @@ func TestColumnPhysicalQueryAdapterAppliesMutationVisibilityM13C(t *testing.T) {
 	}
 	if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
 		t.Fatalf("visibility diagnostics=%+v want one reduced live row and one tombstone", result.Diagnostics)
+	}
+	_, err = reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:                  ColumnPhysicalQueryGroupInt64Span,
+		GroupColumn:           "did",
+		ValueColumn:           "time_us",
+		AggregateMetadataName: "min_time_us",
+	})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("RunColumnPhysicalQuery metadata with mutation parts err=%v want unsupported", err)
 	}
 }
 

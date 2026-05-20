@@ -268,9 +268,22 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			snapshot.Parts = append(snapshot.Parts, part)
 		}
 	}
+	livePartNamespaces := make(map[[2]uint64]string, len(parts))
+	for _, part := range parts {
+		if part.AssetRef.Generation <= snapshot.Generation {
+			livePartNamespaces[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.AssetRef.Namespace
+		}
+	}
 	for _, aggregate := range metadata {
 		if aggregate.AssetRef.Generation > snapshot.Generation {
 			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", aggregate.AssetRef.Generation, snapshot.Generation)
+		}
+		partNamespace, ok := livePartNamespaces[[2]uint64{aggregate.AssetRef.Generation, aggregate.AssetRef.PartID}]
+		if !ok {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", aggregate.AssetRef.Generation, aggregate.AssetRef.PartID)
+		}
+		if aggregate.AssetRef.Namespace != partNamespace {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q does not match part namespace=%q", aggregate.AssetRef.Namespace, partNamespace)
 		}
 		snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
 	}

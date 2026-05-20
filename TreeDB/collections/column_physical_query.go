@@ -95,6 +95,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		return ColumnPhysicalQueryResult{}, err
 	}
 	if mutationParts > 0 {
+		if req.AggregateMetadataName != "" {
+			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
+		}
 		cfg, err := c.columnPhysicalQueryColumnStoreConfig()
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, err
@@ -109,6 +112,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		return ColumnPhysicalQueryResult{}, err
 	}
 	if view.MutationParts > 0 {
+		if req.AggregateMetadataName != "" {
+			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
+		}
 		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 	}
 	if req.AggregateMetadataName != "" {
@@ -138,6 +144,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	var rawScratch []byte
 	start := time.Now()
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
+	diag.WorkerCount = 1
 	diag.ProjectedColumns = 2
 	diag.ScheduledGranules = len(refs)
 	for _, metadataRef := range refs {

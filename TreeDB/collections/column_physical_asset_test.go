@@ -1121,6 +1121,73 @@ func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 	}
 }
 
+func TestColumnManifestAggregateMetadataRequiresLivePartM1634(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	part := testColumnPublishPreparedAssetM10A()
+	part.Ref.Generation = 5
+	part.Ref.PartID = 3
+	part.GenerationID = part.Ref.Generation
+	part.Reason = string(ColumnPublishOperationInsert)
+	metadata := part
+	metadata.Ref.Kind = ColumnAssetKindTCS1AggregateMetadata
+	metadata.Ref.Offset += metadata.Ref.Length
+	metadata.Ref.Length = 256
+	metadata.Bytes = metadata.Ref.Length
+	metadata.Reason = "min_time_us"
+
+	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 99,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{part, metadata},
+			RowCount:           10,
+			ColumnPayloadBytes: part.Bytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	snapshot, err := decodeColumnManifestRecords(manifest.Records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestRecords valid metadata: %v", err)
+	}
+	if got, want := len(snapshot.AggregateMetadata), 1; got != want {
+		t.Fatalf("aggregate metadata refs=%d want %d", got, want)
+	}
+
+	withoutPart := make([]columnManifestRecord, 0, len(manifest.Records)-1)
+	for _, record := range manifest.Records {
+		if bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		withoutPart = append(withoutPart, record)
+	}
+	if _, err := decodeColumnManifestRecords(withoutPart); err == nil || !strings.Contains(err.Error(), "matching live part") {
+		t.Fatalf("decode metadata without part err=%v want matching live part failure", err)
+	}
+
+	namespaceMismatch := cloneColumnManifestRecords(manifest.Records)
+	badMetadata := metadata
+	badMetadata.Ref.Namespace = "wrong/column-assets"
+	badValue, err := encodeColumnManifestPartRecord(badMetadata)
+	if err != nil {
+		t.Fatalf("encode bad metadata: %v", err)
+	}
+	for i := range namespaceMismatch {
+		if bytes.HasPrefix(namespaceMismatch[i].key, columnManifestAggregateMetadataRecordPrefixBytes) {
+			namespaceMismatch[i].value = badValue
+		}
+	}
+	if _, err := decodeColumnManifestRecords(namespaceMismatch); err == nil || !strings.Contains(err.Error(), "does not match part namespace") {
+		t.Fatalf("decode metadata namespace mismatch err=%v want namespace failure", err)
+	}
+}
+
 func TestColumnAssetRefRequiresNamespaceGenerationAndSegmentIDM12A(t *testing.T) {
 	ref := ColumnAssetRef{
 		Kind:       ColumnAssetKindTCS1PartImage,

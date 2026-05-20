@@ -138,6 +138,10 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 	return asset, nil
 }
 
+// buildColumnAggregateMetadataAsset supports the current insert-only metadata
+// shape: every non-deleted row must have present, non-null string group values
+// and int64 aggregate values. Rows counts the full input row set, including
+// deleted rows, while Entries reflects only non-deleted, type-validated rows.
 func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregate ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnAggregateMetadataAsset, bool, error) {
 	if aggregate.GroupColumn == "" || aggregate.Column == "" {
 		return columnAggregateMetadataAsset{}, false, nil
