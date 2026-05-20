@@ -216,9 +216,11 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 	if expectedRefs > 0 {
 		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
 	}
-	for _, assetRef := range view.AssetRefs {
-		if err := ctx.Err(); err != nil {
-			return columnAssetReachabilityPlanIdentity(input), err
+	for i, assetRef := range view.AssetRefs {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), err
+			}
 		}
 		// prepareColumnPhysicalScanSnapshotView already requires the active and
 		// recovery-authoritative manifest identities to match. The same refs are
@@ -265,13 +267,18 @@ type columnAssetReachabilityInput struct {
 }
 
 func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []ColumnAssetRef, source ColumnAssetReachabilitySource) error {
-	for _, ref := range refs {
-		if ctx != nil && ctx.Err() != nil {
-			return ctx.Err()
+	for i, ref := range refs {
+		if ctx != nil && i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		if in.addRef(ref, source) {
 			in.incrementSourceCount(source)
 		}
+	}
+	if ctx != nil {
+		return ctx.Err()
 	}
 	return nil
 }
