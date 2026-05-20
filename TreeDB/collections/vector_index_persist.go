@@ -68,6 +68,10 @@ type VectorIndexLoadStatus struct {
 	RebuildNeeded                 bool
 }
 
+func nativeRuntimeVectorIndexLoadStatus() VectorIndexLoadStatus {
+	return VectorIndexLoadStatus{Strategy: VectorIndexStrategyNativeRuntime}
+}
+
 // VectorIndexPruneStatus reports persisted vector-index epoch cleanup.
 type VectorIndexPruneStatus struct {
 	IndexDir      string
@@ -91,7 +95,7 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 // TreeDB collection-root content and publishes that root through the collection
 // root descriptor system state.
 func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -116,7 +120,7 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 }
 
 func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool, error) {
-	status := VectorIndexLoadStatus{}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if c == nil || idx == nil {
 		return status, false, nil
 	}
@@ -152,7 +156,7 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
 // already acquired the collection mutation barrier and flushed buffered writes.
 func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -230,6 +234,7 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
 	}
 	status.Loaded = true
+	status.NativeRuntimeUsed = true
 	status.RootID = rootIDs[0]
 	status.Epoch = rootIDs[0]
 	status.BytesDisk = bytesDisk
@@ -268,7 +273,7 @@ func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error)
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
 // removed graph keys cannot survive.
 func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -358,6 +363,7 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
 	}
 	status.Loaded = true
+	status.NativeRuntimeUsed = true
 	status.RootID = rootIDs[0]
 	status.Epoch = rootIDs[0]
 	status.BytesDisk = bytesDisk
@@ -600,7 +606,7 @@ func (c *Collection) prepareNativeVectorIndexCommandWALRootPublish(catalog *coll
 }
 
 func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -714,6 +720,7 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 		return status, err
 	}
 	status.Loaded = true
+	status.NativeRuntimeUsed = true
 	status.Epoch = epoch
 	status.BytesDisk = bytesDisk
 	idx.recordPersistedSnapshot(epoch, bytesDisk, snapshotSeq)
@@ -726,7 +733,18 @@ func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 // search as the correctness fallback.
 func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
 	if vectorIndexOptionsStrategy(opts) == VectorIndexStrategyColumnGraph {
-		_, status, err := c.LoadColumnGraphVectorIndexSnapshot(opts)
+		graph, status, err := c.LoadColumnGraphVectorIndexSnapshot(opts)
+		if graph != nil {
+			// This API can only return a native *VectorIndex handle. Keep a
+			// successfully loaded column graph from being reported as a usable
+			// VectorIndex; callers that need the graph must use the explicit
+			// column_graph loader/search path.
+			status.Loaded = false
+			status.ColumnGraphLoaded = false
+			status.ExactFallbackReason = vectorIndexFallbackColumnGraphHandleMissing
+			status.ColumnGraphUnavailableReason = vectorIndexFallbackColumnGraphHandleMissing
+			status.RebuildNeeded = false
+		}
 		return nil, status, err
 	}
 	index, status, err := c.LoadNativeVectorIndexSnapshot(opts)
@@ -745,7 +763,7 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 // are rejected with strategy_mismatch; use LoadColumnGraphVectorIndexSnapshot
 // or LoadVectorIndexSnapshot with Strategy: column_graph for that seam.
 func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{Strategy: VectorIndexStrategyNativeRuntime}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if c == nil {
 		return nil, status, errCollectionNil
 	}
@@ -813,7 +831,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 }
 
 func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+	status := nativeRuntimeVectorIndexLoadStatus()
 	if c == nil {
 		return nil, status, errCollectionNil
 	}
@@ -867,6 +885,7 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, nil
 	}
 	status.Loaded = true
+	status.NativeRuntimeUsed = true
 	status.Epoch = manifest.Epoch
 	status.BytesDisk = vectorIndexSnapshotBytes(manifestData, manifest.Files)
 	index.recordLoadedSnapshot(status.Epoch, status.BytesDisk)

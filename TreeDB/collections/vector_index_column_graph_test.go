@@ -68,6 +68,72 @@ func TestCollectionVectorIndexColumnGraphContractReportsPhysicalAssetsMissing(t 
 	}
 }
 
+func TestLoadVectorIndexSnapshotColumnGraphDoesNotReportNativeLoaded(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	active := ColumnManifestIdentity{Generation: 3, Version: columnManifestIdentityVersion, Checksum: 0x44}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorIndexTestColumnStore(nil),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	publishColumnStoreCatalogForTest(t, d, CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorIndexTestColumnStore(&active),
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}, active)
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	graph := newColumnGraphVectorIndexTestGraph(t)
+	withColumnVectorGraphIndexLoaderForTest(t, testColumnVectorGraphIndexLoader{
+		result: ColumnVectorGraphIndexLoadResult{
+			Graph: graph,
+			Status: VectorIndexLoadStatus{
+				Strategy:                      VectorIndexStrategyColumnGraph,
+				PhysicalColumnAssetsSupported: true,
+				BytesDisk:                     123,
+			},
+		},
+	})
+
+	loadedGraph, graphStatus, err := col.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadColumnGraphVectorIndexSnapshot: %v", err)
+	}
+	if loadedGraph == nil || !graphStatus.Loaded || !graphStatus.ColumnGraphLoaded {
+		t.Fatalf("explicit column_graph loader did not report loaded graph: graph=%v status=%+v", loadedGraph != nil, graphStatus)
+	}
+
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("LoadVectorIndexSnapshot: %v", err)
+	}
+	if loaded != nil || status.Loaded || status.ColumnGraphLoaded {
+		t.Fatalf("generic loader must not report a usable native index for column_graph, loaded=%v status=%+v", loaded != nil, status)
+	}
+	if status.ExactFallbackReason != vectorIndexFallbackColumnGraphHandleMissing || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphHandleMissing {
+		t.Fatalf("unexpected generic column_graph load reason: %+v", status)
+	}
+	if !status.PhysicalColumnAssetsSupported || status.RebuildNeeded {
+		t.Fatalf("generic column_graph status lost physical support or requested rebuild: %+v", status)
+	}
+}
+
 func TestColumnGraphRebuildUnsupportedStatusPreservesReprobeReason(t *testing.T) {
 	def := columnGraphVectorIndexTestDefinition()
 	status := columnGraphRebuildUnsupportedStatus(def, columnGraphUnavailableLoadStatus(vectorIndexFallbackColumnGraphReprobeRequired))
@@ -158,6 +224,13 @@ func TestCollectionVectorIndexColumnGraphOptionDoesNotLoadNativeIndex(t *testing
 	}
 	if rebuild, err := col.RebuildVectorIndex(def.Name); err != nil || !rebuild.NativeRuntimeUsed || !rebuild.NativeRootLoaded {
 		t.Fatalf("native rebuild status=%+v err=%v", rebuild, err)
+	}
+	nativeLoaded, nativeLoadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("native LoadVectorIndexSnapshot: %v", err)
+	}
+	if nativeLoaded == nil || nativeLoadStatus.Strategy != VectorIndexStrategyNativeRuntime || !nativeLoadStatus.NativeRuntimeUsed {
+		t.Fatalf("native load status missing native strategy/runtime: loaded=%v status=%+v", nativeLoaded != nil, nativeLoadStatus)
 	}
 
 	loaded, status, err := col.LoadVectorIndexSnapshot(VectorIndexOptions{
@@ -289,6 +362,41 @@ func columnGraphVectorIndexTestColumnStore(active *ColumnManifestIdentity) *Colu
 		cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
 	}
 	return cfg
+}
+
+type testColumnVectorGraphIndexLoader struct {
+	result ColumnVectorGraphIndexLoadResult
+	err    error
+}
+
+func (l testColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(ColumnVectorGraphIndexLoadInput) (ColumnVectorGraphIndexLoadResult, error) {
+	return l.result, l.err
+}
+
+func withColumnVectorGraphIndexLoaderForTest(t *testing.T, loader ColumnVectorGraphIndexLoader) {
+	t.Helper()
+	previous := defaultColumnVectorGraphIndexLoader
+	defaultColumnVectorGraphIndexLoader = loader
+	t.Cleanup(func() {
+		defaultColumnVectorGraphIndexLoader = previous
+	})
+}
+
+func newColumnGraphVectorIndexTestGraph(t *testing.T) *ColumnVectorGraph {
+	t.Helper()
+	graph, err := NewColumnVectorGraphFromColumns(ColumnVectorGraphColumns{
+		DocumentIDs:     [][]byte{[]byte("a")},
+		Vectors:         []float32{1, 0},
+		InvNorms:        []float32{1},
+		NeighborOffsets: []uint32{0, 0},
+		Dimensions:      2,
+		EntryPoint:      0,
+		EfSearch:        8,
+	})
+	if err != nil {
+		t.Fatalf("new column vector graph: %v", err)
+	}
+	return graph
 }
 
 func assertColumnGraphUnavailableStatus(t *testing.T, status VectorIndexStatus, reason string) {
