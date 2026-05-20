@@ -348,6 +348,43 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsSystemOnly(t *testing.T) 
 	}
 }
 
+func TestPublishOrderedRootDeltaGroupMaintenanceRejectsEmptyRootDelta(t *testing.T) {
+	dir := t.TempDir()
+	setupDB, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open setup DB: %v", err)
+	}
+	baseRoot, err := setupDB.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish base root: %v", err)
+	}
+	if err := setupDB.Close(); err != nil {
+		t.Fatalf("close setup DB: %v", err)
+	}
+
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	emptyDelta := mustFrozenSystemMemtable(t)
+	_, _, err = db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
+		ColumnAssetRewriteStorageMaintenancePlan(),
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot:                  baseRoot,
+			Iter:                      emptyDelta.NewIterator(nil, nil),
+			StorageMaintenanceRewrite: true,
+		}},
+		nil,
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("maintenance system builder should not run for an empty maintenance root delta")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrStorageMaintenanceRootDeltaEmpty) {
+		t.Fatalf("maintenance publish error=%v want ErrStorageMaintenanceRootDeltaEmpty", err)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

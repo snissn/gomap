@@ -49,6 +49,10 @@ var ErrStorageMaintenancePlanMissing = errors.New("treedb: storage-maintenance p
 // covered publish APIs.
 var ErrStorageMaintenanceRootDeltaMissing = errors.New("treedb: storage-maintenance publish requires at least one maintenance root delta")
 
+// ErrStorageMaintenanceRootDeltaEmpty reports a maintenance publish whose
+// marked root delta did not actually rewrite its root.
+var ErrStorageMaintenanceRootDeltaEmpty = errors.New("treedb: storage-maintenance publish requires every maintenance root delta to rewrite its root")
+
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
@@ -1577,6 +1581,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		phaseStats.rootApplyCalls++
 		if err != nil {
 			return 0, nil, err
+		}
+		if storageMaintenance && rootID == ordered[idx].BaseRoot {
+			return 0, nil, fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaEmpty, idx)
 		}
 		rootIDs[idx] = rootID
 		rootsObserved++
