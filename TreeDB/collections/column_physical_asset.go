@@ -716,14 +716,15 @@ func (c *manifestCursor) uint32Slice() []uint32 {
 	return values
 }
 
-func (c *manifestCursor) skipUint32Slice() {
+func (c *manifestCursor) skipUint32Slice() uint64 {
 	n := c.u64()
 	if c.err != nil {
-		return
+		return 0
 	}
 	if n > uint64((len(c.raw)-c.pos)/4) {
 		c.err = errors.New("collections: short column uint32 slice")
-		return
+		return 0
 	}
 	c.pos += int(n) * 4
+	return n
 }

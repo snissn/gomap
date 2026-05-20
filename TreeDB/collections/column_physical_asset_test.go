@@ -283,6 +283,73 @@ func TestManifestCursorVectorSlicesRejectShortPayload(t *testing.T) {
 	})
 }
 
+func TestColumnPhysicalAssetScannerRejectsMismatchedUnprojectedVectorLength(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+			{Name: "score", Path: "score", ValueType: ColumnStoreValueFloat32},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+
+	var raw bytes.Buffer
+	writeManifestUint32(&raw, columnPhysicalAssetMagic)
+	writeManifestUint16(&raw, columnPhysicalAssetVersion)
+	writeManifestString(&raw, "vectors")
+	writeManifestString(&raw, normalized.AssetManager.Namespace)
+	writeManifestUint64(&raw, 2)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 9)
+	writeManifestString(&raw, string(ColumnPublishOperationInsert))
+	writeManifestUint64(&raw, normalized.SchemaHash)
+	writeManifestUint64(&raw, uint64(len(normalized.Columns)))
+	writeManifestUint64(&raw, 1)
+	for _, col := range normalized.Columns {
+		writeManifestString(&raw, col.Name)
+		writeManifestString(&raw, col.Path)
+		writeManifestString(&raw, string(col.ValueType))
+		writeManifestBool(&raw, col.Nullable)
+		writeManifestBool(&raw, col.Dictionary)
+		writeManifestUint64(&raw, uint64(col.VectorDims))
+	}
+	writeManifestBytes(&raw, []byte("v1"))
+	writeManifestBool(&raw, false)
+	writeManifestString(&raw, string(ColumnStoreValueFloat32Vector))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestFloat32Slice(&raw, []float32{1, 2})
+	writeManifestString(&raw, string(ColumnStoreValueFloat32))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestUint32(&raw, math.Float32bits(0.5))
+
+	encoded := raw.Bytes()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"score"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		t.Fatalf("visitor should not run for mismatched vector length: %+v", row)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "float32_vector length=2 want vector_dims=3") {
+		t.Fatalf("scanColumnPhysicalAssetRows err=%v want vector length mismatch", err)
+	}
+}
+
 func TestColumnPhysicalAssetDecodeV1CompatibilityM12C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
