@@ -268,6 +268,74 @@ func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.
 	}
 }
 
+func TestCollectionVectorIndexColumnGraphExactFallbackRangeFilterBypassesColumnRootValidation(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	def := columnGraphVectorIndexTestDefinition()
+	cityIndex := IndexDefinition{Name: "city_idx", Field: "city", ValueType: IndexValueString}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:          "docs",
+		Indexes:       []IndexDefinition{cityIndex},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0],"city":"hnl"}`),
+			[]byte(`{"embedding":[0,1],"city":"sea"}`),
+			[]byte(`{"embedding":[0.9,0.1],"city":"hnl"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	active := ColumnManifestIdentity{Generation: 7, Version: columnManifestIdentityVersion, Checksum: 0x1111}
+	rootIdentity := active
+	rootIdentity.Checksum = 0x2222
+	columnStore := columnGraphVectorIndexTestColumnStore(&active)
+	columnStore.RetainedPayload = ColumnRetainedPayloadFull
+	publishColumnStoreCatalogForTest(t, d, CollectionMeta{
+		Name:    "docs",
+		Indexes: []IndexDefinition{cityIndex},
+		Options: CollectionOptions{
+			ColumnStore: columnStore,
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}, rootIdentity)
+
+	results, trace, err := col.SearchVectorIndex(def.Name, []float32{1, 0}, VectorIndexSearchOptions{
+		TopK: 2,
+		IndexRangeFilter: &VectorIndexRangeFilter{
+			IndexName: cityIndex.Name,
+			Range: IndexRangeOptions{
+				Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
+				Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex fallback with range filter: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c")
+	if trace.Strategy != "vector_index_exact_fallback" || trace.ExactFallbackReason != "column_graph_filter_requires_exact" || trace.ReturnedCount != 2 {
+		t.Fatalf("trace=%+v want column_graph exact fallback with range-filter results", trace)
+	}
+}
+
 func TestCollectionVectorIndexColumnGraphOptionDoesNotLoadNativeIndex(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
