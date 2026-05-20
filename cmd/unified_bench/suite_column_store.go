@@ -161,6 +161,7 @@ type columnStoreQueryMetric struct {
 	PlannerDurationMS        float64 `json:"planner_duration_ms"`
 	ScanDurationMS           float64 `json:"scan_duration_ms"`
 	ReduceDurationMS         float64 `json:"reduce_duration_ms"`
+	AdapterDurationMS        float64 `json:"adapter_duration_ms"`
 	ParityHashDurationMS     float64 `json:"parity_hash_duration_ms"`
 	PlannerCandidates        int     `json:"planner_candidates"`
 	PlannerReason            string  `json:"planner_reason,omitempty"`
@@ -191,6 +192,7 @@ type columnStoreQueryExecution struct {
 	CacheMisses         uint64
 	ScanDuration        time.Duration
 	ReduceDuration      time.Duration
+	AdapterDuration     time.Duration
 }
 
 type columnStoreByteAccounting struct {
@@ -1056,7 +1058,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		parityHashStart := time.Now()
 		hash := columnStoreHashLines(exec.Lines)
 		parityHashElapsed := time.Since(parityHashStart)
-		elapsed := plannerElapsed + exec.ScanDuration + exec.ReduceDuration + parityHashElapsed
+		elapsed := plannerElapsed + exec.ScanDuration + exec.ReduceDuration + exec.AdapterDuration + parityHashElapsed
 		rawHash := rawHashes[name]
 		pass := rawHash == hash
 		parity[name] = columnStoreParity{Pass: pass, RawHash: rawHash, ProductionHash: hash}
@@ -1089,6 +1091,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			PlannerDurationMS:    durationMS(plannerElapsed),
 			ScanDurationMS:       durationMS(exec.ScanDuration),
 			ReduceDurationMS:     durationMS(exec.ReduceDuration),
+			AdapterDurationMS:    durationMS(exec.AdapterDuration),
 			ParityHashDurationMS: durationMS(parityHashElapsed),
 			PlannerCandidates:    plan.Diagnostics.CandidatePlans,
 			PlannerReason:        plan.Diagnostics.Reason,
@@ -1245,7 +1248,9 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	if err != nil {
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s: %w", queryName, plan.Kind, err)
 	}
+	adapterStart := time.Now()
 	lines, err := columnStoreSuitePhysicalQueryLines(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
+	adapterElapsed := time.Since(adapterStart)
 	if err != nil {
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s line mapping: %w", queryName, plan.Kind, err)
 	}
@@ -1280,6 +1285,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		CacheMisses:       diag.DecodedBlockCacheMisses,
 		ScanDuration:      scanDuration,
 		ReduceDuration:    reduceDuration,
+		AdapterDuration:   adapterElapsed,
 	}, nil
 }
 
@@ -1797,8 +1803,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
@@ -1812,8 +1818,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if note != "" {
 			noteCell = markdownCodeTableText(note)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
@@ -1909,21 +1915,14 @@ func markdownTableText(value string) string {
 	if value == "" {
 		return markdownTableEmptyCell
 	}
-	value = strings.ReplaceAll(value, "|", "\\|")
-	value = strings.ReplaceAll(value, "\r\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\n", " ")
-	return value
+	return markdownNormalizeTableCell(value, true)
 }
 
 func markdownCodeTableText(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return markdownTableEmptyCell
 	}
-	value = strings.ReplaceAll(value, "|", "\\|")
-	value = strings.ReplaceAll(value, "\r\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\n", " ")
+	value = markdownNormalizeTableCell(value, false)
 	delimiter := "`"
 	for strings.Contains(value, delimiter) {
 		delimiter += "`"
@@ -1933,6 +1932,17 @@ func markdownCodeTableText(value string) string {
 		padding = " "
 	}
 	return delimiter + padding + value + padding + delimiter
+}
+
+func markdownNormalizeTableCell(value string, escapeHTML bool) string {
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	if escapeHTML {
+		value = html.EscapeString(value)
+	}
+	return value
 }
 
 func renderColumnStoreSuiteHTML(report columnStoreSuiteReport) string {
