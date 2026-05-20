@@ -970,7 +970,7 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	if !strings.Contains(msg, "serial_column_scan") ||
 		!strings.Contains(msg, "unsupported") ||
 		!strings.Contains(msg, "refusing to route through row store") ||
-		!strings.Contains(msg, "reason=physical column query routing is disabled until physical asset capabilities are advertised") {
+		!strings.Contains(msg, "reason=physical column query has no physical assets available") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
