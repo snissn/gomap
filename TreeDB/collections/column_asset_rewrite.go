@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -24,7 +25,10 @@ type ColumnAssetRewriteOptions struct {
 	PendingRefs   []ColumnAssetRef
 	PreparedRefs  []ColumnAssetRef
 	PinnedRefs    []ColumnAssetRef
+}
 
+type columnAssetRewriteOptions struct {
+	ColumnAssetRewriteOptions
 	afterCopyHookForTest       func() error
 	afterPrePublishHookForTest func() error
 }
@@ -63,6 +67,12 @@ type ColumnAssetRewriteStats struct {
 // logical rows and never deletes the old mixed segment; M15B GC can reclaim the
 // old segment once callers present the superseded refs as reclaimable candidates.
 func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
+	return c.columnAssetRewriteWithOptions(ctx, columnAssetRewriteOptions{
+		ColumnAssetRewriteOptions: opts,
+	})
+}
+
+func (c *Collection) columnAssetRewriteWithOptions(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
 	var stats ColumnAssetRewriteStats
 	if c == nil {
 		return stats, errCollectionNil
@@ -86,7 +96,7 @@ func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	return c.columnAssetRewrite(ctx, opts)
 }
 
-func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
+func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
 	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
 		ColumnAssetReachabilityOptions: ColumnAssetReachabilityOptions{
 			Detailed:       opts.Detailed,
@@ -604,6 +614,7 @@ func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, sourceMask
 		}
 		refs = append(refs, ref)
 	}
+	slices.SortFunc(refs, compareColumnAssetRefs)
 	return refs
 }
 

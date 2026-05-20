@@ -15,6 +15,44 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
+func TestColumnAssetRewriteEligibleRefsAreDeterministicM15C(t *testing.T) {
+	older := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "ns",
+		FileID:     2,
+		Offset:     4,
+		Length:     8,
+		Generation: 1,
+		PartID:     1,
+	}
+	newer := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "ns",
+		FileID:     7,
+		Offset:     4,
+		Length:     8,
+		Generation: 1,
+		PartID:     1,
+	}
+	refs := columnAssetRewriteEligibleRefs(
+		ColumnAssetReachabilityPlan{Namespace: "ns"},
+		map[ColumnAssetRef]columnAssetReachabilitySourceMask{
+			newer: columnAssetReachabilitySourceActiveManifestMask,
+			older: columnAssetReachabilitySourceActiveManifestMask,
+		},
+		map[uint32]ColumnAssetReachabilitySegmentEntry{
+			newer.FileID: {},
+			older.FileID: {},
+		},
+	)
+	if len(refs) != 2 {
+		t.Fatalf("eligible refs len=%d want 2", len(refs))
+	}
+	if compareColumnAssetRefs(refs[0], older) != 0 || compareColumnAssetRefs(refs[1], newer) != 0 {
+		t.Fatalf("eligible refs order=%+v want [%+v %+v]", refs, older, newer)
+	}
+}
+
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -328,8 +366,10 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
 
-	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
-		CandidateRefs: []ColumnAssetRef{candidate},
+	stats, err := col.columnAssetRewriteWithOptions(context.Background(), columnAssetRewriteOptions{
+		ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{
+			CandidateRefs: []ColumnAssetRef{candidate},
+		},
 		afterCopyHookForTest: func() error {
 			return staleColumnAssetRewriteManifestRootM15C(d)
 		},
@@ -359,8 +399,10 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *test
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
 
-	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
-		CandidateRefs: []ColumnAssetRef{candidate},
+	stats, err := col.columnAssetRewriteWithOptions(context.Background(), columnAssetRewriteOptions{
+		ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{
+			CandidateRefs: []ColumnAssetRef{candidate},
+		},
 		afterPrePublishHookForTest: func() error {
 			return staleColumnAssetRewriteManifestRootM15C(d)
 		},

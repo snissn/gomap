@@ -39,6 +39,18 @@ var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 // O_EXCL still protects against external process races.
 var columnAssetSegmentAllocationLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
 
+// columnAssetSegmentAllocationCaches avoid repeated directory scans for hot
+// same-namespace segment allocation while keeping cache memory bounded by the
+// stripe count. Collisions only evict the cached hint; O_EXCL remains the source
+// of truth for file-id ownership.
+var columnAssetSegmentAllocationCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentAllocationCache
+
+type columnAssetSegmentAllocationCache struct {
+	segmentDir string
+	nextFileID uint32
+	valid      bool
+}
+
 type columnAssetManagerNamespace struct {
 	ManagerRootDir string
 	RootDir        string
@@ -288,26 +300,70 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
 		return nil, err
 	}
-	allocatorLock := columnAssetSegmentAllocationLock(namespace.SegmentDir)
+	cleanSegmentDir := filepath.Clean(namespace.SegmentDir)
+	allocatorIndex := columnAssetSegmentAllocationLockIndex(cleanSegmentDir)
+	allocatorLock := &columnAssetSegmentAllocationLocks[allocatorIndex]
+	allocatorCache := &columnAssetSegmentAllocationCaches[allocatorIndex]
 	allocatorLock.Lock()
 	defer allocatorLock.Unlock()
-	fileID, err := nextColumnAssetSegmentFileID(namespace)
+	fileID, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, allocatorCache)
 	if err != nil {
 		return nil, err
 	}
 	for {
 		appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
 		if err == nil {
+			advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, allocatorCache, fileID)
 			return appender, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		if fileID == ^uint32(0) {
-			return nil, errors.New("collections: column asset segment file_id exhausted")
+		fileID, err = resetColumnAssetSegmentFileIDCache(namespace, cleanSegmentDir, allocatorCache)
+		if err != nil {
+			return nil, err
 		}
-		fileID++
 	}
+}
+
+func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
+	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
+		if cache.nextFileID == 0 {
+			return 0, errors.New("collections: column asset segment file_id exhausted")
+		}
+		return cache.nextFileID, nil
+	}
+	return resetColumnAssetSegmentFileIDCache(namespace, cleanSegmentDir, cache)
+}
+
+func resetColumnAssetSegmentFileIDCache(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
+	fileID, err := nextColumnAssetSegmentFileID(namespace)
+	if err != nil {
+		if cache != nil && cache.segmentDir == cleanSegmentDir {
+			cache.valid = false
+			cache.nextFileID = 0
+		}
+		return 0, err
+	}
+	if cache != nil {
+		cache.segmentDir = cleanSegmentDir
+		cache.nextFileID = fileID
+		cache.valid = true
+	}
+	return fileID, nil
+}
+
+func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnAssetSegmentAllocationCache, allocatedFileID uint32) {
+	if cache == nil {
+		return
+	}
+	cache.segmentDir = cleanSegmentDir
+	cache.valid = true
+	if allocatedFileID == ^uint32(0) {
+		cache.nextFileID = 0
+		return
+	}
+	cache.nextFileID = allocatedFileID + 1
 }
 
 type columnPhysicalAssetSegmentAppender struct {
@@ -651,7 +707,11 @@ func columnAssetSegmentFileName(fileID uint32) string {
 }
 
 func columnAssetSegmentAllocationLock(segmentDir string) *sync.Mutex {
-	return &columnAssetSegmentAllocationLocks[columnAssetSegmentLockIndex(filepath.Clean(segmentDir))]
+	return &columnAssetSegmentAllocationLocks[columnAssetSegmentAllocationLockIndex(segmentDir)]
+}
+
+func columnAssetSegmentAllocationLockIndex(segmentDir string) uint64 {
+	return columnAssetSegmentLockIndex(filepath.Clean(segmentDir))
 }
 
 func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {

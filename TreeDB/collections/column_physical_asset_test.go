@@ -750,6 +750,42 @@ func TestColumnAssetSegmentAppenderAbortRemovesSegmentM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetSegmentAllocationCacheRescansOnConflictM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	first, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("first newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	firstFileID := first.fileID
+	if err := first.close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	conflictFileID := firstFileID + 1
+	conflictPath, err := columnAssetSegmentPath(root, ColumnAssetRef{
+		Namespace: normalized.AssetManager.Namespace,
+		FileID:    conflictFileID,
+	})
+	if err != nil {
+		t.Fatalf("conflict segment path: %v", err)
+	}
+	if err := os.WriteFile(conflictPath, []byte("reserved"), 0o600); err != nil {
+		t.Fatalf("write conflict segment: %v", err)
+	}
+	second, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("second newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	defer func() { _ = second.abort() }()
+	if second.fileID <= conflictFileID {
+		t.Fatalf("second file_id=%d want > conflict file_id %d", second.fileID, conflictFileID)
+	}
+}
+
 func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
