@@ -540,37 +540,18 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathLoad(b *testing.B) {
 		b.Fatalf("close warm load db: %v", err)
 	}
 
-	loader := testColumnVectorGraphIndexLoader{
-		result: ColumnVectorGraphIndexLoadResult{
-			Graph: fixture.graph,
-			Status: VectorIndexLoadStatus{
-				Strategy:                      VectorIndexStrategyColumnGraph,
-				PhysicalColumnAssetsSupported: true,
-				BytesDisk:                     loadStatus.BytesDisk,
-			},
-		},
-	}
-	opts := VectorIndexOptions{
-		Name:       indexName,
-		Field:      "embedding",
-		Metric:     VectorMetricCosine,
-		Dimensions: dims,
-		Strategy:   VectorIndexStrategyColumnGraph,
-	}
+	opts := vectorIndexOptionsFromDefinition(fixture.def)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		d, err := backenddb.Open(backenddb.Options{Dir: fixture.dir})
-		if err != nil {
-			b.Fatalf("reopen db: %v", err)
-		}
+		d := openCollectionCommandWALDB(b, fixture.dir)
 		col, err := NewCollectionManager(d).OpenCollection("docs")
 		if err != nil {
 			_ = d.Close()
 			b.Fatalf("open collection: %v", err)
 		}
-		loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(opts, loader)
+		loaded, status, err := col.LoadColumnGraphVectorIndexSnapshot(opts)
 		if err != nil {
 			_ = d.Close()
 			b.Fatalf("load column graph vector index: %v", err)
@@ -806,6 +787,59 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathSearchWithDocumentFetchPar
 	b.ReportMetric(float64(warmBytes), "document_bytes/search")
 }
 
+func BenchmarkCollectionVectorIndexColumnGraphMainPathPublicSearch(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	indexName := "embedding_column_graph_public_search"
+	d, col, graph, loadStatus := openColumnGraphVectorBenchmarkMainPath(b, docs, dims, indexName)
+	defer func() { _ = d.Close() }()
+	query, ok := graph.VectorAt(nil, docs/3)
+	if !ok {
+		b.Fatal("missing query vector")
+	}
+	opts := VectorIndexSearchOptions{
+		TopK:                 vectorBenchmarkTopK,
+		EfSearch:             128,
+		DisableExactFallback: true,
+	}
+	var kernelScratch ColumnVectorGraphSearchScratch
+	_, kernelTrace, err := graph.SearchCosine(query, ColumnVectorGraphSearchOptions{
+		TopK:     opts.TopK,
+		EfSearch: opts.EfSearch,
+	}, &kernelScratch)
+	if err != nil {
+		b.Fatalf("warm public column_graph kernel trace: %v", err)
+	}
+	warm, warmTrace, err := col.SearchVectorIndex(indexName, query, opts)
+	if err != nil {
+		b.Fatalf("warm public column_graph search: %v", err)
+	}
+	if len(warm) != opts.TopK || warmTrace.Strategy != columnVectorGraphStrategyCosine {
+		b.Fatalf("warm public results=%d trace=%+v", len(warm), warmTrace)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(kernelTrace.CandidatesExamined * graph.Dims() * 4))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, trace, err := col.SearchVectorIndex(indexName, query, opts)
+		if err != nil {
+			b.Fatalf("public column_graph search: %v", err)
+		}
+		if len(results) != opts.TopK || trace.Strategy != columnVectorGraphStrategyCosine {
+			b.Fatalf("public results=%d trace=%+v", len(results), trace)
+		}
+		columnVectorGraphBenchSink += int64(len(results[0].DocumentID) + len(results[0].Document) + trace.CandidatesExamined)
+	}
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(loadStatus.RootID), "manifest_root_id")
+	b.ReportMetric(float64(loadStatus.BytesDisk), "column_graph_bytes")
+	b.ReportMetric(float64(graph.Edges())/float64(graph.Rows()), "edges/node")
+	b.ReportMetric(float64(kernelTrace.CandidatesExamined), "candidates/search")
+	b.ReportMetric(float64(kernelTrace.EdgesVisited), "edges/search")
+}
+
 func BenchmarkCollectionVectorIndexColumnGraphMainPathOpenLoadSearchWithDocumentFetch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
@@ -816,21 +850,12 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathOpenLoadSearchWithDocument
 		b.Fatal("missing query vector")
 	}
 	opts := ColumnVectorGraphSearchOptions{TopK: vectorBenchmarkTopK, EfSearch: 128}
-	loader := testColumnVectorGraphIndexLoader{
-		result: ColumnVectorGraphIndexLoadResult{
-			Graph: fixture.graph,
-			Status: VectorIndexLoadStatus{
-				Strategy:                      VectorIndexStrategyColumnGraph,
-				PhysicalColumnAssetsSupported: true,
-				BytesDisk:                     fixture.bytesDisk,
-			},
-		},
-	}
 	vectorOpts := vectorIndexOptionsFromDefinition(fixture.def)
 
 	// This deliberately measures the slower DB-facing path: open collection,
-	// validate column_graph status through the loader seam, search, then fetch
-	// the selected documents. Build/index setup stays outside the timed loop.
+	// validate column_graph status through the real physical loader, search,
+	// then fetch the selected documents. Build/index setup stays outside the
+	// timed loop.
 	var scratch ColumnVectorGraphSearchScratch
 	var documentBuf []byte
 	warmD, warmCol, warmGraph, warmLoadStatus := openLoadedColumnGraphVectorBenchmarkMainPath(b, fixture)
@@ -861,7 +886,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathOpenLoadSearchWithDocument
 			_ = d.Close()
 			b.Fatalf("open collection: %v", err)
 		}
-		graph, status, err := col.loadColumnGraphVectorIndexSnapshot(vectorOpts, loader)
+		graph, status, err := col.LoadColumnGraphVectorIndexSnapshot(vectorOpts)
 		if err != nil {
 			_ = d.Close()
 			b.Fatalf("load column graph vector index: %v", err)
@@ -1572,15 +1597,17 @@ func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name st
 }
 
 type columnGraphVectorBenchmarkMainPathFixture struct {
-	dir       string
-	def       VectorIndexDefinition
-	graph     *ColumnVectorGraph
-	bytesDisk int64
+	dir   string
+	def   VectorIndexDefinition
+	graph *ColumnVectorGraph
 }
 
 func setupColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name string) columnGraphVectorBenchmarkMainPathFixture {
 	tb.Helper()
 	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
 	def := VectorIndexDefinition{
 		Name:       name,
 		Field:      "embedding",
@@ -1590,18 +1617,13 @@ func setupColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name
 		EfSearch:   128,
 		Strategy:   VectorIndexStrategyColumnGraph,
 	}
-	active := ColumnManifestIdentity{
-		Generation: 1,
-		Version:    columnManifestIdentityVersion,
-		Checksum:   0x434f4c4752415048,
-	}
-	d, err := backenddb.Open(backenddb.Options{Dir: dir})
-	if err != nil {
-		tb.Fatalf("open db: %v", err)
-	}
+	d := openCollectionCommandWALDB(tb, dir)
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name:          "docs",
+		Name: "docs",
+		Options: CollectionOptions{
+			ColumnStore: columnGraphVectorBenchmarkColumnStore(nil, dims),
+		},
 		VectorIndexes: []VectorIndexDefinition{def},
 	}); err != nil {
 		_ = d.Close()
@@ -1612,29 +1634,22 @@ func setupColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name
 		_ = d.Close()
 		tb.Fatalf("open collection: %v", err)
 	}
-	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	columns := columnVectorGraphTestColumns(docs, dims, 16, false)
+	ids, documents := vectorGraphBenchmarkWriteBatch(columns)
 	vectorBenchmarkInsertBatches(tb, col, ids, documents, 512)
-	if err := col.Flush(); err != nil {
+	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
-		tb.Fatalf("flush benchmark collection: %v", err)
+		tb.Fatalf("checkpoint benchmark collection: %v", err)
 	}
-	publishColumnStoreCatalogForTest(tb, d, CollectionMeta{
-		Name: "docs",
-		Options: CollectionOptions{
-			ColumnStore: columnGraphVectorBenchmarkColumnStore(&active, dims),
-		},
-		VectorIndexes: []VectorIndexDefinition{def},
-	}, active)
 	if err := d.Close(); err != nil {
 		tb.Fatalf("close setup db: %v", err)
 	}
 
-	columns := columnVectorGraphTestColumns(docs, dims, 16, false)
 	graph, err := NewColumnVectorGraphFromColumns(columns)
 	if err != nil {
 		tb.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
 	}
-	return columnGraphVectorBenchmarkMainPathFixture{dir: dir, def: def, graph: graph, bytesDisk: columnGraphVectorBenchmarkBytes(columns)}
+	return columnGraphVectorBenchmarkMainPathFixture{dir: dir, def: def, graph: graph}
 }
 
 func openColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *Collection, *ColumnVectorGraph, VectorIndexLoadStatus) {
@@ -1645,35 +1660,26 @@ func openColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name 
 
 func openLoadedColumnGraphVectorBenchmarkMainPath(tb testing.TB, fixture columnGraphVectorBenchmarkMainPathFixture) (*backenddb.DB, *Collection, *ColumnVectorGraph, VectorIndexLoadStatus) {
 	tb.Helper()
-	d, err := backenddb.Open(backenddb.Options{Dir: fixture.dir})
-	if err != nil {
-		tb.Fatalf("reopen db: %v", err)
-	}
+	d := openCollectionCommandWALDB(tb, fixture.dir)
 	col, err := NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		_ = d.Close()
 		tb.Fatalf("open reopened collection: %v", err)
 	}
-	loader := testColumnVectorGraphIndexLoader{
-		result: ColumnVectorGraphIndexLoadResult{
-			Graph: fixture.graph,
-			Status: VectorIndexLoadStatus{
-				Strategy:                      VectorIndexStrategyColumnGraph,
-				PhysicalColumnAssetsSupported: true,
-				BytesDisk:                     fixture.bytesDisk,
-			},
-		},
-	}
-	loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(fixture.def), loader)
+	loaded, status, err := col.LoadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(fixture.def))
 	if err != nil {
 		_ = d.Close()
 		tb.Fatalf("load column_graph vector index: %v", err)
 	}
-	if loaded == nil || loaded != fixture.graph || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported || status.RootID == 0 {
+	if loaded == nil || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported || status.RootID == 0 {
 		_ = d.Close()
-		tb.Fatalf("unexpected column_graph benchmark load status loaded=%v same=%v status=%+v", loaded != nil, loaded == fixture.graph, status)
+		tb.Fatalf("unexpected column_graph benchmark load status loaded=%v status=%+v", loaded != nil, status)
 	}
-	return d, col, fixture.graph, status
+	if loaded.Rows() != fixture.graph.Rows() || loaded.Dims() != fixture.graph.Dims() || loaded.Edges() != fixture.graph.Edges() {
+		_ = d.Close()
+		tb.Fatalf("unexpected column_graph shape rows=%d/%d dims=%d/%d edges=%d/%d", loaded.Rows(), fixture.graph.Rows(), loaded.Dims(), fixture.graph.Dims(), loaded.Edges(), fixture.graph.Edges())
+	}
+	return d, col, loaded, status
 }
 
 func columnGraphVectorBenchmarkColumnStore(active *ColumnManifestIdentity, dims int) *ColumnStoreConfig {
@@ -1701,12 +1707,37 @@ func columnGraphVectorBenchmarkColumnStore(active *ColumnManifestIdentity, dims 
 	return cfg
 }
 
-func columnGraphVectorBenchmarkBytes(columns ColumnVectorGraphColumns) int64 {
-	var documentIDBytes int
-	for _, id := range columns.DocumentIDs {
-		documentIDBytes += len(id)
+func vectorGraphBenchmarkWriteBatch(columns ColumnVectorGraphColumns) ([][]byte, [][]byte) {
+	rows := len(columns.DocumentIDs)
+	ids := make([][]byte, rows)
+	documents := make([][]byte, rows)
+	for row := 0; row < rows; row++ {
+		ids[row] = append([]byte(nil), columns.DocumentIDs[row]...)
+		vector := columns.Vectors[row*columns.Dimensions : (row+1)*columns.Dimensions]
+		neighbors := columns.Neighbors[columns.NeighborOffsets[row]:columns.NeighborOffsets[row+1]]
+		documents[row] = vectorGraphBenchmarkDocument(row, vector, columns.InvNorms[row], neighbors)
 	}
-	return int64(len(columns.Vectors)*4 + len(columns.InvNorms)*4 + len(columns.NeighborOffsets)*4 + len(columns.Neighbors)*4 + documentIDBytes)
+	return ids, documents
+}
+
+func vectorGraphBenchmarkDocument(id int, vector []float32, invNorm float32, neighbors []uint32) []byte {
+	out := make([]byte, 0, 64+len(vector)*10+len(neighbors)*4)
+	out = append(out, fmt.Sprintf(`{"group":%d,"embedding":[`, id%16)...)
+	for i, value := range vector {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, fmt.Sprintf("%.7g", value)...)
+	}
+	out = append(out, fmt.Sprintf(`],"embedding_inv_norm":%.7g,"embedding_neighbors":[`, invNorm)...)
+	for i, neighbor := range neighbors {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = strconv.AppendUint(out, uint64(neighbor), 10)
+	}
+	out = append(out, ']', '}')
+	return out
 }
 
 func fetchColumnGraphBenchmarkDocuments(tb testing.TB, col *Collection, results []VectorSearchResult, buf *[]byte) int {
