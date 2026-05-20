@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -22,6 +23,7 @@ func TestColumnVectorGraphDeep1BGroundtruthLocality(t *testing.T) {
 	ranks := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_PCA_RANKS", []int{8, 16, 32, 64, columnVectorGraphDeep1BDims})
 	localBaseRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_BASE_ROWS", 1_000_000)
 	fetchBase1B := os.Getenv("COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_BASE1B") == "1"
+	fetchConcurrency := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_CONCURRENCY", 16)
 	outDir := strings.TrimSpace(os.Getenv("COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_OUT"))
 	if outDir == "" {
 		outDir = filepath.Join(os.TempDir(), "gomap_deep1b_groundtruth_locality_"+time.Now().Format("20060102_150405"))
@@ -52,6 +54,7 @@ func TestColumnVectorGraphDeep1BGroundtruthLocality(t *testing.T) {
 		GroundtruthDims:  truthHeader.Dims,
 		Dims:             columnVectorGraphDeep1BDims,
 		FetchBase1B:      fetchBase1B,
+		FetchConcurrency: fetchConcurrency,
 		RequestedQueries: append([]int(nil), queryIndexes...),
 		Ranks:            append([]int(nil), ranks...),
 	}
@@ -61,7 +64,7 @@ func TestColumnVectorGraphDeep1BGroundtruthLocality(t *testing.T) {
 		}
 		query := columnVectorGraphDeep1BReadQuery(t, queryPath, queryHeader, queryIndex)
 		truthRows := columnVectorGraphDeep1BReadGroundtruthRow(t, truthPath, truthHeader, queryIndex)
-		result := columnVectorGraphDeep1BAnalyzeGroundtruthQuery(t, baseFile, baseHeader, query, queryIndex, truthRows, ranks, fetchBase1B, &cache)
+		result := columnVectorGraphDeep1BAnalyzeGroundtruthQuery(t, baseFile, baseHeader, query, queryIndex, truthRows, ranks, fetchBase1B, fetchConcurrency, &cache)
 		report.Queries = append(report.Queries, result)
 	}
 	if err := columnVectorGraphDeep1BWriteJSON(filepath.Join(outDir, "results.json"), report); err != nil {
@@ -90,30 +93,34 @@ type columnVectorGraphDeep1BGroundtruthLocalityReport struct {
 	GroundtruthDims  int                                             `json:"groundtruth_dims"`
 	Dims             int                                             `json:"dims"`
 	FetchBase1B      bool                                            `json:"fetch_base_1b"`
+	FetchConcurrency int                                             `json:"fetch_concurrency"`
 	RequestedQueries []int                                           `json:"requested_queries"`
 	Ranks            []int                                           `json:"ranks"`
 	Queries          []columnVectorGraphDeep1BGroundtruthQueryReport `json:"queries"`
 }
 
 type columnVectorGraphDeep1BGroundtruthQueryReport struct {
-	QueryIndex                int                                                    `json:"query_index"`
-	GroundtruthCount          int                                                    `json:"groundtruth_count"`
-	LoadedCount               int                                                    `json:"loaded_count"`
-	LocalBaseCount            int                                                    `json:"local_base_count"`
-	RemoteBase1BCount         int                                                    `json:"remote_base_1b_count"`
-	MissingCount              int                                                    `json:"missing_count"`
-	FirstGroundtruthRows      []int                                                  `json:"first_groundtruth_rows"`
-	FirstLoadedRows           []int                                                  `json:"first_loaded_rows"`
-	GroundtruthTop10Agreement int                                                    `json:"groundtruth_top10_agreement"`
-	CentroidNorm              float64                                                `json:"centroid_norm"`
-	CentroidCosineToQuery     float64                                                `json:"centroid_cosine_to_query"`
-	AveragePairwiseCosine     float64                                                `json:"average_pairwise_cosine"`
-	ScoreQuantiles            map[string]float64                                     `json:"score_quantiles"`
-	ScoreMargins              map[string]float64                                     `json:"score_margins"`
-	MinRankRecallAt10Full     int                                                    `json:"min_rank_recall_at_10_full,omitempty"`
-	MinRankRecallAt10GE90     int                                                    `json:"min_rank_recall_at_10_ge_90,omitempty"`
-	PCA                       []columnVectorGraphDeep1BGroundtruthPCAQueryRankReport `json:"pca"`
-	Notes                     string                                                 `json:"notes,omitempty"`
+	QueryIndex                 int                                                    `json:"query_index"`
+	GroundtruthCount           int                                                    `json:"groundtruth_count"`
+	LoadedCount                int                                                    `json:"loaded_count"`
+	LocalBaseCount             int                                                    `json:"local_base_count"`
+	RemoteBase1BCount          int                                                    `json:"remote_base_1b_count"`
+	MissingCount               int                                                    `json:"missing_count"`
+	FirstGroundtruthRows       []int                                                  `json:"first_groundtruth_rows"`
+	FirstLoadedRows            []int                                                  `json:"first_loaded_rows"`
+	GroundtruthTop10Agreement  int                                                    `json:"groundtruth_top10_agreement"`
+	CentroidNorm               float64                                                `json:"centroid_norm"`
+	CentroidCosineToQuery      float64                                                `json:"centroid_cosine_to_query"`
+	AveragePairwiseCosine      float64                                                `json:"average_pairwise_cosine"`
+	ScoreQuantiles             map[string]float64                                     `json:"score_quantiles"`
+	ScoreMargins               map[string]float64                                     `json:"score_margins"`
+	MinRankRecallAt10Full      int                                                    `json:"min_rank_recall_at_10_full,omitempty"`
+	MinRankRecallAt10GE90      int                                                    `json:"min_rank_recall_at_10_ge_90,omitempty"`
+	MinRankTop10InApprox20     int                                                    `json:"min_rank_top10_in_approx20,omitempty"`
+	MinRankTop10InApprox50     int                                                    `json:"min_rank_top10_in_approx50,omitempty"`
+	MinRankTop20InApprox50GE95 int                                                    `json:"min_rank_top20_in_approx50_ge_95,omitempty"`
+	PCA                        []columnVectorGraphDeep1BGroundtruthPCAQueryRankReport `json:"pca"`
+	Notes                      string                                                 `json:"notes,omitempty"`
 }
 
 type columnVectorGraphDeep1BGroundtruthPCAQueryRankReport struct {
@@ -131,6 +138,10 @@ type columnVectorGraphDeep1BGroundtruthPCAQueryRankReport struct {
 	Top10RecallAt50     float64 `json:"top10_recall_at_50,omitempty"`
 	Top10InApproxTop100 int     `json:"top10_in_approx_top100,omitempty"`
 	Top10RecallAt100    float64 `json:"top10_recall_at_100,omitempty"`
+	Top20InApproxTop50  int     `json:"top20_in_approx_top50,omitempty"`
+	Top20RecallAt50     float64 `json:"top20_recall_at_50,omitempty"`
+	Top20InApproxTop100 int     `json:"top20_in_approx_top100,omitempty"`
+	Top20RecallAt100    float64 `json:"top20_recall_at_100,omitempty"`
 	MeanScoreError      float64 `json:"mean_score_error"`
 	MaxScoreError       float64 `json:"max_score_error"`
 	MeanRelativeL2      float64 `json:"mean_relative_l2"`
@@ -138,42 +149,52 @@ type columnVectorGraphDeep1BGroundtruthPCAQueryRankReport struct {
 }
 
 type columnVectorGraphDeep1BRemoteRowCache struct {
+	mu     sync.Mutex
 	client *http.Client
 	rows   map[int][]float32
 }
 
-func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.File, baseHeader columnVectorGraphDeep1BFbinHeader, query []float32, queryIndex int, truthRows []int, ranks []int, fetchBase1B bool, cache *columnVectorGraphDeep1BRemoteRowCache) columnVectorGraphDeep1BGroundtruthQueryReport {
+type columnVectorGraphDeep1BLoadedGroundtruthVector struct {
+	rowID  int
+	vector []float32
+	source string
+	ok     bool
+}
+
+func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.File, baseHeader columnVectorGraphDeep1BFbinHeader, query []float32, queryIndex int, truthRows []int, ranks []int, fetchBase1B bool, fetchConcurrency int, cache *columnVectorGraphDeep1BRemoteRowCache) columnVectorGraphDeep1BGroundtruthQueryReport {
 	tb.Helper()
 	loadedRows := make([]int, 0, len(truthRows))
 	vectors := make([]float32, 0, len(truthRows)*columnVectorGraphDeep1BDims)
 	var localCount int
 	var remoteCount int
 	var missingCount int
-	for _, rowID := range truthRows {
-		vector, source, ok := columnVectorGraphDeep1BLoadGroundtruthVector(tb, baseFile, baseHeader, rowID, fetchBase1B, cache)
-		if !ok {
+	for _, loaded := range columnVectorGraphDeep1BLoadGroundtruthVectors(tb, baseFile, baseHeader, truthRows, fetchBase1B, fetchConcurrency, cache) {
+		if !loaded.ok {
 			missingCount++
 			continue
 		}
-		if source == "local" {
+		if loaded.source == "local" {
 			localCount++
-		} else if source == "remote_base_1b" {
+		} else if loaded.source == "remote_base_1b" {
 			remoteCount++
 		}
-		loadedRows = append(loadedRows, rowID)
-		vectors = append(vectors, vector...)
+		loadedRows = append(loadedRows, loaded.rowID)
+		vectors = append(vectors, loaded.vector...)
 	}
 	report := columnVectorGraphDeep1BGroundtruthQueryReport{
-		QueryIndex:            queryIndex,
-		GroundtruthCount:      len(truthRows),
-		LoadedCount:           len(loadedRows),
-		LocalBaseCount:        localCount,
-		RemoteBase1BCount:     remoteCount,
-		MissingCount:          missingCount,
-		FirstGroundtruthRows:  append([]int(nil), truthRows[:min(10, len(truthRows))]...),
-		FirstLoadedRows:       append([]int(nil), loadedRows[:min(10, len(loadedRows))]...),
-		MinRankRecallAt10Full: -1,
-		MinRankRecallAt10GE90: -1,
+		QueryIndex:                 queryIndex,
+		GroundtruthCount:           len(truthRows),
+		LoadedCount:                len(loadedRows),
+		LocalBaseCount:             localCount,
+		RemoteBase1BCount:          remoteCount,
+		MissingCount:               missingCount,
+		FirstGroundtruthRows:       append([]int(nil), truthRows[:min(10, len(truthRows))]...),
+		FirstLoadedRows:            append([]int(nil), loadedRows[:min(10, len(loadedRows))]...),
+		MinRankRecallAt10Full:      -1,
+		MinRankRecallAt10GE90:      -1,
+		MinRankTop10InApprox20:     -1,
+		MinRankTop10InApprox50:     -1,
+		MinRankTop20InApprox50GE95: -1,
 	}
 	if len(loadedRows) < 2 {
 		report.Notes = "fewer than two groundtruth rows are available from the local base file; enable COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_BASE1B=1 or provide base.1B.fbin-compatible rows"
@@ -214,9 +235,11 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 		if rows >= 50 {
 			row.Top50Overlap, row.RecallAt50 = columnVectorGraphDeep1BApproxRecall(exactScores, encoding.approxScores, 50)
 			row.Top10InApproxTop50, row.Top10RecallAt50 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 10, 50)
+			row.Top20InApproxTop50, row.Top20RecallAt50 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 20, 50)
 		}
 		if rows >= 100 {
 			row.Top10InApproxTop100, row.Top10RecallAt100 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 10, 100)
+			row.Top20InApproxTop100, row.Top20RecallAt100 = columnVectorGraphDeep1BCandidateRecall(exactScores, encoding.approxScores, 20, 100)
 		}
 		if row.RecallAt10 == 1 && report.MinRankRecallAt10Full < 0 {
 			report.MinRankRecallAt10Full = rank
@@ -224,9 +247,86 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 		if row.RecallAt10 >= 0.9 && report.MinRankRecallAt10GE90 < 0 {
 			report.MinRankRecallAt10GE90 = rank
 		}
+		if row.Top10InApproxTop20 == 10 && report.MinRankTop10InApprox20 < 0 {
+			report.MinRankTop10InApprox20 = rank
+		}
+		if row.Top10InApproxTop50 == 10 && report.MinRankTop10InApprox50 < 0 {
+			report.MinRankTop10InApprox50 = rank
+		}
+		if row.Top20InApproxTop50 >= 19 && report.MinRankTop20InApprox50GE95 < 0 {
+			report.MinRankTop20InApprox50GE95 = rank
+		}
 		report.PCA = append(report.PCA, row)
 	}
 	return report
+}
+
+func columnVectorGraphDeep1BLoadGroundtruthVectors(tb testing.TB, baseFile *os.File, baseHeader columnVectorGraphDeep1BFbinHeader, truthRows []int, fetchBase1B bool, fetchConcurrency int, cache *columnVectorGraphDeep1BRemoteRowCache) []columnVectorGraphDeep1BLoadedGroundtruthVector {
+	tb.Helper()
+	loaded := make([]columnVectorGraphDeep1BLoadedGroundtruthVector, len(truthRows))
+	remoteIndexes := make([]int, 0, len(truthRows))
+	for i, rowID := range truthRows {
+		loaded[i].rowID = rowID
+		if baseFile != nil && rowID >= 0 && rowID < baseHeader.Rows {
+			_, vector, err := columnVectorGraphDeep1BReadFbinVectorsAt(baseFile, baseHeader, rowID, 1, nil, nil)
+			if err != nil {
+				tb.Fatalf("read local Deep1B row %d: %v", rowID, err)
+			}
+			loaded[i].vector = append([]float32(nil), vector...)
+			loaded[i].source = "local"
+			loaded[i].ok = true
+			continue
+		}
+		if !fetchBase1B || rowID < 0 {
+			continue
+		}
+		if cached, ok := cache.get(rowID); ok {
+			loaded[i].vector = cached
+			loaded[i].source = "remote_base_1b"
+			loaded[i].ok = true
+			continue
+		}
+		remoteIndexes = append(remoteIndexes, i)
+	}
+	if len(remoteIndexes) == 0 {
+		return loaded
+	}
+	if fetchConcurrency <= 0 {
+		fetchConcurrency = 1
+	}
+	fetchConcurrency = min(fetchConcurrency, len(remoteIndexes))
+	type fetchResult struct {
+		index  int
+		rowID  int
+		vector []float32
+		err    error
+	}
+	jobs := make(chan int)
+	results := make(chan fetchResult, len(remoteIndexes))
+	for worker := 0; worker < fetchConcurrency; worker++ {
+		go func() {
+			for index := range jobs {
+				rowID := truthRows[index]
+				vector, err := columnVectorGraphDeep1BFetchBase1BRowErr(cache.client, rowID, columnVectorGraphDeep1BDims)
+				results <- fetchResult{index: index, rowID: rowID, vector: vector, err: err}
+			}
+		}()
+	}
+	for _, index := range remoteIndexes {
+		jobs <- index
+	}
+	close(jobs)
+	for range remoteIndexes {
+		result := <-results
+		if result.err != nil {
+			tb.Fatalf("fetch Deep1B base.1B row %d: %v", result.rowID, result.err)
+		}
+		cache.put(result.rowID, result.vector)
+		loaded[result.index].vector = append([]float32(nil), result.vector...)
+		loaded[result.index].source = "remote_base_1b"
+		loaded[result.index].ok = true
+	}
+	return loaded
 }
 
 func columnVectorGraphDeep1BLoadGroundtruthVector(tb testing.TB, baseFile *os.File, baseHeader columnVectorGraphDeep1BFbinHeader, rowID int, fetchBase1B bool, cache *columnVectorGraphDeep1BRemoteRowCache) ([]float32, string, bool) {
@@ -244,41 +344,74 @@ func columnVectorGraphDeep1BLoadGroundtruthVector(tb testing.TB, baseFile *os.Fi
 	if rowID < 0 {
 		return nil, "", false
 	}
-	if cached, ok := cache.rows[rowID]; ok {
-		return append([]float32(nil), cached...), "remote_base_1b", true
+	if cached, ok := cache.get(rowID); ok {
+		return cached, "remote_base_1b", true
 	}
 	vector := columnVectorGraphDeep1BFetchBase1BRow(tb, cache.client, rowID, columnVectorGraphDeep1BDims)
-	cache.rows[rowID] = append([]float32(nil), vector...)
+	cache.put(rowID, vector)
 	return vector, "remote_base_1b", true
+}
+
+func (cache *columnVectorGraphDeep1BRemoteRowCache) get(rowID int) ([]float32, bool) {
+	if cache == nil {
+		return nil, false
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	vector, ok := cache.rows[rowID]
+	if !ok {
+		return nil, false
+	}
+	return append([]float32(nil), vector...), true
+}
+
+func (cache *columnVectorGraphDeep1BRemoteRowCache) put(rowID int, vector []float32) {
+	if cache == nil {
+		return
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.rows == nil {
+		cache.rows = make(map[int][]float32)
+	}
+	cache.rows[rowID] = append([]float32(nil), vector...)
 }
 
 func columnVectorGraphDeep1BFetchBase1BRow(tb testing.TB, client *http.Client, rowID int, dims int) []float32 {
 	tb.Helper()
+	vector, err := columnVectorGraphDeep1BFetchBase1BRowErr(client, rowID, dims)
+	if err != nil {
+		tb.Fatalf("fetch Deep1B base.1B row %d: %v", rowID, err)
+	}
+	return vector
+}
+
+func columnVectorGraphDeep1BFetchBase1BRowErr(client *http.Client, rowID int, dims int) ([]float32, error) {
 	rowBytes := dims * 4
 	start := int64(8 + rowID*rowBytes)
 	end := start + int64(rowBytes) - 1
 	req, err := http.NewRequest(http.MethodGet, columnVectorGraphDeep1BBase1BURL, nil)
 	if err != nil {
-		tb.Fatalf("build Deep1B base.1B row request: %v", err)
+		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
 	resp, err := client.Do(req)
 	if err != nil {
-		tb.Fatalf("fetch Deep1B base.1B row %d: %v", rowID, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
-		tb.Fatalf("fetch Deep1B base.1B row %d status=%s want 206 Partial Content", rowID, resp.Status)
+		return nil, fmt.Errorf("status=%s want 206 Partial Content", resp.Status)
 	}
 	raw := make([]byte, rowBytes)
 	if _, err := io.ReadFull(resp.Body, raw); err != nil {
-		tb.Fatalf("read Deep1B base.1B row %d: %v", rowID, err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 	vector := make([]float32, dims)
 	for i := range vector {
 		vector[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
 	}
-	return vector
+	return vector, nil
 }
 
 func columnVectorGraphDeep1BEnsureGroundtruth(tb testing.TB) (string, columnVectorGraphDeep1BIbinHeader) {
@@ -653,6 +786,7 @@ func columnVectorGraphDeep1BRenderGroundtruthLocalityMarkdown(report columnVecto
 			)
 		}
 	}
+	columnVectorGraphDeep1BRenderGroundtruthAggregateMarkdown(&b, report)
 	fmt.Fprintf(&b, "\n## Exact Score Margins\n\n")
 	fmt.Fprintf(&b, "| Query | Gap 1/2 | Gap 5/6 | Gap 10/11 | Gap 20/21 | Gap 50/51 | Adjacent p50 | Adjacent p90 | Adjacent max |\n")
 	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
@@ -670,6 +804,138 @@ func columnVectorGraphDeep1BRenderGroundtruthLocalityMarkdown(report columnVecto
 		)
 	}
 	return b.String()
+}
+
+type columnVectorGraphDeep1BGroundtruthRankAggregate struct {
+	count          int
+	variance       float64
+	top10          float64
+	top10At20      float64
+	top10At50      float64
+	top20At50      float64
+	scoreError     float64
+	worstTop10     int
+	worstTop10At20 int
+	worstTop10At50 int
+	worstTop20At50 int
+}
+
+func columnVectorGraphDeep1BRenderGroundtruthAggregateMarkdown(b *strings.Builder, report columnVectorGraphDeep1BGroundtruthLocalityReport) {
+	byRank := make(map[int]*columnVectorGraphDeep1BGroundtruthRankAggregate)
+	var ranks []int
+	for _, q := range report.Queries {
+		for _, pca := range q.PCA {
+			agg := byRank[pca.Rank]
+			if agg == nil {
+				agg = &columnVectorGraphDeep1BGroundtruthRankAggregate{
+					worstTop10:     1_000_000,
+					worstTop10At20: 1_000_000,
+					worstTop10At50: 1_000_000,
+					worstTop20At50: 1_000_000,
+				}
+				byRank[pca.Rank] = agg
+				ranks = append(ranks, pca.Rank)
+			}
+			agg.count++
+			agg.variance += pca.VarianceCaptured
+			agg.top10 += float64(pca.Top10Overlap)
+			agg.top10At20 += float64(pca.Top10InApproxTop20)
+			agg.top10At50 += float64(pca.Top10InApproxTop50)
+			agg.top20At50 += float64(pca.Top20InApproxTop50)
+			agg.scoreError += pca.MeanScoreError
+			agg.worstTop10 = min(agg.worstTop10, pca.Top10Overlap)
+			agg.worstTop10At20 = min(agg.worstTop10At20, pca.Top10InApproxTop20)
+			agg.worstTop10At50 = min(agg.worstTop10At50, pca.Top10InApproxTop50)
+			agg.worstTop20At50 = min(agg.worstTop20At50, pca.Top20InApproxTop50)
+		}
+	}
+	sort.Ints(ranks)
+	fmt.Fprintf(b, "\n## Aggregate PCA Candidate Gates\n\n")
+	fmt.Fprintf(b, "| Rank | Approx code B/vector | Queries | Avg PCA variance | Avg final top10 | Worst final top10 | Avg top10 in approx@20 | Worst top10 in approx@20 | Avg top10 in approx@50 | Worst top10 in approx@50 | Avg top20 in approx@50 | Worst top20 in approx@50 | Avg score error |\n")
+	fmt.Fprintf(b, "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, rank := range ranks {
+		agg := byRank[rank]
+		if agg.count == 0 {
+			continue
+		}
+		count := float64(agg.count)
+		fmt.Fprintf(b, "| %d | %d | %d | %.2f%% | %.2f/10 | %d/10 | %.2f/10 | %d/10 | %.2f/10 | %d/10 | %.2f/20 | %d/20 | %.5f |\n",
+			rank,
+			rank,
+			agg.count,
+			100*agg.variance/count,
+			agg.top10/count,
+			agg.worstTop10,
+			agg.top10At20/count,
+			agg.worstTop10At20,
+			agg.top10At50/count,
+			agg.worstTop10At50,
+			agg.top20At50/count,
+			agg.worstTop20At50,
+			agg.scoreError/count,
+		)
+	}
+
+	type gate struct {
+		name   string
+		values []int
+		failed int
+	}
+	gates := []gate{
+		{name: "final top10 recall >= 9/10"},
+		{name: "final top10 recall = 10/10"},
+		{name: "exact top10 in approx@20 = 10/10"},
+		{name: "exact top10 in approx@50 = 10/10"},
+		{name: "exact top20 in approx@50 >= 19/20"},
+	}
+	appendGateRank := func(gate *gate, rank int) {
+		if rank <= 0 {
+			gate.failed++
+			return
+		}
+		gate.values = append(gate.values, rank)
+	}
+	for _, q := range report.Queries {
+		appendGateRank(&gates[0], q.MinRankRecallAt10GE90)
+		appendGateRank(&gates[1], q.MinRankRecallAt10Full)
+		appendGateRank(&gates[2], q.MinRankTop10InApprox20)
+		appendGateRank(&gates[3], q.MinRankTop10InApprox50)
+		appendGateRank(&gates[4], q.MinRankTop20InApprox50GE95)
+	}
+	fmt.Fprintf(b, "\n## Minimum Rank Quality Gates\n\n")
+	fmt.Fprintf(b, "| Gate | Passed queries | Failed queries | p50 K | p90 K | Worst K |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, gate := range gates {
+		sort.Ints(gate.values)
+		fmt.Fprintf(b, "| %s | %d | %d | %s | %s | %s |\n",
+			gate.name,
+			len(gate.values),
+			gate.failed,
+			columnVectorGraphDeep1BFormatRank(columnVectorGraphDeep1BIntQuantile(gate.values, 0.50)),
+			columnVectorGraphDeep1BFormatRank(columnVectorGraphDeep1BIntQuantile(gate.values, 0.90)),
+			columnVectorGraphDeep1BFormatRank(columnVectorGraphDeep1BIntQuantile(gate.values, 1.00)),
+		)
+	}
+}
+
+func columnVectorGraphDeep1BIntQuantile(values []int, quantile float64) int {
+	if len(values) == 0 {
+		return -1
+	}
+	if quantile <= 0 {
+		return values[0]
+	}
+	if quantile >= 1 {
+		return values[len(values)-1]
+	}
+	index := int(math.Ceil(quantile*float64(len(values)))) - 1
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(values) {
+		index = len(values) - 1
+	}
+	return values[index]
 }
 
 func columnVectorGraphDeep1BFormatRank(rank int) string {

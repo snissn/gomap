@@ -9,22 +9,32 @@ separate two questions:
 2. Which compressed representations are plausible for final ranking versus
    candidate generation before exact rerank?
 
-Deep1B vectors in this benchmark are `D=96`. The live sample below used queries
-`0..4`, loaded each query's official top100 database rows from `base.1B.fbin`
-by HTTP range request, and fit local PCA on each top100 cloud.
+Deep1B vectors in this benchmark are `D=96`. The principal run below used
+queries `0..99`, loaded each query's official top100 database rows from
+`base.1B.fbin` by HTTP range request when the row was not present in the local
+first-1M cache, and fit local PCA on each top100 cloud.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_groundtruth_tracka_q0_99_20260519_181941/report.md
+```
 
 ## What The Probe Establishes
 
-The official top100 neighborhoods are genuinely local. Across queries `0..4`:
+The official top100 neighborhoods are genuinely local. Across queries `0..99`:
 
 | Metric | Result |
 | --- | ---: |
-| Loaded groundtruth rows | `500/500` |
-| Average centroid norm | `0.8779` |
-| Average centroid cos(query) | `0.9297` |
-| Centroid cos(query) range | `0.8960-0.9711` |
-| Average pairwise cosine | `0.7708` |
-| Pairwise cosine range | `0.6359-0.8791` |
+| Loaded groundtruth rows | `10000/10000` |
+| Local first-1M rows | `9` |
+| Remote base.1B rows | `9991` |
+| Average centroid norm | `0.8902` |
+| Centroid norm range | `0.7104-0.9878` |
+| Average centroid cos(query) | `0.9427` |
+| Centroid cos(query) range | `0.8716-0.9941` |
+| Average pairwise cosine | `0.7927` |
+| Pairwise cosine range | `0.4996-0.9756` |
 
 This is much tighter than the earlier first-1M/top8192 smoke block. The premise
 that true nearest-neighbor neighborhoods have exploitable local structure is now
@@ -32,32 +42,55 @@ supported.
 
 The important limitation is equally clear: local variance preservation does not
 automatically preserve final top-k ordering. The rank64 PCA path captures about
-`99.05%` average variance, but only averages `6.8/10` exact top10 recall as a
+`99.24%` average variance, but only averages `7.79/10` exact top10 recall as a
 final ranker.
 
-| Rank | Avg PCA variance | Avg exact top10 in approx@10 | Avg exact top10 in approx@20 | Avg exact top10 in approx@50 | Avg mean score error |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | `45.87%` | `2.2/10` | `4.2/10` | `7.0/10` | `0.00704` |
-| 16 | `68.03%` | `3.2/10` | `4.8/10` | `7.8/10` | `0.00656` |
-| 32 | `88.39%` | `4.2/10` | `6.0/10` | `9.2/10` | `0.00599` |
-| 64 | `99.05%` | `6.8/10` | `8.8/10` | `10.0/10` | `0.00403` |
-| 96 | `100.00%` | `9.8/10` | `10.0/10` | `10.0/10` | `0.00005` |
+| Rank | Approx code B/vector | Avg PCA variance | Avg final top10 | Worst final top10 | Avg top10 in approx@20 | Worst top10 in approx@20 | Avg top10 in approx@50 | Worst top10 in approx@50 | Avg top20 in approx@50 | Worst top20 in approx@50 | Avg score error |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | `8` | `51.26%` | `2.92/10` | `0/10` | `4.78/10` | `0/10` | `7.75/10` | `4/10` | `14.39/20` | `9/20` | `0.00987` |
+| 16 | `16` | `72.08%` | `3.79/10` | `1/10` | `5.82/10` | `2/10` | `8.51/10` | `4/10` | `15.83/20` | `10/20` | `0.00863` |
+| 24 | `24` | `83.53%` | `4.62/10` | `1/10` | `6.48/10` | `3/10` | `9.11/10` | `6/10` | `16.86/20` | `12/20` | `0.00769` |
+| 32 | `32` | `90.27%` | `5.12/10` | `1/10` | `7.19/10` | `3/10` | `9.52/10` | `7/10` | `17.66/20` | `14/20` | `0.00682` |
+| 40 | `40` | `94.36%` | `5.96/10` | `3/10` | `7.99/10` | `4/10` | `9.63/10` | `7/10` | `18.17/20` | `14/20` | `0.00605` |
+| 48 | `48` | `96.87%` | `6.58/10` | `3/10` | `8.58/10` | `4/10` | `9.78/10` | `8/10` | `18.84/20` | `15/20` | `0.00520` |
+| 56 | `56` | `98.38%` | `7.05/10` | `3/10` | `9.02/10` | `5/10` | `9.92/10` | `9/10` | `19.33/20` | `15/20` | `0.00432` |
+| 64 | `64` | `99.24%` | `7.79/10` | `4/10` | `9.47/10` | `7/10` | `9.97/10` | `9/10` | `19.63/20` | `18/20` | `0.00341` |
+| 80 | `80` | `99.91%` | `8.86/10` | `5/10` | `9.94/10` | `9/10` | `10.00/10` | `10/10` | `19.99/20` | `19/20` | `0.00158` |
+| 96 | `96` | `100.00%` | `9.93/10` | `9/10` | `10.00/10` | `10/10` | `10.00/10` | `10/10` | `20.00/20` | `20/20` | `0.00014` |
+
+`Approx code B/vector` is the per-row int8 coordinate payload only. It excludes
+centroid, basis, scale, and rerank-store metadata because this official top100
+probe is a locality/quality experiment, not a production granule layout.
+Metadata amortization must be measured on TreeDB-buildable granule sizes.
+
+The minimum-rank gate table is the most product-relevant output:
+
+| Gate | Passed queries | Failed queries | p50 K | p90 K | Worst K |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Final top10 recall >= `9/10` | `100` | `0` | `80` | `96` | `96` |
+| Final top10 recall = `10/10` | `96` | `4` | `96` | `96` | `96` |
+| Exact top10 in approx@20 = `10/10` | `100` | `0` | `64` | `80` | `96` |
+| Exact top10 in approx@50 = `10/10` | `100` | `0` | `24` | `56` | `80` |
+| Exact top20 in approx@50 >= `19/20` | `100` | `0` | `40` | `64` | `80` |
 
 The score margins explain the mismatch between small reconstruction error and
 unstable final ordering:
 
-| Margin metric | Result across queries `0..4` |
+| Margin metric | Result across queries `0..99` |
 | --- | ---: |
-| Average exact rank10/rank11 gap | `0.000922` |
-| Minimum exact rank10/rank11 gap | `0.000057` |
-| Average p90 adjacent top100 gap | `0.000924` |
-| Rank64 average mean score error | `0.00403` |
+| Average exact rank10/rank11 gap | `0.001109` |
+| Minimum exact rank10/rank11 gap | `0.000020` |
+| Average exact rank50/rank51 gap | `0.000350` |
+| Minimum exact rank50/rank51 gap | `0.000004` |
+| Rank64 average mean score error | `0.00341` |
 
 Rank64 error is several times larger than the score gaps that decide top10
 membership. That makes exact final top10 misses expected, even when the local
-cloud is coherent. The same result is promising for candidate generation:
-rank64 placed the exact top10 inside approximate top50 for all five sampled
-queries.
+cloud is coherent. The same result is promising, but not decisive, for
+candidate generation: rank64 placed the exact top10 inside approximate top50
+for `97/100` queries and had worst-case `9/10`; rank80 placed exact top10
+inside approximate top50 for `100/100` queries and exact top20 inside
+approximate top50 at `19/20` or better for every query.
 
 `approx@100` is a sanity ceiling in this top100-only probe because the whole
 measured universe is the official top100. The actionable candidate-generation
@@ -69,19 +102,23 @@ metric at wider row counts.
 Final ranking needs high-fidelity scores. On this sample, low-rank PCA is not
 safe as the final representation:
 
-- Rank32: compact, but only `4.2/10` average final top10 recall.
-- Rank64: much better, but still only `6.8/10` average final top10 recall.
-- Rank96/full-rank int8 coordinates: `9.8/10` average final top10 recall, so
+- Rank32: compact, but only `5.12/10` average final top10 recall.
+- Rank64: much better, but still only `7.79/10` average final top10 recall.
+- Rank96/full-rank int8 coordinates: `9.93/10` average final top10 recall, so
   even quantization and fp16 metadata can perturb a very tight boundary.
 
 Candidate generation has a different gate: keep the real winners in a larger
 shortlist, then rerank exactly. On this sample:
 
-- Rank32 is weak but not useless: `9.2/10` average exact-top10 survival in
-  approx@50.
-- Rank64 is the first credible local-PCA candidate generator: `10/10` exact
-  top10 survival in approx@50 for every sampled query.
-- Rank96/full-dim int8 is the conservative compressed candidate lane.
+- Rank32 is weak but not useless: `9.52/10` average exact-top10 survival in
+  approx@50, but worst query is only `7/10`.
+- Rank64 is a credible but not fully safe local-PCA candidate generator:
+  `9.97/10` average exact-top10 survival in approx@50, but one query misses one
+  exact top10 row.
+- Rank80 is the first rank in this ladder that clears exact top10 in approx@50
+  for all 100 queries and keeps top20 in approx@50 at `19/20` or better.
+- Rank96/full-dim int8 is the conservative compressed candidate lane and nearly
+  a final-rank lane, but even it misses exact final top10 on 4 of 100 queries.
 
 The product interpretation is:
 
@@ -90,7 +127,8 @@ compressed representation should generate candidates
 exact/full-fidelity representation should decide final rank
 ```
 
-until broader query and production-granule validation proves otherwise.
+until same-byte quantizer baselines and production-buildable granule validation
+prove otherwise.
 
 ## Design A-E
 
@@ -98,9 +136,9 @@ until broader query and production-granule validation proves otherwise.
 | --- | --- | --- | --- | --- |
 | A | Resident fp32 graph/search representation plus compressed storage columns | Final ranking and current product anchor | Existing resident fp32 graph search is `~58.7k` serial searches/s, `~289k` parallel searches/s, and `0 B/op` | Keep as the correctness and throughput baseline. Do not displace it with PCA yet. |
 | B | Full-dimension granule-local int8 residual/scalar quantization, dim-major on disk | Conservative candidate generation; possible near-final rerank lane | Prior int8 tournament stores the 96D dim-major int8 matrix at `85.9-86.7 B/vector` with zstd-better/ClickHouse whole-granule `String CODEC(ZSTD(1))` | Build this first as the robust compressed hot/candidate representation. It has the simplest native scoring path and best measured storage-to-quality balance. |
-| C | Low-rank local PCA int8 codes: centroid + basis + per-row coordinates | Compact candidate generation only | Prior 8192-row storage curve: rank32 `31.51 B/vector`, rank64 `59.65 B/vector`. Groundtruth top100: rank64 final top10 `6.8/10`, but exact top10 in approx@50 is `10/10` on queries `0..4` | Do not use for final ranking. Promote to a candidate-generation experiment with explicit candidate-recall gates. |
-| D | Cascade: low-rank PCA prefilter, then full-dim int8/fp16 or fp32 rerank | Best near-term architecture | The groundtruth data says rank64 can preserve winners in a wider shortlist while failing exact final ranking | Most promising product path: scan `C`, rerank survivors with `B` or `A`, measure recall/cost at fixed rerank budgets. |
-| E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Not measured in this PR yet. It is the relevant same-byte competitor to local PCA | Add as the next tournament lane. Compare against rank32/rank64 PCA at `~32-64 B/vector`, not against fp32. |
+| C | Low-rank local PCA int8 codes: centroid + basis + per-row coordinates | Compact candidate generation only | Prior 8192-row storage curve: rank32 `31.51 B/vector`, rank64 `59.65 B/vector`. Groundtruth top100, 100-query run: rank64 final top10 `7.79/10`, exact top10 in approx@50 `9.97/10`, and rank80 exact top10 in approx@50 `10.00/10` | Do not use for final ranking. Promote only as a candidate-generation experiment with exact-rerank gates. |
+| D | Cascade: low-rank PCA prefilter, then full-dim int8/fp16 or fp32 rerank | Best near-term architecture | The groundtruth data says rank64/rank80 can preserve winners in a wider shortlist while failing exact final ranking | Most promising product path: scan `C`, rerank survivors with `B` or `A`, measure recall/cost at fixed rerank budgets. |
+| E | PQ/residual-PQ/LUT scorer, ideally residualized by granule centroid or segment cluster | Candidate generation at fixed byte budgets | Not measured in this PR yet. It is the mandatory same-byte competitor to local PCA. The current Go harness does not yet train PQ/OPQ codebooks, and a top100-only cloud is too small for a fair 256-entry per-subquantizer training run | Add as the next tournament lane with a real train/eval split. Compare against rank32/rank48/rank64/rank80 PCA at matched bytes, not against fp32. |
 
 ## Literature-Backed Synthesis
 
@@ -219,18 +257,21 @@ Suggested gates before a compressed lane can be called promising:
 
 ## Concrete Research Tracks
 
-Track A is the minimum-rank quality-gate run. For queries `0..100`, evaluate
-ranks `8,16,24,32,40,48,56,64,80,96` and report the minimum rank/bytes needed
-for each gate:
+Track A is now complete for queries `0..99`. It evaluated ranks
+`8,16,24,32,40,48,56,64,80,96` and reported the minimum rank/bytes needed for
+each gate:
 
 ```text
 exact top10 in approx@50 = 10/10
-exact top10 in approx@100 = 10/10
-exact top20 in approx@100 >= 19/20
+exact top10 in approx@20 = 10/10
+exact top20 in approx@50 >= 19/20
 ```
 
-The output should be p50, p90, and worst-query `K_min`, plus the corresponding
-metadata-amortized bytes/vector.
+The headline result is that final compressed top10 order needs almost full rank
+(`p50 K=80`, `p90 K=96` for >=9/10 final recall), while candidate generation is
+much cheaper (`p50 K=24`, `p90 K=56`, worst `K=80` for exact top10 in
+approx@50). For exact top20 in approx@50 at 19/20 or better, the gate is
+`p50 K=40`, `p90 K=64`, worst `K=80`.
 
 Track B is the same-byte PQ/OPQ tournament. Compare local PCA `K=32/48/64`
 against PQ/OPQ/residual-code layouts at the same byte budgets using the same
@@ -250,20 +291,19 @@ local residual after the coarse locality unit, not the raw global vector.
 
 ## Recommended Next Work
 
-1. Expand the groundtruth run from queries `0..4` to at least 100 queries and
-   report p50, p90, and worst-query candidate survival.
-2. Add production-plausible granule builders and run the same candidate-recall
+1. Add production-plausible granule builders and run the same candidate-recall
    tables on their blocks.
-3. Add PQ and OPQ as same-byte competitors to local PCA rank32/rank48/rank64.
-4. Add granule-local residual encoders: local residual PQ/OPQ, then PCA plus
+2. Add PQ and OPQ as same-byte competitors to local PCA rank32/rank48/rank64
+   and rank80.
+3. Add granule-local residual encoders: local residual PQ/OPQ, then PCA plus
    residual correction if local PCA remains promising.
-5. Benchmark the full cascade: rank64 PCA top50/top100, full-dim int8 rerank,
-   then exact fp32 rerank.
-6. Add score-aware projection experiments: pairwise-difference PCA,
+4. Benchmark the full cascade: rank64/rank80 PCA top50/top100, full-dim int8
+   rerank, then exact fp32 rerank.
+5. Add score-aware projection experiments: pairwise-difference PCA,
    boundary-weighted PCA, and a reduced-rank score-approximation baseline.
-7. Add CPU-friendly scalar/low-build challengers after the first PQ/OPQ
+6. Add CPU-friendly scalar/low-build challengers after the first PQ/OPQ
    frontier: LVQ/SVS-style scalar compression, RaBitQ, and TurboQuant.
-8. Keep spherical and byte-shuffle codecs in the storage/cold-decode track
+7. Keep spherical and byte-shuffle codecs in the storage/cold-decode track
    unless direct scoring materially changes their throughput.
 
 ## Reading List
@@ -295,6 +335,6 @@ is:
 ```text
 true Deep1B top100 neighborhoods are highly local,
 rank64 local PCA is not a final ranker,
-rank64 local PCA may be a compact candidate generator,
+rank64/rank80 local PCA are plausible compact candidate generators,
 and exact rerank remains mandatory.
 ```

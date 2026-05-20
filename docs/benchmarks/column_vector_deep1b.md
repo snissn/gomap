@@ -698,32 +698,46 @@ Groundtruth locality interpretation:
 Follow-up candidate-generation report:
 
 - Full report: `docs/benchmarks/column_vector_deep1b_groundtruth_compression_report.md`.
-- Command variant: same opt-in probe, with
-  `COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_QUERIES=0,1,2,3,4`.
+- Command variant: same opt-in probe, with queries `0..99`,
+  `COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_BASE1B=1`, and
+  `COLUMN_VECTOR_DEEP1B_GROUNDTRUTH_FETCH_CONCURRENCY=16`.
 - Result path for this run:
-  `/tmp/gomap_deep1b_groundtruth_locality_multi_20260519_145758/report.md`.
+  `/tmp/gomap_deep1b_groundtruth_tracka_q0_99_20260519_181941/report.md`.
 
-Five-query summary over official full-1B groundtruth top100 neighborhoods:
+100-query summary over official full-1B groundtruth top100 neighborhoods:
 
 | Metric | Result |
 | --- | ---: |
-| Loaded groundtruth rows | `500/500` |
-| Average centroid norm | `0.8779` |
-| Average centroid cos(query) | `0.9297` |
-| Average pairwise cosine | `0.7708` |
-| Rank64 average PCA variance | `99.05%` |
-| Rank64 final top10 recall | `6.8/10` average, `5/10` worst |
-| Rank64 exact top10 in approx@20 | `8.8/10` average, `7/10` worst |
-| Rank64 exact top10 in approx@50 | `10/10` average, `10/10` worst |
-| Rank64 mean score error | `0.00403` average |
-| Exact rank10/rank11 score gap | `0.000922` average, `0.000057` minimum |
+| Loaded groundtruth rows | `10000/10000` |
+| Local first-1M rows | `9` |
+| Remote base.1B rows | `9991` |
+| Average centroid norm | `0.8902` |
+| Average centroid cos(query) | `0.9427` |
+| Average pairwise cosine | `0.7927` |
+| Rank64 average PCA variance | `99.24%` |
+| Rank64 final top10 recall | `7.79/10` average, `4/10` worst |
+| Rank64 exact top10 in approx@20 | `9.47/10` average, `7/10` worst |
+| Rank64 exact top10 in approx@50 | `9.97/10` average, `9/10` worst |
+| Rank80 exact top10 in approx@50 | `10/10` average, `10/10` worst |
+| Rank64 mean score error | `0.00341` average |
+| Exact rank10/rank11 score gap | `0.001109` average, `0.000020` minimum |
 
 This changes the local-PCA interpretation from "not enough for final ranking" to
-"potentially useful for candidate generation." Rank64 score error is larger
-than the score margins deciding final top10 membership, so exact final ranking
-misses are expected. But the same rank64 representation retained the exact top10
-inside approximate top50 for every sampled query, which is the right shape for a
-compressed shortlist followed by exact rerank.
+"potentially useful for candidate generation, with rank80 as the first
+100-query-safe top50 gate in this ladder." Rank64 score error is larger than
+the score margins deciding final top10 membership, so exact final ranking
+misses are expected. Rank64 retained the exact top10 inside approximate top50
+for `97/100` queries; rank80 retained it for `100/100`.
+
+Minimum-rank gates from the 100-query run:
+
+| Gate | Passed queries | Failed queries | p50 K | p90 K | Worst K |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Final top10 recall >= `9/10` | `100` | `0` | `80` | `96` | `96` |
+| Final top10 recall = `10/10` | `96` | `4` | `96` | `96` | `96` |
+| Exact top10 in approx@20 = `10/10` | `100` | `0` | `64` | `80` | `96` |
+| Exact top10 in approx@50 = `10/10` | `100` | `0` | `24` | `56` | `80` |
+| Exact top20 in approx@50 >= `19/20` | `100` | `0` | `40` | `64` | `80` |
 
 The follow-on literature synthesis in the full report sharpens the next
 benchmark path:
