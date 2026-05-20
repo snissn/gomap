@@ -107,6 +107,7 @@ func (physicalColumnVectorGraphIndexLoader) LoadColumnVectorGraphIndex(input Col
 			}
 			status = columnGraphPhysicalUnavailableLoadStatus(reason)
 			status.BytesDisk = diag.PhysicalBytesScanned
+			status.ColumnGraphUnavailableDetail = state.unavailableDetail
 			return ColumnVectorGraphIndexLoadResult{Status: status}, nil
 		}
 		return ColumnVectorGraphIndexLoadResult{Status: status}, err
@@ -223,6 +224,7 @@ type columnVectorGraphPhysicalLoadState struct {
 	offsets           []uint32
 	neighbors         []uint32
 	unavailableReason string
+	unavailableDetail string
 }
 
 func (s *columnVectorGraphPhysicalLoadState) visit(row columnPhysicalScanRowView) error {
@@ -261,6 +263,9 @@ func (s *columnVectorGraphPhysicalLoadState) visit(row columnPhysicalScanRowView
 func (s *columnVectorGraphPhysicalLoadState) fail(reason string, detail string) error {
 	if s.unavailableReason == "" {
 		s.unavailableReason = reason
+	}
+	if detail != "" && s.unavailableDetail == "" {
+		s.unavailableDetail = detail
 	}
 	if detail == "" {
 		return errColumnVectorGraphPhysicalLoadUnavailable
@@ -441,9 +446,7 @@ func mergeColumnGraphLoadStatus(status *VectorIndexLoadStatus, update VectorInde
 		if update.BytesDisk != 0 {
 			status.BytesDisk = update.BytesDisk
 		}
-		if update.ColumnGraphUnavailableDetail != "" {
-			status.ColumnGraphUnavailableDetail = update.ColumnGraphUnavailableDetail
-		}
+		status.ColumnGraphUnavailableDetail = update.ColumnGraphUnavailableDetail
 		return
 	}
 	if update.PhysicalColumnAssetsSupported {

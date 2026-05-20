@@ -194,6 +194,27 @@ func TestColumnGraphUnavailableStatusPreservesPhysicalSupportForLoaderFailures(t
 	if status.ColumnGraphUnavailableDetail != "test detail" {
 		t.Fatalf("unavailable detail=%q want test detail", status.ColumnGraphUnavailableDetail)
 	}
+	mergeColumnGraphLoadStatus(&status, VectorIndexLoadStatus{
+		PhysicalColumnAssetsSupported: true,
+		ColumnGraphUnavailableReason:  vectorIndexFallbackColumnGraphInvalid,
+	})
+	if status.ColumnGraphUnavailableDetail != "" {
+		t.Fatalf("unavailable detail=%q want cleared after detail-less update", status.ColumnGraphUnavailableDetail)
+	}
+}
+
+func TestColumnGraphPhysicalLoadFailureRecordsDetail(t *testing.T) {
+	state := columnVectorGraphPhysicalLoadState{}
+	err := state.fail(vectorIndexFallbackColumnGraphInvalid, "invalid vector column value")
+	if !errors.Is(err, errColumnVectorGraphPhysicalLoadUnavailable) {
+		t.Fatalf("fail err=%v want errColumnVectorGraphPhysicalLoadUnavailable", err)
+	}
+	if state.unavailableReason != vectorIndexFallbackColumnGraphInvalid {
+		t.Fatalf("unavailable reason=%q want %q", state.unavailableReason, vectorIndexFallbackColumnGraphInvalid)
+	}
+	if state.unavailableDetail != "invalid vector column value" {
+		t.Fatalf("unavailable detail=%q want physical scan detail", state.unavailableDetail)
+	}
 }
 
 func TestColumnGraphRebuildUnsupportedStatusPreservesReprobeReason(t *testing.T) {
