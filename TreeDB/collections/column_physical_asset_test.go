@@ -1770,3 +1770,43 @@ func makeColumnPhysicalAssetBenchmarkPayload(tb testing.TB, rows int) []byte {
 	}
 	return encoded
 }
+
+func TestManifestCursorRejectsWrappedFixedWidthSliceLengths(t *testing.T) {
+	wrappedElementCount := uint64(maxCollectionInt)/2 + 2
+	var b bytes.Buffer
+	writeManifestUint64(&b, wrappedElementCount)
+	raw := b.Bytes()
+
+	t.Run("float32_vector", func(t *testing.T) {
+		cur := manifestCursor{raw: raw}
+		if got := cur.float32Slice(); got != nil {
+			t.Fatalf("float32Slice returned %d values for wrapped length", len(got))
+		}
+		if cur.err == nil || !strings.Contains(cur.err.Error(), "short column binary float32_vector") {
+			t.Fatalf("float32Slice err=%v want short binary error", cur.err)
+		}
+	})
+
+	t.Run("uint32_slice", func(t *testing.T) {
+		cur := manifestCursor{raw: raw}
+		if got := cur.uint32Slice(); got != nil {
+			t.Fatalf("uint32Slice returned %d values for wrapped length", len(got))
+		}
+		if cur.err == nil || !strings.Contains(cur.err.Error(), "short column binary uint32 slice") {
+			t.Fatalf("uint32Slice err=%v want short binary error", cur.err)
+		}
+	})
+
+	t.Run("skip_uint32_slice", func(t *testing.T) {
+		cur := manifestCursor{raw: raw}
+		if got := cur.skipUint32Slice(); got != 0 {
+			t.Fatalf("skipUint32Slice returned length=%d for wrapped length", got)
+		}
+		if cur.err == nil || !strings.Contains(cur.err.Error(), "short column binary uint32 slice") {
+			t.Fatalf("skipUint32Slice err=%v want short binary error", cur.err)
+		}
+		if cur.pos != len(raw) {
+			t.Fatalf("skipUint32Slice pos=%d want %d after reading length only", cur.pos, len(raw))
+		}
+	})
+}

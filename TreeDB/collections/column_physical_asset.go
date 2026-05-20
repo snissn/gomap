@@ -718,13 +718,8 @@ func (c *manifestCursor) float32SliceAfterLength(n uint64) []float32 {
 	if c.err != nil {
 		return nil
 	}
-	if n > uint64(maxCollectionInt) {
-		c.err = errors.New("collections: float32_vector length overflows int")
-		return nil
-	}
-	byteLen := n * 4
-	if byteLen > uint64(len(c.raw)-c.pos) {
-		c.err = errors.New("collections: short column binary float32_vector")
+	_, ok := c.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
 		return nil
 	}
 	out := make([]float32, int(n))
@@ -740,13 +735,8 @@ func (c *manifestCursor) uint32Slice() []uint32 {
 	if c.err != nil {
 		return nil
 	}
-	if n > uint64(maxCollectionInt) {
-		c.err = errors.New("collections: uint32 slice length overflows int")
-		return nil
-	}
-	byteLen := n * 4
-	if byteLen > uint64(len(c.raw)-c.pos) {
-		c.err = errors.New("collections: short column binary uint32 slice")
+	_, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice")
+	if !ok {
 		return nil
 	}
 	out := make([]uint32, int(n))
@@ -762,11 +752,22 @@ func (c *manifestCursor) skipUint32Slice() uint64 {
 	if c.err != nil {
 		return 0
 	}
-	byteLen := n * 4
-	if n > uint64(maxCollectionInt) || byteLen > uint64(len(c.raw)-c.pos) {
-		c.err = errors.New("collections: short column binary uint32 slice")
+	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice")
+	if !ok {
 		return 0
 	}
 	c.pos += int(byteLen)
 	return n
+}
+
+func (c *manifestCursor) fixedWidthSliceByteLen(n uint64, elemBytes uint64, label string) (uint64, bool) {
+	if n > uint64(maxCollectionInt) {
+		c.err = fmt.Errorf("collections: %s length overflows int", label)
+		return 0, false
+	}
+	if elemBytes == 0 || n > uint64(len(c.raw)-c.pos)/elemBytes {
+		c.err = fmt.Errorf("collections: short column binary %s", label)
+		return 0, false
+	}
+	return n * elemBytes, true
 }
