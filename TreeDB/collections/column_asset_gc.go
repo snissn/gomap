@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -39,6 +40,7 @@ type ColumnAssetGCStats struct {
 }
 
 var (
+	columnAssetGCTestHookMu             sync.RWMutex
 	removeColumnAssetGCSegment          = os.Remove
 	syncColumnAssetGCDeletedSegmentsDir = syncColumnAssetDir
 )
@@ -123,7 +125,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			continue
 		}
 		stats.SegmentsEligible++
-		stats.BytesEligible += entry.Bytes
+		stats.BytesEligible = addColumnAssetReachabilityBytes(stats.BytesEligible, entry.Bytes)
 		eligible = append(eligible, entry)
 	}
 	if opts.DryRun {
@@ -142,7 +144,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if stats.SegmentsDeleted == 0 {
 			return retErr
 		}
-		syncErr := syncColumnAssetGCDeletedSegmentsDir(namespace.SegmentDir)
+		syncErr := syncColumnAssetGCDeletedSegmentsDirFunc()(namespace.SegmentDir)
 		if retErr != nil {
 			return errors.Join(retErr, syncErr)
 		}
@@ -153,13 +155,13 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := ctx.Err(); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
-		if err := removeColumnAssetGCSegment(entry.Path); err != nil {
+		if err := removeColumnAssetGCSegmentFunc()(entry.Path); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		stats.SegmentsDeleted++
-		stats.BytesDeleted += entry.Bytes
+		stats.BytesDeleted = addColumnAssetReachabilityBytes(stats.BytesDeleted, entry.Bytes)
 		stats.SegmentsRetained--
-		stats.BytesRetained -= entry.Bytes
+		stats.BytesRetained = subColumnAssetReachabilityBytesFloor(stats.BytesRetained, entry.Bytes)
 	}
 	if err := syncDeletedSegmentsDir(nil); err != nil {
 		return stats, err
@@ -205,4 +207,47 @@ func columnAssetGCPlanForDetail(plan ColumnAssetReachabilityPlan, detailed, segm
 		plan.SegmentEntries = nil
 	}
 	return plan
+}
+
+func removeColumnAssetGCSegmentFunc() func(string) error {
+	columnAssetGCTestHookMu.RLock()
+	fn := removeColumnAssetGCSegment
+	columnAssetGCTestHookMu.RUnlock()
+	return fn
+}
+
+func syncColumnAssetGCDeletedSegmentsDirFunc() func(string) error {
+	columnAssetGCTestHookMu.RLock()
+	fn := syncColumnAssetGCDeletedSegmentsDir
+	columnAssetGCTestHookMu.RUnlock()
+	return fn
+}
+
+func setColumnAssetGCTestHooks(remove func(string) error, syncDeletedDir func(string) error) func() {
+	columnAssetGCTestHookMu.Lock()
+	prevRemove := removeColumnAssetGCSegment
+	prevSync := syncColumnAssetGCDeletedSegmentsDir
+	if remove != nil {
+		removeColumnAssetGCSegment = remove
+	}
+	if syncDeletedDir != nil {
+		syncColumnAssetGCDeletedSegmentsDir = syncDeletedDir
+	}
+	columnAssetGCTestHookMu.Unlock()
+	return func() {
+		columnAssetGCTestHookMu.Lock()
+		removeColumnAssetGCSegment = prevRemove
+		syncColumnAssetGCDeletedSegmentsDir = prevSync
+		columnAssetGCTestHookMu.Unlock()
+	}
+}
+
+func subColumnAssetReachabilityBytesFloor(total, delta int64) int64 {
+	if delta <= 0 {
+		return total
+	}
+	if total <= delta {
+		return 0
+	}
+	return total - delta
 }

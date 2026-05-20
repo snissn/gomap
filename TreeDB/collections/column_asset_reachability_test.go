@@ -540,6 +540,9 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 }
 
 func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
+	if len(columnAssetReachabilitySourceBits) >= 64 {
+		t.Fatalf("source mask table has %d entries; uint64 mask needs an explicit overflow strategy", len(columnAssetReachabilitySourceBits))
+	}
 	seen := make(map[columnAssetReachabilitySourceMask]ColumnAssetReachabilitySource, len(columnAssetReachabilitySourceBits))
 	for _, entry := range columnAssetReachabilitySourceBits {
 		mask, ok := columnAssetReachabilitySourceBit(entry.source)

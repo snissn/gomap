@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,25 +147,17 @@ func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T
 	var syncedDirs []string
 	gcCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	prevRemove := removeColumnAssetGCSegment
-	removeColumnAssetGCSegment = func(path string) error {
+	restoreHooks := setColumnAssetGCTestHooks(func(path string) error {
 		err := os.Remove(path)
 		if err == nil && path == firstPath {
 			cancel()
 		}
 		return err
-	}
-	defer func() {
-		removeColumnAssetGCSegment = prevRemove
-	}()
-	prevSync := syncColumnAssetGCDeletedSegmentsDir
-	syncColumnAssetGCDeletedSegmentsDir = func(dir string) error {
+	}, func(dir string) error {
 		syncedDirs = append(syncedDirs, dir)
 		return nil
-	}
-	defer func() {
-		syncColumnAssetGCDeletedSegmentsDir = prevSync
-	}()
+	})
+	defer restoreHooks()
 
 	stats, err := col.ColumnAssetGC(gcCtx, ColumnAssetGCOptions{
 		Detailed:      true,
@@ -443,6 +436,19 @@ func TestColumnAssetGCSegmentEligibleRequiresExactCanonicalPathM15B(t *testing.T
 	entry.Path = filepath.Join(segmentDir, columnAssetSegmentFileName(8))
 	if columnAssetGCSegmentEligibleForDelete(segmentDir, entry) {
 		t.Fatalf("wrong canonical file id was accepted: %+v", entry)
+	}
+}
+
+func TestColumnAssetGCByteAccountingSaturatesM15B(t *testing.T) {
+	stats := ColumnAssetGCStats{BytesRetained: 3}
+	stats.BytesEligible = addColumnAssetReachabilityBytes(math.MaxInt64-1, 2)
+	stats.BytesDeleted = addColumnAssetReachabilityBytes(math.MaxInt64-2, 3)
+	stats.BytesRetained = subColumnAssetReachabilityBytesFloor(stats.BytesRetained, 4)
+	if stats.BytesEligible != math.MaxInt64 || stats.BytesDeleted != math.MaxInt64 {
+		t.Fatalf("saturating add failed: %+v", stats)
+	}
+	if stats.BytesRetained != 0 {
+		t.Fatalf("retained underflowed to %d, want 0", stats.BytesRetained)
 	}
 }
 

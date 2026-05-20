@@ -134,7 +134,7 @@ type columnAssetReachabilityRefBuilder struct {
 	sourceMask columnAssetReachabilitySourceMask
 }
 
-type columnAssetReachabilitySourceMask uint32
+type columnAssetReachabilitySourceMask uint64
 
 const (
 	columnAssetReachabilitySourceActiveManifestMask columnAssetReachabilitySourceMask = 1 << iota
