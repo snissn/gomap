@@ -1063,8 +1063,14 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 		case ColumnStoreValueAdjacencyList:
 			if selected {
 				rowValues[outputIdx].AdjacencyList = cur.uint32Slice()
+				if cur.err != nil {
+					return cur.err
+				}
 			} else {
 				cur.skipUint32Slice()
+				if cur.err != nil {
+					return cur.err
+				}
 			}
 		default:
 			return fmt.Errorf("unsupported column physical value type %q", col.ValueType)

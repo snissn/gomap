@@ -433,16 +433,19 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err := ValidateIndexName(aggregate.Name); err != nil {
 			return fmt.Errorf("collections: invalid aggregate metadata %q name: %w", aggregate.Name, err)
 		}
+		var columnType ColumnStoreValueType
 		if aggregate.Column != "" {
-			if _, ok := columnNames[aggregate.Column]; !ok {
+			var ok bool
+			columnType, ok = columnTypes[aggregate.Column]
+			if !ok {
 				return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 			}
 		}
 		if err := validateColumnAggregateKind(aggregate.Kind, aggregate.Column); err != nil {
 			return fmt.Errorf("collections: invalid aggregate metadata %q: %w", aggregate.Name, err)
 		}
-		if aggregate.Column != "" && !columnStoreValueTypeSupportsAggregate(columnTypes[aggregate.Column], aggregate.Kind) {
-			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, columnTypes[aggregate.Column])
+		if aggregate.Column != "" && !columnStoreValueTypeSupportsAggregate(columnType, aggregate.Kind) {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, columnType)
 		}
 		if _, ok := aggregateNames[aggregate.Name]; ok {
 			return fmt.Errorf("collections: duplicate aggregate metadata %q", aggregate.Name)
