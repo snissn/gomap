@@ -456,7 +456,7 @@ func enumerateColumnManifestAssetRefsForPrefix(iter iterator.UnsafeIterator, pre
 		refs = append(refs, ref)
 		iter.Next()
 	}
-	return refs, nil
+	return refs, iter.Error()
 }
 
 func columnManifestAggregateMetadataKeyFromRecordKey(key []byte) (uint64, uint64, string, error) {
