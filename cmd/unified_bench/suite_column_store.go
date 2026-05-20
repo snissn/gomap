@@ -1919,7 +1919,10 @@ func markdownCodeTableText(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return markdownTableEmptyCell
 	}
-	value = markdownTableText(value)
+	value = strings.ReplaceAll(value, "|", "\\|")
+	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "\n", " ")
 	delimiter := "`"
 	for strings.Contains(value, delimiter) {
 		delimiter += "`"

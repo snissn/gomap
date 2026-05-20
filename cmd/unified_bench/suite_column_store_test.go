@@ -623,6 +623,14 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 	}
 }
 
+func TestMarkdownCodeTableTextPreservesBoundaryWhitespaceM14C(t *testing.T) {
+	got := markdownCodeTableText(" value|with`tick ")
+	want := "``  value\\|with`tick  ``"
+	if got != want {
+		t.Fatalf("markdownCodeTableText=%q want %q", got, want)
+	}
+}
+
 func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 	md := renderColumnStoreSuiteMarkdown(columnStoreSuiteReport{
 		Profile:                "durable",
