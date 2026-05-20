@@ -1145,7 +1145,7 @@ selected blocks; routing misses still bound global recall before compression.
 Run artifact:
 
 ```text
-/tmp/gomap_deep1b_buildable_graph_visited_blocks_q0_9_20260520_004309/report.md
+/tmp/gomap_deep1b_buildable_graph_visited_full_ladder_q0_9_20260520_012048/report.md
 ```
 
 Run shape:
@@ -1166,19 +1166,22 @@ Run shape:
 | Queries | `0..9` |
 | Top granules | `1,4` |
 | PQ train rows | `8192` |
+| Local PCA ranks | `32,48,64,80,96` |
+| PQ / residual-PQ / OPQ budgets | `32,48,64,80,96 B/vector` |
+| Local residual-PQ / local residual-OPQ budgets | `32,48,64,80,96 B/vector` |
 | PQ iterations | `4` |
 | OPQ outer iterations | `3` |
 | Scan iterations | `4` |
 
-Training cost and metadata match the graph-sorted codebook run within noise:
+Training cost and metadata now cover the full fixed-byte ladder:
 
 | Method family | Budgets | Train ms | Metadata B/eval-vector | Interpretation |
 | --- | --- | ---: | ---: | --- |
-| global PQ | `32/48/64` | `705.8-1045.0` | `1.50` | simplest trained codebook baseline |
-| global residual-PQ | `32/48/64` | `705.8-1033.3` | `1.51` | overlaps global PQ in this run |
-| global OPQ | `32/48/64` | `3094.6-4822.7` | `2.06` | extra rotation cost, no decisive win yet |
-| local residual-PQ | `32/48/64` | `2837.7-4135.8` | `12.05` | local low-byte challenger |
-| local residual-OPQ | `32/48/64` | `12413.5-19610.9` | `16.55` | slightly lower error, high metadata/build cost |
+| global PQ | `32/48/64/80/96` | `773.2-1235.3` | `1.50` | simplest trained codebook baseline |
+| global residual-PQ | `32/48/64/80/96` | `715.0-1426.2` | `1.51` | overlaps global PQ in this run |
+| global OPQ | `32/48/64/80/96` | `3305.9-7065.1` | `2.06` | extra rotation cost, no decisive win yet |
+| local residual-PQ | `32/48/64/80/96` | `3035.0-4945.4` | `12.05` | local low-byte challenger |
+| local residual-OPQ | `32/48/64/80/96` | `12593.6-25047.3` | `16.55` | slightly lower error, high metadata/build cost |
 
 Routing is the main finding. The graph-visited selector is now measured, but it
 does not outperform centroid-ranked graph-sorted top4 routing on this slice.
@@ -1195,20 +1198,42 @@ Selected aggregate codec rows:
 
 | Selection | Method | Row-code B/vector | Metadata B/vector | Avg total KiB/query | Worst top10@20 | Worst top10@50 | Worst top20@50 | Worst rerank@20 recall@10 | Avg score err | Scan ns/vector |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| top1 | `global_pq_32B` | `32` | `3.50` | `142.0` | `6/10` | `10/10` | `19/20` | `0.60` | `0.01757` | `17.11` |
-| top1 | `local_residual_pq_32B` | `32` | `14.05` | `184.2` | `10/10` | `10/10` | `19/20` | `1.00` | `0.01401` | `17.36` |
-| top1 | `global_pq_48B` | `48` | `3.50` | `206.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00827` | `27.07` |
-| top4 | `global_pq_32B` | `32` | `3.50` | `568.0` | `7/10` | `10/10` | `19/20` | `0.70` | `0.01713` | `17.56` |
-| top4 | `local_residual_pq_32B` | `32` | `14.05` | `736.8` | `8/10` | `10/10` | `18/20` | `0.80` | `0.01412` | `17.66` |
-| top4 | `local_residual_opq_32B` | `32` | `18.55` | `808.8` | `9/10` | `10/10` | `19/20` | `0.90` | `0.01387` | `17.56` |
-| top4 | `global_pq_48B` | `48` | `3.50` | `824.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00809` | `26.75` |
-| top4 | `local_residual_pq_48B` | `48` | `14.05` | `992.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00681` | `27.93` |
-| top4 | `local_residual_opq_48B` | `48` | `18.55` | `1064.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00671` | `27.40` |
-| top4 | `scalar_u4` | `48` | `0.19` | `771.0` | `10/10` | `10/10` | `19/20` | `1.00` | `0.00979` | `1013.28` |
-| top4 | `global_pq_64B` | `64` | `3.50` | `1080.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00660` | `39.56` |
-| top4 | `local_residual_pq_64B` | `64` | `14.05` | `1248.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00561` | `40.73` |
-| top4 | `local_residual_opq_64B` | `64` | `18.55` | `1320.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00548` | `38.90` |
-| top4 | `local_pca_rank80` | `80` | `5.84` | `1373.4` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00645` | `92.79` |
+| top1 | `global_pq_32B` | `32` | `3.50` | `142.0` | `6/10` | `10/10` | `19/20` | `0.60` | `0.01757` | `17.24` |
+| top1 | `local_residual_pq_32B` | `32` | `14.05` | `184.2` | `10/10` | `10/10` | `19/20` | `1.00` | `0.01401` | `16.98` |
+| top1 | `global_pq_48B` | `48` | `3.50` | `206.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00827` | `27.45` |
+| top4 | `global_pq_32B` | `32` | `3.50` | `568.0` | `7/10` | `10/10` | `19/20` | `0.70` | `0.01713` | `16.44` |
+| top4 | `local_residual_pq_32B` | `32` | `14.05` | `736.8` | `8/10` | `10/10` | `18/20` | `0.80` | `0.01412` | `16.97` |
+| top4 | `local_residual_opq_32B` | `32` | `18.55` | `808.8` | `9/10` | `10/10` | `19/20` | `0.90` | `0.01387` | `16.55` |
+| top4 | `global_pq_48B` | `48` | `3.50` | `824.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00809` | `26.35` |
+| top4 | `local_residual_pq_48B` | `48` | `14.05` | `992.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00681` | `27.40` |
+| top4 | `local_residual_opq_48B` | `48` | `18.55` | `1064.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00671` | `26.86` |
+| top4 | `scalar_u4` | `48` | `0.19` | `771.0` | `10/10` | `10/10` | `19/20` | `1.00` | `0.00979` | `1010.28` |
+| top4 | `global_pq_64B` | `64` | `3.50` | `1080.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00660` | `38.10` |
+| top4 | `local_residual_pq_64B` | `64` | `14.05` | `1248.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00561` | `38.53` |
+| top4 | `local_residual_opq_64B` | `64` | `18.55` | `1320.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00548` | `38.09` |
+| top4 | `global_pq_80B` | `80` | `3.50` | `1336.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00485` | `47.25` |
+| top4 | `local_pca_rank80` | `80` | `5.84` | `1373.4` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00645` | `83.42` |
+| top4 | `local_residual_pq_80B` | `80` | `14.05` | `1504.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00414` | `48.23` |
+| top4 | `global_pq_96B` | `96` | `3.50` | `1592.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00144` | `58.35` |
+| top4 | `local_pca_rank96` | `96` | `6.59` | `1641.5` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00084` | `105.47` |
+| top4 | `local_residual_opq_96B` | `96` | `18.55` | `1832.8` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00124` | `58.46` |
+| top4 | `scalar_u8` | `96` | `0.19` | `1539.0` | `10/10` | `10/10` | `20/20` | `1.00` | `0.00057` | `1005.98` |
+
+The same artifact now includes a staged cascade cost estimate: compressed scan,
+materialized approximate topK selection, and resident fp32 rerank of the
+selected shortlist. This is still not full end-to-end query latency because it
+excludes I/O, decompression, cache effects, and a fused scan+topK executor.
+
+| Selection | Method | Selected-code KiB/query | p50 scan us | p50 topK@50 us | p50 measured cascade@50 us | Avg cascade@50 KiB | p50 measured cascade@100 us | Avg cascade@100 KiB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 | `global_pq_80B` | `334.0` | `192.93` | `16.22` | `214.79` | `352.9` | `242.84` | `371.9` |
+| top1 | `local_residual_pq_80B` | `376.2` | `189.58` | `16.52` | `209.40` | `395.1` | `235.90` | `414.1` |
+| top1 | `global_pq_96B` | `398.0` | `240.58` | `16.19` | `259.80` | `416.9` | `281.01` | `435.9` |
+| top1 | `local_pca_rank96` | `410.4` | `432.18` | `16.18` | `454.53` | `429.3` | `482.40` | `448.3` |
+| top4 | `global_pq_80B` | `1336.0` | `768.76` | `33.41` | `798.72` | `1354.9` | `825.23` | `1373.9` |
+| top4 | `local_pca_rank80` | `1373.4` | `1381.71` | `33.90` | `1416.62` | `1392.3` | `1437.91` | `1411.3` |
+| top4 | `global_pq_96B` | `1592.0` | `957.34` | `33.31` | `993.56` | `1610.9` | `1013.78` | `1629.9` |
+| top4 | `local_residual_opq_96B` | `1832.8` | `958.80` | `33.29` | `997.81` | `1851.7` | `1012.64` | `1870.6` |
 
 Interpretation:
 
@@ -1217,10 +1242,20 @@ Interpretation:
   hard queries `6` and `9`, so it should be treated as a stress test rather
   than a production route.
 - Conditional on the routed union, the codec conclusions are stable: global
-  PQ48/PQ64 are still the cleanest trained-codebook frontier points; local
-  residual-PQ improves low-row-code gates and score error at about
-  `14 B/vector` selected metadata; local residual-OPQ lowers error slightly but
-  still does not justify the extra rotation metadata and build time.
+  PQ48/PQ64 remain the cleanest low-byte trained-codebook frontier points, and
+  the 80B/96B ladder mostly buys lower score error and better compressed-top10
+  stability after the wider candidate gates are already saturated.
+- Global PQ80/PQ96 have low selected metadata (`3.50 B/vector`) and scan at
+  about `47-59 ns/vector`; they are the cleanest high-byte codebook baselines.
+- Local PCA96 has the lowest codebook-family score error in the top4 row
+  (`0.00084`) but scans at about `105 ns/vector`, so it is a quality baseline,
+  not the speed frontier.
+- Local residual-PQ80 improves score error versus global PQ80, but spends about
+  `14 B/vector` selected metadata; keep it as a challenger rather than the
+  default.
+- Local residual-OPQ96 scans like global PQ96 but spends about
+  `18.55 B/vector` selected metadata and much more build time, so it is not
+  promoted yet.
 - The apparent perfect rerank@50 rows do not repair routing misses. If the
   exact winner never enters the routed storage-block union, no compressed scan
   or rerank lane can recover it.
@@ -1311,14 +1346,14 @@ The current evidence map is:
 | --- | --- | --- |
 | Separate official top100 oracle locality from production/buildable locality | Top100 sections are labeled as oracle local-neighborhood upper-bound probes. Buildable sections are separated into row-id, IVF/k-means, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, and graph-visited block-routing over sealed graph-sorted blocks. | Satisfied for current report wording. |
 | Primary metric is candidate survival, not compressed final top10 order | Tables report exact top10/top20 containment at approx@20/@50 and rerank@20/@50 recall@10. The conclusion keeps exact rerank mandatory. | Satisfied for measured rows. |
-| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The latest graph-sorted and graph-visited codebook runs cover 32/48/64 only for PQ-family lanes, so they should not be used for 80/96-byte codebook conclusions. | Partial. |
+| Fixed byte-budget comparisons | Top100 and buildable runs cover the 32/48/64/80/96-byte ladder where the lane exists. The latest graph-visited full-ladder scout now covers 32/48/64/80/96 for PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ lanes, and compares them against local PCA and scalar lanes at the same row-code budgets. Older graph-neighborhood and graph-sorted curated sections still summarize selected 32/48/64 rows unless regenerated from their artifacts. | Satisfied for the measured scout lanes; still partial for production because larger/full TreeDB granules remain unmeasured. |
 | Metadata-amortized accounting | Buildable codebook tables split row-code bytes and metadata bytes. Top100 oracle rows are explicitly row-code payload probes; their metadata amortization is not production evidence. | Satisfied for buildable codebook lanes; top100 metadata remains intentionally unproven. |
 | Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
 | Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, and PCA plus tiny residual correction. | Broadly satisfied; low-rank-plus-tail progressive bounds remain open. |
 | Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, and a graph-visited block-routing scout over sealed graph-sorted storage blocks. | Partial; full HNSW/TreeDB graph visited sets and actual TreeDB granules are not measured. |
 | Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, and a measured resident-fp32 row-id rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 vector+invNorm rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, and optional fp32-after-int8 rerank are not measured. |
 | p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
-| Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured trained-codebook candidate-generator baseline and local residual-PQ as a low-byte-plus-metadata challenger. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
+| Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured low-byte trained-codebook candidate-generator baseline, global PQ80/PQ96 as clean high-byte error-reduction baselines, and local residual-PQ as a metadata-heavy challenger. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
 
 The most important remaining gap is production locality. The report has measured
 several buildable fixed-block proxies and a graph-visited block-routing scout,
@@ -1330,13 +1365,14 @@ strong research frontier, not a production format decision.
 ## Recommended Next Work
 
 1. Extend the trained graph-neighborhood, graph-sorted, and graph-visited
-   block-routing runs to larger query coverage and larger train/eval slices,
-   then add full HNSW/TreeDB graph-visited-set and actual TreeDB granule
-   builders. This is the next required step before any production compression
-   claim.
-2. Extend the PQ/residual-PQ/OPQ/local-residual-PQ/local-residual-OPQ
-   same-byte tournament to more queries and larger train/eval slices. Do not
-   train codebooks on a single official top100 cloud.
+   block-routing runs from this fixed-byte scout to larger query coverage and
+   larger train/eval slices, then add full HNSW/TreeDB graph-visited-set and
+   actual TreeDB granule builders. This is the next required step before any
+   production compression claim.
+2. Repeat the PQ/residual-PQ/OPQ/local-residual-PQ/local-residual-OPQ
+   same-byte tournament with broader train/eval coverage and stricter metadata
+   amortization checks. Do not train codebooks on a single official top100
+   cloud.
 3. Extend local OPQ/LOPQ to production-plausible graph/TreeDB granules and add
    PCA plus residual correction if local PCA remains promising.
 4. Extend the cascade benchmark beyond the current staged scan-plus-topK-plus
@@ -1385,6 +1421,8 @@ true Deep1B top100 neighborhoods are highly local,
 rank64 local PCA is not a final ranker,
 rank64/rank80 local PCA are plausible compact candidate generators,
 global PQ is the strongest measured trained-codebook buildable baseline so far,
-graph-sorted row-adjacent blocks are measured but not a new routing frontier,
+graph-sorted and graph-visited block proxies are measured but not a new routing frontier,
+global PQ48/PQ64 are the cleanest low-byte codebook frontier points,
+global PQ80/PQ96 are clean high-byte error-reduction baselines,
 and exact rerank remains mandatory.
 ```
