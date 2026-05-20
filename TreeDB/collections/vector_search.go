@@ -112,10 +112,14 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 }
 
 func (c *Collection) searchVectorsExactWithoutColumnRootValidation(query []float32, opts VectorSearchOptions) ([]VectorSearchResult, error) {
-	return c.searchVectorsExactWithScanner(query, opts, c.scanDocumentsFuncWithoutColumnRootValidation)
+	return c.searchVectorsExactWithReaders(query, opts, c.scanDocumentsFuncWithoutColumnRootValidation, c.vectorSearchIndexRangeDocumentIDsWithoutColumnRootValidation, c.getWithoutColumnRootValidation)
 }
 
 func (c *Collection) searchVectorsExactWithScanner(query []float32, opts VectorSearchOptions, scanDocuments func(int, func(DocumentRecord) (bool, error)) (bool, error)) ([]VectorSearchResult, error) {
+	return c.searchVectorsExactWithReaders(query, opts, scanDocuments, c.vectorSearchIndexRangeDocumentIDs, c.Get)
+}
+
+func (c *Collection) searchVectorsExactWithReaders(query []float32, opts VectorSearchOptions, scanDocuments func(int, func(DocumentRecord) (bool, error)) (bool, error), rangeDocumentIDs func(*VectorIndexRangeFilter, int) ([][]byte, bool, error), getDocument func([]byte) ([]byte, error)) ([]VectorSearchResult, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -147,6 +151,12 @@ func (c *Collection) searchVectorsExactWithScanner(query []float32, opts VectorS
 	}
 	if scanDocuments == nil {
 		scanDocuments = c.ScanDocumentsFunc
+	}
+	if rangeDocumentIDs == nil {
+		rangeDocumentIDs = c.vectorSearchIndexRangeDocumentIDs
+	}
+	if getDocument == nil {
+		getDocument = c.Get
 	}
 
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
@@ -189,12 +199,12 @@ func (c *Collection) searchVectorsExactWithScanner(query []float32, opts VectorS
 	}
 
 	if opts.IndexRangeFilter != nil {
-		ids, _, err := c.vectorSearchIndexRangeDocumentIDs(opts.IndexRangeFilter, 0)
+		ids, _, err := rangeDocumentIDs(opts.IndexRangeFilter, 0)
 		if err != nil {
 			return nil, err
 		}
 		for _, id := range ids {
-			document, err := c.Get(id)
+			document, err := getDocument(id)
 			if err != nil {
 				return nil, err
 			}
@@ -234,15 +244,26 @@ func cloneDocumentRecord(record DocumentRecord) DocumentRecord {
 }
 
 func (c *Collection) vectorSearchIndexRangeDocumentIDs(filter *VectorIndexRangeFilter, limit int) ([][]byte, bool, error) {
+	return c.vectorSearchIndexRangeDocumentIDsWithFinder(filter, limit, c.FindByIndexRange)
+}
+
+func (c *Collection) vectorSearchIndexRangeDocumentIDsWithoutColumnRootValidation(filter *VectorIndexRangeFilter, limit int) ([][]byte, bool, error) {
+	return c.vectorSearchIndexRangeDocumentIDsWithFinder(filter, limit, c.findByIndexRangeWithoutColumnRootValidation)
+}
+
+func (c *Collection) vectorSearchIndexRangeDocumentIDsWithFinder(filter *VectorIndexRangeFilter, limit int, findRange func(string, IndexRangeOptions) ([][]byte, bool, error)) ([][]byte, bool, error) {
 	if filter == nil {
 		return nil, false, nil
 	}
 	if limit < 0 {
 		return nil, false, errors.New("collections: vector index range filter limit cannot be negative")
 	}
+	if findRange == nil {
+		findRange = c.FindByIndexRange
+	}
 	opts := filter.Range
 	opts.Limit = limit
-	ids, truncated, err := c.FindByIndexRange(filter.IndexName, opts)
+	ids, truncated, err := findRange(filter.IndexName, opts)
 	if err != nil {
 		return nil, false, err
 	}

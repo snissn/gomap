@@ -17217,6 +17217,28 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 // The returned slice is owned by the caller. Missing documents return
 // (dst[:0], false, nil).
 func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
+	return c.getIntoWithCatalogResolver(documentID, dst, func(snap *backenddb.Snapshot, _ string) (*collectionCatalog, error) {
+		return c.catalogForSnapshot(snap)
+	})
+}
+
+func (c *Collection) getWithoutColumnRootValidation(documentID []byte) ([]byte, error) {
+	out, found, err := c.getIntoWithCatalogResolver(documentID, nil, loadCollectionCatalogWithoutColumnRootValidation)
+	if err != nil || !found {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return []byte{}, nil
+	}
+	if cap(out) == len(out) {
+		return out, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, nil
+}
+
+func (c *Collection) getIntoWithCatalogResolver(documentID []byte, dst []byte, loadCatalog func(*backenddb.Snapshot, string) (*collectionCatalog, error)) ([]byte, bool, error) {
 	if c == nil {
 		return dst[:0], false, errCollectionNil
 	}
@@ -17234,7 +17256,13 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 		return dst[:0], false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
+	if loadCatalog == nil {
+		loadCatalog = loadCollectionCatalog
+	}
+	c.catalogMu.RLock()
+	collectionName := c.meta.Name
+	c.catalogMu.RUnlock()
+	catalog, err := loadCatalog(snap, collectionName)
 	if err != nil {
 		return dst[:0], false, err
 	}
@@ -17425,6 +17453,16 @@ func (c *Collection) FindByIndexValueLimit(indexName string, value any, maxResul
 }
 
 func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) ([][]byte, bool, error) {
+	return c.findByIndexRangeWithCatalogResolver(indexName, opts, func(snap *backenddb.Snapshot, _ string) (*collectionCatalog, error) {
+		return c.catalogForSnapshotWithWriteDomainLocked(snap)
+	})
+}
+
+func (c *Collection) findByIndexRangeWithoutColumnRootValidation(indexName string, opts IndexRangeOptions) ([][]byte, bool, error) {
+	return c.findByIndexRangeWithCatalogResolver(indexName, opts, loadCollectionCatalogWithoutColumnRootValidation)
+}
+
+func (c *Collection) findByIndexRangeWithCatalogResolver(indexName string, opts IndexRangeOptions, loadCatalog func(*backenddb.Snapshot, string) (*collectionCatalog, error)) ([][]byte, bool, error) {
 	if opts.Limit < 0 {
 		return nil, false, errors.New("collections: index range limit cannot be negative")
 	}
@@ -17433,13 +17471,13 @@ func (c *Collection) FindByIndexRange(indexName string, opts IndexRangeOptions) 
 		capHint = opts.Limit
 	}
 	var out [][]byte
-	truncated, found, err := c.scanIndexRange(indexName, opts, func(id []byte) (bool, error) {
+	truncated, found, err := c.scanIndexRangeWithCatalogResolver(indexName, opts, func(id []byte) (bool, error) {
 		if out == nil {
 			out = make([][]byte, 0, capHint)
 		}
 		out = append(out, id)
 		return true, nil
-	})
+	}, loadCatalog)
 	if err != nil {
 		return nil, false, err
 	}
@@ -17699,8 +17737,17 @@ func (c *Collection) findByIndexValue(indexName string, value any, maxResults in
 }
 
 func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error)) (bool, bool, error) {
+	return c.scanIndexRangeWithCatalogResolver(indexName, opts, fn, func(snap *backenddb.Snapshot, _ string) (*collectionCatalog, error) {
+		return c.catalogForSnapshotWithWriteDomainLocked(snap)
+	})
+}
+
+func (c *Collection) scanIndexRangeWithCatalogResolver(indexName string, opts IndexRangeOptions, fn func(id []byte) (bool, error), loadCatalog func(*backenddb.Snapshot, string) (*collectionCatalog, error)) (bool, bool, error) {
 	if c == nil {
 		return false, false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, false, errCollectionDBNil
 	}
 	if err := ValidateIndexName(indexName); err != nil {
 		return false, false, err
@@ -17730,7 +17777,13 @@ func (c *Collection) scanIndexRange(indexName string, opts IndexRangeOptions, fn
 		return false, false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshotWithWriteDomainLocked(snap)
+	if loadCatalog == nil {
+		loadCatalog = loadCollectionCatalog
+	}
+	c.catalogMu.RLock()
+	collectionName := c.meta.Name
+	c.catalogMu.RUnlock()
+	catalog, err := loadCatalog(snap, collectionName)
 	if err != nil {
 		return false, false, err
 	}
