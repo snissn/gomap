@@ -163,10 +163,10 @@ locality builder over the base prefix. In both modes, it ranks granules by
 centroid similarity and reports routing recall separately from codec recall
 inside the selected granule union. The codec rows include full-dim
 per-dimension scalar u8/u4, local PCA int8 ranks, and optional trained global
-8-bit PQ lanes. The PQ lanes use held-out base-prefix rows for codebook
-training and evaluate on a disjoint base slice; they are production/buildable
-codebook probes, not top100 oracle fits. OPQ, residual-PQ, and LOPQ are still
-pending.
+8-bit PQ/OPQ-style lanes. The PQ/OPQ lanes use held-out base-prefix rows for
+codebook and rotation training and evaluate on a disjoint base slice; they are
+production/buildable codebook probes, not top100 oracle fits. Residual-PQ and
+LOPQ are still pending.
 
 ## Manual Commands
 
@@ -327,10 +327,10 @@ This builder is buildable from the base prefix and is a stronger production
 locality scout than row-id order, but it is still not a trained-codebook PQ/OPQ
 result.
 
-IVF/k-means buildable granule scout with trained global PQ lanes:
+IVF/k-means buildable granule scout with trained global PQ/OPQ lanes:
 
 ```sh
-OUT=/tmp/gomap_deep1b_buildable_pq_ivf_q0_9_$(date +%Y%m%d_%H%M%S)
+OUT=/tmp/gomap_deep1b_buildable_opq_ivf_q0_9_$(date +%Y%m%d_%H%M%S)
 COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_SCOUT=1 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_BUILDER=ivf_kmeans \
@@ -341,8 +341,10 @@ COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES=0,1,2,3,4,5,6,7,8,9 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES=1,4 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS=32,64 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_BYTES=32,48,64 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_BYTES=32,48,64 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS=8192 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_ITERS=3 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS=4 \
 COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT="$OUT" \
 GOWORK=off go test ./experiments/colgranule \
@@ -353,34 +355,41 @@ GOWORK=off go test ./experiments/colgranule \
 ```
 
 This is the first trained-codebook production lane in this PR. It trains global
-8-bit PQ codebooks on held-out rows and evaluates them on disjoint IVF/k-means
-granules. It does not claim OPQ, residual-PQ, LOPQ, ScaNN/AVQ, or QINCo
-coverage.
+8-bit PQ codebooks and OPQ-style learned rotations on held-out rows and
+evaluates them on disjoint IVF/k-means granules. It does not claim
+residual-PQ, LOPQ, ScaNN/AVQ, or QINCo coverage.
 
 Representative artifact:
 
 ```text
-/tmp/gomap_deep1b_buildable_pq_ivf_q0_9_20260519_211250/report.md
+/tmp/gomap_deep1b_buildable_opq_ivf_q0_9_20260519_212929/report.md
 ```
 
 Key aggregate conditional codec gates, queries `0..9`, `32768` eval rows,
-`8192` held-out PQ training rows, top `1` and top `4` centroid-routed IVF
-granules:
+`8192` held-out PQ/OPQ training rows, top `1` and top `4` centroid-routed IVF
+granules. OPQ metadata includes f16 rotation metadata amortized over the eval
+slice plus per-row f16 inverse norms:
 
 | Method | Top granules | Row-code B/vector | Metadata B/vector | p50 compressed top10 | Worst compressed top10 | Worst top10@50 | Worst top10@100 | Worst top20@100 | Avg score err | Avg scan ns/vector |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| global PQ 32B x8 | 1 | 32 | 3.50 | 7/10 | 5/10 | 10/10 | 10/10 | 20/20 | 0.01829 | 19.05 |
-| local PCA rank32 int8 | 1 | 32 | 3.49 | 6/10 | 5/10 | 7/10 | 9/10 | 18/20 | 0.02206 | 26.62 |
-| global PQ 48B x8 | 1 | 48 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00851 | 28.81 |
-| scalar u4 per-dim reconstructed | 1 | 48 | 0.18 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00961 | 1044.37 |
-| global PQ 64B x8 | 1 | 64 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00686 | 40.30 |
-| local PCA rank64 int8 | 1 | 64 | 4.94 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00849 | 61.41 |
-| global PQ 32B x8 | 4 | 32 | 3.50 | 6/10 | 5/10 | 10/10 | 10/10 | 20/20 | 0.01717 | 16.60 |
-| local PCA rank32 int8 | 4 | 32 | 3.57 | 6/10 | 4/10 | 9/10 | 10/10 | 17/20 | 0.02646 | 26.80 |
-| global PQ 48B x8 | 4 | 48 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00811 | 29.98 |
-| scalar u4 per-dim reconstructed | 4 | 48 | 0.19 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00957 | 1032.29 |
-| global PQ 64B x8 | 4 | 64 | 3.50 | 9/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00662 | 38.60 |
-| local PCA rank64 int8 | 4 | 64 | 5.10 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.01114 | 57.85 |
+| global PQ 32B x8 | 1 | 32 | 3.50 | 7/10 | 5/10 | 10/10 | 10/10 | 20/20 | 0.01829 | 15.90 |
+| global OPQ 32B x8 | 1 | 32 | 4.06 | 7/10 | 4/10 | 10/10 | 10/10 | 20/20 | 0.01834 | 15.97 |
+| local PCA rank32 int8 | 1 | 32 | 3.49 | 6/10 | 5/10 | 7/10 | 9/10 | 18/20 | 0.02206 | 25.10 |
+| global PQ 48B x8 | 1 | 48 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00851 | 25.24 |
+| global OPQ 48B x8 | 1 | 48 | 4.06 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00845 | 25.26 |
+| scalar u4 per-dim reconstructed | 1 | 48 | 0.18 | 8/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00961 | 960.86 |
+| global PQ 64B x8 | 1 | 64 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00686 | 34.54 |
+| global OPQ 64B x8 | 1 | 64 | 4.06 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00678 | 35.32 |
+| local PCA rank64 int8 | 1 | 64 | 4.94 | 8/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00849 | 55.33 |
+| global PQ 32B x8 | 4 | 32 | 3.50 | 6/10 | 5/10 | 10/10 | 10/10 | 20/20 | 0.01717 | 16.41 |
+| global OPQ 32B x8 | 4 | 32 | 4.06 | 7/10 | 4/10 | 10/10 | 10/10 | 20/20 | 0.01714 | 15.89 |
+| local PCA rank32 int8 | 4 | 32 | 3.57 | 6/10 | 4/10 | 9/10 | 10/10 | 17/20 | 0.02646 | 25.14 |
+| global PQ 48B x8 | 4 | 48 | 3.50 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00811 | 25.24 |
+| global OPQ 48B x8 | 4 | 48 | 4.06 | 9/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00804 | 25.29 |
+| scalar u4 per-dim reconstructed | 4 | 48 | 0.19 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.00957 | 979.13 |
+| global PQ 64B x8 | 4 | 64 | 3.50 | 9/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00662 | 35.07 |
+| global OPQ 64B x8 | 4 | 64 | 4.06 | 8/10 | 7/10 | 10/10 | 10/10 | 20/20 | 0.00655 | 34.94 |
+| local PCA rank64 int8 | 4 | 64 | 5.10 | 9/10 | 8/10 | 10/10 | 10/10 | 20/20 | 0.01114 | 53.11 |
 
 Interpretation:
 
@@ -390,16 +399,22 @@ Interpretation:
 - At the same 32B row-code budget, trained global PQ beats local PCA rank32 on
   candidate survival and scan cost. PQ32 kept exact top10 inside approx@50 for
   every routed candidate set; PCA32 did not.
-- At 48B, global PQ and scalar u4 both preserve candidate gates in this run.
-  PQ's current LUT scorer is about `30 ns/vector`, while the scalar u4 lane is
+- At 48B, global PQ/OPQ and scalar u4 all preserve candidate gates in this run.
+  The PQ/OPQ LUT scorer is about `25 ns/vector`, while the scalar u4 lane is
   still a reconstructed Go scorer around `1 us/vector`.
-- At 64B, global PQ is a stronger same-byte competitor to rank64 local PCA on
-  score error and scan cost, though neither should be treated as a final ranker
+- At 64B, global PQ/OPQ are stronger same-byte competitors to rank64 local PCA
+  on score error and scan cost, though none should be treated as a final ranker
   without exact rerank.
+- OPQ-style learned rotation is now measured, but it is not promoted yet. It
+  slightly improves mean score error in some 48B/64B rows, but it adds about
+  `0.56 B/vector` metadata at this eval size, takes roughly `3.9-4.3x` PQ
+  training time, and does not produce a decisive worst-query or candidate-gate
+  win over global PQ.
 - PQ training for 32B/48B/64B on 8192 rows and 4 iterations took about
-  `708 ms`, `947 ms`, and `1035 ms` respectively in this harness. The method
-  build milliseconds in the table are per-run encode costs for selected rows;
-  production query-time would read stored codes instead.
+  `712 ms`, `949 ms`, and `1036 ms`; OPQ with 3 outer iterations took about
+  `2983 ms`, `3944 ms`, and `4473 ms`. The method build milliseconds in the
+  table are per-run encode costs for selected rows; production query-time would
+  read stored codes instead.
 
 ## Scope
 
@@ -921,8 +936,10 @@ benchmark path:
 - Treat dimensionality reduction as an out-of-place acceleration layer unless it
   proves final-ranking quality. Local PCA is a baseline candidate generator, not
   the objective.
-- Add same-byte PQ/OPQ baselines for Deep1B `D=96`: local PCA `K=32/48/64`
-  should compete against 32/48/64-byte PQ/OPQ codes, not just against fp32.
+- Same-byte PQ/OPQ baselines are now started for Deep1B `D=96`: local PCA
+  `K=32/64` competes against 32/48/64-byte PQ/OPQ codes on buildable
+  IVF/k-means granules. The next extension is rank48/rank80/rank96 and larger
+  query/train/eval coverage.
 - Prioritize granule-local residual encoders: `centroid + residual code +
   compressed scan + exact rerank`, which matches the LOPQ-style lesson that
   local residuals are easier to encode than raw global vectors.
@@ -978,9 +995,10 @@ IVF/k-means buildable scout:
   around `53 ns/vector` and preserves top10@50/top20@50 well, but compressed
   final top10 is still not reliable. Rank32 is too fragile on less coherent
   routed unions.
-- This is a buildable locality probe, not a PQ/OPQ/residual-PQ result. The next
-  production tournament must train codebooks on real train/eval splits and
-  count metadata-amortized bytes.
+- This is a buildable locality probe, not a trained-codebook result. The
+  PQ/OPQ scout above adds the first real train/eval split and
+  metadata-amortized codebook accounting; residual-PQ and local/LOPQ-style
+  encoders remain pending.
 
 Granule-native int8 micro-kernel smoke:
 
