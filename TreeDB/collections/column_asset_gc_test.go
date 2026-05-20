@@ -107,6 +107,42 @@ func TestColumnAssetGCDryRunCanReturnSegmentDetailsWithoutRefEntriesM15B(t *test
 	}
 }
 
+func TestColumnAssetGCDryRunSummaryOmitsSegmentEntriesAndMissingRetainedM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	cfg := col.Meta().Options.ColumnStore
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		DryRun: true,
+		CandidateRefs: []ColumnAssetRef{{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  cfg.AssetManager.Namespace,
+			Generation: 1,
+			PartID:     1,
+			FileID:     99,
+			Length:     64,
+			Checksum:   page.Checksum([]byte("missing")),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC dry-run: %v", err)
+	}
+	if len(stats.Plan.Entries) != 0 || len(stats.Plan.SegmentEntries) != 0 {
+		t.Fatalf("summary dry-run retained detail entries: refs=%d segments=%d", len(stats.Plan.Entries), len(stats.Plan.SegmentEntries))
+	}
+	if stats.Plan.Segments.Missing != 1 {
+		t.Fatalf("segments=%+v want one missing segment in summary plan", stats.Plan.Segments)
+	}
+	if stats.SegmentsRetained != stats.Plan.Segments.Total-stats.Plan.Segments.Missing || stats.BytesRetained != stats.Plan.Segments.BytesTotal {
+		t.Fatalf("stats=%+v segments=%+v want missing segment excluded from retained physical segment count", stats, stats.Plan.Segments)
+	}
+}
+
 func TestColumnAssetGCDeletesCompleteReclaimableSegmentM15B(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -196,7 +232,7 @@ func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T
 	if stats.SegmentsDeleted != 1 || stats.BytesDeleted != first.Length {
 		t.Fatalf("deleted stats=%+v want first segment deleted", stats)
 	}
-	if stats.SegmentsRetained != stats.Plan.Segments.Total-stats.SegmentsDeleted ||
+	if stats.SegmentsRetained != columnAssetGCExistingSegmentCount(stats.Plan)-stats.SegmentsDeleted ||
 		stats.BytesRetained != stats.Plan.Segments.BytesTotal-stats.BytesDeleted {
 		t.Fatalf("retained stats=%+v planSegments=%+v want retained decremented after partial delete", stats, stats.Plan.Segments)
 	}

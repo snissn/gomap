@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"slices"
@@ -560,6 +561,9 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.RewriteDebtBytes = addColumnAssetReachabilityBytes(plan.RewriteDebtBytes, segmentPlan.reclaimableBytes)
 		default:
 			plan.Segments.Unknown++
+			if segmentPlan.reclaimableBytes != 0 {
+				plan.RewriteDebtBytes = addColumnAssetReachabilityBytes(plan.RewriteDebtBytes, segmentPlan.reclaimableBytes)
+			}
 		}
 		if input.detailed || input.segmentDetails {
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
@@ -852,12 +856,7 @@ func columnAssetReachabilitySourcesForMaskWithUnknown(mask columnAssetReachabili
 }
 
 func columnAssetReachabilitySourceMaskCount(mask columnAssetReachabilitySourceMask) int {
-	count := 0
-	for mask != 0 {
-		count++
-		mask &= mask - 1
-	}
-	return count
+	return bits.OnesCount64(uint64(mask))
 }
 
 func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string) ([]columnAssetReachabilitySegment, error) {
@@ -899,6 +898,9 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		name := info.Name()
 		info, err := os.Lstat(columnAssetReachabilitySegmentPath(segmentDir, name))
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, err
 		}
 		if info.IsDir() {

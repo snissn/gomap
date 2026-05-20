@@ -79,9 +79,10 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	defer func() {
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
+	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
-		SegmentDetails:                        opts.Detailed || opts.SegmentDetails || !opts.DryRun,
+		SegmentDetails:                        needSegmentEntries,
 		ProtectCandidateRefsForOlderSnapshots: true,
 		CandidateRefs:                         opts.CandidateRefs,
 		PendingRefs:                           opts.PendingRefs,
@@ -91,7 +92,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
 		Plan:             plan,
-		SegmentsRetained: plan.Segments.Total,
+		SegmentsRetained: columnAssetGCExistingSegmentCount(plan),
 		BytesRetained:    plan.Segments.BytesTotal,
 	}
 	if err != nil {
@@ -191,6 +192,14 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		return stats, err
 	}
 	return stats, nil
+}
+
+func columnAssetGCExistingSegmentCount(plan ColumnAssetReachabilityPlan) int {
+	segments := plan.Segments.Total - plan.Segments.Missing
+	if segments < 0 {
+		return 0
+	}
+	return segments
 }
 
 func columnAssetGCSegmentEligibleForDelete(segmentDir string, entry ColumnAssetReachabilitySegmentEntry) bool {
