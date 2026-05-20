@@ -156,7 +156,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			continue
 		}
 		stats.SegmentsEligible++
-		stats.BytesEligible = addColumnAssetReachabilityBytes(stats.BytesEligible, entry.Bytes)
+		stats.BytesEligible = addColumnAssetReachabilityBytes(stats.BytesEligible, entry.ReclaimableBytes)
 		eligible = append(eligible, entry)
 	}
 	// Re-check after planning while still under the mutation lock so destructive
@@ -185,13 +185,13 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := ctx.Err(); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
-		if err := removeSegment(entry.Path); err != nil {
+		if err := removeSegment(entry.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		stats.SegmentsDeleted++
-		stats.BytesDeleted = addColumnAssetReachabilityBytes(stats.BytesDeleted, entry.Bytes)
+		stats.BytesDeleted = addColumnAssetReachabilityBytes(stats.BytesDeleted, entry.ReclaimableBytes)
 		stats.SegmentsRetained--
-		stats.BytesRetained = subColumnAssetReachabilityBytesFloor(stats.BytesRetained, entry.Bytes)
+		stats.BytesRetained = subColumnAssetReachabilityBytesFloor(stats.BytesRetained, entry.ReclaimableBytes)
 	}
 	if err := syncDeletedSegmentsDir(nil); err != nil {
 		return stats, err
