@@ -428,7 +428,7 @@ func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) 
 	records := make([]columnManifestRecord, 0, 8)
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) && !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
+		if !columnManifestRecordKeyKnownForScan(key) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -510,7 +510,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 	activeParts := uint64(0)
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) && !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
+		if !columnManifestRecordKeyKnownForScan(key) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -589,6 +589,11 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			writeHashBytes(&d, value)
 			if keyGeneration == header.generation {
 				activeParts++
+			}
+		case bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes):
+			if sawHeader {
+				writeHashBytes(&d, key)
+				writeHashBytes(&d, value)
 			}
 		}
 		iter.Next()
@@ -671,6 +676,8 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 	for _, record := range records {
 		switch {
 		case bytes.Equal(record.key, columnManifestHeaderRecordKeyBytes):
+			active = append(active, record)
+		case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
 			active = append(active, record)
 		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
 			partGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)

@@ -231,16 +231,7 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 		return status, nil
 	case VectorIndexStrategyColumnGraph:
 		cfg := c.meta.Options.ColumnStore
-		if cfg == nil || !cfg.Enabled {
-			status.State = VectorIndexStateColumnGraphUnavailable
-			status.Reason = VectorIndexReasonPhysicalColumnAssetSupportMissing
-			status.RebuildNeeded = true
-			return status, nil
-		}
-		status.State = VectorIndexStateColumnGraphRebuildNeeded
-		status.Reason = VectorIndexReasonColumnGraphRebuildNeeded
-		status.RebuildNeeded = true
-		return status, nil
+		return c.columnGraphVectorIndexStatus(def, cfg)
 	default:
 		return VectorIndexStatus{}, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
 	}
