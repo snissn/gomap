@@ -26,6 +26,23 @@ func TestColumnAssetGCDryRunReportsReclaimableButDoesNotDeleteM15B(t *testing.T)
 		t.Fatalf("columnAssetSegmentPath: %v", err)
 	}
 
+	summary, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		DryRun:        true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC summary dry-run: %v", err)
+	}
+	if !summary.DryRun || summary.SegmentsEligible != 1 || summary.BytesEligible != candidate.Length {
+		t.Fatalf("summary stats=%+v want one dry-run eligible segment of %d bytes", summary, candidate.Length)
+	}
+	if len(summary.Plan.SegmentEntries) != 0 {
+		t.Fatalf("summary segment entries=%d want non-detailed summary plan", len(summary.Plan.SegmentEntries))
+	}
+	if summary.Plan.Segments.BytesWholeReclaimable != candidate.Length {
+		t.Fatalf("summary segment stats=%+v want whole reclaimable bytes %d", summary.Plan.Segments, candidate.Length)
+	}
+
 	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		DryRun:        true,
 		Detailed:      true,
@@ -173,6 +190,26 @@ func TestColumnAssetGCRetainsMixedSegmentM15B(t *testing.T) {
 	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
 	if err != nil {
 		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+
+	dry, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		DryRun:        true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC dry-run: %v", err)
+	}
+	if dry.SegmentsEligible != 0 || dry.BytesEligible != 0 {
+		t.Fatalf("dry-run stats=%+v want no whole-segment eligibility for mixed protected/reclaimable segment", dry)
+	}
+	if len(dry.Plan.SegmentEntries) != 0 {
+		t.Fatalf("dry-run segment entries=%d want non-detailed summary plan", len(dry.Plan.SegmentEntries))
+	}
+	if dry.Plan.Segments.Mixed != 1 || dry.Plan.RewriteDebtBytes != candidate.Length {
+		t.Fatalf("dry-run plan segments=%+v debt=%d want mixed rewrite debt=%d", dry.Plan.Segments, dry.Plan.RewriteDebtBytes, candidate.Length)
+	}
+	if dry.Plan.Segments.BytesReclaimable != candidate.Length || dry.Plan.Segments.BytesWholeReclaimable != 0 {
+		t.Fatalf("dry-run segment bytes=%+v want reclaimable range bytes %d but zero whole reclaimable bytes", dry.Plan.Segments, candidate.Length)
 	}
 
 	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{

@@ -109,17 +109,18 @@ type ColumnAssetReachabilityRefStats struct {
 }
 
 type ColumnAssetReachabilitySegmentStats struct {
-	Total            int
-	Protected        int
-	Reclaimable      int
-	Mixed            int
-	Unknown          int
-	Missing          int
-	OutOfBoundsRefs  int
-	BytesTotal       int64
-	BytesProtected   int64
-	BytesReclaimable int64
-	BytesUnknown     int64
+	Total                 int
+	Protected             int
+	Reclaimable           int
+	Mixed                 int
+	Unknown               int
+	Missing               int
+	OutOfBoundsRefs       int
+	BytesTotal            int64
+	BytesProtected        int64
+	BytesReclaimable      int64
+	BytesWholeReclaimable int64
+	BytesUnknown          int64
 }
 
 type ColumnAssetReachabilityRefEntry struct {
@@ -524,6 +525,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.Segments.Protected++
 		case ColumnAssetReachabilitySegmentReclaimable:
 			plan.Segments.Reclaimable++
+			plan.Segments.BytesWholeReclaimable += segment.bytes
 		case ColumnAssetReachabilitySegmentMixed:
 			plan.Segments.Mixed++
 			plan.RewriteDebtBytes += segmentPlan.reclaimableBytes
