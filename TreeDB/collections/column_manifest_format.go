@@ -129,6 +129,13 @@ func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, g
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			retained = append(retained, columnManifestRecord{
+				key:   bytes.Clone(record.key),
+				value: bytes.Clone(record.value),
+			})
+			continue
+		}
 		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) {
 			continue
 		}

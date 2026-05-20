@@ -311,18 +311,6 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		Name:     def.Name,
 		Strategy: def.Strategy,
 	}
-	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
-		status.State = VectorIndexStateColumnGraphUnavailable
-		status.Reason = VectorIndexReasonPhysicalColumnAssetSupportMissing
-		status.RebuildNeeded = true
-		return status, nil
-	}
-	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
-		status.State = VectorIndexStateColumnGraphRebuildNeeded
-		status.Reason = VectorIndexReasonColumnGraphRebuildNeeded
-		status.RebuildNeeded = true
-		return status, nil
-	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return VectorIndexStatus{}, errors.New("collections: collection db is closed")
@@ -335,7 +323,27 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 	if catalog == nil {
 		return VectorIndexStatus{}, errCollectionNotFound
 	}
-	rootID := catalog.rootID(collectionColumnManifestRootName(c.meta.Name))
+	if latestDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name); ok {
+		def = latestDef
+		status.Name = def.Name
+		status.Strategy = def.Strategy
+	} else {
+		return VectorIndexStatus{}, ErrIndexNotFound
+	}
+	cfg = catalog.meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
+		status.State = VectorIndexStateColumnGraphUnavailable
+		status.Reason = VectorIndexReasonPhysicalColumnAssetSupportMissing
+		status.RebuildNeeded = true
+		return status, nil
+	}
+	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphRebuildNeeded
+		status.RebuildNeeded = true
+		return status, nil
+	}
+	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	if rootID == 0 {
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
 		status.Reason = VectorIndexReasonColumnGraphRebuildNeeded
@@ -359,7 +367,7 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	if err := validateColumnManifestSnapshot(manifest, records, *cfg, *cfg.ActiveManifest, c.meta.Name, "column vector graph status"); err != nil {
+	if err := validateColumnManifestSnapshot(manifest, records, *cfg, *cfg.ActiveManifest, catalog.meta.Name, "column vector graph status"); err != nil {
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
@@ -379,7 +387,7 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	if !columnVectorGraphManifestMatchesDefinition(c.meta.Name, graph, def, *cfg, manifest, records) {
+	if !columnVectorGraphManifestMatchesDefinition(catalog.meta.Name, graph, def, *cfg, manifest, records) {
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
 		status.Reason = VectorIndexReasonColumnGraphAssetMismatch
 		status.RebuildNeeded = true

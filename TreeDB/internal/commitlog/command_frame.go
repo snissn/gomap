@@ -54,11 +54,12 @@ const (
 
 	// Collection command frames carry deterministic user-level collection
 	// mutations. They do not encode physical root deltas.
-	CommandKindCollectionInsertBatchByID  CommandKind = 100
-	CommandKindCollectionDeleteBatchByID  CommandKind = 101
-	CommandKindCollectionUpdateBatchByID  CommandKind = 102
-	CommandKindCatalogCreateCollection    CommandKind = 200
-	CommandKindCatalogMutationPlaceholder CommandKind = CommandKindCatalogCreateCollection
+	CommandKindCollectionInsertBatchByID    CommandKind = 100
+	CommandKindCollectionDeleteBatchByID    CommandKind = 101
+	CommandKindCollectionUpdateBatchByID    CommandKind = 102
+	CommandKindCollectionRebuildVectorIndex CommandKind = 103
+	CommandKindCatalogCreateCollection      CommandKind = 200
+	CommandKindCatalogMutationPlaceholder   CommandKind = CommandKindCatalogCreateCollection
 )
 
 // CommandScope identifies which logical TreeDB surface a command mutates.
@@ -74,12 +75,13 @@ const (
 type PayloadFormat uint16
 
 const (
-	PayloadFormatRawKVBatchV1                PayloadFormat = 1
-	PayloadFormatNativeWireDeterministic     PayloadFormat = 2
-	PayloadFormatCollectionInsertBatchByIDV1 PayloadFormat = 3
-	PayloadFormatCollectionDeleteBatchByIDV1 PayloadFormat = 4
-	PayloadFormatCollectionUpdateBatchByIDV1 PayloadFormat = 5
-	PayloadFormatCatalogCreateCollectionV1   PayloadFormat = 6
+	PayloadFormatRawKVBatchV1                   PayloadFormat = 1
+	PayloadFormatNativeWireDeterministic        PayloadFormat = 2
+	PayloadFormatCollectionInsertBatchByIDV1    PayloadFormat = 3
+	PayloadFormatCollectionDeleteBatchByIDV1    PayloadFormat = 4
+	PayloadFormatCollectionUpdateBatchByIDV1    PayloadFormat = 5
+	PayloadFormatCatalogCreateCollectionV1      PayloadFormat = 6
+	PayloadFormatCollectionRebuildVectorIndexV1 PayloadFormat = 7
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -914,6 +916,11 @@ type CollectionUpdateBatchByIDPayload struct {
 	Documents  []CollectionDocument
 }
 
+type CollectionRebuildVectorIndexPayload struct {
+	Collection string
+	IndexName  string
+}
+
 type CatalogCreateCollectionPayload struct {
 	Collection string
 	Metadata   []byte
@@ -1305,6 +1312,10 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 {
 			return ErrCorrupt
 		}
+	case CommandKindCollectionRebuildVectorIndex:
+		if env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
+			return ErrCorrupt
+		}
 	case CommandKindCatalogCreateCollection:
 		if env.Scope != CommandScopeCatalog || env.PayloadFormat != PayloadFormatCatalogCreateCollectionV1 {
 			return ErrCorrupt
@@ -1327,6 +1338,9 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 		return err
 	case CommandKindCollectionUpdateBatchByID:
 		_, err := DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+		return err
+	case CommandKindCollectionRebuildVectorIndex:
+		_, err := DecodeCollectionRebuildVectorIndexPayload(env.Payload)
 		return err
 	case CommandKindCatalogCreateCollection:
 		_, err := DecodeCatalogCreateCollectionPayload(env.Payload)
@@ -1821,6 +1835,56 @@ func DecodeCollectionDeleteBatchByIDPayload(payload []byte) (CollectionDeleteBat
 		return CollectionDeleteBatchByIDPayload{}, err
 	}
 	return CollectionDeleteBatchByIDPayload{Collection: collection, IDs: ids}, nil
+}
+
+func EncodeCollectionRebuildVectorIndexPayload(collection, indexName string) ([]byte, error) {
+	if collection == "" || indexName == "" {
+		return nil, fmt.Errorf("%w: invalid collection vector index rebuild payload", ErrCorrupt)
+	}
+	if commandFrameIntExceedsUint32(len(collection)) || commandFrameIntExceedsUint32(len(indexName)) {
+		return nil, ErrRecordTooLarge
+	}
+	total, err := addCommandFrameEncodedSectionLen(2+4+4, len(collection))
+	if err != nil {
+		return nil, err
+	}
+	total, err = addCommandFrameEncodedSectionLen(total, len(indexName))
+	if err != nil {
+		return nil, err
+	}
+	payload := make([]byte, total)
+	binary.LittleEndian.PutUint16(payload[0:2], 1)
+	binary.LittleEndian.PutUint32(payload[2:6], uint32(len(collection)))
+	binary.LittleEndian.PutUint32(payload[6:10], uint32(len(indexName)))
+	copy(payload[10:], collection)
+	copy(payload[10+len(collection):], indexName)
+	return payload, nil
+}
+
+func DecodeCollectionRebuildVectorIndexPayload(payload []byte) (CollectionRebuildVectorIndexPayload, error) {
+	if len(payload) < 10 {
+		return CollectionRebuildVectorIndexPayload{}, ErrCorrupt
+	}
+	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+		return CollectionRebuildVectorIndexPayload{}, ErrCommandWALUnsupportedVersion
+	}
+	nameLen := binary.LittleEndian.Uint32(payload[2:6])
+	indexLen := binary.LittleEndian.Uint32(payload[6:10])
+	off := 10
+	if uint64(nameLen)+uint64(indexLen) > uint64(len(payload)-off) {
+		return CollectionRebuildVectorIndexPayload{}, ErrCorrupt
+	}
+	collection := payload[off : off+int(nameLen)]
+	off += int(nameLen)
+	indexName := payload[off : off+int(indexLen)]
+	off += int(indexLen)
+	if off != len(payload) || len(collection) == 0 || len(indexName) == 0 {
+		return CollectionRebuildVectorIndexPayload{}, ErrCorrupt
+	}
+	return CollectionRebuildVectorIndexPayload{
+		Collection: string(collection),
+		IndexName:  string(indexName),
+	}, nil
 }
 
 func EncodeCatalogCreateCollectionPayload(collection string, metadata []byte) ([]byte, error) {

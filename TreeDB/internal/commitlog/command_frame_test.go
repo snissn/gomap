@@ -212,6 +212,14 @@ func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing
 	if _, err := DecodeCollectionDeleteBatchByIDPayload(payload); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
 	}
+
+	rebuildPayload := make([]byte, 10)
+	binary.LittleEndian.PutUint16(rebuildPayload[0:2], 1)
+	binary.LittleEndian.PutUint32(rebuildPayload[2:6], ^uint32(0))
+	binary.LittleEndian.PutUint32(rebuildPayload[6:10], 1)
+	if _, err := DecodeCollectionRebuildVectorIndexPayload(rebuildPayload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCollectionRebuildVectorIndexPayload huge length error=%v, want ErrCorrupt", err)
+	}
 }
 
 func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
@@ -320,6 +328,46 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 		string(decoded.Documents[0].ID) != "u1" || string(decoded.Documents[0].Document) != `{"name":"Ada","active":true}` ||
 		string(decoded.Documents[1].ID) != "u2" || string(decoded.Documents[1].Document) != `{"name":"Grace","active":true}` {
 		t.Fatalf("decoded collection update payload=%+v", decoded)
+	}
+}
+
+func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
+	payload, err := EncodeCollectionRebuildVectorIndexPayload("users", "embedding_graph")
+	if err != nil {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload: %v", err)
+	}
+	env := CommandEnvelope{
+		LSN:           15,
+		Kind:          CommandKindCollectionRebuildVectorIndex,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionRebuildVectorIndexV1,
+		Payload:       payload,
+	}
+	frame, err := EncodeCommandFrame(env)
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+	got, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame: %v", err)
+	}
+	if got.Kind != CommandKindCollectionRebuildVectorIndex ||
+		got.Scope != CommandScopeCollection ||
+		got.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
+		t.Fatalf("decoded collection rebuild mismatch: %+v", got)
+	}
+	decoded, err := DecodeCollectionRebuildVectorIndexPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionRebuildVectorIndexPayload: %v", err)
+	}
+	if decoded.Collection != "users" || decoded.IndexName != "embedding_graph" {
+		t.Fatalf("decoded collection rebuild payload=%+v", decoded)
+	}
+	if _, err := EncodeCollectionRebuildVectorIndexPayload("", "embedding_graph"); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty collection error=%v, want ErrCorrupt", err)
+	}
+	if _, err := EncodeCollectionRebuildVectorIndexPayload("users", ""); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty index error=%v, want ErrCorrupt", err)
 	}
 }
 
