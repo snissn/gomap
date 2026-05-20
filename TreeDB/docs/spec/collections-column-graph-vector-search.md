@@ -162,8 +162,8 @@ GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench 'BenchmarkCollectionVectorIndexColumnGraphMainPath' \
   -benchmem \
-  -benchtime 500ms \
-  -count 3
+  -benchtime=500ms \
+  -count=3
 ```
 
 This is a synthetic benchmark, but it exercises real collection metadata,

@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if [[ -z "${RUN_DIR:-}" ]]; then
   RUN_DIR="$(mktemp -d /tmp/gomap_column_graph_main_path_XXXXXX)"
+elif [[ -e "${RUN_DIR}" ]] && [[ ! -d "${RUN_DIR}" ]]; then
+  printf 'RUN_DIR exists and is not a directory: %s\n' "${RUN_DIR}" >&2
+  exit 1
 elif [[ -d "${RUN_DIR}" ]] && [[ -n "$(find "${RUN_DIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   printf 'RUN_DIR exists and is not empty: %s\n' "${RUN_DIR}" >&2
   exit 1
@@ -22,16 +25,16 @@ cat > "${RUN_DIR}/README.md" <<EOF
 
 Command:
 
-\`\`\`sh
+~~~sh
 TREEDB_VECTOR_BENCH_DOCS=${TREEDB_VECTOR_BENCH_DOCS} \\
 TREEDB_VECTOR_BENCH_DIMS=${TREEDB_VECTOR_BENCH_DIMS} \\
 GOWORK=off go test ./TreeDB/collections \\
   -run '^$' \\
   -bench "${BENCH_REGEX}" \\
   -benchmem \\
-  -benchtime "${BENCHTIME}" \\
-  -count "${COUNT}"
-\`\`\`
+  -benchtime="${BENCHTIME}" \\
+  -count="${COUNT}"
+~~~
 
 This benchmark uses synthetic vectors but exercises the collection product path:
 real column-store assets, manifest/root reopen, ColumnVectorGraph load/search,
@@ -46,8 +49,8 @@ GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench "${BENCH_REGEX}" \
   -benchmem \
-  -benchtime "${BENCHTIME}" \
-  -count "${COUNT}" \
+  -benchtime="${BENCHTIME}" \
+  -count="${COUNT}" \
   | tee "${RUN_DIR}/column_graph_main_path.txt"
 
 printf 'wrote %s\n' "${RUN_DIR}"

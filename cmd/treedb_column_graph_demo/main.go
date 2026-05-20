@@ -151,7 +151,9 @@ func runDemo(dir string, jsonOut bool, allowFallback bool) error {
 	if err != nil {
 		out.Trace = trace
 		out.Error = err.Error()
-		_ = writeDemoOutput(out, jsonOut)
+		if writeErr := writeDemoOutput(out, jsonOut); writeErr != nil {
+			return fmt.Errorf("column graph search: %w; additionally failed to write demo output: %v", err, writeErr)
+		}
 		return fmt.Errorf("column graph search: %w", err)
 	}
 
