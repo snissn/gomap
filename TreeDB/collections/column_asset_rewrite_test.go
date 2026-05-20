@@ -471,7 +471,7 @@ func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
 	if err != nil {
 		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), []byte("unknown-bytes"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, "segment-unknown.tca"), []byte("unknown-bytes"), 0o600); err != nil {
 		t.Fatalf("WriteFile unknown segment: %v", err)
 	}
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
