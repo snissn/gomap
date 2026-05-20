@@ -663,11 +663,11 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 			return file, nil
 		}
 	}
+	c.misses++
 	file, err := os.Open(filepath.Join(c.segmentDir, columnAssetSegmentFileName(ref.FileID)))
 	if err != nil {
 		return nil, err
 	}
-	c.misses++
 	if c.file == nil && c.files == nil {
 		c.fileID = ref.FileID
 		c.file = file

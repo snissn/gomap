@@ -1400,7 +1400,7 @@ func TestColumnQueryPlannerM14BRoutesSerialMutationVisibilityButNotParallel(t *t
 	if parallel.Supported {
 		t.Fatalf("parallel mutation plan should fail closed until partitioned visibility execution lands: %+v", parallel)
 	}
-	if got, want := parallel.Diagnostics.UnsupportedPlanReason, "parallel physical column scan capability is disabled"; got != want {
+	if got, want := parallel.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedParallelMutationPartsReason; got != want {
 		t.Fatalf("parallel unsupported reason=%q want %q diagnostics=%+v", got, want, parallel.Diagnostics)
 	}
 }
