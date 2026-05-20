@@ -142,6 +142,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - R2 deterministic command-entry closeout, including replicated-command
     fixtures, canonical validation, digest stability, benchmarks, and deferred
     Raft apply work.
+- `TreeDB/docs/spec/column-graph-native-reconstruction-inventory.md`
+  - issue #1646 V0 inventory for rebuilding column-store-native vector graph
+    search on generic column-store reader/cache APIs without carrying forward
+    decoded full-graph behavior as the product path.
 
 ## Canonical Ownership
 
