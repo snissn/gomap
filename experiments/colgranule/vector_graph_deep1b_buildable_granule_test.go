@@ -24,6 +24,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	ranks := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS", []int{32, 48, 64, 80, columnVectorGraphDeep1BDims})
 	pqBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_BYTES", nil)
 	opqBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_BYTES", nil)
+	residualPQBytes := columnVectorGraphDeep1BEnvIntList(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_RESIDUAL_PQ_BYTES", nil)
 	pqTrainRows := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS", 8192)
 	pqTrainIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_ITERS", 4)
 	opqIters := columnVectorGraphDeep1BEnvInt(t, "COLUMN_VECTOR_DEEP1B_BUILDABLE_OPQ_ITERS", 3)
@@ -34,7 +35,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 	if granuleRows <= 0 {
 		t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=%d must be positive", granuleRows)
 	}
-	codebookEnabled := len(pqBytes) > 0 || len(opqBytes) > 0
+	codebookEnabled := len(pqBytes) > 0 || len(opqBytes) > 0 || len(residualPQBytes) > 0
 	if codebookEnabled {
 		if pqTrainRows < 256 {
 			t.Fatalf("COLUMN_VECTOR_DEEP1B_BUILDABLE_PQ_TRAIN_ROWS=%d must be at least 256 for 8-bit PQ codebooks", pqTrainRows)
@@ -88,8 +89,12 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		t.Fatalf("no granules for builder=%s baseRows=%d granuleRows=%d", builder, baseRows, granuleRows)
 	}
 	pqModels := columnVectorGraphDeep1BFitBuildablePQModels(t, trainVectors, pqBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters)
+	residualPQModels := columnVectorGraphDeep1BFitBuildableResidualPQModels(t, trainVectors, residualPQBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters)
 	opqModels := columnVectorGraphDeep1BFitBuildableOPQModels(t, trainVectors, opqBytes, pqTrainRows, baseRows, columnVectorGraphDeep1BDims, pqTrainIters, opqIters)
-	codebookModels := append(pqModels, opqModels...)
+	codebookModels := make([]columnVectorGraphDeep1BPQModel, 0, len(pqModels)+len(residualPQModels)+len(opqModels))
+	codebookModels = append(codebookModels, pqModels...)
+	codebookModels = append(codebookModels, residualPQModels...)
+	codebookModels = append(codebookModels, opqModels...)
 
 	report := columnVectorGraphDeep1BBuildableGranuleScoutReport{
 		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -104,6 +109,7 @@ func TestColumnVectorGraphDeep1BBuildableGranuleScout(t *testing.T) {
 		GranuleCount:     len(granules),
 		KMeansIters:      kmeansIters,
 		PQBytes:          append([]int(nil), pqBytes...),
+		ResidualPQBytes:  append([]int(nil), residualPQBytes...),
 		OPQBytes:         append([]int(nil), opqBytes...),
 		PQTrainRows:      len(trainVectors) / columnVectorGraphDeep1BDims,
 		PQTrainIters:     pqTrainIters,
@@ -158,6 +164,7 @@ type columnVectorGraphDeep1BBuildableGranuleScoutReport struct {
 	GranuleCount     int                                                  `json:"granule_count"`
 	KMeansIters      int                                                  `json:"kmeans_iters,omitempty"`
 	PQBytes          []int                                                `json:"pq_bytes,omitempty"`
+	ResidualPQBytes  []int                                                `json:"residual_pq_bytes,omitempty"`
 	OPQBytes         []int                                                `json:"opq_bytes,omitempty"`
 	PQTrainRows      int                                                  `json:"pq_train_rows,omitempty"`
 	PQTrainIters     int                                                  `json:"pq_train_iters,omitempty"`
@@ -656,6 +663,9 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 		if len(report.PQBytes) > 0 {
 			fmt.Fprintf(&b, "- PQ row-code byte budgets: `%v`\n", report.PQBytes)
 		}
+		if len(report.ResidualPQBytes) > 0 {
+			fmt.Fprintf(&b, "- Residual PQ row-code byte budgets: `%v`\n", report.ResidualPQBytes)
+		}
 		if len(report.OPQBytes) > 0 {
 			fmt.Fprintf(&b, "- OPQ row-code byte budgets: `%v`\n", report.OPQBytes)
 			fmt.Fprintf(&b, "- OPQ outer iterations: `%d`\n", report.OPQIterations)
@@ -664,8 +674,8 @@ func columnVectorGraphDeep1BRenderBuildableGranuleScoutMarkdown(report columnVec
 	fmt.Fprintf(&b, "- Scan iterations: `%d`\n\n", report.ScanIters)
 	fmt.Fprintf(&b, "%s\n\n", columnVectorGraphDeep1BBuildableBuilderMarkdown(report))
 	if len(report.PQTraining) > 0 {
-		fmt.Fprintf(&b, "## PQ/OPQ Training\n\n")
-		fmt.Fprintf(&b, "These are global 8-bit PQ-family codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice. They are production/buildable codebook lanes, not official top100 oracle fits. Codebook metadata is counted as f16 centroids, plus f16 rotation metadata for OPQ, amortized over all eval rows; per-row f16 inverse norms are counted in method metadata.\n\n")
+		fmt.Fprintf(&b, "## PQ/OPQ/Residual-PQ Training\n\n")
+		fmt.Fprintf(&b, "These are global 8-bit PQ-family codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice. They are production/buildable codebook lanes, not official top100 oracle fits. Codebook metadata is counted as f16 centroids, f16 residual centroids for residual PQ, and f16 rotation metadata for OPQ, amortized over all eval rows; per-row f16 inverse norms are counted in method metadata.\n\n")
 		fmt.Fprintf(&b, "| Method | Row-code B/vector | Subquantizers | Codebook size | Train rows | PQ train iters | OPQ outer iters | Train ms | Codebook metadata B | Codebook metadata B/eval-vector |\n")
 		fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 		for _, training := range report.PQTraining {
@@ -754,12 +764,12 @@ func columnVectorGraphDeep1BBuildableBuilderMarkdown(report columnVectorGraphDee
 	switch report.Builder {
 	case "row_id_contiguous":
 		if len(report.PQTraining) > 0 {
-			return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure. The PQ/OPQ rows are trained-codebook lanes with a held-out train/eval split; residual-PQ/LOPQ are still pending."
+			return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure. The PQ/OPQ/residual-PQ rows are trained-codebook lanes with a held-out train/eval split; local LOPQ remains pending."
 		}
 		return "This is a **production/buildable granule** scout using `row_id_contiguous` blocks. They are real storage units TreeDB can build without oracle labels, but they are intentionally a weak locality control. The result separates routing/locality failure from codec failure; it should not be read as evidence that row-id order is a good ANN granule builder. PQ/OPQ/residual-PQ/LOPQ are still pending because they require real train/eval splits and trained codebooks."
 	case "ivf_kmeans":
 		if len(report.PQTraining) > 0 {
-			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the eval slice. It is a buildable locality probe, unlike the official top100 oracle clouds. The PQ/OPQ rows use global codebooks trained on held-out rows before the eval slice, so they are trained-codebook production lanes; residual-PQ/LOPQ are still pending."
+			return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the eval slice. It is a buildable locality probe, unlike the official top100 oracle clouds. The PQ/OPQ/residual-PQ rows use global codebooks trained on held-out rows before the eval slice, so they are trained-codebook production lanes; local LOPQ remains pending."
 		}
 		return "This is a **production/buildable granule** scout using deterministic cosine `ivf_kmeans` clusters trained on the base prefix. It is a buildable locality probe, unlike the official top100 oracle clouds, but it is still not a PQ/OPQ/residual-PQ tournament: codebook methods still require separate train/eval discipline and metadata accounting."
 	default:

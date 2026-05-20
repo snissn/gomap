@@ -23,6 +23,7 @@ type columnVectorGraphDeep1BPQModel struct {
 	subDims               []int
 	centroidOffsets       []int
 	centroids             []float32
+	residualCenter        []float32
 	rotation              []float32
 	trainRows             int
 	trainIterations       int
@@ -93,8 +94,11 @@ func columnVectorGraphDeep1BPQTrainingReports(models []columnVectorGraphDeep1BPQ
 	for _, model := range models {
 		amortizeRows := max(1, model.amortizeRows)
 		notes := "global 8-bit PQ codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice; this is a production/buildable codebook lane, not a top100 oracle fit"
-		if model.method == "global_opq" {
+		switch model.method {
+		case "global_opq":
 			notes = "global OPQ-style learned rotation plus 8-bit PQ codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice; this is a production/buildable codebook lane, not a top100 oracle fit"
+		case "global_residual_pq":
+			notes = "global centroid-residual 8-bit PQ codebooks trained on held-out base-prefix rows and evaluated on a disjoint eval slice; this is a production/buildable residual-codebook lane, not a top100 oracle fit and not full LOPQ"
 		}
 		out = append(out, columnVectorGraphDeep1BPQTrainingReport{
 			Method:                       model.method,
@@ -111,6 +115,36 @@ func columnVectorGraphDeep1BPQTrainingReports(models []columnVectorGraphDeep1BPQ
 		})
 	}
 	return out
+}
+
+func columnVectorGraphDeep1BFitBuildableResidualPQModels(tb testing.TB, trainVectors []float32, rowCodeBytes []int, trainRows int, amortizeRows int, dims int, iterations int) []columnVectorGraphDeep1BPQModel {
+	tb.Helper()
+	if len(rowCodeBytes) == 0 {
+		return nil
+	}
+	if len(trainVectors) != trainRows*dims {
+		tb.Fatalf("residual PQ train vectors=%d want=%d", len(trainVectors), trainRows*dims)
+	}
+	seen := make(map[int]bool, len(rowCodeBytes))
+	budgets := make([]int, 0, len(rowCodeBytes))
+	for _, budget := range rowCodeBytes {
+		if budget <= 0 {
+			tb.Fatalf("residual PQ row-code budget=%d must be positive", budget)
+		}
+		if budget > dims {
+			tb.Fatalf("residual PQ row-code budget=%d exceeds dims=%d; this scout uses one 8-bit subcode per subquantizer", budget, dims)
+		}
+		if !seen[budget] {
+			seen[budget] = true
+			budgets = append(budgets, budget)
+		}
+	}
+	sort.Ints(budgets)
+	models := make([]columnVectorGraphDeep1BPQModel, 0, len(budgets))
+	for _, budget := range budgets {
+		models = append(models, columnVectorGraphDeep1BFitResidualPQModel(tb, trainVectors, trainRows, dims, budget, iterations, amortizeRows))
+	}
+	return models
 }
 
 func columnVectorGraphDeep1BFitBuildableOPQModels(tb testing.TB, trainVectors []float32, rowCodeBytes []int, trainRows int, amortizeRows int, dims int, pqIterations int, opqIterations int) []columnVectorGraphDeep1BPQModel {
@@ -176,6 +210,42 @@ func columnVectorGraphDeep1BFitPQModel(tb testing.TB, vectors []float32, rows in
 	}
 }
 
+func columnVectorGraphDeep1BFitResidualPQModel(tb testing.TB, vectors []float32, rows int, dims int, rowCodeBytes int, iterations int, amortizeRows int) columnVectorGraphDeep1BPQModel {
+	tb.Helper()
+	if rows < columnVectorGraphDeep1BPQCodebookSize {
+		tb.Fatalf("residual PQ train rows=%d must be at least codebook size=%d", rows, columnVectorGraphDeep1BPQCodebookSize)
+	}
+	start := time.Now()
+	center := columnVectorGraphDeep1BMeanVector(vectors, rows, dims)
+	for i, value := range center {
+		center[i] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(value))
+	}
+	residuals := columnVectorGraphDeep1BSubtractCenterRows(vectors, rows, dims, center)
+	subStarts, subDims, centroidOffsets, centroids := columnVectorGraphDeep1BTrainPQCentroids(tb, residuals, rows, dims, rowCodeBytes, iterations)
+	trainNanos := time.Since(start).Nanoseconds()
+	for i, value := range centroids {
+		centroids[i] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(value))
+	}
+	return columnVectorGraphDeep1BPQModel{
+		method:                "global_residual_pq",
+		family:                "residual_product_quantization",
+		rowCodeBytes:          rowCodeBytes,
+		dims:                  dims,
+		subquantizers:         rowCodeBytes,
+		codebookSize:          columnVectorGraphDeep1BPQCodebookSize,
+		subStarts:             subStarts,
+		subDims:               subDims,
+		centroidOffsets:       centroidOffsets,
+		centroids:             centroids,
+		residualCenter:        center,
+		trainRows:             rows,
+		trainIterations:       iterations,
+		trainNanos:            trainNanos,
+		codebookMetadataBytes: dims*columnVectorGraphDeep1BPQCodebookSize*2 + dims*2,
+		amortizeRows:          amortizeRows,
+	}
+}
+
 func columnVectorGraphDeep1BFitOPQModel(tb testing.TB, vectors []float32, rows int, dims int, rowCodeBytes int, pqIterations int, opqIterations int, amortizeRows int) columnVectorGraphDeep1BPQModel {
 	tb.Helper()
 	if rows < columnVectorGraphDeep1BPQCodebookSize {
@@ -231,6 +301,35 @@ func columnVectorGraphDeep1BFitOPQModel(tb testing.TB, vectors []float32, rows i
 		codebookMetadataBytes: dims*columnVectorGraphDeep1BPQCodebookSize*2 + dims*dims*2,
 		amortizeRows:          amortizeRows,
 	}
+}
+
+func columnVectorGraphDeep1BMeanVector(vectors []float32, rows int, dims int) []float32 {
+	center := make([]float32, dims)
+	if rows == 0 {
+		return center
+	}
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		for j := 0; j < dims; j++ {
+			center[j] += vectors[base+j]
+		}
+	}
+	invRows := float32(1 / float64(rows))
+	for j := 0; j < dims; j++ {
+		center[j] *= invRows
+	}
+	return center
+}
+
+func columnVectorGraphDeep1BSubtractCenterRows(vectors []float32, rows int, dims int, center []float32) []float32 {
+	residuals := make([]float32, rows*dims)
+	for row := 0; row < rows; row++ {
+		base := row * dims
+		for j := 0; j < dims; j++ {
+			residuals[base+j] = vectors[base+j] - center[j]
+		}
+	}
+	return residuals
 }
 
 func columnVectorGraphDeep1BTrainPQCentroids(tb testing.TB, vectors []float32, rows int, dims int, rowCodeBytes int, iterations int) ([]int, []int, []int, []float32) {
@@ -433,12 +532,18 @@ func columnVectorGraphDeep1BPQStorageNotes(model columnVectorGraphDeep1BPQModel)
 	if model.method == "global_opq" {
 		return "global_opq_rotation_and_pq_codebooks_amortized_over_eval_rows_plus_f16_inv_norm_per_row"
 	}
+	if model.method == "global_residual_pq" {
+		return "global_f16_centroid_and_residual_pq_codebooks_amortized_over_eval_rows_plus_f16_inv_norm_per_row"
+	}
 	return "global_pq_codebooks_amortized_over_eval_rows_plus_f16_inv_norm_per_row"
 }
 
 func columnVectorGraphDeep1BPQMethodNotes(builder string, model columnVectorGraphDeep1BPQModel) string {
 	if model.method == "global_opq" {
 		return fmt.Sprintf("production/buildable scout over %s granules; global OPQ-style rotation plus PQ codebooks trained on %d held-out rows for %d OPQ iterations and %d PQ k-means iterations, then evaluated on disjoint eval rows; codec recall is conditional on centroid-routed candidate union", builder, model.trainRows, model.opqIterations, model.trainIterations)
+	}
+	if model.method == "global_residual_pq" {
+		return fmt.Sprintf("production/buildable scout over %s granules; global centroid-residual PQ codebooks trained on %d held-out rows for %d iterations and evaluated on disjoint eval rows; this is a residual-codebook baseline, not local LOPQ; codec recall is conditional on centroid-routed candidate union", builder, model.trainRows, model.trainIterations)
 	}
 	return fmt.Sprintf("production/buildable scout over %s granules; global PQ codebooks trained on %d held-out rows for %d iterations and evaluated on disjoint eval rows; codec recall is conditional on centroid-routed candidate union", builder, model.trainRows, model.trainIterations)
 }
@@ -460,15 +565,24 @@ func columnVectorGraphDeep1BEncodePQRows(vectors []float32, invNorms []float32, 
 	codes := make([]byte, rows*model.subquantizers)
 	invNormsStored := make([]float32, rows)
 	recon := make([]float32, dims)
-	transformed := make([]float32, dims)
+	working := make([]float32, dims)
+	rotated := make([]float32, dims)
+	approxOriginal := make([]float32, dims)
 	var relSum float64
 	var maxRel float64
 	for outRow, rowID := range rowIDs {
 		srcBase := rowID * dims
-		src := vectors[srcBase : srcBase+dims]
+		original := vectors[srcBase : srcBase+dims]
+		src := original
+		if len(model.residualCenter) > 0 {
+			for j := 0; j < dims; j++ {
+				working[j] = original[j] - model.residualCenter[j]
+			}
+			src = working
+		}
 		if len(model.rotation) > 0 {
-			columnVectorGraphDeep1BRotateVectorInto(src, model.rotation, dims, transformed)
-			src = transformed
+			columnVectorGraphDeep1BRotateVectorInto(src, model.rotation, dims, rotated)
+			src = rotated
 		}
 		for sub := 0; sub < model.subquantizers; sub++ {
 			start := model.subStarts[sub]
@@ -479,10 +593,18 @@ func columnVectorGraphDeep1BEncodePQRows(vectors []float32, invNorms []float32, 
 			copy(recon[start:start+subDim], centroid)
 		}
 		invNormsStored[outRow] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(invNorms[rowID]))
+		reconForError := recon
+		if len(model.residualCenter) > 0 && len(model.rotation) == 0 {
+			for j := 0; j < dims; j++ {
+				approxOriginal[j] = model.residualCenter[j] + recon[j]
+			}
+			reconForError = approxOriginal
+			src = original
+		}
 		var errSquared float64
 		var normSquared float64
 		for j := 0; j < dims; j++ {
-			diff := float64(src[j] - recon[j])
+			diff := float64(src[j] - reconForError[j])
 			errSquared += diff * diff
 			value := float64(src[j])
 			normSquared += value * value
@@ -534,13 +656,20 @@ func columnVectorGraphDeep1BPQCentroid(model columnVectorGraphDeep1BPQModel, sub
 }
 
 type columnVectorGraphDeep1BPQScorer struct {
-	table []float32
+	table   []float32
+	baseDot float32
 }
 
 func columnVectorGraphDeep1BPreparePQScorer(model columnVectorGraphDeep1BPQModel, query []float32) columnVectorGraphDeep1BPQScorer {
 	table := make([]float32, model.subquantizers*model.codebookSize)
 	queryForScore := query
 	var rotatedQuery []float32
+	var baseDot float32
+	if len(model.residualCenter) > 0 {
+		for j := 0; j < model.dims; j++ {
+			baseDot += query[j] * model.residualCenter[j]
+		}
+	}
 	if len(model.rotation) > 0 {
 		rotatedQuery = make([]float32, model.dims)
 		columnVectorGraphDeep1BRotateVectorInto(query, model.rotation, model.dims, rotatedQuery)
@@ -559,7 +688,7 @@ func columnVectorGraphDeep1BPreparePQScorer(model columnVectorGraphDeep1BPQModel
 			table[sub*model.codebookSize+code] = dot
 		}
 	}
-	return columnVectorGraphDeep1BPQScorer{table: table}
+	return columnVectorGraphDeep1BPQScorer{table: table, baseDot: baseDot}
 }
 
 func (scorer columnVectorGraphDeep1BPQScorer) scoreInto(encoding columnVectorGraphDeep1BPQEncoding, queryInvNorm float32, rows int, scores []float32) {
@@ -572,7 +701,7 @@ func (scorer columnVectorGraphDeep1BPQScorer) scoreInto(encoding columnVectorGra
 	subquantizers := len(encoding.codes) / rows
 	codebookSize := columnVectorGraphDeep1BPQCodebookSize
 	for row := 0; row < rows; row++ {
-		var dot float32
+		dot := scorer.baseDot
 		codeBase := row * subquantizers
 		for sub := 0; sub < subquantizers; sub++ {
 			dot += scorer.table[sub*codebookSize+int(encoding.codes[codeBase+sub])]
