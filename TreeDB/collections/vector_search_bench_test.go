@@ -534,12 +534,15 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathLoad(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
 	indexName := "embedding_column_graph_load"
-	d, col, graph, loadStatus := openColumnGraphVectorBenchmarkMainPath(b, docs, dims, indexName)
-	defer func() { _ = d.Close() }()
+	fixture := setupColumnGraphVectorBenchmarkMainPath(b, docs, dims, indexName)
+	d, _, _, loadStatus := openLoadedColumnGraphVectorBenchmarkMainPath(b, fixture)
+	if err := d.Close(); err != nil {
+		b.Fatalf("close warm load db: %v", err)
+	}
 
 	loader := testColumnVectorGraphIndexLoader{
 		result: ColumnVectorGraphIndexLoadResult{
-			Graph: graph,
+			Graph: fixture.graph,
 			Status: VectorIndexLoadStatus{
 				Strategy:                      VectorIndexStrategyColumnGraph,
 				PhysicalColumnAssetsSupported: true,
@@ -558,14 +561,28 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathLoad(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		d, err := backenddb.Open(backenddb.Options{Dir: fixture.dir})
+		if err != nil {
+			b.Fatalf("reopen db: %v", err)
+		}
+		col, err := NewCollectionManager(d).OpenCollection("docs")
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("open collection: %v", err)
+		}
 		loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(opts, loader)
 		if err != nil {
+			_ = d.Close()
 			b.Fatalf("load column graph vector index: %v", err)
 		}
 		if loaded == nil || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported {
+			_ = d.Close()
 			b.Fatalf("unexpected column_graph load status loaded=%v status=%+v", loaded != nil, status)
 		}
 		columnVectorGraphBenchSink += int64(loaded.Rows()) + int64(status.RootID)
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
 	}
 	b.ReportMetric(float64(docs), "docs/index")
 	b.ReportMetric(float64(dims), "dims")
@@ -1395,7 +1412,14 @@ func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name st
 	return d, loaded, loadStatus
 }
 
-func openColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *Collection, *ColumnVectorGraph, VectorIndexLoadStatus) {
+type columnGraphVectorBenchmarkMainPathFixture struct {
+	dir       string
+	def       VectorIndexDefinition
+	graph     *ColumnVectorGraph
+	bytesDisk int64
+}
+
+func setupColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name string) columnGraphVectorBenchmarkMainPathFixture {
 	tb.Helper()
 	dir := tb.TempDir()
 	def := VectorIndexDefinition{
@@ -1451,36 +1475,46 @@ func openColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name 
 	if err != nil {
 		tb.Fatalf("NewColumnVectorGraphFromColumns: %v", err)
 	}
+	return columnGraphVectorBenchmarkMainPathFixture{dir: dir, def: def, graph: graph, bytesDisk: columnGraphVectorBenchmarkBytes(columns)}
+}
 
-	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+func openColumnGraphVectorBenchmarkMainPath(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *Collection, *ColumnVectorGraph, VectorIndexLoadStatus) {
+	tb.Helper()
+	fixture := setupColumnGraphVectorBenchmarkMainPath(tb, docs, dims, name)
+	return openLoadedColumnGraphVectorBenchmarkMainPath(tb, fixture)
+}
+
+func openLoadedColumnGraphVectorBenchmarkMainPath(tb testing.TB, fixture columnGraphVectorBenchmarkMainPathFixture) (*backenddb.DB, *Collection, *ColumnVectorGraph, VectorIndexLoadStatus) {
+	tb.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: fixture.dir})
 	if err != nil {
 		tb.Fatalf("reopen db: %v", err)
 	}
-	col, err = NewCollectionManager(d).OpenCollection("docs")
+	col, err := NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		_ = d.Close()
 		tb.Fatalf("open reopened collection: %v", err)
 	}
 	loader := testColumnVectorGraphIndexLoader{
 		result: ColumnVectorGraphIndexLoadResult{
-			Graph: graph,
+			Graph: fixture.graph,
 			Status: VectorIndexLoadStatus{
 				Strategy:                      VectorIndexStrategyColumnGraph,
 				PhysicalColumnAssetsSupported: true,
-				BytesDisk:                     columnGraphVectorBenchmarkBytes(columns),
+				BytesDisk:                     fixture.bytesDisk,
 			},
 		},
 	}
-	loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def), loader)
+	loaded, status, err := col.loadColumnGraphVectorIndexSnapshot(vectorIndexOptionsFromDefinition(fixture.def), loader)
 	if err != nil {
 		_ = d.Close()
 		tb.Fatalf("load column_graph vector index: %v", err)
 	}
-	if loaded == nil || loaded != graph || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported || status.RootID == 0 {
+	if loaded == nil || loaded != fixture.graph || !status.ColumnGraphLoaded || !status.PhysicalColumnAssetsSupported || status.RootID == 0 {
 		_ = d.Close()
-		tb.Fatalf("unexpected column_graph benchmark load status loaded=%v same=%v status=%+v", loaded != nil, loaded == graph, status)
+		tb.Fatalf("unexpected column_graph benchmark load status loaded=%v same=%v status=%+v", loaded != nil, loaded == fixture.graph, status)
 	}
-	return d, col, graph, status
+	return d, col, fixture.graph, status
 }
 
 func columnGraphVectorBenchmarkColumnStore(active *ColumnManifestIdentity, dims int) *ColumnStoreConfig {

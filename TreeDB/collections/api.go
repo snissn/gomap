@@ -3258,6 +3258,12 @@ func (c *Collection) DropAllIndexes() (*CollectionMeta, error) {
 }
 
 func (c *Collection) DropIndexesAndVectorIndexes(indexNames []string, vectorIndexNames []string) (*CollectionMeta, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
 	if len(indexNames) == 0 && len(vectorIndexNames) == 0 {
 		return nil, ErrIndexNotFound
 	}
