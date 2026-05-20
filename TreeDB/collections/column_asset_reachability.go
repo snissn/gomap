@@ -442,6 +442,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			}
 		}
 		ranges := rangesByFile[fileID]
+		plan.Segments.Total++
 		plan.Segments.Missing++
 		plan.Complete = false
 		if input.detailed {
@@ -646,15 +647,23 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		if info.IsDir() {
 			continue
 		}
+		fileID, ok := columnAssetReachabilitySegmentFileID(entry.Name())
 		if info.Mode()&os.ModeSymlink != 0 {
-			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			if ok {
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, path: path})
+			} else {
+				segments = append(segments, columnAssetReachabilitySegment{path: path})
+			}
 			continue
 		}
 		if !info.Mode().IsRegular() {
-			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
+			if ok {
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, path: path})
+			} else {
+				segments = append(segments, columnAssetReachabilitySegment{path: path})
+			}
 			continue
 		}
-		fileID, ok := columnAssetReachabilitySegmentFileID(entry.Name())
 		if !ok {
 			segments = append(segments, columnAssetReachabilitySegment{path: path, bytes: info.Size()})
 			continue
