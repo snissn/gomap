@@ -397,6 +397,28 @@ func TestColumnPhysicalScanHonorsCancellationBeforeSchedulingRefsM14B(t *testing
 	}
 }
 
+func TestColumnPhysicalScanRejectsRemainderWithoutModuloM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	_, err = reopened.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns:    []string{"kind"},
+		Visitor:             func(columnPhysicalScanRowView) error { return nil },
+		RequireInsertOnly:   true,
+		RefOrdinalRemainder: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires non-zero modulo") {
+		t.Fatalf("scan err=%v want remainder without modulo rejection", err)
+	}
+}
+
 func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t *testing.T) {
 	left := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 1}
 	right := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 3}
