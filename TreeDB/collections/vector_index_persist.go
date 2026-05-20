@@ -190,8 +190,10 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	status.RootName = rootName
 	baseRoot := catalog.rootID(rootName)
-	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != baseEpoch {
-		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
+	effectiveRoot := catalog.effectiveRootID(rootName)
+	rootOverlays := append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
+	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); effectiveRoot != baseEpoch {
+		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, effectiveRoot)
 	}
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	baseSystemRoot := snapshotSystemRoot(pin)
@@ -223,6 +225,9 @@ func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, err
 		Iter:          iter,
 		StoragePolicy: policy,
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootOverlays) != 0 {
+			return c.buildRootOverlayCompactionSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, map[string][]uint64{rootName: rootOverlays}, rootIDs)
+		}
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
 	})
 	_ = iter.Close()
@@ -318,6 +323,8 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	status.RootName = rootName
 	baseRoot := catalog.rootID(rootName)
+	effectiveRoot := catalog.effectiveRootID(rootName)
+	rootOverlays := append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -326,16 +333,16 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 		return status, err
 	}
 
-	table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err := idx.persistNativeDeltaTable(baseRoot == 0)
+	table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err := idx.persistNativeDeltaTable(effectiveRoot == 0)
 	if err != nil {
 		return status, err
 	}
 	if !hasWork {
 		return status, nil
 	}
-	if baseRoot != persistedEpoch {
+	if effectiveRoot != persistedEpoch {
 		resetCollectionRunTable(table)
-		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, persistedEpoch, baseRoot)
+		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, persistedEpoch, effectiveRoot)
 	}
 	table.Freeze()
 	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
@@ -348,10 +355,13 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	iter := publishTable.NewIterator(nil, nil)
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:      baseRoot,
+		BaseRoot:      effectiveRoot,
 		Iter:          iter,
 		StoragePolicy: policy,
 	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootOverlays) != 0 {
+			return c.buildRootOverlayCompactionSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, map[string][]uint64{rootName: rootOverlays}, rootIDs)
+		}
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
 	})
 	_ = iter.Close()
@@ -379,6 +389,7 @@ type preparedNativeVectorIndexRootPublish struct {
 	index         *VectorIndex
 	rootName      string
 	baseRoot      uint64
+	rootOverlays  []uint64
 	publishBase   uint64
 	storagePolicy backenddb.OrderedRootStoragePolicy
 	table         memtable.Table
@@ -475,6 +486,8 @@ func (c *Collection) persistDirtyNativeVectorIndexesWithCommandWALIntent(intent 
 	}()
 	rootNames := make([]string, 0, len(indexes))
 	baseRootIDs := make(map[string]uint64, len(indexes))
+	rootOverlays := make(map[string][]uint64, len(indexes))
+	hasOverlayRoots := false
 	ordered := make([]backenddb.OrderedRootDeltaPublishInput, 0, len(indexes))
 	for _, index := range indexes {
 		if index == nil || !index.needsNativeAutoPersist() {
@@ -489,6 +502,10 @@ func (c *Collection) persistDirtyNativeVectorIndexesWithCommandWALIntent(intent 
 		}
 		rootNames = append(rootNames, item.rootName)
 		baseRootIDs[item.rootName] = item.baseRoot
+		rootOverlays[item.rootName] = append([]uint64(nil), item.rootOverlays...)
+		if len(item.rootOverlays) != 0 {
+			hasOverlayRoots = true
+		}
 		ordered = append(ordered, backenddb.OrderedRootDeltaPublishInput{
 			BaseRoot:      item.publishBase,
 			Iter:          item.iter,
@@ -501,6 +518,9 @@ func (c *Collection) persistDirtyNativeVectorIndexesWithCommandWALIntent(intent 
 	}
 
 	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, intent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if hasOverlayRoots {
+			return c.buildRootOverlayCompactionSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+		}
 		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 	})
 	if err != nil {
@@ -546,6 +566,8 @@ func (c *Collection) prepareNativeVectorIndexCommandWALRootPublish(catalog *coll
 	}
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	baseRoot := catalog.rootID(rootName)
+	effectiveRoot := catalog.effectiveRootID(rootName)
+	rootOverlays := append([]uint64(nil), catalog.overlayRootIDs(rootName)...)
 	policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
 	if err != nil {
 		return item, false, err
@@ -554,10 +576,10 @@ func (c *Collection) prepareNativeVectorIndexCommandWALRootPublish(catalog *coll
 	var table memtable.Table
 	var bytesDisk int64
 	var snapshotSeq uint64
-	publishBase := baseRoot
+	publishBase := effectiveRoot
 	if !idx.isNativePersistent() || !idx.hasNativePersistedSnapshot() {
-		if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != baseEpoch {
-			return item, false, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
+		if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); effectiveRoot != baseEpoch {
+			return item, false, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, effectiveRoot)
 		}
 		snapshot, seq := idx.persistSnapshot()
 		table, bytesDisk, err = buildVectorIndexNativeSnapshotTable(snapshot)
@@ -569,16 +591,16 @@ func (c *Collection) prepareNativeVectorIndexCommandWALRootPublish(catalog *coll
 	} else {
 		var persistedEpoch uint64
 		var hasWork bool
-		table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err = idx.persistNativeDeltaTable(baseRoot == 0)
+		table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err = idx.persistNativeDeltaTable(effectiveRoot == 0)
 		if err != nil {
 			return item, false, err
 		}
 		if !hasWork {
 			return item, false, nil
 		}
-		if baseRoot != persistedEpoch {
+		if effectiveRoot != persistedEpoch {
 			resetCollectionRunTable(table)
-			return item, false, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, persistedEpoch, baseRoot)
+			return item, false, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, persistedEpoch, effectiveRoot)
 		}
 	}
 	table.Freeze()
@@ -591,6 +613,7 @@ func (c *Collection) prepareNativeVectorIndexCommandWALRootPublish(catalog *coll
 		index:         idx,
 		rootName:      rootName,
 		baseRoot:      baseRoot,
+		rootOverlays:  rootOverlays,
 		publishBase:   publishBase,
 		storagePolicy: policy,
 		table:         table,

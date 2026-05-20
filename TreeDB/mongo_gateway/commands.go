@@ -2927,6 +2927,10 @@ func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, nam
 	if err != nil {
 		return createIndexDefinition{}, err
 	}
+	strategy, err := optionalVectorStrategyField(options, "strategy")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
 	if m == 0 {
 		m = mongoDefaultVectorIndexM
 	}
@@ -2953,6 +2957,7 @@ func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, nam
 			EfConstruction: efConstruction,
 			EfSearch:       efSearch,
 			Encoding:       encoding,
+			Strategy:       strategy,
 		},
 	}, nil
 }
@@ -3083,6 +3088,28 @@ func optionalVectorEncodingField(doc wire.Document, key string) (collections.Vec
 	}
 }
 
+func optionalVectorStrategyField(doc wire.Document, key string) (collections.VectorIndexStrategy, error) {
+	value, present, err := optionalStringFieldWithPresence(doc, key)
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return "", nil
+	}
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	if normalized == "" {
+		return "", fmt.Errorf("Mongo command field %q cannot be empty", key)
+	}
+	switch normalized {
+	case "native", string(collections.VectorIndexStrategyNativeRuntime), "ann_graph":
+		return "", nil
+	case string(collections.VectorIndexStrategyColumnGraph):
+		return collections.VectorIndexStrategyColumnGraph, nil
+	default:
+		return "", fmt.Errorf("Mongo command field %q has unsupported vector strategy %q; supported values are native_runtime, column_graph", key, value)
+	}
+}
+
 func mongoCollectionDocument(name string, nameOnly bool) bson.D {
 	doc := bson.D{
 		{Key: "name", Value: name},
@@ -3121,19 +3148,23 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 		out = append(out, doc)
 	}
 	for _, idx := range meta.VectorIndexes {
+		vectorOptions := bson.D{
+			{Key: "dimensions", Value: int32(idx.Dimensions)},
+			{Key: "metric", Value: idx.Metric.String()},
+			{Key: "m", Value: int32(idx.M)},
+			{Key: "efConstruction", Value: int32(idx.EfConstruction)},
+			{Key: "efSearch", Value: int32(idx.EfSearch)},
+			{Key: "encoding", Value: idx.Encoding.String()},
+		}
+		if idx.Strategy == collections.VectorIndexStrategyColumnGraph {
+			vectorOptions = append(vectorOptions, bson.E{Key: "strategy", Value: idx.Strategy.String()})
+		}
 		doc := bson.D{
 			{Key: "v", Value: int32(2)},
 			{Key: "key", Value: bson.D{{Key: idx.Field, Value: treeDBIndexTypeVector}}},
 			{Key: "name", Value: idx.Name},
 			{Key: treeDBIndexTypeField, Value: treeDBIndexTypeVector},
-			{Key: treeDBVectorOptionsField, Value: bson.D{
-				{Key: "dimensions", Value: int32(idx.Dimensions)},
-				{Key: "metric", Value: idx.Metric.String()},
-				{Key: "m", Value: int32(idx.M)},
-				{Key: "efConstruction", Value: int32(idx.EfConstruction)},
-				{Key: "efSearch", Value: int32(idx.EfSearch)},
-				{Key: "encoding", Value: idx.Encoding.String()},
-			}},
+			{Key: treeDBVectorOptionsField, Value: vectorOptions},
 		}
 		out = append(out, doc)
 	}

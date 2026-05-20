@@ -2171,20 +2171,7 @@ func TestCollectionVectorIndexNativeRootLoadStatusUsesOverlayRootID(t *testing.T
 	}
 
 	rootName := collectionVectorIndexRootName("docs", def.Name)
-	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
-		snap := d.AcquireSnapshot()
-		if snap == nil {
-			return nil, backenddb.ErrClosed
-		}
-		defer func() { _ = snap.Close() }()
-		return buildSystemTargetIterator(snap, map[string][]byte{
-			systemCollectionRootKey(rootName):        encodeRootID(0),
-			systemCollectionRootOverlayKey(rootName): encodeRootIDList([]uint64{seedStatus.RootID}),
-		})
-	})
-	if err != nil {
-		t.Fatalf("publish vector root as overlay: %v", err)
-	}
+	publishVectorIndexRootAsOverlayForTest(t, d, rootName, seedStatus.RootID)
 
 	freshCol, err := mgr.OpenCollection("docs")
 	if err != nil {
@@ -2206,6 +2193,137 @@ func TestCollectionVectorIndexNativeRootLoadStatusUsesOverlayRootID(t *testing.T
 	}
 	if status.RootID != seedStatus.RootID || status.RebuildNeeded {
 		t.Fatalf("overlay status=%+v seed=%+v", status, seedStatus)
+	}
+
+	resaveStatus, err := loaded.SaveNativeSnapshot()
+	if err != nil {
+		t.Fatalf("resave overlay vector index: %v", err)
+	}
+	if !resaveStatus.Loaded || resaveStatus.RootID == 0 || resaveStatus.RootID == seedStatus.RootID {
+		t.Fatalf("resave status=%+v seed=%+v", resaveStatus, seedStatus)
+	}
+	reloadedCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection after overlay resave: %v", err)
+	}
+	_, reloadedStatus, err := reloadedCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("reload after overlay resave: %v", err)
+	}
+	if reloadedStatus.RootID != resaveStatus.RootID || reloadedStatus.RebuildNeeded {
+		t.Fatalf("reloaded status=%+v resave=%+v", reloadedStatus, resaveStatus)
+	}
+}
+
+func TestCollectionVectorIndexNativeDeltaUsesOverlayRootID(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	seedCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open seed collection: %v", err)
+	}
+	if _, err := seedCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0.9,0.1]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert seed vectors: %v", err)
+	}
+	seedIndex, err := seedCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build seed vector index: %v", err)
+	}
+	seedStatus, err := seedIndex.SaveNativeSnapshot()
+	if err != nil {
+		t.Fatalf("save seed native snapshot: %v", err)
+	}
+	rootName := collectionVectorIndexRootName("docs", def.Name)
+	publishVectorIndexRootAsOverlayForTest(t, d, rootName, seedStatus.RootID)
+
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	loaded, loadStatus, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load overlay vector index: %v", err)
+	}
+	if loaded == nil || loadStatus.RootID != seedStatus.RootID {
+		t.Fatalf("overlay load loaded=%v status=%+v seed=%+v", loaded != nil, loadStatus, seedStatus)
+	}
+
+	loaded.TombstoneDocumentID([]byte("b"))
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot returned nil")
+	}
+	catalog, err := loadCollectionCatalog(snap, "docs")
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	item, ok, err := freshCol.prepareNativeVectorIndexCommandWALRootPublish(catalog, loaded)
+	if err != nil {
+		t.Fatalf("prepare command WAL vector root publish: %v", err)
+	}
+	defer item.close()
+	if !ok || item.baseRoot != 0 || item.publishBase != seedStatus.RootID || len(item.rootOverlays) != 1 || item.rootOverlays[0] != seedStatus.RootID {
+		t.Fatalf("prepared publish ok=%v item=%+v seed=%+v", ok, item, seedStatus)
+	}
+
+	deltaStatus, err := loaded.SaveNativeDeltaSnapshot()
+	if err != nil {
+		t.Fatalf("save overlay delta: %v", err)
+	}
+	if !deltaStatus.Loaded || deltaStatus.RootID == 0 || deltaStatus.RootID == seedStatus.RootID {
+		t.Fatalf("delta status=%+v seed=%+v", deltaStatus, seedStatus)
+	}
+	reloaded, status, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("reload after overlay delta publish: %v", err)
+	}
+	if reloaded == nil || status.RootID == 0 || status.RootID == seedStatus.RootID || status.RebuildNeeded {
+		t.Fatalf("delta status=%+v loaded=%v seed=%+v", status, reloaded != nil, seedStatus)
+	}
+	results, _, err := reloaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search delta graph: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c")
+}
+
+func publishVectorIndexRootAsOverlayForTest(t *testing.T, d *backenddb.DB, rootName string, rootID uint64) {
+	t.Helper()
+	_, _, err := d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = snap.Close() }()
+		return buildSystemTargetIterator(snap, map[string][]byte{
+			systemCollectionRootKey(rootName):        encodeRootID(0),
+			systemCollectionRootOverlayKey(rootName): encodeRootIDList([]uint64{rootID}),
+		})
+	})
+	if err != nil {
+		t.Fatalf("publish vector root as overlay: %v", err)
 	}
 }
 
