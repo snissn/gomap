@@ -330,6 +330,7 @@ func columnVectorGraphDeep1BAnalyzeGroundtruthQuery(tb testing.TB, baseFile *os.
 		report.Methods = append(report.Methods, method)
 	}
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthPCABasisVariants(tb, vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, validRanks, scanIters)...)
+	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthPCAResidualSketchMethods(tb, vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, validRanks, scanIters, int64(queryIndex))...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthScalarMethods(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters)...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthQueryAxisOracle(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters)...)
 	report.Methods = append(report.Methods, columnVectorGraphDeep1BEvaluateGroundtruthRandomRotationMethods(vectors, invNorms, query, queryInvNorm, exactScores, report.ScoreMargins, rows, dims, scanIters, int64(queryIndex))...)
@@ -917,6 +918,174 @@ func (scorer columnVectorGraphDeep1BLocalPCAScorer) scoreInto(encoding columnVec
 			dot += scorer.queryProjection[k] * float32(int8(encoding.codes[k*rows+row])) * encoding.scales[k]
 		}
 		scores[row] = dot * queryInvNorm * encoding.invNorms[row]
+	}
+}
+
+type columnVectorGraphDeep1BPCAResidualSketch struct {
+	dims           int
+	sketchDims     int
+	codes          []byte
+	scales         []float32
+	queryProject   []float32
+	seed           int64
+	meanRelativeL2 float64
+	maxRelativeL2  float64
+}
+
+func columnVectorGraphDeep1BEvaluateGroundtruthPCAResidualSketchMethods(tb testing.TB, vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, rows int, dims int, ranks []int, scanIters int, seed int64) []columnVectorGraphDeep1BGroundtruthMethodReport {
+	tb.Helper()
+	sketchDimsList := []int{4, 8, 16}
+	validRanks := columnVectorGraphDeep1BFilterRanksForRows(tb, ranks, rows, dims)
+	start := time.Now()
+	model := columnVectorGraphDeep1BFitLocalPCAModel(tb, vectors, rows, dims, validRanks)
+	modelBuildNanos := time.Since(start).Nanoseconds()
+	out := make([]columnVectorGraphDeep1BGroundtruthMethodReport, 0, len(validRanks)*len(sketchDimsList))
+	for _, rank := range validRanks {
+		encodeStart := time.Now()
+		encoding := columnVectorGraphDeep1BEncodeLocalPCARank(vectors, invNorms, model, rank, query, queryInvNorm, rows, dims)
+		encodeNanos := time.Since(encodeStart).Nanoseconds()
+		pcaScorer := columnVectorGraphDeep1BPrepareLocalPCAScorer(model, encoding, query, rows, dims)
+		for _, sketchDims := range sketchDimsList {
+			if sketchDims > dims {
+				continue
+			}
+			sketchStart := time.Now()
+			sketch := columnVectorGraphDeep1BBuildPCAResidualRandomProjectionSketch(vectors, model, encoding, query, rows, dims, sketchDims, 0x7e1e_db+seed+int64(rank*257+sketchDims))
+			approx := make([]float32, rows)
+			columnVectorGraphDeep1BScorePCAResidualSketchInto(encoding, pcaScorer, sketch, queryInvNorm, rows, approx)
+			buildNanos := modelBuildNanos + encodeNanos + time.Since(sketchStart).Nanoseconds()
+			metadataBytes := float64(model.centroidMetaBytes+rank*dims*2+rank*2+rows*2+sketchDims*2+8) / float64(rows)
+			method := columnVectorGraphDeep1BNewGroundtruthMethodReport(
+				"pca_residual_random_projection",
+				fmt.Sprintf("local_pca_i8_rank%d_residual_rp_i8_%d", rank, sketchDims),
+				float64(rank+sketchDims),
+				metadataBytes,
+				buildNanos,
+				"official top100 local-neighborhood upper-bound probe; adds a tiny deterministic random-projection int8 sketch of the PCA reconstruction residual to test whether a small residual code repairs boundary flips; seed/scales are charged, metadata is not production-amortized",
+			)
+			method.ScanNanosPerVector = columnVectorGraphDeep1BMeasureGroundtruthScan(rows, scanIters, func(dst []float32) {
+				columnVectorGraphDeep1BScorePCAResidualSketchInto(encoding, pcaScorer, sketch, queryInvNorm, rows, dst)
+			})
+			method.MeanRelativeL2 = sketch.meanRelativeL2
+			method.MaxRelativeL2 = sketch.maxRelativeL2
+			columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approx, margins)
+			out = append(out, method)
+		}
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BBuildPCAResidualRandomProjectionSketch(vectors []float32, model columnVectorGraphDeep1BLocalPCAModel, encoding columnVectorGraphDeep1BLocalPCAEncoding, query []float32, rows int, dims int, sketchDims int, seed int64) columnVectorGraphDeep1BPCAResidualSketch {
+	if sketchDims <= 0 || sketchDims > dims {
+		panic(fmt.Sprintf("residual sketch dims=%d outside dims=%d", sketchDims, dims))
+	}
+	rotation := columnVectorGraphDeep1BRandomOrthogonalMatrix(dims, seed)
+	residualCoefficients := make([]float32, sketchDims*rows)
+	scales := make([]float32, sketchDims)
+	recon := make([]float32, dims)
+	residual := make([]float32, dims)
+	var relativeResidualSum float64
+	var maxRelativeResidual float64
+	for row := 0; row < rows; row++ {
+		columnVectorGraphDeep1BReconstructLocalPCARow(recon, model, encoding, row, dims)
+		srcBase := row * dims
+		var residualNormSquared float64
+		var normSquared float64
+		for j := 0; j < dims; j++ {
+			value := vectors[srcBase+j] - recon[j]
+			residual[j] = value
+			residualNormSquared += float64(value) * float64(value)
+			original := float64(vectors[srcBase+j])
+			normSquared += original * original
+		}
+		var relativeResidual float64
+		if normSquared > 0 {
+			relativeResidual = math.Sqrt(residualNormSquared / normSquared)
+		}
+		relativeResidualSum += relativeResidual
+		if relativeResidual > maxRelativeResidual {
+			maxRelativeResidual = relativeResidual
+		}
+		for k := 0; k < sketchDims; k++ {
+			basisBase := k * dims
+			var coeff float32
+			for j := 0; j < dims; j++ {
+				coeff += residual[j] * rotation[basisBase+j]
+			}
+			residualCoefficients[k*rows+row] = coeff
+			absCoeff := float32(math.Abs(float64(coeff)))
+			if absCoeff > scales[k] {
+				scales[k] = absCoeff
+			}
+		}
+	}
+	for k := 0; k < sketchDims; k++ {
+		if scales[k] == 0 {
+			scales[k] = 1
+		} else {
+			scales[k] /= 127
+		}
+		scales[k] = columnVectorGraphDeep1BFloat16BitsToFloat32(columnVectorGraphDeep1BFloat32ToFloat16Bits(scales[k]))
+		if scales[k] == 0 {
+			scales[k] = 1
+		}
+	}
+	codes := make([]byte, sketchDims*rows)
+	for k := 0; k < sketchDims; k++ {
+		scale := scales[k]
+		for row := 0; row < rows; row++ {
+			code := int(math.Round(float64(residualCoefficients[k*rows+row] / scale)))
+			if code < -127 {
+				code = -127
+			} else if code > 127 {
+				code = 127
+			}
+			codes[k*rows+row] = byte(int8(code))
+		}
+	}
+	queryProject := make([]float32, sketchDims)
+	for k := 0; k < sketchDims; k++ {
+		basisBase := k * dims
+		var projection float32
+		for j := 0; j < dims; j++ {
+			projection += query[j] * rotation[basisBase+j]
+		}
+		queryProject[k] = projection
+	}
+	return columnVectorGraphDeep1BPCAResidualSketch{
+		dims:           dims,
+		sketchDims:     sketchDims,
+		codes:          codes,
+		scales:         scales,
+		queryProject:   queryProject,
+		seed:           seed,
+		meanRelativeL2: relativeResidualSum / float64(rows),
+		maxRelativeL2:  maxRelativeResidual,
+	}
+}
+
+func columnVectorGraphDeep1BReconstructLocalPCARow(dst []float32, model columnVectorGraphDeep1BLocalPCAModel, encoding columnVectorGraphDeep1BLocalPCAEncoding, row int, dims int) {
+	if len(dst) < dims {
+		panic(fmt.Sprintf("local PCA reconstruct dst len=%d want %d", len(dst), dims))
+	}
+	copy(dst[:dims], model.centroid)
+	for k := 0; k < encoding.rank; k++ {
+		dequantized := float32(int8(encoding.codes[k*len(encoding.invNorms)+row])) * encoding.scales[k]
+		basisBase := k * dims
+		for j := 0; j < dims; j++ {
+			dst[j] += dequantized * model.basis[basisBase+j]
+		}
+	}
+}
+
+func columnVectorGraphDeep1BScorePCAResidualSketchInto(encoding columnVectorGraphDeep1BLocalPCAEncoding, pcaScorer columnVectorGraphDeep1BLocalPCAScorer, sketch columnVectorGraphDeep1BPCAResidualSketch, queryInvNorm float32, rows int, scores []float32) {
+	pcaScorer.scoreInto(encoding, queryInvNorm, rows, scores)
+	for row := 0; row < rows; row++ {
+		var residualDot float32
+		for k := 0; k < sketch.sketchDims; k++ {
+			residualDot += sketch.queryProject[k] * float32(int8(sketch.codes[k*rows+row])) * sketch.scales[k]
+		}
+		scores[row] += residualDot * queryInvNorm * encoding.invNorms[row]
 	}
 }
 

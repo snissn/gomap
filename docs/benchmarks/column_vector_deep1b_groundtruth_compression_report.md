@@ -121,6 +121,16 @@ Selected aggregate rows across queries `0..99`:
 | `pairwise_diff_pca_top10_vs_11_100_i8_rank64` | `64` | `128.08` | `10.595` | `9/10` | `6/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `17/20` | `0.00327` | `10.91` | `64` | Boundary-separating directions improve top10 survival, but top20 worst-case is weaker than boundary-weighted PCA. Oracle only. |
 | `query_axis_oracle_i8_projection_f16_norm` | `1` | `2.02` | `0.001` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `10/10` | `20/20` | `20/20` | `0.00175` | `6.43` | `0.74` | Non-deployable query-specific upper bound. It proves score-aware projection has headroom, not that this exact method can ship. |
 
+The harness now also emits a `pca_residual_random_projection` family for the
+top100 oracle tournament. It scores local PCA plus a tiny deterministic int8
+random-projection sketch of the PCA reconstruction residual at `+4`, `+8`, and
+`+16` row-code bytes. This directly tests whether a small residual correction
+can repair rank64/rank80 boundary flips without pretending to be a production
+residual-PQ method. It is intentionally labeled as an official top100
+local-neighborhood upper-bound probe; the archived `0..99` aggregate table
+above should be regenerated with the Deep1B groundtruth cache before drawing a
+Pareto conclusion from those rows.
+
 The top100-only tournament changes the immediate emphasis:
 
 - Full-dim SQ8 remains the conservative compressed candidate/rerank lane.
@@ -848,10 +858,12 @@ The scalar and basis-objective probes sharpen that conclusion. Full SQ8 is the
 conservative compressed lane; plain per-dimension int4 is the strongest simple
 48B top100 oracle candidate-survival result; int2/sign are too lossy; and
 boundary-weighted or pairwise-difference PCA improves rank64 candidate gates
-over variance PCA but remains an oracle-locality result. The remaining
-top100-only probes worth adding, if this path remains decision-relevant, are
-PCA plus tiny residual correction and low-rank-plus-tail progressive bound
-tests.
+over variance PCA but remains an oracle-locality result. The PCA plus tiny
+residual-correction lane is now present in the harness as
+`pca_residual_random_projection`; it still needs a full cached `0..99` rerun
+before it can be included in the frontier. The remaining top100-only probe worth
+adding, if this path remains decision-relevant, is a low-rank-plus-tail
+progressive bound test.
 
 Track A.5 is now started: buildable-granule scouts over row-id-contiguous
 blocks, IVF/k-means variable-size clusters, and IVF/k-means locality-sorted
@@ -901,9 +913,9 @@ local residual after the coarse locality unit, not the raw global vector.
 4. Extend the cascade benchmark beyond the existing rerank-recall gates:
    compressed scan top50/top100, full-dim int8 rerank, optional exact fp32
    rerank, plus p50/p95 latency and cache-aware bytes read/query.
-5. Finish the remaining top100-only probes only if they are still needed for
-   method triage: PCA plus tiny residual correction and safe/progressive
-   low-rank-plus-tail bounds.
+5. Rerun the top100-only tournament with the new PCA plus tiny residual
+   random-projection lane, then finish safe/progressive low-rank-plus-tail
+   bounds only if this path is still needed for method triage.
 6. Add CPU-friendly scalar/low-build challengers after the first production
    frontier: LVQ/SVS-style scalar compression, RaBitQ-inspired and
    TurboQuant-inspired lanes, with honest labels when the implementation is
