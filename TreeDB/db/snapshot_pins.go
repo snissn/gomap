@@ -1,8 +1,13 @@
 package db
 
-import "math"
+import (
+	"math"
+	"runtime"
+)
 
 var minPinnedSnapshotCommitSeqAfterScanForTesting func()
+
+const minPinnedSnapshotCommitSeqMaxAttempts = 64
 
 // MinPinnedSnapshotCommitSeq returns the oldest commit sequence currently held
 // by any active snapshot reader across the current and still-tracked retired
@@ -13,7 +18,7 @@ func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 	if db == nil {
 		return math.MaxUint64
 	}
-	for attempts := 0; attempts < 4; attempts++ {
+	for attempts := 0; attempts < minPinnedSnapshotCommitSeqMaxAttempts; attempts++ {
 		if db.snapshotAcquireInFlight() > 0 {
 			return 0
 		}
@@ -38,6 +43,7 @@ func (db *DB) MinPinnedSnapshotCommitSeq() uint64 {
 		if db.snapshotAcquireEpoch.Load() == acquireEpoch {
 			return min
 		}
+		runtime.Gosched()
 	}
 	return 0
 }

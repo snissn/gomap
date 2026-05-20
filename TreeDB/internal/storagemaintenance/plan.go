@@ -14,6 +14,11 @@ type Plan struct {
 	token *byte
 }
 
+// StorageMaintenancePlanToken returns the unforgeable internal plan token.
+func (p Plan) StorageMaintenancePlanToken() Plan {
+	return p
+}
+
 // ColumnAssetRewritePlan returns the internal token used for column asset
 // rewrite/remap publishes that preserve the same logical collection contents.
 func ColumnAssetRewritePlan() Plan {
@@ -22,7 +27,6 @@ func ColumnAssetRewritePlan() Plan {
 
 // IsColumnAssetRewritePlan reports whether plan is the internally minted
 // column asset rewrite token.
-func IsColumnAssetRewritePlan(plan any) bool {
-	p, ok := plan.(Plan)
-	return ok && p.kind == columnAssetRewritePlan && p.token == &columnAssetRewritePlanToken
+func IsColumnAssetRewritePlan(plan Plan) bool {
+	return plan.kind == columnAssetRewritePlan && plan.token == &columnAssetRewritePlanToken
 }

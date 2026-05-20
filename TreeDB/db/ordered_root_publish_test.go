@@ -53,6 +53,12 @@ func (it *closeCountingUnsafeIterator) Close() error {
 }
 func (it *closeCountingUnsafeIterator) Domain() ([]byte, []byte) { return nil, nil }
 
+type forgedStorageMaintenancePlan struct{}
+
+func (forgedStorageMaintenancePlan) StorageMaintenancePlanToken() storagemaintenance.Plan {
+	return storagemaintenance.Plan{}
+}
+
 func mustRawKVCommandWALIntent(tb testing.TB, db *DB, key, value string) *CommandWALIntent {
 	tb.Helper()
 	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
@@ -320,9 +326,7 @@ func TestPublishOrderedRootDeltaGroupMaintenanceRejectsForgedPlan(t *testing.T) 
 	defer db.Close()
 
 	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
-		struct {
-			kind string
-		}{kind: "column_asset_rewrite"},
+		forgedStorageMaintenancePlan{},
 		[]OrderedRootDeltaPublishInput{{
 			BaseRoot:                  0,
 			Iter:                      mustFrozenSystemMemtable(t, "root/k", "v").NewIterator(nil, nil),

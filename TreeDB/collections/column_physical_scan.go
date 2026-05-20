@@ -133,7 +133,9 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScan
 	columnStoreEnabled := cfgPtr != nil
 	var cfg ColumnStoreConfig
 	if cfgPtr != nil {
-		cfg = cfgPtr.copy()
+		// Collection catalogs are immutable after publication; snapshot views
+		// only read the config, so a shallow copy avoids per-scan slice clones.
+		cfg = *cfgPtr
 	}
 
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled)

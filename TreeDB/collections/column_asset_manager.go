@@ -653,7 +653,7 @@ func columnAssetSegmentLockIndex(name string) uint64 {
 		hash ^= uint64(name[i])
 		hash *= fnvPrime64
 	}
-	return hash % uint64(columnAssetSegmentWriteLockStripes)
+	return hash % uint64(len(columnAssetSegmentWriteLocks))
 }
 
 func syncColumnAssetDir(dir string) error {
