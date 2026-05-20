@@ -597,7 +597,7 @@ func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, err
 	case columnStorePathParallelColumnScan:
 		return collections.ColumnQueryPlanParallelColumnScan, nil
 	default:
-		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteAcceptedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteFailClosedForcedPaths))
+		return "", fmt.Errorf("column_store: unknown forced path %q; accepted=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteAcceptedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteFailClosedForcedPaths))
 	}
 }
 
