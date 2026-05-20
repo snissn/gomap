@@ -349,13 +349,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 	}
 	processRef := func(ref ColumnAssetRef, sourceMask columnAssetReachabilitySourceMask) {
 		status := columnAssetReachabilityStatusForSourceMask(sourceMask)
-		if err := validateColumnAssetRefForPlan(ref); err != nil {
-			status = ColumnAssetReachabilityUncertain
-		}
-		if ref.Namespace != input.namespace {
-			status = ColumnAssetReachabilityUncertain
-		}
-		if ref.Offset > math.MaxInt64-ref.Length {
+		if !columnAssetReachabilityRefCanContributeRange(ref, input.namespace) {
 			status = ColumnAssetReachabilityUncertain
 		}
 		plan.Refs.Total++
