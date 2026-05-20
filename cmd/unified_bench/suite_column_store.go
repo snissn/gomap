@@ -1525,7 +1525,7 @@ func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
 	if rowDenominator > 0 {
 		rowMaterializations = fmt.Sprintf("%d/%d", q.RowMaterializations, rowDenominator)
 	}
-	return fmt.Sprintf("; observed rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
+	return fmt.Sprintf("; effective_rows_processed=%d row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessed, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -1938,7 +1938,6 @@ func markdownCodeTableText(value string) string {
 }
 
 func markdownNormalizeTableCell(value string, escapeHTML bool) string {
-	value = markdownNormalizeTableCellLineBreaks(value)
 	value = markdownEscapeTablePipes(value)
 	if escapeHTML {
 		value = html.EscapeString(value)

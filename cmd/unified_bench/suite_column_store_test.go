@@ -433,7 +433,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowMaterializations: 1024,
 				BytesRead:           128 << 10,
 			},
-			want: []string{"decode-bound", "row materialization", "mark-pruning not active", "observed rows_processed=1024", "row_materializations=1024/1024", "bytes_read=131072"},
+			want: []string{"decode-bound", "row materialization", "mark-pruning not active", "effective_rows_processed=1024", "row_materializations=1024/1024", "bytes_read=131072"},
 		},
 		{
 			name: "btree decode baseline",
@@ -445,7 +445,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowMaterializations: 1024,
 				BytesRead:           128 << 10,
 			},
-			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active", "observed rows_processed=1024", "row_materializations=1024/1024"},
+			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active", "effective_rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
 			name: "serial physical scan",
@@ -458,7 +458,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				BytesRead:           96 << 10,
 				ScheduledGranules:   2,
 			},
-			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "observed rows_processed=1024", "scheduled_granules=2"},
+			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "effective_rows_processed=1024", "scheduled_granules=2"},
 		},
 		{
 			name: "missing source row count falls back to processed rows",
@@ -478,7 +478,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				Rows:                1024,
 				RowMaterializations: 1024,
 			},
-			want: []string{"decode-bound", "observed rows_processed=1024", "row_materializations=1024/1024"},
+			want: []string{"decode-bound", "effective_rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
 			name: "scan backed aggregate fallback",
@@ -539,7 +539,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowsProcessed: 1024,
 				WorkerCount:   0,
 			},
-			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "observed rows_processed=1024"},
+			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "effective_rows_processed=1024"},
 		},
 		{
 			name: "unknown plan includes labels",
