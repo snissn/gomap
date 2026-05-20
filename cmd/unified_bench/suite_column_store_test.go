@@ -261,11 +261,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.Manifest.ActiveGeneration == 0 || report.Manifest.AppliedCommandLSN == 0 {
 		t.Fatalf("expected active/recovery-authoritative manifest identity: %+v", report.Manifest)
 	}
-	if len(report.UnsupportedForcedPaths) != 0 {
-		t.Fatalf("unexpected unsupported forced path labels after M14B routing: %+v", report.UnsupportedForcedPaths)
+	if len(report.FailClosedForcedPaths) != 0 {
+		t.Fatalf("unexpected fail-closed forced path labels after M14B routing: %+v", report.FailClosedForcedPaths)
 	}
-	if !columnStoreTestStringSliceContains(report.SupportedForcedPaths, columnStorePathSerialColumnScan) {
-		t.Fatalf("expected physical forced path labels to be recorded as supported: %+v", report.SupportedForcedPaths)
+	if !columnStoreTestStringSliceContains(report.AcceptedForcedPaths, columnStorePathSerialColumnScan) {
+		t.Fatalf("expected physical forced path labels to be recorded as accepted: %+v", report.AcceptedForcedPaths)
 	}
 	if report.Artifacts.CPUProfile == "" ||
 		report.Artifacts.AllocsProfile == "" ||
@@ -420,14 +420,15 @@ func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 		ByteAccounting: columnStoreByteAccounting{
 			ManifestControlMissing: []string{"manifest", "dictionary"},
 		},
-		SupportedForcedPaths:   []string{"row_store_baseline", "physical_column"},
-		UnsupportedForcedPaths: []string{"planner_skipscan", "aggregate_metadata"},
+		AcceptedForcedPaths:   []string{"row_store_baseline", "physical_column"},
+		FailClosedForcedPaths: []string{"planner_skipscan", "aggregate_metadata"},
 	})
 
 	for _, want := range []string{
 		"- manifest_control_missing: `manifest`, `dictionary`",
-		"- supported: `row_store_baseline`, `physical_column`",
-		"- unsupported/fail-closed: `planner_skipscan`, `aggregate_metadata`",
+		"- accepted labels are CLI/planner labels, not a promise that every run has the required physical assets",
+		"- accepted: `row_store_baseline`, `physical_column`",
+		"- fail-closed: `planner_skipscan`, `aggregate_metadata`",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
@@ -1059,8 +1060,8 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 	if got, want := report.ForcedPath, columnStorePathSerialColumnScan; got != want {
 		t.Fatalf("forced_path=%q want %q", got, want)
 	}
-	if !columnStoreTestStringSliceContains(report.SupportedForcedPaths, columnStorePathSerialColumnScan) {
-		t.Fatalf("serial physical path not reported as supported: %+v", report.SupportedForcedPaths)
+	if !columnStoreTestStringSliceContains(report.AcceptedForcedPaths, columnStorePathSerialColumnScan) {
+		t.Fatalf("serial physical path not reported as accepted: %+v", report.AcceptedForcedPaths)
 	}
 	if report.ByteAccounting.ColumnAssetBytes <= 0 {
 		t.Fatalf("physical run did not report column assets: %+v", report.ByteAccounting)
@@ -1121,8 +1122,8 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			if err := json.Unmarshal(data, &report); err != nil {
 				t.Fatalf("unmarshal column_store_results.json: %v", err)
 			}
-			if !columnStoreTestStringSliceContains(report.SupportedForcedPaths, tc.forcedPath) {
-				t.Fatalf("%s not reported as supported: %+v", tc.forcedPath, report.SupportedForcedPaths)
+			if !columnStoreTestStringSliceContains(report.AcceptedForcedPaths, tc.forcedPath) {
+				t.Fatalf("%s not reported as accepted: %+v", tc.forcedPath, report.AcceptedForcedPaths)
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {

@@ -113,8 +113,8 @@ type columnStoreSuiteReport struct {
 	BatchSize              int                          `json:"batch_size"`
 	Seed                   int64                        `json:"seed"`
 	CacheLabel             string                       `json:"cache_label"`
-	SupportedForcedPaths   []string                     `json:"supported_forced_paths"`
-	UnsupportedForcedPaths []string                     `json:"unsupported_forced_paths"`
+	AcceptedForcedPaths    []string                     `json:"accepted_forced_paths"`
+	FailClosedForcedPaths  []string                     `json:"fail_closed_forced_paths"`
 	Stages                 []columnStoreStageMetric     `json:"stages"`
 	Queries                []columnStoreQueryMetric     `json:"queries"`
 	Parity                 map[string]columnStoreParity `json:"parity"`
@@ -449,21 +449,21 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	}
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	report := columnStoreSuiteReport{
-		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
-		Suite:                  "column_store",
-		Profile:                profile,
-		Fixture:                fixture,
-		PathLabel:              strings.TrimSpace(opts.ExecutionPath),
-		ForcedPath:             forcedPath,
-		Rows:                   rows,
-		BatchSize:              batchSize,
-		Seed:                   seed,
-		CacheLabel:             "reopened_warm_process",
-		SupportedForcedPaths:   cloneStringSlice(columnStoreSuiteSupportedForcedPaths),
-		UnsupportedForcedPaths: cloneStringSlice(columnStoreSuiteUnsupportedForcedPaths),
-		Stages:                 stages,
-		Queries:                queries,
-		Parity:                 parity,
+		GeneratedAt:           time.Now().UTC().Format(time.RFC3339),
+		Suite:                 "column_store",
+		Profile:               profile,
+		Fixture:               fixture,
+		PathLabel:             strings.TrimSpace(opts.ExecutionPath),
+		ForcedPath:            forcedPath,
+		Rows:                  rows,
+		BatchSize:             batchSize,
+		Seed:                  seed,
+		CacheLabel:            "reopened_warm_process",
+		AcceptedForcedPaths:   cloneStringSlice(columnStoreSuiteSupportedForcedPaths),
+		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteUnsupportedForcedPaths),
+		Stages:                stages,
+		Queries:               queries,
+		Parity:                parity,
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            retainedPayloadBytes,
@@ -583,7 +583,7 @@ func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, err
 	case columnStorePathParallelColumnScan:
 		return collections.ColumnQueryPlanParallelColumnScan, nil
 	default:
-		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+		return "", fmt.Errorf("column_store: unknown forced path %q; accepted=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
 	}
 }
 
@@ -1795,8 +1795,9 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- schema_hash: %d\n\n", report.Manifest.SchemaHash))
 
 	sb.WriteString("## Forced Path Labels\n\n")
-	sb.WriteString(fmt.Sprintf("- supported: %s\n", markdownCodeList(report.SupportedForcedPaths)))
-	sb.WriteString(fmt.Sprintf("- unsupported/fail-closed: %s\n", markdownCodeList(report.UnsupportedForcedPaths)))
+	sb.WriteString("- accepted labels are CLI/planner labels, not a promise that every run has the required physical assets\n")
+	sb.WriteString(fmt.Sprintf("- accepted: %s\n", markdownCodeList(report.AcceptedForcedPaths)))
+	sb.WriteString(fmt.Sprintf("- fail-closed: %s\n", markdownCodeList(report.FailClosedForcedPaths)))
 	if report.Artifacts.ColumnJSON != "" {
 		sb.WriteString("\n## Artifacts\n\n")
 		columnStoreWriteArtifactLine(&sb, "column JSON", report.Artifacts.ColumnJSON)
