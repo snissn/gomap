@@ -36,7 +36,10 @@ type ColumnAssetGCStats struct {
 	BytesRetained    int64
 }
 
-var syncColumnAssetGCDeletedSegmentsDir = syncColumnAssetDir
+var (
+	removeColumnAssetGCSegment          = os.Remove
+	syncColumnAssetGCDeletedSegmentsDir = syncColumnAssetDir
+)
 
 // ColumnAssetGC reclaims only complete, canonical column asset segments that
 // M15A reachability proves wholly reclaimable. Mixed segments remain rewrite
@@ -148,7 +151,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := ctx.Err(); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
-		if err := os.Remove(entry.Path); err != nil {
+		if err := removeColumnAssetGCSegment(entry.Path); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		stats.SegmentsDeleted++

@@ -144,6 +144,19 @@ func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T
 		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
 	}
 	var syncedDirs []string
+	gcCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	prevRemove := removeColumnAssetGCSegment
+	removeColumnAssetGCSegment = func(path string) error {
+		err := os.Remove(path)
+		if err == nil && path == firstPath {
+			cancel()
+		}
+		return err
+	}
+	defer func() {
+		removeColumnAssetGCSegment = prevRemove
+	}()
 	prevSync := syncColumnAssetGCDeletedSegmentsDir
 	syncColumnAssetGCDeletedSegmentsDir = func(dir string) error {
 		syncedDirs = append(syncedDirs, dir)
@@ -153,10 +166,7 @@ func TestColumnAssetGCRetainedStatsUpdateOnPartialContextCancelM15B(t *testing.T
 		syncColumnAssetGCDeletedSegmentsDir = prevSync
 	}()
 
-	stats, err := col.ColumnAssetGC(cancelAfterPathRemovedContextM15B{
-		Context: context.Background(),
-		path:    firstPath,
-	}, ColumnAssetGCOptions{
+	stats, err := col.ColumnAssetGC(gcCtx, ColumnAssetGCOptions{
 		Detailed:      true,
 		CandidateRefs: []ColumnAssetRef{first, second},
 	})
@@ -429,21 +439,6 @@ func TestColumnAssetGCSegmentEligibleRequiresExactCanonicalPathM15B(t *testing.T
 	if columnAssetGCSegmentEligibleForDelete(segmentDir, entry) {
 		t.Fatalf("wrong canonical file id was accepted: %+v", entry)
 	}
-}
-
-type cancelAfterPathRemovedContextM15B struct {
-	context.Context
-	path string
-}
-
-func (ctx cancelAfterPathRemovedContextM15B) Err() error {
-	if err := ctx.Context.Err(); err != nil {
-		return err
-	}
-	if _, err := os.Stat(ctx.path); errors.Is(err, os.ErrNotExist) {
-		return context.Canceled
-	}
-	return nil
 }
 
 func writeColumnAssetGCCandidateSegmentM15B(t testing.TB, rootDir string, col *Collection, fileID uint32, payload []byte) ColumnAssetRef {
