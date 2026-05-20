@@ -791,14 +791,27 @@ func columnVectorGraphDeep1BCandidateRecall(exact []float32, approximate []float
 }
 
 func columnVectorGraphDeep1BNewGroundtruthMethodReport(family string, name string, rowCodeBytesPerVector float64, metadataBytesPerVector float64, buildNanos int64, notes string) columnVectorGraphDeep1BGroundtruthMethodReport {
+	return columnVectorGraphDeep1BNewCompressionMethodReport(
+		"official_top100_local_neighborhood_upper_bound_probe",
+		"top100_oracle_metadata_not_production_amortized",
+		family,
+		name,
+		rowCodeBytesPerVector,
+		metadataBytesPerVector,
+		buildNanos,
+		notes,
+	)
+}
+
+func columnVectorGraphDeep1BNewCompressionMethodReport(regime string, metadataStatus string, family string, name string, rowCodeBytesPerVector float64, metadataBytesPerVector float64, buildNanos int64, notes string) columnVectorGraphDeep1BGroundtruthMethodReport {
 	return columnVectorGraphDeep1BGroundtruthMethodReport{
-		Regime:                 "official_top100_local_neighborhood_upper_bound_probe",
+		Regime:                 regime,
 		Family:                 family,
 		Name:                   name,
 		RowCodeBytesPerVector:  rowCodeBytesPerVector,
 		MetadataBytesPerVector: metadataBytesPerVector,
 		TotalBytesPerVector:    rowCodeBytesPerVector + metadataBytesPerVector,
-		MetadataStatus:         "top100_oracle_metadata_not_production_amortized",
+		MetadataStatus:         metadataStatus,
 		BuildNanos:             buildNanos,
 		Notes:                  notes,
 	}

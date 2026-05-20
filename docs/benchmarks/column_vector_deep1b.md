@@ -156,6 +156,15 @@ but they do not prove TreeDB can build equivalent production granules and they
 do not validate codebook-trained methods such as PQ, OPQ, residual PQ, LOPQ,
 ScaNN/AVQ, QINCo, or Matryoshka.
 
+`TestColumnVectorGraphDeep1BBuildableGranuleScout` is an opt-in first
+production/buildable granule scout. It currently uses row-id-contiguous
+granules as a weak but buildable control, ranks granules by centroid similarity,
+then reports routing recall separately from codec recall inside the selected
+granule union. The initial codec rows are full-dim per-dimension scalar u8/u4
+and local PCA int8 ranks. The scout is deliberately not a PQ/OPQ/residual-PQ
+tournament yet; those methods require real train/eval splits and trained
+codebooks.
+
 ## Manual Commands
 
 Search-only benchmark:
@@ -264,6 +273,30 @@ candidate-survival gates are the promotion metrics: exact top10 contained in
 approx@20/approx@50, exact top20 contained in approx@50, and final recall after
 exact rerank from fixed shortlists. Compressed final top10 order is diagnostic,
 not the primary promotion gate.
+
+First buildable row-id-contiguous granule scout:
+
+```sh
+OUT=/tmp/gomap_deep1b_buildable_scout_q0_32768_$(date +%Y%m%d_%H%M%S)
+COLUMN_VECTOR_DEEP1B_DOWNLOAD=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_SCOUT=1 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_BASE_ROWS=32768 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_GRANULE_ROWS=4096 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_QUERIES=0 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_TOP_GRANULES=1,4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_PCA_RANKS=32,64 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_SCAN_ITERS=4 \
+COLUMN_VECTOR_DEEP1B_BUILDABLE_OUT="$OUT" \
+GOWORK=off go test ./experiments/colgranule \
+  -run '^TestColumnVectorGraphDeep1BBuildableGranuleScout$' \
+  -count 1 \
+  -v
+```
+
+This writes `results.json` and `report.md` under `$OUT`. The routing table is
+the first-order production signal: row-id-contiguous granules are buildable but
+not expected to have nearest-neighbor locality, so codec recall is reported as
+conditional on whichever exact winners reached the selected granule union.
 
 ## Scope
 
@@ -803,6 +836,27 @@ benchmark path:
 
 The product-shaped output should be `quality gate -> minimum bytes/vector`,
 with p50/p90/worst query and per-granule escalation statistics.
+
+First buildable-granule control:
+
+- Report:
+  `/tmp/gomap_deep1b_buildable_scout_q0_32768_20260519_204341/report.md`.
+- Regime: row-id-contiguous Deep1B prefix blocks, `32768` base rows,
+  `4096` rows/granule, one query, granules ranked by centroid similarity.
+- Routing is weak, as expected for row-id order: top1 granule routes only
+  `2/10` global exact top10 and `2/20` top20; top4 granules route `4/10`
+  top10 and `10/20` top20.
+- Conditional codec recall inside the selected granule union remains useful:
+  u4 scalar at `48 B/vector` and u8 scalar at `96 B/vector` keep the
+  conditional exact top10 inside approx@20/50 and top20 inside approx@50 for
+  both top1 and top4 selections; local PCA rank64 keeps conditional exact
+  top10 inside approx@50 and top20 inside approx@50, while rank32 degrades on
+  the less coherent top4 union.
+
+This is not production locality proof. Its value is that the harness now
+separates **routing recall** from **conditional codec recall**, which is the
+required shape for comparing future IVF/k-means, graph-neighborhood,
+visited-set, graph-sorted, and actual TreeDB granules.
 
 Granule-native int8 micro-kernel smoke:
 

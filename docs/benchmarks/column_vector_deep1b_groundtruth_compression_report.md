@@ -304,6 +304,78 @@ Suggested gates before a compressed lane can be called promising:
 | Margin diagnosis | Always report score error versus top-k boundary gaps |
 | Adaptive policy | Report p50/p90/worst minimum bytes or rank needed to clear each gate |
 
+## First Buildable Granule Scout
+
+The first production/buildable scout is now in the harness:
+`TestColumnVectorGraphDeep1BBuildableGranuleScout`. The initial builder is
+`row_id_contiguous`, which is a real storage unit TreeDB can build without
+oracle labels, but it is intentionally a weak locality control. This result
+should be read as a methodology checkpoint, not as proof that row-id granules
+are good ANN granules.
+
+Run artifact:
+
+```text
+/tmp/gomap_deep1b_buildable_scout_q0_32768_20260519_204341/report.md
+```
+
+Run shape:
+
+| Field | Value |
+| --- | ---: |
+| Regime | `buildable_granule_scout` |
+| Builder | `row_id_contiguous` |
+| Base rows | `32768` |
+| Dims | `96` |
+| Granule rows | `4096` |
+| Granules | `8` |
+| Queries | `0` |
+| Top granules | `1,4` |
+
+The important new accounting split is:
+
+```text
+routing recall:
+  how many global exact winners reach the selected buildable granule union
+
+conditional codec recall:
+  among rows in that selected union, how well does the compressed scorer
+  preserve the exact winners before rerank?
+```
+
+The routing result shows why row-id-contiguous granules are only a control:
+
+| Query | Top granules | Candidate rows | Global top10 routed | Global top20 routed | Global top50 routed |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| `0` | `1` | `4096` | `2/10` | `2/20` | `8/50` |
+| `0` | `4` | `16384` | `4/10` | `10/20` | `29/50` |
+
+Inside the routed candidate union, the conditional codec rows are still useful
+for comparing representation behavior:
+
+| Selection | Method | Row-code B/vector | Metadata B/vector | Compressed top10 | Top10 in approx@20 | Top10 in approx@50 | Top20 in approx@50 | Scan ns/vector |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| top1 | `buildable_rowid_scalar_u4_affine_per_dim_reconstructed` | `48` | `0.19` | `10/10` | `10/10` | `10/10` | `20/20` | `980` |
+| top1 | `buildable_rowid_local_pca_i8_rank64` | `64` | `5.08` | `9/10` | `10/10` | `10/10` | `20/20` | `60` |
+| top4 | `buildable_rowid_scalar_u4_affine_per_dim_reconstructed` | `48` | `0.19` | `9/10` | `10/10` | `10/10` | `20/20` | `954` |
+| top4 | `buildable_rowid_local_pca_i8_rank64` | `64` | `5.08` | `7/10` | `9/10` | `10/10` | `20/20` | `67` |
+| top4 | `buildable_rowid_local_pca_i8_rank32` | `32` | `3.56` | `2/10` | `4/10` | `6/10` | `10/20` | `29` |
+
+The interpretation is deliberately conservative:
+
+- The production/buildable evaluation shape exists and separates routing from
+  codec quality.
+- Row-id-contiguous routing is poor, so this builder does not establish
+  production viability.
+- Conditional codec results remain aligned with the top100 oracle direction:
+  scalar u4/u8 are robust but scan slowly in the current Go
+  reconstruct-and-score kernel; low-rank PCA scans much faster but rank32 is
+  fragile once the selected union is less coherent, while rank64 is a better
+  candidate-generation lane.
+- PQ, OPQ, residual-PQ, and LOPQ remain unmeasured in this PR. They still need
+  real train/eval splits, trained codebooks, and metadata-amortized bytes before
+  they can make production claims.
+
 ## Concrete Research Tracks
 
 Track A now has a first completed top100-only tournament for queries `0..99`.
@@ -334,6 +406,11 @@ over variance PCA but remains an oracle-locality result. The remaining
 top100-only probes worth adding, if this path remains decision-relevant, are
 PCA plus tiny residual correction and low-rank-plus-tail progressive bound
 tests.
+
+Track A.5 is now started: a first buildable-granule control over
+row-id-contiguous blocks. It is not a production locality win, but it gives the
+right harness shape for the next builders by reporting both routing recall and
+conditional codec recall.
 
 Track B is the same-byte PQ/OPQ tournament. Compare local PCA `K=32/48/64`
 against PQ/OPQ/residual-code layouts at the same byte budgets using the same
