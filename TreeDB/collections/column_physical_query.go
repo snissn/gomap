@@ -343,6 +343,8 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.ReduceRows += right.ReduceRows
 	left.VisibilityRows += right.VisibilityRows
 	left.ReconstructionRows += right.ReconstructionRows
+	left.DecodedBlockCacheHits += right.DecodedBlockCacheHits
+	left.DecodedBlockCacheMisses += right.DecodedBlockCacheMisses
 	return left
 }
 

@@ -170,6 +170,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.ScanDurationMS < 0 {
 			t.Fatalf("query %s scan_duration_ms=%v", q.Name, q.ScanDurationMS)
 		}
+		if q.AdapterDurationMS < 0 {
+			t.Fatalf("query %s adapter_duration_ms=%v", q.Name, q.AdapterDurationMS)
+		}
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
@@ -585,7 +588,7 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 			{
 				Name:                     "q|pipe`tick",
 				PlanLabel:                "plan|pipe`tick",
-				ThroughputInterpretation: "line1\r\nline2|pipe",
+				ThroughputInterpretation: "line1\r\nline2|pipe <b>&bad</b>",
 				ImplementationNote:       "note|pipe`tick",
 			},
 			{
@@ -610,10 +613,11 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 		"physical serial scan",
 		"fallback-bound aggregate metadata label",
 		"mark-pruning not active",
+		"adapter ms",
 		"``q\\|pipe`tick``",
 		"``plan\\|pipe`tick``",
 		"``note\\|pipe`tick``",
-		"line1 line2\\|pipe",
+		"line1 line2\\|pipe &lt;b&gt;&amp;bad&lt;/b&gt;",
 		"| `q_empty_interpretation` | `serial_column_scan` | (empty) |",
 		"| `-` | `-` | - |",
 	} {
