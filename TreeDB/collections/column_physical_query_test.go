@@ -76,9 +76,9 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 		{
 			name:       "q5_metadata",
 			hashName:   "q5",
-			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"},
 			wantCount:  12,
-			wantDirect: true,
+			wantDirect: false,
 		},
 	}
 
@@ -99,8 +99,11 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			if result.Diagnostics.RowMaterializations != 0 {
 				t.Fatalf("%s row materializations=%d want zero for physical aggregate/projection adapter", tc.name, result.Diagnostics.RowMaterializations)
 			}
-			if result.Diagnostics.AssetRefs == 0 || result.Diagnostics.DecodedBlocks == 0 || result.Diagnostics.PhysicalBytesScanned <= 0 {
+			if result.Diagnostics.AssetRefs == 0 || result.Diagnostics.PhysicalBytesScanned <= 0 {
 				t.Fatalf("%s missing physical diagnostics: %+v", tc.name, result.Diagnostics)
+			}
+			if tc.name != "q5_metadata" && result.Diagnostics.DecodedBlocks == 0 {
+				t.Fatalf("%s decoded blocks=0 diagnostics=%+v", tc.name, result.Diagnostics)
 			}
 			if tc.wantDirect && result.Diagnostics.DirectReduceBlocks != result.Diagnostics.DecodedBlocks {
 				t.Fatalf("%s direct reduce blocks=%d want decoded blocks=%d diagnostics=%+v", tc.name, result.Diagnostics.DirectReduceBlocks, result.Diagnostics.DecodedBlocks, result.Diagnostics)
@@ -108,10 +111,34 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			if !tc.wantDirect && result.Diagnostics.DirectReduceBlocks != 0 {
 				t.Fatalf("%s direct reduce blocks=%d want zero for non-vectorized shape diagnostics=%+v", tc.name, result.Diagnostics.DirectReduceBlocks, result.Diagnostics)
 			}
+			if tc.name == "q5_metadata" {
+				if result.Diagnostics.MetadataHits == 0 {
+					t.Fatalf("%s metadata hits=0 diagnostics=%+v", tc.name, result.Diagnostics)
+				}
+				if result.Diagnostics.RowsScanned != 0 || result.Diagnostics.DecodedBlocks != 0 {
+					t.Fatalf("%s scanned physical rows on metadata path diagnostics=%+v", tc.name, result.Diagnostics)
+				}
+			}
 			if result.Diagnostics.ReduceRows != len(events) {
 				t.Fatalf("%s reduce rows=%d want %d", tc.name, result.Diagnostics.ReduceRows, len(events))
 			}
 		})
+	}
+}
+
+func TestColumnPhysicalQueryAggregateMetadataRequiresRegisteredAssetM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(96)
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	_, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:                  ColumnPhysicalQueryGroupInt64Span,
+		GroupColumn:           "did",
+		ValueColumn:           "time_us",
+		AggregateMetadataName: "missing_metadata",
+	})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("RunColumnPhysicalQuery missing aggregate metadata err=%v want unsupported", err)
 	}
 }
 
@@ -1485,7 +1512,7 @@ func inspectColumnPhysicalVisibilityM13C(t *testing.T, d *backenddb.DB, col *Col
 	if cfg == nil || cfg.ActiveManifest == nil || cfg.AssetManager == nil {
 		t.Fatalf("missing column store manifest metadata: %+v", cfg)
 	}
-	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	refs := columnManifestPhysicalAssetRefsForTestM1634(columnManifestAssetRefsForCollectionM12A(t, d, col))
 	seenRefs := make(map[[2]uint64]struct{}, len(refs))
 	for _, ref := range refs {
 		if ref.Namespace != cfg.AssetManager.Namespace {

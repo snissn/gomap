@@ -521,6 +521,36 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		GenerationID: generation,
 		Reason:       string(input.operation),
 	}}
+	if hookInput.Operation == ColumnPublishOperationInsert {
+		for _, aggregate := range hookInput.ColumnStore.AggregateMetadata {
+			metadata, ok, err := buildColumnAggregateMetadataAsset(hookInput.ColumnStore, rows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if !ok {
+				continue
+			}
+			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			metadataRef, err := writeColumnAggregateMetadataAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedMetadata, generation, partID)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
+				metadataRef.Generation != generation || metadataRef.PartID != partID || metadataRef.Length != int64(len(encodedMetadata)) {
+				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid aggregate metadata asset ref %+v", metadataRef)
+			}
+			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
+				Ref:          metadataRef,
+				Bytes:        metadataRef.Length,
+				PublishID:    hookInput.AppliedCommandLSN,
+				GenerationID: generation,
+				Reason:       aggregate.Name,
+			})
+		}
+	}
 	return prepared, nil
 }
 

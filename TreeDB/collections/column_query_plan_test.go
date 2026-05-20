@@ -126,10 +126,10 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 			}
 			if tc.want == ColumnQueryPlanAggregateMetadata {
 				if plan.Diagnostics.ScheduledGranules != base.Capabilities.GranuleCount || plan.Diagnostics.WorkerCount != 1 {
-					t.Fatalf("aggregate metadata diagnostics=%+v want scan-backed granules=%d worker=1", plan.Diagnostics, base.Capabilities.GranuleCount)
+					t.Fatalf("aggregate metadata diagnostics=%+v want granules=%d worker=1", plan.Diagnostics, base.Capabilities.GranuleCount)
 				}
-				if !strings.Contains(plan.Diagnostics.Reason, "scan-backed") {
-					t.Fatalf("aggregate metadata reason=%q want scan-backed disclosure", plan.Diagnostics.Reason)
+				if !strings.Contains(plan.Diagnostics.Reason, "metadata asset") {
+					t.Fatalf("aggregate metadata reason=%q want metadata asset disclosure", plan.Diagnostics.Reason)
 				}
 			}
 		})

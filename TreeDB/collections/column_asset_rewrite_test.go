@@ -291,8 +291,9 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	if err != nil {
 		t.Fatalf("scanColumnPhysicalRows after reopen: %v", err)
 	}
-	if diag.RowsScanned != 2 || diag.AssetRefs != len(afterRefs) {
-		t.Fatalf("diag=%+v want 2 rows and %d remapped refs", diag, len(afterRefs))
+	afterPhysicalRefs := columnManifestPhysicalAssetRefsForTestM1634(afterRefs)
+	if diag.RowsScanned != 2 || diag.AssetRefs != len(afterPhysicalRefs) {
+		t.Fatalf("diag=%+v want 2 rows and %d remapped physical refs", diag, len(afterPhysicalRefs))
 	}
 
 	gcStats, err := reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{

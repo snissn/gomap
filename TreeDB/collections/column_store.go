@@ -149,9 +149,10 @@ type ColumnSortKey struct {
 }
 
 type ColumnAggregateMetadata struct {
-	Name   string              `json:"name"`
-	Column string              `json:"column,omitempty"`
-	Kind   ColumnAggregateKind `json:"kind"`
+	Name        string              `json:"name"`
+	Column      string              `json:"column,omitempty"`
+	GroupColumn string              `json:"group_column,omitempty"`
+	Kind        ColumnAggregateKind `json:"kind"`
 }
 
 type ColumnAssetManagerConfig struct {
@@ -416,6 +417,11 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if aggregate.Column != "" {
 			if _, ok := columnNames[aggregate.Column]; !ok {
 				return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+			}
+		}
+		if aggregate.GroupColumn != "" {
+			if _, ok := columnNames[aggregate.GroupColumn]; !ok {
+				return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
 			}
 		}
 		if err := validateColumnAggregateKind(aggregate.Kind, aggregate.Column); err != nil {
@@ -822,6 +828,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 	for _, aggregate := range cfg.AggregateMetadata {
 		writeHashString(&d, aggregate.Name)
 		writeHashString(&d, aggregate.Column)
+		writeHashString(&d, aggregate.GroupColumn)
 		writeHashString(&d, string(aggregate.Kind))
 	}
 	if cfg.AssetManager != nil {

@@ -28,10 +28,11 @@ const columnPhysicalQueryHourUS = int64(3_600_000_000)
 // ColumnPhysicalQueryRequest describes one explicit physical column query. It
 // does not invoke planner routing; M14 owns forced/automatic route selection.
 type ColumnPhysicalQueryRequest struct {
-	Kind           ColumnPhysicalQueryKind
-	GroupColumn    string
-	ValueColumn    string
-	DistinctColumn string
+	Kind                  ColumnPhysicalQueryKind
+	GroupColumn           string
+	ValueColumn           string
+	DistinctColumn        string
+	AggregateMetadataName string
 }
 
 // ColumnPhysicalQueryGroup is one reduced result row. Count is populated for
@@ -54,6 +55,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	MutationParts              int
 	DecodedBlocks              int
 	DirectReduceBlocks         int
+	MetadataHits               int
 	ScheduledGranules          int
 	SkippedGranules            int
 	RowsScanned                int
@@ -109,7 +111,60 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 	if view.MutationParts > 0 {
 		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 	}
+	if req.AggregateMetadataName != "" {
+		return c.runColumnPhysicalQueryAggregateMetadataInSnapshotView(view, req)
+	}
 	return c.runColumnPhysicalQueryInSnapshotView(view, req)
+}
+
+func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if view.MutationParts != 0 {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
+	}
+	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.Config, req)
+	if !ok {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata %q does not match physical query shape", ErrColumnQueryPlanUnsupported, req.AggregateMetadataName)
+	}
+	refs := columnPhysicalQueryAggregateMetadataRefs(view.AggregateMetadata, aggregate.Name)
+	if len(refs) == 0 {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata %q has no physical asset refs", ErrColumnQueryPlanUnsupported, aggregate.Name)
+	}
+	readCache, err := newColumnPhysicalAssetReadCache(view.ColumnAssetRootDir, view.AssetNamespace)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+	defer func() { _ = readCache.close() }()
+	acc := newColumnPhysicalQueryMetadataAccumulator(req.Kind)
+	var rawScratch []byte
+	start := time.Now()
+	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
+	diag.ProjectedColumns = 2
+	diag.ScheduledGranules = len(refs)
+	for _, metadataRef := range refs {
+		raw, err := readCache.read(metadataRef.AssetRef, rawScratch)
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
+		if err != nil {
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: aggregate metadata read %q generation=%d part_id=%d: %w", metadataRef.Name, metadataRef.AssetRef.Generation, metadataRef.AssetRef.PartID, err)
+		}
+		rawScratch = raw
+		diag.PhysicalBytesScanned += int64(len(raw))
+		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.Config, view.CollectionName, aggregate.Name)
+		if err != nil {
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		if asset.GroupColumn != req.GroupColumn || asset.ValueColumn != req.ValueColumn {
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("%w: aggregate metadata %q columns %s/%s do not match query %s/%s", ErrColumnQueryPlanUnsupported, aggregate.Name, asset.GroupColumn, asset.ValueColumn, req.GroupColumn, req.ValueColumn)
+		}
+		acc.add(asset.Entries)
+		diag.MetadataHits++
+	}
+	diag.ScanNanos = time.Since(start).Nanoseconds()
+	diag.ReduceRows = acc.rows
+	diag.ResultGroups = acc.groupCount()
+	diag.SegmentFileCacheHits = readCache.hits
+	diag.SegmentFileCacheMisses = readCache.misses
+	return ColumnPhysicalQueryResult{Groups: acc.groups(), Diagnostics: diag}, nil
 }
 
 func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, refModulo, refRemainder int, shouldCancel func() bool) (ColumnPhysicalQueryResult, bool, error) {
@@ -466,6 +521,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	}
 	left.DecodedBlocks += right.DecodedBlocks
 	left.DirectReduceBlocks += right.DirectReduceBlocks
+	left.MetadataHits += right.MetadataHits
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
 	left.RowsScanned += right.RowsScanned
@@ -576,6 +632,42 @@ func columnPhysicalQueryDeclaredColumn(cfg ColumnStoreConfig, name string) (Colu
 		}
 	}
 	return ColumnStoreColumn{}, -1, false
+}
+
+func columnPhysicalQueryAggregateMetadataConfig(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (ColumnAggregateMetadata, bool) {
+	name := req.AggregateMetadataName
+	if name == "" {
+		return ColumnAggregateMetadata{}, false
+	}
+	for _, aggregate := range cfg.AggregateMetadata {
+		if aggregate.Name != name {
+			continue
+		}
+		if aggregate.GroupColumn != req.GroupColumn || aggregate.Column != req.ValueColumn {
+			return ColumnAggregateMetadata{}, false
+		}
+		switch req.Kind {
+		case ColumnPhysicalQueryGroupMinInt64:
+			return aggregate, aggregate.Kind == ColumnAggregateMin
+		case ColumnPhysicalQueryGroupMaxInt64:
+			return aggregate, aggregate.Kind == ColumnAggregateMax
+		case ColumnPhysicalQueryGroupInt64Span:
+			return aggregate, aggregate.Kind == ColumnAggregateMin || aggregate.Kind == ColumnAggregateMax
+		default:
+			return ColumnAggregateMetadata{}, false
+		}
+	}
+	return ColumnAggregateMetadata{}, false
+}
+
+func columnPhysicalQueryAggregateMetadataRefs(refs []columnManifestAggregateMetadataSnapshot, name string) []columnManifestAggregateMetadataSnapshot {
+	var out []columnManifestAggregateMetadataSnapshot
+	for _, ref := range refs {
+		if ref.Name == name {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func (e *columnPhysicalQueryExecutor) supportsDirectAssetReduce() bool {
@@ -1043,6 +1135,79 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 		return e.resultGroups[i].Key < e.resultGroups[j].Key
 	})
 	return e.resultGroups
+}
+
+type columnPhysicalQueryMetadataAccumulator struct {
+	kind        ColumnPhysicalQueryKind
+	int64Values map[string]int64
+	spans       map[string]columnPhysicalQuerySpan
+	rows        int
+}
+
+func newColumnPhysicalQueryMetadataAccumulator(kind ColumnPhysicalQueryKind) *columnPhysicalQueryMetadataAccumulator {
+	acc := &columnPhysicalQueryMetadataAccumulator{kind: kind}
+	switch kind {
+	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
+		acc.int64Values = make(map[string]int64)
+	case ColumnPhysicalQueryGroupInt64Span:
+		acc.spans = make(map[string]columnPhysicalQuerySpan)
+	}
+	return acc
+}
+
+func (a *columnPhysicalQueryMetadataAccumulator) add(entries []columnAggregateMetadataEntry) {
+	for _, entry := range entries {
+		a.rows += entry.Count
+		switch a.kind {
+		case ColumnPhysicalQueryGroupMinInt64:
+			if cur, ok := a.int64Values[entry.Group]; !ok || entry.Min < cur {
+				a.int64Values[entry.Group] = entry.Min
+			}
+		case ColumnPhysicalQueryGroupMaxInt64:
+			if cur, ok := a.int64Values[entry.Group]; !ok || entry.Max > cur {
+				a.int64Values[entry.Group] = entry.Max
+			}
+		case ColumnPhysicalQueryGroupInt64Span:
+			cur, ok := a.spans[entry.Group]
+			if !ok {
+				a.spans[entry.Group] = columnPhysicalQuerySpan{min: entry.Min, max: entry.Max}
+				continue
+			}
+			if entry.Min < cur.min {
+				cur.min = entry.Min
+			}
+			if entry.Max > cur.max {
+				cur.max = entry.Max
+			}
+			a.spans[entry.Group] = cur
+		}
+	}
+}
+
+func (a *columnPhysicalQueryMetadataAccumulator) groupCount() int {
+	if a == nil {
+		return 0
+	}
+	if a.spans != nil {
+		return len(a.spans)
+	}
+	return len(a.int64Values)
+}
+
+func (a *columnPhysicalQueryMetadataAccumulator) groups() []ColumnPhysicalQueryGroup {
+	out := make([]ColumnPhysicalQueryGroup, 0, a.groupCount())
+	switch a.kind {
+	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
+		for key, value := range a.int64Values {
+			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: value})
+		}
+	case ColumnPhysicalQueryGroupInt64Span:
+		for key, span := range a.spans {
+			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecutor) error {

@@ -713,8 +713,8 @@ func testColumnStoreConfig(active *ColumnManifestIdentity) *ColumnStoreConfig {
 		SortKey: []ColumnSortKey{{Column: "time_us"}},
 		AggregateMetadata: []ColumnAggregateMetadata{
 			{Name: "rows", Kind: ColumnAggregateCount},
-			{Name: "min_time_us", Column: "time_us", Kind: ColumnAggregateMin},
-			{Name: "max_time_us", Column: "time_us", Kind: ColumnAggregateMax},
+			{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin},
+			{Name: "max_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMax},
 		},
 		ActiveManifest:                active,
 		RecoveryAuthoritativeManifest: recovery,

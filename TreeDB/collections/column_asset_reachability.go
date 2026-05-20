@@ -271,6 +271,19 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 			input.recoveryRefs++
 		}
 	}
+	for i, metadataRef := range view.AggregateMetadata {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(metadataRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(metadataRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -969,7 +982,7 @@ func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
 }
 
 func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
-	return ref.Kind == ColumnAssetKindTCS1PartImage &&
+	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1AggregateMetadata) &&
 		ref.Namespace == namespace &&
 		ref.Generation != 0 &&
 		ref.PartID != 0 &&

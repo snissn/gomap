@@ -92,6 +92,7 @@ type columnPhysicalScanSnapshotView struct {
 	ColumnStoreEnabled bool
 	CommitSeq          uint64
 	AssetRefs          []columnManifestAssetRefForScan
+	AggregateMetadata  []columnManifestAggregateMetadataSnapshot
 	MutationParts      int
 	Diagnostics        columnPhysicalScanDiagnostics
 	ColumnAssetRootDir string
@@ -253,7 +254,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		return view, err
 	}
 	diag.ManifestRecords = len(records)
-	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	manifest, err := decodeColumnManifestRecords(records)
 	if err != nil {
 		view.Diagnostics = diag
 		return view, err
@@ -270,6 +271,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 	diag.AssetRefs = len(refs)
 	diag.MutationParts = mutationParts
 	view.AssetRefs = refs
+	view.AggregateMetadata = manifest.AggregateMetadata
 	view.MutationParts = mutationParts
 	view.Diagnostics = diag
 	return view, nil
@@ -428,7 +430,9 @@ func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) 
 	records := make([]columnManifestRecord, 0, 8)
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) && !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
+		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) &&
+			!bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) &&
+			!bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -510,7 +514,9 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 	activeParts := uint64(0)
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) && !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
+		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) &&
+			!bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) &&
+			!bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -590,6 +596,27 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if keyGeneration == header.generation {
 				activeParts++
 			}
+		case bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes):
+			if !sawHeader {
+				iter.Next()
+				continue
+			}
+			keyGeneration, _, _, err := columnManifestAggregateMetadataKeyFromRecordKey(key)
+			if err != nil {
+				return columnManifestPlannerCapabilitiesForScan{}, err
+			}
+			if keyGeneration > header.generation {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", keyGeneration, header.generation)
+			}
+			metadata, err := decodeColumnManifestAggregateMetadataRecord(key, value)
+			if err != nil {
+				return columnManifestPlannerCapabilitiesForScan{}, err
+			}
+			if metadata.AssetRef.Namespace != cfg.AssetManager.Namespace {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q want %q", metadata.AssetRef.Namespace, cfg.AssetManager.Namespace)
+			}
+			writeHashBytes(&d, key)
+			writeHashBytes(&d, value)
 		}
 		iter.Next()
 	}
@@ -680,6 +707,14 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 			if partGeneration <= generation {
 				active = append(active, record)
 			}
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			metadataGeneration, _, _, err := columnManifestAggregateMetadataKeyFromRecordKey(record.key)
+			if err != nil {
+				return nil, err
+			}
+			if metadataGeneration <= generation {
+				active = append(active, record)
+			}
 		}
 	}
 	return active, nil
@@ -714,6 +749,17 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			}
 			if partGeneration == snapshot.Generation {
 				activeParts++
+			}
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			if !sawHeader {
+				continue
+			}
+			metadataGeneration, _, _, err := columnManifestAggregateMetadataKeyFromRecordKey(record.key)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			if metadataGeneration > snapshot.Generation {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", metadataGeneration, snapshot.Generation)
 			}
 		}
 	}

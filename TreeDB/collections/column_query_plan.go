@@ -338,7 +338,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
 		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
-			plan.Diagnostics.Reason = "forced scan-backed aggregate metadata plan"
+			plan.Diagnostics.Reason = "forced aggregate metadata asset plan"
 			return plan
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
@@ -373,7 +373,7 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		return false, ColumnQueryPlan{}
 	}
-	diag.Reason = "selected scan-backed aggregate metadata"
+	diag.Reason = "selected aggregate metadata asset path"
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
 	diag.WorkerCount = 1
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}

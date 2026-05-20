@@ -192,10 +192,22 @@ func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]s
 }
 
 func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
-	return writeColumnPhysicalAssetToManagerSegment(rootDir, cfg, payload, generation, partID, columnAssetM12ASegmentFileID)
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID)
+}
+
+func writeColumnAggregateMetadataAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1AggregateMetadata, generation, partID)
+}
+
+func writeColumnAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
 }
 
 func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
+	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID, fileID)
+}
+
+func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
 	if cfg.AssetManager == nil {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires asset manager")
 	}
@@ -223,7 +235,7 @@ func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreCon
 		return ColumnAssetRef{}, err
 	}
 	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
+		Kind:       kind,
 		Namespace:  cfg.AssetManager.Namespace,
 		Generation: generation,
 		PartID:     partID,
@@ -441,6 +453,10 @@ func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return a.appendKind(payload, ColumnAssetKindTCS1PartImage, generation, partID)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
 	if a == nil || a.file == nil {
 		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
 	}
@@ -454,7 +470,7 @@ func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, 
 		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
 	}
 	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
+		Kind:       kind,
 		Namespace:  a.cfg.AssetManager.Namespace,
 		Generation: generation,
 		PartID:     partID,

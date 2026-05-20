@@ -1017,12 +1017,13 @@ func prepareColumnPhysicalScannerCorruptionFixtureM13A(t *testing.T) (string, Co
 		t.Fatalf("Insert: %v", err)
 	}
 	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
-	if len(refs) != 1 {
+	physicalRefs := columnManifestPhysicalAssetRefsForTestM1634(refs)
+	if len(physicalRefs) != 1 {
 		_ = d.Close()
 		t.Fatalf("refs=%+v want one", refs)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	return dir, refs[0]
+	return dir, physicalRefs[0]
 }
