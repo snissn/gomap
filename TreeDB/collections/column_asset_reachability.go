@@ -410,6 +410,9 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.RewriteDebtBytes = addColumnAssetReachabilityBytes(plan.RewriteDebtBytes, segmentPlan.reclaimableBytes)
 		default:
 			plan.Segments.Unknown++
+			if segmentPlan.reclaimableBytes != 0 {
+				plan.RewriteDebtBytes = addColumnAssetReachabilityBytes(plan.RewriteDebtBytes, segmentPlan.reclaimableBytes)
+			}
 		}
 		if input.detailed {
 			plan.SegmentEntries = append(plan.SegmentEntries, ColumnAssetReachabilitySegmentEntry{
@@ -642,6 +645,9 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		path := filepath.Join(segmentDir, entry.Name())
 		info, err := os.Lstat(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, err
 		}
 		if info.IsDir() {
