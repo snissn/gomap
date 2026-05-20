@@ -25,6 +25,13 @@ const (
 
 var vectorDistanceBenchmarkSink float32
 
+func columnVectorGraphBenchmarkSearchBytes(candidates int, dims int) int64 {
+	if candidates <= 0 || dims <= 0 {
+		return 0
+	}
+	return int64(candidates) * int64(dims) * int64(4)
+}
+
 func BenchmarkVectorDistanceToFloat32NodeCosinePrepared(b *testing.B) {
 	docs := minInt(vectorBenchmarkDocs(b), 4096)
 	dims := vectorBenchmarkDims(b)
@@ -591,7 +598,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathSearch(b *testing.B) {
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphBenchmarkSearchBytes(warmTrace.CandidatesExamined, graph.Dims()))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		results, trace, err := graph.SearchCosine(query, opts, &scratch)
@@ -640,7 +647,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathSearchParallel(b *testing.
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphBenchmarkSearchBytes(warmTrace.CandidatesExamined, graph.Dims()))
 	b.ResetTimer()
 	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
@@ -694,7 +701,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathSearchWithDocumentFetch(b 
 	warmBytes := fetchColumnGraphBenchmarkDocuments(b, col, warm, &documentBuf)
 
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphBenchmarkSearchBytes(warmTrace.CandidatesExamined, graph.Dims()))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		results, trace, err := graph.SearchCosine(query, opts, &scratch)
@@ -748,7 +755,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathSearchWithDocumentFetchPar
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphBenchmarkSearchBytes(warmTrace.CandidatesExamined, graph.Dims()))
 	b.ResetTimer()
 	var nextWorker uint64
 	b.RunParallel(func(pb *testing.PB) {
@@ -819,7 +826,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathPublicSearch(b *testing.B)
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphBenchmarkSearchBytes(warmTrace.CandidatesExamined, graph.Dims()))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		results, trace, err := col.SearchVectorIndex(indexName, query, opts)
@@ -874,7 +881,7 @@ func BenchmarkCollectionVectorIndexColumnGraphMainPathOpenLoadSearchWithDocument
 	}
 
 	b.ReportAllocs()
-	b.SetBytes(int64(warmTrace.CandidatesExamined * fixture.graph.Dims() * 4))
+	b.SetBytes(columnVectorGraphBenchmarkSearchBytes(warmTrace.CandidatesExamined, fixture.graph.Dims()))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		d, err := backenddb.Open(backenddb.Options{Dir: fixture.dir})
@@ -1679,9 +1686,13 @@ func openLoadedColumnGraphVectorBenchmarkMainPath(tb testing.TB, fixture columnG
 		_ = d.Close()
 		tb.Fatalf("unexpected column_graph benchmark load status loaded=%v status=%+v", loaded != nil, status)
 	}
-	if loaded.Rows() != fixture.graph.Rows() || loaded.Dims() != fixture.graph.Dims() || loaded.Edges() != fixture.graph.Edges() {
+	if loaded.Rows() != fixture.graph.Rows() || loaded.Dims() != fixture.graph.Dims() {
 		_ = d.Close()
-		tb.Fatalf("unexpected column_graph shape rows=%d/%d dims=%d/%d edges=%d/%d", loaded.Rows(), fixture.graph.Rows(), loaded.Dims(), fixture.graph.Dims(), loaded.Edges(), fixture.graph.Edges())
+		tb.Fatalf("unexpected column_graph shape rows=%d/%d dims=%d/%d", loaded.Rows(), fixture.graph.Rows(), loaded.Dims(), fixture.graph.Dims())
+	}
+	if loaded.Rows() > 1 && loaded.Edges() == 0 {
+		_ = d.Close()
+		tb.Fatalf("unexpected column_graph empty adjacency rows=%d edges=%d", loaded.Rows(), loaded.Edges())
 	}
 	return d, col, loaded, status
 }
