@@ -1337,6 +1337,66 @@ encode residuals with PCA K, PQ, OPQ/PQ, and PCA + residual correction
 This is the closest TreeDB-native version of the LOPQ/RVQ lesson: compress the
 local residual after the coarse locality unit, not the raw global vector.
 
+## Full-Int8 Cascade Instrumentation Smoke
+
+The buildable-granule renderer now emits the next cascade lane:
+
+```text
+compressed scan
+  -> approximate topK selection
+  -> full-dim SQ8/int8 rerank
+```
+
+This is a staged kernel estimate over resident materialized data, not full
+end-to-end query latency. It measures the compressed scorer, approximate topK
+selection over materialized scores, and a resident full-dim SQ8 rerank scorer;
+it still excludes I/O, decompression, cache effects, and a fused scan+topK
+executor.
+
+Instrumentation smoke:
+
+```text
+builder:        ivf_kmeans_sorted_blocks
+queries:        0,1
+eval rows:      8192
+granule rows:   4096
+top granules:   1
+PCA ranks:      32,64,96
+PQ budgets:     32,48 B/vector
+PQ train rows:  1024
+PQ train iters: 2
+scan iters:     2
+```
+
+The smoke confirms the new columns render and distinguishes the byte lane from
+the current kernel lane. In this Go prototype, full-dim SQ8 rerank is currently
+much slower than the resident fp32 rerank kernel:
+
+```text
+avg exact-fp32 rerank:   75.73 ns/vector
+avg full-int8 rerank:   972.66 ns/vector
+```
+
+So this result should be read as a storage/cascade instrumentation result, not
+as an optimized int8 scoring result. It lowers rerank bytes but does not lower
+rerank latency until the full-int8 scorer is replaced by a production SIMD or
+otherwise optimized kernel.
+
+Representative `global_pq_32B_x8` row from the smoke:
+
+```text
+selected compressed code bytes/query: 160.0 KiB
+fp32 cascade@50 p50:                   76.99 us
+int8 cascade@50 p50:                  121.41 us
+fp32 cascade@50 bytes:                178.9 KiB
+int8 cascade@50 bytes:                164.7 KiB
+full-int8 rerank@50 recall@10:          1.00
+```
+
+This fills the report's instrumentation gap for a full-dim int8 rerank stage.
+It does not yet settle the production cascade question, because the measured
+path is still staged and resident rather than an integrated TreeDB executor.
+
 ## Evidence Contract Audit
 
 This report is now a tournament artifact, not a single-method benchmark note.
@@ -1351,7 +1411,7 @@ The current evidence map is:
 | Train/eval discipline for PQ/OPQ/residual-PQ | PQ, residual-PQ, OPQ-style, local residual-PQ, and local residual-OPQ rows are trained on buildable train samples and evaluated on held-out eval/query slices, not on a single top100 cloud. | Satisfied for measured codebook lanes. |
 | Top100-only method coverage | Measured local PCA int8, adaptive rank, full-dim SQ8, scalar low-bit lanes, scale-policy probes, norm-explicit correction, boundary-weighted PCA, pairwise-difference PCA, query-centered oracle projection, random-rotation scalar/sign probes, and PCA plus tiny residual correction. | Broadly satisfied; low-rank-plus-tail progressive bounds remain open. |
 | Production/buildable granule coverage | Measured row-id controls, IVF clusters, IVF-sorted fixed blocks, graph-neighborhood fixed blocks, graph-sorted row-adjacent fixed blocks, and a graph-visited block-routing scout over sealed graph-sorted storage blocks. | Partial; full HNSW/TreeDB graph visited sets and actual TreeDB granules are not measured. |
-| Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, and a measured resident-fp32 row-id rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 vector+invNorm rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, and optional fp32-after-int8 rerank are not measured. |
+| Cascade architecture | Existing rows report compressed shortlist containment and exact rerank@20/@50 recall. The buildable scout renderer now emits staged cascade measurements: measured compressed scan cost, measured approximate topK selection over materialized scores, a measured resident-fp32 row-id rerank kernel, and a measured resident full-dim SQ8/int8 rerank kernel at top20/top50/top100, with selected-code bytes plus fp32 or full-int8 rerank bytes. | Partial; this is still not full end-to-end latency because I/O, decompression, cache effects, fused scan+topK executor effects, optimized int8 scoring, and optional fp32-after-int8 rerank are not measured. |
 | p50/p90/worst-query behavior | Top100 adaptive-rank tables include p50/p90/worst K. The buildable scout renderer now emits aggregate routing and conditional-codec p50/p90/worst tables for new artifacts. The curated historical sections in this report still emphasize p50/worst unless regenerated from those artifacts. | Partial; larger buildable runs should be regenerated or summarized with the new p90 tables before final promotion. |
 | Production promotion criteria | Current report does not promote spherical hot scoring, local PCA as a final ranker, OPQ as a winner, graph-visited block routing as a production route, or top100-only oracle projections as production methods. It promotes global PQ48/PQ64 as the simplest measured low-byte trained-codebook candidate-generator baseline, global PQ80/PQ96 as clean high-byte error-reduction baselines, and local residual-PQ as a metadata-heavy challenger. | Satisfied for current evidence, but not final until full graph visited sets and TreeDB granules are measured. |
 
@@ -1376,9 +1436,10 @@ strong research frontier, not a production format decision.
 3. Extend local OPQ/LOPQ to production-plausible graph/TreeDB granules and add
    PCA plus residual correction if local PCA remains promising.
 4. Extend the cascade benchmark beyond the current staged scan-plus-topK-plus
-   fp32 rerank measurements: add full-dim int8 rerank, optional exact fp32
-   rerank, p50/p95 end-to-end latency, decompression/I/O/cache effects, a fused
-   scan+topK executor, and cache-aware bytes read/query.
+   fp32/full-int8 rerank measurements: add an optimized full-dim int8 rerank
+   kernel, optional exact fp32 rerank after int8, p50/p95 end-to-end latency,
+   decompression/I/O/cache effects, a fused scan+topK executor, and cache-aware
+   bytes read/query.
 5. Finish safe/progressive low-rank-plus-tail bounds only if the top100 oracle
    path remains needed for method triage; the tiny residual sketch has now been
    rerun on queries `0..99` and is not promoted above the current oracle
