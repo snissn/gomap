@@ -232,6 +232,12 @@ type columnVectorGraphDeep1BGroundtruthMethodReport struct {
 	MaxErrorOverGap50                      float64   `json:"max_error_over_gap_50_51,omitempty"`
 	MeanRelativeL2                         float64   `json:"mean_relative_l2,omitempty"`
 	MaxRelativeL2                          float64   `json:"max_relative_l2,omitempty"`
+	PlanBaseBits                           int       `json:"plan_base_bits,omitempty"`
+	PlanMaxBits                            int       `json:"plan_max_bits,omitempty"`
+	PlanUpgradedRows                       int       `json:"plan_upgraded_rows,omitempty"`
+	PlanUpgradedValues                     int       `json:"plan_upgraded_values,omitempty"`
+	PlanExtraPayloadBitsPerVector          float64   `json:"plan_extra_payload_bits_per_vector,omitempty"`
+	PlanMeanBitsPerValue                   float64   `json:"plan_mean_bits_per_value,omitempty"`
 	BoundTargetK                           int       `json:"bound_target_k,omitempty"`
 	BoundPrunedRows                        int       `json:"bound_pruned_rows,omitempty"`
 	BoundSurvivorRows                      int       `json:"bound_survivor_rows,omitempty"`

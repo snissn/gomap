@@ -9,7 +9,7 @@ Current measured run:
 date:          2026-05-20
 queries:       official Deep1B public queries 0..99
 regime:        official top100 local-neighborhood codec probe
-source output: /tmp/gomap_deep1b_float_quant_q0_99_20260520_084512/report.md
+source output: /tmp/gomap_deep1b_float_quant_v2_q0_99/report.md
 ```
 
 This document is the standalone home for the next codec-only Deep1B vector
@@ -192,36 +192,42 @@ is not used as the primary ranking metric for this oracle-top100 regime.
 
 | Gate | Cheapest all-query winner | Payload bits/vector | Payload B/vector | Metadata B/vector |
 | --- | --- | ---: | ---: | ---: |
-| compressed final top10 >= 9/10 | `float_quant_affine_u6_per_dim_reconstructed_norm` | 576 | 72 | 7.68 |
-| compressed final top10 = 10/10 | `float_quant_block_float_u10_per_dim_reconstructed_norm` | 960 | 120 | 3.84 |
-| compressed final top20 >= 19/20 | `float_quant_affine_u8_per_dim_f16_explicit_norm` | 768 | 96 | 9.68 |
-| compressed final top20 = 20/20 | `float_quant_affine_u14_per_dim_f16_explicit_norm` | 1344 | 168 | 9.68 |
-| exact top10 in approx@20 >= 9/10 | `float_quant_affine_u4_per_dim_reconstructed_norm` | 384 | 48 | 7.68 |
-| exact top10 in approx@20 = 10/10 | `float_quant_affine_u4_per_dim_reconstructed_norm` | 384 | 48 | 7.68 |
-| exact top10 in approx@50 = 10/10 | `float_quant_affine_u4_per_dim_reconstructed_norm` | 384 | 48 | 7.68 |
-| exact top20 in approx@50 >= 19/20 | `float_quant_affine_u4_per_dim_reconstructed_norm` | 384 | 48 | 7.68 |
-| exact top20 in approx@50 = 20/20 | `float_quant_affine_u4_per_dim_reconstructed_norm` | 384 | 48 | 7.68 |
+| compressed final top10 >= 9/10 | `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top10_ge9` | 192.4 | 24.05 | 8.64 |
+| compressed final top10 = 10/10 | `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top10_full` | 192.4 | 24.05 | 8.64 |
+| compressed final top20 >= 19/20 | `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top20_ge19` | 192.6 | 24.08 | 8.64 |
+| compressed final top20 = 20/20 | `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top20_full` | 192.7 | 24.09 | 8.64 |
+| exact top10 in approx@20 >= 9/10 | `float_quant_per_dim_u2_sparse_value_exceptions_top10_at20_ge9` | 192.2 | 24.03 | 8.64 |
+| exact top10 in approx@20 = 10/10 | `float_quant_per_dim_u2_sparse_value_exceptions_top10_at20_full` | 192.3 | 24.04 | 8.64 |
+| exact top10 in approx@50 = 10/10 | `float_quant_per_dim_u2_sparse_value_exceptions_top10_at50_full` | 192.2 | 24.03 | 8.64 |
+| exact top20 in approx@50 >= 19/20 | `float_quant_per_dim_u2_sparse_value_exceptions_top20_at50_ge19` | 192.3 | 24.04 | 8.64 |
+| exact top20 in approx@50 = 20/20 | `float_quant_per_dim_u2_sparse_value_exceptions_top20_at50_full` | 192.4 | 24.05 | 8.64 |
 
 The primary codec conclusion is therefore:
 
 ```text
-For official Deep1B top100 local neighborhoods, u4 per-dimension affine
-quantization is the conservative candidate-generation winner in this tournament.
-It preserves all tested top10/top20 shortlist gates across queries 0..99 at
-48 B/vector row payload.
+For official Deep1B top100 local neighborhoods, the most packed tested codec is
+u2 per-dimension affine plus sparse row-dimension exception bitplanes. It passes
+the tested candidate-survival and compressed-final gates across queries 0..99 at
+about 192.2-192.7 payload bits/vector, or about 24.0 B/vector.
 ```
 
-This is not a final-ranking result. Compressed-only final ranking requires much
-more precision. The cheapest all-query compressed-final winners were 72 B/vector
-for top10 >= 9/10, 120 B/vector for exact top10, and 168 B/vector for exact
-top20. That supports the cascade design:
+This is a theory-of-information result for the top100 oracle setting, not a
+production layout. The sparse exception rows intentionally treat the exception
+selection map as secondary metadata. They answer "how many value bits need to be
+repaired?" before answering "how should TreeDB pack and address those repairs?"
+
+The simple implementation-shaped conclusion remains:
 
 ```text
-u4-ish compressed candidate scan
-  -> exact or near-exact rerank
+u4 per-dimension affine is the first uniform scalar lane that preserves the
+tested top10/top20 candidate-survival gates across queries 0..99 at
+384 payload bits/vector = 48 B/vector.
 ```
 
-instead of trying to make the compressed codec own final top10 ordering.
+Uniform u6 is the first simple lane that reaches compressed top10 >= 9/10 for
+all 100 queries, and u10-ish block float is the first simple lane that reaches
+exact compressed top10. Those are near-final or rerank-reference lanes, not the
+smallest candidate-generation payloads.
 
 ### Per-Query Lower Bound
 
@@ -231,19 +237,21 @@ it shows how much headroom a better adaptive codec could have.
 
 | Gate | Passing queries | p50 payload bits/vector | p90 payload bits/vector | Worst passing payload bits/vector |
 | --- | ---: | ---: | ---: | ---: |
-| compressed final top10 >= 9/10 | 100/100 | 384.0 | 394.6 | 480.0 |
-| compressed final top10 = 10/10 | 100/100 | 384.0 | 480.0 | 768.0 |
-| compressed final top20 >= 19/20 | 100/100 | 384.0 | 480.0 | 576.0 |
-| compressed final top20 = 20/20 | 100/100 | 576.0 | 672.0 | 960.0 |
-| exact top10 in approx@20 >= 9/10 | 100/100 | 192.0 | 288.0 | 384.0 |
-| exact top10 in approx@20 = 10/10 | 100/100 | 288.0 | 384.0 | 384.0 |
-| exact top10 in approx@50 = 10/10 | 100/100 | 108.0 | 192.0 | 288.0 |
-| exact top20 in approx@50 >= 19/20 | 100/100 | 192.0 | 288.0 | 384.0 |
-| exact top20 in approx@50 = 20/20 | 100/100 | 259.2 | 288.0 | 384.0 |
+| compressed final top10 >= 9/10 | 100/100 | 192.3 | 192.6 | 192.9 |
+| compressed final top10 = 10/10 | 100/100 | 192.4 | 192.6 | 193.0 |
+| compressed final top20 >= 19/20 | 100/100 | 192.7 | 192.9 | 193.2 |
+| compressed final top20 = 20/20 | 100/100 | 192.7 | 192.9 | 193.3 |
+| exact top10 in approx@20 >= 9/10 | 100/100 | 192.0 | 192.4 | 192.7 |
+| exact top10 in approx@20 = 10/10 | 100/100 | 192.2 | 192.5 | 192.8 |
+| exact top10 in approx@50 = 10/10 | 100/100 | 109.0 | 192.0 | 192.5 |
+| exact top20 in approx@50 >= 19/20 | 100/100 | 192.0 | 192.5 | 192.8 |
+| exact top20 in approx@50 = 20/20 | 100/100 | 192.3 | 192.7 | 192.9 |
 
-This says adaptive quantization is still worth studying, but the current simple
-all-query policy to promote is not a mixed row/dimension oracle. It is u4
-per-dimension affine.
+This materially changes the mixed-precision interpretation. The earlier coarse
+mixed-row/mixed-dimension allocators did not reach the likely floor; sparse
+row-dimension exception bitplanes did. The packed value budget for these oracle
+clouds is often just above a uniform u2 payload, but only if the codec can spend
+tiny repairs on the specific values that move the target gate.
 
 ### Method-Level Observations
 
@@ -251,6 +259,10 @@ Selected aggregate rows from the q0..99 report:
 
 | Method | Payload B/vector | p50 compressed top10 | Worst compressed top10 | Worst top10@20 | Worst top10@50 | Worst top20@50 | Avg err/gap10 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `float_quant_affine_u2_per_dim_reconstructed_norm` | 24 | 6/10 | 2/10 | 5/10 | 7/10 | 13/20 | 66.42 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_top10_at20_full` | 24.04 | 5/10 | 2/10 | 10/10 | 10/10 | 14/20 | 51.84 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_top20_at50_full` | 24.05 | 5/10 | 0/10 | 3/10 | 10/10 | 20/20 | 50.51 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top10_full` | 24.05 | 10/10 | 10/10 | 10/10 | 10/10 | 14/20 | 54.56 |
 | `float_quant_affine_u3_per_dim_reconstructed_norm` | 36 | 8/10 | 5/10 | 7/10 | 9/10 | 18/20 | 16.57 |
 | `float_quant_affine_u4_per_dim_reconstructed_norm` | 48 | 9/10 | 7/10 | 10/10 | 10/10 | 20/20 | 6.19 |
 | `float_quant_random_rotation_affine_u4_per_dim_reconstructed_norm` | 48 | 9/10 | 7/10 | 9/10 | 10/10 | 20/20 | 6.22 |
@@ -263,17 +275,36 @@ Selected aggregate rows from the q0..99 report:
 Interpretation:
 
 ```text
-u1/u2/u3 are useful diagnostics but not reliable conservative candidates.
-u4 per-dim affine is the first all-query candidate-survival threshold.
-u6 per-dim affine is the first all-query compressed-top10 >= 9/10 threshold.
-u10-ish block-float is needed for exact compressed top10 in this run.
+uniform u1/u2/u3 are useful diagnostics but not reliable conservative lanes.
+u2 plus sparse value exceptions is the current top100 theoretical floor.
+u4 per-dim affine is the first simple all-query candidate-survival threshold.
+u6 per-dim affine is the first simple all-query compressed-top10 >= 9/10 threshold.
+u10-ish block-float is needed for exact compressed top10 in simple lanes.
 bf16/fp16/mantissa-style float formats are near-final/rerank lanes, not
 candidate-generation winners by payload.
 ```
 
 Explicit norm lanes did not become the candidate-generation winner. They helped
-some higher-precision compressed-final gates, but the all-query candidate gates
-were won by reconstructed-norm per-dimension affine u4.
+some higher-precision compressed-final gates in the earlier uniform-only pass,
+but the v2 all-query gates are won by sparse exceptions over reconstructed-norm
+per-dimension affine u2.
+
+### Adaptive Bit-Plan Structure
+
+The sparse value-exception lanes are gate-specific. Each starts from uniform u2
+per-dimension affine quantization, then adds individual row-dimension bitplane
+repairs until the target gate passes. The table below shows why this is a codec
+floor probe rather than a storage layout: very few values are upgraded, and the
+maximum observed per-value precision is only u3 for these gates, but an actual
+storage format still needs an efficient exception-address representation.
+
+| Method | Passing queries | p50 payload bits/vector | p90 payload bits/vector | p50 extra bits/vector | Mean bits/value | Max bits/value | Mean upgraded rows | Mean upgraded values | Worst top10@20 | Worst top10@50 | Worst top20@50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `float_quant_per_dim_u2_sparse_value_exceptions_top10_at50_full` | 100 | 192.1 | 192.5 | 0.1 | 2.001 | 3.0 | 13.0 | 14.0 | 2/10 | 10/10 | 13/20 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_top10_at20_full` | 100 | 192.3 | 192.5 | 0.3 | 2.003 | 3.0 | 18.0 | 28.0 | 10/10 | 10/10 | 14/20 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_top20_at50_full` | 100 | 192.4 | 192.7 | 0.4 | 2.004 | 3.0 | 29.0 | 43.0 | 3/10 | 10/10 | 20/20 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top10_full` | 100 | 192.4 | 192.6 | 0.4 | 2.004 | 3.0 | 14.0 | 39.0 | 10/10 | 10/10 | 14/20 |
+| `float_quant_per_dim_u2_sparse_value_exceptions_compressed_top20_full` | 100 | 192.7 | 192.9 | 0.7 | 2.007 | 3.0 | 23.0 | 71.0 | 10/10 | 10/10 | 20/20 |
 
 ## Size Accounting
 
@@ -315,6 +346,8 @@ random-rotation affine selected widths: u1/u2/u4/u8/u16/u32
 greedy mixed per-dimension precision plans for candidate-survival gates
 greedy mixed per-row precision classes for candidate-survival gates
 base-u4 plus row-exception upgrades for candidate-survival gates
+per-dimension u2/u3/u4 base plus whole-row exception bitplanes
+per-dimension u2/u3/u4 base plus sparse row-dimension exception bitplanes
 ```
 
 The mixed-precision lanes use exact row norms to isolate value-quantization
@@ -481,8 +514,8 @@ u2, u3, u4, mantissa m7, or block-float mN
 Then add exception payloads for fragile rows or dimensions:
 
 ```text
-row exceptions
-dimension exceptions
+whole-row exception bitplanes
+sparse row-dimension exception bitplanes
 residual sidecar
 explicit norm sidecar
 ```
@@ -493,6 +526,12 @@ This family answers:
 Can a mostly cheap representation match high-precision candidate survival by
 repairing only the boundary-sensitive cases?
 ```
+
+The v2 result says yes in the oracle-top100 setting: a u2 base plus sparse
+row-dimension exception bitplanes reached the tested gates at roughly 24
+B/vector of value payload. That should be read as an upper-bound compression
+signal, because the exception-address representation is not yet optimized or
+charged as a primary metric.
 
 ### 8. Norm-Explicit Variants
 
@@ -707,6 +746,8 @@ Implemented pieces:
    - per-dimension greedy allocator
    - per-row precision-class allocator
    - base-plus-exceptions allocator
+   - per-dimension base plus whole-row exception bitplanes
+   - per-dimension base plus sparse row-dimension exception bitplanes
 
 5. report:
    - measured gate-winner table
@@ -719,10 +760,11 @@ Current limitations:
 
 ```text
 1. mixed-precision metadata is intentionally rough and secondary
-2. mixed row/dimension lanes are oracle codec probes, not production layouts
-3. scan timings are research-scorer timings, not optimized packed-code kernels
-4. results are official top100 locality probes, not buildable TreeDB granules
-5. PQ/OPQ/AVQ/QINCo are intentionally excluded from this top100-only tournament
+2. sparse exception-address metadata is not optimized and is not a primary gate
+3. mixed row/dimension lanes are oracle codec probes, not production layouts
+4. scan timings are research-scorer timings, not optimized packed-code kernels
+5. results are official top100 locality probes, not buildable TreeDB granules
+6. PQ/OPQ/AVQ/QINCo are intentionally excluded from this top100-only tournament
 ```
 
 ## Decision Output
@@ -731,25 +773,32 @@ Current policy-oriented conclusion:
 
 ```text
 Candidate generation:
-  promote u4 per-dimension affine as the conservative q0..99 top100 codec lane
-  at 384 bits/vector = 48 B/vector row payload.
+  the current top100 oracle floor is u2 per-dimension affine plus sparse
+  row-dimension exception bitplanes at about 192.2-192.4 bits/vector for the
+  tested shortlist gates.
+
+Simple conservative lane:
+  promote u4 per-dimension affine as the implementation-shaped q0..99 top100
+  codec lane at 384 bits/vector = 48 B/vector row payload.
 
 Near-final / compressed-only ranking:
-  do not rely on u4.
-  q0..99 required 576 bits/vector for compressed top10 >= 9/10,
-  960 bits/vector for exact compressed top10,
-  and 1344 bits/vector for exact compressed top20.
+  sparse exception plans can force compressed-final gates in this top100 oracle
+  setting, but should not be read as a deployable final-ranker yet.
+  simple uniform/block lanes required u6 for compressed top10 >= 9/10 and
+  u10-ish block float for exact compressed top10.
 
 Adaptive quantization:
-  still promising as a lower-bound signal, but the implemented mixed
-  row/dimension oracle policies are not yet a production policy.
+  the coarse mixed row/dimension allocators were too blunt.
+  sparse value exceptions show the more useful theoretical target: start with a
+  very cheap base and repair only the row-dimension cells that affect the gate.
 
 Mantissa/fp formats:
   useful near-final/rerank references, but not payload winners for candidate
   generation in this Deep1B top100 tournament.
 
 Norm-explicit correction:
-  not the primary candidate-generation win in this run.
+  not the primary candidate-generation win in this run; value-precision repair
+  mattered more than explicit magnitude sidecars for the winning gates.
 ```
 
 This result should guide TreeDB codec priorities before investing in more

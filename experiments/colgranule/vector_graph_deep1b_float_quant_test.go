@@ -45,6 +45,8 @@ func columnVectorGraphDeep1BEvaluateGroundtruthFloatQuantizationTournament(vecto
 	out = append(out, columnVectorGraphDeep1BReportMixedDimFloatQuant(vectors, invNorms, query, queryInvNorm, exactScores, margins, rows, dims, scanIters, gates)...)
 	out = append(out, columnVectorGraphDeep1BReportMixedRowFloatQuant(vectors, invNorms, query, queryInvNorm, exactScores, margins, rows, dims, scanIters, gates, 1, "mixed_row_affine")...)
 	out = append(out, columnVectorGraphDeep1BReportMixedRowFloatQuant(vectors, invNorms, query, queryInvNorm, exactScores, margins, rows, dims, scanIters, gates, 4, "base_u4_row_exceptions")...)
+	out = append(out, columnVectorGraphDeep1BReportPerDimBaseRowExceptionFloatQuant(vectors, invNorms, query, queryInvNorm, exactScores, margins, rows, dims, scanIters, gates)...)
+	out = append(out, columnVectorGraphDeep1BReportSparseValueExceptionFloatQuant(vectors, invNorms, query, queryInvNorm, exactScores, margins, rows, dims, scanIters, gates)...)
 	return out
 }
 
@@ -253,6 +255,71 @@ func columnVectorGraphDeep1BReportMixedRowFloatQuant(vectors []float32, invNorms
 		})
 		columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approx, margins)
 		out = append(out, method)
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BReportPerDimBaseRowExceptionFloatQuant(vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, rows int, dims int, scanIters int, gates []columnVectorGraphDeep1BFloatQuantGate) []columnVectorGraphDeep1BGroundtruthMethodReport {
+	if len(gates) == 0 {
+		return nil
+	}
+	pre := columnVectorGraphDeep1BPrecomputeDimAffineContributions(vectors, invNorms, query, queryInvNorm, rows, dims)
+	rowScores := columnVectorGraphDeep1BPerDimAffineRowScoreTable(pre, rows, dims)
+	out := make([]columnVectorGraphDeep1BGroundtruthMethodReport, 0, len(gates)*3)
+	for _, baseBits := range []int{2, 3, 4} {
+		for _, gate := range columnVectorGraphDeep1BNonTrivialFloatQuantGates(gates, rows) {
+			start := time.Now()
+			bitsByRow, approx := columnVectorGraphDeep1BGreedyPerDimBaseRowExceptions(rowScores, exactScores, gate, rows, baseBits)
+			buildNanos := time.Since(start).Nanoseconds()
+			totalBits := dims * columnVectorGraphDeep1BSumInts(bitsByRow)
+			payloadBytes := float64(totalBits) / (8 * float64(rows))
+			method := columnVectorGraphDeep1BNewGroundtruthMethodReport(
+				"float_quant_per_dim_base_row_exceptions",
+				fmt.Sprintf("float_quant_per_dim_u%d_row_exceptions_%s", baseBits, gate.id),
+				payloadBytes,
+				float64(dims*8+dims+rows)/float64(rows),
+				buildNanos,
+				"official top100 float-value codec probe; starts from per-dimension affine base precision and spends whole-row exception bitplanes only until the named recall gate passes; payload is theoretical packed value bits and ignores implementation alignment",
+			)
+			columnVectorGraphDeep1BSetRowBitPlanStats(&method, baseBits, bitsByRow, rows, dims)
+			method.ScanNanosPerVector = columnVectorGraphDeep1BMeasureGroundtruthScan(rows, scanIters, func(dst []float32) {
+				copy(dst[:rows], approx)
+			})
+			columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approx, margins)
+			out = append(out, method)
+		}
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BReportSparseValueExceptionFloatQuant(vectors []float32, invNorms []float32, query []float32, queryInvNorm float32, exactScores []float32, margins map[string]float64, rows int, dims int, scanIters int, gates []columnVectorGraphDeep1BFloatQuantGate) []columnVectorGraphDeep1BGroundtruthMethodReport {
+	if len(gates) == 0 {
+		return nil
+	}
+	pre := columnVectorGraphDeep1BPrecomputeDimAffineContributions(vectors, invNorms, query, queryInvNorm, rows, dims)
+	out := make([]columnVectorGraphDeep1BGroundtruthMethodReport, 0, len(gates)*3)
+	for _, baseBits := range []int{2, 3, 4} {
+		for _, gate := range columnVectorGraphDeep1BNonTrivialFloatQuantGates(gates, rows) {
+			start := time.Now()
+			bitsByCell, approx := columnVectorGraphDeep1BGreedySparseValueExceptions(pre, exactScores, gate, rows, dims, baseBits)
+			buildNanos := time.Since(start).Nanoseconds()
+			payloadBits := float64(columnVectorGraphDeep1BSumInts(bitsByCell)) / float64(rows)
+			payloadBytes := payloadBits / 8
+			method := columnVectorGraphDeep1BNewGroundtruthMethodReport(
+				"float_quant_sparse_value_exceptions",
+				fmt.Sprintf("float_quant_per_dim_u%d_sparse_value_exceptions_%s", baseBits, gate.id),
+				payloadBytes,
+				float64(dims*8+dims)/float64(rows),
+				buildNanos,
+				"official top100 float-value codec probe; starts from per-dimension affine base precision and spends individual row-dimension exception bitplanes only until the named recall gate passes; payload is theoretical packed value bits and intentionally ignores exception-map storage",
+			)
+			columnVectorGraphDeep1BSetCellBitPlanStats(&method, baseBits, bitsByCell, rows, dims)
+			method.ScanNanosPerVector = columnVectorGraphDeep1BMeasureGroundtruthScan(rows, scanIters, func(dst []float32) {
+				copy(dst[:rows], approx)
+			})
+			columnVectorGraphDeep1BFillGroundtruthMethodMetrics(&method, exactScores, approx, margins)
+			out = append(out, method)
+		}
 	}
 	return out
 }
@@ -675,6 +742,280 @@ func columnVectorGraphDeep1BGreedyMixedRowBitPlan(pre columnVectorGraphDeep1BRow
 	return bitsByRow, scores
 }
 
+func columnVectorGraphDeep1BPerDimAffineRowScoreTable(pre columnVectorGraphDeep1BDimAffinePrecompute, rows int, dims int) []float32 {
+	scores := make([]float32, rows*33)
+	for bits := 1; bits <= 32; bits++ {
+		for j := 0; j < dims; j++ {
+			base := (j*33 + bits) * rows
+			for row := 0; row < rows; row++ {
+				scores[row*33+bits] += pre.contrib[base+row]
+			}
+		}
+	}
+	return scores
+}
+
+func columnVectorGraphDeep1BGreedyPerDimBaseRowExceptions(rowScores []float32, exactScores []float32, gate columnVectorGraphDeep1BFloatQuantGate, rows int, baseBits int) ([]int, []float32) {
+	if baseBits < 1 {
+		baseBits = 1
+	}
+	if baseBits > 32 {
+		baseBits = 32
+	}
+	bitsByRow := make([]int, rows)
+	scores := make([]float32, rows)
+	for row := 0; row < rows; row++ {
+		bitsByRow[row] = baseBits
+		scores[row] = rowScores[row*33+baseBits]
+	}
+	weights := columnVectorGraphDeep1BBoundaryWeights(exactScores, gate)
+	for !columnVectorGraphDeep1BFloatQuantGatePasses(exactScores, scores, gate) {
+		ctx := columnVectorGraphDeep1BFloatQuantGateContext(exactScores, scores, gate)
+		bestRow := -1
+		bestPriority := math.Inf(-1)
+		for row := 0; row < rows; row++ {
+			if bitsByRow[row] >= 32 {
+				continue
+			}
+			nextScore := rowScores[row*33+bitsByRow[row]+1]
+			priority := columnVectorGraphDeep1BFloatQuantUpgradePriority(exactScores, scores, weights, ctx, gate, row, nextScore)
+			if priority > bestPriority || bestRow < 0 {
+				bestPriority = priority
+				bestRow = row
+			}
+		}
+		if bestRow < 0 {
+			break
+		}
+		bitsByRow[bestRow]++
+		scores[bestRow] = rowScores[bestRow*33+bitsByRow[bestRow]]
+		if columnVectorGraphDeep1BAllIntsAtLeast(bitsByRow, 32) {
+			break
+		}
+	}
+	return bitsByRow, scores
+}
+
+func columnVectorGraphDeep1BGreedySparseValueExceptions(pre columnVectorGraphDeep1BDimAffinePrecompute, exactScores []float32, gate columnVectorGraphDeep1BFloatQuantGate, rows int, dims int, baseBits int) ([]int, []float32) {
+	if baseBits < 1 {
+		baseBits = 1
+	}
+	if baseBits > 32 {
+		baseBits = 32
+	}
+	bitsByCell := make([]int, rows*dims)
+	scores := make([]float32, rows)
+	for row := range bitsByCell {
+		bitsByCell[row] = baseBits
+	}
+	for j := 0; j < dims; j++ {
+		base := (j*33 + baseBits) * rows
+		for row := 0; row < rows; row++ {
+			scores[row] += pre.contrib[base+row]
+		}
+	}
+	weights := columnVectorGraphDeep1BBoundaryWeights(exactScores, gate)
+	for !columnVectorGraphDeep1BFloatQuantGatePasses(exactScores, scores, gate) {
+		ctx := columnVectorGraphDeep1BFloatQuantGateContext(exactScores, scores, gate)
+		active := columnVectorGraphDeep1BFloatQuantActiveRows(ctx, gate)
+		bestRow := -1
+		bestDim := -1
+		bestPriority := math.Inf(-1)
+		for row, ok := range active {
+			if !ok {
+				continue
+			}
+			for j := 0; j < dims; j++ {
+				cell := row*dims + j
+				currentBits := bitsByCell[cell]
+				if currentBits >= 32 {
+					continue
+				}
+				oldBase := (j*33 + currentBits) * rows
+				newBase := (j*33 + currentBits + 1) * rows
+				nextScore := scores[row] + pre.contrib[newBase+row] - pre.contrib[oldBase+row]
+				priority := columnVectorGraphDeep1BFloatQuantUpgradePriority(exactScores, scores, weights, ctx, gate, row, nextScore)
+				if priority > bestPriority || bestRow < 0 {
+					bestPriority = priority
+					bestRow = row
+					bestDim = j
+				}
+			}
+		}
+		if bestRow < 0 {
+			break
+		}
+		cell := bestRow*dims + bestDim
+		oldBase := (bestDim*33 + bitsByCell[cell]) * rows
+		bitsByCell[cell]++
+		newBase := (bestDim*33 + bitsByCell[cell]) * rows
+		scores[bestRow] += pre.contrib[newBase+bestRow] - pre.contrib[oldBase+bestRow]
+		if columnVectorGraphDeep1BAllIntsAtLeast(bitsByCell, 32) {
+			break
+		}
+	}
+	return bitsByCell, scores
+}
+
+type columnVectorGraphDeep1BFloatQuantGateContextInfo struct {
+	exactTarget     []bool
+	approxCandidate []bool
+	approxRank      []int
+	cutoffScore     float32
+	missingTargets  int
+}
+
+func columnVectorGraphDeep1BFloatQuantGateContext(exactScores []float32, approximate []float32, gate columnVectorGraphDeep1BFloatQuantGate) columnVectorGraphDeep1BFloatQuantGateContextInfo {
+	rows := len(exactScores)
+	ctx := columnVectorGraphDeep1BFloatQuantGateContextInfo{
+		exactTarget:     make([]bool, rows),
+		approxCandidate: make([]bool, rows),
+		approxRank:      make([]int, rows),
+	}
+	for row := range ctx.approxRank {
+		ctx.approxRank[row] = rows
+	}
+	exactOrder := columnVectorGraphDeep1BScoreOrderDesc(exactScores)
+	for rank := 0; rank < min(gate.targetK, len(exactOrder)); rank++ {
+		ctx.exactTarget[exactOrder[rank]] = true
+	}
+	approxOrder := columnVectorGraphDeep1BScoreOrderDesc(approximate)
+	candidateK := min(gate.candidateK, len(approxOrder))
+	for rank, row := range approxOrder {
+		ctx.approxRank[row] = rank
+		if rank < candidateK {
+			ctx.approxCandidate[row] = true
+		}
+	}
+	if candidateK > 0 {
+		ctx.cutoffScore = approximate[approxOrder[candidateK-1]]
+	}
+	for row, target := range ctx.exactTarget {
+		if target && !ctx.approxCandidate[row] {
+			ctx.missingTargets++
+		}
+	}
+	return ctx
+}
+
+func columnVectorGraphDeep1BFloatQuantActiveRows(ctx columnVectorGraphDeep1BFloatQuantGateContextInfo, gate columnVectorGraphDeep1BFloatQuantGate) []bool {
+	active := make([]bool, len(ctx.exactTarget))
+	activeLimit := min(len(active), max(gate.candidateK+10, gate.targetK+10))
+	for row := range active {
+		if ctx.exactTarget[row] || ctx.approxCandidate[row] || ctx.approxRank[row] < activeLimit {
+			active[row] = true
+		}
+	}
+	return active
+}
+
+func columnVectorGraphDeep1BFloatQuantUpgradePriority(exactScores []float32, scores []float32, weights []float64, ctx columnVectorGraphDeep1BFloatQuantGateContextInfo, gate columnVectorGraphDeep1BFloatQuantGate, row int, nextScore float32) float64 {
+	oldScore := scores[row]
+	delta := float64(nextScore - oldScore)
+	oldErr := math.Abs(float64(exactScores[row] - oldScore))
+	newErr := math.Abs(float64(exactScores[row] - nextScore))
+	errImprovement := oldErr - newErr
+	priority := weights[row] * errImprovement
+	if ctx.exactTarget[row] {
+		if !ctx.approxCandidate[row] {
+			oldGap := math.Max(0, float64(ctx.cutoffScore-oldScore))
+			newGap := math.Max(0, float64(ctx.cutoffScore-nextScore))
+			priority += 1000 * (oldGap - newGap)
+			if delta > 0 {
+				priority += 100 * delta
+			}
+		} else if ctx.approxRank[row] >= max(0, gate.candidateK-5) && delta > 0 {
+			priority += 10 * delta
+		}
+	} else if ctx.approxCandidate[row] && ctx.missingTargets > 0 {
+		if delta < 0 {
+			priority += 500 * -delta
+		}
+	}
+	return priority
+}
+
+func columnVectorGraphDeep1BNonTrivialFloatQuantGates(gates []columnVectorGraphDeep1BFloatQuantGate, rows int) []columnVectorGraphDeep1BFloatQuantGate {
+	out := make([]columnVectorGraphDeep1BFloatQuantGate, 0, len(gates))
+	for _, gate := range gates {
+		if gate.candidateK >= rows {
+			continue
+		}
+		out = append(out, gate)
+	}
+	return out
+}
+
+func columnVectorGraphDeep1BSetRowBitPlanStats(method *columnVectorGraphDeep1BGroundtruthMethodReport, baseBits int, bitsByRow []int, rows int, dims int) {
+	maxBits := baseBits
+	upgradedRows := 0
+	totalBits := 0
+	extraBits := 0
+	for _, bits := range bitsByRow {
+		totalBits += bits * dims
+		if bits > maxBits {
+			maxBits = bits
+		}
+		if bits > baseBits {
+			upgradedRows++
+			extraBits += (bits - baseBits) * dims
+		}
+	}
+	method.PlanBaseBits = baseBits
+	method.PlanMaxBits = maxBits
+	method.PlanUpgradedRows = upgradedRows
+	method.PlanUpgradedValues = upgradedRows * dims
+	method.PlanExtraPayloadBitsPerVector = float64(extraBits) / float64(rows)
+	method.PlanMeanBitsPerValue = float64(totalBits) / float64(rows*dims)
+	method.Notes += fmt.Sprintf("; bit_plan base_bits=%d max_bits=%d upgraded_rows=%d upgraded_values=%d extra_bits_per_vector=%.2f mean_bits_per_value=%.3f",
+		method.PlanBaseBits,
+		method.PlanMaxBits,
+		method.PlanUpgradedRows,
+		method.PlanUpgradedValues,
+		method.PlanExtraPayloadBitsPerVector,
+		method.PlanMeanBitsPerValue,
+	)
+}
+
+func columnVectorGraphDeep1BSetCellBitPlanStats(method *columnVectorGraphDeep1BGroundtruthMethodReport, baseBits int, bitsByCell []int, rows int, dims int) {
+	maxBits := baseBits
+	totalBits := 0
+	extraBits := 0
+	upgradedValues := 0
+	upgradedRowsSeen := make([]bool, rows)
+	for cell, bits := range bitsByCell {
+		totalBits += bits
+		if bits > maxBits {
+			maxBits = bits
+		}
+		if bits > baseBits {
+			upgradedValues++
+			extraBits += bits - baseBits
+			upgradedRowsSeen[cell/dims] = true
+		}
+	}
+	upgradedRows := 0
+	for _, seen := range upgradedRowsSeen {
+		if seen {
+			upgradedRows++
+		}
+	}
+	method.PlanBaseBits = baseBits
+	method.PlanMaxBits = maxBits
+	method.PlanUpgradedRows = upgradedRows
+	method.PlanUpgradedValues = upgradedValues
+	method.PlanExtraPayloadBitsPerVector = float64(extraBits) / float64(rows)
+	method.PlanMeanBitsPerValue = float64(totalBits) / float64(rows*dims)
+	method.Notes += fmt.Sprintf("; bit_plan base_bits=%d max_bits=%d upgraded_rows=%d upgraded_values=%d extra_bits_per_vector=%.2f mean_bits_per_value=%.3f",
+		method.PlanBaseBits,
+		method.PlanMaxBits,
+		method.PlanUpgradedRows,
+		method.PlanUpgradedValues,
+		method.PlanExtraPayloadBitsPerVector,
+		method.PlanMeanBitsPerValue,
+	)
+}
+
 func columnVectorGraphDeep1BBoundaryWeights(exactScores []float32, gate columnVectorGraphDeep1BFloatQuantGate) []float64 {
 	weights := make([]float64, len(exactScores))
 	for i := range weights {
@@ -755,6 +1096,9 @@ func columnVectorGraphDeep1BRenderFloatQuantGateSummaryMarkdown(b *strings.Build
 				if !strings.HasPrefix(method.Family, "float_quant_") {
 					continue
 				}
+				if !columnVectorGraphDeep1BFloatQuantMethodEligibleForGate(method, gate.id) {
+					continue
+				}
 				result := summaries[i].results[method.Name]
 				if result == nil {
 					result = &methodGateResult{name: method.Name, family: method.Family}
@@ -828,6 +1172,9 @@ func columnVectorGraphDeep1BRenderFloatQuantGateSummaryMarkdown(b *strings.Build
 				if !strings.HasPrefix(method.Family, "float_quant_") {
 					continue
 				}
+				if !columnVectorGraphDeep1BFloatQuantMethodEligibleForGate(method, gate.id) {
+					continue
+				}
 				if !gate.passes(method) {
 					continue
 				}
@@ -854,4 +1201,109 @@ func columnVectorGraphDeep1BRenderFloatQuantGateSummaryMarkdown(b *strings.Build
 			columnVectorGraphDeep1BFloatQuantile(minimums, 1.0),
 		)
 	}
+	columnVectorGraphDeep1BRenderAdaptiveFloatQuantPlanMarkdown(b, report)
+}
+
+func columnVectorGraphDeep1BFloatQuantMethodEligibleForGate(method columnVectorGraphDeep1BGroundtruthMethodReport, gateID string) bool {
+	switch method.Family {
+	case "float_quant_mixed_dim_precision",
+		"float_quant_mixed_row_affine",
+		"float_quant_base_u4_row_exceptions",
+		"float_quant_per_dim_base_row_exceptions",
+		"float_quant_sparse_value_exceptions":
+		return strings.HasSuffix(method.Name, "_"+gateID)
+	default:
+		return true
+	}
+}
+
+func columnVectorGraphDeep1BRenderAdaptiveFloatQuantPlanMarkdown(b *strings.Builder, report columnVectorGraphDeep1BGroundtruthLocalityReport) {
+	type planAgg struct {
+		count     int
+		payload   []float64
+		extra     []float64
+		meanBits  []float64
+		maxBits   []float64
+		rows      []float64
+		values    []float64
+		top10At20 []float64
+		top10At50 []float64
+		top20At50 []float64
+	}
+	aggs := make(map[string]*planAgg)
+	for _, q := range report.Queries {
+		for _, method := range q.Methods {
+			if method.PlanBaseBits == 0 {
+				continue
+			}
+			key := method.Name
+			agg := aggs[key]
+			if agg == nil {
+				agg = &planAgg{}
+				aggs[key] = agg
+			}
+			agg.count++
+			agg.payload = append(agg.payload, method.RowCodeBytesPerVector*8)
+			agg.extra = append(agg.extra, method.PlanExtraPayloadBitsPerVector)
+			agg.meanBits = append(agg.meanBits, method.PlanMeanBitsPerValue)
+			agg.maxBits = append(agg.maxBits, float64(method.PlanMaxBits))
+			agg.rows = append(agg.rows, float64(method.PlanUpgradedRows))
+			agg.values = append(agg.values, float64(method.PlanUpgradedValues))
+			agg.top10At20 = append(agg.top10At20, float64(method.Top10InApproxTop20))
+			agg.top10At50 = append(agg.top10At50, float64(method.Top10InApproxTop50))
+			agg.top20At50 = append(agg.top20At50, float64(method.Top20InApproxTop50))
+		}
+	}
+	if len(aggs) == 0 {
+		return
+	}
+	type row struct {
+		name string
+		agg  *planAgg
+	}
+	rows := make([]row, 0, len(aggs))
+	for name, agg := range aggs {
+		rows = append(rows, row{name: name, agg: agg})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		left := columnVectorGraphDeep1BFloatQuantileUnsorted(rows[i].agg.payload, 0.50)
+		right := columnVectorGraphDeep1BFloatQuantileUnsorted(rows[j].agg.payload, 0.50)
+		if left != right {
+			return left < right
+		}
+		return rows[i].name < rows[j].name
+	})
+	if len(rows) > 24 {
+		rows = rows[:24]
+	}
+	fmt.Fprintf(b, "\n### Adaptive Bit-Plan Structure\n\n")
+	fmt.Fprintf(b, "These rows are not production layouts. They are theoretical packed-payload probes: the optimizer starts from a base precision and spends exception bitplanes until the named gate passes. The useful question is whether the gate can be met with fewer value bits than uniform u4, not whether the exception map is cheap yet.\n\n")
+	fmt.Fprintf(b, "| Method | Queries | p50 payload bits/vector | p90 payload bits/vector | p50 extra bits/vector | p50 mean bits/value | p50 max bits/value | p50 upgraded rows | p50 upgraded values | Worst top10@20 | Worst top10@50 | Worst top20@50 |\n")
+	fmt.Fprintf(b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+	for _, row := range rows {
+		agg := row.agg
+		fmt.Fprintf(b, "| `%s` | %d | %.1f | %.1f | %.1f | %.3f | %.1f | %.1f | %.1f | %.0f/10 | %.0f/10 | %.0f/20 |\n",
+			row.name,
+			agg.count,
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.payload, 0.50),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.payload, 0.90),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.extra, 0.50),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.meanBits, 0.50),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.maxBits, 0.50),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.rows, 0.50),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.values, 0.50),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.top10At20, 0.0),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.top10At50, 0.0),
+			columnVectorGraphDeep1BFloatQuantileUnsorted(agg.top20At50, 0.0),
+		)
+	}
+}
+
+func columnVectorGraphDeep1BFloatQuantileUnsorted(values []float64, quantile float64) float64 {
+	if len(values) == 0 {
+		return math.NaN()
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	return columnVectorGraphDeep1BFloatQuantile(sorted, quantile)
 }

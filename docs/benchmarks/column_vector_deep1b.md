@@ -163,16 +163,19 @@ tournament. The executable lane is enabled with
 float-value quantization rather than only integer scalar quantization, with
 affine `u1..u32`, mantissa-truncated fp32, bf16/fp16/fp32, block-floating,
 random-rotation scalar quantization, mixed per-dimension precision, mixed
-per-row precision, base-u4 plus row exceptions, and norm-explicit variants. The
-primary output is inverted: for each candidate-survival or ranking gate, find
-the minimum vector payload bits/vector that passes. Metadata is reported
-secondarily because official top100 clouds are not production-amortized
-granules. The 2026-05-20 q0..99 run found `u4` per-dimension affine as the
-conservative top100 candidate-generation winner: it passed exact top10 in
+per-row precision, whole-row exceptions, sparse row-dimension exception
+bitplanes, and norm-explicit variants. The primary output is inverted: for each
+candidate-survival or ranking gate, find the minimum vector payload bits/vector
+that passes. Metadata is reported secondarily because official top100 clouds are
+not production-amortized granules. The 2026-05-20 q0..99 v2 run found a
+theoretical top100 oracle floor near 192 bits/vector, or 24 B/vector, using u2
+per-dimension affine plus sparse row-dimension exception bitplanes for the
+tested gates. That lane intentionally does not prove an optimized exception-map
+layout. Among simple uniform lanes, `u4` per-dimension affine remains the
+conservative candidate-generation baseline: it passed exact top10 in
 approx@20/@50 and exact top20 in approx@50 across all 100 queries at
-384 payload bits/vector, or 48 B/vector. Compressed-only final ranking required
-much more precision, so the recommended interpretation remains compressed
-candidate scan followed by exact or near-exact rerank.
+384 payload bits/vector, or 48 B/vector. The recommended interpretation remains
+compressed candidate scan followed by exact or near-exact rerank.
 
 `TestColumnVectorGraphDeep1BBuildableGranuleScout` is an opt-in
 production/buildable granule scout. It supports `row_id_contiguous` as a weak
