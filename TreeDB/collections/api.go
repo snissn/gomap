@@ -18246,6 +18246,16 @@ func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, er
 // collection is exhausted, or fn returns false. The returned boolean is true
 // only when additional documents were present beyond the maxDocuments limit.
 func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
+	return c.scanDocumentsFuncWithCatalogResolver(maxDocuments, fn, func(snap *backenddb.Snapshot, _ string) (*collectionCatalog, error) {
+		return c.catalogForSnapshot(snap)
+	})
+}
+
+func (c *Collection) scanDocumentsFuncWithoutColumnRootValidation(maxDocuments int, fn func(DocumentRecord) (bool, error)) (bool, error) {
+	return c.scanDocumentsFuncWithCatalogResolver(maxDocuments, fn, loadCollectionCatalogWithoutColumnRootValidation)
+}
+
+func (c *Collection) scanDocumentsFuncWithCatalogResolver(maxDocuments int, fn func(DocumentRecord) (bool, error), loadCatalog func(*backenddb.Snapshot, string) (*collectionCatalog, error)) (bool, error) {
 	if c == nil {
 		return false, errCollectionNil
 	}
@@ -18266,7 +18276,13 @@ func (c *Collection) ScanDocumentsFunc(maxDocuments int, fn func(DocumentRecord)
 		return false, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
+	if loadCatalog == nil {
+		loadCatalog = loadCollectionCatalog
+	}
+	c.catalogMu.RLock()
+	collectionName := c.meta.Name
+	c.catalogMu.RUnlock()
+	catalog, err := loadCatalog(snap, collectionName)
 	if err != nil {
 		return false, err
 	}

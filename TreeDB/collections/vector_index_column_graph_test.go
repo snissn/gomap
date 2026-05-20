@@ -241,6 +241,20 @@ func TestCollectionVectorIndexColumnGraphReportsManifestRootMismatch(t *testing.
 	if status.RootID == 0 || status.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestRootMismatch || status.ColumnGraphUnavailableReason != vectorIndexFallbackColumnGraphManifestRootMismatch {
 		t.Fatalf("unexpected mismatch status: %+v", status)
 	}
+	results, trace, err := col.SearchVectorIndex(def.Name, []float32{1, 0}, VectorIndexSearchOptions{TopK: 1})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex fallback for mismatch: %v", err)
+	}
+	if len(results) != 0 || trace.Strategy != "vector_index_exact_fallback" || trace.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestRootMismatch {
+		t.Fatalf("fallback results=%+v trace=%+v want exact fallback for manifest mismatch", results, trace)
+	}
+	_, disabledTrace, err := col.SearchVectorIndex(def.Name, []float32{1, 0}, VectorIndexSearchOptions{
+		TopK:                 1,
+		DisableExactFallback: true,
+	})
+	if err == nil || disabledTrace.ExactFallbackReason != vectorIndexFallbackColumnGraphManifestRootMismatch {
+		t.Fatalf("disabled fallback err=%v trace=%+v want manifest mismatch fallback reason", err, disabledTrace)
+	}
 	rebuild, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		t.Fatalf("RebuildVectorIndex should report mismatch status, not error: %v", err)
@@ -456,6 +470,25 @@ func TestCollectionSearchVectorIndexUsesColumnGraphPhysicalAssets(t *testing.T) 
 	}
 	if len(results) != 2 || string(results[0].DocumentID) != "a" || len(results[0].Document) == 0 {
 		t.Fatalf("results=%+v trace=%+v want materialized doc a first", results, trace)
+	}
+}
+
+func TestCollectionSearchVectorIndexColumnGraphAllowsUnderfilledResultsWithFallbackDisabled(t *testing.T) {
+	reopened, closeFn := openColumnGraphPhysicalAssetFixture(t)
+	defer closeFn()
+
+	results, trace, err := reopened.SearchVectorIndex("embedding", []float32{1, 0}, VectorIndexSearchOptions{
+		TopK:                 10,
+		DisableExactFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex underfilled: %v", err)
+	}
+	if trace.Strategy != columnVectorGraphStrategyCosine || trace.ExactFallbackReason != "" || trace.ReturnedCount != 2 {
+		t.Fatalf("trace=%+v want column graph with two returned rows and no exact fallback", trace)
+	}
+	if len(results) != 2 || string(results[0].DocumentID) != "a" || string(results[1].DocumentID) != "b" {
+		t.Fatalf("underfilled results=%+v trace=%+v", results, trace)
 	}
 }
 

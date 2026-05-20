@@ -108,6 +108,14 @@ type VectorIndexRangeFilter struct {
 // nearest TopK matches. The collection primary row remains the canonical vector
 // storage; missing or null vector fields are skipped.
 func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOptions) ([]VectorSearchResult, error) {
+	return c.searchVectorsExactWithScanner(query, opts, c.ScanDocumentsFunc)
+}
+
+func (c *Collection) searchVectorsExactWithoutColumnRootValidation(query []float32, opts VectorSearchOptions) ([]VectorSearchResult, error) {
+	return c.searchVectorsExactWithScanner(query, opts, c.scanDocumentsFuncWithoutColumnRootValidation)
+}
+
+func (c *Collection) searchVectorsExactWithScanner(query []float32, opts VectorSearchOptions, scanDocuments func(int, func(DocumentRecord) (bool, error)) (bool, error)) ([]VectorSearchResult, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -136,6 +144,9 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
+	}
+	if scanDocuments == nil {
+		scanDocuments = c.ScanDocumentsFunc
 	}
 
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
@@ -200,7 +211,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 		return matches, nil
 	}
 
-	_, err = c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+	_, err = scanDocuments(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		if err := processRecord(record); err != nil {
 			return false, err
 		}
