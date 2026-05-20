@@ -3,7 +3,12 @@
 `treedb_column_graph_demo` is a small product-path demo for the explicit
 `column_graph` vector-index strategy. It creates a collection, writes vector,
 inverse-norm, and adjacency-list columns as normal column-store assets, closes
-and reopens the database, then searches through `Collection.SearchVectorIndex`.
+and reopens the database, loads those assets into an in-memory
+`ColumnVectorGraph`, then searches through `Collection.SearchVectorIndex`.
+
+This demo does not prove column-store-native search. Search currently runs on
+the decoded in-memory graph, not directly over TreeDB column-store granules or
+reader/cache APIs.
 
 Run it with:
 
@@ -22,10 +27,12 @@ The demo intentionally keeps the graph tiny. It proves the lifecycle boundary:
 4. Insert documents that include the three graph columns.
 5. Checkpoint, close, and reopen.
 6. Search through `Collection.SearchVectorIndex`.
-7. Print status showing whether the physical column graph was loaded.
+7. Print status showing whether the physical column assets were loaded into the
+   in-memory graph.
 
 Current caveat: normal vector-index `BuildVectorIndex` does not yet derive and
 publish inverse-norm or adjacency-list columns from ordinary vector documents.
 Until that build/rebuild seam lands, this demo writes those columns explicitly
 so the loader can prove the persisted column-asset path without adding a
-vector-only sidecar format.
+vector-only sidecar format. True column-store-native vector search is a
+separate follow-on.

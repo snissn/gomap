@@ -12,12 +12,18 @@ TreeDB currently has two vector-index paths:
   load, and query the native/runtime ANN graph.
 - Explicit `column_graph` indexes load vector, inverse-norm, and adjacency-list
   data from physical column-store assets referenced by the collection column
-  manifest/root state, then construct an immutable `ColumnVectorGraph`.
+  manifest/root state, then decode those assets into an immutable in-memory
+  `ColumnVectorGraph`.
 
 `ColumnVectorGraph` searches immutable row-major vector, inverse-norm, and CSR
-adjacency columns with caller-owned scratch. It does not fetch full documents in
+adjacency slices with caller-owned scratch. It does not fetch full documents in
 the traversal, scoring, or top-k kernel. Public `SearchVectorIndex` materializes
 documents only after the graph kernel has selected top-k IDs.
+
+This seam is not native column-store search. The current search kernel does not
+traverse adjacency or score vectors through TreeDB column-store reader APIs,
+granule caches, marks, or decoded-block caches. It searches a full decoded
+in-memory graph copy loaded from physical column assets.
 
 ## `column_graph` Strategy
 
@@ -81,8 +87,8 @@ that only inspect the older field still fail closed.
 
 `ColumnVectorGraphIndexLoader` is the seam the physical column-store path
 satisfies. The default loader reads vector, inverse-norm, and adjacency-list
-column assets referenced by the collection column manifest and constructs an
-immutable `ColumnVectorGraph`.
+column assets referenced by the collection column manifest and decodes them into
+an immutable in-memory `ColumnVectorGraph`.
 
 The loader currently requires an insert-only physical manifest. If the active
 manifest includes mutation parts, or if the expected vector/invNorm/adjacency
@@ -101,6 +107,9 @@ still needs:
 3. Dynamic overlay or rebuild integration for mutation-bearing manifests.
 4. Optional caching/open-handle lifecycle so repeated public
    `SearchVectorIndex` calls do not have to rescan physical assets each time.
+5. A column-store-native graph reader/search path that uses generic column-store
+   APIs for vector rows and adjacency without materializing the full graph into
+   decoded Go slices.
 
 ## What This Proves
 
@@ -110,5 +119,6 @@ manifest/root lifecycle, load a `ColumnVectorGraph`, and serve public
 `SearchVectorIndex` calls without accidentally using the native graph path.
 
 It does not yet prove that normal vector-index build/rebuild creates all graph
-assets from ordinary vector documents, and it does not claim mutation-bearing
-manifests are maintained in place. Those remain explicit follow-on milestones.
+assets from ordinary vector documents, it does not claim mutation-bearing
+manifests are maintained in place, and it does not prove column-store-native
+search. Those remain explicit follow-on milestones.

@@ -37,9 +37,13 @@ GOWORK=off go test ./TreeDB/collections \\
 ~~~
 
 This benchmark uses synthetic vectors but exercises the collection product path:
-real column-store assets, manifest/root reopen, ColumnVectorGraph load/search,
-and optional public document materialization variants. For the opt-in public
-Deep1B dataset path, use scripts/bench_column_vector_deep1b.sh.
+real column-store assets, manifest/root reopen, decode into an in-memory
+ColumnVectorGraph, in-memory graph search, and optional public document
+materialization variants.
+
+It does not measure column-store-native search over granules, marks, reader
+caches, or decoded-block caches. For the opt-in public Deep1B dataset path, use
+scripts/bench_column_vector_deep1b.sh.
 EOF
 
 cd "${ROOT_DIR}"

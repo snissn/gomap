@@ -1,8 +1,8 @@
 # Column Graph Vector Search
 
 Status: pre-alpha. The `column_graph` strategy is explicit and feature-gated so
-TreeDB can prove the persisted column-store search path without replacing the
-native vector index by default.
+TreeDB can prove persisted column graph assets without replacing the native
+vector index by default. This is not column-store-native search yet.
 
 ## What It Is
 
@@ -13,12 +13,36 @@ TreeDB has two vector-index paths today:
   persists native vector-index roots, and reloads those roots on reopen.
 - Column graph vector indexes: an explicit `column_graph` strategy that loads
   vector, inverse-norm, and adjacency-list columns from physical column-store
-  assets, constructs an immutable `ColumnVectorGraph`, runs graph search, then
-  materializes documents after top-k selection.
+  assets, decodes them into an immutable in-memory `ColumnVectorGraph`, runs
+  graph search over that in-memory graph, then materializes documents after
+  top-k selection.
 
 The column graph path does not create a vector-only sidecar format. It uses the
 normal collection column manifest/root lifecycle and the physical column asset
 scanner.
+
+## What It Is Not
+
+This path does not search directly over TreeDB column-store granules, resident
+column readers, marks, or decoded-block caches. The current flow is:
+
+```text
+physical column assets on disk
+-> manifest/root lookup and physical scan
+-> decode into Go slices
+-> in-memory ColumnVectorGraph.SearchCosine
+```
+
+The target future flow for column-store-native vector search is different:
+
+```text
+column-store-native graph reader/cache
+-> fetch vector rows and adjacency through generic column APIs
+-> search without materializing a full decoded graph copy
+```
+
+Until that exists, treat the search-kernel benchmarks below as an in-memory
+ceiling after column-asset decode, not as proof of native column-store search.
 
 ## Quickstart
 
@@ -116,10 +140,11 @@ GOWORK=off go run ./cmd/treedb_column_graph_demo -json
 The demo creates a database, inserts a tiny graph, checkpoints, reopens, and
 searches through the public collection API. It intentionally writes the
 inverse-norm and adjacency columns in the documents so it can prove the
-persisted column-asset loader without adding fake vector persistence. By
-default it requires the persisted `column_graph` path; pass `-allow-fallback`
-when you want the demo to print exact-fallback diagnostics instead of failing
-closed.
+persisted column-asset loader without adding fake vector persistence. Search is
+still performed over the decoded in-memory `ColumnVectorGraph`, not directly
+over column-store granules. By default it requires the persisted `column_graph`
+path; pass `-allow-fallback` when you want the demo to print exact-fallback
+diagnostics instead of failing closed.
 
 ## Real Public Dataset
 
@@ -166,9 +191,11 @@ GOWORK=off go test ./TreeDB/collections \
   -count=3
 ```
 
-This is a synthetic benchmark, but it exercises real collection metadata,
-physical column assets, manifest/root reopen, `ColumnVectorGraph` load/search,
-and public document materialization variants.
+This is a synthetic benchmark. It exercises real collection metadata, physical
+column assets, manifest/root reopen, decode into an in-memory
+`ColumnVectorGraph`, in-memory graph search, and public document
+materialization variants. It does not measure direct search over native
+column-store reader APIs.
 
 ## Current Evidence
 
@@ -190,18 +217,19 @@ Representative results:
 
 | Benchmark | Result |
 | --- | ---: |
-| Load reopened physical column graph | 15.7-16.4 ms/op |
-| Kernel search, graph only | 10.47-10.57 us/search, 0 B/op, 0 allocs/op |
-| Kernel search, parallel | 2.10-2.36 us/op, 0 B/op, 0 allocs/op |
-| Kernel search plus document fetch | 0.47 ms/search, 0 allocs/op after warmed buffer |
-| Public `SearchVectorIndex` | 5.1-5.4 ms/search, about 21.7 MB/op, 30,463 allocs/op |
-| Open, load, search, document fetch | usually 17-18 ms/op after one slower first sample |
+| Decode persisted column assets into in-memory graph | 15.7-16.4 ms/op |
+| In-memory graph search after column decode | 10.47-10.57 us/search, 0 B/op, 0 allocs/op |
+| Parallel in-memory graph search after column decode | 2.10-2.36 us/op, 0 B/op, 0 allocs/op |
+| In-memory graph search plus TreeDB document fetch | 0.47 ms/search, 0 allocs/op after warmed buffer |
+| Public `SearchVectorIndex`, currently reload/decode per call | 5.1-5.4 ms/search, about 21.7 MB/op, 30,463 allocs/op |
+| Cold DB/open plus column decode plus in-memory search plus document fetch | usually 17-18 ms/op after one slower first sample |
 
-Interpretation: the reopened `ColumnVectorGraph` kernel remains the current
-steady-state ceiling and is zero-allocation with warmed scratch. The public API
-path is intentionally slower today because it reloads/scans physical assets for
-each call before materializing documents. That is the next lifecycle-cache seam,
-not a reason to add a vector-specific storage shortcut.
+Interpretation: the reopened `ColumnVectorGraph` kernel is only the current
+in-memory ceiling after column-asset decode. It is zero-allocation with warmed
+scratch, but it is not column-store-native search. The public API path is
+slower today because it reloads/scans/decodes physical assets for each call
+before materializing documents. The correct follow-on is a generic
+column-store-native graph reader/cache, not a vector-specific storage shortcut.
 
 ## Best Practices
 
@@ -213,6 +241,8 @@ not a reason to add a vector-specific storage shortcut.
   top-k IDs are selected.
 - Treat loaded `ColumnVectorGraph` instances as immutable shared state. Use one
   `ColumnVectorGraphSearchScratch` per goroutine for lower-level kernel calls.
+- Do not treat `ColumnVectorGraph.SearchCosine` as native column-store search.
+  It searches decoded in-memory slices loaded from column assets.
 - Expect mutation-bearing physical manifests to report rebuild-needed until the
   dynamic overlay or rebuild-maintenance seam lands.
 - For final storage numbers, compact through TreeDB's normal storage
@@ -227,5 +257,8 @@ not a reason to add a vector-specific storage shortcut.
   unavailable/rebuild-needed rather than maintaining it in place.
 - Repeated public searches currently reload the physical graph each call. Reuse
   a loaded `ColumnVectorGraph` directly in lower-level benchmarks when measuring
-  the search-kernel ceiling.
+  the in-memory search-kernel ceiling after column-asset decode.
+- True column-store-native search still needs a generic column-store graph
+  reader/cache that can traverse adjacency and score vector rows without
+  materializing a full decoded `ColumnVectorGraph`.
 - Deep1B benchmark scripts are opt-in and should not be added to routine CI.
