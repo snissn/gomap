@@ -293,6 +293,12 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset segment allocation requires asset manager")
 	}
+	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
+		return nil, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
+	}
+	if !cfg.AssetManager.IsolatedNamespace {
+		return nil, errors.New("collections: column physical asset segment allocation requires isolated namespace")
+	}
 	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
 	if err != nil {
 		return nil, err
@@ -497,20 +503,25 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		a.closeFile = false
 		a.file = nil
 	}
+	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
 	var removeErr error
-	if columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr) && a.assetPath != "" {
+	removeOnClose := columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
+	if removeOnClose && a.assetPath != "" {
 		removeErr = os.Remove(a.assetPath)
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
 	}
-	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
+	var removeDirSyncErr error
+	if removeOnClose && removeErr == nil {
+		removeDirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
+	}
 	a.releaseLock()
-	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, removeErr, dirSyncErr)
+	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, removeErr, dirSyncErr, removeDirSyncErr)
 }
 
-func columnPhysicalAssetSegmentAppenderRemoveOnClose(failed bool, fileSyncErr, fileCloseErr error) bool {
-	return failed || fileSyncErr != nil || fileCloseErr != nil
+func columnPhysicalAssetSegmentAppenderRemoveOnClose(failed bool, fileSyncErr, fileCloseErr, dirSyncErr error) bool {
+	return failed || fileSyncErr != nil || fileCloseErr != nil || dirSyncErr != nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) abort() error {
