@@ -84,12 +84,14 @@ func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 
 func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
-		Detailed:       true,
-		SegmentDetails: true,
-		CandidateRefs:  opts.CandidateRefs,
-		PendingRefs:    opts.PendingRefs,
-		PreparedRefs:   opts.PreparedRefs,
-		PinnedRefs:     opts.PinnedRefs,
+		Detailed:                 true,
+		SegmentDetails:           true,
+		CandidateRefs:            opts.CandidateRefs,
+		PendingRefs:              opts.PendingRefs,
+		PreparedRefs:             opts.PreparedRefs,
+		PinnedRefs:               opts.PinnedRefs,
+		omitDetailedEntrySources: true,
+		omitDetailedEntrySort:    true,
 	})
 	stats := ColumnAssetRewriteStats{
 		DryRun:           opts.DryRun,
@@ -566,7 +568,7 @@ func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReach
 		if _, ok := eligible[entry.Ref.FileID]; !ok {
 			continue
 		}
-		if columnAssetRewriteSourcesIncludeManifest(entry.Sources) {
+		if columnAssetRewriteRefEntrySourcesIncludeManifest(entry) {
 			continue
 		}
 		delete(eligible, entry.Ref.FileID)
@@ -583,7 +585,7 @@ func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, segments m
 		if _, ok := segments[entry.Ref.FileID]; !ok {
 			continue
 		}
-		if !columnAssetRewriteSourcesIncludeManifest(entry.Sources) {
+		if !columnAssetRewriteRefEntrySourcesIncludeManifest(entry) {
 			continue
 		}
 		refs = append(refs, entry.Ref)
@@ -615,6 +617,13 @@ func columnAssetRewriteSourcesIncludeManifest(sources []ColumnAssetReachabilityS
 		}
 	}
 	return false
+}
+
+func columnAssetRewriteRefEntrySourcesIncludeManifest(entry ColumnAssetReachabilityRefEntry) bool {
+	if entry.sourceMask != 0 {
+		return entry.sourceMask&(columnAssetReachabilitySourceActiveManifestMask|columnAssetReachabilitySourceRecoveryManifestMask) != 0
+	}
+	return columnAssetRewriteSourcesIncludeManifest(entry.Sources)
 }
 
 func columnAssetRewriteSameLogicalRef(left, right ColumnAssetRef) bool {

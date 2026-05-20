@@ -28,6 +28,9 @@ type ColumnAssetReachabilityOptions struct {
 	PendingRefs                           []ColumnAssetRef
 	PreparedRefs                          []ColumnAssetRef
 	PinnedRefs                            []ColumnAssetRef
+
+	omitDetailedEntrySources bool
+	omitDetailedEntrySort    bool
 }
 
 type ColumnAssetReachabilityStatus string
@@ -120,6 +123,8 @@ type ColumnAssetReachabilityRefEntry struct {
 	Ref     ColumnAssetRef
 	Status  ColumnAssetReachabilityStatus
 	Sources []ColumnAssetReachabilitySource
+
+	sourceMask columnAssetReachabilitySourceMask
 }
 
 type ColumnAssetReachabilitySegmentEntry struct {
@@ -242,6 +247,8 @@ func (c *Collection) PlanColumnAssetReachability(ctx context.Context, opts Colum
 		manifestRecs:   view.Diagnostics.ManifestRecords,
 		detailed:       opts.Detailed,
 		segmentDetails: opts.Detailed || opts.SegmentDetails,
+		omitSources:    opts.omitDetailedEntrySources,
+		omitSort:       opts.omitDetailedEntrySort,
 	}
 	if expectedRefs > 0 {
 		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
@@ -302,6 +309,8 @@ type columnAssetReachabilityInput struct {
 	recoveryRefs   int
 	detailed       bool
 	segmentDetails bool
+	omitSources    bool
+	omitSort       bool
 	refs           map[ColumnAssetRef]columnAssetReachabilitySourceMask
 	sourceCounts   ColumnAssetReachabilitySourceStats
 }
@@ -419,11 +428,15 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			plan.Complete = false
 		}
 		if input.detailed {
-			plan.Entries = append(plan.Entries, ColumnAssetReachabilityRefEntry{
-				Ref:     ref,
-				Status:  status,
-				Sources: columnAssetReachabilitySourcesForMask(sourceMask),
-			})
+			entry := ColumnAssetReachabilityRefEntry{
+				Ref:        ref,
+				Status:     status,
+				sourceMask: sourceMask,
+			}
+			if !input.omitSources {
+				entry.Sources = columnAssetReachabilitySourcesForMask(sourceMask)
+			}
+			plan.Entries = append(plan.Entries, entry)
 		}
 		if status == ColumnAssetReachabilityUncertain {
 			return
@@ -436,7 +449,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		})
 		rangesByFile[ref.FileID] = set
 	}
-	if input.detailed {
+	if input.detailed && !input.omitSort {
 		refBuilders := make([]columnAssetReachabilityRefBuilder, 0, len(input.refs))
 		for ref, sourceMask := range input.refs {
 			refBuilders = append(refBuilders, columnAssetReachabilityRefBuilder{ref: ref, sourceMask: sourceMask})

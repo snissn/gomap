@@ -472,6 +472,58 @@ func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilityCanElideDiagnosticSourcesForRewriteM15C(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	payload := []byte("rewrite-source-elision-column-asset")
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), payload, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:      root,
+		collection:   "events",
+		namespace:    namespaceName,
+		detailed:     true,
+		omitSources:  true,
+		omitSort:     true,
+		activeGen:    1,
+		recoveryGen:  1,
+		manifestRecs: 1,
+	}
+	input.addRef(ref, ColumnAssetReachabilitySourceActiveManifest)
+	input.addRef(ref, ColumnAssetReachabilitySourceRecoveryManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || len(plan.Entries) != 1 {
+		t.Fatalf("plan complete=%t entries=%d want one complete entry", plan.Complete, len(plan.Entries))
+	}
+	if len(plan.Entries[0].Sources) != 0 {
+		t.Fatalf("diagnostic sources=%v want elided", plan.Entries[0].Sources)
+	}
+	if !columnAssetRewriteRefEntrySourcesIncludeManifest(plan.Entries[0]) {
+		t.Fatalf("entry source mask did not preserve manifest-source classification: %+v", plan.Entries[0])
+	}
+}
+
 func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	const namespaceName = "events/column-assets"
 	root := t.TempDir()
