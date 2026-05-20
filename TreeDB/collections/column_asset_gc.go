@@ -131,7 +131,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	if opts.DryRun {
 		return stats, nil
 	}
-	// Re-check after planning and after taking the mutation lock so destructive
+	// Re-check after planning while still under the mutation lock so destructive
 	// deletion cannot proceed if the handle became closed, read-only, or
 	// command-WAL-poisoned while reachability was being computed.
 	if err := c.db.CheckStorageMaintenanceReady(); err != nil {
@@ -140,11 +140,13 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	if len(eligible) == 0 {
 		return stats, nil
 	}
+	removeSegment := removeColumnAssetGCSegmentFunc()
+	syncDeletedSegmentsDirFn := syncColumnAssetGCDeletedSegmentsDirFunc()
 	syncDeletedSegmentsDir := func(retErr error) error {
 		if stats.SegmentsDeleted == 0 {
 			return retErr
 		}
-		syncErr := syncColumnAssetGCDeletedSegmentsDirFunc()(namespace.SegmentDir)
+		syncErr := syncDeletedSegmentsDirFn(namespace.SegmentDir)
 		if retErr != nil {
 			return errors.Join(retErr, syncErr)
 		}
@@ -155,7 +157,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if err := ctx.Err(); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
-		if err := removeColumnAssetGCSegmentFunc()(entry.Path); err != nil {
+		if err := removeSegment(entry.Path); err != nil {
 			return stats, syncDeletedSegmentsDir(err)
 		}
 		stats.SegmentsDeleted++
