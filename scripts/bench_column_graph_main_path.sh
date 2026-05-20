@@ -3,14 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-: "${RUN_DIR:="/tmp/gomap_column_graph_main_path_$(date +%Y%m%d_%H%M%S)"}"
+if [[ -z "${RUN_DIR:-}" ]]; then
+  RUN_DIR="$(mktemp -d /tmp/gomap_column_graph_main_path_XXXXXX)"
+elif [[ -d "${RUN_DIR}" ]] && [[ -n "$(find "${RUN_DIR}" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  printf 'RUN_DIR exists and is not empty: %s\n' "${RUN_DIR}" >&2
+  exit 1
+else
+  mkdir -p "${RUN_DIR}"
+fi
 : "${TREEDB_VECTOR_BENCH_DOCS:=10000}"
 : "${TREEDB_VECTOR_BENCH_DIMS:=64}"
 : "${BENCHTIME:=500ms}"
 : "${COUNT:=3}"
 : "${BENCH_REGEX:=BenchmarkCollectionVectorIndexColumnGraphMainPath}"
-
-mkdir -p "${RUN_DIR}"
 
 cat > "${RUN_DIR}/README.md" <<EOF
 # TreeDB Column Graph Main-Path Benchmark
@@ -22,10 +27,10 @@ TREEDB_VECTOR_BENCH_DOCS=${TREEDB_VECTOR_BENCH_DOCS} \\
 TREEDB_VECTOR_BENCH_DIMS=${TREEDB_VECTOR_BENCH_DIMS} \\
 GOWORK=off go test ./TreeDB/collections \\
   -run '^$' \\
-  -bench '${BENCH_REGEX}' \\
+  -bench "${BENCH_REGEX}" \\
   -benchmem \\
-  -benchtime '${BENCHTIME}' \\
-  -count '${COUNT}'
+  -benchtime "${BENCHTIME}" \\
+  -count "${COUNT}"
 \`\`\`
 
 This benchmark uses synthetic vectors but exercises the collection product path:

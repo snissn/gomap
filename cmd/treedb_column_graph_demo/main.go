@@ -28,6 +28,7 @@ type demoStatus struct {
 	RebuildNeeded                 bool   `json:"rebuild_needed"`
 	ExactFallbackReason           string `json:"exact_fallback_reason,omitempty"`
 	ColumnGraphUnavailableReason  string `json:"column_graph_unavailable_reason,omitempty"`
+	ColumnGraphUnavailableDetail  string `json:"column_graph_unavailable_detail,omitempty"`
 }
 
 type demoResult struct {
@@ -114,6 +115,10 @@ func runDemo(dir string, jsonOut bool) error {
 		_ = db.Close()
 		return fmt.Errorf("insert docs: %w", err)
 	}
+	if err := col.Flush(); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("flush collection: %w", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("checkpoint: %w", err)
@@ -136,9 +141,8 @@ func runDemo(dir string, jsonOut bool) error {
 		return fmt.Errorf("vector status: %w", err)
 	}
 	results, trace, err := reopened.SearchVectorIndex("embedding", []float32{1, 0, 0}, collections.VectorIndexSearchOptions{
-		TopK:                 2,
-		EfSearch:             16,
-		DisableExactFallback: true,
+		TopK:     2,
+		EfSearch: 16,
 	})
 	if err != nil {
 		return fmt.Errorf("column graph search: %w", err)
@@ -151,11 +155,12 @@ func runDemo(dir string, jsonOut bool) error {
 		return enc.Encode(out)
 	}
 	fmt.Printf("TreeDB column_graph demo dir: %s\n", out.Dir)
-	fmt.Printf("status: loaded=%t physical_assets=%t rebuild_needed=%t fallback=%q root=%d\n",
+	fmt.Printf("status: loaded=%t physical_assets=%t rebuild_needed=%t fallback=%q detail=%q root=%d\n",
 		out.Status.ColumnGraphLoaded,
 		out.Status.PhysicalColumnAssetsSupported,
 		out.Status.RebuildNeeded,
 		out.Status.ExactFallbackReason,
+		out.Status.ColumnGraphUnavailableDetail,
 		out.Status.RootID,
 	)
 	fmt.Printf("trace: strategy=%s candidates=%d returned=%d fallback=%q\n",
@@ -180,6 +185,7 @@ func demoStatusFromVectorStatus(status collections.VectorIndexStatus) demoStatus
 		RebuildNeeded:                 status.RebuildNeeded,
 		ExactFallbackReason:           status.ExactFallbackReason,
 		ColumnGraphUnavailableReason:  status.ColumnGraphUnavailableReason,
+		ColumnGraphUnavailableDetail:  status.ColumnGraphUnavailableDetail,
 	}
 }
 
