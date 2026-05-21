@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 )
 
 const columnVectorGraphNativeFrontierOversizeSlack = 16
+const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
@@ -125,7 +127,8 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 
 // SearchCosine traverses the persisted column graph through the physical row
 // reader. It fetches only graph rows: document materialization stays outside
-// this kernel.
+// this kernel. Returned results and result IDs alias scratch-owned buffers and
+// must be copied before the next SearchCosine call with the same scratch.
 func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	if r == nil || r.reader == nil {
 		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: nil column vector graph physical row reader")
@@ -228,16 +231,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 	for i := 0; i < n; i++ {
 		scratch.resultOrder[i] = i
 	}
-	for i := 1; i < n; i++ {
-		order := scratch.resultOrder[i]
-		ordinal := scratch.top[order].ordinal
-		j := i - 1
-		for j >= 0 && scratch.top[scratch.resultOrder[j]].ordinal > ordinal {
-			scratch.resultOrder[j+1] = scratch.resultOrder[j]
-			j--
-		}
-		scratch.resultOrder[j+1] = order
-	}
+	sortColumnVectorGraphResultOrderByOrdinal(scratch.resultOrder, scratch.top)
 	for fetchPos, topIndex := range scratch.resultOrder {
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
@@ -275,6 +269,25 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 		})
 	}
 	return nil
+}
+
+func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGraphSearchCandidate) {
+	if len(order) <= columnVectorGraphNativeResultOrderInsertionSortLimit {
+		for i := 1; i < len(order); i++ {
+			item := order[i]
+			ordinal := top[item].ordinal
+			j := i - 1
+			for j >= 0 && top[order[j]].ordinal > ordinal {
+				order[j+1] = order[j]
+				j--
+			}
+			order[j+1] = item
+		}
+		return
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return top[order[i]].ordinal < top[order[j]].ordinal
+	})
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
