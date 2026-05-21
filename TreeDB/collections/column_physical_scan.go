@@ -592,8 +592,8 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 	activeParts := uint64(0)
 	manifestRecords := 0
 	mutationParts := 0
-	refs := make([]columnManifestAssetRefForScan, 0, 8)
-	livePartRows := make(map[[2]uint64]int, 8)
+	var refs []columnManifestAssetRefForScan
+	var livePartRows columnManifestLivePartRowsForScan
 	for iter.Valid() {
 		key := iter.UnsafeKey()
 		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) &&
@@ -640,10 +640,8 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			}
 			if header.expectedParts > 0 && header.expectedParts <= uint64(maxCollectionInt) {
 				expectedParts := int(header.expectedParts)
-				if cap(refs) < expectedParts {
-					refs = make([]columnManifestAssetRefForScan, 0, expectedParts)
-				}
-				livePartRows = make(map[[2]uint64]int, expectedParts)
+				refs = make([]columnManifestAssetRefForScan, 0, expectedParts)
+				livePartRows.initCapacity(expectedParts)
 				if filter.AggregateMetadata {
 					if capacity := columnManifestScanSidecarCapacity(expectedParts, len(cfg.AggregateMetadata)); capacity > 0 {
 						snapshot.AggregateMetadata = make([]columnManifestAggregateMetadataSnapshot, 0, capacity)
@@ -697,7 +695,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			if !ok {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
-			livePartRows[[2]uint64{ref.Generation, ref.PartID}] = rows
+			livePartRows.add(ref.Generation, ref.PartID, rows)
 			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
 			if ref.Generation == snapshot.Generation {
 				activeParts++
@@ -718,14 +716,14 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			}
 			preferredName, include := filter.aggregateMetadataNameForScan(name)
 			if !include {
-				if err := validateColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows); err != nil {
+				if err := validateColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, &livePartRows); err != nil {
 					return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 				}
 				writeHashBytes(&d, key)
 				writeHashBytes(&d, value)
 				break
 			}
-			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows, preferredName)
+			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, &livePartRows, preferredName)
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 			}
@@ -743,14 +741,14 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			}
 			preferredColumnName, include := filter.dictionaryColumnNameForScan(columnName)
 			if !include {
-				if err := validateColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows); err != nil {
+				if err := validateColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, &livePartRows); err != nil {
 					return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 				}
 				writeHashBytes(&d, key)
 				writeHashBytes(&d, value)
 				break
 			}
-			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows, preferredColumnName)
+			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, &livePartRows, preferredColumnName)
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 			}
@@ -768,14 +766,14 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			}
 			preferredColumnName, include := filter.int64ColumnNameForScan(columnName)
 			if !include {
-				if err := validateColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows); err != nil {
+				if err := validateColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, &livePartRows); err != nil {
 					return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 				}
 				writeHashBytes(&d, key)
 				writeHashBytes(&d, value)
 				break
 			}
-			values, err := decodeColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows, preferredColumnName)
+			values, err := decodeColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, &livePartRows, preferredColumnName)
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 			}
@@ -1272,7 +1270,8 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 	}
 
 	refs := make([]columnManifestAssetRefForScan, 0, partRecords)
-	livePartRows := make(map[[2]uint64]int, partRecords)
+	var livePartRows columnManifestLivePartRowsForScan
+	livePartRows.initCapacity(partRecords)
 	mutationParts := 0
 	activeParts := 0
 	for _, record := range records {
@@ -1303,7 +1302,7 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 		if !ok {
 			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
-		livePartRows[[2]uint64{ref.Generation, ref.PartID}] = rows
+		livePartRows.add(ref.Generation, ref.PartID, rows)
 		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
 		if ref.Generation == snapshot.Generation {
 			activeParts++
@@ -1315,19 +1314,19 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 	for _, record := range records {
 		switch {
 		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
-			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows, "")
+			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, &livePartRows, "")
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, err
 			}
 			snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
 		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
-			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows, "")
+			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, &livePartRows, "")
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, err
 			}
 			snapshot.DictionaryCodes = append(snapshot.DictionaryCodes, dictionary)
 		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
-			values, err := decodeColumnManifestInt64ValuesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows, "")
+			values, err := decodeColumnManifestInt64ValuesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, &livePartRows, "")
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, err
 			}
@@ -1340,7 +1339,49 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 	return snapshot, refs, mutationParts, nil
 }
 
-func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int, preferredName string) (columnManifestAggregateMetadataSnapshot, error) {
+type columnManifestLivePartRowsForScan struct {
+	inlineKey  [2]uint64
+	inlineRows int
+	inlineSet  bool
+	rows       map[[2]uint64]int
+}
+
+func (r *columnManifestLivePartRowsForScan) initCapacity(parts int) {
+	if parts > 1 {
+		r.rows = make(map[[2]uint64]int, parts)
+	}
+}
+
+func (r *columnManifestLivePartRowsForScan) add(generation, partID uint64, rows int) {
+	key := [2]uint64{generation, partID}
+	if r.rows != nil {
+		r.rows[key] = rows
+		return
+	}
+	if !r.inlineSet || r.inlineKey == key {
+		r.inlineKey = key
+		r.inlineRows = rows
+		r.inlineSet = true
+		return
+	}
+	r.rows = make(map[[2]uint64]int, 2)
+	r.rows[r.inlineKey] = r.inlineRows
+	r.rows[key] = rows
+}
+
+func (r *columnManifestLivePartRowsForScan) get(generation, partID uint64) (int, bool) {
+	key := [2]uint64{generation, partID}
+	if r.rows != nil {
+		rows, ok := r.rows[key]
+		return rows, ok
+	}
+	if r.inlineSet && r.inlineKey == key {
+		return r.inlineRows, true
+	}
+	return 0, false
+}
+
+func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows *columnManifestLivePartRowsForScan, preferredName string) (columnManifestAggregateMetadataSnapshot, error) {
 	generation, partID, name, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestAggregateMetadataSnapshot{}, err
@@ -1358,7 +1399,7 @@ func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expecte
 	if ref.Generation > activeGeneration {
 		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
 	}
-	if _, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]; !ok {
+	if _, ok := livePartRows.get(ref.Generation, ref.PartID); !ok {
 		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
 	}
 	if !bytes.Equal(name, reason) {
@@ -1376,7 +1417,7 @@ func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expecte
 	}, nil
 }
 
-func validateColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) error {
+func validateColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows *columnManifestLivePartRowsForScan) error {
 	generation, partID, name, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
 	if err != nil {
 		return err
@@ -1394,7 +1435,7 @@ func validateColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expec
 	if ref.Generation > activeGeneration {
 		return fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
 	}
-	if _, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]; !ok {
+	if _, ok := livePartRows.get(ref.Generation, ref.PartID); !ok {
 		return fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
 	}
 	if !bytes.Equal(name, reason) {
@@ -1403,7 +1444,7 @@ func validateColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expec
 	return nil
 }
 
-func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int, preferredColumnName string) (columnManifestDictionaryCodesSnapshot, error) {
+func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows *columnManifestLivePartRowsForScan, preferredColumnName string) (columnManifestDictionaryCodesSnapshot, error) {
 	generation, partID, columnName, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestDictionaryCodesSnapshot{}, err
@@ -1421,7 +1462,7 @@ func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedN
 	if ref.Generation > activeGeneration {
 		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
 	}
-	if _, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]; !ok {
+	if _, ok := livePartRows.get(ref.Generation, ref.PartID); !ok {
 		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
 	}
 	if !bytes.Equal(columnName, reason) {
@@ -1439,7 +1480,7 @@ func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedN
 	}, nil
 }
 
-func validateColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) error {
+func validateColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows *columnManifestLivePartRowsForScan) error {
 	generation, partID, columnName, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return err
@@ -1457,7 +1498,7 @@ func validateColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expecte
 	if ref.Generation > activeGeneration {
 		return fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
 	}
-	if _, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]; !ok {
+	if _, ok := livePartRows.get(ref.Generation, ref.PartID); !ok {
 		return fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
 	}
 	if !bytes.Equal(columnName, reason) {
@@ -1466,7 +1507,7 @@ func validateColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expecte
 	return nil
 }
 
-func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int, preferredColumnName string) (columnManifestInt64ValuesSnapshot, error) {
+func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows *columnManifestLivePartRowsForScan, preferredColumnName string) (columnManifestInt64ValuesSnapshot, error) {
 	generation, partID, columnName, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestInt64ValuesSnapshot{}, err
@@ -1484,7 +1525,7 @@ func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNames
 	if ref.Generation > activeGeneration {
 		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
 	}
-	partRows, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]
+	partRows, ok := livePartRows.get(ref.Generation, ref.PartID)
 	if !ok {
 		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
 	}
@@ -1507,7 +1548,7 @@ func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNames
 	}, nil
 }
 
-func validateColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) error {
+func validateColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows *columnManifestLivePartRowsForScan) error {
 	generation, partID, columnName, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return err
@@ -1525,7 +1566,7 @@ func validateColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNam
 	if ref.Generation > activeGeneration {
 		return fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
 	}
-	partRows, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]
+	partRows, ok := livePartRows.get(ref.Generation, ref.PartID)
 	if !ok {
 		return fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
 	}
