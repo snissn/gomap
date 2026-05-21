@@ -1843,6 +1843,10 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 	defer closeFn()
 	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
 	wantHash := columnPhysicalQueryReferenceHashM13B("q1", events)
+	tcpResult, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery TCPA baseline: %v", err)
+	}
 
 	runner, err := collection.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -1864,11 +1868,11 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 		if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
 			t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
 		}
-		if i == 0 && result.Diagnostics.SegmentFileCacheMisses == 0 {
-			t.Fatalf("first runner diagnostics=%+v want initial segment cache miss", result.Diagnostics)
+		if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpResult.Diagnostics.PhysicalBytesScanned {
+			t.Fatalf("runner physical bytes=%d want dictionary-code sidecar below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpResult.Diagnostics.PhysicalBytesScanned)
 		}
-		if i > 0 && result.Diagnostics.SegmentFileCacheMisses != 0 {
-			t.Fatalf("runner diagnostics=%+v want per-run cache misses reset after warmup", result.Diagnostics)
+		if result.Diagnostics.SegmentFileCacheMisses != 0 {
+			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared dictionary-code setup", result.Diagnostics)
 		}
 	}
 
@@ -1883,6 +1887,116 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("runner q1 warmed allocs/run=%.2f want 0", allocs)
+	}
+}
+
+func TestColumnPhysicalQueryDictionaryCodesAreManifestReachableM1634(t *testing.T) {
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(128))
+	defer closeFn()
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	if len(view.AssetRefs) != 1 {
+		t.Fatalf("asset refs=%d want 1 physical part", len(view.AssetRefs))
+	}
+	if len(view.DictionaryCodes) != 2 {
+		t.Fatalf("dictionary code refs=%d want kind+did sidecars", len(view.DictionaryCodes))
+	}
+	byColumn := make(map[string]ColumnAssetRef, len(view.DictionaryCodes))
+	for _, sidecar := range view.DictionaryCodes {
+		byColumn[sidecar.ColumnName] = sidecar.AssetRef
+		if sidecar.AssetRef.Kind != ColumnAssetKindTCS1DictionaryCodes {
+			t.Fatalf("dictionary sidecar kind=%q want %q", sidecar.AssetRef.Kind, ColumnAssetKindTCS1DictionaryCodes)
+		}
+		if sidecar.AssetRef.Generation != view.AssetRefs[0].Ref.Generation || sidecar.AssetRef.PartID != view.AssetRefs[0].Ref.PartID {
+			t.Fatalf("dictionary sidecar ref=%+v want same generation/part as %+v", sidecar.AssetRef, view.AssetRefs[0].Ref)
+		}
+	}
+	if byColumn["kind"].Length == 0 || byColumn["did"].Length == 0 {
+		t.Fatalf("dictionary sidecars missing expected columns: %+v", byColumn)
+	}
+}
+
+func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
+	normalized, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{
+		{ID: []byte("e1"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+			{Type: ColumnStoreValueString, Present: true, String: "share"},
+			{Type: ColumnStoreValueString, Present: true, String: "did_a"},
+		}},
+		{ID: []byte("e2"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+			{Type: ColumnStoreValueString, Present: true, String: "like"},
+			{Type: ColumnStoreValueString, Present: true, String: "did_b"},
+		}},
+		{ID: []byte("e3"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 3},
+			{Type: ColumnStoreValueString, Present: true, String: "share"},
+			{Type: ColumnStoreValueString, Present: true, String: "did_c"},
+		}},
+	}
+	assets, err := buildColumnDictionaryCodesAssets(*normalized, rows, "events", normalized.AssetManager.Namespace, 7, 3, 42)
+	if err != nil {
+		t.Fatalf("buildColumnDictionaryCodesAssets: %v", err)
+	}
+	var kindAsset columnDictionaryCodesAsset
+	for _, asset := range assets {
+		if asset.ColumnName == "kind" {
+			kindAsset = asset
+			break
+		}
+	}
+	if kindAsset.ColumnName == "" {
+		t.Fatalf("missing kind dictionary asset: %+v", assets)
+	}
+	raw, err := encodeColumnDictionaryCodesAsset(kindAsset)
+	if err != nil {
+		t.Fatalf("encodeColumnDictionaryCodesAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1DictionaryCodes,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: kindAsset.Generation,
+		PartID:     kindAsset.PartID,
+		Length:     int64(len(raw)),
+		Checksum:   page.Checksum(raw),
+	}
+	decoded, err := decodeColumnDictionaryCodesAsset(raw, ref, *normalized, "events", "kind")
+	if err != nil {
+		t.Fatalf("decodeColumnDictionaryCodesAsset: %v", err)
+	}
+	if got, want := decoded.Dictionary, []string{"share", "like"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("dictionary=%v want %v", got, want)
+	}
+	if got, want := decoded.Codes, []uint32{0, 1, 0}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("codes=%v want %v", got, want)
+	}
+
+	corrupt := append([]byte(nil), raw...)
+	corrupt[len(corrupt)-1] ^= 0xff
+	if _, err := decodeColumnDictionaryCodesAsset(corrupt, ref, *normalized, "events", "kind"); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("checksum corruption err=%v want checksum failure", err)
+	}
+
+	badCode := append([]byte(nil), raw...)
+	badCode[len(badCode)-1] = 9
+	badRef := ref
+	badRef.Checksum = page.Checksum(badCode)
+	if _, err := decodeColumnDictionaryCodesAsset(badCode, badRef, *normalized, "events", "kind"); err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+		t.Fatalf("bad code err=%v want outside cardinality failure", err)
+	}
+
+	wrongColumnRef := ref
+	if _, err := decodeColumnDictionaryCodesAsset(raw, wrongColumnRef, *normalized, "events", "did"); err == nil || !strings.Contains(err.Error(), "column=") {
+		t.Fatalf("wrong column err=%v want column validation failure", err)
 	}
 }
 
