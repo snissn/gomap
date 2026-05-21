@@ -11,11 +11,11 @@ func mmapColumnPhysicalAssetFile(file *os.File) ([]byte, error) {
 	if file == nil {
 		return nil, os.ErrInvalid
 	}
-	info, err := file.Stat()
-	if err != nil {
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(int(file.Fd()), &stat); err != nil {
 		return nil, err
 	}
-	size := info.Size()
+	size := stat.Size
 	if size <= 0 || size > int64(maxCollectionInt) {
 		return nil, os.ErrInvalid
 	}
