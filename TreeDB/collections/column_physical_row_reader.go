@@ -730,6 +730,7 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 	}
 	i := base
 	for ; i+4 <= need; i += 4 {
+		_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
 		dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
 		dst[i+1] = math.Float32frombits(uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7]))
 		dst[i+2] = math.Float32frombits(uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11]))
@@ -772,6 +773,7 @@ func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
 	}
 	i := base
 	for ; i+4 <= need; i += 4 {
+		_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
 		dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
 		dst[i+1] = uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7])
 		dst[i+2] = uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11])
