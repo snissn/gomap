@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -279,6 +280,19 @@ func TestColumnAssetReachabilityFromBinaryViewsMatchesMaterializedPlan(t *testin
 	}
 	if want := lifecycleSummaryFromPlan(materialized); !reflect.DeepEqual(summary, want) {
 		t.Fatalf("summary mismatch\nsummary=%+v\nmaterialized=%+v", summary, want)
+	}
+}
+
+func TestColumnCollectionManifestViewRejectsSemanticallyInvalidBinaryManifest(t *testing.T) {
+	ref := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	manifest := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, ref)
+	manifest.PartSet.BaseParts[0].Coverage.Checksums[0]++
+	manifest.ByteAccounting = columnManifestByteAccounting(manifest)
+	payload := encodeColumnCollectionManifestBinaryEnvelopeUnchecked(t, manifest)
+
+	_, err := DecodeColumnCollectionManifestView(payload)
+	if err == nil || !strings.Contains(err.Error(), "coverage invalid") {
+		t.Fatalf("DecodeColumnCollectionManifestView err=%v want coverage validation failure", err)
 	}
 }
 
@@ -630,6 +644,20 @@ func mustColumnCollectionManifestView(t testing.TB, manifest ColumnCollectionMan
 		t.Fatalf("DecodeColumnCollectionManifestView: %v", err)
 	}
 	return view
+}
+
+func encodeColumnCollectionManifestBinaryEnvelopeUnchecked(t testing.TB, manifest ColumnCollectionManifest) []byte {
+	t.Helper()
+	w := columnBinaryWriter{}
+	writeColumnCollectionManifestBinary(&w, manifest)
+	if w.err != nil {
+		t.Fatalf("writeColumnCollectionManifestBinary: %v", w.err)
+	}
+	payload, err := encodeColumnControlPlaneEnvelope(columnCollectionManifestBinaryMagic, columnCollectionManifestBinaryVersion, w.buf)
+	if err != nil {
+		t.Fatalf("encodeColumnControlPlaneEnvelope: %v", err)
+	}
+	return payload
 }
 
 func mustColumnPreparedAssetRegistryView(t testing.TB, registry ColumnPreparedAssetRegistry) ColumnPreparedAssetRegistryView {

@@ -82,7 +82,6 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 	}
 	out := ColumnPartByteAccounting{
 		Rows:                p.Descriptor.RowCount,
-		Columns:             len(p.Columns),
 		Granules:            len(p.Descriptor.Granules),
 		PhysicalFiles:       0,
 		RetainedJSONPayload: "absent_declared_columns_only",
@@ -167,6 +166,7 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 		out.DeclaredColumnStoredBytes += detail.StoredBytes
 		out.ColumnsDetail = append(out.ColumnsDetail, detail)
 	}
+	out.Columns = len(out.ColumnsDetail)
 	out.MarkBytes = estimateSortKeyMarkBytes(p.Marks)
 	out.SortKeyMetadataBytes = estimateSortKeyMetadataBytes(p.Descriptor.SortKey)
 	out.AggregateMetadataBytes = aggregateMetadataStoredBytes(p.AggregateMetadata)
@@ -183,6 +183,15 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 		right := out.CompressionDetail[j]
 		if left.Column != right.Column {
 			return left.Column < right.Column
+		}
+		if left.Substream != right.Substream {
+			return left.Substream < right.Substream
+		}
+		if left.Encoding != right.Encoding {
+			return left.Encoding < right.Encoding
+		}
+		if left.RequestedCompression != right.RequestedCompression {
+			return left.RequestedCompression < right.RequestedCompression
 		}
 		if left.ActualCompression != right.ActualCompression {
 			return left.ActualCompression < right.ActualCompression
@@ -217,6 +226,8 @@ func (a *ColumnPartByteAccounting) RecomputeTotals() {
 	a.TotalStoredBytes = a.CategoryBytes()
 	if a.Rows > 0 {
 		a.BytesPerRow = float64(a.TotalStoredBytes) / float64(a.Rows)
+	} else {
+		a.BytesPerRow = 0
 	}
 }
 
