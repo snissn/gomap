@@ -161,6 +161,12 @@ func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][
 }
 
 func columnVectorGraphNativeScratchCapOversized(capacity, target int) bool {
+	if target < 0 {
+		return true
+	}
+	if target > (math.MaxInt-columnVectorGraphNativeScratchOversizeSlack)/2 {
+		return false
+	}
 	return capacity > target*2+columnVectorGraphNativeScratchOversizeSlack
 }
 
