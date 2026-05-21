@@ -71,19 +71,44 @@ current checksum slot is already `uint32`-sized. A fast native 32-bit hash could
 be a drop-in format change while gomap does not need backward compatibility for
 persisted checksum values.
 
-## Initial Apple M3 Read
+## Current Apple M3 Read
 
-A short Apple M3 run showed `FarmHash64` as the fastest candidate across the
-four sizes, with `XXH3_64` next and `CRC32C_Castagnoli_TreeDB` around 9-10
-GB/s on larger buffers.
+On the local Apple M3 smoke runs, `FarmHash64` and its seeded 64-bit variants
+are the fastest candidates. The 128-bit farm and `XXH3` variants do not beat
+the 64-bit farm path, and the native 32-bit farm variants do not beat the
+current Go `CRC32C_Castagnoli_TreeDB` path.
 
-In the native 32-bit set, `FarmHash32` and `FarmFingerprint32` are useful
-drop-in-width candidates, but this local run had both around 7.6 GB/s. That is
-slower than Go's `CRC32C_Castagnoli_TreeDB` path on the same machine, so the
-32-bit candidates need target-hardware validation before replacing the current
-TreeDB checksum slot.
+Representative 1 MiB expanded-run results:
 
-Representative top-contender pass:
+```text
+FarmHash64:           ~27.20 GB/s
+FarmHash64Seeded:     ~27.16 GB/s
+FarmHash64TwoSeeds:   ~27.22 GB/s
+FarmFingerprint64:    ~21.33 GB/s
+FarmHash128:          ~19.65 GB/s
+FarmHash128Seeded:    ~19.69 GB/s
+FarmFingerprint128:   ~19.63 GB/s
+XXH3_128:             ~19.13 GB/s
+XXH3_64:              ~18.95 GB/s
+XXHash64:             ~16.88 GB/s
+MapHash_ProcessLocal: ~13.90 GB/s
+CRC32C_Castagnoli:    ~10.64 GB/s
+FarmHash32Seeded:     ~7.71 GB/s
+FarmFingerprint32:    ~7.67 GB/s
+FarmHash32:           ~7.38 GB/s
+```
+
+Practical read from this machine:
+
+- If the checksum field can move to 64 bits, `FarmHash64` is the strongest
+  local candidate to validate on target hardware.
+- If the checksum field must stay `uint32`, benchmark truncating fast 64-bit
+  hashes, such as `uint32(farm.Hash64(data))`, before choosing a native 32-bit
+  hash. The native 32-bit farm variants are slower than CRC32C in this run.
+- `maphash` is not a good persisted checksum default because its seed is
+  process-local unless the format explicitly owns and persists seed semantics.
+
+Earlier short-run top-contender pass:
 
 ```text
 64 KiB:  FarmHash64 ~24.3 GB/s, XXH3 ~15.2 GB/s, CRC32C ~7.6 GB/s
