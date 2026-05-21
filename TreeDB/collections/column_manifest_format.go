@@ -139,7 +139,7 @@ func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, g
 			})
 			continue
 		}
-		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
 		part, err := decodeColumnManifestPartRecord(record.value)
@@ -228,7 +228,7 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			}
 			snapshot = header
 			sawHeader = true
-		case bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)):
+		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
 			part, err := decodeColumnManifestPartRecord(record.value)
 			if err != nil {
 				return columnManifestSnapshot{}, err
@@ -359,11 +359,11 @@ func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAss
 	if iter == nil {
 		return nil, nil
 	}
-	iter.Seek([]byte(columnManifestPartRecordPrefix))
+	iter.Seek(columnManifestPartRecordPrefixBytes)
 	var refs []ColumnAssetRef
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+		if !bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) {
 			break
 		}
 		if iter.IsDeleted() {
