@@ -573,6 +573,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.Target != "treedb" && cfg.Target != "mongo" {
 		return config{}, fmt.Errorf("unknown target %q", cfg.Target)
 	}
+	if cfg.Target != "treedb" && cfg.TreeDBCommandWAL {
+		return config{}, errors.New("treedb-command-wal is only supported with -target treedb")
+	}
 	clientMode, err := parseClientMode(cfg.ClientMode)
 	if err != nil {
 		return config{}, err

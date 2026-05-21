@@ -15,7 +15,7 @@ type commandWALRawBarrier struct {
 // command executors use this to drain already-appended staged command frames so
 // raw KV publishes cannot create AppliedCommandLSN gaps.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
-	if db == nil || hook == nil {
+	if db == nil || hook == nil || !db.commandWAL {
 		return func() {}
 	}
 	db.closeHooksMu.Lock()

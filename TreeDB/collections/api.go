@@ -111,6 +111,8 @@ var (
 	)
 )
 
+var testBeforeCommandWALBufferedUpdateStageLock func()
+
 // CommitAmbiguousError reports that a collection mutation reached its logical
 // commit point before a later visibility, flush, checkpoint, response, or
 // bookkeeping step failed. The operation may already be visible or recoverable;
@@ -12844,6 +12846,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					}
 					plan.bufferedCommandWALIntent = intent
 					if c.db != nil {
+						if testBeforeCommandWALBufferedUpdateStageLock != nil {
+							testBeforeCommandWALBufferedUpdateStageLock()
+						}
 						unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 						defer unlockCommandWALRawStage()
 					}

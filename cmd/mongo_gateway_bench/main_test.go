@@ -1213,6 +1213,9 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false want true")
 	}
+	if _, err := parseConfig([]string{"-target", "mongo", "-treedb-command-wal"}); err == nil || !strings.Contains(err.Error(), "treedb-command-wal is only supported with -target treedb") {
+		t.Fatalf("parse mongo command WAL error=%v, want target error", err)
+	}
 	if cfg.TreeDBMaintenance != treeDBMaintenanceCheckpoint {
 		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceCheckpoint)
 	}

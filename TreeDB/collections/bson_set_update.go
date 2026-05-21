@@ -50,7 +50,7 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // slices until UpdateBSONSet returns.
 //
 // For no-index collections, this path may stage buffered root runs in WAL-off
-// relaxed and WAL-on relaxed modes. In command-WAL durable modes, staged
+// relaxed and WAL-on relaxed modes. In command-WAL (WAL-on) modes, staged
 // updates append their deterministic command frame before returning, and
 // Flush/Close later publishes the covered roots.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {

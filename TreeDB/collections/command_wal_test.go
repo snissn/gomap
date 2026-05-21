@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1059,6 +1060,16 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexWaitsForRawKVCommandWALPublish(
 	}
 
 	attempting := make(chan struct{})
+	stagingAttempted := make(chan struct{})
+	var signalStagingAttempt sync.Once
+	testBeforeCommandWALBufferedUpdateStageLock = func() {
+		signalStagingAttempt.Do(func() {
+			close(stagingAttempted)
+		})
+	}
+	defer func() {
+		testBeforeCommandWALBufferedUpdateStageLock = nil
+	}()
 	done := make(chan error, 1)
 	unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
 		go func() {
@@ -1074,12 +1085,22 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexWaitsForRawKVCommandWALPublish(
 		}()
 		<-attempting
 		select {
+		case <-stagingAttempted:
+		case updateErr := <-done:
+			if updateErr != nil {
+				return updateErr
+			}
+			return errors.New("collection update completed before command WAL staging lock")
+		case <-time.After(2 * time.Second):
+			return errors.New("collection update did not reach command WAL staging lock")
+		}
+		select {
 		case updateErr := <-done:
 			if updateErr != nil {
 				return updateErr
 			}
 			return errors.New("collection update completed while raw command WAL publish was open")
-		case <-time.After(25 * time.Millisecond):
+		default:
 			return nil
 		}
 	})
