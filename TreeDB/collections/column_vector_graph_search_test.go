@@ -280,6 +280,22 @@ func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T)
 			t.Fatalf("old result[%d] retained ID alias %q", i, string(result.ID))
 		}
 	}
+	scratch.results = append(scratch.results,
+		columnVectorGraphNativeSearchResult{Ordinal: 9, ID: oldID, Score: 1},
+		columnVectorGraphNativeSearchResult{Ordinal: 10, ID: oldID, Score: 0.5},
+	)
+	oldResults = scratch.results
+	if err := scratch.prepare(2, 3, 2, 2, 2); err != nil {
+		t.Fatalf("prepare same target: %v", err)
+	}
+	if len(scratch.results) != 0 {
+		t.Fatalf("prepared same-target results len=%d want zero", len(scratch.results))
+	}
+	for i, result := range oldResults {
+		if result.ID != nil {
+			t.Fatalf("same-target old result[%d] retained ID alias %q", i, string(result.ID))
+		}
+	}
 	scratch.results = make([]columnVectorGraphNativeSearchResult, 2, 64)
 	scratch.results[0].ID = oldID
 	scratch.results[1].ID = oldID
