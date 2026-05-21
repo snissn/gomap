@@ -182,7 +182,7 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsDefinitionMismatchV2B(t *testi
 	defer func() { _ = d.Close() }()
 
 	_, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
-	if err == nil || !strings.Contains(err.Error(), "graph manifest does not match vector index definition") {
+	if !errors.Is(err, errColumnVectorGraphManifestMismatch) {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want manifest mismatch", err)
 	}
 }
@@ -209,7 +209,7 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsStaleGraphAfterMutationV2B(t *
 		t.Fatalf("status=%+v want stale graph mismatch", status)
 	}
 	_, err = col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
-	if err == nil || !strings.Contains(err.Error(), "graph manifest does not match vector index definition") {
+	if !errors.Is(err, errColumnVectorGraphManifestMismatch) {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want stale graph mismatch", err)
 	}
 }
