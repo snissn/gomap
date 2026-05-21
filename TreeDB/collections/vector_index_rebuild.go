@@ -62,12 +62,13 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	if def.Strategy != VectorIndexStrategyColumnGraph {
 		_ = snap.Close()
-		return c.nativeVectorIndexRebuildStatus(def), nil
+		return c.finishRebuildVectorIndexNoopStatus(c.nativeVectorIndexRebuildStatus(def), nil, replay)
 	}
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
 		_ = snap.Close()
-		return c.columnGraphVectorIndexStatus(def, cfg)
+		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		return c.finishRebuildVectorIndexNoopStatus(status, statusErr, replay)
 	}
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
 		_ = snap.Close()
@@ -85,11 +86,13 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	baseManifestRootID := catalog.rootID(rootName)
 	if baseManifestRootID == 0 {
 		_ = snap.Close()
-		return c.columnGraphVectorIndexStatus(def, cfg)
+		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		return c.finishRebuildVectorIndexNoopStatus(status, statusErr, replay)
 	}
 	if err := validateColumnManifestIdentityAtRoot(snap, baseManifestRootID, *cfg.ActiveManifest); err != nil {
 		_ = snap.Close()
-		return c.columnGraphVectorIndexStatus(def, cfg)
+		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		return c.finishRebuildVectorIndexNoopStatus(status, statusErr, replay)
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseManifestRootID)
 	if err != nil {
@@ -167,7 +170,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return c.columnGraphVectorIndexStatus(def, updatedMeta.Options.ColumnStore)
+	return c.columnGraphVectorIndexStatus(def)
 }
 
 func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) VectorIndexStatus {
@@ -177,6 +180,18 @@ func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) V
 		State:    VectorIndexStateNativeRuntime,
 		Reason:   VectorIndexReasonNativeRuntime,
 	}
+}
+
+func (c *Collection) finishRebuildVectorIndexNoopStatus(status VectorIndexStatus, statusErr error, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+	if statusErr != nil {
+		return VectorIndexStatus{}, statusErr
+	}
+	if replay != nil {
+		if err := c.db.PublishCommandWALNoop(replay, false); err != nil {
+			return VectorIndexStatus{}, err
+		}
+	}
+	return status, nil
 }
 
 func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, error) {

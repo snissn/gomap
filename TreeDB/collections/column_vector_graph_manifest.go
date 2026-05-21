@@ -321,7 +321,7 @@ func writeColumnVectorGraphPhysicalAssetToManager(rootDir string, cfg ColumnStor
 	return ref, closeErr
 }
 
-func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg *ColumnStoreConfig) (VectorIndexStatus, error) {
+func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition) (VectorIndexStatus, error) {
 	status := VectorIndexStatus{
 		Name:     def.Name,
 		Strategy: def.Strategy,
@@ -354,7 +354,7 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 	default:
 		return VectorIndexStatus{}, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
 	}
-	cfg = catalog.meta.Options.ColumnStore
+	cfg := catalog.meta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonPhysicalColumnAssetSupportMissing

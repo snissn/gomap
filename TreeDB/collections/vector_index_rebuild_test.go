@@ -293,6 +293,73 @@ func TestColumnGraphRebuildVectorIndexCommandWALReplayV2A(t *testing.T) {
 	}
 }
 
+func TestColumnGraphRebuildVectorIndexCommandWALReplayNoopAdvancesLSNV2A(t *testing.T) {
+	tests := []struct {
+		name          string
+		strategy      VectorIndexStrategy
+		wantState     VectorIndexState
+		wantReason    VectorIndexReason
+		rebuildNeeded bool
+	}{
+		{
+			name:       "native_strategy",
+			strategy:   VectorIndexStrategyNativeRuntime,
+			wantState:  VectorIndexStateNativeRuntime,
+			wantReason: VectorIndexReasonNativeRuntime,
+		},
+		{
+			name:          "column_graph_physical_support_missing",
+			strategy:      VectorIndexStrategyColumnGraph,
+			wantState:     VectorIndexStateColumnGraphUnavailable,
+			wantReason:    VectorIndexReasonPhysicalColumnAssetSupportMissing,
+			rebuildNeeded: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+				Name:       "embedding_graph",
+				Field:      "embedding",
+				Metric:     VectorMetricCosine,
+				Dimensions: 3,
+				Strategy:   tt.strategy,
+			})
+			if err != nil {
+				t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+			}
+			dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+				Name: "docs",
+				Options: CollectionOptions{
+					DocumentFormat: DocumentFormatJSON,
+				},
+				VectorIndexes: []VectorIndexDefinition{def},
+			})
+			payload, err := commitlog.EncodeCollectionRebuildVectorIndexPayload("docs", def.Name)
+			if err != nil {
+				t.Fatalf("EncodeCollectionRebuildVectorIndexPayload: %v", err)
+			}
+			writeCollectionCommandWALFrame(t, dir, 1, commitlog.CommandKindCollectionRebuildVectorIndex, commitlog.PayloadFormatCollectionRebuildVectorIndexV1, payload)
+
+			reopened := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopened.Close() }()
+			if got := reopened.State().AppliedCommandLSN; got != 1 {
+				t.Fatalf("AppliedCommandLSN after rebuild no-op replay=%d want 1", got)
+			}
+			col, err := NewCollectionManager(reopened).OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			status, err := col.VectorIndexStatus(def.Name)
+			if err != nil {
+				t.Fatalf("VectorIndexStatus: %v", err)
+			}
+			if status.State != tt.wantState || status.Reason != tt.wantReason || status.RebuildNeeded != tt.rebuildNeeded {
+				t.Fatalf("status=%+v want state=%q reason=%q rebuild=%t", status, tt.wantState, tt.wantReason, tt.rebuildNeeded)
+			}
+		})
+	}
+}
+
 func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 	const (
 		rows = 128
