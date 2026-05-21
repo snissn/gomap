@@ -142,6 +142,45 @@ func TestBoolGranuleRoundTripAndCount(t *testing.T) {
 	}
 }
 
+func TestBoolCorruptPayloadsFailClosedBeforeDecodeAllocation(t *testing.T) {
+	tests := []struct {
+		name string
+		rows int
+		raw  []byte
+	}{
+		{
+			name: "invalid_rle_start",
+			rows: 1,
+			raw:  []byte{boolPayloadRLE, 2, 1},
+		},
+		{
+			name: "huge_bitpack_rows",
+			rows: maxGranuleDecodeRows + 1,
+			raw:  []byte{boolPayloadBitpack},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := EncodedGranule{
+				Rows:        tt.rows,
+				Encoding:    EncodingBoolBitpackRLE,
+				Compression: CompressionNone,
+				RawBytes:    len(tt.raw),
+				StoredBytes: len(tt.raw),
+				PayloadRef:  PayloadRef{Kind: PayloadRefInline, Length: len(tt.raw)},
+				Payload:     tt.raw,
+			}
+			var reader GranuleReader
+			if _, err := reader.DecodeBool(g); err == nil {
+				t.Fatal("DecodeBool(corrupt) succeeded, want error")
+			}
+			if _, err := reader.CountTrueBool(g); err == nil {
+				t.Fatal("CountTrueBool(corrupt) succeeded, want error")
+			}
+		})
+	}
+}
+
 func TestNullableInt64GranuleRoundTrip(t *testing.T) {
 	values := []int64{10, 20, 30, 40, 50, 60, 70}
 	nulls := []bool{false, true, false, false, false, true, false}
@@ -203,6 +242,26 @@ func TestLowCardinalityUint32RoundTripAndCounts(t *testing.T) {
 	}
 }
 
+func TestLowCardinalityUint32CorruptRowsFailClosed(t *testing.T) {
+	payload := []byte{4, 1}
+	g := EncodedGranule{
+		Rows:        maxGranuleDecodeRows + 1,
+		Encoding:    EncodingLowCardinalityUint32,
+		Compression: CompressionNone,
+		RawBytes:    len(payload),
+		StoredBytes: len(payload),
+		PayloadRef:  PayloadRef{Kind: PayloadRefInline, Length: len(payload)},
+		Payload:     payload,
+	}
+	var reader GranuleReader
+	if _, err := reader.DecodeUint32Codes(g); err == nil {
+		t.Fatal("DecodeUint32Codes(corrupt) succeeded, want error")
+	}
+	if _, err := reader.CountUint32Codes(g, nil); err == nil {
+		t.Fatal("CountUint32Codes(corrupt) succeeded, want error")
+	}
+}
+
 func TestCompressionAdmissionReportsFallback(t *testing.T) {
 	values := makeRandom(8192)
 	g, err := EncodeInt64(nil, values, Config{Encoding: EncodingRawInt64, Compression: CompressionSnappy})
@@ -237,6 +296,9 @@ func TestUnsupportedCodecIDsFailClosed(t *testing.T) {
 	}
 	if _, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTD}); err == nil {
 		t.Fatal("EncodeInt64 with unsupported zstd succeeded, want error")
+	}
+	if _, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTDDict}); err == nil {
+		t.Fatal("EncodeInt64 with unsupported zstd_dict succeeded, want error")
 	}
 }
 
@@ -350,6 +412,39 @@ func TestCorruptPayloadsFailClosed(t *testing.T) {
 			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone},
 			edit: func(g EncodedGranule) EncodedGranule {
 				g.Payload = append(append([]byte(nil), g.Payload...), 0)
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				g.RawBytes = len(g.Payload)
+				return g
+			},
+		},
+		{
+			name: "double_delta_truncated",
+			cfg:  Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Payload = g.Payload[:len(g.Payload)-1]
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				return g
+			},
+		},
+		{
+			name: "double_delta_trailing",
+			cfg:  Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Payload = append(append([]byte(nil), g.Payload...), 0)
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				g.RawBytes = len(g.Payload)
+				return g
+			},
+		},
+		{
+			name: "double_delta_huge_rows_tiny_payload",
+			cfg:  Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Rows = maxGranuleDecodeRows + 1
+				g.Payload = []byte{0}
 				g.StoredBytes = len(g.Payload)
 				g.PayloadRef.Length = len(g.Payload)
 				g.RawBytes = len(g.Payload)

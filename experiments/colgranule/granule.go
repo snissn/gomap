@@ -130,8 +130,6 @@ type GranuleBuilder struct {
 	encoded    []byte
 	compressed []byte
 	values64   []int64
-	bools      []bool
-	codes32    []uint32
 }
 
 func NewGranuleBuilder(cfg Config) *GranuleBuilder {
@@ -364,6 +362,12 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 }
 
 func decodeDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return nil, err
+	}
+	if rows > len(raw) {
+		return nil, fmt.Errorf("colgranule: delta rows=%d exceed payload bytes=%d", rows, len(raw))
+	}
 	out := dst[:0]
 	if cap(out) < rows {
 		out = make([]int64, 0, rows)
@@ -393,6 +397,12 @@ func decodeDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
 }
 
 func decodeDoubleDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return nil, err
+	}
+	if rows > len(raw) {
+		return nil, fmt.Errorf("colgranule: double-delta rows=%d exceed payload bytes=%d", rows, len(raw))
+	}
 	out := dst[:0]
 	if cap(out) < rows {
 		out = make([]int64, 0, rows)
@@ -456,7 +466,7 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 		if cap(dst) < need {
 			dst = make([]byte, need)
 		} else {
-			dst = dst[:need]
+			dst = dst[:0]
 		}
 		start := time.Now()
 		out := snappy.Encode(dst, raw)
