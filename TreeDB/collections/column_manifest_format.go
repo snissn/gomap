@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	// Manifest record keys keep their v1 keyspace names for stable ordering and
+	// prefix scans; columnManifestRecordVersion versions the binary values.
 	columnManifestHeaderRecordKey               = "\x01column-manifest/v1/header"
 	columnManifestPartRecordPrefix              = "\x02column-manifest/v1/part/"
 	columnManifestAggregateMetadataRecordPrefix = "\x03column-manifest/v1/aggregate/"
