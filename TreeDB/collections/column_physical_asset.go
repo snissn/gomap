@@ -384,7 +384,9 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 			case ColumnStoreValueString:
 				writeManifestString(&b, value.String)
 			case ColumnStoreValueFloat32Vector:
-				writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding)
+				if err := writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding); err != nil {
+					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] float32_vector: %w", colIdx, err)
+				}
 			case ColumnStoreValueAdjacencyList:
 				writeManifestUint32Slice(&b, value.AdjacencyList)
 			default:
@@ -677,26 +679,28 @@ func writeManifestBytes(b *bytes.Buffer, value []byte) {
 }
 
 func writeManifestFloat32Slice(b *bytes.Buffer, values []float32) {
-	writeManifestFloat32SliceWithEncoding(b, values, ColumnFixedWidthEncodingDefault)
+	_ = writeManifestFloat32SliceWithEncoding(b, values, ColumnFixedWidthEncodingDefault)
 }
 
-func writeManifestFloat32SliceWithEncoding(b *bytes.Buffer, values []float32, encoding ColumnFixedWidthEncoding) {
+func writeManifestFloat32SliceWithEncoding(b *bytes.Buffer, values []float32, encoding ColumnFixedWidthEncoding) error {
+	littleEndian, err := columnFixedWidthEncodingIsLittleEndian(encoding)
+	if err != nil {
+		return err
+	}
 	writeManifestUint64(b, uint64(len(values)))
 	var buf [4]byte
-	switch encoding {
-	case ColumnFixedWidthEncodingDefault:
-		for _, value := range values {
-			binary.BigEndian.PutUint32(buf[:], math.Float32bits(value))
-			_, _ = b.Write(buf[:])
-		}
-	case ColumnFixedWidthEncodingLittleEndian:
+	if littleEndian {
 		for _, value := range values {
 			binary.LittleEndian.PutUint32(buf[:], math.Float32bits(value))
 			_, _ = b.Write(buf[:])
 		}
-	default:
-		panic(fmt.Sprintf("collections: unsupported fixed_width_encoding %q", encoding))
+		return nil
 	}
+	for _, value := range values {
+		binary.BigEndian.PutUint32(buf[:], math.Float32bits(value))
+		_, _ = b.Write(buf[:])
+	}
+	return nil
 }
 
 func writeManifestUint32Slice(b *bytes.Buffer, values []uint32) {
@@ -782,12 +786,8 @@ func (c *manifestCursor) float32SliceAfterLengthWithEncoding(n uint64, encoding 
 	if !ok {
 		return nil
 	}
-	littleEndian := false
-	switch encoding {
-	case ColumnFixedWidthEncodingDefault:
-	case ColumnFixedWidthEncodingLittleEndian:
-		littleEndian = true
-	default:
+	littleEndian, err := columnFixedWidthEncodingIsLittleEndian(encoding)
+	if err != nil {
 		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
 		return nil
 	}

@@ -592,6 +592,14 @@ func normalizeColumnFixedWidthEncoding(encoding ColumnFixedWidthEncoding) (Colum
 	}
 }
 
+func columnFixedWidthEncodingIsLittleEndian(encoding ColumnFixedWidthEncoding) (bool, error) {
+	normalized, err := normalizeColumnFixedWidthEncoding(encoding)
+	if err != nil {
+		return false, err
+	}
+	return normalized == ColumnFixedWidthEncodingLittleEndian, nil
+}
+
 func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
 	switch valueType {
 	case ColumnStoreValueFloat32Vector:

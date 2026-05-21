@@ -715,12 +715,8 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []f
 	if !ok {
 		return dst, c.err
 	}
-	littleEndian := false
-	switch encoding {
-	case ColumnFixedWidthEncodingDefault:
-	case ColumnFixedWidthEncodingLittleEndian:
-		littleEndian = true
-	default:
+	littleEndian, err := columnFixedWidthEncodingIsLittleEndian(encoding)
+	if err != nil {
 		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
 		return dst, c.err
 	}
