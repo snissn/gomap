@@ -18,7 +18,8 @@ type commandWALRawBarrier struct {
 // command executors use this to drain already-appended staged command frames so
 // raw KV publishes cannot create AppliedCommandLSN gaps. Hooks run while the raw
 // publish mutex is held, so they must not append raw command-WAL frames, take a
-// staging lock, or call paths that may do either.
+// staging lock, or call paths that may do either. The returned unregister
+// function waits for in-flight hooks and must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	if db == nil || hook == nil || !db.commandWAL {
 		return func() {}

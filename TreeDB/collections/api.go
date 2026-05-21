@@ -112,7 +112,8 @@ var (
 )
 
 var testBeforeCommandWALBufferedUpdateStageLockHook struct {
-	ptr atomic.Pointer[testCommandWALBufferedUpdateStageLockHook]
+	installMu sync.Mutex
+	ptr       atomic.Pointer[testCommandWALBufferedUpdateStageLockHook]
 }
 
 type testCommandWALBufferedUpdateStageLockHook struct {
@@ -2246,14 +2247,19 @@ func runCollectionWaitIndexedAsyncFlushHook() {
 }
 
 func setTestBeforeCommandWALBufferedUpdateStageLockForTest(fn func()) func() {
+	testBeforeCommandWALBufferedUpdateStageLockHook.installMu.Lock()
 	prev := testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Load()
 	var next *testCommandWALBufferedUpdateStageLockHook
 	if fn != nil {
 		next = &testCommandWALBufferedUpdateStageLockHook{fn: fn}
 	}
 	testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Store(next)
+	var once sync.Once
 	return func() {
-		testBeforeCommandWALBufferedUpdateStageLockHook.ptr.CompareAndSwap(next, prev)
+		once.Do(func() {
+			testBeforeCommandWALBufferedUpdateStageLockHook.ptr.CompareAndSwap(next, prev)
+			testBeforeCommandWALBufferedUpdateStageLockHook.installMu.Unlock()
+		})
 	}
 }
 
