@@ -54,7 +54,16 @@ type columnVectorGraphPhysicalRow struct {
 }
 
 func (c *Collection) openColumnVectorGraphPhysicalRowReader(name string, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
-	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotView(name)
+	snap, err := c.acquireColumnVectorGraphPhysicalRowReaderSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = snap.Close() }()
+	return c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(name, snap, opts)
+}
+
+func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name string, snap *backenddb.Snapshot, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
+	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name, snap)
 	if err != nil {
 		return nil, err
 	}
@@ -78,18 +87,38 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReader(name string, opts co
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
+	snap, err := c.acquireColumnVectorGraphPhysicalRowReaderSnapshot()
+	if err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
+	defer func() { _ = snap.Close() }()
+	return c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name, snap)
+}
+
+func (c *Collection) acquireColumnVectorGraphPhysicalRowReaderSnapshot() (*backenddb.Snapshot, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return snap, nil
+}
+
+func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name string, snap *backenddb.Snapshot) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
 	if c == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errCollectionNil
 	}
 	if c.db == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errCollectionDBNil
 	}
-	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
-	defer func() { _ = snap.Close() }()
-
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err

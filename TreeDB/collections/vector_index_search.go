@@ -3,6 +3,8 @@ package collections
 import (
 	"errors"
 	"fmt"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // ErrVectorIndexSearchUnavailable reports that the requested vector index is
@@ -91,8 +93,11 @@ type VectorIndexSearcher struct {
 	strategy   VectorIndexStrategy
 	path       VectorIndexSearchPath
 	status     VectorIndexStatus
+	snapshot   *backenddb.Snapshot
+	catalog    *collectionCatalog
 	reader     *columnVectorGraphPhysicalRowReader
 	scratch    columnVectorGraphNativeSearchScratch
+	readerLast columnPhysicalRowReaderStats
 	closed     bool
 }
 
@@ -166,7 +171,17 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		return nil, response, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
 	}
 
-	reader, err := c.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, response, backenddb.ErrClosed
+	}
+	closeOnErr := true
+	defer func() {
+		if closeOnErr {
+			_ = snap.Close()
+		}
+	}()
+	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,
 	})
 	if err != nil {
@@ -176,6 +191,15 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		}
 		response.Status = status
 		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %v", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
+	}
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		_ = reader.Close()
+		return nil, response, err
+	}
+	if catalog == nil {
+		_ = reader.Close()
+		return nil, response, errCollectionNotFound
 	}
 
 	response.Status = VectorIndexStatus{
@@ -191,8 +215,12 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		strategy:   response.Strategy,
 		path:       response.Path,
 		status:     response.Status,
+		snapshot:   snap,
+		catalog:    catalog,
 		reader:     reader,
+		readerLast: reader.Stats(),
 	}
+	closeOnErr = false
 	return searcher, response, nil
 }
 
@@ -214,11 +242,14 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if opts.EfSearch < 0 {
 		return response, errors.New("collections: vector index search ef_search cannot be negative")
 	}
+	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:     opts.TopK,
 		EfSearch: opts.EfSearch,
 	}, &s.scratch)
-	readerStats := s.reader.Stats()
+	readerStatsAfter := s.reader.Stats()
+	s.readerLast = readerStatsAfter
+	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
 	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
 	if err != nil {
 		return response, err
@@ -239,11 +270,11 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 			Score:   result.Score,
 		}
 		if opts.IncludeDocuments {
-			doc, err := s.collection.Get(id)
+			doc, found, err := s.getDocumentAtBoundSnapshot(id)
 			if err != nil {
 				return response, err
 			}
-			if doc == nil {
+			if !found {
 				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, string(id))
 			}
 			response.Results[i].Document = doc
@@ -251,6 +282,24 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		}
 	}
 	return response, nil
+}
+
+func (s *VectorIndexSearcher) getDocumentAtBoundSnapshot(documentID []byte) ([]byte, bool, error) {
+	if s == nil || s.snapshot == nil || s.catalog == nil || s.collection == nil {
+		return nil, false, errors.New("collections: nil vector index searcher snapshot")
+	}
+	value, found, err := collectionGetAppendAtCatalogRoot(s.snapshot, s.catalog, collectionPrimaryRootName(s.collection.meta.Name), documentID, nil)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	if !columnStoreCanReconstructDocument(s.catalog.meta) {
+		return value, true, nil
+	}
+	reconstructed, err := s.collection.reconstructColumnDocumentAtSnapshot(s.snapshot, s.catalog, documentID, value)
+	if err != nil {
+		return nil, false, err
+	}
+	return reconstructed, true, nil
 }
 
 func vectorIndexSearchResultIDBytes(results []columnVectorGraphNativeSearchResult) int {
@@ -266,10 +315,52 @@ func (s *VectorIndexSearcher) Close() error {
 		return nil
 	}
 	s.closed = true
+	var closeErr error
 	if s.reader == nil {
-		return nil
+		if s.snapshot != nil {
+			closeErr = s.snapshot.Close()
+			s.snapshot = nil
+		}
+		return closeErr
 	}
-	return s.reader.Close()
+	if err := s.reader.Close(); err != nil {
+		closeErr = err
+	}
+	if s.snapshot != nil {
+		if err := s.snapshot.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		s.snapshot = nil
+	}
+	return closeErr
+}
+
+func columnPhysicalRowReaderStatsDelta(before, after columnPhysicalRowReaderStats) columnPhysicalRowReaderStats {
+	return columnPhysicalRowReaderStats{
+		RowFetches:        deltaUint64(before.RowFetches, after.RowFetches),
+		BatchFetches:      deltaUint64(before.BatchFetches, after.BatchFetches),
+		RowsFetched:       deltaUint64(before.RowsFetched, after.RowsFetched),
+		CacheHits:         deltaUint64(before.CacheHits, after.CacheHits),
+		CacheMisses:       deltaUint64(before.CacheMisses, after.CacheMisses),
+		DecodedBlocks:     deltaUint64(before.DecodedBlocks, after.DecodedBlocks),
+		GranulesTouched:   deltaUint64(before.GranulesTouched, after.GranulesTouched),
+		PhysicalBytesRead: deltaInt64(before.PhysicalBytesRead, after.PhysicalBytesRead),
+		MaxResidentBytes:  after.MaxResidentBytes,
+	}
+}
+
+func deltaUint64(before, after uint64) uint64 {
+	if after < before {
+		return 0
+	}
+	return after - before
+}
+
+func deltaInt64(before, after int64) int64 {
+	if after < before {
+		return 0
+	}
+	return after - before
 }
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {

@@ -86,6 +86,52 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	}
 }
 
+func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if err := col.Delete([]byte("doc-a")); err != nil {
+		t.Fatalf("Delete doc-a after opening searcher: %v", err)
+	}
+	if live, err := col.Get([]byte("doc-a")); err != nil || live != nil {
+		t.Fatalf("live Get doc-a after delete=%q err=%v want missing", live, err)
+	}
+
+	got, err := searcher.Search(VectorIndexSearcherSearchOptions{
+		Query:            []float32{1, 0, 0},
+		TopK:             1,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+	})
+	if err != nil {
+		t.Fatalf("Search after delete on bound searcher: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 1)
+	if string(got.Results[0].ID) != "doc-a" {
+		t.Fatalf("top result id=%q want doc-a from bound graph snapshot", got.Results[0].ID)
+	}
+	if !strings.Contains(string(got.Results[0].Document), `"did":"doc-a"`) {
+		t.Fatalf("bound snapshot document=%q want pre-delete doc-a", got.Results[0].Document)
+	}
+	if got.Stats.DocumentsFetched != 1 {
+		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
+	}
+}
+
 func TestOpenVectorIndexSearcherReusesNativeReaderV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -126,7 +172,13 @@ func TestOpenVectorIndexSearcherReusesNativeReaderV4(t *testing.T) {
 		}
 	}
 	if second.Stats.OpenPhysicalBytesRead != first.Stats.OpenPhysicalBytesRead {
-		t.Fatalf("open physical bytes changed first=%d second=%d; want reused reader/open state", first.Stats.OpenPhysicalBytesRead, second.Stats.OpenPhysicalBytesRead)
+		t.Fatalf("open physical bytes changed first=%d second=%d; want per-search open stats to remain outside Search", first.Stats.OpenPhysicalBytesRead, second.Stats.OpenPhysicalBytesRead)
+	}
+	if first.Stats.RowFetches == 0 || second.Stats.RowFetches != first.Stats.RowFetches {
+		t.Fatalf("row fetch stats first=%d second=%d want per-search deltas", first.Stats.RowFetches, second.Stats.RowFetches)
+	}
+	if second.Stats.PhysicalBytesRead != 0 {
+		t.Fatalf("second PhysicalBytesRead=%d want cached per-search reader delta", second.Stats.PhysicalBytesRead)
 	}
 }
 
