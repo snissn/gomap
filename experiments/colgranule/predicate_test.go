@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -111,11 +112,19 @@ func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build granules: %v", err)
 	}
+	var reader GranuleReader
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, nil, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "collection", Low: 1, High: 1}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "sort key ranges require marks") {
+		t.Fatalf("missing marks err=%v want sort key ranges require marks", err)
+	}
+
 	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
-	var reader GranuleReader
 	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{mark}, PredicatePlan{
 		Filter:        Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
 		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 1, High: 3}},
