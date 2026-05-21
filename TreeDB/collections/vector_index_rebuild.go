@@ -13,6 +13,13 @@ import (
 
 const columnVectorGraphNeighborInsertionLimit = 32
 
+var (
+	errColumnVectorGraphInvNormEmpty          = errors.New("collections: column_graph vector is empty")
+	errColumnVectorGraphInvNormValueNotFinite = errors.New("collections: column_graph vector value is not finite")
+	errColumnVectorGraphInvNormNormInvalid    = errors.New("collections: column_graph vector norm must be finite and non-zero")
+	errColumnVectorGraphInvNormOutOfRange     = errors.New("collections: column_graph vector inverse norm must be finite and fit float32")
+)
+
 // RebuildVectorIndex rebuilds the named vector index through the collection
 // product lifecycle. V2A only builds and publishes physical column graph assets;
 // it does not load or search a decoded in-memory graph.
@@ -403,22 +410,22 @@ func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Sn
 
 func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 	if len(vector) == 0 {
-		return 0, errors.New("empty vector")
+		return 0, errColumnVectorGraphInvNormEmpty
 	}
 	var sum float64
 	for i, v := range vector {
 		f := float64(v)
 		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return 0, fmt.Errorf("vector[%d] is not finite", i)
+			return 0, fmt.Errorf("vector[%d] is not finite: %w", i, errColumnVectorGraphInvNormValueNotFinite)
 		}
 		sum += f * f
 	}
 	if sum == 0 || math.IsNaN(sum) || math.IsInf(sum, 0) {
-		return 0, errors.New("vector norm must be finite and non-zero")
+		return 0, errColumnVectorGraphInvNormNormInvalid
 	}
 	invNorm := 1 / math.Sqrt(sum)
 	if invNorm > math.MaxFloat32 || math.IsNaN(invNorm) || math.IsInf(invNorm, 0) {
-		return 0, errors.New("vector inverse norm must be finite and fit float32")
+		return 0, errColumnVectorGraphInvNormOutOfRange
 	}
 	return float32(invNorm), nil
 }

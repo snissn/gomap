@@ -79,11 +79,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
 		prepareColumnVectorGraphNativeRowScratch(rowScratch, dimensions, degree)
 	}
-	if cap(s.visitMarks) < rowCount {
-		s.visitMarks = make([]uint64, rowCount)
-	} else {
-		s.visitMarks = s.visitMarks[:rowCount]
-	}
+	s.visitMarks = resizeColumnVectorGraphNativeUint64Scratch(s.visitMarks, rowCount)
 	s.visitEpoch++
 	if s.visitEpoch == 0 {
 		clear(s.visitMarks)
@@ -149,6 +145,13 @@ func resizeColumnVectorGraphNativeIntScratch(dst []int, target int) []int {
 	return dst[:0]
 }
 
+func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint64 {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]uint64, target)
+	}
+	return dst[:target]
+}
+
 func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][]byte {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		next := make([][]byte, target)
@@ -205,7 +208,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	queryInvNorm, err := columnVectorGraphInvNorm(query)
 	if err != nil {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w: %v", r.def.Name, errColumnVectorGraphNativeSearchQueryNormInvalid, err)
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w: %w", r.def.Name, errColumnVectorGraphNativeSearchQueryNormInvalid, err)
 	}
 	if topK > rowCount {
 		topK = rowCount
