@@ -102,6 +102,12 @@ func TestSearchVectorIndexByteAccountingRejectsOverflowV4(t *testing.T) {
 	if _, err := addVectorIndexSearchByteTotal(8, 3, 10, "document"); err == nil {
 		t.Fatalf("addVectorIndexSearchByteTotal overflow err=nil want failure")
 	}
+	if total, err := multiplyVectorIndexSearchByteTotal(3, 4, 12, "document"); err != nil || total != 12 {
+		t.Fatalf("multiplyVectorIndexSearchByteTotal=%d, %v want 12, nil", total, err)
+	}
+	if _, err := multiplyVectorIndexSearchByteTotal(math.MaxInt, 2, math.MaxInt, "document"); err == nil {
+		t.Fatalf("multiplyVectorIndexSearchByteTotal overflow err=nil want failure")
+	}
 	got, err := vectorIndexSearchResultIDBytesLimit([]columnVectorGraphNativeSearchResult{
 		{ID: []byte("abc")},
 		{ID: []byte("de")},
@@ -419,7 +425,7 @@ func TestSearchVectorIndexNativeRuntimeDoesNotFallbackToColumnGraphV4(t *testing
 	}
 }
 
-func TestSearchVectorIndexColumnGraphRejectsUnsupportedMetricV4(t *testing.T) {
+func TestSearchVectorIndexColumnGraphUsesSnapshotMetadataV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0, 1, 0}},
@@ -433,12 +439,41 @@ func TestSearchVectorIndexColumnGraphRejectsUnsupportedMetricV4(t *testing.T) {
 	for i := range col.meta.VectorIndexes {
 		if col.meta.VectorIndexes[i].Name == def.Name {
 			col.meta.VectorIndexes[i].Metric = VectorMetric("dot")
+			col.meta.VectorIndexes[i].Strategy = VectorIndexStrategyNativeRuntime
 			mutated = true
 		}
 	}
 	if !mutated {
 		t.Fatalf("test setup missing vector index %q", def.Name)
 	}
+
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0, 0},
+		TopK:      1,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex after handle metadata drift: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 1)
+	if !bytes.Equal(got.Results[0].ID, []byte("doc-a")) {
+		t.Fatalf("top result id=%q want doc-a from snapshot catalog metadata", got.Results[0].ID)
+	}
+}
+
+func TestSearchVectorIndexColumnGraphRejectsUnsupportedMetricV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	mutateCurrentSnapshotVectorIndexForTestV4(t, d, col, def.Name, func(def *VectorIndexDefinition) {
+		def.Metric = VectorMetric("dot")
+	})
 
 	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
 		IndexName: def.Name,
@@ -454,6 +489,58 @@ func TestSearchVectorIndexColumnGraphRejectsUnsupportedMetricV4(t *testing.T) {
 	if got.Path != "" || len(got.Results) != 0 {
 		t.Fatalf("response path=%q results=%d want no search path/results on unsupported metric", got.Path, len(got.Results))
 	}
+}
+
+func TestSearchVectorIndexRejectsUnsupportedSnapshotStrategyV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	mutateCurrentSnapshotVectorIndexForTestV4(t, d, col, def.Name, func(def *VectorIndexDefinition) {
+		def.Strategy = VectorIndexStrategy("decoded_graph")
+	})
+
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0, 0},
+		TopK:      1,
+	})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "unsupported strategy") {
+		t.Fatalf("SearchVectorIndex err=%v want unsupported strategy search-unavailable error", err)
+	}
+	if got.Status.State != VectorIndexStateColumnGraphUnavailable || got.Status.Reason != VectorIndexReasonUnsupportedStrategy {
+		t.Fatalf("status=%+v want unsupported strategy unavailable status", got.Status)
+	}
+	if got.Path != "" || len(got.Results) != 0 {
+		t.Fatalf("response path=%q results=%d want no search path/results on unsupported strategy", got.Path, len(got.Results))
+	}
+}
+
+func mutateCurrentSnapshotVectorIndexForTestV4(tb testing.TB, d *backenddb.DB, col *Collection, name string, mutate func(*VectorIndexDefinition)) {
+	tb.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		tb.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if catalog == nil {
+		tb.Fatal("catalogForSnapshot returned nil")
+	}
+	for i := range catalog.meta.VectorIndexes {
+		if catalog.meta.VectorIndexes[i].Name == name {
+			mutate(&catalog.meta.VectorIndexes[i])
+			return
+		}
+	}
+	tb.Fatalf("test setup missing vector index %q in snapshot catalog", name)
 }
 
 func assertColumnGraphSearchResponseLoadedV4(tb testing.TB, got VectorIndexSearchResponse, name string, wantResults int) {

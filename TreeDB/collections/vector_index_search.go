@@ -12,11 +12,6 @@ import (
 // not currently searchable through the selected product path.
 var ErrVectorIndexSearchUnavailable = errors.New("collections: vector index search unavailable")
 
-// vectorIndexSearchInlineDocumentSliceCap avoids heap allocation for common
-// TopK document materialization while falling back to an exact-sized slice for
-// larger result sets.
-const vectorIndexSearchInlineDocumentSliceCap = 16
-
 // VectorIndexSearchPath identifies the physical implementation used for a
 // public vector-index search.
 type VectorIndexSearchPath string
@@ -176,13 +171,16 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 	if err != nil {
 		return response, err
 	}
-	defer func() { _ = searcher.Close() }()
-	return searcher.Search(VectorIndexSearcherSearchOptions{
+	response, err = searcher.Search(VectorIndexSearcherSearchOptions{
 		Query:            opts.Query,
 		TopK:             opts.TopK,
 		EfSearch:         opts.EfSearch,
 		IncludeDocuments: opts.IncludeDocuments,
 	})
+	if closeErr := searcher.Close(); err == nil && closeErr != nil {
+		return response, closeErr
+	}
+	return response, err
 }
 
 // OpenVectorIndexSearcher opens a reusable search handle for steady-state
@@ -208,7 +206,24 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	if c.db == nil {
 		return nil, response, errCollectionDBNil
 	}
-	def, ok := findVectorIndex(c.meta.VectorIndexes, opts.IndexName)
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, response, backenddb.ErrClosed
+	}
+	closeOnErr := true
+	defer func() {
+		if closeOnErr {
+			_ = snap.Close()
+		}
+	}()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return nil, response, err
+	}
+	if catalog == nil {
+		return nil, response, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
 	if !ok {
 		return nil, response, ErrIndexNotFound
 	}
@@ -225,7 +240,13 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; public native-reader search currently requires an explicit column_graph index", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
-		return nil, response, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
+		response.Status = VectorIndexStatus{
+			Name:     def.Name,
+			Strategy: def.Strategy,
+			State:    VectorIndexStateColumnGraphUnavailable,
+			Reason:   VectorIndexReasonUnsupportedStrategy,
+		}
+		return nil, response, fmt.Errorf("%w: vector index %q uses unsupported strategy %q", ErrVectorIndexSearchUnavailable, def.Name, def.Strategy)
 	}
 	if def.Metric != VectorMetricCosine {
 		response.Status = VectorIndexStatus{
@@ -236,17 +257,6 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		}
 		return nil, response, fmt.Errorf("%w: column_graph vector index %q uses metric %q; native reader currently supports only %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric, VectorMetricCosine)
 	}
-
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return nil, response, backenddb.ErrClosed
-	}
-	closeOnErr := true
-	defer func() {
-		if closeOnErr {
-			_ = snap.Close()
-		}
-	}()
 	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(def.Name, snap, columnVectorGraphPhysicalRowReaderOptions{
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,
 	})
@@ -258,8 +268,8 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		response.Status = status
 		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %w", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
 	}
-	catalog := reader.catalog
-	if catalog == nil {
+	readerCatalog := reader.catalog
+	if readerCatalog == nil {
 		_ = reader.Close()
 		return nil, response, errors.New("collections: column_graph physical row reader missing snapshot catalog")
 	}
@@ -278,7 +288,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		path:       response.Path,
 		status:     response.Status,
 		snapshot:   snap,
-		catalog:    catalog,
+		catalog:    readerCatalog,
 		reader:     reader,
 		readerLast: reader.Stats(),
 	}
@@ -318,35 +328,6 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if len(results) == 0 {
 		return response, nil
 	}
-	var documents [][]byte
-	var documentBytes []byte
-	if opts.IncludeDocuments {
-		var inlineDocuments [vectorIndexSearchInlineDocumentSliceCap][]byte
-		if len(results) <= len(inlineDocuments) {
-			documents = inlineDocuments[:len(results)]
-		} else {
-			documents = make([][]byte, len(results))
-		}
-		totalDocumentBytes := 0
-		for i, result := range results {
-			doc, found, err := s.getDocumentAtBoundSnapshot(result.ID)
-			if err != nil {
-				return response, err
-			}
-			if !found {
-				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, result.ID)
-			}
-			documents[i] = doc
-			totalDocumentBytes, err = addVectorIndexSearchByteTotal(totalDocumentBytes, len(doc), math.MaxInt, "document")
-			if err != nil {
-				return response, err
-			}
-			response.Stats.DocumentsFetched++
-		}
-		if totalDocumentBytes > 0 {
-			documentBytes = make([]byte, totalDocumentBytes)
-		}
-	}
 	response.Results = make([]VectorIndexSearchResult, len(results))
 	idByteCount, err := vectorIndexSearchResultIDBytes(results)
 	if err != nil {
@@ -354,7 +335,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	}
 	idBytes := make([]byte, idByteCount)
 	idOffset := 0
-	docOffset := 0
+	var documentBytes []byte
 	for i, result := range results {
 		if len(result.ID) > len(idBytes)-idOffset {
 			return response, errors.New("collections: vector index search result id byte accounting mismatch")
@@ -369,15 +350,25 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 			Score:   result.Score,
 		}
 		if opts.IncludeDocuments {
-			doc := documents[i]
-			if len(doc) > len(documentBytes)-docOffset {
-				return response, errors.New("collections: vector index search document byte accounting mismatch")
+			doc, found, err := s.getDocumentAtBoundSnapshot(result.ID)
+			if err != nil {
+				return response, err
 			}
-			nextDocOffset := docOffset + len(doc)
-			responseDoc := documentBytes[docOffset:nextDocOffset:nextDocOffset]
-			copy(responseDoc, doc)
+			if !found {
+				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, result.ID)
+			}
+			if documentBytes == nil {
+				capHint, err := multiplyVectorIndexSearchByteTotal(len(doc), len(results), math.MaxInt, "document")
+				if err != nil {
+					return response, err
+				}
+				documentBytes = make([]byte, 0, capHint)
+			}
+			docOffset := len(documentBytes)
+			documentBytes = append(documentBytes, doc...)
+			responseDoc := documentBytes[docOffset:len(documentBytes):len(documentBytes)]
 			response.Results[i].Document = responseDoc
-			docOffset = nextDocOffset
+			response.Stats.DocumentsFetched++
 		}
 	}
 	return response, nil
@@ -394,7 +385,7 @@ func validateVectorIndexSearchRequest(topK, efSearch int) error {
 }
 
 // getDocumentAtBoundSnapshot returns snapshot-bound document bytes for immediate
-// use by Search. Search copies them into a response-owned arena before exposing
+// use by Search. Search copies them into response-owned storage before exposing
 // documents to callers, matching Collection.Get retention semantics.
 func (s *VectorIndexSearcher) getDocumentAtBoundSnapshot(documentID []byte) ([]byte, bool, error) {
 	if s == nil || s.snapshot == nil || s.catalog == nil || s.collection == nil {
@@ -435,6 +426,16 @@ func addVectorIndexSearchByteTotal(total, n, limit int, label string) (int, erro
 		return 0, fmt.Errorf("collections: vector index search %s bytes overflow", label)
 	}
 	return total + n, nil
+}
+
+func multiplyVectorIndexSearchByteTotal(n, count, limit int, label string) (int, error) {
+	if n < 0 || count < 0 || limit < 0 {
+		return 0, fmt.Errorf("collections: vector index search %s bytes overflow", label)
+	}
+	if count != 0 && n > limit/count {
+		return 0, fmt.Errorf("collections: vector index search %s bytes overflow", label)
+	}
+	return n * count, nil
 }
 
 // Close releases the searcher's bound physical reader and snapshot.

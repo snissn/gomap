@@ -54,6 +54,7 @@ const (
 	VectorIndexReasonColumnGraphAssetMismatch          VectorIndexReason = "column_graph_asset_mismatch"
 	VectorIndexReasonColumnGraphCorrupt                VectorIndexReason = "column_graph_corrupt"
 	VectorIndexReasonColumnGraphUnsupportedMetric      VectorIndexReason = "column_graph_unsupported_metric"
+	VectorIndexReasonUnsupportedStrategy               VectorIndexReason = "unsupported_vector_index_strategy"
 )
 
 type VectorIndexDefinition struct {
