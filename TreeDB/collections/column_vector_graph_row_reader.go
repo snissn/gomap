@@ -9,12 +9,26 @@ import (
 )
 
 type columnVectorGraphPhysicalRowReaderOptions struct {
+	// MaxDecodedBlocks is the maximum number of decoded column blocks retained
+	// in the reader cache. Zero uses the underlying row reader default.
 	MaxDecodedBlocks int
 }
+
+const (
+	// These positions must match the ProjectedColumns order in
+	// openColumnVectorGraphPhysicalRowReader.
+	columnVectorGraphPhysicalRowValueVector = iota
+	columnVectorGraphPhysicalRowValueInvNorm
+	columnVectorGraphPhysicalRowValueAdjacency
+	columnVectorGraphPhysicalRowValueCount
+)
 
 // columnVectorGraphPhysicalRowReader fetches graph rows from the persisted
 // column graph asset by ordinal. It is a graph-specific wrapper around the
 // generic physical row reader, not a decoded ColumnVectorGraph.
+//
+// The reader is not concurrency-safe. Parallel native search uses one reader
+// and one scratch per worker over immutable physical graph assets.
 type columnVectorGraphPhysicalRowReader struct {
 	def    VectorIndexDefinition
 	graph  columnVectorGraphManifestSnapshot
@@ -209,14 +223,14 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 	if len(row.ID) == 0 {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing document id", r.def.Name, row.Ordinal)
 	}
-	if len(row.Values) != 3 {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d values=%d want 3", r.def.Name, row.Ordinal, len(row.Values))
+	if len(row.Values) != columnVectorGraphPhysicalRowValueCount {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d values=%d want %d", r.def.Name, row.Ordinal, len(row.Values), columnVectorGraphPhysicalRowValueCount)
 	}
-	vector := row.Values[0]
-	invNorm := row.Values[1]
-	adjacency := row.Values[2]
+	vector := row.Values[columnVectorGraphPhysicalRowValueVector]
+	invNorm := row.Values[columnVectorGraphPhysicalRowValueInvNorm]
+	adjacency := row.Values[columnVectorGraphPhysicalRowValueAdjacency]
 	if vector.Type != ColumnStoreValueFloat32Vector || invNorm.Type != ColumnStoreValueFloat32 || adjacency.Type != ColumnStoreValueAdjacencyList {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types", r.def.Name, row.Ordinal)
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types: vector=%q inv_norm=%q adjacency=%q", r.def.Name, row.Ordinal, vector.Type, invNorm.Type, adjacency.Type)
 	}
 	if vector.Null || invNorm.Null || adjacency.Null {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
@@ -228,6 +242,8 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", r.def.Name, row.Ordinal, invNorm.Float32)
 	}
 	rowCount := r.reader.RowCount()
+	// Fail closed if persisted adjacency points outside the immutable graph.
+	// V3 search relies on this validation before expanding neighbor ordinals.
 	for i, neighbor := range adjacency.AdjacencyList {
 		if uint64(neighbor) >= uint64(rowCount) {
 			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d", r.def.Name, row.Ordinal, i, neighbor, rowCount)

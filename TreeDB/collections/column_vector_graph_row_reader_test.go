@@ -51,7 +51,7 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	if err != nil {
 		t.Fatalf("FetchRow(1): %v", err)
 	}
-	assertColumnVectorGraphPhysicalRowV2B(t, row, "doc-b", 1, []float32{0, 1, 0}, 1, []uint32{0, 2})
+	assertColumnVectorGraphPhysicalRowV2B(t, row, "doc-b", 1, 1, []float32{0, 1, 0}, 1, []uint32{0, 2})
 
 	var batchIDs []string
 	if err := reader.FetchBatch([]int{2, 0}, &scratch, func(row columnVectorGraphPhysicalRow) error {
@@ -295,10 +295,13 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaV2B(tb testing.TB, r
 	return d, col, def
 }
 
-func assertColumnVectorGraphPhysicalRowV2B(tb testing.TB, row columnVectorGraphPhysicalRow, id string, ordinal int, vector []float32, invNorm float32, adjacency []uint32) {
+func assertColumnVectorGraphPhysicalRowV2B(tb testing.TB, row columnVectorGraphPhysicalRow, id string, ordinal, rowIndex int, vector []float32, invNorm float32, adjacency []uint32) {
 	tb.Helper()
 	if string(row.ID) != id || row.Ordinal != ordinal {
 		tb.Fatalf("row id=%q ordinal=%d want id=%q ordinal=%d", string(row.ID), row.Ordinal, id, ordinal)
+	}
+	if row.RowIndex != rowIndex {
+		tb.Fatalf("row index=%d want %d", row.RowIndex, rowIndex)
 	}
 	if len(row.Vector) != len(vector) {
 		tb.Fatalf("vector len=%d want %d", len(row.Vector), len(vector))
