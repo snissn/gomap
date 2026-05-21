@@ -183,6 +183,44 @@ func TestColumnGraphRebuildVectorIndexAdjacencyUsesBoundedTopKV2A(t *testing.T) 
 	}
 }
 
+func TestColumnGraphRebuildVectorIndexHeapTopKV2A(t *testing.T) {
+	const rows = 45
+	degree := columnVectorGraphNeighborInsertionLimit + 1
+	input := make([]columnVectorGraphAssetRow, rows)
+	input[0] = columnVectorGraphAssetRow{
+		ID:      []byte("doc-00"),
+		Vector:  []float32{1, 0},
+		InvNorm: 1,
+	}
+	for i := 1; i < rows; i++ {
+		vector := []float32{float32(i), 1}
+		invNorm, err := columnVectorGraphInvNorm(vector)
+		if err != nil {
+			t.Fatalf("columnVectorGraphInvNorm row %d: %v", i, err)
+		}
+		input[i] = columnVectorGraphAssetRow{
+			ID:      []byte(fmt.Sprintf("doc-%02d", i)),
+			Vector:  vector,
+			InvNorm: invNorm,
+		}
+	}
+
+	got, err := topColumnVectorGraphNeighbors(input, 0, degree)
+	if err != nil {
+		t.Fatalf("topColumnVectorGraphNeighbors: %v", err)
+	}
+	if len(got) != degree {
+		t.Fatalf("neighbors=%d want %d", len(got), degree)
+	}
+	for i, neighbor := range got {
+		wantOrdinal := rows - 1 - i
+		wantScore := columnVectorGraphCosine(input[0], input[wantOrdinal])
+		if neighbor.ordinal != wantOrdinal || math.Abs(neighbor.score-wantScore) > 1e-12 {
+			t.Fatalf("neighbor[%d]=%+v want ordinal=%d score=%.12f", i, neighbor, wantOrdinal, wantScore)
+		}
+	}
+}
+
 func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegmentV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
