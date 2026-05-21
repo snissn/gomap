@@ -104,6 +104,24 @@ func TestColumnVectorGraphAdjacencyBoundsRejectsBadOrdinalV2B(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphPhysicalRowReaderRejectsBadAdjacencyOrdinalV2B(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{2}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	})
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnPhysicalRowReaderScratch
+	_, err = reader.FetchRow(0, &scratch)
+	if !errors.Is(err, errColumnVectorGraphAdjacencyOrdinalOutOfBounds) {
+		t.Fatalf("FetchRow err=%v want adjacency bounds sentinel", err)
+	}
+}
+
 func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testing.T) {
 	reader := &columnVectorGraphPhysicalRowReader{
 		def: VectorIndexDefinition{Name: "embedding_graph", Dimensions: 3},
