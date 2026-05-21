@@ -38,6 +38,35 @@ func TestSortKeyMarkPrefixSummaries(t *testing.T) {
 	}
 }
 
+func TestSortKeyMarkRejectsDuplicateOrUnsortedColumns(t *testing.T) {
+	if _, err := BuildSortKeyMark([]SortKeyColumn{
+		{Name: "collection", Values: []int64{1, 1, 1}},
+		{Name: "collection", Values: []int64{10, 20, 30}},
+	}); err == nil {
+		t.Fatal("BuildSortKeyMark duplicate columns succeeded, want error")
+	}
+	if _, err := BuildSortKeyMark([]SortKeyColumn{
+		{Name: "collection", Values: []int64{1, 1, 1}},
+		{Name: "time_us", Values: []int64{10, 9, 11}},
+	}); err == nil {
+		t.Fatal("BuildSortKeyMark unsorted rows succeeded, want error")
+	}
+}
+
+func TestEmptySortKeyPredicateIsConstrainedEmpty(t *testing.T) {
+	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "collection", Values: []int64{1, 1, 1}}})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark: %v", err)
+	}
+	mayContain, constrained, err := mark.MayContainRanges([]Int64RangePredicate{{Column: "collection", Low: 2, High: 1}})
+	if err != nil {
+		t.Fatalf("MayContainRanges: %v", err)
+	}
+	if mayContain || !constrained {
+		t.Fatalf("empty predicate mayContain/constrained=(%v,%v), want (false,true)", mayContain, constrained)
+	}
+}
+
 func TestCountInt64RangeDiagnostics(t *testing.T) {
 	granules, err := buildInt64GranulesForTest(makeSequentialInt64(100), 10)
 	if err != nil {
@@ -74,6 +103,37 @@ func TestCountInt64RangeDiagnostics(t *testing.T) {
 	}
 	if count != 0 || diagnostics.SkippedByMinMax != 10 || diagnostics.Decoded != 0 {
 		t.Fatalf("full-prune count=%d diagnostics=%+v", count, diagnostics)
+	}
+}
+
+func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
+	granules, err := buildInt64GranulesForTest([]int64{1, 2, 3}, 3)
+	if err != nil {
+		t.Fatalf("build granules: %v", err)
+	}
+	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2}}})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark: %v", err)
+	}
+	var reader GranuleReader
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{mark}, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 1, High: 3}},
+	})
+	if err == nil {
+		t.Fatal("CountInt64RangeWithDiagnostics mismatched mark rows succeeded, want error")
+	}
+
+	matchingMark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2, 3}}})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark matching: %v", err)
+	}
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "other_column", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 1, High: 3}},
+	})
+	if err == nil {
+		t.Fatal("CountInt64RangeWithDiagnostics mismatched filter column succeeded, want error")
 	}
 }
 
