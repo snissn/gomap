@@ -19,11 +19,11 @@ func (a *AggregateArena) Reset() {
 	a.counts = a.counts[:0]
 	a.bucketCounts = a.bucketCounts[:0]
 	a.codeBits = a.codeBits[:0]
-	for k := range a.seenInt64 {
-		delete(a.seenInt64, k)
-	}
+	clear(a.seenInt64)
 }
 
+// GroupedCountCodes returns arena-owned count storage. The returned slice is
+// valid only until the next AggregateArena operation or Reset.
 func (a *AggregateArena) GroupedCountCodes(granules []EncodedGranule, cardinality uint32) ([]uint64, error) {
 	counts, err := a.prepareCounts(granules, cardinality)
 	if err != nil {
@@ -45,6 +45,8 @@ func (a *AggregateArena) GroupedCountCodes(granules []EncodedGranule, cardinalit
 	return counts, nil
 }
 
+// FilteredGroupedCountCodes returns arena-owned count storage. The returned
+// slice is valid only until the next AggregateArena operation or Reset.
 func (a *AggregateArena) FilteredGroupedCountCodes(codeGranules []EncodedGranule, filterGranules []EncodedGranule, filter Int64RangePredicate, cardinality uint32) ([]uint64, PredicateDiagnostics, error) {
 	var diagnostics PredicateDiagnostics
 	if len(codeGranules) != len(filterGranules) {
@@ -62,6 +64,9 @@ func (a *AggregateArena) FilteredGroupedCountCodes(codeGranules []EncodedGranule
 	for i, codeGranule := range codeGranules {
 		filterGranule := filterGranules[i]
 		diagnostics.Considered++
+		if filterGranule.Rows != codeGranule.Rows {
+			return nil, diagnostics, errors.New("colgranule: filter/code row mismatch")
+		}
 		if filterGranule.HasMinMax && (filter.High < filterGranule.Min || filter.Low > filterGranule.Max) {
 			diagnostics.SkippedByMinMax++
 			continue
@@ -161,9 +166,7 @@ func (a *AggregateArena) ExactDistinctInt64(granules []EncodedGranule) (int, err
 	if a.seenInt64 == nil {
 		a.seenInt64 = make(map[int64]struct{})
 	} else {
-		for k := range a.seenInt64 {
-			delete(a.seenInt64, k)
-		}
+		clear(a.seenInt64)
 	}
 	for _, g := range granules {
 		values, err := a.reader.DecodeInt64(g)
@@ -189,13 +192,19 @@ func (c TimeBucketedCounts) Count(bucket int64, code uint32) uint64 {
 	if c.BucketWidth <= 0 || code >= c.Cardinality {
 		return 0
 	}
-	bucketIndex := int(bucket - c.MinBucket)
-	if bucketIndex < 0 || bucketIndex >= c.Buckets {
+	bucketOffset := bucket - c.MinBucket
+	if bucketOffset < 0 || bucketOffset >= int64(c.Buckets) {
 		return 0
 	}
-	return c.Counts[bucketIndex*int(c.Cardinality)+int(code)]
+	cell, err := bucketCellIndex(int(bucketOffset), c.Buckets, code, c.Cardinality, len(c.Counts))
+	if err != nil {
+		return 0
+	}
+	return c.Counts[cell]
 }
 
+// TimeBucketedCountCodes returns a result whose Counts slice is arena-owned.
+// Counts is valid only until the next AggregateArena operation or Reset.
 func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, timeGranules []EncodedGranule, bucketWidth int64, cardinality uint32) (TimeBucketedCounts, error) {
 	if len(codeGranules) != len(timeGranules) {
 		return TimeBucketedCounts{}, fmt.Errorf("colgranule: code granules=%d time granules=%d", len(codeGranules), len(timeGranules))
@@ -216,10 +225,9 @@ func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, t
 	}
 	minBucket := floorDiv(minTime, bucketWidth)
 	maxBucket := floorDiv(maxTime, bucketWidth)
-	buckets := int(maxBucket - minBucket + 1)
-	cells := buckets * int(cardinality)
-	if cells < 0 || cells > maxAggregateCells {
-		return TimeBucketedCounts{}, fmt.Errorf("colgranule: aggregate cells=%d exceeds cap %d", cells, maxAggregateCells)
+	buckets, cells, err := boundedBucketCells(minBucket, maxBucket, cardinality)
+	if err != nil {
+		return TimeBucketedCounts{}, err
 	}
 	if cap(a.bucketCounts) < cells {
 		a.bucketCounts = make([]uint64, cells)
@@ -248,8 +256,16 @@ func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, t
 			if code >= header.cardinality || code >= cardinality {
 				return TimeBucketedCounts{}, fmt.Errorf("colgranule: code %d outside cardinality %d", code, cardinality)
 			}
-			bucketIndex := int(floorDiv(timestamp, bucketWidth) - minBucket)
-			a.bucketCounts[bucketIndex*int(cardinality)+int(code)]++
+			bucketIndex64 := floorDiv(timestamp, bucketWidth) - minBucket
+			if bucketIndex64 < 0 || bucketIndex64 >= int64(buckets) {
+				return TimeBucketedCounts{}, fmt.Errorf("colgranule: timestamp %d outside bucket range [%d,%d]", timestamp, minBucket, maxBucket)
+			}
+			bucketIndex := int(bucketIndex64)
+			cell, err := bucketCellIndex(bucketIndex, buckets, code, cardinality, len(a.bucketCounts))
+			if err != nil {
+				return TimeBucketedCounts{}, err
+			}
+			a.bucketCounts[cell]++
 		}
 	}
 	return TimeBucketedCounts{
@@ -324,6 +340,41 @@ func inferCodeCardinality(granules []EncodedGranule, cardinality uint32) (uint32
 		return 0, errors.New("colgranule: empty code cardinality")
 	}
 	return maxCardinality, nil
+}
+
+func boundedBucketCells(minBucket int64, maxBucket int64, cardinality uint32) (int, int, error) {
+	if maxBucket < minBucket {
+		return 0, 0, fmt.Errorf("colgranule: invalid bucket range [%d,%d]", minBucket, maxBucket)
+	}
+	if cardinality == 0 {
+		return 0, 0, errors.New("colgranule: empty code cardinality")
+	}
+	maxBuckets := maxAggregateCells / int(cardinality)
+	if maxBuckets == 0 {
+		return 0, 0, fmt.Errorf("colgranule: aggregate cardinality=%d exceeds cell cap %d", cardinality, maxAggregateCells)
+	}
+	maxSpan := int64(maxBuckets - 1)
+	const minInt64 = -1 << 63
+	if maxBucket >= minInt64+maxSpan && maxBucket-maxSpan > minBucket {
+		return 0, 0, fmt.Errorf("colgranule: aggregate buckets exceed cap %d", maxBuckets)
+	}
+	buckets := int(maxBucket - minBucket + 1)
+	cells := buckets * int(cardinality)
+	return buckets, cells, nil
+}
+
+func bucketCellIndex(bucketIndex int, buckets int, code uint32, cardinality uint32, cells int) (int, error) {
+	if bucketIndex < 0 || bucketIndex >= buckets {
+		return 0, fmt.Errorf("colgranule: bucket index %d outside bucket count %d", bucketIndex, buckets)
+	}
+	if code >= cardinality {
+		return 0, fmt.Errorf("colgranule: code %d outside cardinality %d", code, cardinality)
+	}
+	cell := bucketIndex*int(cardinality) + int(code)
+	if cell < 0 || cell >= cells {
+		return 0, fmt.Errorf("colgranule: bucket cell %d outside counts length %d", cell, cells)
+	}
+	return cell, nil
 }
 
 func floorDiv(v int64, width int64) int64 {

@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -125,6 +126,20 @@ func TestAggregateMetadataDefinitionRejectsUnsupportedShapes(t *testing.T) {
 				def.Measures[2].Column = "kind_code"
 			},
 			want: "want int64",
+		},
+		{
+			name: "nan_max_bytes",
+			edit: func(def *AggregateMetadataDefinition) {
+				def.MaxBytesPerRow = math.NaN()
+			},
+			want: "not finite",
+		},
+		{
+			name: "inf_max_bytes",
+			edit: func(def *AggregateMetadataDefinition) {
+				def.MaxBytesPerRow = math.Inf(1)
+			},
+			want: "not finite",
 		},
 	}
 	for _, tc := range cases {
