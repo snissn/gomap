@@ -3,6 +3,7 @@ package colgranule
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -42,9 +43,9 @@ type JSONBenchPartQueryDiagnostics struct {
 	AggregateMetadataName          string        `json:"aggregate_metadata_name,omitempty"`
 	AggregateMetadataRows          int           `json:"aggregate_metadata_rows,omitempty"`
 	AggregateMetadataEntries       int           `json:"aggregate_metadata_entries,omitempty"`
-	AggregateMetadataBytes         int           `json:"aggregate_metadata_bytes,omitempty"`
+	AggregateMetadataBytes         int           `json:"aggregate_metadata_estimated_bytes,omitempty"`
 	AggregateMetadataBuildDuration time.Duration `json:"aggregate_metadata_build_duration,omitempty"`
-	AggregateMetadataBytesPerRow   float64       `json:"aggregate_metadata_bytes_per_row,omitempty"`
+	AggregateMetadataBytesPerRow   float64       `json:"aggregate_metadata_estimated_bytes_per_row,omitempty"`
 	AggregateMetadataCompression   string        `json:"aggregate_metadata_compression,omitempty"`
 }
 
@@ -485,10 +486,17 @@ func runJSONBenchPartQ2(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 	if err != nil {
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
-	didBlocks, err := lowCardinalityBlocks(part, "did_code")
-	if err != nil {
-		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	didColumn, ok := part.Columns["did_code"]
+	if !ok {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, errors.New("colgranule: missing column did_code")
 	}
+	if didColumn.Definition.Type != ColumnTypeLowCardinalityCode {
+		return runJSONBenchPartQ2Projected(part, codes, scratch)
+	}
+	if len(didColumn.Blocks) == 0 {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, errors.New("colgranule: column did_code has no blocks")
+	}
+	didBlocks := didColumn.Blocks
 	if err := validateAlignedBlocks(kindBlocks, operationBlocks, collectionBlocks, didBlocks); err != nil {
 		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 	}
@@ -552,6 +560,42 @@ func runJSONBenchPartQ2(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 	rows, digest := digestDenseQ2(counts, seen, didWords)
 	diagnostics := partColumnDiagnostics(part, jsonBenchPartQ2Columns, "fused_dense_group_count_distinct_codes")
 	return rows, digest, diagnostics, nil
+}
+
+func runJSONBenchPartQ2Projected(part *ColumnPart, codes queryCodeSet, scratch *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error) {
+	scan, err := scanPartProjection(part, scratch, jsonBenchPartQ2Columns)
+	if err != nil {
+		return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+	}
+	kind := scan.Columns["kind_code"]
+	operation := scan.Columns["commit_operation_code"]
+	collection := scan.Columns["commit_collection_code"]
+	did := scan.Columns["did_code"]
+	counts := scratch.resetCounts()
+	unique, events := scratch.resetUnique()
+	for i := range collection {
+		if kind[i] != codes.kindCommit || operation[i] != codes.operationCreate {
+			continue
+		}
+		event := collection[i]
+		if counts[event] == 0 {
+			events = append(events, event)
+		}
+		counts[event]++
+		if unique[event] == nil {
+			unique[event] = make(map[int64]struct{})
+		}
+		unique[event][did[i]] = struct{}{}
+	}
+	scratch.events = events
+	digest := digestCounts(counts)
+	sort.Slice(events, func(i, j int) bool { return events[i] < events[j] })
+	for _, event := range events {
+		users := unique[event]
+		digest = digestMix(digest, uint64(event), uint64(len(users)))
+	}
+	diagnostics := queryDiagnosticsFromScan(scan.Diagnostics, jsonBenchPartQ2Columns, "projected_scan_group_count_distinct")
+	return len(counts), digest, diagnostics, nil
 }
 
 func runJSONBenchPartQ3(part *ColumnPart, codes queryCodeSet, scratch *jsonBenchPartQueryScratch) (int, uint64, JSONBenchPartQueryDiagnostics, error) {
@@ -709,6 +753,7 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 			if err != nil {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 			}
+			rowsScanned++
 			if len(top) == 3 && timestamp > top[2].t {
 				scratch.q4Pairs = top
 				bytesDecoded += timeCursor.RawBytesRead()
@@ -716,7 +761,6 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 				diagnostics.EarlyStopAvailable = true
 				return len(top), digestQ4Top(top), diagnostics, nil
 			}
-			rowsScanned++
 			kind := readTinyCode(kindHeader, row)
 			if kind >= kindHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
@@ -1136,6 +1180,9 @@ func validateAlignedBlocks(reference []ColumnBlock, others ...[]ColumnBlock) err
 			desc := blocks[i].Descriptor
 			if desc.FirstRow != refDesc.FirstRow || desc.RowCount != refDesc.RowCount {
 				return fmt.Errorf("colgranule: aligned kernel block %d rows=%d+%d want %d+%d", i, desc.FirstRow, desc.RowCount, refDesc.FirstRow, refDesc.RowCount)
+			}
+			if desc.FirstGranule != refDesc.FirstGranule || desc.LastGranule != refDesc.LastGranule {
+				return fmt.Errorf("colgranule: aligned kernel block %d granules=%d..%d want %d..%d", i, desc.FirstGranule, desc.LastGranule, refDesc.FirstGranule, refDesc.LastGranule)
 			}
 		}
 	}
@@ -1612,7 +1659,7 @@ func queryDiagnosticsFromScan(scan PartScanDiagnostics, columns []string, kernel
 	return JSONBenchPartQueryDiagnostics{
 		RowsScanned:        scan.RowsScanned,
 		GranulesConsidered: scan.GranulesConsidered,
-		GranulesDecoded:    scan.GranulesConsidered,
+		GranulesDecoded:    scan.GranulesDecoded,
 		BlocksDecoded:      scan.BlocksDecoded,
 		BytesDecoded:       scan.BytesDecoded,
 		ColumnsProjected:   append([]string(nil), columns...),
@@ -1623,21 +1670,22 @@ func queryDiagnosticsFromScan(scan PartScanDiagnostics, columns []string, kernel
 func partColumnDiagnostics(part *ColumnPart, columns []string, kernel string) JSONBenchPartQueryDiagnostics {
 	var blocks int
 	var bytes int
-	covered := make(map[int]struct{}, len(part.Descriptor.Granules))
+	var granulesDecoded int
 	for _, name := range columns {
 		column := part.Columns[name]
+		columnGranules, err := countGranulesCoveredByBlocks(column.Blocks)
+		if err == nil && columnGranules > granulesDecoded {
+			granulesDecoded = columnGranules
+		}
 		for _, block := range column.Blocks {
 			blocks++
 			bytes += block.Granule.RawBytes
-			for granule := block.Descriptor.FirstGranule; granule <= block.Descriptor.LastGranule; granule++ {
-				covered[granule] = struct{}{}
-			}
 		}
 	}
 	return JSONBenchPartQueryDiagnostics{
 		RowsScanned:        part.Descriptor.RowCount,
 		GranulesConsidered: len(part.Descriptor.Granules),
-		GranulesDecoded:    len(covered),
+		GranulesDecoded:    granulesDecoded,
 		BlocksDecoded:      blocks,
 		BytesDecoded:       bytes,
 		ColumnsProjected:   append([]string(nil), columns...),
