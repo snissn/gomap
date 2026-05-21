@@ -389,6 +389,12 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return status, nil
 	}
+	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphRebuildNeeded
+		status.RebuildNeeded = true
+		return status, nil
+	}
 	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	if rootID == 0 {
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
