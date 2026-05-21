@@ -124,7 +124,8 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsBadAdjacencyOrdinalV2B(t *test
 
 func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testing.T) {
 	reader := &columnVectorGraphPhysicalRowReader{
-		def: VectorIndexDefinition{Name: "embedding_graph", Dimensions: 3},
+		def:    VectorIndexDefinition{Name: "embedding_graph", Dimensions: 3},
+		reader: &columnPhysicalRowReader{totalRows: 8},
 	}
 	row := func(vector []float32, invNorm float32) columnPhysicalRowReaderRow {
 		return columnPhysicalRowReaderRow{
@@ -167,6 +168,15 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testi
 			}
 		})
 	}
+	t.Run("nil underlying reader", func(t *testing.T) {
+		nilReader := &columnVectorGraphPhysicalRowReader{
+			def: VectorIndexDefinition{Name: "embedding_graph", Dimensions: 3},
+		}
+		_, err := nilReader.graphRowFromPhysicalRow(row([]float32{1, 0, 0}, 1))
+		if !errors.Is(err, errNilColumnVectorGraphPhysicalRowReader) {
+			t.Fatalf("graphRowFromPhysicalRow err=%v want nil-reader sentinel", err)
+		}
+	})
 }
 
 func TestColumnVectorGraphPhysicalRowReaderRejectsDefinitionMismatchV2B(t *testing.T) {
