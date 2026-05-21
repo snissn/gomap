@@ -2349,17 +2349,17 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 		{
 			name:      "q4a_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 56,
+			maxAllocs: 51,
 		},
 		{
 			name:      "q4b_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 56,
+			maxAllocs: 51,
 		},
 		{
 			name:      "q5_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 61,
+			maxAllocs: 55,
 		},
 	}
 	for _, tc := range tests {
