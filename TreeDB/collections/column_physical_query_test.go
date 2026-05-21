@@ -2328,6 +2328,12 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 				// where the #1634 performance evidence is collected.
 				maxAllocs += 32
 			}
+			if collectionsRaceEnabled {
+				// The race detector instruments this routed allocation-budget
+				// path and shifts AllocsPerRun upward. Keep the normal budget
+				// strict for the performance evidence builds.
+				maxAllocs += 32
+			}
 			if allocs > maxAllocs {
 				t.Fatalf("%s routed sidecar allocs/run=%.2f want <= %.2f", tc.name, allocs, maxAllocs)
 			}
