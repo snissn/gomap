@@ -3,6 +3,7 @@ package collections
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -32,11 +33,16 @@ func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T)
 		t.Fatalf("status before rebuild=%+v, want rebuild-needed", status)
 	}
 
+	baseLSN := d.State().AppliedCommandLSN
 	status, err = col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	rebuildLSN := d.State().AppliedCommandLSN
+	if rebuildLSN <= baseLSN {
+		t.Fatalf("rebuild AppliedCommandLSN=%d want > base %d", rebuildLSN, baseLSN)
+	}
 	frames := collectionCommandWALFrames(t, dir)
 	if len(frames) == 0 || frames[len(frames)-1].Kind != commitlog.CommandKindCollectionRebuildVectorIndex {
 		t.Fatalf("last command WAL frame=%+v, want vector-index rebuild", frames)
@@ -45,6 +51,17 @@ func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T)
 	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
 	if graph.RowCount != len(rows) {
 		t.Fatalf("graph row count=%d want %d", graph.RowCount, len(rows))
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	if manifest.AppliedCommandLSN != rebuildLSN {
+		t.Fatalf("manifest AppliedCommandLSN=%d want rebuild LSN %d", manifest.AppliedCommandLSN, rebuildLSN)
+	}
+	if cfg.RecoveryAuthoritativeAppliedCommandLSN != rebuildLSN {
+		t.Fatalf("recovery AppliedCommandLSN=%d want rebuild LSN %d", cfg.RecoveryAuthoritativeAppliedCommandLSN, rebuildLSN)
 	}
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
 	if len(scanned) != len(rows) {
@@ -105,6 +122,48 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 		t.Fatalf("empty graph scanned rows=%d want 0", len(scanned))
 	}
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
+}
+
+func TestColumnGraphRebuildEmptyInitialManifestWithoutCommandWALFailsClosedV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg := columnGraphRebuildColumnStoreConfigV2A(3)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 1)
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	_, err = col.RebuildVectorIndex(def.Name)
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) || !strings.Contains(err.Error(), "requires command WAL") {
+		t.Fatalf("RebuildVectorIndex empty without command WAL err=%v, want command WAL rejection", err)
+	}
+	status, statusErr := col.VectorIndexStatus(def.Name)
+	if statusErr != nil {
+		t.Fatalf("VectorIndexStatus: %v", statusErr)
+	}
+	if status.Loaded || !status.RebuildNeeded {
+		t.Fatalf("status after rejected empty rebuild=%+v, want not loaded/rebuild-needed", status)
+	}
 }
 
 func TestColumnGraphRebuildVectorIndexFailsClosedOnZeroVectorV2A(t *testing.T) {
@@ -204,6 +263,68 @@ func TestColumnGraphRebuildVectorIndexAdjacencyUsesBoundedTopKV2A(t *testing.T) 
 	}
 	if got := scanned[0].adjacency; len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("doc-a adjacency=%v, want bounded top-k [1 2]", got)
+	}
+}
+
+func TestColumnGraphRebuildVectorIndexAllocatesPartIDsAcrossGraphIndexesV2A(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	cfg := columnGraphRebuildColumnStoreConfigV2A(2)
+	cfg.Columns = append(cfg.Columns, ColumnStoreColumn{
+		Name:       "other_embedding",
+		Path:       "other_embedding",
+		ValueType:  ColumnStoreValueFloat32Vector,
+		VectorDims: 2,
+	})
+	defA := columnGraphRebuildVectorIndexDefinitionV2A(2, 1)
+	defB, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:       "other_embedding_graph",
+		Field:      "other_embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          1,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		t.Fatalf("normalizeVectorIndexDefinition defB: %v", err)
+	}
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		},
+		VectorIndexes: []VectorIndexDefinition{defA, defB},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	insertColumnGraphRebuildDualVectorRowsV2A(t, col, []columnGraphRebuildDualInputRowV2A{
+		{id: "doc-a", embedding: []float32{1, 0}, otherEmbedding: []float32{0, 1}},
+		{id: "doc-b", embedding: []float32{0, 1}, otherEmbedding: []float32{1, 0}},
+	})
+	if _, err := col.RebuildVectorIndex(defA.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex defA: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(defB.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex defB: %v", err)
+	}
+	graphA, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", defA)
+	graphB, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", defB)
+	if graphA.AssetRef.Namespace != graphB.AssetRef.Namespace {
+		t.Fatalf("graph namespaces differ %q vs %q, test requires shared namespace", graphA.AssetRef.Namespace, graphB.AssetRef.Namespace)
+	}
+	if graphA.AssetRef.PartID == graphB.AssetRef.PartID {
+		t.Fatalf("graph indexes reused part_id=%d in namespace %q", graphA.AssetRef.PartID, graphA.AssetRef.Namespace)
 	}
 }
 
@@ -550,6 +671,12 @@ type columnGraphRebuildInputRowV2A struct {
 	vector []float32
 }
 
+type columnGraphRebuildDualInputRowV2A struct {
+	id             string
+	embedding      []float32
+	otherEmbedding []float32
+}
+
 type columnGraphRebuildScannedRowV2A struct {
 	id        string
 	vector    []float32
@@ -624,6 +751,29 @@ func insertColumnGraphRebuildRowsV2A(tb testing.TB, col *Collection, rows []colu
 			"kind":      "vector",
 			"did":       row.id,
 			"embedding": row.vector,
+		})
+		if err != nil {
+			tb.Fatalf("json.Marshal row %q: %v", row.id, err)
+		}
+		ids[i] = []byte(row.id)
+		docs[i] = raw
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		tb.Fatalf("InsertBatch: %v", err)
+	}
+}
+
+func insertColumnGraphRebuildDualVectorRowsV2A(tb testing.TB, col *Collection, rows []columnGraphRebuildDualInputRowV2A) {
+	tb.Helper()
+	ids := make([][]byte, len(rows))
+	docs := make([][]byte, len(rows))
+	for i, row := range rows {
+		raw, err := json.Marshal(map[string]any{
+			"time_us":         int64(i + 1),
+			"kind":            "vector",
+			"did":             row.id,
+			"embedding":       row.embedding,
+			"other_embedding": row.otherEmbedding,
 		})
 		if err != nil {
 			tb.Fatalf("json.Marshal row %q: %v", row.id, err)
