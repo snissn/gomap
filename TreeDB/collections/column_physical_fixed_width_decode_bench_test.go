@@ -8,6 +8,8 @@ import (
 	"unsafe"
 )
 
+// columnPhysicalFixedWidthDecodeBenchSink prevents benchmark work from being
+// optimized away.
 var columnPhysicalFixedWidthDecodeBenchSink uint64
 
 // These helpers are benchmark-only evidence for the M1C encoding decision. They
@@ -24,20 +26,23 @@ func TestColumnPhysicalFixedWidthEndianDecodeBenchHelpersV1(t *testing.T) {
 	for i, bits := range floatBits {
 		floatValues[i] = math.Float32frombits(bits)
 	}
-	for name, tc := range map[string]struct {
+	for _, tc := range []struct {
+		name   string
 		raw    []byte
 		decode func([]float32, []byte) []float32
 	}{
-		"big_endian": {
+		{
+			name:   "big_endian",
 			raw:    encodeFloat32FixedWidthForBenchmark(floatValues, binary.BigEndian),
 			decode: appendFloat32FixedWidthBigEndianForBenchmark,
 		},
-		"little_endian": {
+		{
+			name:   "little_endian",
 			raw:    encodeFloat32FixedWidthForBenchmark(floatValues, binary.LittleEndian),
 			decode: appendFloat32FixedWidthLittleEndianForBenchmark,
 		},
 	} {
-		t.Run("float32_"+name, func(t *testing.T) {
+		t.Run("float32_"+tc.name, func(t *testing.T) {
 			got := tc.decode([]float32{42}, tc.raw)
 			if len(got) != len(floatValues)+1 || got[0] != 42 {
 				t.Fatalf("got len=%d first=%v", len(got), got[0])
@@ -51,20 +56,23 @@ func TestColumnPhysicalFixedWidthEndianDecodeBenchHelpersV1(t *testing.T) {
 	}
 
 	uintValues := []uint32{0, 1, 17, 1024, math.MaxUint16 + 1, math.MaxUint32}
-	for name, tc := range map[string]struct {
+	for _, tc := range []struct {
+		name   string
 		raw    []byte
 		decode func([]uint32, []byte) []uint32
 	}{
-		"big_endian": {
+		{
+			name:   "big_endian",
 			raw:    encodeUint32FixedWidthForBenchmark(uintValues, binary.BigEndian),
 			decode: appendUint32FixedWidthBigEndianForBenchmark,
 		},
-		"little_endian": {
+		{
+			name:   "little_endian",
 			raw:    encodeUint32FixedWidthForBenchmark(uintValues, binary.LittleEndian),
 			decode: appendUint32FixedWidthLittleEndianForBenchmark,
 		},
 	} {
-		t.Run("uint32_"+name, func(t *testing.T) {
+		t.Run("uint32_"+tc.name, func(t *testing.T) {
 			got := tc.decode([]uint32{42}, tc.raw)
 			if len(got) != len(uintValues)+1 || got[0] != 42 {
 				t.Fatalf("got len=%d first=%v", len(got), got[0])
@@ -91,6 +99,9 @@ func TestColumnPhysicalFixedWidthEndianDecodeBenchHelpersV1(t *testing.T) {
 		if _, ok := float32FixedWidthLittleEndianViewForBenchmark(append([]byte{0}, raw...)[1:]); ok {
 			t.Fatalf("misaligned float32 direct view unexpectedly available")
 		}
+		if _, ok := float32FixedWidthLittleEndianViewForBenchmark(nil); ok {
+			t.Fatalf("empty float32 direct view unexpectedly available")
+		}
 
 		uintRaw := encodeUint32FixedWidthForBenchmark(uintValues, binary.LittleEndian)
 		uintView, ok := uint32FixedWidthLittleEndianViewForBenchmark(uintRaw)
@@ -104,6 +115,9 @@ func TestColumnPhysicalFixedWidthEndianDecodeBenchHelpersV1(t *testing.T) {
 		}
 		if _, ok := uint32FixedWidthLittleEndianViewForBenchmark(append([]byte{0}, uintRaw...)[1:]); ok {
 			t.Fatalf("misaligned uint32 direct view unexpectedly available")
+		}
+		if _, ok := uint32FixedWidthLittleEndianViewForBenchmark(nil); ok {
+			t.Fatalf("empty uint32 direct view unexpectedly available")
 		}
 	}
 }
@@ -302,6 +316,7 @@ func appendFloat32FixedWidthBigEndianForBenchmark(dst []float32, raw []byte) []f
 	}
 	pos := 0
 	i := base
+	// i indexes the extended dst slice; pos indexes raw and advances in lockstep.
 	for ; i+4 <= need; i += 4 {
 		_ = raw[pos+15]
 		dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
@@ -332,6 +347,7 @@ func appendFloat32FixedWidthLittleEndianForBenchmark(dst []float32, raw []byte) 
 	}
 	pos := 0
 	i := base
+	// i indexes the extended dst slice; pos indexes raw and advances in lockstep.
 	for ; i+4 <= need; i += 4 {
 		_ = raw[pos+15]
 		dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)
@@ -362,6 +378,7 @@ func appendUint32FixedWidthBigEndianForBenchmark(dst []uint32, raw []byte) []uin
 	}
 	pos := 0
 	i := base
+	// i indexes the extended dst slice; pos indexes raw and advances in lockstep.
 	for ; i+4 <= need; i += 4 {
 		_ = raw[pos+15]
 		dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
@@ -392,6 +409,7 @@ func appendUint32FixedWidthLittleEndianForBenchmark(dst []uint32, raw []byte) []
 	}
 	pos := 0
 	i := base
+	// i indexes the extended dst slice; pos indexes raw and advances in lockstep.
 	for ; i+4 <= need; i += 4 {
 		_ = raw[pos+15]
 		dst[i] = uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24
@@ -412,7 +430,7 @@ func float32FixedWidthLittleEndianViewForBenchmark(raw []byte) ([]float32, bool)
 		return nil, false
 	}
 	if len(raw) == 0 {
-		return nil, true
+		return nil, false
 	}
 	ptr := unsafe.Pointer(unsafe.SliceData(raw))
 	if uintptr(ptr)%unsafe.Alignof(float32(0)) != 0 {
@@ -426,7 +444,7 @@ func uint32FixedWidthLittleEndianViewForBenchmark(raw []byte) ([]uint32, bool) {
 		return nil, false
 	}
 	if len(raw) == 0 {
-		return nil, true
+		return nil, false
 	}
 	ptr := unsafe.Pointer(unsafe.SliceData(raw))
 	if uintptr(ptr)%unsafe.Alignof(uint32(0)) != 0 {
