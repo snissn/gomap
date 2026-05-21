@@ -349,7 +349,8 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 	}
 	// Cached blocks must own stable bytes. The asset read cache reuses scratch
 	// for syscall reads, so storing that scratch would let later cache misses
-	// corrupt already-indexed row offsets.
+	// corrupt already-indexed row offsets. Malformed lengths skip the owned
+	// destination and are rejected by the read/index checks below.
 	raw, err := r.readCache.read(rowRange.ref, dst)
 	if err != nil {
 		return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
@@ -692,7 +693,7 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 	end := pos + int(byteLen)
 	raw := c.raw
 	if pos < end {
-		_ = raw[end-1]
+		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
 	}
 	for i := base; i < need; i++ {
 		dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
@@ -726,7 +727,7 @@ func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
 	end := pos + int(byteLen)
 	raw := c.raw
 	if pos < end {
-		_ = raw[end-1]
+		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
 	}
 	for i := base; i < need; i++ {
 		dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
