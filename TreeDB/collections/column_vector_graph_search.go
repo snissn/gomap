@@ -7,7 +7,12 @@ import (
 	"sort"
 )
 
+// Keep modest frontier overgrowth to avoid realloc churn when callers vary
+// EfSearch slightly, while still releasing oversized scratch after large probes.
 const columnVectorGraphNativeFrontierOversizeSlack = 16
+
+// Default TopK values are small; insertion order avoids sort overhead there.
+// Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
 const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
 type columnVectorGraphNativeSearchOptions struct {
@@ -116,12 +121,18 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch, dimensions, degree int) {
 	if cap(s.Values) < 3 {
 		s.Values = make([]columnDeclaredValue, 0, 3)
+	} else {
+		s.Values = s.Values[:0]
 	}
 	if cap(s.Float32Values) < dimensions {
 		s.Float32Values = make([]float32, 0, dimensions)
+	} else {
+		s.Float32Values = s.Float32Values[:0]
 	}
 	if cap(s.Uint32Values) < degree {
 		s.Uint32Values = make([]uint32, 0, degree)
+	} else {
+		s.Uint32Values = s.Uint32Values[:0]
 	}
 }
 
