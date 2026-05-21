@@ -1864,6 +1864,12 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 		if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
 			t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
 		}
+		if i == 0 && result.Diagnostics.SegmentFileCacheMisses == 0 {
+			t.Fatalf("first runner diagnostics=%+v want initial segment cache miss", result.Diagnostics)
+		}
+		if i > 0 && result.Diagnostics.SegmentFileCacheMisses != 0 {
+			t.Fatalf("runner diagnostics=%+v want per-run cache misses reset after warmup", result.Diagnostics)
+		}
 	}
 
 	allocs := testing.AllocsPerRun(20, func() {

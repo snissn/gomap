@@ -218,9 +218,13 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
 	}
 	r.exec.resetForRun()
+	beforeHits := r.readCache.hits
+	beforeMisses := r.readCache.misses
 	scanStart := time.Now()
 	diag, err := r.collection.scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(r.view, r.exec, &r.readCache, 0, 0, nil)
 	scanNanos := time.Since(scanStart).Nanoseconds()
+	diag.SegmentFileCacheHits -= beforeHits
+	diag.SegmentFileCacheMisses -= beforeMisses
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
