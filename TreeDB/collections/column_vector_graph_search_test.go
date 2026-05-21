@@ -231,14 +231,14 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 
 func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	var scratch columnVectorGraphNativeSearchScratch
-	if err := scratch.prepare(10, 3, 2, 1, 4); err != nil {
+	if err := scratch.prepare(64, 3, 2, 64, 64); err != nil {
 		t.Fatalf("prepare large: %v", err)
 	}
-	if len(scratch.visitMarks) != 10 {
-		t.Fatalf("large visitMarks len=%d want 10", len(scratch.visitMarks))
+	if len(scratch.visitMarks) != 64 {
+		t.Fatalf("large visitMarks len=%d want 64", len(scratch.visitMarks))
 	}
-	if cap(scratch.frontier) > 4 {
-		t.Fatalf("frontier cap=%d want bounded by ef_search", cap(scratch.frontier))
+	if cap(scratch.frontier) < 64 || cap(scratch.top) < 64 || cap(scratch.results) < 64 || cap(scratch.idBuffers) < 64 || cap(scratch.resultOrder) < 64 || cap(scratch.resultOrdinals) < 64 {
+		t.Fatalf("large scratch caps frontier=%d top=%d results=%d idBuffers=%d resultOrder=%d resultOrdinals=%d want at least 64", cap(scratch.frontier), cap(scratch.top), cap(scratch.results), cap(scratch.idBuffers), cap(scratch.resultOrder), cap(scratch.resultOrdinals))
 	}
 	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
 		t.Fatalf("prepare small: %v", err)
@@ -248,6 +248,14 @@ func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	}
 	if scratch.markVisited(5) {
 		t.Fatalf("markVisited accepted stale ordinal outside current row count")
+	}
+	if cap(scratch.frontier) > 1+columnVectorGraphNativeScratchOversizeSlack ||
+		cap(scratch.top) > 1+columnVectorGraphNativeScratchOversizeSlack ||
+		cap(scratch.results) > 1+columnVectorGraphNativeScratchOversizeSlack ||
+		cap(scratch.idBuffers) > 1+columnVectorGraphNativeScratchOversizeSlack ||
+		cap(scratch.resultOrder) > 1+columnVectorGraphNativeScratchOversizeSlack ||
+		cap(scratch.resultOrdinals) > 1+columnVectorGraphNativeScratchOversizeSlack {
+		t.Fatalf("small scratch retained oversized caps frontier=%d top=%d results=%d idBuffers=%d resultOrder=%d resultOrdinals=%d", cap(scratch.frontier), cap(scratch.top), cap(scratch.results), cap(scratch.idBuffers), cap(scratch.resultOrder), cap(scratch.resultOrdinals))
 	}
 }
 

@@ -7,9 +7,10 @@ import (
 	"sort"
 )
 
-// Keep modest frontier overgrowth to avoid realloc churn when callers vary
-// EfSearch slightly, while still releasing oversized scratch after large probes.
-const columnVectorGraphNativeFrontierOversizeSlack = 16
+// Keep modest scratch overgrowth to avoid realloc churn when callers vary
+// TopK/EfSearch slightly, while still releasing oversized scratch after large
+// probes.
+const columnVectorGraphNativeScratchOversizeSlack = 16
 
 // Default TopK values are small; insertion order avoids sort overhead there.
 // Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
@@ -86,41 +87,18 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	if frontierCap < topK {
 		frontierCap = topK
 	}
-	if cap(s.frontier) < frontierCap || cap(s.frontier) > frontierCap*2+columnVectorGraphNativeFrontierOversizeSlack {
-		s.frontier = make([]columnVectorGraphSearchCandidate, 0, frontierCap)
-	} else {
-		s.frontier = s.frontier[:0]
-	}
-	s.top = s.top[:0]
-	if cap(s.top) < topK {
-		s.top = make([]columnVectorGraphSearchCandidate, 0, topK)
-	}
-	s.results = s.results[:0]
-	if cap(s.results) < topK {
-		s.results = make([]columnVectorGraphNativeSearchResult, 0, topK)
-	}
-	if len(s.idBuffers) < topK {
-		next := make([][]byte, topK)
-		copy(next, s.idBuffers)
-		s.idBuffers = next
-	} else {
-		for i := topK; i < len(s.idBuffers); i++ {
-			s.idBuffers[i] = nil
-		}
-		s.idBuffers = s.idBuffers[:topK]
-	}
-	if cap(s.resultOrder) < topK {
-		s.resultOrder = make([]int, 0, topK)
-	}
-	if cap(s.resultOrdinals) < topK {
-		s.resultOrdinals = make([]int, 0, topK)
-	}
+	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
+	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topK)
+	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
+	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
+	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
+	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
 	return nil
 }
 
 func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch, dimensions, degree int) {
-	if cap(s.Values) < 3 {
-		s.Values = make([]columnDeclaredValue, 0, 3)
+	if cap(s.Values) < columnVectorGraphPhysicalRowValueCount {
+		s.Values = make([]columnDeclaredValue, 0, columnVectorGraphPhysicalRowValueCount)
 	} else {
 		s.Values = s.Values[:0]
 	}
@@ -134,6 +112,46 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 	} else {
 		s.Uint32Values = s.Uint32Values[:0]
 	}
+}
+
+func resizeColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearchCandidate, target int) []columnVectorGraphSearchCandidate {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]columnVectorGraphSearchCandidate, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSearchResult, target int) []columnVectorGraphNativeSearchResult {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]columnVectorGraphNativeSearchResult, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeIntScratch(dst []int, target int) []int {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]int, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][]byte {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		next := make([][]byte, target)
+		copy(next, dst)
+		return next
+	}
+	if len(dst) < target {
+		return dst[:target]
+	}
+	for i := target; i < len(dst); i++ {
+		dst[i] = nil
+	}
+	return dst[:target]
+}
+
+func columnVectorGraphNativeScratchCapOversized(capacity, target int) bool {
+	return capacity > target*2+columnVectorGraphNativeScratchOversizeSlack
 }
 
 // SearchCosine traverses the persisted column graph through the physical row
@@ -247,23 +265,21 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
 	fetched := 0
+	resultPos := 0
 	if err := r.fetchBatchUnchecked(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
-		resultPos := sort.SearchInts(scratch.resultOrdinals, row.Ordinal)
 		if resultPos >= n || scratch.resultOrdinals[resultPos] != row.Ordinal {
-			return fmt.Errorf("collections: column_graph %q result batch returned unexpected row ordinal=%d", r.def.Name, row.Ordinal)
+			return fmt.Errorf("collections: column_graph %q result batch returned unexpected or out-of-order row ordinal=%d", r.def.Name, row.Ordinal)
 		}
 		topIndex := scratch.resultOrder[resultPos]
-		if topIndex < 0 {
-			return fmt.Errorf("collections: column_graph %q result batch returned duplicate row ordinal=%d", r.def.Name, row.Ordinal)
-		}
-		// Mark fetched in-place to avoid another per-search scratch slice.
-		scratch.resultOrder[resultPos] = ^topIndex
 		if cap(scratch.idBuffers[topIndex]) < len(row.ID) {
+			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
+		} else if columnVectorGraphNativeScratchCapOversized(cap(scratch.idBuffers[topIndex]), len(row.ID)) {
 			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
 		}
 		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(row.ID)]
 		copy(scratch.idBuffers[topIndex], row.ID)
 		fetched++
+		resultPos++
 		return nil
 	}); err != nil {
 		return err
