@@ -12746,11 +12746,17 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch
 	}
-	if c.commandWALActive(nil) {
-		return false
-	}
 	if !meta.Options.BufferedIndexedWrites {
 		return false
+	}
+	if c.commandWALActive(nil) {
+		return c.canBufferDirectUpdateAck() &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			isBSONDocumentFormat(opts.documentFormat) &&
+			structuredBSONSetBatch &&
+			canBuffer &&
+			!updateBatchChangesSecondaryIndex(runtimes, changed) &&
+			!persistIndexStateForOptions(opts)
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
 		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
@@ -12830,7 +12836,11 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					results = plan.results
 					return nil
 				}
-				if commandWALBufferedMode && plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && len(plan.commandWALDocuments) > 0 {
+				if commandWALBufferedMode &&
+					plan.directBufferedUpdate != nil &&
+					len(plan.directBufferedUpdate.templateEntries) == 0 &&
+					len(plan.directBufferedUpdate.secondaryRootPlans) == 0 &&
+					len(plan.commandWALDocuments) > 0 {
 					intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
 					if err != nil {
 						return err
@@ -14983,6 +14993,20 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 		if !runtime.def.unique {
 			continue
 		}
+		for _, update := range updates {
+			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func updateBatchChangesSecondaryIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
+	if len(runtimes) == 0 || len(updates) == 0 {
+		return false
+	}
+	for runtimeIdx := range runtimes {
 		for _, update := range updates {
 			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
 				return true
