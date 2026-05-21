@@ -69,23 +69,46 @@ func TestDocs_ColumnGraphNativePRTemplateSections(t *testing.T) {
 	}
 	text := string(content)
 
-	required := []string{
-		"Column Graph Native Workstream",
-		"Copied/Adapted From Old Stack",
-		"Path Identity",
-		"Base And Dependency State",
-		"Test Plan Start",
-		"Performance Plan Start",
-		"Test Plan Close",
-		"Performance Plan Close",
-		"AI Review Loop",
-		"Codex latest-head review",
-		"Copilot latest-head review",
-		"CodeRabbit latest-head review",
+	requiredHeadings := []string{
+		"## Column Graph Native Workstream (#1646, if applicable)",
+		"### Copied/Adapted From Old Stack",
+		"### Path Identity",
+		"### Base And Dependency State",
+		"### Evidence",
+		"### Test Plan Start",
+		"### Performance Plan Start",
+		"### Test Plan Close",
+		"### Performance Plan Close",
+		"### AI Review Loop",
 	}
-	for _, needle := range required {
-		if !strings.Contains(text, needle) {
-			t.Fatalf("PR template missing #1646 section %q", needle)
+	for _, heading := range requiredHeadings {
+		if !strings.Contains(text, "\n"+heading+"\n") {
+			t.Fatalf("PR template missing exact #1646 heading %q", heading)
+		}
+	}
+
+	requiredBullets := []string{
+		"- Codex latest-head review:",
+		"- Copilot latest-head review:",
+		"- CodeRabbit latest-head review:",
+	}
+	for _, bullet := range requiredBullets {
+		if !strings.Contains(text, "\n"+bullet) {
+			t.Fatalf("PR template missing exact #1646 bullet %q", bullet)
+		}
+	}
+}
+
+func TestDocs_ColumnGraphNativeInventoryMarkdownTables(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	inventoryPath := filepath.Join(treeRoot, "docs", "spec", "column-graph-native-reconstruction-inventory.md")
+	content, err := os.ReadFile(inventoryPath)
+	if err != nil {
+		t.Fatalf("read inventory: %v", err)
+	}
+	for lineNo, line := range strings.Split(string(content), "\n") {
+		if strings.HasPrefix(line, "||") {
+			t.Fatalf("inventory line %d has invalid double-pipe table prefix: %q", lineNo+1, line)
 		}
 	}
 }
