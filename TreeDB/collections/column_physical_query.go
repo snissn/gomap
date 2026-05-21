@@ -1121,81 +1121,14 @@ func (e *columnPhysicalQueryExecutor) distinctSetForGroup(key string) map[string
 }
 
 func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, expectedOperation ColumnPublishOperation, exec *columnPhysicalQueryExecutor) (columnPhysicalAssetScanSummary, error) {
-	cur := manifestCursor{raw: raw}
-	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("bad column physical asset magic=0x%08x", magic)
-	}
-	version := cur.u16()
-	if !isSupportedColumnPhysicalAssetVersion(version) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset version=%d", version)
-	}
-	collection := cur.stringBytes()
-	namespace := cur.stringBytes()
-	generation := cur.u64()
-	partID := cur.u64()
-	appliedCommandLSN := cur.u64()
-	operationBytes := cur.stringBytes()
-	operation, operationOK := columnPhysicalScanOperationFromBytes(operationBytes)
-	schemaHash := cur.u64()
-	columnCount := cur.u64()
-	rowCount := cur.u64()
-	if err := cur.err; err != nil {
+	header, version, rowsOffset, err := parseColumnPhysicalAssetScanHeader(raw, ref, expectedCollection, cfg, expectedOperation)
+	if err != nil {
 		return columnPhysicalAssetScanSummary{}, err
-	}
-	if columnCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column_count=%d overflows int max=%d", columnCount, maxCollectionInt)
-	}
-	if rowCount > uint64(maxCollectionInt) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset row_count=%d overflows int max=%d", rowCount, maxCollectionInt)
-	}
-	header := columnPhysicalAssetScanHeader{
-		Collection:        collection,
-		Namespace:         namespace,
-		Generation:        generation,
-		PartID:            partID,
-		AppliedCommandLSN: appliedCommandLSN,
-		Operation:         operation,
-		SchemaHash:        schemaHash,
-		ColumnCount:       int(columnCount),
-		RowCount:          int(rowCount),
-	}
-	if !operationOK {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("unsupported column physical asset operation %q", operationBytes)
-	}
-	if version == columnPhysicalAssetVersionV1 && header.Operation == ColumnPublishOperationDelete {
-		return columnPhysicalAssetScanSummary{}, errors.New("legacy v1 column physical asset delete operation unsupported")
-	}
-	if err := validateColumnPhysicalAssetScanHeader(header, ref, expectedCollection, cfg); err != nil {
-		return columnPhysicalAssetScanSummary{}, err
-	}
-	if expectedOperation != "" && header.Operation != expectedOperation {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: manifest reason=%q asset operation=%q", errColumnPhysicalAssetManifestOperationMismatch, expectedOperation, header.Operation)
 	}
 	if header.Operation != ColumnPublishOperationInsert {
 		return columnPhysicalAssetScanSummary{}, errColumnPhysicalQueryNeedsVisibility
 	}
-	if header.ColumnCount != len(cfg.Columns) {
-		return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset columns=%d want %d", header.ColumnCount, len(cfg.Columns))
-	}
-	for colIdx := 0; colIdx < header.ColumnCount; colIdx++ {
-		name := cur.stringBytes()
-		path := cur.stringBytes()
-		valueType := cur.stringBytes()
-		nullable := cur.bool()
-		dictionary := cur.bool()
-		if cur.err != nil {
-			return columnPhysicalAssetScanSummary{}, cur.err
-		}
-		want := cfg.Columns[colIdx]
-		if !columnPhysicalBytesEqualString(name, want.Name) ||
-			!columnPhysicalBytesEqualString(path, want.Path) ||
-			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
-			nullable != want.Nullable ||
-			dictionary != want.Dictionary {
-			return columnPhysicalAssetScanSummary{}, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t} want %+v",
-				colIdx, string(name), string(path), string(valueType), nullable, dictionary, want)
-		}
-	}
+	cur := manifestCursor{raw: raw, pos: rowsOffset}
 	var summary columnPhysicalAssetScanSummary
 	for rowIdx := 0; rowIdx < header.RowCount; rowIdx++ {
 		_ = cur.bytesView()
@@ -1284,7 +1217,7 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			return nil, false, nil, false, 0, false, cur.err
 		}
 		present := true
-		if version >= columnPhysicalAssetVersion {
+		if version >= columnPhysicalAssetVersionV3 {
 			present = cur.bool()
 			if cur.err != nil {
 				return nil, false, nil, false, 0, false, cur.err
@@ -1325,6 +1258,8 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			}
 		case ColumnStoreValueDouble:
 			cur.skip(8)
+		case ColumnStoreValueFloat32:
+			cur.skip(4)
 		case ColumnStoreValueString:
 			if selectedGroup || selectedDistinct {
 				v := cur.stringBytes()
@@ -1339,6 +1274,16 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			} else {
 				cur.skipStringBytes()
 			}
+		case ColumnStoreValueFloat32Vector:
+			n := cur.skipUint32Slice()
+			if cur.err != nil {
+				return nil, false, nil, false, 0, false, cur.err
+			}
+			if n != uint64(col.VectorDims) {
+				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, col.VectorDims)
+			}
+		case ColumnStoreValueAdjacencyList:
+			cur.skipUint32Slice()
 		default:
 			return nil, false, nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
 		}

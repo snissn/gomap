@@ -157,7 +157,7 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
-	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation)
+	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
@@ -216,16 +216,26 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 	}, nil
 }
 
-func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
+func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
-		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) &&
-			!bytes.HasPrefix(record.key, []byte(columnManifestAggregateMetadataRecordPrefix)) &&
-			!bytes.HasPrefix(record.key, []byte(columnManifestDictionaryCodesRecordPrefix)) &&
-			!bytes.HasPrefix(record.key, []byte(columnManifestInt64ValuesRecordPrefix)) {
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			if !retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				continue
+			}
+			retained = append(retained, columnManifestRecord{
+				key:   bytes.Clone(record.key),
+				value: bytes.Clone(record.value),
+			})
+			continue
+		}
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) &&
+			!bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes) &&
+			!bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes) &&
+			!bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes) {
 			continue
 		}
 		part, err := decodeColumnManifestPartRecord(record.value)
@@ -241,6 +251,34 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 		})
 	}
 	return retained, nil
+}
+
+func retainColumnManifestVectorGraphRecordForWrite(key []byte, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) bool {
+	if !activeVectorIndexesKnown {
+		return true
+	}
+	if !bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) {
+		return false
+	}
+	indexName := key[len(columnManifestVectorGraphRecordPrefixBytes):]
+	for _, def := range activeVectorIndexes {
+		if def.Strategy == VectorIndexStrategyColumnGraph && columnManifestBytesEqualString(indexName, def.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func columnManifestBytesEqualString(left []byte, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i, b := range left {
+		if b != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, generation uint64) ([]byte, error) {

@@ -310,6 +310,19 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 			input.recoveryRefs++
 		}
 	}
+	for i, ref := range view.GraphAssetRefs {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(ref, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(ref, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -342,7 +355,7 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 }
 
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
-	expectedRefs := len(view.AssetRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
+	expectedRefs := len(view.AssetRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
 		rootDir:        view.ColumnAssetRootDir,
 		collection:     view.CollectionName,

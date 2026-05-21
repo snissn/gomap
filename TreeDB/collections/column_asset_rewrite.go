@@ -474,6 +474,33 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 		if !inPlace {
 			patched[i] = record
 		}
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			oldRef, offsets, err := columnVectorGraphManifestAssetRefForPatch(record.value, expectedNamespace)
+			if err != nil {
+				return nil, 0, err
+			}
+			newRef, ok := byOldRef[oldRef]
+			if !ok {
+				continue
+			}
+			if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
+				return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph ref %+v to %+v", oldRef, newRef)
+			}
+			if err := validateColumnAssetRefForPlan(newRef); err != nil {
+				return nil, 0, err
+			}
+			value := record.value
+			if !inPlace {
+				value = bytes.Clone(record.value)
+			}
+			binary.BigEndian.PutUint64(value[offsets.fileID:], uint64(newRef.FileID))
+			binary.BigEndian.PutUint64(value[offsets.offset:], uint64(newRef.Offset))
+			binary.BigEndian.PutUint64(value[offsets.length:], uint64(newRef.Length))
+			binary.BigEndian.PutUint64(value[offsets.checksum:], uint64(newRef.Checksum))
+			patched[i].value = value
+			count++
+			continue
+		}
 		isPart := bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes)
 		isMetadata := bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes)
 		isDictionary := bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes)
@@ -606,6 +633,93 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	}
 	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64)}); err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
+	}
+	return ref, offsets, nil
+}
+
+type columnVectorGraphManifestRefPatchOffsets struct {
+	fileID   int
+	offset   int
+	length   int
+	checksum int
+}
+
+func columnVectorGraphManifestAssetRefForPatch(raw []byte, expectedNamespace string) (ColumnAssetRef, columnVectorGraphManifestRefPatchOffsets, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestVectorGraphMagic {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: bad column vector graph manifest magic=0x%08x", magic)
+	}
+	if version := cur.u16(); version != columnManifestRecordVersion {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: unsupported column vector graph manifest version=%d", version)
+	}
+	_ = cur.stringBytes() // index_name
+	_ = cur.stringBytes() // field
+	_ = cur.stringBytes() // metric
+	_ = cur.stringBytes() // encoding
+	_ = cur.u64()         // dimensions
+	_ = cur.u64()         // M
+	_ = cur.u64()         // ef_construction
+	_ = cur.u64()         // ef_search
+	generation := cur.u64()
+	_ = cur.u64() // base manifest checksum
+	_ = cur.u64() // base schema hash
+	_ = cur.u64() // graph schema hash
+	rowCount64 := cur.u64()
+	kindBytes := cur.stringBytes()
+	namespaceBytes := cur.stringBytes()
+	refGeneration := cur.u64()
+	partID := cur.u64()
+	offsets := columnVectorGraphManifestRefPatchOffsets{fileID: cur.pos}
+	fileID64 := cur.u64()
+	offsets.offset = cur.pos
+	offset64 := cur.u64()
+	offsets.length = cur.pos
+	length64 := cur.u64()
+	offsets.checksum = cur.pos
+	checksum64 := cur.u64()
+	assetBytes64 := cur.u64()
+	if err := cur.err; err != nil {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, err
+	}
+	if cur.pos != len(raw) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: trailing bytes in column vector graph manifest record")
+	}
+	if generation != refGeneration {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: column vector graph manifest generation=%d does not match ref generation=%d", generation, refGeneration)
+	}
+	if !columnPhysicalBytesEqualString(kindBytes, string(ColumnAssetKindTCS1PartImage)) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: unsupported column vector graph manifest asset kind %q", string(kindBytes))
+	}
+	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: column vector graph manifest namespace=%q want %q", string(namespaceBytes), expectedNamespace)
+	}
+	if fileID64 > uint64(math.MaxUint32) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest file_id overflows uint32")
+	}
+	if checksum64 > uint64(math.MaxUint32) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest checksum overflows uint32")
+	}
+	if rowCount64 > uint64(maxCollectionInt) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest row count overflows int")
+	}
+	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || assetBytes64 > uint64(math.MaxInt64) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest offsets or byte counts overflow int64")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  expectedNamespace,
+		Generation: refGeneration,
+		PartID:     partID,
+		FileID:     uint32(fileID64),
+		Offset:     int64(offset64),
+		Length:     int64(length64),
+		Checksum:   uint32(checksum64),
+	}
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rowCount64), Bytes: int64(assetBytes64)}); err != nil {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, err
+	}
+	if ref.Length != int64(assetBytes64) {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: column vector graph manifest asset bytes=%d does not match ref length=%d", assetBytes64, ref.Length)
 	}
 	return ref, offsets, nil
 }
