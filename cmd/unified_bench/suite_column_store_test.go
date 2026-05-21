@@ -171,12 +171,14 @@ func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lines, err := columnStoreSuitePhysicalQueryLines(tt.prefix, tt.queryName, tt.groups)
+			groupsForLines := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
+			lines, err := columnStoreSuitePhysicalQueryLines(tt.prefix, tt.queryName, groupsForLines)
 			if err != nil {
 				t.Fatalf("columnStoreSuitePhysicalQueryLines: %v", err)
 			}
 			want := columnStoreHashLines(lines)
-			got, count, err := columnStoreSuiteHashPhysicalQueryGroups(tt.prefix, tt.queryName, tt.groups)
+			groupsForHash := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
+			got, count, err := columnStoreSuiteHashPhysicalQueryGroups(tt.prefix, tt.queryName, groupsForHash)
 			if err != nil {
 				t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups: %v", err)
 			}
