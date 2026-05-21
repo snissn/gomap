@@ -298,7 +298,7 @@ func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testin
 		t.Fatalf("open collection: %v", err)
 	}
 
-	status, err := col.columnGraphVectorIndexStatus(staleColumnGraphDef)
+	status, err := col.columnGraphVectorIndexStatus(staleColumnGraphDef.Name)
 	if err != nil {
 		t.Fatalf("columnGraphVectorIndexStatus: %v", err)
 	}

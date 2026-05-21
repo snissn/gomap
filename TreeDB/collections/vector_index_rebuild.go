@@ -67,7 +67,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
 		_ = snap.Close()
-		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
@@ -97,12 +97,12 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
 		_ = snap.Close()
-		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	if err := validateColumnManifestIdentityAtRoot(snap, baseManifestRootID, *cfg.ActiveManifest); err != nil {
 		_ = snap.Close()
-		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		status, statusErr := c.columnGraphVectorIndexStatus(def.Name)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseManifestRootID)
@@ -221,7 +221,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return c.columnGraphVectorIndexStatus(def)
+	return c.columnGraphVectorIndexStatus(def.Name)
 }
 
 func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
@@ -283,7 +283,7 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs)
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
-	return c.columnGraphVectorIndexStatus(def)
+	return c.columnGraphVectorIndexStatus(def.Name)
 }
 
 func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) VectorIndexStatus {
