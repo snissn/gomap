@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -83,6 +84,14 @@ func TestAggregateKernelsFailClosedOnShapeMismatch(t *testing.T) {
 	if _, _, err := arena.FilteredGroupedCountCodes(codeGranules, filterGranules, filter, 4); err == nil || !strings.Contains(err.Error(), "row mismatch") {
 		t.Fatalf("FilteredGroupedCountCodes row mismatch err=%v want row mismatch", err)
 	}
+
+	filterGranules, err = buildInt64GranulesFromSetsForTest([][]int64{{100, 101, 102}})
+	if err != nil {
+		t.Fatalf("build pruned filter granules: %v", err)
+	}
+	if _, _, err := arena.FilteredGroupedCountCodes(codeGranules, filterGranules, filter, 4); err == nil || !strings.Contains(err.Error(), "row mismatch") {
+		t.Fatalf("FilteredGroupedCountCodes pruned row mismatch err=%v want row mismatch", err)
+	}
 }
 
 func TestMinMaxInt64Kernels(t *testing.T) {
@@ -153,6 +162,78 @@ func TestExactDistinctKernels(t *testing.T) {
 	}
 }
 
+func TestAggregateKernelsInferCardinalityFromHeaders(t *testing.T) {
+	codeGranules, err := buildCodeGranulesForTest([][]uint32{
+		{0, 1, 1},
+		{2, 4, 4},
+	}, 5)
+	if err != nil {
+		t.Fatalf("build code granules: %v", err)
+	}
+	var arena AggregateArena
+	counts, err := arena.GroupedCountCodes(codeGranules, 0)
+	if err != nil {
+		t.Fatalf("GroupedCountCodes inferred cardinality: %v", err)
+	}
+	want := []uint64{1, 2, 1, 0, 2}
+	if !slices.Equal(counts, want) {
+		t.Fatalf("inferred counts=%v want %v", counts, want)
+	}
+	distinct, err := arena.ExactDistinctCodes(codeGranules, 0)
+	if err != nil {
+		t.Fatalf("ExactDistinctCodes inferred cardinality: %v", err)
+	}
+	if distinct != 4 {
+		t.Fatalf("inferred distinct=%d want 4", distinct)
+	}
+}
+
+func TestAggregateKernelsInferMaxCardinalityFromMixedHeaders(t *testing.T) {
+	codeGranules, err := buildCodeGranulesWithCardinalitiesForTest(
+		[][]uint32{{0, 1}, {0, 2, 3}},
+		[]uint32{2, 4},
+	)
+	if err != nil {
+		t.Fatalf("build mixed-cardinality code granules: %v", err)
+	}
+	timeGranules, err := buildInt64GranulesFromSetsForTest([][]int64{{0, 1}, {10, 11, 12}})
+	if err != nil {
+		t.Fatalf("build time granules: %v", err)
+	}
+	var arena AggregateArena
+	counts, err := arena.GroupedCountCodes(codeGranules, 0)
+	if err != nil {
+		t.Fatalf("GroupedCountCodes mixed inferred cardinality: %v", err)
+	}
+	want := []uint64{2, 1, 1, 1}
+	if !slices.Equal(counts, want) {
+		t.Fatalf("mixed inferred counts=%v want %v", counts, want)
+	}
+	got, err := arena.TimeBucketedCountCodes(codeGranules, timeGranules, 10, 0)
+	if err != nil {
+		t.Fatalf("TimeBucketedCountCodes mixed inferred cardinality: %v", err)
+	}
+	if got.Cardinality != 4 || got.Buckets != 2 {
+		t.Fatalf("bucketed inferred cardinality/buckets=(%d,%d) want (4,2)", got.Cardinality, got.Buckets)
+	}
+	if got.Count(0, 0) != 1 || got.Count(0, 1) != 1 || got.Count(1, 0) != 1 || got.Count(1, 2) != 1 || got.Count(1, 3) != 1 {
+		t.Fatalf("bucketed inferred counts=%+v", got)
+	}
+}
+
+func TestAggregateKernelsInferCardinalityRejectsEmptyInputs(t *testing.T) {
+	var arena AggregateArena
+	if _, err := arena.GroupedCountCodes(nil, 0); err == nil || !strings.Contains(err.Error(), "empty code cardinality") {
+		t.Fatalf("GroupedCountCodes empty inferred cardinality err=%v want empty code cardinality", err)
+	}
+	if _, err := arena.ExactDistinctCodes(nil, 0); err == nil || !strings.Contains(err.Error(), "empty code cardinality") {
+		t.Fatalf("ExactDistinctCodes empty inferred cardinality err=%v want empty code cardinality", err)
+	}
+	if _, err := arena.TimeBucketedCountCodes(nil, nil, 10, 0); err == nil || !strings.Contains(err.Error(), "empty code cardinality") {
+		t.Fatalf("TimeBucketedCountCodes empty inferred cardinality err=%v want empty code cardinality", err)
+	}
+}
+
 func TestTimeBucketedGroupedCountsMatchRaw(t *testing.T) {
 	codes := [][]uint32{{0, 1, 2, 0, 1, 2, 0, 1, 2, 0}, {1, 2, 0, 1, 2, 0, 1, 2, 0, 1}}
 	times := [][]int64{{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, {10, 11, 12, 13, 14, 15, 16, 17, 18, 19}}
@@ -178,11 +259,68 @@ func TestTimeBucketedGroupedCountsMatchRaw(t *testing.T) {
 	}
 }
 
+func TestTimeBucketedCountCodesRejectsHugeBucketSpan(t *testing.T) {
+	codeGranules, err := buildCodeGranulesForTest([][]uint32{{0, 0}}, 1)
+	if err != nil {
+		t.Fatalf("build code granules: %v", err)
+	}
+	const minInt64 = -1 << 63
+	const maxInt64 = 1<<63 - 1
+	timeBuilder := NewGranuleBuilder(Config{Encoding: EncodingRawInt64, Compression: CompressionNone})
+	timeGranule, err := timeBuilder.BuildInt64([]int64{minInt64, maxInt64})
+	if err != nil {
+		t.Fatalf("BuildInt64 times: %v", err)
+	}
+	timeGranule.Payload = append([]byte(nil), timeGranule.Payload...)
+	var arena AggregateArena
+	_, err = arena.TimeBucketedCountCodes(codeGranules, []EncodedGranule{timeGranule}, 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "aggregate buckets exceed cap") {
+		t.Fatalf("TimeBucketedCountCodes huge span err=%v want aggregate bucket cap", err)
+	}
+}
+
+func TestTimeBucketedCountCodesRejectsStaleMinMaxMetadata(t *testing.T) {
+	codeGranules, err := buildCodeGranulesForTest([][]uint32{{0, 0}}, 1)
+	if err != nil {
+		t.Fatalf("build code granules: %v", err)
+	}
+	timeBuilder := NewGranuleBuilder(Config{Encoding: EncodingRawInt64, Compression: CompressionNone})
+	timeGranule, err := timeBuilder.BuildInt64([]int64{0, 10})
+	if err != nil {
+		t.Fatalf("BuildInt64 times: %v", err)
+	}
+	timeGranule.Payload = append([]byte(nil), timeGranule.Payload...)
+	timeGranule.Max = 0
+	var arena AggregateArena
+	_, err = arena.TimeBucketedCountCodes(codeGranules, []EncodedGranule{timeGranule}, 10, 1)
+	if err == nil || !strings.Contains(err.Error(), "outside bucket range") {
+		t.Fatalf("TimeBucketedCountCodes stale min/max err=%v want outside bucket range", err)
+	}
+}
+
 func buildCodeGranulesForTest(codeSets [][]uint32, cardinality uint32) ([]EncodedGranule, error) {
 	builder := NewGranuleBuilder(Config{Compression: CompressionNone})
 	granules := make([]EncodedGranule, 0, len(codeSets))
 	for _, codes := range codeSets {
 		g, err := builder.BuildUint32Codes(codes, cardinality)
+		if err != nil {
+			return nil, err
+		}
+		owned := g
+		owned.Payload = append([]byte(nil), g.Payload...)
+		granules = append(granules, owned)
+	}
+	return granules, nil
+}
+
+func buildCodeGranulesWithCardinalitiesForTest(codeSets [][]uint32, cardinalities []uint32) ([]EncodedGranule, error) {
+	if len(codeSets) != len(cardinalities) {
+		return nil, errors.New("test: code/cardinality length mismatch")
+	}
+	builder := NewGranuleBuilder(Config{Compression: CompressionNone})
+	granules := make([]EncodedGranule, 0, len(codeSets))
+	for i, codes := range codeSets {
+		g, err := builder.BuildUint32Codes(codes, cardinalities[i])
 		if err != nil {
 			return nil, err
 		}
