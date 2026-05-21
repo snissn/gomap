@@ -76,6 +76,14 @@ type compiledRowSortKeyRanges struct {
 }
 
 func BuildSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
+	return buildSortKeyMark(columns, true)
+}
+
+func buildOwnedSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
+	return buildSortKeyMark(columns, false)
+}
+
+func buildSortKeyMark(columns []SortKeyColumnValues, copyValues bool) (SortKeyMark, error) {
 	if len(columns) == 0 {
 		return SortKeyMark{}, errors.New("colgranule: empty sort key")
 	}
@@ -107,7 +115,11 @@ func BuildSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
 			return SortKeyMark{}, fmt.Errorf("colgranule: sort key column %s rows=%d want=%d", c.Name, len(c.Values), rows)
 		}
 		mark.Columns[i] = c.Name
-		mark.ColumnValues[i] = append([]int64(nil), c.Values...)
+		if copyValues {
+			mark.ColumnValues[i] = append([]int64(nil), c.Values...)
+		} else {
+			mark.ColumnValues[i] = c.Values
+		}
 		lower[i] = c.Values[0]
 		last[i] = c.Values[rows-1]
 	}
