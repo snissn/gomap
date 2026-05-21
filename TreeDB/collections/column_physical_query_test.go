@@ -1944,6 +1944,64 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarParityAndAllocationM1634(t *tes
 	}
 }
 
+func TestColumnPhysicalQueryRunnerInt64ValueSidecarParityAndAllocationM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}
+	wantHash := columnPhysicalQueryReferenceHashM13B("q3", events)
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Fatalf("runner Close: %v", err)
+		}
+	}()
+	wantGroups := 0
+	for i := 0; i < 3; i++ {
+		result, err := runner.Run()
+		if err != nil {
+			t.Fatalf("runner Run warmup %d: %v", i, err)
+		}
+		if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B("q3", result.Groups)); got != wantHash {
+			t.Fatalf("runner q3 hash=%d want %d groups=%+v", got, wantHash, result.Groups)
+		}
+		if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+			t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+		}
+		if result.Diagnostics.ProjectedColumns != 1 {
+			t.Fatalf("runner projected columns=%d want time_us sidecar", result.Diagnostics.ProjectedColumns)
+		}
+		if result.Diagnostics.Int64ValueHits == 0 || result.Diagnostics.Int64ValueHits != result.Diagnostics.ScheduledGranules {
+			t.Fatalf("runner int64 hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.Int64ValueHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+		}
+		if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+			t.Fatalf("runner physical bytes=%d want int64 sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
+		}
+		if result.Diagnostics.SegmentFileCacheMisses != 0 {
+			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared int64 sidecar setup", result.Diagnostics)
+		}
+		wantGroups = len(result.Groups)
+	}
+
+	allocs := testing.AllocsPerRun(20, func() {
+		result, err := runner.Run()
+		if err != nil {
+			panic(fmt.Sprintf("runner Run: %v", err))
+		}
+		if len(result.Groups) != wantGroups {
+			panic(fmt.Sprintf("runner groups=%d want %d", len(result.Groups), wantGroups))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("runner q3 warmed allocs/run=%.2f want 0", allocs)
+	}
+}
+
 func TestColumnPhysicalQuerySerialDictionarySidecarParityM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(2048)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
@@ -2230,6 +2288,14 @@ func TestColumnInt64ValuesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 	}
 	if got, want := decoded.Values, []int64{1, -2, 3}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("values=%v want %v", got, want)
+	}
+
+	truncated := append([]byte(nil), raw[:len(raw)-8]...)
+	truncatedRef := ref
+	truncatedRef.Length = int64(len(truncated))
+	truncatedRef.Checksum = page.Checksum(truncated)
+	if _, err := decodeColumnInt64ValuesAsset(truncated, truncatedRef, *normalized, "events", "time_us", true); err == nil || !strings.Contains(err.Error(), "row count exceeds payload bytes") {
+		t.Fatalf("truncated payload err=%v want row-count payload validation failure", err)
 	}
 
 	corrupt := append([]byte(nil), raw...)

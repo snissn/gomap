@@ -147,6 +147,9 @@ func decodeColumnInt64ValuesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStor
 	if columnIndex > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
 		return columnInt64ValuesAsset{}, errors.New("collections: int64 values asset dimensions overflow int")
 	}
+	if rowCount > uint64((len(raw)-cur.pos)/8) {
+		return columnInt64ValuesAsset{}, errors.New("collections: int64 values asset row count exceeds payload bytes")
+	}
 	asset.ColumnIndex = int(columnIndex)
 	asset.Values = make([]int64, int(rowCount))
 	for i := range asset.Values {

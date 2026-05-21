@@ -32,19 +32,16 @@ func prepareColumnInt64ValueHourCountRunner(view columnPhysicalScanSnapshotView,
 	if len(byPart) == 0 {
 		return nil, nil
 	}
+	if !columnInt64ValueSnapshotsCoverParts(view, byPart) {
+		return nil, nil
+	}
 	runner := &columnInt64ValueHourCountRunner{
 		column: req.ValueColumn,
 		assets: make([]columnInt64ValueHourCountAsset, 0, len(view.AssetRefs)),
 	}
 	var scratch []byte
 	for _, part := range view.AssetRefs {
-		if part.Reason != ColumnPublishOperationInsert {
-			return nil, nil
-		}
-		snapshot, ok := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
-		if !ok {
-			return nil, nil
-		}
+		snapshot := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
 		raw, err := readCache.read(snapshot.AssetRef, scratch)
 		if err != nil {
 			return nil, fmt.Errorf("collections: int64 values read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, err)
@@ -67,6 +64,18 @@ func prepareColumnInt64ValueHourCountRunner(view columnPhysicalScanSnapshotView,
 	}
 	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, 24)
 	return runner, nil
+}
+
+func columnInt64ValueSnapshotsCoverParts(view columnPhysicalScanSnapshotView, byPart map[[2]uint64]columnManifestInt64ValuesSnapshot) bool {
+	for _, part := range view.AssetRefs {
+		if part.Reason != ColumnPublishOperationInsert {
+			return false
+		}
+		if _, ok := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]; !ok {
+			return false
+		}
+	}
+	return len(view.AssetRefs) > 0
 }
 
 func columnInt64ValueSnapshotsByPart(view columnPhysicalScanSnapshotView, column string) map[[2]uint64]columnManifestInt64ValuesSnapshot {
@@ -95,6 +104,9 @@ func runColumnInt64ValueHourCountOneShot(view columnPhysicalScanSnapshotView, re
 	if len(byPart) == 0 {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
+	if !columnInt64ValueSnapshotsCoverParts(view, byPart) {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
 
 	start := time.Now()
 	var counts [24]int
@@ -103,13 +115,7 @@ func runColumnInt64ValueHourCountOneShot(view columnPhysicalScanSnapshotView, re
 	blocks := 0
 	var scratch []byte
 	for _, part := range view.AssetRefs {
-		if part.Reason != ColumnPublishOperationInsert {
-			return ColumnPhysicalQueryResult{}, false, nil
-		}
-		snapshot, ok := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
-		if !ok {
-			return ColumnPhysicalQueryResult{}, false, nil
-		}
+		snapshot := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
 		raw, err := readCache.read(snapshot.AssetRef, scratch)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: int64 values read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, err)
