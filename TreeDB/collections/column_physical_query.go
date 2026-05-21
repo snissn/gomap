@@ -3,7 +3,6 @@ package collections
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -85,6 +84,20 @@ type ColumnPhysicalQueryResult struct {
 	Diagnostics ColumnPhysicalQueryDiagnostics
 }
 
+// ColumnPhysicalQueryRunner pins one immutable snapshot and reuses direct-query
+// execution state across repeated scans. It is intentionally limited to
+// insert-only direct physical reducers; mutation visibility and planner routing
+// remain owned by RunColumnPhysicalQuery.
+type ColumnPhysicalQueryRunner struct {
+	collection *Collection
+	view       columnPhysicalScanSnapshotView
+	closeView  func()
+	req        ColumnPhysicalQueryRequest
+	exec       *columnPhysicalQueryExecutor
+	readCache  columnPhysicalAssetReadCache
+	closed     bool
+}
+
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
 
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
@@ -123,6 +136,95 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		return c.runColumnPhysicalQueryAggregateMetadataInSnapshotView(view, req)
 	}
 	return c.runColumnPhysicalQueryInSnapshotView(view, req)
+}
+
+// PrepareColumnPhysicalQuery prepares a reusable direct physical query runner
+// over the current recovery-authoritative manifest. The runner pins a snapshot
+// until Close and fail-closes for mutation-bearing manifests or unsupported
+// query shapes rather than silently changing semantics.
+func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		if closeView != nil {
+			closeView()
+		}
+		return nil, err
+	}
+	release := true
+	defer func() {
+		if release && closeView != nil {
+			closeView()
+		}
+	}()
+	if view.MutationParts > 0 {
+		return nil, fmt.Errorf("%w: prepared physical column query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
+	}
+	if req.AggregateMetadataName != "" {
+		return nil, fmt.Errorf("%w: prepared physical column query does not support aggregate metadata yet", ErrColumnQueryPlanUnsupported)
+	}
+	exec, err := newColumnPhysicalQueryExecutor(view.Config, req)
+	if err != nil {
+		return nil, err
+	}
+	if !exec.supportsDirectAssetReduce() {
+		return nil, fmt.Errorf("%w: prepared physical column query requires direct asset reducer", ErrColumnQueryPlanUnsupported)
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		return nil, err
+	}
+	readCache.returnViews = true
+	release = false
+	return &ColumnPhysicalQueryRunner{
+		collection: c,
+		view:       view,
+		closeView:  closeView,
+		req:        req,
+		exec:       exec,
+		readCache:  readCache,
+	}, nil
+}
+
+// Close releases the pinned snapshot and typed column asset readers owned by
+// the prepared physical query runner.
+func (r *ColumnPhysicalQueryRunner) Close() error {
+	if r == nil || r.closed {
+		return nil
+	}
+	r.closed = true
+	var closeErr error
+	if err := r.readCache.close(); err != nil {
+		closeErr = err
+	}
+	if r.closeView != nil {
+		r.closeView()
+		r.closeView = nil
+	}
+	return closeErr
+}
+
+// Run executes the prepared direct physical query against the pinned snapshot.
+func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
+	if r == nil || r.closed {
+		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
+	}
+	r.exec.resetForRun()
+	scanStart := time.Now()
+	diag, err := r.collection.scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(r.view, r.exec, &r.readCache, 0, 0, nil)
+	scanNanos := time.Since(scanStart).Nanoseconds()
+	result := ColumnPhysicalQueryResult{
+		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
+	}
+	result.Diagnostics.DirectReduceBlocks = diag.DecodedBlocks
+	result.Diagnostics.WorkerCount = 1
+	result.Diagnostics.ScanNanos = scanNanos
+	result.Diagnostics.ReduceRows = r.exec.reduceRows
+	if err != nil {
+		return result, err
+	}
+	result.Groups = r.exec.groups()
+	result.Diagnostics.ResultGroups = len(result.Groups)
+	return result, nil
 }
 
 func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -210,6 +312,23 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
 	refRemainder int,
 	shouldCancel func() bool,
 ) (columnPhysicalScanDiagnostics, error) {
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, exec.readIntegrity)
+	if err != nil {
+		return view.Diagnostics, err
+	}
+	readCache.returnViews = true
+	defer func() { _ = readCache.close() }()
+	return c.scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(view, exec, &readCache, refModulo, refRemainder, shouldCancel)
+}
+
+func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(
+	view columnPhysicalScanSnapshotView,
+	exec *columnPhysicalQueryExecutor,
+	readCache *columnPhysicalAssetReadCache,
+	refModulo int,
+	refRemainder int,
+	shouldCancel func() bool,
+) (columnPhysicalScanDiagnostics, error) {
 	cfg := view.Config
 	diag := view.Diagnostics
 	if c == nil {
@@ -238,12 +357,10 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
 	}
 	diag.ProjectedColumns = len(exec.projected)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(exec.readIntegrity)
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, exec.readIntegrity)
-	if err != nil {
-		return diag, err
+	if readCache == nil {
+		return diag, errors.New("collections: prepared physical column query missing read cache")
 	}
 	readCache.returnViews = true
-	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
 	start, step := columnPhysicalScanRefOrdinalPartition(columnPhysicalScanRequest{RefOrdinalModulo: refModulo, RefOrdinalRemainder: refRemainder})
 	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {
@@ -710,6 +827,31 @@ func (e *columnPhysicalQueryExecutor) supportsDirectAssetReduce() bool {
 	}
 }
 
+func (e *columnPhysicalQueryExecutor) resetForRun() {
+	if e == nil {
+		return
+	}
+	e.reduceRows = 0
+	e.resultGroups = e.resultGroups[:0]
+	for idx := range e.hourCounts {
+		e.hourCounts[idx] = 0
+	}
+	for key := range e.counts {
+		delete(e.counts, key)
+	}
+	for _, set := range e.distinct {
+		for key := range set {
+			delete(set, key)
+		}
+	}
+	for key := range e.int64Values {
+		delete(e.int64Values, key)
+	}
+	for key := range e.int64Spans {
+		delete(e.int64Spans, key)
+	}
+}
+
 func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error {
 	if row.Deleted || row.Operation != ColumnPublishOperationInsert {
 		return fmt.Errorf("%w: operation=%s deleted=%v", errColumnPhysicalQueryNeedsVisibility, row.Operation, row.Deleted)
@@ -1169,10 +1311,19 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 			e.resultGroups = append(e.resultGroups, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	sort.Slice(e.resultGroups, func(i, j int) bool {
-		return e.resultGroups[i].Key < e.resultGroups[j].Key
-	})
+	sortColumnPhysicalQueryGroupsByKey(e.resultGroups)
 	return e.resultGroups
+}
+
+func sortColumnPhysicalQueryGroupsByKey(groups []ColumnPhysicalQueryGroup) {
+	for i := 1; i < len(groups); i++ {
+		group := groups[i]
+		j := i - 1
+		for ; j >= 0 && group.Key < groups[j].Key; j-- {
+			groups[j+1] = groups[j]
+		}
+		groups[j+1] = group
+	}
 }
 
 type columnPhysicalQueryMetadataAccumulator struct {
@@ -1244,7 +1395,7 @@ func (a *columnPhysicalQueryMetadataAccumulator) groups() []ColumnPhysicalQueryG
 			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	sortColumnPhysicalQueryGroupsByKey(out)
 	return out
 }
 
