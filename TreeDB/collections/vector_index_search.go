@@ -206,6 +206,9 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	if c.db == nil {
 		return nil, response, errCollectionDBNil
 	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, response, err
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, response, backenddb.ErrClosed
