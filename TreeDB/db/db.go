@@ -93,6 +93,7 @@ type DB struct {
 	ghostManager *indexGhostManager
 
 	dir                  string
+	columnAssetRootDir   string
 	chunkSize            int64
 	preferAppendAlloc    bool
 	freelistRegionPages  uint64
@@ -1440,6 +1441,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		piggybackCompaction:            !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
 		dir:                            opts.Dir,
+		columnAssetRootDir:             layout.columnAssetDir,
 		chunkSize:                      opts.ChunkSize,
 		preferAppendAlloc:              opts.PreferAppendAlloc,
 		freelistRegionPages:            opts.FreelistRegionPages,
