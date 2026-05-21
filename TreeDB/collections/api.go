@@ -12839,6 +12839,8 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 		return false
 	}
 	if c.commandWALActive(nil) {
+		// The mode excludes secondary-unique changes at the planner boundary;
+		// this runtime guard is the authoritative check for all secondary indexes.
 		return c.canBufferDirectUpdateAck() &&
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
 			isBSONDocumentFormat(opts.documentFormat) &&
@@ -14732,6 +14734,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			return false, err
 		}
 	}
+	// Record after staging before any synchronous threshold flush; the flush
+	// clears the pending range after it advances AppliedCommandLSN.
 	if err := recordPendingCommandWAL(); err != nil {
 		return false, err
 	}
@@ -14747,6 +14751,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
 		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
 		if err != nil {
+			// The command frame is appended and staged writes are buffered, so a
+			// flush failure is commit-ambiguous and the deferred poison forces recovery.
 			if rollbackOnError {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
@@ -14756,6 +14762,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	resetCollectionTables(compactedObsolete)
 	plan.stats.BufferedBatches = 1
+	// If no threshold flush published the range, leave it pending for the next
+	// explicit/background flush. The helper is idempotent if already recorded.
 	if err := recordPendingCommandWAL(); err != nil {
 		return false, err
 	}

@@ -1793,15 +1793,18 @@ func TestCollectionCommandWALPendingRecordIgnoresAlreadyAppliedLSN(t *testing.T)
 	})
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
-	if err := d.PublishCommandWALAppliedLSN(1, []backenddb.CommandWALLSNRange{{First: 1, Last: 1}}, false); err != nil {
+	if err := d.PublishCommandWALAppliedLSN(2, []backenddb.CommandWALLSNRange{{First: 1, Last: 2}}, false); err != nil {
 		t.Fatalf("PublishCommandWALAppliedLSN: %v", err)
 	}
 	domain := &collectionWriteDomain{}
-	if err := domain.recordPendingCommandWALLSNLocked(d, 1); err != nil {
+	if err := domain.recordPendingCommandWALLSNLocked(d, 2); err != nil {
 		t.Fatalf("recordPendingCommandWALLSNLocked already applied: %v", err)
 	}
 	if domain.pendingCommandWALFirst != 0 || domain.pendingCommandWALLast != 0 {
 		t.Fatalf("pending command WAL range=[%d,%d], want empty", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	if err := domain.recordPendingCommandWALLSNLocked(d, 1); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("recordPendingCommandWALLSNLocked stale error=%v, want ErrCommandWALAppliedLSNNonContig", err)
 	}
 }
 
