@@ -105,12 +105,19 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 	if len(byPart) == 0 {
 		return nil, nil
 	}
+	if !columnDictionaryCodeSnapshotsCoverParts(view, byPart) {
+		return nil, nil
+	}
+	codeArenaRows := columnDictionaryCodeSnapshotRows(view, byPart)
+	if codeArenaRows == 0 {
+		return nil, nil
+	}
 	globalByValue := make(map[string]uint32)
 	runner := &columnDictionaryCodeGroupCountRunner{
 		column: req.GroupColumn,
 		assets: make([]columnDictionaryCodeGroupCountAsset, 0, len(view.AssetRefs)),
 	}
-	codeArena := make([]uint32, columnDictionaryCodeSnapshotRows(view, byPart))
+	codeArena := make([]uint32, codeArenaRows)
 	codeArenaOffset := 0
 	var localToGlobal []uint32
 	var scratch []byte
@@ -345,6 +352,13 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	if len(groupByPart) == 0 || len(distinctByPart) == 0 {
 		return nil, nil
 	}
+	if !columnDictionaryCodeSnapshotsCoverParts(view, groupByPart) || !columnDictionaryCodeSnapshotsCoverParts(view, distinctByPart) {
+		return nil, nil
+	}
+	codeArenaRows := columnDictionaryCodeSnapshotRows(view, groupByPart)
+	if codeArenaRows == 0 {
+		return nil, nil
+	}
 	runner := &columnDictionaryCodeGroupCountDistinctRunner{
 		groupColumn:    req.GroupColumn,
 		distinctColumn: req.DistinctColumn,
@@ -352,7 +366,6 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	}
 	groupByValue := make(map[string]uint32)
 	distinctByValue := make(map[string]uint32)
-	codeArenaRows := columnDictionaryCodeSnapshotRows(view, groupByPart)
 	groupCodeArena := make([]uint32, codeArenaRows)
 	distinctCodeArena := make([]uint32, codeArenaRows)
 	groupCodeArenaOffset := 0

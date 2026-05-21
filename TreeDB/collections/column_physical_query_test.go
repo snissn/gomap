@@ -2846,6 +2846,33 @@ func TestColumnDictionaryCodeSnapshotRowsM1634(t *testing.T) {
 	}
 }
 
+func TestColumnDictionaryCodePreparedRunnersFallbackOnMixedSidecarCoverageM1634(t *testing.T) {
+	normalized, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	ns := normalized.AssetManager.Namespace
+	view := columnPhysicalScanSnapshotView{
+		CollectionName: "events",
+		Config:         *normalized,
+		AssetRefs: []columnManifestAssetRefForScan{
+			{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: ns, Generation: 2, PartID: 1}, Reason: ColumnPublishOperationInsert, Rows: 3},
+			{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: ns, Generation: 2, PartID: 2}, Reason: ColumnPublishOperationInsert, Rows: 5},
+		},
+		DictionaryCodes: []columnManifestDictionaryCodesSnapshot{
+			{ColumnName: "kind", AssetRef: ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: ns, Generation: 2, PartID: 1}},
+			{ColumnName: "did", AssetRef: ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: ns, Generation: 2, PartID: 1}},
+		},
+	}
+	readCache := &columnPhysicalAssetReadCache{namespace: ns}
+	if runner, err := prepareColumnDictionaryCodeGroupCountRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}, readCache); err != nil || runner != nil {
+		t.Fatalf("group-count runner=%T err=%v want clean fallback", runner, err)
+	}
+	if runner, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, readCache); err != nil || runner != nil {
+		t.Fatalf("group-count-distinct runner=%T err=%v want clean fallback", runner, err)
+	}
+}
+
 func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {
 	wordsPerGroup, totalWords, ok, err := columnDictionaryCodeDistinctSeenWords(4, 129)
 	if err != nil {
