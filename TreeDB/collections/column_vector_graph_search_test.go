@@ -129,6 +129,10 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "query norm") {
 		t.Fatalf("SearchCosine zero err=%v want norm failure", err)
 	}
+	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: -1}, &scratch)
+	if err == nil || !strings.Contains(err.Error(), "ef_search cannot be negative") {
+		t.Fatalf("SearchCosine ef_search err=%v want negative ef_search failure", err)
+	}
 }
 
 func TestColumnVectorGraphNativeSearchRequiresScratchV3(t *testing.T) {
@@ -205,13 +209,16 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 
 func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	var scratch columnVectorGraphNativeSearchScratch
-	if err := scratch.prepare(10, 3, 2, 1); err != nil {
+	if err := scratch.prepare(10, 3, 2, 1, 4); err != nil {
 		t.Fatalf("prepare large: %v", err)
 	}
 	if len(scratch.visitMarks) != 10 {
 		t.Fatalf("large visitMarks len=%d want 10", len(scratch.visitMarks))
 	}
-	if err := scratch.prepare(1, 3, 2, 1); err != nil {
+	if cap(scratch.frontier) > 4 {
+		t.Fatalf("frontier cap=%d want bounded by ef_search", cap(scratch.frontier))
+	}
+	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
 		t.Fatalf("prepare small: %v", err)
 	}
 	if len(scratch.visitMarks) != 1 {
@@ -463,6 +470,13 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	}
 
 	var sink atomic.Int64
+	var firstErr atomic.Value
+	var failed atomic.Bool
+	recordParallelErr := func(format string, args ...any) {
+		if failed.CompareAndSwap(false, true) {
+			firstErr.Store(fmt.Sprintf(format, args...))
+		}
+	}
 	var totalCandidates atomic.Uint64
 	var totalEdges atomic.Uint64
 	var totalCandidateFetches atomic.Uint64
@@ -473,14 +487,21 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		value := workerPool.Get()
 		if value == nil {
-			b.Fatalf("parallel worker requested more than %d prewarmed readers/scratches", workers)
+			recordParallelErr("parallel worker requested more than %d prewarmed readers/scratches", workers)
+			for pb.Next() {
+			}
+			return
 		}
 		worker := value.(*searchWorker)
 		defer workerPool.Put(worker)
 		for pb.Next() {
+			if failed.Load() {
+				continue
+			}
 			got, stats, err := worker.reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch)
 			if err != nil {
-				b.Fatalf("SearchCosine: %v", err)
+				recordParallelErr("SearchCosine: %v", err)
+				continue
 			}
 			sink.Add(int64(got[0].Ordinal))
 			totalCandidates.Add(stats.Candidates)
@@ -491,6 +512,9 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		}
 	})
 	b.StopTimer()
+	if errValue := firstErr.Load(); errValue != nil {
+		b.Fatalf("%s", errValue.(string))
+	}
 	columnPhysicalScanBenchSum += sink.Load()
 	var stats columnPhysicalRowReaderStats
 	for _, worker := range benchWorkers {

@@ -50,11 +50,11 @@ type columnVectorGraphNativeSearchScratch struct {
 	resultOrdinals []int
 }
 
-func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK int) error {
+func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
 	if s == nil {
 		return errors.New("collections: column_graph native search requires caller-owned scratch")
 	}
-	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 {
+	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 || efSearch < 0 {
 		return errors.New("collections: column_graph native search received negative sizing input")
 	}
 	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
@@ -70,9 +70,17 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		clear(s.visitMarks)
 		s.visitEpoch = 1
 	}
-	s.frontier = s.frontier[:0]
-	if cap(s.frontier) < rowCount {
-		s.frontier = make([]columnVectorGraphSearchCandidate, 0, rowCount)
+	frontierCap := efSearch
+	if frontierCap > rowCount {
+		frontierCap = rowCount
+	}
+	if frontierCap < topK {
+		frontierCap = topK
+	}
+	if cap(s.frontier) < frontierCap || cap(s.frontier) > frontierCap*2+16 {
+		s.frontier = make([]columnVectorGraphSearchCandidate, 0, frontierCap)
+	} else {
+		s.frontier = s.frontier[:0]
 	}
 	s.top = s.top[:0]
 	if cap(s.top) < topK {
@@ -137,7 +145,10 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		topK = rowCount
 	}
 	efSearch := opts.EfSearch
-	if efSearch <= 0 {
+	if efSearch < 0 {
+		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: column_graph native search ef_search cannot be negative")
+	}
+	if efSearch == 0 {
 		efSearch = r.def.EfSearch
 	}
 	if efSearch < topK {
@@ -150,7 +161,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if degree < 0 {
 		degree = 0
 	}
-	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK); err != nil {
+	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK, efSearch); err != nil {
 		return nil, columnVectorGraphNativeSearchStats{}, err
 	}
 
@@ -179,10 +190,10 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		}
 		stats.ExpansionFetches++
 		for _, neighbor := range row.Adjacency {
-			stats.Edges++
 			if stats.Candidates >= uint64(efSearch) {
 				break
 			}
+			stats.Edges++
 			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
