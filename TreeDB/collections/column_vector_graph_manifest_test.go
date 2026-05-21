@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -192,9 +193,13 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
 	}
 	var ids []string
+	var vectors [][]float32
+	var invNorms []float32
 	var neighbors [][]uint32
 	summary, err := scanColumnPhysicalAssetRows(raw, prepared.Ref, "docs", &prepared.Config, projection, func(row columnPhysicalScanRowView) error {
 		ids = append(ids, string(row.ID))
+		vectors = append(vectors, append([]float32(nil), row.Values[0].Float32Vector...))
+		invNorms = append(invNorms, row.Values[1].Float32)
 		neighbors = append(neighbors, append([]uint32(nil), row.Values[2].AdjacencyList...))
 		return nil
 	})
@@ -206,6 +211,15 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 	}
 	if got := neighbors[1]; len(got) != 2 || got[0] != 0 || got[1] != 2 {
 		t.Fatalf("row1 neighbors=%v", got)
+	}
+	if got := vectors[0]; len(got) != 3 || got[0] != 1 || got[1] != 0 || got[2] != 0 {
+		t.Fatalf("row0 vector=%v", got)
+	}
+	if got := vectors[1]; len(got) != 3 || got[0] != 0 || got[1] != 1 || got[2] != 0 {
+		t.Fatalf("row1 vector=%v", got)
+	}
+	if got := invNorms[2]; got != 1 {
+		t.Fatalf("row2 inv_norm=%v want 1", got)
 	}
 }
 
@@ -269,6 +283,7 @@ func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testin
 		t.Fatalf("open db: %v", err)
 	}
 	defer func() { _ = d.Close() }()
+
 	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
 	if err != nil {
 		t.Fatalf("normalize base column store: %v", err)
@@ -304,6 +319,67 @@ func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testin
 	}
 	if status.Strategy != VectorIndexStrategyNativeRuntime || status.State != VectorIndexStateNativeRuntime || status.Reason != VectorIndexReasonNativeRuntime {
 		t.Fatalf("status=%+v want native_runtime after catalog refresh", status)
+	}
+}
+
+func TestColumnGraphVectorIndexStatusClosedDBReturnsErrClosedV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, 2, 1, 1, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+	})
+	if err != nil {
+		t.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
+	}
+	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	meta := CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{ColumnStore: testColumnGraphBaseColumnStoreConfigV2A()},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
+	publishColumnGraphCatalogForTestV2A(t, d, meta, identity, records)
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, err := col.VectorIndexStatus(def.Name); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("VectorIndexStatus closed err=%v want ErrClosed", err)
+	}
+}
+
+func TestColumnGraphVectorIndexStatusClosedDBBeforeEarlyStatusV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	meta := CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{ColumnStore: &ColumnStoreConfig{}},
+		VectorIndexes: []VectorIndexDefinition{testColumnGraphVectorIndexDefinitionV2A()},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, err := col.columnGraphVectorIndexStatus(meta.VectorIndexes[0].Name); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("columnGraphVectorIndexStatus closed unsupported err=%v want ErrClosed", err)
 	}
 }
 
@@ -350,6 +426,24 @@ func TestColumnGraphVectorIndexStatusFailsClosedOnMissingOrMismatchedAssetV2A(t 
 		}
 		if status.State != VectorIndexStateColumnGraphRebuildNeeded || status.Reason != VectorIndexReasonColumnGraphAssetMismatch || !status.RebuildNeeded {
 			t.Fatalf("status=%+v want mismatch rebuild-needed", status)
+		}
+	})
+
+	t.Run("active_recovery_manifest_mismatch", func(t *testing.T) {
+		records, goodIdentity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
+		publishColumnGraphCatalogForTestV2A(t, d, meta, goodIdentity, records)
+		col, err := NewCollectionManager(d).OpenCollection("docs")
+		if err != nil {
+			t.Fatalf("open collection: %v", err)
+		}
+		currentMeta := copyCollectionMeta(col.Meta())
+		badCfg := *currentMeta.Options.ColumnStore
+		recoveryIdentity := *badCfg.RecoveryAuthoritativeManifest
+		recoveryIdentity.Checksum++
+		badCfg.RecoveryAuthoritativeManifest = &recoveryIdentity
+		currentMeta.Options.ColumnStore = &badCfg
+		if _, err := normalizeCollectionMeta(currentMeta); err == nil || !strings.Contains(err.Error(), "recovery-authoritative column manifest must match active column manifest") {
+			t.Fatalf("normalizeCollectionMeta err=%v want active/recovery mismatch failure", err)
 		}
 	})
 
@@ -582,12 +676,14 @@ func testColumnVectorGraphManifestRecordV2A(tb testing.TB, baseCfg *ColumnStoreC
 		EfConstruction:         def.EfConstruction,
 		EfSearch:               def.EfSearch,
 		BaseManifestGeneration: identity.Generation,
-		BaseManifestChecksum:   identity.Checksum,
-		BaseSchemaHash:         baseCfg.SchemaHash,
-		GraphSchemaHash:        graphCfg.SchemaHash,
-		RowCount:               1,
-		AssetRef:               ref,
-		AssetBytes:             ref.Length,
+		// Callers must pass the base-only identity; manifest identities that
+		// already include graph records have a different checksum.
+		BaseManifestChecksum: identity.Checksum,
+		BaseSchemaHash:       baseCfg.SchemaHash,
+		GraphSchemaHash:      graphCfg.SchemaHash,
+		RowCount:             1,
+		AssetRef:             ref,
+		AssetBytes:           ref.Length,
 	}
 	encoded, err := encodeColumnVectorGraphManifestRecord(record)
 	if err != nil {
