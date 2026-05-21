@@ -151,6 +151,9 @@ func (b *GranuleBuilder) BuildInt64(values []int64) (EncodedGranule, error) {
 	if len(values) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
 	}
+	if err := validateGranuleDecodeRows(len(values)); err != nil {
+		return EncodedGranule{}, err
+	}
 	min, max := minMax(values)
 	raw, err := encodeInt64Payload(b.raw[:0], values, b.cfg.Encoding)
 	if err != nil {
@@ -213,6 +216,9 @@ func (r *GranuleReader) RangeScanCountInt64(g EncodedGranule, low, high int64) (
 func EncodeInt64(dst []byte, values []int64, cfg Config) (EncodedGranule, error) {
 	if len(values) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	if err := validateGranuleDecodeRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	min, max := minMax(values)
 	raw, err := encodeInt64Payload(dst[:0], values, cfg.Encoding)
@@ -477,7 +483,7 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 	case CompressionSnappy:
 		need := snappy.MaxEncodedLen(len(raw))
 		if cap(dst) < need {
-			dst = make([]byte, need)
+			dst = make([]byte, 0, need)
 		} else {
 			dst = dst[:0]
 		}
@@ -597,6 +603,9 @@ func validateGranule(g EncodedGranule) error {
 	if g.Rows <= 0 {
 		return fmt.Errorf("colgranule: invalid row count %d", g.Rows)
 	}
+	if err := validateGranuleDecodeRows(g.Rows); err != nil {
+		return err
+	}
 	if g.NullCount < 0 {
 		return fmt.Errorf("colgranule: negative null count %d", g.NullCount)
 	}
@@ -612,13 +621,60 @@ func validateGranule(g EncodedGranule) error {
 	if g.StoredBytes < 0 {
 		return fmt.Errorf("colgranule: negative stored payload length %d", g.StoredBytes)
 	}
-	if g.StoredBytes != 0 && g.StoredBytes != len(g.Payload) {
+	maxRaw := maxGranuleRawPayloadBytes(g.Encoding, g.Rows)
+	if maxRaw < 0 {
+		return fmt.Errorf("colgranule: unsupported encoding %d", g.Encoding)
+	}
+	if g.RawBytes > maxRaw {
+		return fmt.Errorf("colgranule: raw payload length=%d exceeds max=%d", g.RawBytes, maxRaw)
+	}
+	maxStored, err := maxGranuleStoredPayloadBytes(g.Compression, maxRaw)
+	if err != nil {
+		return err
+	}
+	if g.StoredBytes > maxStored {
+		return fmt.Errorf("colgranule: stored payload length=%d exceeds max=%d", g.StoredBytes, maxStored)
+	}
+	if len(g.Payload) > maxStored {
+		return fmt.Errorf("colgranule: payload length=%d exceeds max=%d", len(g.Payload), maxStored)
+	}
+	if g.PayloadRef.Kind != PayloadRefInline {
+		return fmt.Errorf("colgranule: unsupported payload ref kind %d", g.PayloadRef.Kind)
+	}
+	if g.PayloadRef.Offset != 0 {
+		return fmt.Errorf("colgranule: inline payload offset=%d want=0", g.PayloadRef.Offset)
+	}
+	if g.StoredBytes != len(g.Payload) {
 		return fmt.Errorf("colgranule: stored payload length=%d want=%d", len(g.Payload), g.StoredBytes)
 	}
-	if g.PayloadRef.Length != 0 && g.PayloadRef.Length != len(g.Payload) {
+	if g.PayloadRef.Length != len(g.Payload) {
 		return fmt.Errorf("colgranule: payload ref length=%d want=%d", g.PayloadRef.Length, len(g.Payload))
 	}
 	return nil
+}
+
+func maxGranuleRawPayloadBytes(encoding Encoding, rows int) int {
+	switch encoding {
+	case EncodingRawInt64:
+		return rows * 8
+	case EncodingDeltaVarint:
+		return rows * binary.MaxVarintLen64
+	default:
+		return -1
+	}
+}
+
+func maxGranuleStoredPayloadBytes(compression Compression, maxRaw int) (int, error) {
+	switch compression {
+	case CompressionNone:
+		return maxRaw, nil
+	case CompressionSnappy:
+		return snappy.MaxEncodedLen(maxRaw), nil
+	case CompressionLZ4:
+		return lz4.CompressBlockBound(maxRaw), nil
+	default:
+		return 0, fmt.Errorf("colgranule: unsupported compression %d", compression)
+	}
 }
 
 func minMax(values []int64) (int64, int64) {

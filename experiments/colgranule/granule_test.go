@@ -52,6 +52,17 @@ func TestGranuleBuilderRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestGranuleBuilderRejectsOversizedRows(t *testing.T) {
+	values := make([]int64, maxGranuleDecodeRows+1)
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone})
+	if _, err := builder.BuildInt64(values); err == nil {
+		t.Fatal("BuildInt64(oversized) succeeded, want error")
+	}
+	if _, err := EncodeInt64(nil, values, Config{Encoding: EncodingRawInt64, Compression: CompressionNone}); err == nil {
+		t.Fatal("EncodeInt64(oversized) succeeded, want error")
+	}
+}
+
 func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -495,6 +506,38 @@ func TestCorruptPayloadsFailClosed(t *testing.T) {
 			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
 			edit: func(g EncodedGranule) EncodedGranule {
 				g.StoredBytes++
+				return g
+			},
+		},
+		{
+			name: "metadata_bad_payload_ref_kind",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.PayloadRef.Kind = 0
+				return g
+			},
+		},
+		{
+			name: "metadata_bad_payload_ref_length_zero",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.PayloadRef.Length = 0
+				return g
+			},
+		},
+		{
+			name: "metadata_bad_payload_ref_offset",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.PayloadRef.Offset = 1
+				return g
+			},
+		},
+		{
+			name: "metadata_huge_raw_bytes",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.RawBytes = maxGranuleRawPayloadBytes(g.Encoding, g.Rows) + 1
 				return g
 			},
 		},
