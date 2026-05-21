@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"hash/fnv"
 	"html"
 	"math"
 	"math/rand"
@@ -193,6 +192,8 @@ type columnStoreParity struct {
 
 type columnStoreQueryExecution struct {
 	Lines                  []string
+	ProductionHash         uint64
+	ProductionHashKnown    bool
 	RowsProcessed          int
 	RowsProcessedKnown     bool
 	BytesRead              int64
@@ -207,6 +208,7 @@ type columnStoreQueryExecution struct {
 	ScanDuration           time.Duration
 	ReduceDuration         time.Duration
 	AdapterDuration        time.Duration
+	ParityHashDuration     time.Duration
 }
 
 type columnStoreByteAccounting struct {
@@ -1098,9 +1100,16 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			return nil, nil, err
 		}
 		planLabel := string(plan.Kind)
-		parityHashStart := time.Now()
-		hash := columnStoreHashLines(exec.Lines)
-		parityHashElapsed := time.Since(parityHashStart)
+		var hash uint64
+		var parityHashElapsed time.Duration
+		if exec.ProductionHashKnown {
+			hash = exec.ProductionHash
+			parityHashElapsed = exec.ParityHashDuration
+		} else {
+			parityHashStart := time.Now()
+			hash = columnStoreHashLines(exec.Lines)
+			parityHashElapsed = time.Since(parityHashStart)
+		}
 		elapsed := plannerElapsed + exec.ScanDuration + exec.ReduceDuration + exec.AdapterDuration + parityHashElapsed
 		rawHash := rawHashes[name]
 		pass := rawHash == hash
@@ -1301,11 +1310,11 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	if err != nil {
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s: %w", queryName, plan.Kind, err)
 	}
-	adapterStart := time.Now()
-	lines, err := columnStoreSuitePhysicalQueryLines(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
-	adapterElapsed := time.Since(adapterStart)
+	parityHashStart := time.Now()
+	productionHash, resultCount, err := columnStoreSuiteHashPhysicalQueryGroups(columnStoreQueryHashLineName(queryName), queryName, result.Groups)
+	parityHashElapsed := time.Since(parityHashStart)
 	if err != nil {
-		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s line mapping: %w", queryName, plan.Kind, err)
+		return columnStoreQueryExecution{}, fmt.Errorf("column_store: physical query %s via %s parity hash: %w", queryName, plan.Kind, err)
 	}
 	diag := result.Diagnostics
 	workers := diag.WorkerCount
@@ -1324,12 +1333,13 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		reduceDuration = time.Duration(diag.ReduceNanos)
 	}
 	return columnStoreQueryExecution{
-		Lines:                  lines,
+		ProductionHash:         productionHash,
+		ProductionHashKnown:    true,
 		RowsProcessed:          diag.ReduceRows,
 		RowsProcessedKnown:     true,
 		BytesRead:              diag.PhysicalBytesScanned,
 		RowMaterializations:    diag.RowMaterializations,
-		ResultCount:            len(lines),
+		ResultCount:            resultCount,
 		MetadataHits:           diag.MetadataHits,
 		SkippedGranules:        diag.SkippedGranules,
 		ScheduledGranules:      diag.ScheduledGranules,
@@ -1338,7 +1348,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		SegmentFileCacheMisses: diag.SegmentFileCacheMisses,
 		ScanDuration:           scanDuration,
 		ReduceDuration:         reduceDuration,
-		AdapterDuration:        adapterElapsed,
+		ParityHashDuration:     parityHashElapsed,
 	}, nil
 }
 
@@ -1376,6 +1386,34 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 		return nil, fmt.Errorf("column_store: unsupported physical query line mapping %q", queryName)
 	}
 	return lines, nil
+}
+
+func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []collections.ColumnPhysicalQueryGroup) (uint64, int, error) {
+	hash := columnStoreFNV64Offset
+	switch queryName {
+	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
+		for _, group := range groups {
+			hash = columnStoreHashPhysicalQueryGroup(hash, prefix, group.Key, int64(group.Count))
+		}
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+		for _, group := range groups {
+			hash = columnStoreHashPhysicalQueryGroup(hash, prefix, group.Key, group.Int64)
+		}
+	default:
+		return 0, 0, fmt.Errorf("column_store: unsupported physical query hash mapping %q", queryName)
+	}
+	return hash, len(groups), nil
+}
+
+func columnStoreHashPhysicalQueryGroup(hash uint64, prefix, key string, value int64) uint64 {
+	const maxInt64DecimalLen = 20 // len("-9223372036854775808")
+	var num [maxInt64DecimalLen]byte
+	hash = columnStoreHashString(hash, prefix)
+	hash = columnStoreHashByte(hash, ':')
+	hash = columnStoreHashString(hash, key)
+	hash = columnStoreHashByte(hash, '=')
+	hash = columnStoreHashBytes(hash, strconv.AppendInt(num[:0], value, 10))
+	return columnStoreHashByte(hash, 0)
 }
 
 func columnStoreSuiteFormatPhysicalQueryLine(prefix, key string, value int64) string {
@@ -1620,12 +1658,36 @@ func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64
 
 func columnStoreHashLines(lines []string) uint64 {
 	sort.Strings(lines)
-	h := fnv.New64a()
+	hash := columnStoreFNV64Offset
 	for _, line := range lines {
-		_, _ = h.Write([]byte(line))
-		_, _ = h.Write([]byte{0})
+		hash = columnStoreHashString(hash, line)
+		hash = columnStoreHashByte(hash, 0)
 	}
-	return h.Sum64()
+	return hash
+}
+
+const (
+	columnStoreFNV64Offset uint64 = 14695981039346656037
+	columnStoreFNV64Prime  uint64 = 1099511628211
+)
+
+func columnStoreHashString(hash uint64, value string) uint64 {
+	for i := 0; i < len(value); i++ {
+		hash = columnStoreHashByte(hash, value[i])
+	}
+	return hash
+}
+
+func columnStoreHashBytes(hash uint64, value []byte) uint64 {
+	for _, b := range value {
+		hash = columnStoreHashByte(hash, b)
+	}
+	return hash
+}
+
+func columnStoreHashByte(hash uint64, value byte) uint64 {
+	hash ^= uint64(value)
+	return hash * columnStoreFNV64Prime
 }
 
 func columnStoreQueryHashLineName(name string) string {

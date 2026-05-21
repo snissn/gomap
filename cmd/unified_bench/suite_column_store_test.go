@@ -132,6 +132,49 @@ func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.T) {
+	groups := []collections.ColumnPhysicalQueryGroup{
+		{Key: "app.bsky.feed.like", Count: 12},
+		{Key: "app.bsky.feed.post", Count: 34},
+		{Key: "app.bsky.graph.follow", Count: 56},
+	}
+	lines, err := columnStoreSuitePhysicalQueryLines("q1", columnStoreQueryQ1, groups)
+	if err != nil {
+		t.Fatalf("columnStoreSuitePhysicalQueryLines: %v", err)
+	}
+	want := columnStoreHashLines(lines)
+	got, count, err := columnStoreSuiteHashPhysicalQueryGroups("q1", columnStoreQueryQ1, groups)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups: %v", err)
+	}
+	if count != len(groups) {
+		t.Fatalf("result count=%d want %d", count, len(groups))
+	}
+	if got != want {
+		t.Fatalf("direct hash=%016x want line hash=%016x", got, want)
+	}
+
+	spanGroups := []collections.ColumnPhysicalQueryGroup{
+		{Key: "d000001", Int64: -1 << 63},
+		{Key: "d000002", Int64: 1<<63 - 1},
+	}
+	lines, err = columnStoreSuitePhysicalQueryLines("q5", columnStoreQueryQ5, spanGroups)
+	if err != nil {
+		t.Fatalf("columnStoreSuitePhysicalQueryLines q5: %v", err)
+	}
+	want = columnStoreHashLines(lines)
+	got, count, err = columnStoreSuiteHashPhysicalQueryGroups("q5", columnStoreQueryQ5, spanGroups)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups q5: %v", err)
+	}
+	if count != len(spanGroups) {
+		t.Fatalf("q5 result count=%d want %d", count, len(spanGroups))
+	}
+	if got != want {
+		t.Fatalf("q5 direct hash=%016x want line hash=%016x", got, want)
+	}
+}
+
 func TestColumnStoreSuiteInheritsTreeDBDisableReadChecksumM1634(t *testing.T) {
 	prevAllowUnsafe := *treedbAllowUnsafe
 	prevDisableReadChecksum := *treedbDisableReadChecksum
