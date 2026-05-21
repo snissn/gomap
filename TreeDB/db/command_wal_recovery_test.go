@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -797,6 +798,54 @@ func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 	unregisterSecond()
 	if got := len(db.commandWALRawBarriers); got != 0 {
 		t.Fatalf("barrier count after unregister second=%d, want 0", got)
+	}
+}
+
+func TestCommandWALRawPublishBarrierUnregisterWaitsForInFlight(t *testing.T) {
+	db := &DB{commandWAL: true}
+	barrierEntered := make(chan struct{})
+	releaseBarrier := make(chan struct{})
+	unregisterReturned := make(chan struct{})
+	runDone := make(chan error, 1)
+
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		close(barrierEntered)
+		<-releaseBarrier
+		return nil
+	})
+	go func() {
+		runDone <- db.runCommandWALRawPublishBarriers()
+	}()
+	select {
+	case <-barrierEntered:
+	case <-time.After(time.Second):
+		t.Fatalf("raw publish barrier did not start")
+	}
+	go func() {
+		unregister()
+		close(unregisterReturned)
+	}()
+	select {
+	case <-unregisterReturned:
+		t.Fatalf("unregister returned before in-flight barrier completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseBarrier)
+	select {
+	case <-unregisterReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("unregister did not return after in-flight barrier completed")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("runCommandWALRawPublishBarriers did not finish")
+	}
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after unregister=%d, want 0", got)
 	}
 }
 

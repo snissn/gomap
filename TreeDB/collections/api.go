@@ -978,7 +978,7 @@ type collectionWriteDomain struct {
 	baseSystemRoot           uint64
 	primaryRoot              uint64
 	storagePolicy            backenddb.OrderedRootStoragePolicy
-	commandWALCoordinator    *collectionCommandWALCoordinator
+	commandWALCoordinator    atomic.Pointer[collectionCommandWALCoordinator]
 	table                    memtable.Table
 	indexedPublishingUnits   []indexedFlushUnit
 	indexedFlushUnits        []indexedFlushUnit
@@ -2448,15 +2448,15 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 		m.domains = make(map[string]*collectionWriteDomain)
 	}
 	if domain := m.domains[name]; domain != nil {
-		if domain.commandWALCoordinator == nil {
-			domain.commandWALCoordinator = m.commandWALCoordinator
+		if domain.commandWALCoordinator.Load() == nil {
+			domain.commandWALCoordinator.Store(m.commandWALCoordinator)
 		}
 		return domain
 	}
 	domain := &collectionWriteDomain{
-		commandWALCoordinator: m.commandWALCoordinator,
-		updateCombineShards:   defaultCollectionUpdateCombineShards,
+		updateCombineShards: defaultCollectionUpdateCombineShards,
 	}
+	domain.commandWALCoordinator.Store(m.commandWALCoordinator)
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
 	m.domains[name] = domain
 	return domain
@@ -7749,6 +7749,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.mutableBytes = 0
 	if commandWALAppliedLSN != 0 {
 		domain.clearPendingCommandWALThroughLocked(commandWALAppliedLSN)
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 	}
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)

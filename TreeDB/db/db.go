@@ -272,7 +272,7 @@ type DB struct {
 	commandWALRawPublishMu     sync.RWMutex
 	commandWALRawBarrierMu     sync.Mutex
 	commandWALRawBarrierNextID uint64
-	commandWALRawBarriers      []commandWALRawBarrier
+	commandWALRawBarriers      []*commandWALRawBarrier
 	closing                    atomic.Bool
 }
 

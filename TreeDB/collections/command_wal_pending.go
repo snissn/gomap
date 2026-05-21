@@ -57,10 +57,17 @@ func (domain *collectionWriteDomain) commandWALCoordinatorForDomain(db *backendd
 	if domain == nil {
 		return nil
 	}
-	if domain.commandWALCoordinator != nil {
-		return domain.commandWALCoordinator
+	if coord := domain.commandWALCoordinator.Load(); coord != nil {
+		return coord
 	}
-	return collectionCommandWALCoordinatorForDB(db)
+	coord := collectionCommandWALCoordinatorForDB(db)
+	if coord == nil {
+		return nil
+	}
+	if domain.commandWALCoordinator.CompareAndSwap(nil, coord) {
+		return coord
+	}
+	return domain.commandWALCoordinator.Load()
 }
 
 func collectionCommandWALDomainPendingLocked(domain *collectionWriteDomain) bool {
@@ -75,10 +82,13 @@ func collectionCommandWALDomainStageReserved(domain *collectionWriteDomain) bool
 }
 
 func (domain *collectionWriteDomain) reserveCommandWALCoordinatorOwnerLocked() {
-	if domain == nil || domain.commandWALCoordinator == nil {
+	if domain == nil {
 		return
 	}
-	coord := domain.commandWALCoordinator
+	coord := domain.commandWALCoordinator.Load()
+	if coord == nil {
+		return
+	}
 	coord.mu.Lock()
 	coord.owner = domain
 	if cond := coord.condLocked(); cond != nil {
@@ -88,10 +98,13 @@ func (domain *collectionWriteDomain) reserveCommandWALCoordinatorOwnerLocked() {
 }
 
 func (domain *collectionWriteDomain) clearCommandWALCoordinatorOwnerIfNoPendingLocked() {
-	if domain == nil || domain.commandWALCoordinator == nil || collectionCommandWALDomainPendingLocked(domain) {
+	if domain == nil || collectionCommandWALDomainPendingLocked(domain) {
 		return
 	}
-	coord := domain.commandWALCoordinator
+	coord := domain.commandWALCoordinator.Load()
+	if coord == nil {
+		return
+	}
 	coord.mu.Lock()
 	if collectionCommandWALDomainStageReserved(domain) {
 		coord.mu.Unlock()
@@ -180,10 +193,13 @@ func (c *Collection) drainCommandWALStageCoordinatorBeforeMutation() error {
 }
 
 func (domain *collectionWriteDomain) finishCommandWALStageReservation() {
-	if domain == nil || domain.commandWALCoordinator == nil {
+	if domain == nil {
 		return
 	}
-	coord := domain.commandWALCoordinator
+	coord := domain.commandWALCoordinator.Load()
+	if coord == nil {
+		return
+	}
 	coord.mu.Lock()
 	if next := domain.commandWALStageReservations.Add(-1); next < 0 {
 		domain.commandWALStageReservations.Store(0)

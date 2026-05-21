@@ -1590,6 +1590,87 @@ func TestCollectionCommandWALPublishCoordinatorDoesNotHoldCoordinatorWhileDraini
 	}
 }
 
+func TestCollectionCommandWALThresholdFlushClearsCoordinatorOwner(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "email", Value: "ada@example.test"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("UpdateBSONSet matched=%t modified=%t, want true/true", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after threshold flush=%d, want 1", got)
+	}
+	coord := mgr.commandWALCoordinator
+	if coord == nil {
+		t.Fatalf("missing command WAL coordinator")
+	}
+	coord.mu.Lock()
+	owner := coord.owner
+	coord.mu.Unlock()
+	if owner != nil {
+		t.Fatalf("coordinator owner after threshold flush=%p, want nil", owner)
+	}
+}
+
+func TestCollectionCommandWALStageCoordinatorPinsFallbackToDomain(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	domain := &collectionWriteDomain{}
+	col := &Collection{db: d, writeDomain: domain}
+
+	unlock, err := col.lockCommandWALStageCoordinator()
+	if err != nil {
+		t.Fatalf("lockCommandWALStageCoordinator: %v", err)
+	}
+	coord := domain.commandWALCoordinator.Load()
+	if coord == nil {
+		t.Fatalf("fallback coordinator was not pinned to domain")
+	}
+	if got := domain.commandWALStageReservations.Load(); got != 1 {
+		t.Fatalf("stage reservations before unlock=%d, want 1", got)
+	}
+	unlock()
+	if got := domain.commandWALStageReservations.Load(); got != 0 {
+		t.Fatalf("stage reservations after unlock=%d, want 0", got)
+	}
+	coord.mu.Lock()
+	owner := coord.owner
+	coord.mu.Unlock()
+	if owner != nil {
+		t.Fatalf("coordinator owner after unlock=%p, want nil", owner)
+	}
+}
+
 func TestCollectionCommandWALPublishWaitsForStageReservation(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
