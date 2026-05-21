@@ -2578,8 +2578,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	if err := writeResult(&out, "json", result); err != nil {
 		t.Fatalf("writeResult json without command WAL: %v", err)
 	}
-	if strings.Contains(out.String(), "treedb_command_wal") {
-		t.Fatalf("json includes false treedb_command_wal field: %s", out.String())
+	if !strings.Contains(out.String(), `"treedb_command_wal": false`) {
+		t.Fatalf("json missing explicit false treedb_command_wal field: %s", out.String())
 	}
 }
 

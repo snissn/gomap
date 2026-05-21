@@ -144,7 +144,7 @@ type benchmarkResult struct {
 	RangeIndex         bool `json:"range_index"`
 
 	TreeDBProfile                                 string              `json:"treedb_profile,omitempty"`
-	TreeDBCommandWAL                              bool                `json:"treedb_command_wal,omitempty"`
+	TreeDBCommandWAL                              bool                `json:"treedb_command_wal"`
 	TreeDBDocumentFormat                          string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage                         string              `json:"treedb_data_root_storage,omitempty"`
 	TreeDBIndexStateRootStorage                   string              `json:"treedb_index_state_root_storage,omitempty"`
@@ -5952,12 +5952,15 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
 		if result.TreeDBProfile != "" {
-			fmt.Fprintf(out, "treedb_profile=%s command_wal=%t document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
-				result.TreeDBProfile, result.TreeDBCommandWAL, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
+			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
+				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
 				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage,
 				result.TreeDBBufferedIndexedWriteMaxDocuments, result.TreeDBBufferedIndexedWriteMaxBytes,
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,
 				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, result.TreeDBMaintenanceMode, result.TreeDBReadState)
+		}
+		if result.TreeDBCommandWAL {
+			fmt.Fprintf(out, "treedb_command_wal=true\n")
 		}
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)

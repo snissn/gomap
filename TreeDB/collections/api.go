@@ -1155,10 +1155,12 @@ func (m *CollectionManager) SetUpdateBatchDetailedStatsEnabled(enabled bool) {
 
 func (m *CollectionManager) closeForBackend() error {
 	m.closing.Store(true)
-	if m.commandWALRawUnregister != nil {
-		m.commandWALRawUnregister()
-		m.commandWALRawUnregister = nil
-	}
+	defer func() {
+		if m.commandWALRawUnregister != nil {
+			m.commandWALRawUnregister()
+			m.commandWALRawUnregister = nil
+		}
+	}()
 	m.stopUpdateCombiners()
 	return m.FlushAll()
 }

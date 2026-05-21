@@ -258,21 +258,22 @@ type DB struct {
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
-	commandWALFlushPoisoned   atomic.Bool
-	commandWALStatsMu         sync.Mutex
-	commandWALRequiredFeature bool
-	commandWALRequiredErr     string
-	commandWALStatsAppliedLSN uint64
-	commandWALStatsSummary    commandWALStatsSummary
-	commandWALStatsOK         bool
-	commandWALLiveAccepted    atomic.Uint64
-	commandWALLiveAcceptedMax atomic.Uint64
-	commandWALLiveCovered     atomic.Uint64
-	commandWALLiveCoveredMax  atomic.Uint64
-	commandWALRawPublishMu    sync.RWMutex
-	commandWALRawBarrierMu    sync.Mutex
-	commandWALRawBarriers     []func() error
-	closing                   atomic.Bool
+	commandWALFlushPoisoned    atomic.Bool
+	commandWALStatsMu          sync.Mutex
+	commandWALRequiredFeature  bool
+	commandWALRequiredErr      string
+	commandWALStatsAppliedLSN  uint64
+	commandWALStatsSummary     commandWALStatsSummary
+	commandWALStatsOK          bool
+	commandWALLiveAccepted     atomic.Uint64
+	commandWALLiveAcceptedMax  atomic.Uint64
+	commandWALLiveCovered      atomic.Uint64
+	commandWALLiveCoveredMax   atomic.Uint64
+	commandWALRawPublishMu     sync.RWMutex
+	commandWALRawBarrierMu     sync.Mutex
+	commandWALRawBarrierNextID uint64
+	commandWALRawBarriers      []commandWALRawBarrier
+	closing                    atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {

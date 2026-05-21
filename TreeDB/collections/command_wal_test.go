@@ -1514,6 +1514,7 @@ func TestCollectionCommandWALPublishCoordinatorDoesNotHoldCoordinatorWhileDraini
 	coordAvailable := make(chan struct{})
 	go func() {
 		coord.mu.Lock()
+		_ = coord.owner
 		coord.mu.Unlock()
 		close(coordAvailable)
 	}()

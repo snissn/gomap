@@ -336,11 +336,6 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
-	unlockRawPublish := db.lockCommandWALRawPublish()
-	defer unlockRawPublish()
-	if err := db.runCommandWALRawPublishBarriers(); err != nil {
-		return 0, err
-	}
 	intent := commandWALBatchIntent{
 		kind:          kind,
 		scope:         scope,

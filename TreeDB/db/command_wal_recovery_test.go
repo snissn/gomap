@@ -731,6 +731,75 @@ func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
 	}
 }
 
+func TestAppendCommandWALPayloadDoesNotRunRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	defer unregister()
+
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"city":"sea"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	lsn, err := db.AppendCommandWALPayload(
+		commitlog.CommandKindCollectionUpdateBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("AppendCommandWALPayload error=%v", err)
+	}
+	if lsn == 0 {
+		t.Fatalf("AppendCommandWALPayload lsn=0, want assigned LSN")
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("higher-level command WAL payload append ran raw publish barrier")
+	}
+}
+
+func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
+	db := &DB{commandWAL: true}
+	var calls []int
+	unregisterFirst := db.RegisterCommandWALRawPublishBarrier(func() error {
+		calls = append(calls, 1)
+		return nil
+	})
+	unregisterSecond := db.RegisterCommandWALRawPublishBarrier(func() error {
+		calls = append(calls, 2)
+		return nil
+	})
+
+	unregisterFirst()
+	unregisterFirst()
+	if got := len(db.commandWALRawBarriers); got != 1 {
+		t.Fatalf("barrier count after unregister=%d, want 1", got)
+	}
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != 2 {
+		t.Fatalf("barrier calls=%v, want only second barrier", calls)
+	}
+
+	unregisterSecond()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after unregister second=%d, want 0", got)
+	}
+}
+
 func TestMarkCommandWALIntentRecoveryRequiredNilNoop(t *testing.T) {
 	db := &DB{}
 	db.MarkCommandWALIntentRecoveryRequired(nil)

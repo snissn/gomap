@@ -5,6 +5,11 @@ import (
 	"sync"
 )
 
+type commandWALRawBarrier struct {
+	id   uint64
+	hook func() error
+}
+
 // RegisterCommandWALRawPublishBarrier registers a callback that raw command-WAL
 // writers must run before appending a new raw KV command frame. Higher-level
 // command executors use this to drain already-appended staged command frames so
@@ -14,16 +19,23 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 		return func() {}
 	}
 	db.commandWALRawBarrierMu.Lock()
-	idx := len(db.commandWALRawBarriers)
-	db.commandWALRawBarriers = append(db.commandWALRawBarriers, hook)
+	db.commandWALRawBarrierNextID++
+	id := db.commandWALRawBarrierNextID
+	db.commandWALRawBarriers = append(db.commandWALRawBarriers, commandWALRawBarrier{id: id, hook: hook})
 	db.commandWALRawBarrierMu.Unlock()
 
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			db.commandWALRawBarrierMu.Lock()
-			if idx >= 0 && idx < len(db.commandWALRawBarriers) && db.commandWALRawBarriers[idx] != nil {
-				db.commandWALRawBarriers[idx] = nil
+			for i := range db.commandWALRawBarriers {
+				if db.commandWALRawBarriers[i].id == id {
+					copy(db.commandWALRawBarriers[i:], db.commandWALRawBarriers[i+1:])
+					last := len(db.commandWALRawBarriers) - 1
+					db.commandWALRawBarriers[last] = commandWALRawBarrier{}
+					db.commandWALRawBarriers = db.commandWALRawBarriers[:last]
+					break
+				}
 			}
 			db.commandWALRawBarrierMu.Unlock()
 		})
@@ -38,14 +50,16 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 		return err
 	}
 	db.commandWALRawBarrierMu.Lock()
-	hooks := append([]func() error(nil), db.commandWALRawBarriers...)
+	hooks := make([]func() error, 0, len(db.commandWALRawBarriers))
+	for _, barrier := range db.commandWALRawBarriers {
+		if barrier.hook != nil {
+			hooks = append(hooks, barrier.hook)
+		}
+	}
 	db.commandWALRawBarrierMu.Unlock()
 
 	var errs []error
 	for _, hook := range hooks {
-		if hook == nil {
-			continue
-		}
 		if err := hook(); err != nil {
 			errs = append(errs, err)
 		}
