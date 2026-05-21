@@ -21,6 +21,7 @@ type columnPhysicalScanRequest struct {
 	RefOrdinalModulo    int
 	RefOrdinalRemainder int
 	ShouldCancel        func() bool
+	ReadIntegrity       ColumnAssetReadIntegrity
 }
 
 type columnPhysicalScanDiagnostics struct {
@@ -39,10 +40,11 @@ type columnPhysicalScanDiagnostics struct {
 	DeletedRows      int
 	ProjectedColumns int
 	// Counts full-document row materialization; M13A emits declared-column row views only.
-	RowMaterializations    int
-	PhysicalBytesScanned   int64
-	SegmentFileCacheHits   uint64
-	SegmentFileCacheMisses uint64
+	RowMaterializations      int
+	PhysicalBytesScanned     int64
+	SegmentFileCacheHits     uint64
+	SegmentFileCacheMisses   uint64
+	ColumnAssetReadIntegrity string
 }
 
 type columnPhysicalScanRowView struct {
@@ -312,11 +314,12 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	if req.RefOrdinalModulo > 0 && (req.RefOrdinalRemainder < 0 || req.RefOrdinalRemainder >= req.RefOrdinalModulo) {
 		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", req.RefOrdinalRemainder, req.RefOrdinalModulo)
 	}
-	readCache, err := newColumnPhysicalAssetReadCache(view.ColumnAssetRootDir, view.AssetNamespace)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ReadIntegrity)
 	if err != nil {
 		return diag, err
 	}
 	defer func() { _ = readCache.close() }()
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ReadIntegrity)
 	var rawScratch []byte
 	start, step := columnPhysicalScanRefOrdinalPartition(req)
 	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {

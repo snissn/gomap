@@ -49,6 +49,96 @@ func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
 	}
 }
 
+func TestRunColumnStoreSuiteRejectsRelaxedAssetReadIntegrityWithoutUnsafeM1634(t *testing.T) {
+	dir := t.TempDir()
+	cfg := BenchConfig{
+		Keys:      16,
+		BatchSize: 8,
+		DBsArg:    "treedb",
+		Profile:   "durable",
+		Progress:  false,
+		SeedUsed:  1,
+	}
+	prevAllowUnsafe := *treedbAllowUnsafe
+	prevIntegrity := *columnStoreSuiteAssetReadIntegrityArg
+	*treedbAllowUnsafe = false
+	*columnStoreSuiteAssetReadIntegrityArg = "skip_checksums"
+	t.Cleanup(func() {
+		*treedbAllowUnsafe = prevAllowUnsafe
+		*columnStoreSuiteAssetReadIntegrityArg = prevIntegrity
+	})
+	if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:    dir,
+		ExecutionPath: "native-fastpath",
+		ForcedPath:    columnStorePathSerialColumnScan,
+	}); err == nil || !strings.Contains(err.Error(), "requires -treedb-allow-unsafe") {
+		t.Fatalf("runColumnStoreSuite relaxed read integrity err=%v want unsafe rejection", err)
+	}
+}
+
+func TestRunColumnStoreSuiteReportsRelaxedAssetReadIntegrityM1634(t *testing.T) {
+	dir := t.TempDir()
+	cfg := BenchConfig{
+		Keys:      16,
+		BatchSize: 8,
+		DBsArg:    "treedb",
+		Profile:   "durable",
+		Progress:  false,
+		SeedUsed:  1,
+	}
+	prevAllowUnsafe := *treedbAllowUnsafe
+	*treedbAllowUnsafe = true
+	t.Cleanup(func() { *treedbAllowUnsafe = prevAllowUnsafe })
+	if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:               dir,
+		ExecutionPath:            "native-fastpath",
+		ForcedPath:               columnStorePathSerialColumnScan,
+		ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegritySkipChecksums,
+	}); err != nil {
+		t.Fatalf("runColumnStoreSuite relaxed read integrity: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+	if err != nil {
+		t.Fatalf("read column_store_results.json: %v", err)
+	}
+	var report columnStoreSuiteReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal column_store_results.json: %v", err)
+	}
+	if got, want := report.ColumnAssetReadIntegrity, string(collections.ColumnAssetReadIntegritySkipChecksums); got != want {
+		t.Fatalf("column_asset_read_integrity=%q want %q", got, want)
+	}
+}
+
+func TestColumnStoreSuiteInheritsTreeDBDisableReadChecksumM1634(t *testing.T) {
+	prevAllowUnsafe := *treedbAllowUnsafe
+	prevDisableReadChecksum := *treedbDisableReadChecksum
+	prevIntegrity := *columnStoreSuiteAssetReadIntegrityArg
+	*treedbAllowUnsafe = true
+	*treedbDisableReadChecksum = true
+	*columnStoreSuiteAssetReadIntegrityArg = string(collections.ColumnAssetReadIntegrityVerify)
+	t.Cleanup(func() {
+		*treedbAllowUnsafe = prevAllowUnsafe
+		*treedbDisableReadChecksum = prevDisableReadChecksum
+		*columnStoreSuiteAssetReadIntegrityArg = prevIntegrity
+	})
+
+	got, err := columnStoreSuiteEffectiveAssetReadIntegrity("")
+	if err != nil {
+		t.Fatalf("columnStoreSuiteEffectiveAssetReadIntegrity: %v", err)
+	}
+	if got != collections.ColumnAssetReadIntegritySkipChecksums {
+		t.Fatalf("column asset read integrity=%q want inherited %q", got, collections.ColumnAssetReadIntegritySkipChecksums)
+	}
+	got, err = columnStoreSuiteEffectiveAssetReadIntegrity(collections.ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		t.Fatalf("explicit verify integrity: %v", err)
+	}
+	if got != collections.ColumnAssetReadIntegrityVerify {
+		t.Fatalf("explicit column asset read integrity=%q want verify override", got)
+	}
+}
+
 func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	dir := t.TempDir()
 	cfg := BenchConfig{
@@ -834,7 +924,7 @@ func TestColumnStoreSuiteCPUProfileStartsAfterProfileBaselinesM11A(t *testing.T)
 		MutexProfile:         filepath.Join(profileTmpDir, "mutex.pprof"),
 		MutexProfileFraction: 1,
 		profileHooks:         profileHooks,
-	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err != nil {
 		t.Fatalf("profiled queries: %v", err)
 	}
@@ -978,7 +1068,7 @@ func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T)
 	_, _, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		CPUProfile:   profilePrefix,
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err == nil {
 		t.Fatal("expected CPU profile start failure")
 	}
@@ -1030,7 +1120,7 @@ func TestColumnStoreSuiteHardQueryFailureRemovesCPUArtifactM11A(t *testing.T) {
 	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		CPUProfile:   profilePrefix,
 		profileHooks: profileHooks,
-	}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err == nil {
 		t.Fatal("expected hard query error")
 	}
@@ -1062,7 +1152,7 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	_, _, _, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		BlockProfile: blockPath,
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err != nil {
 		t.Fatalf("empty block delta output should be skipped: %v", err)
 	}
@@ -1114,7 +1204,7 @@ func TestColumnStoreSuiteProfiledQueriesSkipWhitespaceOnlyRuntimeProfilePathsM11
 		BlockProfile: " \t ",
 		MutexProfile: " \n ",
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err != nil || parityErr != nil {
 		t.Fatalf("whitespace-only runtime profiles should be ignored: err=%v parityErr=%v", err, parityErr)
 	}
@@ -1141,7 +1231,7 @@ func TestColumnStoreSuiteProfiledQueriesTrimAllocsDeltaPathM11A(t *testing.T) {
 		AllocsProfile:     " \t" + allocsPrefix + "\t ",
 		AllocsProfileRate: 1,
 		profileHooks:      profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err != nil || parityErr != nil {
 		t.Fatalf("profiled queries failed: err=%v parityErr=%v", err, parityErr)
 	}
@@ -1248,7 +1338,7 @@ func TestColumnStoreSuiteArtifactsPreserveRuntimeDeltaStatErrorsM11A(t *testing.
 
 func TestColumnStoreSuiteProfiledQueriesReturnHardErrorsSeparatelyM11A(t *testing.T) {
 	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 4, 2)
-	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 	if err == nil {
 		t.Fatal("expected hard query error")
 	}
@@ -1647,7 +1737,7 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reference hashes: %v", err)
 	}
-	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row")
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row", collections.ColumnAssetReadIntegrityVerify)
 	if err != nil {
 		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
 	}
@@ -1698,7 +1788,7 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if got != want {
 			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", alias, got, want)
 		}
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias, collections.ColumnAssetReadIntegrityVerify)
 		if err != nil {
 			t.Fatalf("physical alias %q: %v", alias, err)
 		}
@@ -1772,7 +1862,7 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen collection after asset removal: %v", err)
 	}
-	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan)
+	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing physical assets err=%v want os.ErrNotExist without row fallback", err)
 	}
@@ -2062,26 +2152,34 @@ func TestColumnStoreSuiteREADMEDocumentsCommandM11A(t *testing.T) {
 }
 
 func BenchmarkColumnStoreSuiteRowBaselineQueriesM11B(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathRowStoreBaseline)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 }
 
 func BenchmarkColumnStoreSuiteBTreeIndexBaselineQueriesM11B(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline, collections.ColumnAssetReadIntegrityVerify)
 }
 
 func BenchmarkColumnStoreSuiteSerialPhysicalQueriesM14C(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify)
+}
+
+func BenchmarkColumnStoreSuiteSerialPhysicalQueriesSkipChecksumsM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegritySkipChecksums)
 }
 
 func BenchmarkColumnStoreSuiteAggregateMetadataQueriesM14C(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegrityVerify)
+}
+
+func BenchmarkColumnStoreSuiteAggregateMetadataQueriesSkipChecksumsM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegritySkipChecksums)
 }
 
 func BenchmarkColumnStoreSuiteParallelPhysicalQueriesM14C(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathParallelColumnScan)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathParallelColumnScan, collections.ColumnAssetReadIntegrityVerify)
 }
 
-func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
+func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string, readIntegrity collections.ColumnAssetReadIntegrity) {
 	const rows = 10_000
 	const batchSize = 1_000
 
@@ -2128,7 +2226,7 @@ func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
 	b.SetBytes(sourceBytes * int64(queryCount))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, readIntegrity)
 		if err != nil {
 			b.Fatalf("queries: %v", err)
 		}

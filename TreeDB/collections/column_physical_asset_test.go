@@ -499,6 +499,16 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	if _, err := readColumnPhysicalAssetFromManager(root, ref); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("read corrupt asset err=%v want checksum failure", err)
 	}
+	relaxedRaw, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("relaxed read corrupt asset: %v", err)
+	}
+	if bytes.Equal(relaxedRaw, raw) {
+		t.Fatalf("relaxed read returned uncorrupted payload")
+	}
+	if err := validateColumnPhysicalAssetForManifest(relaxedRaw, ref, *normalized); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("manifest validation err=%v want checksum failure", err)
+	}
 }
 
 func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {

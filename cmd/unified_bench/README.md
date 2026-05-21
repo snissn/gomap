@@ -134,6 +134,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 - `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
+- `-column-store-asset-read-integrity` column-store typed asset hot-read integrity for `-suite column_store` physical paths (`verify|skip_checksums`). `skip_checksums` requires `-treedb-allow-unsafe`; when unset, `-treedb-disable-read-checksum` also disables typed column-asset hot-read CRC verification for the suite.
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
 - `-treedb-vlog-rewrite-min-segment-age-ms` TreeDB: minimum source segment age for online generational rewrite (`0`=default)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)

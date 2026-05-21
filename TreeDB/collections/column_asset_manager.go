@@ -578,7 +578,15 @@ func readColumnPhysicalAssetFromManager(rootDir string, ref ColumnAssetRef) ([]b
 }
 
 func readColumnPhysicalAssetFromManagerInto(rootDir string, ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	return readColumnPhysicalAssetFromManagerIntoWithIntegrity(rootDir, ref, dst, ColumnAssetReadIntegrityVerify)
+}
+
+func readColumnPhysicalAssetFromManagerIntoWithIntegrity(rootDir string, ref ColumnAssetRef, dst []byte, integrity ColumnAssetReadIntegrity) ([]byte, error) {
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return nil, err
+	}
+	verifyChecksum, err := columnAssetReadIntegrityVerifyChecksum(integrity)
+	if err != nil {
 		return nil, err
 	}
 	if ref.Length > int64(maxCollectionInt) {
@@ -604,34 +612,78 @@ func readColumnPhysicalAssetFromManagerInto(rootDir string, ref ColumnAssetRef, 
 	if n != len(raw) {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if checksum := page.Checksum(raw); checksum != ref.Checksum {
-		return nil, fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	if verifyChecksum {
+		if checksum := page.Checksum(raw); checksum != ref.Checksum {
+			return nil, fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+		}
 	}
 	return raw, nil
 }
 
+func columnAssetReadIntegrityVerifyChecksum(integrity ColumnAssetReadIntegrity) (bool, error) {
+	switch integrity {
+	case "", ColumnAssetReadIntegrityVerify:
+		return true, nil
+	case ColumnAssetReadIntegritySkipChecksums:
+		return false, nil
+	default:
+		return false, fmt.Errorf("collections: unsupported column asset read integrity %q", integrity)
+	}
+}
+
+func columnAssetReadIntegrityLabel(integrity ColumnAssetReadIntegrity) string {
+	switch integrity {
+	case ColumnAssetReadIntegritySkipChecksums:
+		return string(ColumnAssetReadIntegritySkipChecksums)
+	default:
+		return string(ColumnAssetReadIntegrityVerify)
+	}
+}
+
+func verifyColumnPhysicalAssetReadChecksum(raw []byte, ref ColumnAssetRef, verify bool) error {
+	if !verify {
+		return nil
+	}
+	if checksum := page.Checksum(raw); checksum != ref.Checksum {
+		return fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	}
+	return nil
+}
+
 type columnPhysicalAssetReadCache struct {
-	namespace  string
-	segmentDir string
-	fileID     uint32
-	file       *os.File
-	files      map[uint32]*os.File
-	scratch    []byte
-	hits       uint64
-	misses     uint64
+	namespace      string
+	segmentDir     string
+	readIntegrity  ColumnAssetReadIntegrity
+	verifyChecksum bool
+	fileID         uint32
+	file           *os.File
+	files          map[uint32]*os.File
+	scratch        []byte
+	hits           uint64
+	misses         uint64
 }
 
 func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPhysicalAssetReadCache, error) {
+	return newColumnPhysicalAssetReadCacheWithIntegrity(rootDir, namespace, ColumnAssetReadIntegrityVerify)
+}
+
+func newColumnPhysicalAssetReadCacheWithIntegrity(rootDir string, namespace string, integrity ColumnAssetReadIntegrity) (columnPhysicalAssetReadCache, error) {
 	if namespace == "" {
 		return columnPhysicalAssetReadCache{}, errors.New("collections: column asset read cache namespace is required")
+	}
+	verifyChecksum, err := columnAssetReadIntegrityVerifyChecksum(integrity)
+	if err != nil {
+		return columnPhysicalAssetReadCache{}, err
 	}
 	managerNamespace, err := columnAssetManagerNamespaceForRoot(rootDir, namespace)
 	if err != nil {
 		return columnPhysicalAssetReadCache{}, err
 	}
 	return columnPhysicalAssetReadCache{
-		namespace:  namespace,
-		segmentDir: managerNamespace.SegmentDir,
+		namespace:      namespace,
+		segmentDir:     managerNamespace.SegmentDir,
+		readIntegrity:  integrity,
+		verifyChecksum: verifyChecksum,
 	}, nil
 }
 
@@ -679,7 +731,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 		}
 		dst = c.scratch
 	}
-	return readColumnPhysicalAssetFromFile(file, ref, dst)
+	return readColumnPhysicalAssetFromFileWithChecksum(file, ref, dst, c.verifyChecksum)
 }
 
 func getColumnPhysicalAssetReadScratch(minLen int) []byte {
@@ -738,6 +790,10 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 }
 
 func readColumnPhysicalAssetFromFile(file *os.File, ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	return readColumnPhysicalAssetFromFileWithChecksum(file, ref, dst, true)
+}
+
+func readColumnPhysicalAssetFromFileWithChecksum(file *os.File, ref ColumnAssetRef, dst []byte, verifyChecksum bool) ([]byte, error) {
 	if file == nil {
 		return nil, errors.New("collections: nil column physical asset segment file")
 	}
@@ -755,8 +811,8 @@ func readColumnPhysicalAssetFromFile(file *os.File, ref ColumnAssetRef, dst []by
 	if n != len(raw) {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if checksum := page.Checksum(raw); checksum != ref.Checksum {
-		return nil, fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	if err := verifyColumnPhysicalAssetReadChecksum(raw, ref, verifyChecksum); err != nil {
+		return nil, err
 	}
 	return raw, nil
 }

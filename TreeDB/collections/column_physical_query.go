@@ -28,11 +28,12 @@ const columnPhysicalQueryHourUS = int64(3_600_000_000)
 // ColumnPhysicalQueryRequest describes one explicit physical column query. It
 // does not invoke planner routing; M14 owns forced/automatic route selection.
 type ColumnPhysicalQueryRequest struct {
-	Kind                  ColumnPhysicalQueryKind
-	GroupColumn           string
-	ValueColumn           string
-	DistinctColumn        string
-	AggregateMetadataName string
+	Kind                     ColumnPhysicalQueryKind
+	GroupColumn              string
+	ValueColumn              string
+	DistinctColumn           string
+	AggregateMetadataName    string
+	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
 // ColumnPhysicalQueryGroup is one reduced result row. Count is populated for
@@ -70,6 +71,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	WorkerCount                int
 	SegmentFileCacheHits       uint64
 	SegmentFileCacheMisses     uint64
+	ColumnAssetReadIntegrity   string
 	ScanNanos                  int64
 	VisibilityNanos            int64
 	ReduceNanos                int64
@@ -135,7 +137,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	if len(refs) == 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata %q has no physical asset refs", ErrColumnQueryPlanUnsupported, aggregate.Name)
 	}
-	readCache, err := newColumnPhysicalAssetReadCache(view.ColumnAssetRootDir, view.AssetNamespace)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
@@ -146,6 +148,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = 2
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
 	diag.ScheduledGranules = len(refs)
 	for _, metadataRef := range refs {
 		raw, err := readCache.read(metadataRef.AssetRef, rawScratch)
@@ -233,7 +236,8 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
 		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", refRemainder, refModulo)
 	}
 	diag.ProjectedColumns = len(exec.projected)
-	readCache, err := newColumnPhysicalAssetReadCache(view.ColumnAssetRootDir, view.AssetNamespace)
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(exec.readIntegrity)
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, exec.readIntegrity)
 	if err != nil {
 		return diag, err
 	}
@@ -338,6 +342,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 					RefOrdinalModulo:    workers,
 					RefOrdinalRemainder: worker,
 					ShouldCancel:        cancel.Load,
+					ReadIntegrity:       req.ColumnAssetReadIntegrity,
 				})
 			}
 			if err != nil {
@@ -398,6 +403,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 		ProjectedColumns:  exec.projected,
 		Visitor:           exec.visit,
 		RequireInsertOnly: true,
+		ReadIntegrity:     req.ColumnAssetReadIntegrity,
 	})
 	scanNanos := time.Since(scanStart).Nanoseconds()
 	result := ColumnPhysicalQueryResult{
@@ -422,7 +428,7 @@ func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig,
 		return ColumnPhysicalQueryResult{}, err
 	}
 	visibilityStart := time.Now()
-	visible, err := c.scanColumnPhysicalVisibleRows(exec.projected)
+	visible, err := c.scanColumnPhysicalVisibleRowsWithReadIntegrity(exec.projected, req.ColumnAssetReadIntegrity)
 	visibilityNanos := time.Since(visibilityStart).Nanoseconds()
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(visible.Diagnostics),
@@ -501,6 +507,7 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		PhysicalBytesScanned:       diag.PhysicalBytesScanned,
 		SegmentFileCacheHits:       diag.SegmentFileCacheHits,
 		SegmentFileCacheMisses:     diag.SegmentFileCacheMisses,
+		ColumnAssetReadIntegrity:   diag.ColumnAssetReadIntegrity,
 	}
 }
 
@@ -513,6 +520,10 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 		left.ManifestRecords = right.ManifestRecords
 		left.AssetRefs = right.AssetRefs
 		left.ProjectedColumns = right.ProjectedColumns
+		left.ColumnAssetReadIntegrity = right.ColumnAssetReadIntegrity
+	}
+	if left.ColumnAssetReadIntegrity == "" {
+		left.ColumnAssetReadIntegrity = right.ColumnAssetReadIntegrity
 	}
 	if right.ManifestRecords > left.ManifestRecords {
 		left.ManifestRecords = right.ManifestRecords
@@ -545,6 +556,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 
 type columnPhysicalQueryExecutor struct {
 	kind              ColumnPhysicalQueryKind
+	readIntegrity     ColumnAssetReadIntegrity
 	projected         []string
 	groupIdx          int
 	valueIdx          int
@@ -571,6 +583,7 @@ type columnPhysicalQuerySpan struct {
 func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (*columnPhysicalQueryExecutor, error) {
 	exec := &columnPhysicalQueryExecutor{
 		kind:              req.Kind,
+		readIntegrity:     req.ColumnAssetReadIntegrity,
 		groupIdx:          -1,
 		valueIdx:          -1,
 		distinctIdx:       -1,

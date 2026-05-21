@@ -116,6 +116,16 @@ const (
 	ColumnStoreProfileBenchmarkRelaxed ColumnStoreProfileSupport = "benchmark-relaxed"
 )
 
+// ColumnAssetReadIntegrity controls hot physical column asset payload checksum
+// verification. It does not change durability, manifest validation, or the
+// checksum fields written into typed column asset refs.
+type ColumnAssetReadIntegrity string
+
+const (
+	ColumnAssetReadIntegrityVerify        ColumnAssetReadIntegrity = "verify"
+	ColumnAssetReadIntegritySkipChecksums ColumnAssetReadIntegrity = "skip_checksums"
+)
+
 type ColumnStoreConfig struct {
 	Enabled                                bool                          `json:"enabled,omitempty"`
 	Columns                                []ColumnStoreColumn           `json:"columns,omitempty"`
