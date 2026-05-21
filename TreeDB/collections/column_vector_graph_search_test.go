@@ -580,7 +580,7 @@ func exactColumnGraphTopKForTest(tb testing.TB, rows []columnGraphRebuildInputRo
 
 func insertColumnGraphTopForTest(top []columnVectorGraphSearchCandidate, limit int, candidate columnVectorGraphSearchCandidate) []columnVectorGraphSearchCandidate {
 	pos := len(top)
-	for pos > 0 && columnVectorGraphSearchCandidateLess(candidate, top[pos-1]) {
+	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, top[pos-1]) {
 		pos--
 	}
 	if pos >= limit {
@@ -630,15 +630,29 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.CandidateFetches)/float64(n), "candidate_fetches/search")
 	b.ReportMetric(float64(searchStats.ExpansionFetches)/float64(n), "expansion_fetches/search")
 	b.ReportMetric(float64(searchStats.ResultFetches)/float64(n), "result_fetches/search")
-	b.ReportMetric(float64(stats.CacheHits-baseStats.CacheHits)/float64(n), "cache_hits/search")
-	b.ReportMetric(float64(stats.CacheMisses-baseStats.CacheMisses)/float64(n), "cache_misses/search")
-	b.ReportMetric(float64(stats.DecodedBlocks-baseStats.DecodedBlocks)/float64(n), "decoded_blocks/search")
-	b.ReportMetric(float64(stats.GranulesTouched-baseStats.GranulesTouched)/float64(n), "granules_touched/search")
-	b.ReportMetric(float64(stats.PhysicalBytesRead-baseStats.PhysicalBytesRead)/float64(n), "physical_B/search")
+	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.CacheHits, baseStats.CacheHits))/float64(n), "cache_hits/search")
+	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.CacheMisses, baseStats.CacheMisses))/float64(n), "cache_misses/search")
+	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.DecodedBlocks, baseStats.DecodedBlocks))/float64(n), "decoded_blocks/search")
+	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.GranulesTouched, baseStats.GranulesTouched))/float64(n), "granules_touched/search")
+	b.ReportMetric(float64(deltaColumnGraphNativeBenchBytesV3(stats.PhysicalBytesRead, baseStats.PhysicalBytesRead))/float64(n), "physical_B/search")
 	b.ReportMetric(float64(stats.MaxResidentBytes), "max_resident_B")
 	if stats.Rows > 0 {
 		b.ReportMetric(float64(stats.OpenPhysicalBytesRead)/float64(stats.Rows), "asset_B/row")
 	}
+}
+
+func deltaColumnGraphNativeBenchCounterV3(current, base uint64) uint64 {
+	if current < base {
+		return 0
+	}
+	return current - base
+}
+
+func deltaColumnGraphNativeBenchBytesV3(current, base int64) int64 {
+	if current < base {
+		return 0
+	}
+	return current - base
 }
 
 func addColumnPhysicalRowReaderStatsV3(left, right columnPhysicalRowReaderStats) columnPhysicalRowReaderStats {

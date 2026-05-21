@@ -6,6 +6,8 @@ import (
 	"math"
 )
 
+const columnVectorGraphNativeFrontierOversizeSlack = 16
+
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
@@ -77,7 +79,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	if frontierCap < topK {
 		frontierCap = topK
 	}
-	if cap(s.frontier) < frontierCap || cap(s.frontier) > frontierCap*2+16 {
+	if cap(s.frontier) < frontierCap || cap(s.frontier) > frontierCap*2+columnVectorGraphNativeFrontierOversizeSlack {
 		s.frontier = make([]columnVectorGraphSearchCandidate, 0, frontierCap)
 	} else {
 		s.frontier = s.frontier[:0]
@@ -94,6 +96,11 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		next := make([][]byte, topK)
 		copy(next, s.idBuffers)
 		s.idBuffers = next
+	} else {
+		for i := topK; i < len(s.idBuffers); i++ {
+			s.idBuffers[i] = nil
+		}
+		s.idBuffers = s.idBuffers[:topK]
 	}
 	if cap(s.resultOrder) < topK {
 		s.resultOrder = make([]int, 0, topK)
@@ -235,6 +242,8 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
 	fetchPos := 0
+	// FetchBatch preserves request order today; the ordinal check below fails
+	// closed if that contract changes.
 	if err := r.fetchBatchUnchecked(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
 		if fetchPos >= n {
 			return fmt.Errorf("collections: column_graph %q result batch returned extra row ordinal=%d", r.def.Name, row.Ordinal)
@@ -320,7 +329,7 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphS
 func (s *columnVectorGraphNativeSearchScratch) frontierSiftUp(idx int) {
 	for idx > 0 {
 		parent := (idx - 1) / 2
-		if !columnVectorGraphSearchCandidateLess(s.frontier[idx], s.frontier[parent]) {
+		if !columnVectorGraphSearchCandidateBetter(s.frontier[idx], s.frontier[parent]) {
 			return
 		}
 		s.frontier[idx], s.frontier[parent] = s.frontier[parent], s.frontier[idx]
@@ -335,10 +344,10 @@ func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int) {
 			return
 		}
 		child := left
-		if right := left + 1; right < len(s.frontier) && columnVectorGraphSearchCandidateLess(s.frontier[right], s.frontier[left]) {
+		if right := left + 1; right < len(s.frontier) && columnVectorGraphSearchCandidateBetter(s.frontier[right], s.frontier[left]) {
 			child = right
 		}
-		if !columnVectorGraphSearchCandidateLess(s.frontier[child], s.frontier[idx]) {
+		if !columnVectorGraphSearchCandidateBetter(s.frontier[child], s.frontier[idx]) {
 			return
 		}
 		s.frontier[idx], s.frontier[child] = s.frontier[child], s.frontier[idx]
@@ -351,7 +360,7 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 		return
 	}
 	pos := len(s.top)
-	for pos > 0 && columnVectorGraphSearchCandidateLess(candidate, s.top[pos-1]) {
+	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
 		pos--
 	}
 	if pos >= limit {
@@ -364,7 +373,7 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 	s.top[pos] = candidate
 }
 
-func columnVectorGraphSearchCandidateLess(left, right columnVectorGraphSearchCandidate) bool {
+func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchCandidate) bool {
 	if left.score == right.score {
 		return left.ordinal < right.ordinal
 	}
