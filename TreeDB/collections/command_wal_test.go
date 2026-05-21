@@ -1307,13 +1307,16 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotReserveBeforeMutation(t 
 	defer releaseMutation()
 
 	updateDone := make(chan error, 1)
+	updateStarted := make(chan struct{})
 	go func() {
+		close(updateStarted)
 		_, _, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
 			Key:   "city",
 			Value: mustBSONRawValue(t, "sea"),
 		}})
 		updateDone <- err
 	}()
+	<-updateStarted
 
 	deadline := time.Now().Add(100 * time.Millisecond)
 	for time.Now().Before(deadline) {
@@ -1333,9 +1336,12 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotReserveBeforeMutation(t 
 		t.Fatalf("newCollectionUpdateCommandWALIntent: %v", err)
 	}
 	publishDone := make(chan error, 1)
+	publishStarted := make(chan struct{})
 	go func() {
+		close(publishStarted)
 		publishDone <- col.publishCommandWALNoop(intent, false)
 	}()
+	<-publishStarted
 	select {
 	case err := <-publishDone:
 		if err != nil {
@@ -1547,14 +1553,16 @@ func TestCollectionCommandWALPublishCoordinatorDoesNotHoldCoordinatorWhileDraini
 
 	col.writeDomain.mu.Lock()
 	drainDone := make(chan error, 1)
+	drainStarted := make(chan struct{})
 	go func() {
+		close(drainStarted)
 		unlock, lockErr := mgr.lockCommandWALPublishCoordinator()
 		if lockErr == nil {
 			unlock()
 		}
 		drainDone <- lockErr
 	}()
-	time.Sleep(25 * time.Millisecond)
+	<-drainStarted
 	select {
 	case err := <-drainDone:
 		col.writeDomain.mu.Unlock()
@@ -1701,9 +1709,12 @@ func TestCollectionCommandWALPublishWaitsForStageReservation(t *testing.T) {
 		t.Fatalf("newCollectionUpdateCommandWALIntent: %v", err)
 	}
 	publishDone := make(chan error, 1)
+	publishStarted := make(chan struct{})
 	go func() {
+		close(publishStarted)
 		publishDone <- col.publishCommandWALNoop(intent, false)
 	}()
+	<-publishStarted
 	select {
 	case err := <-publishDone:
 		t.Fatalf("publish completed while staged owner had no pending LSN: %v", err)

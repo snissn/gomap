@@ -147,9 +147,12 @@ func (c *Collection) lockCommandWALStageCoordinator() (func(), error) {
 				cond.Broadcast()
 			}
 			coord.mu.Unlock()
+			var unlockOnce sync.Once
 			return func() {
-				domain.finishCommandWALStageReservation()
-				domain.clearCommandWALCoordinatorOwnerIfNoPending()
+				unlockOnce.Do(func() {
+					domain.finishCommandWALStageReservation()
+					domain.clearCommandWALCoordinatorOwnerIfNoPending()
+				})
 			}, nil
 		}
 		if collectionCommandWALDomainStageReserved(owner) {
@@ -201,13 +204,14 @@ func (domain *collectionWriteDomain) finishCommandWALStageReservation() {
 		return
 	}
 	coord.mu.Lock()
+	defer coord.mu.Unlock()
 	if next := domain.commandWALStageReservations.Add(-1); next < 0 {
 		domain.commandWALStageReservations.Store(0)
+		panic("collections: command WAL stage reservation underflow")
 	}
 	if cond := coord.condLocked(); cond != nil {
 		cond.Broadcast()
 	}
-	coord.mu.Unlock()
 }
 
 func (coord *collectionCommandWALCoordinator) waitForCommandWALStageReservationLocked(owner *collectionWriteDomain) {

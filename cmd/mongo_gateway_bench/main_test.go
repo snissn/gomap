@@ -2563,6 +2563,17 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	}
 
 	out.Reset()
+	result.Target = "mongo"
+	result.TreeDBProfile = ""
+	result.TreeDBCommandWAL = true
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult mongo text: %v", err)
+	}
+	if strings.Contains(out.String(), "command_wal=") {
+		t.Fatalf("mongo text output included TreeDB command_wal line: %q", out.String())
+	}
+
+	out.Reset()
 	if err := writeResult(&out, "json", result); err != nil {
 		t.Fatalf("writeResult json: %v", err)
 	}
