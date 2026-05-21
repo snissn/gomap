@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -214,9 +215,9 @@ func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing
 	}
 
 	rebuildPayload := make([]byte, collectionRebuildVectorIndexPayloadHeaderSize)
-	binary.LittleEndian.PutUint16(rebuildPayload[:collectionRebuildVectorIndexCollectionLenOffset], collectionRebuildVectorIndexPayloadVersion)
-	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexCollectionLenOffset:collectionRebuildVectorIndexIndexLenOffset], ^uint32(0))
-	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexIndexLenOffset:collectionRebuildVectorIndexPayloadHeaderSize], 1)
+	binary.LittleEndian.PutUint16(rebuildPayload[:collectionRebuildVectorIndexVersionEnd], collectionRebuildVectorIndexPayloadVersion)
+	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexCollectionLenStart:collectionRebuildVectorIndexCollectionLenEnd], ^uint32(0))
+	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexIndexLenStart:collectionRebuildVectorIndexIndexLenEnd], 1)
 	if _, err := DecodeCollectionRebuildVectorIndexPayload(rebuildPayload); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("DecodeCollectionRebuildVectorIndexPayload huge length error=%v, want ErrCorrupt", err)
 	}
@@ -364,11 +365,11 @@ func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
 	if decoded.Collection != "users" || decoded.IndexName != "embedding_graph" {
 		t.Fatalf("decoded collection rebuild payload=%+v", decoded)
 	}
-	if _, err := EncodeCollectionRebuildVectorIndexPayload("", "embedding_graph"); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty collection error=%v, want ErrCorrupt", err)
+	if _, err := EncodeCollectionRebuildVectorIndexPayload("", "embedding_graph"); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "collection name") {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty collection error=%v, want ErrCorrupt with collection name", err)
 	}
-	if _, err := EncodeCollectionRebuildVectorIndexPayload("users", ""); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty index error=%v, want ErrCorrupt", err)
+	if _, err := EncodeCollectionRebuildVectorIndexPayload("users", ""); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "index name") {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty index error=%v, want ErrCorrupt with index name", err)
 	}
 }
 
