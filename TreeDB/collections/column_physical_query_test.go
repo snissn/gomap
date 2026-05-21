@@ -2283,6 +2283,16 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 		maxAllocs float64
 	}{
 		{
+			name:      "q1_dictionary_codes",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
+			maxAllocs: 93,
+		},
+		{
+			name:      "q2_dictionary_codes",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
+			maxAllocs: 113,
+		},
+		{
 			name:      "q3_int64_values",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
 			maxAllocs: 90,
