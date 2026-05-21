@@ -96,6 +96,7 @@ type columnPhysicalScanSnapshotView struct {
 	AssetRefs          []columnManifestAssetRefForScan
 	AggregateMetadata  []columnManifestAggregateMetadataSnapshot
 	DictionaryCodes    []columnManifestDictionaryCodesSnapshot
+	Int64Values        []columnManifestInt64ValuesSnapshot
 	MutationParts      int
 	Diagnostics        columnPhysicalScanDiagnostics
 	ColumnAssetRootDir string
@@ -276,6 +277,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 	view.AssetRefs = refs
 	view.AggregateMetadata = manifest.AggregateMetadata
 	view.DictionaryCodes = manifest.DictionaryCodes
+	view.Int64Values = manifest.Int64Values
 	view.MutationParts = mutationParts
 	view.Diagnostics = diag
 	return view, nil
@@ -438,7 +440,8 @@ func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) 
 		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) &&
 			!bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) &&
 			!bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) &&
-			!bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) {
+			!bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) &&
+			!bytes.HasPrefix(key, columnManifestInt64ValuesRecordPrefixBytes) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -524,7 +527,8 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 		if !bytes.Equal(key, columnManifestHeaderRecordKeyBytes) &&
 			!bytes.HasPrefix(key, columnManifestPartRecordPrefixBytes) &&
 			!bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) &&
-			!bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) {
+			!bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) &&
+			!bytes.HasPrefix(key, columnManifestInt64ValuesRecordPrefixBytes) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -661,6 +665,34 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
+		case bytes.HasPrefix(key, columnManifestInt64ValuesRecordPrefixBytes):
+			if !sawHeader {
+				iter.Next()
+				continue
+			}
+			keyGeneration, _, _, err := columnManifestInt64ValuesKeyFromRecordKey(key)
+			if err != nil {
+				return columnManifestPlannerCapabilitiesForScan{}, err
+			}
+			if keyGeneration > header.generation {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", keyGeneration, header.generation)
+			}
+			values, err := decodeColumnManifestInt64ValuesRecord(key, value)
+			if err != nil {
+				return columnManifestPlannerCapabilitiesForScan{}, err
+			}
+			if values.AssetRef.Namespace != cfg.AssetManager.Namespace {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values namespace=%q want %q", values.AssetRef.Namespace, cfg.AssetManager.Namespace)
+			}
+			partNamespace, ok := livePartNamespaces[[2]uint64{values.AssetRef.Generation, values.AssetRef.PartID}]
+			if !ok {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", values.AssetRef.Generation, values.AssetRef.PartID)
+			}
+			if values.AssetRef.Namespace != partNamespace {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values namespace=%q does not match part namespace=%q", values.AssetRef.Namespace, partNamespace)
+			}
+			writeHashBytes(&d, key)
+			writeHashBytes(&d, value)
 		}
 		iter.Next()
 	}
@@ -767,6 +799,14 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 			if dictionaryGeneration <= generation {
 				active = append(active, record)
 			}
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			valuesGeneration, _, _, err := columnManifestInt64ValuesKeyFromRecordKey(record.key)
+			if err != nil {
+				return nil, err
+			}
+			if valuesGeneration <= generation {
+				active = append(active, record)
+			}
 		}
 	}
 	return active, nil
@@ -823,6 +863,17 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			}
 			if dictionaryGeneration > snapshot.Generation {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", dictionaryGeneration, snapshot.Generation)
+			}
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			if !sawHeader {
+				continue
+			}
+			valuesGeneration, _, _, err := columnManifestInt64ValuesKeyFromRecordKey(record.key)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			if valuesGeneration > snapshot.Generation {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", valuesGeneration, snapshot.Generation)
 			}
 		}
 	}
@@ -907,6 +958,7 @@ func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (C
 	offset64 := cur.u64()
 	length64 := cur.u64()
 	checksum64 := cur.u64()
+	rows64 := cur.u64()
 	_ = cur.u64() // bytes; scan only needs the durable asset ref.
 	_ = cur.u64() // publish_id
 	_ = cur.u64() // generation_id
@@ -928,6 +980,9 @@ func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (C
 	}
 	if checksum64 > uint64(math.MaxUint32) {
 		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part checksum overflows uint32")
+	}
+	if rows64 > uint64(maxCollectionInt) {
+		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part rows overflows int")
 	}
 	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) {
 		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part offsets or byte counts overflow int64")

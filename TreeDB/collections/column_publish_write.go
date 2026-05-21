@@ -516,6 +516,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	prepared.ColumnPayloadBytes = summary.PayloadBytes
 	prepared.Assets = []ColumnPreparedAsset{{
 		Ref:          ref,
+		Rows:         summary.RowCount,
 		Bytes:        ref.Length,
 		PublishID:    hookInput.AppliedCommandLSN,
 		GenerationID: generation,
@@ -541,10 +542,37 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
 				Ref:          dictionaryRef,
+				Rows:         summary.RowCount,
 				Bytes:        dictionaryRef.Length,
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       dictionary.ColumnName,
+			})
+		}
+		int64Assets, err := buildColumnInt64ValuesAssets(hookInput.ColumnStore, rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		for _, values := range int64Assets {
+			encodedValues, err := encodeColumnInt64ValuesAsset(values)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			valuesRef, err := writeColumnInt64ValuesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedValues, generation, partID)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if valuesRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || valuesRef.Kind != ColumnAssetKindTCS1Int64Values ||
+				valuesRef.Generation != generation || valuesRef.PartID != partID || valuesRef.Length != int64(len(encodedValues)) {
+				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid int64 values asset ref %+v", valuesRef)
+			}
+			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
+				Ref:          valuesRef,
+				Rows:         summary.RowCount,
+				Bytes:        valuesRef.Length,
+				PublishID:    hookInput.AppliedCommandLSN,
+				GenerationID: generation,
+				Reason:       values.ColumnName,
 			})
 		}
 		for _, aggregate := range hookInput.ColumnStore.AggregateMetadata {
@@ -569,6 +597,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
 				Ref:          metadataRef,
+				Rows:         summary.RowCount,
 				Bytes:        metadataRef.Length,
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,

@@ -59,6 +59,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	DirectReduceBlocks         int
 	MetadataHits               int
 	DictionaryCodeHits         int
+	Int64ValueHits             int
 	ScheduledGranules          int
 	SkippedGranules            int
 	RowsScanned                int
@@ -104,6 +105,7 @@ type ColumnPhysicalQueryRunner struct {
 	readCache    columnPhysicalAssetReadCache
 	dictCount    *columnDictionaryCodeGroupCountRunner
 	dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
+	int64Hour    *columnInt64ValueHourCountRunner
 	metadata     *columnAggregateMetadataRunner
 	closed       bool
 }
@@ -207,6 +209,11 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		_ = readCache.close()
 		return nil, err
 	}
+	int64Hour, err := prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
+	if err != nil {
+		_ = readCache.close()
+		return nil, err
+	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
 		collection:   c,
@@ -217,6 +224,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		readCache:    readCache,
 		dictCount:    dictCount,
 		dictDistinct: dictDistinct,
+		int64Hour:    int64Hour,
 		metadata:     metadata,
 	}, nil
 }
@@ -252,6 +260,9 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	}
 	if r.dictDistinct != nil {
 		return r.dictDistinct.run(r.view, r.req), nil
+	}
+	if r.int64Hour != nil {
+		return r.int64Hour.run(r.view, r.req), nil
 	}
 	if r.metadata != nil {
 		return r.metadata.run(r.view, r.req), nil
@@ -558,6 +569,9 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	if result, ok, err := c.runColumnPhysicalQueryDictionaryCodesInSnapshotView(view, req); ok {
 		return result, err
 	}
+	if result, ok, err := c.runColumnPhysicalQueryInt64ValuesInSnapshotView(view, req); ok {
+		return result, err
+	}
 	if result, ok, err := c.runColumnPhysicalQueryDirectInSnapshotView(view, req, 0, 0, nil); ok {
 		if err != nil {
 			if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
@@ -626,6 +640,31 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
 	result.Diagnostics.DictionaryCodeHits = result.Diagnostics.DecodedBlocks
+	return result, true, nil
+}
+
+func (c *Collection) runColumnPhysicalQueryInt64ValuesInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
+	if req.AggregateMetadataName != "" || view.MutationParts != 0 {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	readCache.returnViews = true
+	defer func() { _ = readCache.close() }()
+
+	hour, err := prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	if hour == nil {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
+	result := hour.run(view, req)
+	result.Diagnostics.SegmentFileCacheHits = readCache.hits
+	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	result.Diagnostics.Int64ValueHits = result.Diagnostics.DecodedBlocks
 	return result, true, nil
 }
 
@@ -750,6 +789,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.DirectReduceBlocks += right.DirectReduceBlocks
 	left.MetadataHits += right.MetadataHits
 	left.DictionaryCodeHits += right.DictionaryCodeHits
+	left.Int64ValueHits += right.Int64ValueHits
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
 	left.RowsScanned += right.RowsScanned

@@ -444,8 +444,8 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 
 func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	for idx, ref := range refs {
-		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes {
-			return fmt.Errorf("collections: column asset rewrite supports only physical part, aggregate metadata, or dictionary code refs: ref %d kind %q", idx, ref.Kind)
+		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values {
+			return fmt.Errorf("collections: column asset rewrite supports only physical part, aggregate metadata, dictionary code, or int64 value refs: ref %d kind %q", idx, ref.Kind)
 		}
 	}
 	return nil
@@ -477,7 +477,8 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 		isPart := bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes)
 		isMetadata := bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes)
 		isDictionary := bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes)
-		if !isPart && !isMetadata && !isDictionary {
+		isInt64Values := bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes)
+		if !isPart && !isMetadata && !isDictionary && !isInt64Values {
 			continue
 		}
 		oldRef, offsets, err := columnAssetRewriteManifestPartRefForPatch(record.value, expectedNamespace)
@@ -493,8 +494,10 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 		} else {
 			if isMetadata {
 				keyGeneration, keyPartID, _, err = columnManifestAggregateMetadataKeyFromRecordKey(record.key)
-			} else {
+			} else if isDictionary {
 				keyGeneration, keyPartID, _, err = columnManifestDictionaryCodesKeyFromRecordKey(record.key)
+			} else {
+				keyGeneration, keyPartID, _, err = columnManifestInt64ValuesKeyFromRecordKey(record.key)
 			}
 			if err != nil {
 				return nil, 0, err
@@ -557,6 +560,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	length64 := cur.u64()
 	offsets.checksum = cur.pos
 	checksum64 := cur.u64()
+	rows64 := cur.u64()
 	bytes64 := cur.u64()
 	_ = cur.u64() // publish_id; rewrite preserves the original field bytes.
 	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
@@ -568,7 +572,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: trailing bytes in column manifest part record")
 	}
 	kind := ColumnAssetKind(string(kindBytes))
-	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes {
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes && kind != ColumnAssetKindTCS1Int64Values {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
@@ -579,6 +583,9 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	}
 	if checksum64 > uint64(math.MaxUint32) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part checksum overflows uint32")
+	}
+	if rows64 > uint64(maxCollectionInt) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part rows overflows int")
 	}
 	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || bytes64 > uint64(math.MaxInt64) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part offsets or byte counts overflow int64")
@@ -593,7 +600,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Bytes: int64(bytes64)}); err != nil {
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64)}); err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
 	}
 	return ref, offsets, nil

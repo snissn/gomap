@@ -364,9 +364,9 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			if got, want := parallel.Diagnostics.ScheduledGranules, serial.Diagnostics.ScheduledGranules; got != want {
 				t.Fatalf("parallel scheduled granules=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
 			}
-			if tc.req.Kind == ColumnPhysicalQueryGroupCount || tc.req.Kind == ColumnPhysicalQueryGroupCountDistinct {
+			if tc.req.Kind == ColumnPhysicalQueryGroupCount || tc.req.Kind == ColumnPhysicalQueryGroupCountDistinct || tc.req.Kind == ColumnPhysicalQueryHourCount {
 				if serial.Diagnostics.PhysicalBytesScanned <= 0 || serial.Diagnostics.PhysicalBytesScanned >= parallel.Diagnostics.PhysicalBytesScanned {
-					t.Fatalf("serial dictionary-sidecar bytes=%d want below parallel TCPA bytes=%d serial=%+v parallel=%+v", serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics, parallel.Diagnostics)
+					t.Fatalf("serial sidecar bytes=%d want below parallel TCPA bytes=%d serial=%+v parallel=%+v", serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics, parallel.Diagnostics)
 				}
 			} else if parallel.Diagnostics.PhysicalBytesScanned != serial.Diagnostics.PhysicalBytesScanned {
 				t.Fatalf("parallel bytes=%d want serial %d diagnostics=%+v", parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics)
@@ -1373,7 +1373,7 @@ func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("RunColumnPhysicalQuery corrupt asset err=%v want checksum failure", err)
 	}
 	if got, err := reopened.Get([]byte("e1")); err == nil || !strings.Contains(err.Error(), "checksum") || got != nil {
@@ -1394,7 +1394,7 @@ func TestColumnStoreQueryAndReconstructionFailClosedTruncatedAssetM13C(t *testin
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("RunColumnPhysicalQuery truncated asset err=%v want io.ErrUnexpectedEOF", err)
 	}
 	if got, err := reopened.Get([]byte("e1")); !errors.Is(err, io.ErrUnexpectedEOF) || got != nil {
@@ -1997,6 +1997,40 @@ func TestColumnPhysicalQuerySerialDictionarySidecarParityM1634(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQuerySerialInt64ValueSidecarParityM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
+	wantHash := columnPhysicalQueryReferenceHashM13B("q3", events)
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}
+	result, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B("q3", result.Groups)); got != wantHash {
+		t.Fatalf("serial int64 sidecar q3 hash=%d want %d groups=%+v", got, wantHash, result.Groups)
+	}
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+		t.Fatalf("serial int64 sidecar diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+	}
+	if result.Diagnostics.ProjectedColumns != 1 {
+		t.Fatalf("serial int64 sidecar projected columns=%d want 1", result.Diagnostics.ProjectedColumns)
+	}
+	if result.Diagnostics.Int64ValueHits == 0 || result.Diagnostics.Int64ValueHits != result.Diagnostics.ScheduledGranules {
+		t.Fatalf("serial int64 sidecar hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.Int64ValueHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+	}
+	if result.Diagnostics.DictionaryCodeHits != 0 {
+		t.Fatalf("serial int64 sidecar dictionary hits=%d want 0 diagnostics=%+v", result.Diagnostics.DictionaryCodeHits, result.Diagnostics)
+	}
+	if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+		t.Fatalf("serial int64 sidecar physical bytes=%d want int64 sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
+	}
+	if result.Diagnostics.SegmentFileCacheMisses == 0 {
+		t.Fatalf("serial int64 sidecar diagnostics=%+v want one-shot sidecar read misses accounted", result.Diagnostics)
+	}
+}
+
 func TestColumnPhysicalQueryRunnerDistinctSidecarSkipsIdenticalColumnsM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(128)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
@@ -2105,7 +2139,8 @@ func TestColumnPhysicalQueryRunnerAggregateMetadataParityAndAllocationM1634(t *t
 }
 
 func TestColumnPhysicalQueryDictionaryCodesAreManifestReachableM1634(t *testing.T) {
-	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(128))
+	events := columnPhysicalQueryFixtureEventsM13B(128)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
 	defer closeFn()
 	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
 	if closeView != nil {
@@ -2120,6 +2155,9 @@ func TestColumnPhysicalQueryDictionaryCodesAreManifestReachableM1634(t *testing.
 	if len(view.DictionaryCodes) != 2 {
 		t.Fatalf("dictionary code refs=%d want kind+did sidecars", len(view.DictionaryCodes))
 	}
+	if len(view.Int64Values) != 1 {
+		t.Fatalf("int64 value refs=%d want time_us sidecar", len(view.Int64Values))
+	}
 	byColumn := make(map[string]ColumnAssetRef, len(view.DictionaryCodes))
 	for _, sidecar := range view.DictionaryCodes {
 		byColumn[sidecar.ColumnName] = sidecar.AssetRef
@@ -2132,6 +2170,88 @@ func TestColumnPhysicalQueryDictionaryCodesAreManifestReachableM1634(t *testing.
 	}
 	if byColumn["kind"].Length == 0 || byColumn["did"].Length == 0 {
 		t.Fatalf("dictionary sidecars missing expected columns: %+v", byColumn)
+	}
+	if view.Int64Values[0].ColumnName != "time_us" || view.Int64Values[0].AssetRef.Kind != ColumnAssetKindTCS1Int64Values {
+		t.Fatalf("int64 sidecar=%+v want time_us %q", view.Int64Values[0], ColumnAssetKindTCS1Int64Values)
+	}
+	if view.Int64Values[0].Rows != len(events) {
+		t.Fatalf("int64 sidecar rows=%d want %d", view.Int64Values[0].Rows, len(events))
+	}
+	if view.Int64Values[0].AssetRef.Generation != view.AssetRefs[0].Ref.Generation || view.Int64Values[0].AssetRef.PartID != view.AssetRefs[0].Ref.PartID {
+		t.Fatalf("int64 sidecar ref=%+v want same generation/part as %+v", view.Int64Values[0].AssetRef, view.AssetRefs[0].Ref)
+	}
+}
+
+func TestColumnInt64ValuesAssetCodecRejectsCorruptionM1634(t *testing.T) {
+	normalized, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	normalized.RecoveryAuthoritativeAppliedCommandLSN = 42
+	rows := []columnDeclaredRow{
+		{ID: []byte("e1"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+			{Type: ColumnStoreValueString, Present: true, String: "share"},
+			{Type: ColumnStoreValueString, Present: true, String: "did_a"},
+		}},
+		{ID: []byte("e2"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: -2},
+			{Type: ColumnStoreValueString, Present: true, String: "like"},
+			{Type: ColumnStoreValueString, Present: true, String: "did_b"},
+		}},
+		{ID: []byte("e3"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 3},
+			{Type: ColumnStoreValueString, Present: true, String: "share"},
+			{Type: ColumnStoreValueString, Present: true, String: "did_c"},
+		}},
+	}
+	assets, err := buildColumnInt64ValuesAssets(*normalized, rows, "events", normalized.AssetManager.Namespace, 7, 3, 42)
+	if err != nil {
+		t.Fatalf("buildColumnInt64ValuesAssets: %v", err)
+	}
+	if len(assets) != 1 || assets[0].ColumnName != "time_us" {
+		t.Fatalf("assets=%+v want one time_us int64 sidecar", assets)
+	}
+	raw, err := encodeColumnInt64ValuesAsset(assets[0])
+	if err != nil {
+		t.Fatalf("encodeColumnInt64ValuesAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1Int64Values,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: assets[0].Generation,
+		PartID:     assets[0].PartID,
+		Length:     int64(len(raw)),
+		Checksum:   page.Checksum(raw),
+	}
+	decoded, err := decodeColumnInt64ValuesAsset(raw, ref, *normalized, "events", "time_us", true)
+	if err != nil {
+		t.Fatalf("decodeColumnInt64ValuesAsset: %v", err)
+	}
+	if got, want := decoded.Values, []int64{1, -2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("values=%v want %v", got, want)
+	}
+
+	corrupt := append([]byte(nil), raw...)
+	corrupt[len(corrupt)-1] ^= 0xff
+	if _, err := decodeColumnInt64ValuesAsset(corrupt, ref, *normalized, "events", "time_us", true); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("checksum corruption err=%v want checksum failure", err)
+	}
+	mismatchedChecksumRef := ref
+	mismatchedChecksumRef.Checksum ^= 1
+	if _, err := decodeColumnInt64ValuesAsset(raw, mismatchedChecksumRef, *normalized, "events", "time_us", false); err != nil {
+		t.Fatalf("skip-checksum decode err=%v want valid raw bytes to decode despite ref checksum mismatch", err)
+	}
+
+	wrongColumnRef := ref
+	if _, err := decodeColumnInt64ValuesAsset(raw, wrongColumnRef, *normalized, "events", "kind", true); err == nil || !strings.Contains(err.Error(), "column=") {
+		t.Fatalf("wrong column err=%v want column validation failure", err)
+	}
+
+	futureLSNCfg := *normalized
+	futureLSNCfg.RecoveryAuthoritativeAppliedCommandLSN = 41
+	if _, err := decodeColumnInt64ValuesAsset(raw, ref, futureLSNCfg, "events", "time_us", true); err == nil || !strings.Contains(err.Error(), "newer than recovery") {
+		t.Fatalf("future lsn err=%v want recovery-authoritative LSN failure", err)
 	}
 }
 
