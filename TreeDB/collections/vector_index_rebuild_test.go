@@ -83,6 +83,30 @@ func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T)
 	}
 }
 
+func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testing.T) {
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 0, nil)
+	defer func() { _ = d.Close() }()
+
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex empty collection: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) == 0 || frames[len(frames)-1].Kind != commitlog.CommandKindCollectionRebuildVectorIndex {
+		t.Fatalf("last command WAL frame=%+v, want vector-index rebuild", frames)
+	}
+
+	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	if graph.RowCount != 0 {
+		t.Fatalf("empty graph row count=%d want 0", graph.RowCount)
+	}
+	if len(scanned) != 0 {
+		t.Fatalf("empty graph scanned rows=%d want 0", len(scanned))
+	}
+	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
+}
+
 func TestColumnGraphRebuildVectorIndexFailsClosedOnZeroVectorV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

@@ -68,6 +68,36 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphPhysicalAssetWriteRejectsInvalidInputBeforeSegmentAllocationV2A(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", *baseCfg, testColumnGraphVectorIndexDefinitionV2A())
+	if err != nil {
+		t.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+
+	if _, err := writeColumnVectorGraphPhysicalAssetToManager(root, graphCfg, nil, 7, 1); err == nil || !strings.Contains(err.Error(), "payload is empty") {
+		t.Fatalf("writeColumnVectorGraphPhysicalAssetToManager err=%v want empty-payload failure", err)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(root, graphCfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	entries, err := os.ReadDir(namespace.SegmentDir)
+	if err == nil {
+		if len(entries) != 0 {
+			t.Fatalf("segment files after rejected write=%d want 0", len(entries))
+		}
+		return
+	}
+	if !os.IsNotExist(err) {
+		t.Fatalf("ReadDir segment dir err=%v want missing or empty", err)
+	}
+}
+
 func TestColumnVectorGraphManifestRecordsParticipateInIdentityWithoutRowLaneCountsV2A(t *testing.T) {
 	cfg, input, manifest, asset := makeColumnManifestWithPartForGraphTestV2A(t)
 	graphRecord := testColumnVectorGraphManifestRecordV2A(t, cfg, testColumnGraphVectorIndexDefinitionV2A(), manifest.Identity, asset.Ref)

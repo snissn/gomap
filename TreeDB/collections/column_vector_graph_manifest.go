@@ -200,8 +200,8 @@ func validateColumnVectorGraphManifestSnapshot(snapshot columnVectorGraphManifes
 	if snapshot.BaseManifestGeneration == 0 || snapshot.BaseManifestChecksum == 0 || snapshot.BaseSchemaHash == 0 || snapshot.GraphSchemaHash == 0 {
 		return errors.New("collections: column vector graph manifest missing base or graph identity")
 	}
-	if snapshot.RowCount <= 0 {
-		return errors.New("collections: column vector graph manifest row count must be positive")
+	if snapshot.RowCount < 0 {
+		return errors.New("collections: column vector graph manifest row count must be non-negative")
 	}
 	if err := validateColumnAssetRefForPlan(snapshot.AssetRef); err != nil {
 		return err
@@ -261,9 +261,6 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, err
 	}
-	if len(rows) == 0 {
-		return columnVectorGraphPreparedPhysicalAsset{}, errors.New("collections: column vector graph physical asset requires rows")
-	}
 	declared := make([]columnDeclaredRow, len(rows))
 	for i, row := range rows {
 		if len(row.ID) == 0 {
@@ -309,6 +306,12 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 }
 
 func writeColumnVectorGraphPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	if len(payload) == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
+	}
+	if generation == 0 || partID == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
+	}
 	appender, err := newNextColumnPhysicalAssetSegmentAppender(rootDir, cfg)
 	if err != nil {
 		return ColumnAssetRef{}, err

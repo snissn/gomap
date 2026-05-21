@@ -65,7 +65,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return c.finishRebuildVectorIndexNoopStatus(name, c.nativeVectorIndexRebuildStatus(def), nil, replay)
 	}
 	cfg := baseMeta.Options.ColumnStore
-	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
+	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
 		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
@@ -85,6 +85,18 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	rootName := collectionColumnManifestRootName(baseMeta.Name)
 	baseManifestRootID := catalog.rootID(rootName)
 	if baseManifestRootID == 0 {
+		rows, err := c.columnVectorGraphRowsFromCatalogSnapshot(snap, catalog, def)
+		_ = snap.Close()
+		if err != nil {
+			return VectorIndexStatus{}, err
+		}
+		if len(rows) == 0 {
+			return c.rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name, catalog, baseMeta, def, *cfg, baseCommitSeq, baseSystemRoot, rootName, replay)
+		}
+		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
+	}
+	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
 		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def)
 		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
@@ -115,9 +127,6 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	_ = snap.Close()
 
-	if len(rows) == 0 {
-		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q found no vector rows", name)
-	}
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -137,7 +146,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
-	updatedMeta, err := columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity)
+	updatedMeta, err := columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity, manifest.AppliedCommandLSN)
 	if err != nil {
 		return VectorIndexStatus{}, err
 	}
@@ -165,6 +174,71 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	if prepared.RowCount != len(rows) {
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
+	}
+	c.meta = updatedMeta
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return c.columnGraphVectorIndexStatus(def)
+}
+
+func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(name string, catalog *collectionCatalog, baseMeta CollectionMeta, def VectorIndexDefinition, cfg ColumnStoreConfig, baseCommitSeq, baseSystemRoot uint64, rootName string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if intent == nil {
+		status, statusErr := c.columnGraphVectorIndexStatus(def)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
+	}
+
+	rootNames := []string{rootName}
+	baseRootIDs := map[string]uint64{rootName: 0}
+	var updatedMeta CollectionMeta
+	buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
+		manifest, records, err := initialColumnVectorGraphBaseManifestForRebuild(baseMeta.Name, cfg, ctx.AppliedCommandLSN)
+		if err != nil {
+			return nil, err
+		}
+		prepared, graphRecord, nextIdentity, err := prepareColumnVectorGraphRebuildManifest(baseMeta.Name, cfg, def, manifest, records, nil, c.db.ColumnAssetRootDir())
+		if err != nil {
+			return nil, err
+		}
+		if prepared.RowCount != 0 {
+			return nil, fmt.Errorf("collections: empty column_graph rebuild prepared rows=%d want 0", prepared.RowCount)
+		}
+		deltaRecords := append(cloneColumnManifestRecords(records), graphRecord)
+		sortColumnManifestRecords(deltaRecords)
+		delta := ColumnManifestRootDelta{
+			RootName:       rootName,
+			BaseRootID:     0,
+			StoragePolicy:  cfg.ManifestRoot.StoragePolicy,
+			Identity:       nextIdentity,
+			IdentityRecord: encodeColumnManifestIdentityRecordArray(nextIdentity),
+			Records:        deltaRecords,
+		}
+		ordered, err := delta.OrderedRootDeltaPublishInput()
+		if err != nil {
+			return nil, err
+		}
+		updatedMeta, err = columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity, ctx.AppliedCommandLSN)
+		if err != nil {
+			return nil, err
+		}
+		return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
+	}
+	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if updatedMeta.Name == "" {
+			return nil, errors.New("collections: empty column_graph rebuild did not prepare updated metadata")
+		}
+		return c.buildColumnGraphRebuildSystemDeltaIterator(baseMeta, updatedMeta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+	}
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(nil, intent, buildContextDeltas, buildSystemDelta)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		return VectorIndexStatus{}, unexpectedOrderedRootCountError(baseMeta.Name, 1, len(rootIDs))
 	}
 	c.meta = updatedMeta
 	nextCatalog := cloneCatalogWithRootUpdates(catalog, updatedMeta, rootNames, rootIDs)
@@ -309,9 +383,6 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
-	if len(rows) == 0 {
-		return errors.New("collections: column vector graph adjacency requires rows")
-	}
 	degree := def.M
 	if degree <= 0 {
 		degree = defaultVectorIndexM
@@ -523,6 +594,26 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	return prepared, record, identity, nil
 }
 
+func initialColumnVectorGraphBaseManifestForRebuild(collection string, cfg ColumnStoreConfig, appliedCommandLSN uint64) (columnManifestSnapshot, []columnManifestRecord, error) {
+	encoded, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        collection,
+		ColumnStore:       cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: appliedCommandLSN,
+		Prepared: ColumnPublishPreparedAssets{
+			RowCount: 0,
+		},
+	})
+	if err != nil {
+		return columnManifestSnapshot{}, nil, err
+	}
+	manifest, err := decodeColumnManifestSnapshotForScan(encoded.Records)
+	if err != nil {
+		return columnManifestSnapshot{}, nil, err
+	}
+	return manifest, encoded.Records, nil
+}
+
 func replaceColumnVectorGraphManifestRecord(records []columnManifestRecord, generation uint64, replacement columnManifestRecord) ([]columnManifestRecord, error) {
 	active, err := activeColumnManifestRecordsForScan(records, generation)
 	if err != nil {
@@ -575,7 +666,7 @@ func nextColumnVectorGraphPartIDAfter(next, observed uint64) uint64 {
 	return observed + 1
 }
 
-func columnGraphRebuildUpdatedMeta(base CollectionMeta, identity ColumnManifestIdentity) (CollectionMeta, error) {
+func columnGraphRebuildUpdatedMeta(base CollectionMeta, identity ColumnManifestIdentity, appliedCommandLSN uint64) (CollectionMeta, error) {
 	updated := copyCollectionMeta(base)
 	if updated.Options.ColumnStore == nil || !updated.Options.ColumnStore.Enabled {
 		return CollectionMeta{}, errColumnPublishPlanRequiresEnabledColumnStore
@@ -585,6 +676,7 @@ func columnGraphRebuildUpdatedMeta(base CollectionMeta, identity ColumnManifestI
 	recovery := identity
 	cfg.ActiveManifest = &active
 	cfg.RecoveryAuthoritativeManifest = &recovery
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = appliedCommandLSN
 	updated.Options.ColumnStore = &cfg
 	return normalizeCollectionMeta(updated)
 }
