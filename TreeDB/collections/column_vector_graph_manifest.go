@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
@@ -323,9 +325,15 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		status.RebuildNeeded = true
 		return status, nil
 	}
+	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphRebuildNeeded
+		status.RebuildNeeded = true
+		return status, nil
+	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return VectorIndexStatus{}, errors.New("collections: collection db is closed")
+		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
