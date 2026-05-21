@@ -12,6 +12,9 @@ type columnVectorGraphPhysicalRowReaderOptions struct {
 	// MaxDecodedBlocks is the maximum number of decoded column blocks retained
 	// in the reader cache. Zero uses the underlying row reader default.
 	MaxDecodedBlocks int
+	// detachCatalog copies immutable catalog metadata for readers returned after
+	// their assembly snapshot closes.
+	detachCatalog bool
 }
 
 const (
@@ -60,21 +63,22 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReader(name string, opts co
 		return nil, err
 	}
 	defer func() { _ = snap.Close() }()
-	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(name, snap, opts)
-	if err != nil {
-		return nil, err
-	}
-	reader.detachCatalogFromSnapshot()
-	return reader, nil
+	opts.detachCatalog = true
+	return c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(name, snap, opts)
 }
 
 // openColumnVectorGraphPhysicalRowReaderAtSnapshot binds the returned reader to
-// the caller-owned snapshot. Callers that close the snapshot before closing the
-// reader must detach the catalog metadata first.
+// the caller-owned snapshot unless opts.detachCatalog requests an owned catalog
+// copy for readers returned after snapshot close.
 func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name string, snap *backenddb.Snapshot, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
 	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name, snap)
 	if err != nil {
 		return nil, err
+	}
+	catalog := view.Catalog
+	if opts.detachCatalog && catalog != nil {
+		catalog = catalog.copy()
+		view.Catalog = catalog
 	}
 	reader, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{
 		ProjectedColumns: []string{
@@ -91,20 +95,9 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 	return &columnVectorGraphPhysicalRowReader{
 		def:     def,
 		graph:   graph,
-		catalog: view.Catalog,
+		catalog: catalog,
 		reader:  reader,
 	}, nil
-}
-
-func (r *columnVectorGraphPhysicalRowReader) detachCatalogFromSnapshot() {
-	if r == nil || r.catalog == nil {
-		return
-	}
-	catalog := r.catalog.copy()
-	r.catalog = catalog
-	if r.reader != nil {
-		r.reader.view.Catalog = catalog
-	}
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
