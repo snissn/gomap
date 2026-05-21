@@ -167,6 +167,9 @@ func BenchmarkColumnPhysicalFixedWidthEndianDecodeV1(b *testing.B) {
 		b.Run(fmt.Sprintf("float32_%dd/little_endian_decode_copy", dims), func(b *testing.B) {
 			benchmarkFloat32FixedWidthDecodeCopy(b, littleEndianRaw, dims, appendFloat32FixedWidthLittleEndianForBenchmark)
 		})
+		b.Run(fmt.Sprintf("float32_%dd/little_endian_direct_set_copy", dims), func(b *testing.B) {
+			benchmarkFloat32FixedWidthDecodeCopy(b, littleEndianRaw, dims, appendFloat32FixedWidthLittleEndianDirectSetForBenchmark)
+		})
 		b.Run(fmt.Sprintf("float32_%dd/little_endian_direct_view_setup", dims), func(b *testing.B) {
 			benchmarkFloat32FixedWidthDirectViewSetup(b, littleEndianRaw, dims)
 		})
@@ -396,6 +399,24 @@ func appendFloat32FixedWidthLittleEndianForBenchmark(dst []float32, raw []byte) 
 		dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)
 		pos += 4
 	}
+	return dst
+}
+
+func appendFloat32FixedWidthLittleEndianDirectSetForBenchmark(dst []float32, raw []byte) []float32 {
+	requireColumnPhysicalFixedWidth4ForBenchmark(raw)
+	if !columnPhysicalNativeLittleEndian {
+		return appendFloat32FixedWidthLittleEndianForBenchmark(dst, raw)
+	}
+	base := len(dst)
+	need := base + len(raw)/4
+	if cap(dst) < need {
+		next := make([]float32, need)
+		copy(next, dst)
+		dst = next
+	} else {
+		dst = dst[:need]
+	}
+	columnPhysicalCopyLittleEndianFloat32Bytes(dst[base:need], raw)
 	return dst
 }
 

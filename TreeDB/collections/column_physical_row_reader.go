@@ -5,11 +5,17 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"unsafe"
 )
 
 const defaultColumnPhysicalRowReaderMaxDecodedBlocks = 4
 
 var errColumnPhysicalRowOrdinalOutOfBounds = errors.New("physical column row ordinal outside row_count")
+
+var columnPhysicalNativeLittleEndian = func() bool {
+	var value uint16 = 1
+	return *(*byte)(unsafe.Pointer(&value)) == 1
+}()
 
 type columnPhysicalRowReaderOptions struct {
 	ProjectedColumns  []string
@@ -737,6 +743,11 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []f
 	if pos < end {
 		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
 	}
+	if littleEndian && columnPhysicalNativeLittleEndian {
+		columnPhysicalCopyLittleEndianFloat32Bytes(dst[base:need], raw[pos:end])
+		c.pos = end
+		return dst, nil
+	}
 	i := base
 	if littleEndian {
 		for ; i+4 <= need; i += 4 {
@@ -767,6 +778,17 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []f
 	}
 	c.pos = end
 	return dst, nil
+}
+
+func columnPhysicalCopyLittleEndianFloat32Bytes(dst []float32, raw []byte) {
+	if len(raw) == 0 {
+		return
+	}
+	// raw may be byte-unaligned inside a manifest row. Copying into the aligned
+	// scratch []float32 backing store avoids per-element byte assembly without
+	// changing the row reader's scratch-aliasing contract.
+	dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst))), len(raw))
+	copy(dstBytes, raw)
 }
 
 func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
