@@ -14,8 +14,10 @@ import (
 const columnVectorGraphNeighborInsertionLimit = 32
 
 // RebuildVectorIndex rebuilds the named vector index through the collection
-// product lifecycle. V2A only builds and publishes physical column graph assets;
-// it does not load or search a decoded in-memory graph.
+// product lifecycle. It flushes buffered writes, holds the collection mutation
+// lock, and scans a consistent collection snapshot while publishing new roots.
+// V2A only builds and publishes physical column graph assets; it does not load
+// or search a decoded in-memory graph.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	return c.rebuildVectorIndexWithCommandWALIntent(name, nil)
 }
@@ -143,10 +145,11 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		buildContextDeltas := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
 			var deltaRecords []columnManifestRecord
 			var nextIdentity ColumnManifestIdentity
-			prepared, deltaRecords, nextIdentity, err = prepareColumnVectorGraphRebuildManifest(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir())
-			if err != nil {
-				return nil, err
+			preparedAsset, preparedRecords, preparedIdentity, prepareErr := prepareColumnVectorGraphRebuildManifest(baseMeta.Name, *cfg, baseMeta.VectorIndexes, def, manifest, records, ctx.AppliedCommandLSN, rows, c.db.ColumnAssetRootDir())
+			if prepareErr != nil {
+				return nil, prepareErr
 			}
+			prepared, deltaRecords, nextIdentity = preparedAsset, preparedRecords, preparedIdentity
 			if prepared.RowCount != len(rows) {
 				return nil, fmt.Errorf("collections: column_graph rebuild row count changed rows=%d prepared=%d", len(rows), prepared.RowCount)
 			}
@@ -162,10 +165,11 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 			if err != nil {
 				return nil, err
 			}
-			updatedMeta, err = columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity, ctx.AppliedCommandLSN)
-			if err != nil {
-				return nil, err
+			updated, metaErr := columnGraphRebuildUpdatedMeta(baseMeta, nextIdentity, ctx.AppliedCommandLSN)
+			if metaErr != nil {
+				return nil, metaErr
 			}
+			updatedMeta = updated
 			return []backenddb.OrderedRootDeltaPublishInput{ordered}, nil
 		}
 		buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -428,8 +432,12 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 	if degree <= 0 {
 		degree = defaultVectorIndexM
 	}
-	if degree > len(rows)-1 {
-		degree = len(rows) - 1
+	maxDegree := len(rows) - 1
+	if maxDegree < 0 {
+		maxDegree = 0
+	}
+	if degree > maxDegree {
+		degree = maxDegree
 	}
 	for i := range rows {
 		if len(rows[i].Vector) != def.Dimensions {
