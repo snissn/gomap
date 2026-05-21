@@ -312,8 +312,8 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float3
 		if err != nil {
 			return err
 		}
-		if math.IsNaN(score) {
-			return fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is NaN", r.def.Name, ordinal)
+		if math.IsNaN(score) || math.IsInf(score, 0) {
+			return fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", r.def.Name, ordinal)
 		}
 		stats.Candidates++
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
