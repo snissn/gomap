@@ -577,15 +577,17 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 
 func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) columnManifestScanSidecarFilter {
 	if req.AggregateMetadataName != "" {
-		return columnManifestScanSidecarFilter{AggregateMetadata: true}
+		return columnManifestScanSidecarFilter{AggregateMetadata: true, AggregateMetadataName: req.AggregateMetadataName}
 	}
 	switch req.Kind {
-	case ColumnPhysicalQueryGroupCount, ColumnPhysicalQueryGroupCountDistinct:
-		return columnManifestScanSidecarFilter{DictionaryCodes: true}
+	case ColumnPhysicalQueryGroupCount:
+		return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn}
+	case ColumnPhysicalQueryGroupCountDistinct:
+		return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, DictionaryColumn2: req.DistinctColumn}
 	case ColumnPhysicalQueryHourCount:
-		return columnManifestScanSidecarFilter{Int64Values: true}
+		return columnManifestScanSidecarFilter{Int64Values: true, Int64Column: req.ValueColumn}
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
-		return columnManifestScanSidecarFilter{DictionaryCodes: true, Int64Values: true}
+		return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, Int64Values: true, Int64Column: req.ValueColumn}
 	default:
 		return columnManifestScanNoSidecars()
 	}

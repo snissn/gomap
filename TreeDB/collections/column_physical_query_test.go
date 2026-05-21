@@ -2334,32 +2334,32 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 		{
 			name:      "q1_dictionary_codes",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
-			maxAllocs: 26,
+			maxAllocs: 24,
 		},
 		{
 			name:      "q2_dictionary_codes",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
-			maxAllocs: 45,
+			maxAllocs: 43,
 		},
 		{
 			name:      "q3_int64_values",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
-			maxAllocs: 14,
+			maxAllocs: 13,
 		},
 		{
 			name:      "q4a_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 42,
+			maxAllocs: 39,
 		},
 		{
 			name:      "q4b_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 42,
+			maxAllocs: 39,
 		},
 		{
 			name:      "q5_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 43,
+			maxAllocs: 40,
 		},
 	}
 	for _, tc := range tests {
@@ -2435,7 +2435,7 @@ func TestColumnPhysicalQueryManifestSidecarFilterM1634(t *testing.T) {
 		{
 			name:           "q1_dictionary_only",
 			req:            ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
-			wantDictionary: 2,
+			wantDictionary: 1,
 		},
 		{
 			name:           "q2_dictionary_only",
@@ -2450,13 +2450,13 @@ func TestColumnPhysicalQueryManifestSidecarFilterM1634(t *testing.T) {
 		{
 			name:           "q4_dictionary_and_int64",
 			req:            ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			wantDictionary: 2,
+			wantDictionary: 1,
 			wantInt64:      1,
 		},
 		{
 			name:          "q5_metadata_aggregate_only",
 			req:           ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"},
-			wantAggregate: 2,
+			wantAggregate: 1,
 		},
 	}
 	for _, tc := range tests {
