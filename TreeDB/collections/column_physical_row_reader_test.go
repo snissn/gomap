@@ -123,6 +123,53 @@ func TestColumnPhysicalRowReaderRejectsNegativeMaxDecodedBlocksV1(t *testing.T) 
 	}
 }
 
+func TestColumnPhysicalRowReaderOwnsSnapshotCloseV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 12, 1, testColumnPhysicalRowReaderRowsV1(0, 1, normalized))
+	closed := 0
+	reader, err := newColumnPhysicalRowReaderFromSnapshotViewWithClose(columnPhysicalRowReaderViewForTestV1(root, normalized, ref), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"embedding", "neighbors"},
+		RequireInsertOnly: true,
+	}, func() {
+		closed++
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotViewWithClose: %v", err)
+	}
+	if closed != 0 {
+		t.Fatalf("snapshot close called during open: %d", closed)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("snapshot close calls=%d want 1", closed)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if closed != 1 {
+		t.Fatalf("snapshot close calls after second close=%d want 1", closed)
+	}
+}
+
+func TestColumnPhysicalRowReaderClosesSnapshotOnOpenErrorV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	view := columnPhysicalRowReaderViewForTestV1(backenddb.ColumnAssetRootDirPath(t.TempDir()), normalized)
+	view.ColumnStoreEnabled = false
+	closed := 0
+	_, err := newColumnPhysicalRowReaderFromSnapshotViewWithClose(view, columnPhysicalRowReaderOptions{}, func() {
+		closed++
+	})
+	if err == nil {
+		t.Fatal("newColumnPhysicalRowReaderFromSnapshotViewWithClose succeeded, want error")
+	}
+	if closed != 1 {
+		t.Fatalf("snapshot close calls=%d want 1", closed)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsOutOfRangeOrdinalV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())

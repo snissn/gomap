@@ -18,6 +18,7 @@ import (
 )
 
 const defaultIndexName = "embedding_graph"
+const minDemoResetDirLen = 8
 
 type demoConfig struct {
 	Dir              string
@@ -71,6 +72,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	defer cleanup()
 	if cfg.Reset {
+		resetDir, err := validateDemoResetDir(cfg.Dir)
+		if err != nil {
+			return err
+		}
+		cfg.Dir = resetDir
 		if err := os.RemoveAll(cfg.Dir); err != nil {
 			return err
 		}
@@ -195,6 +201,60 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	_, _ = fmt.Fprintln(stderr, "tip: use OpenVectorIndexSearcher for steady-state queries; SearchVectorIndex is a one-shot path that pays open/setup per call.")
 	return nil
+}
+
+func validateDemoResetDir(dir string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("reset directory is empty")
+	}
+	cleanInput := filepath.Clean(strings.TrimSpace(dir))
+	if cleanInput == "." || cleanInput == ".." {
+		return "", fmt.Errorf("refusing to reset unsafe directory %q", dir)
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	root := filepath.VolumeName(abs) + string(os.PathSeparator)
+	if abs == root || len(abs) < minDemoResetDirLen {
+		return "", fmt.Errorf("refusing to reset unsafe directory %q", dir)
+	}
+	base := filepath.Base(abs)
+	if base == "." || base == ".." {
+		return "", fmt.Errorf("refusing to reset unsafe directory %q", dir)
+	}
+
+	allowedBases := make([]string, 0, 3)
+	if cwd, err := os.Getwd(); err == nil {
+		allowedBases = append(allowedBases, cwd)
+	}
+	allowedBases = append(allowedBases, os.TempDir())
+	if filepath.VolumeName(abs) == "" {
+		allowedBases = append(allowedBases, "/tmp")
+	}
+	for _, allowedBase := range allowedBases {
+		if demoResetDirWithinBase(abs, allowedBase) {
+			return abs, nil
+		}
+	}
+	return "", fmt.Errorf("refusing to reset %q: directory must be under the current working directory or temp directory", dir)
+}
+
+func demoResetDirWithinBase(abs, base string) bool {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return false
+	}
+	baseAbs = filepath.Clean(baseAbs)
+	if abs == baseAbs {
+		return false
+	}
+	rel, err := filepath.Rel(baseAbs, abs)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 func parseConfig(args []string) (demoConfig, error) {

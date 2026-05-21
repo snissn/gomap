@@ -58,6 +58,7 @@ type columnPhysicalRowReader struct {
 	view       columnPhysicalScanSnapshotView
 	projection columnPhysicalScanProjection
 	readCache  columnPhysicalAssetReadCache
+	closeView  func()
 	ranges     []columnPhysicalRowReaderRange
 	totalRows  int
 	maxBlocks  int
@@ -100,16 +101,27 @@ type columnPhysicalRowReaderRow struct {
 
 func (c *Collection) openColumnPhysicalRowReader(opts columnPhysicalRowReaderOptions) (*columnPhysicalRowReader, error) {
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
-	if closeView != nil {
-		defer closeView()
-	}
 	if err != nil {
+		if closeView != nil {
+			closeView()
+		}
 		return nil, err
 	}
-	return newColumnPhysicalRowReaderFromSnapshotView(view, opts)
+	return newColumnPhysicalRowReaderFromSnapshotViewWithClose(view, opts, closeView)
 }
 
 func newColumnPhysicalRowReaderFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnPhysicalRowReaderOptions) (*columnPhysicalRowReader, error) {
+	return newColumnPhysicalRowReaderFromSnapshotViewWithClose(view, opts, nil)
+}
+
+func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScanSnapshotView, opts columnPhysicalRowReaderOptions, closeView func()) (_ *columnPhysicalRowReader, err error) {
+	if closeView != nil {
+		defer func() {
+			if err != nil {
+				closeView()
+			}
+		}()
+	}
 	cfg := view.Config
 	if !view.ColumnStoreEnabled || !cfg.Enabled {
 		return nil, errors.New("collections: physical column row reader requires enabled column_store")
@@ -139,6 +151,7 @@ func newColumnPhysicalRowReaderFromSnapshotView(view columnPhysicalScanSnapshotV
 		view:       view,
 		projection: projection,
 		readCache:  readCache,
+		closeView:  closeView,
 		maxBlocks:  maxBlocks,
 		blocks:     make(map[int]*columnPhysicalRowReaderBlock, maxBlocks),
 		stats: columnPhysicalRowReaderStats{
@@ -166,6 +179,10 @@ func (r *columnPhysicalRowReader) Close() error {
 	}
 	r.lru = r.lru[:0]
 	r.stats.ResidentBytes = 0
+	if r.closeView != nil {
+		r.closeView()
+		r.closeView = nil
+	}
 	return closeErr
 }
 

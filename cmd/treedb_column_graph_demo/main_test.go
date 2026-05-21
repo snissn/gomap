@@ -45,6 +45,27 @@ func TestColumnGraphDemoRunsCloseReopenNativeReaderPath(t *testing.T) {
 	}
 }
 
+func TestValidateDemoResetDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "db")
+	got, err := validateDemoResetDir(dir)
+	if err != nil {
+		t.Fatalf("validateDemoResetDir(%q): %v", dir, err)
+	}
+	want, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("Abs(%q): %v", dir, err)
+	}
+	if got != filepath.Clean(want) {
+		t.Fatalf("validateDemoResetDir=%q want %q", got, filepath.Clean(want))
+	}
+
+	for _, unsafe := range []string{"", ".", "..", string(os.PathSeparator), os.TempDir()} {
+		if _, err := validateDemoResetDir(unsafe); err == nil {
+			t.Fatalf("validateDemoResetDir(%q) succeeded, want rejection", unsafe)
+		}
+	}
+}
+
 func TestLoadGloveRowsRejectsInvalidNumericValues(t *testing.T) {
 	tests := []struct {
 		name    string

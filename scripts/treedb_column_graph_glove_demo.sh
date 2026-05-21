@@ -61,9 +61,31 @@ fi
 mkdir -p "$DATA_DIR"
 if [[ ! -f "$GLOVE_PATH" ]]; then
   if [[ ! -f "$ZIP_PATH" ]]; then
-    curl -L "$ZIP_URL" -o "$ZIP_PATH"
+    ZIP_TMP="${ZIP_PATH}.tmp.$$"
+    rm -f "$ZIP_TMP"
+    if ! curl -fL "$ZIP_URL" -o "$ZIP_TMP"; then
+      rm -f "$ZIP_TMP"
+      exit 1
+    fi
+    if [[ ! -s "$ZIP_TMP" ]]; then
+      rm -f "$ZIP_TMP"
+      echo "downloaded zip is empty: $ZIP_URL" >&2
+      exit 1
+    fi
+    mv "$ZIP_TMP" "$ZIP_PATH"
   fi
-  unzip -p "$ZIP_PATH" glove.6B.50d.txt > "$GLOVE_PATH"
+  GLOVE_TMP="${GLOVE_PATH}.tmp.$$"
+  rm -f "$GLOVE_TMP"
+  if ! unzip -p "$ZIP_PATH" glove.6B.50d.txt > "$GLOVE_TMP"; then
+    rm -f "$GLOVE_TMP"
+    exit 1
+  fi
+  if [[ ! -s "$GLOVE_TMP" ]]; then
+    rm -f "$GLOVE_TMP"
+    echo "extracted GloVe file is empty: $GLOVE_PATH" >&2
+    exit 1
+  fi
+  mv "$GLOVE_TMP" "$GLOVE_PATH"
 fi
 
 GOWORK="${GOWORK:-off}" go run ./cmd/treedb_column_graph_demo \
