@@ -282,6 +282,31 @@ func TestColumnGraphVectorIndexStatusClosedDBReturnsErrClosedV2A(t *testing.T) {
 	}
 }
 
+func TestColumnGraphVectorIndexStatusClosedDBBeforeEarlyStatusV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	meta := CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{ColumnStore: &ColumnStoreConfig{}},
+		VectorIndexes: []VectorIndexDefinition{testColumnGraphVectorIndexDefinitionV2A()},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, err := col.columnGraphVectorIndexStatus(meta.VectorIndexes[0], nil); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("columnGraphVectorIndexStatus closed unsupported err=%v want ErrClosed", err)
+	}
+}
+
 func TestColumnGraphVectorIndexStatusFailsClosedOnMissingOrMismatchedAssetV2A(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

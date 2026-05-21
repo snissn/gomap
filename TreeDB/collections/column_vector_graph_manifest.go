@@ -313,6 +313,11 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		Name:     def.Name,
 		Strategy: def.Strategy,
 	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return VectorIndexStatus{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonPhysicalColumnAssetSupportMissing
@@ -331,11 +336,6 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return VectorIndexStatus{}, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return VectorIndexStatus{}, err
