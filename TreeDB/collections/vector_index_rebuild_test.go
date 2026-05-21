@@ -289,9 +289,9 @@ func TestColumnGraphRebuildVectorIndexMarksStaleAfterMutationV2A(t *testing.T) {
 		t.Fatalf("status after mutation=%+v, want stale/rebuild-needed", status)
 	}
 	switch status.Reason {
-	case VectorIndexReasonColumnGraphRebuildNeeded, VectorIndexReasonColumnGraphAssetMismatch:
+	case VectorIndexReasonColumnGraphRebuildNeeded, VectorIndexReasonColumnGraphAssetMismatch, VectorIndexReasonColumnGraphUnsupportedVisibility:
 	default:
-		t.Fatalf("status reason after mutation=%q, want rebuild-needed or asset-mismatch", status.Reason)
+		t.Fatalf("status reason after mutation=%q, want rebuild-needed, asset-mismatch, or unsupported visibility", status.Reason)
 	}
 }
 

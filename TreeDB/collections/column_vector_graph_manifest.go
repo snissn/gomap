@@ -439,7 +439,14 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return status, nil
 	}
-	if !columnVectorGraphManifestMatchesDefinition(catalog.meta.Name, graph, def, *cfg, manifest, records) {
+	switch columnVectorGraphManifestMatchStatus(catalog.meta.Name, graph, def, *cfg, manifest, records) {
+	case columnVectorGraphManifestMatchLoaded:
+	case columnVectorGraphManifestMatchUnsupportedVisibility:
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphUnsupportedVisibility
+		status.RebuildNeeded = true
+		return status, nil
+	default:
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
 		status.Reason = VectorIndexReasonColumnGraphAssetMismatch
 		status.RebuildNeeded = true
@@ -456,19 +463,31 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 	return status, nil
 }
 
+type columnVectorGraphManifestMatch uint8
+
+const (
+	columnVectorGraphManifestMatchMismatch columnVectorGraphManifestMatch = iota
+	columnVectorGraphManifestMatchLoaded
+	columnVectorGraphManifestMatchUnsupportedVisibility
+)
+
 func columnVectorGraphManifestMatchesDefinition(collection string, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord) bool {
+	return columnVectorGraphManifestMatchStatus(collection, graph, def, cfg, manifest, records) == columnVectorGraphManifestMatchLoaded
+}
+
+func columnVectorGraphManifestMatchStatus(collection string, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord) columnVectorGraphManifestMatch {
 	if cfg.ActiveManifest == nil {
-		return false
+		return columnVectorGraphManifestMatchMismatch
 	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, cfg, def)
 	if err != nil {
-		return false
+		return columnVectorGraphManifestMatchMismatch
 	}
 	baseChecksum, err := columnVectorGraphBaseManifestChecksum(manifest, records, cfg)
 	if err != nil {
-		return false
+		return columnVectorGraphManifestMatchMismatch
 	}
-	return graph.IndexName == def.Name &&
+	if !(graph.IndexName == def.Name &&
 		graph.Field == def.Field &&
 		graph.Metric == def.Metric &&
 		graph.Encoding == def.Encoding &&
@@ -476,13 +495,20 @@ func columnVectorGraphManifestMatchesDefinition(collection string, graph columnV
 		graph.M == def.M &&
 		graph.EfConstruction == def.EfConstruction &&
 		graph.EfSearch == def.EfSearch &&
-		graph.BaseManifestGeneration == cfg.ActiveManifest.Generation &&
-		graph.BaseManifestChecksum == baseChecksum &&
 		graph.BaseSchemaHash == cfg.SchemaHash &&
 		graph.GraphSchemaHash == graphCfg.SchemaHash &&
 		graph.AssetRef.Kind == ColumnAssetKindTCS1PartImage &&
 		graph.AssetRef.Namespace == graphCfg.AssetManager.Namespace &&
-		graph.AssetRef.Generation == graph.BaseManifestGeneration
+		graph.AssetRef.Generation == graph.BaseManifestGeneration) {
+		return columnVectorGraphManifestMatchMismatch
+	}
+	if graph.BaseManifestGeneration != cfg.ActiveManifest.Generation {
+		return columnVectorGraphManifestMatchUnsupportedVisibility
+	}
+	if graph.BaseManifestChecksum != baseChecksum {
+		return columnVectorGraphManifestMatchMismatch
+	}
+	return columnVectorGraphManifestMatchLoaded
 }
 
 func columnVectorGraphBaseManifestChecksum(manifest columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig) (uint64, error) {

@@ -323,8 +323,8 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsStaleGraphAfterMutationV2B(t *
 	if err != nil {
 		t.Fatalf("VectorIndexStatus: %v", err)
 	}
-	if status.State != VectorIndexStateColumnGraphRebuildNeeded || status.Reason != VectorIndexReasonColumnGraphAssetMismatch || !status.RebuildNeeded {
-		t.Fatalf("status=%+v want stale graph mismatch", status)
+	if status.State != VectorIndexStateColumnGraphRebuildNeeded || status.Reason != VectorIndexReasonColumnGraphUnsupportedVisibility || !status.RebuildNeeded {
+		t.Fatalf("status=%+v want stale graph unsupported visibility", status)
 	}
 	_, err = col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if !errors.Is(err, errColumnVectorGraphManifestMismatch) {

@@ -480,6 +480,185 @@ func TestSearchVectorIndexColumnGraphStaleAfterMutationV4(t *testing.T) {
 	if got.Status.State != VectorIndexStateColumnGraphRebuildNeeded || !got.Status.RebuildNeeded {
 		t.Fatalf("status=%+v want stale graph to require rebuild", got.Status)
 	}
+	if got.Status.Reason != VectorIndexReasonColumnGraphUnsupportedVisibility {
+		t.Fatalf("status reason=%q want %q", got.Status.Reason, VectorIndexReasonColumnGraphUnsupportedVisibility)
+	}
+}
+
+func TestSearchVectorIndexColumnGraphMutationMatrixFailsClosedV5(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(testing.TB, *Collection)
+		query  []float32
+	}{
+		{
+			name: "insert_after_build",
+			mutate: func(tb testing.TB, col *Collection) {
+				insertColumnGraphRebuildRowsV2A(tb, col, []columnGraphRebuildInputRowV2A{
+					{id: "doc-c", vector: []float32{0, 0, 1}},
+				})
+			},
+			query: []float32{0, 0, 1},
+		},
+		{
+			name: "vector_update",
+			mutate: func(tb testing.TB, col *Collection) {
+				updateColumnGraphRebuildJSONDocumentV5(tb, col, "doc-a", []float32{0, 0, 1}, "vector-updated")
+			},
+			query: []float32{0, 0, 1},
+		},
+		{
+			name: "non_vector_payload_update",
+			mutate: func(tb testing.TB, col *Collection) {
+				updateColumnGraphRebuildJSONDocumentV5(tb, col, "doc-a", []float32{1, 0, 0}, "payload-updated")
+			},
+			query: []float32{1, 0, 0},
+		},
+		{
+			name: "delete",
+			mutate: func(tb testing.TB, col *Collection) {
+				deleted, err := col.DeleteDocument([]byte("doc-a"))
+				if err != nil {
+					tb.Fatalf("DeleteDocument: %v", err)
+				}
+				if !deleted {
+					tb.Fatalf("DeleteDocument deleted=false want true")
+				}
+			},
+			query: []float32{1, 0, 0},
+		},
+		{
+			name: "mixed_sequential_batch",
+			mutate: func(tb testing.TB, col *Collection) {
+				insertColumnGraphRebuildRowsV2A(tb, col, []columnGraphRebuildInputRowV2A{
+					{id: "doc-c", vector: []float32{0, 0, 1}},
+				})
+				updateColumnGraphRebuildJSONDocumentV5(tb, col, "doc-b", []float32{1, 0, 0}, "vector-updated")
+				deleted, err := col.DeleteDocument([]byte("doc-a"))
+				if err != nil {
+					tb.Fatalf("DeleteDocument: %v", err)
+				}
+				if !deleted {
+					tb.Fatalf("DeleteDocument deleted=false want true")
+				}
+			},
+			query: []float32{1, 0, 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := []columnGraphRebuildInputRowV2A{
+				{id: "doc-a", vector: []float32{1, 0, 0}},
+				{id: "doc-b", vector: []float32{0, 1, 0}},
+			}
+			_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+			defer func() { _ = d.Close() }()
+			status, err := col.RebuildVectorIndex(def.Name)
+			if err != nil {
+				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+			assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+
+			tt.mutate(t, col)
+
+			assertColumnGraphUnsupportedVisibilityStatusV5(t, col, def.Name)
+			got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+				IndexName:        def.Name,
+				Query:            tt.query,
+				TopK:             2,
+				EfSearch:         len(rows) + 1,
+				IncludeDocuments: true,
+				MaxDecodedBlocks: 1,
+			})
+			if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !errors.Is(err, errColumnVectorGraphManifestMismatch) {
+				t.Fatalf("SearchVectorIndex err=%v want unavailable stale manifest mismatch", err)
+			}
+			if got.Path != "" || len(got.Results) != 0 || got.Stats.DocumentsFetched != 0 {
+				t.Fatalf("response path=%q results=%d docs=%d want no search results before rebuild", got.Path, len(got.Results), got.Stats.DocumentsFetched)
+			}
+			assertColumnGraphUnsupportedVisibilitySearchStatusV5(t, got.Status, def.Name)
+		})
+	}
+}
+
+func TestSearchVectorIndexColumnGraphMutationStaleStatusSurvivesReopenV5(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	updateColumnGraphRebuildJSONDocumentV5(t, col, "doc-a", []float32{0, 0, 1}, "vector-updated")
+	assertColumnGraphUnsupportedVisibilityStatusV5(t, col, def.Name)
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	assertColumnGraphUnsupportedVisibilityStatusV5(t, reopenedCol, def.Name)
+	got, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            []float32{0, 0, 1},
+		TopK:             1,
+		EfSearch:         len(rows),
+		MaxDecodedBlocks: 1,
+	})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !errors.Is(err, errColumnVectorGraphManifestMismatch) {
+		t.Fatalf("SearchVectorIndex reopen err=%v want unavailable stale manifest mismatch", err)
+	}
+	assertColumnGraphUnsupportedVisibilitySearchStatusV5(t, got.Status, def.Name)
+}
+
+func TestSearchVectorIndexColumnGraphSnapshotBoundSearcherSurvivesLaterMutationV5(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	updateColumnGraphRebuildJSONDocumentV5(t, col, "doc-a", []float32{0, 0, 1}, "vector-updated")
+	assertColumnGraphUnsupportedVisibilityStatusV5(t, col, def.Name)
+
+	got, err := searcher.Search(VectorIndexSearcherSearchOptions{
+		Query:            []float32{1, 0, 0},
+		TopK:             1,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+	})
+	if err != nil {
+		t.Fatalf("snapshot-bound Search: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 1)
+	if string(got.Results[0].ID) != "doc-a" ||
+		!bytes.Contains(got.Results[0].Document, []byte(`"did":"doc-a"`)) ||
+		bytes.Contains(got.Results[0].Document, []byte(`"note":"vector-updated"`)) {
+		t.Fatalf("snapshot result id=%q doc=%s want old consistent generation", got.Results[0].ID, got.Results[0].Document)
+	}
 }
 
 func TestSearchVectorIndexNativeRuntimeDoesNotFallbackToColumnGraphV4(t *testing.T) {
@@ -671,6 +850,51 @@ func assertVectorIndexSearchResultsV4(tb testing.TB, got []VectorIndexSearchResu
 		if wantDocs && len(got[i].Document) == 0 {
 			tb.Fatalf("result[%d] missing materialized document", i)
 		}
+	}
+}
+
+func assertColumnGraphUnsupportedVisibilityStatusV5(tb testing.TB, col *Collection, name string) {
+	tb.Helper()
+	status, err := col.VectorIndexStatus(name)
+	if err != nil {
+		tb.Fatalf("VectorIndexStatus: %v", err)
+	}
+	assertColumnGraphUnsupportedVisibilitySearchStatusV5(tb, status, name)
+}
+
+func assertColumnGraphUnsupportedVisibilitySearchStatusV5(tb testing.TB, status VectorIndexStatus, name string) {
+	tb.Helper()
+	if status.Name != name || status.Strategy != VectorIndexStrategyColumnGraph {
+		tb.Fatalf("status=%+v want column_graph index %q", status, name)
+	}
+	if status.State != VectorIndexStateColumnGraphRebuildNeeded ||
+		status.Reason != VectorIndexReasonColumnGraphUnsupportedVisibility ||
+		!status.RebuildNeeded ||
+		status.Loaded {
+		tb.Fatalf("status=%+v want rebuild-needed unsupported visibility", status)
+	}
+}
+
+func updateColumnGraphRebuildJSONDocumentV5(tb testing.TB, col *Collection, id string, vector []float32, note string) {
+	tb.Helper()
+	replacement, err := json.Marshal(map[string]any{
+		"time_us":   int64(100),
+		"kind":      "vector",
+		"did":       id,
+		"embedding": vector,
+		"note":      note,
+	})
+	if err != nil {
+		tb.Fatalf("json.Marshal replacement: %v", err)
+	}
+	matched, modified, err := col.Update([]byte(id), func(current []byte) ([]byte, bool, error) {
+		return replacement, true, nil
+	})
+	if err != nil {
+		tb.Fatalf("Update %q: %v", id, err)
+	}
+	if !matched || !modified {
+		tb.Fatalf("Update %q matched=%t modified=%t want true/true", id, matched, modified)
 	}
 }
 
