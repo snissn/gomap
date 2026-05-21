@@ -163,6 +163,37 @@ func TestSortKeyMarkPruningMatchesRawReference(t *testing.T) {
 	}
 }
 
+func TestSortKeyRangeIsAppliedWithinMixedGranule(t *testing.T) {
+	collections := []int64{1, 1, 2, 2}
+	times := []int64{110, 111, 110, 111}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone})
+	g, err := builder.BuildInt64(times)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	mark, err := BuildSortKeyMark([]SortKeyColumn{
+		{Name: "collection", Values: collections},
+		{Name: "time_us", Values: times},
+	})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark: %v", err)
+	}
+	var reader GranuleReader
+	count, diagnostics, err := reader.CountInt64RangeWithDiagnostics([]EncodedGranule{g}, []SortKeyMark{mark}, PredicatePlan{
+		Filter: Int64RangePredicate{Column: "time_us", Low: 110, High: 111},
+		SortKeyRanges: []Int64RangePredicate{
+			{Column: "collection", Low: 1, High: 1},
+			{Column: "time_us", Low: 110, High: 111},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CountInt64RangeWithDiagnostics: %v", err)
+	}
+	if count != 2 || diagnostics.Decoded != 1 || diagnostics.Matched != 2 {
+		t.Fatalf("count=%d diagnostics=%+v want count=2 decoded=1 matched=2", count, diagnostics)
+	}
+}
+
 func TestTimeOnlyPredicateDoesNotSortKeyPruneWhenNotLeftPrefix(t *testing.T) {
 	granules, marks, _, _, err := buildCompositeSortFixtureForTest()
 	if err != nil {
