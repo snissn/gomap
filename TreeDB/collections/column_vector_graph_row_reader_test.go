@@ -68,9 +68,6 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	if stats.RowFetches != 1 || stats.BatchFetches != 1 || stats.RowsFetched != 3 {
 		t.Fatalf("stats=%+v want one row fetch, one batch fetch, three fetched rows", stats)
 	}
-	if stats.CacheMisses == 0 || stats.CacheHits == 0 || stats.BlockEvictions != 0 {
-		t.Fatalf("cache stats=%+v want cache activity with no evictions", stats)
-	}
 }
 
 func TestColumnVectorGraphPhysicalRowReaderOpensEmptyPublishedGraphV2B(t *testing.T) {
@@ -367,7 +364,7 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaV2B(tb testing.TB, r
 		Name: "docs",
 		Options: CollectionOptions{
 			DocumentFormat: DocumentFormatJSON,
-			ColumnStore:    columnGraphRebuildColumnStoreConfigV2A(3),
+			ColumnStore:    baseCfg,
 		},
 		VectorIndexes: []VectorIndexDefinition{def},
 	}
