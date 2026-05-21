@@ -53,6 +53,7 @@ const (
 	VectorIndexReasonPhysicalColumnAssetSupportMissing VectorIndexReason = "physical_column_asset_support_missing"
 	VectorIndexReasonColumnGraphAssetMismatch          VectorIndexReason = "column_graph_asset_mismatch"
 	VectorIndexReasonColumnGraphCorrupt                VectorIndexReason = "column_graph_corrupt"
+	VectorIndexReasonColumnGraphUnsupportedMetric      VectorIndexReason = "column_graph_unsupported_metric"
 )
 
 type VectorIndexDefinition struct {

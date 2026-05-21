@@ -105,7 +105,9 @@ type VectorIndexSearcher struct {
 // SearchVectorIndex searches a collection vector index through the public
 // collection lifecycle. V4 wires only explicit column_graph indexes to the
 // native physical column reader; native_runtime remains reported as native
-// rather than silently falling back or pretending to use column storage.
+// rather than silently falling back or pretending to use column storage. When
+// availability or staleness checks fail, the returned response may still carry
+// the index status so callers can distinguish rebuild-needed/unavailable cases.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
@@ -163,10 +165,19 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 			State:    VectorIndexStateNativeRuntime,
 			Reason:   VectorIndexReasonNativeRuntime,
 		}
-		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; SearchVectorIndex currently requires an explicit column_graph index", ErrVectorIndexSearchUnavailable, def.Name)
+		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; public native-reader search currently requires an explicit column_graph index", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		return nil, response, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
+	}
+	if def.Metric != VectorMetricCosine {
+		response.Status = VectorIndexStatus{
+			Name:     def.Name,
+			Strategy: def.Strategy,
+			State:    VectorIndexStateColumnGraphUnavailable,
+			Reason:   VectorIndexReasonColumnGraphUnsupportedMetric,
+		}
+		return nil, response, fmt.Errorf("%w: column_graph vector index %q uses metric %q; native reader currently supports only %q", ErrVectorIndexSearchUnavailable, def.Name, def.Metric, VectorMetricCosine)
 	}
 
 	snap := c.db.AcquireSnapshot()

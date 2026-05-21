@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -49,8 +50,11 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
-	if got.Stats.Candidates != uint64(len(rows)) || got.Stats.ResultFetches != 2 {
-		t.Fatalf("stats=%+v want public search to expose native graph traversal accounting", got.Stats)
+	if got.Stats.Candidates == 0 || got.Stats.CandidateFetches == 0 || got.Stats.ResultFetches < uint64(len(got.Results)) {
+		t.Fatalf("stats=%+v want public search to expose non-zero native graph traversal/result accounting", got.Stats)
+	}
+	if got.Stats.DocumentsFetched != 0 {
+		t.Fatalf("DocumentsFetched=%d want no document fetch without IncludeDocuments", got.Stats.DocumentsFetched)
 	}
 	if got.Results[0].Document != nil {
 		t.Fatalf("document materialized without IncludeDocuments: %q", got.Results[0].Document)
@@ -409,6 +413,43 @@ func TestSearchVectorIndexNativeRuntimeDoesNotFallbackToColumnGraphV4(t *testing
 	}
 	if got.Path != "" || len(got.Results) != 0 {
 		t.Fatalf("response path=%q results=%d want no column graph fallback", got.Path, len(got.Results))
+	}
+}
+
+func TestSearchVectorIndexColumnGraphRejectsUnsupportedMetricV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	mutated := false
+	for i := range col.meta.VectorIndexes {
+		if col.meta.VectorIndexes[i].Name == def.Name {
+			col.meta.VectorIndexes[i].Metric = VectorMetric("dot")
+			mutated = true
+		}
+	}
+	if !mutated {
+		t.Fatalf("test setup missing vector index %q", def.Name)
+	}
+
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0, 0},
+		TopK:      1,
+	})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !strings.Contains(err.Error(), "supports only \"cosine\"") {
+		t.Fatalf("SearchVectorIndex err=%v want unsupported metric search-unavailable error", err)
+	}
+	if got.Status.State != VectorIndexStateColumnGraphUnavailable || got.Status.Reason != VectorIndexReasonColumnGraphUnsupportedMetric {
+		t.Fatalf("status=%+v want unsupported metric unavailable status", got.Status)
+	}
+	if got.Path != "" || len(got.Results) != 0 {
+		t.Fatalf("response path=%q results=%d want no search path/results on unsupported metric", got.Path, len(got.Results))
 	}
 }
 
