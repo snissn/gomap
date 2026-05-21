@@ -294,6 +294,7 @@ type CollectionManager struct {
 	closeUnregister          func()
 	closing                  atomic.Bool
 	updateBatchDetailedStats atomic.Bool
+	commandWALCoordinator    *collectionCommandWALCoordinator
 	domainMu                 sync.RWMutex
 	domains                  map[string]*collectionWriteDomain
 }
@@ -964,6 +965,7 @@ type collectionWriteDomain struct {
 	baseSystemRoot           uint64
 	primaryRoot              uint64
 	storagePolicy            backenddb.OrderedRootStoragePolicy
+	commandWALCoordinator    *collectionCommandWALCoordinator
 	table                    memtable.Table
 	indexedPublishingUnits   []indexedFlushUnit
 	indexedFlushUnits        []indexedFlushUnit
@@ -1114,6 +1116,7 @@ type collectionWriteDomain struct {
 func NewCollectionManager(database *backenddb.DB) *CollectionManager {
 	manager := &CollectionManager{db: database}
 	if database != nil {
+		manager.commandWALCoordinator = collectionCommandWALCoordinatorForDB(database)
 		manager.closeUnregister = database.RegisterCloseHook(manager.closeForBackend)
 	}
 	return manager
@@ -2399,9 +2402,15 @@ func (m *CollectionManager) writeDomainForCollection(name string) *collectionWri
 		m.domains = make(map[string]*collectionWriteDomain)
 	}
 	if domain := m.domains[name]; domain != nil {
+		if domain.commandWALCoordinator == nil {
+			domain.commandWALCoordinator = m.commandWALCoordinator
+		}
 		return domain
 	}
-	domain := &collectionWriteDomain{updateCombineShards: defaultCollectionUpdateCombineShards}
+	domain := &collectionWriteDomain{
+		commandWALCoordinator: m.commandWALCoordinator,
+		updateCombineShards:   defaultCollectionUpdateCombineShards,
+	}
 	domain.updateBatchDetailedStats.Store(m.updateBatchDetailedStats.Load())
 	m.domains[name] = domain
 	return domain
@@ -2610,7 +2619,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
 		if commandWALIntent != nil {
-			if err := m.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+			if err := m.publishCommandWALNoop(commandWALIntent, false); err != nil {
 				return nil, err
 			}
 		}
@@ -2646,7 +2655,10 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		if err != nil {
 			return nil, err
 		}
-		_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(nil, intent, buildSystemDelta)
+		err = m.withCommandWALPublishCoordinator(func() error {
+			_, _, err = m.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(nil, intent, buildSystemDelta)
+			return err
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -8524,8 +8536,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if commandWALIntent != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			})
+			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -8963,8 +8978,11 @@ func (c *Collection) insertBatchNoIndex(
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if commandWALIntent != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+			})
+			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -9145,7 +9163,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	if primaryRoot == 0 {
 		_ = snap.Close()
 		if commandWALIntent != nil {
-			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+			if err := c.publishCommandWALNoop(commandWALIntent, false); err != nil {
 				return 0, err
 			}
 		}
@@ -9198,7 +9216,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	if len(existing) == 0 {
 		_ = snap.Close()
 		if commandWALIntent != nil {
-			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+			if err := c.publishCommandWALNoop(commandWALIntent, false); err != nil {
 				return 0, err
 			}
 		}
@@ -9283,8 +9301,11 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if commandWALIntent != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			})
+			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -9352,7 +9373,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		if alreadyDeleted {
 			_ = snap.Close()
 			if commandWALIntent != nil {
-				if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+				if err := c.publishCommandWALNoop(commandWALIntent, false); err != nil {
 					return false, err
 				}
 			}
@@ -9363,7 +9384,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		_ = snap.Close()
 		if commandWALIntent != nil {
-			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+			if err := c.publishCommandWALNoop(commandWALIntent, false); err != nil {
 				return false, err
 			}
 		}
@@ -9376,7 +9397,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	if entry.Flags&node.FlagTombstone != 0 {
 		_ = snap.Close()
 		if commandWALIntent != nil {
-			if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+			if err := c.publishCommandWALNoop(commandWALIntent, false); err != nil {
 				return false, err
 			}
 		}
@@ -9469,8 +9490,11 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if commandWALIntent != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			})
+			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -12799,7 +12823,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						if err != nil {
 							return err
 						}
-						if err := c.db.PublishCommandWALNoop(intent, false); err != nil {
+						if err := c.publishCommandWALNoop(intent, false); err != nil {
 							return err
 						}
 					}
@@ -12812,6 +12836,11 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						return err
 					}
 					plan.bufferedCommandWALIntent = intent
+					unlockCommandWALStage, err := c.lockCommandWALStageCoordinator()
+					if err != nil {
+						return err
+					}
+					defer unlockCommandWALStage()
 				}
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
@@ -12918,7 +12947,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						return err
 					}
 				}
-				if err := c.db.PublishCommandWALNoop(commandWALIntent, false); err != nil {
+				if err := c.publishCommandWALNoop(commandWALIntent, false); err != nil {
 					return err
 				}
 			}
@@ -14147,8 +14176,11 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	if commandWALIntent != nil {
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
+			})
+			return err
 		})
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {

@@ -948,6 +948,145 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing
 	}
 }
 
+func TestCollectionCommandWALUpdateBSONSetNoopFlushesStagedUpdate(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet staged: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("staged UpdateBSONSet matched=%t modified=%t, want true/true", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0", got)
+	}
+	matched, modified, err = col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBSONSet noop: %v", err)
+	}
+	if !matched || modified {
+		t.Fatalf("noop UpdateBSONSet matched=%t modified=%t, want true/false", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after noop=%d, want 2", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 2 {
+		t.Fatalf("command WAL frame count=%d, want 2", len(frames))
+	}
+}
+
+func TestCollectionCommandWALUpdateBSONSetNoIndexInterleavedCollectionsDrainOwner(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "a",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("a1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "b",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection b: %v", err)
+	}
+	a, err := mgr.OpenCollection("a")
+	if err != nil {
+		t.Fatalf("OpenCollection a: %v", err)
+	}
+	b, err := mgr.OpenCollection("b")
+	if err != nil {
+		t.Fatalf("OpenCollection b: %v", err)
+	}
+	if _, err := b.Insert([]byte("b1"), mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}})); err != nil {
+		t.Fatalf("Insert b1: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after setup=%d, want 2", got)
+	}
+	if _, _, err := a.UpdateBSONSet([]byte("a1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}}); err != nil {
+		t.Fatalf("UpdateBSONSet a1 first: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after staged a=%d, want 2", got)
+	}
+	if _, _, err := b.UpdateBSONSet([]byte("b1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "bos"),
+	}}); err != nil {
+		t.Fatalf("UpdateBSONSet b1: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 3 {
+		t.Fatalf("AppliedCommandLSN after switching to b=%d, want 3", got)
+	}
+	if _, _, err := a.UpdateBSONSet([]byte("a1"), []BSONSetField{{
+		Key:   "state",
+		Value: mustBSONRawValue(t, "wa"),
+	}}); err != nil {
+		t.Fatalf("UpdateBSONSet a1 second: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 4 {
+		t.Fatalf("AppliedCommandLSN after switching back to a=%d, want 4", got)
+	}
+	if err := a.Flush(); err != nil {
+		t.Fatalf("Flush a: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 5 {
+		t.Fatalf("AppliedCommandLSN after final flush=%d, want 5", got)
+	}
+	doc, err := a.Get([]byte("a1"))
+	if err != nil {
+		t.Fatalf("Get a1: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("a.city=%q want sea", got)
+	}
+	if got := bson.Raw(doc).Lookup("state").StringValue(); got != "wa" {
+		t.Fatalf("a.state=%q want wa", got)
+	}
+	doc, err = b.Get([]byte("b1"))
+	if err != nil {
+		t.Fatalf("Get b1: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "bos" {
+		t.Fatalf("b.city=%q want bos", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexReopenRecovery(t *testing.T) {
 	doc1 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}})
 	doc2 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}})
