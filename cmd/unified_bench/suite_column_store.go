@@ -1389,6 +1389,7 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 }
 
 func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []collections.ColumnPhysicalQueryGroup) (uint64, int, error) {
+	columnStoreSuiteSortPhysicalQueryGroups(queryName, groups)
 	hash := columnStoreFNV64Offset
 	switch queryName {
 	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
@@ -1403,6 +1404,31 @@ func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []
 		return 0, 0, fmt.Errorf("column_store: unsupported physical query hash mapping %q", queryName)
 	}
 	return hash, len(groups), nil
+}
+
+func columnStoreSuiteSortPhysicalQueryGroups(queryName string, groups []collections.ColumnPhysicalQueryGroup) {
+	for i := 1; i < len(groups); i++ {
+		group := groups[i]
+		j := i - 1
+		for ; j >= 0 && columnStoreSuitePhysicalQueryGroupLess(queryName, group, groups[j]); j-- {
+			groups[j+1] = groups[j]
+		}
+		groups[j+1] = group
+	}
+}
+
+func columnStoreSuitePhysicalQueryGroupLess(queryName string, left, right collections.ColumnPhysicalQueryGroup) bool {
+	if left.Key != right.Key {
+		return left.Key < right.Key
+	}
+	switch queryName {
+	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
+		return left.Count < right.Count
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+		return left.Int64 < right.Int64
+	default:
+		return false
+	}
 }
 
 func columnStoreHashPhysicalQueryGroup(hash uint64, prefix, key string, value int64) uint64 {

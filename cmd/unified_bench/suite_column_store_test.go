@@ -134,8 +134,8 @@ func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
 
 func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.T) {
 	groups := []collections.ColumnPhysicalQueryGroup{
-		{Key: "app.bsky.feed.like", Count: 12},
 		{Key: "app.bsky.feed.post", Count: 34},
+		{Key: "app.bsky.feed.like", Count: 12},
 		{Key: "app.bsky.graph.follow", Count: 56},
 	}
 	lines, err := columnStoreSuitePhysicalQueryLines("q1", columnStoreQueryQ1, groups)
@@ -155,8 +155,8 @@ func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.
 	}
 
 	spanGroups := []collections.ColumnPhysicalQueryGroup{
-		{Key: "d000001", Int64: -1 << 63},
 		{Key: "d000002", Int64: 1<<63 - 1},
+		{Key: "d000001", Int64: -1 << 63},
 	}
 	lines, err = columnStoreSuitePhysicalQueryLines("q5", columnStoreQueryQ5, spanGroups)
 	if err != nil {
