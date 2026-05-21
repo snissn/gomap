@@ -52,6 +52,28 @@ func TestColumnManifestRecordDecodeAcceptsV1CompatibilityM1634(t *testing.T) {
 	if len(snapshot.Parts) != 1 || snapshot.Parts[0].Rows != 0 {
 		t.Fatalf("unexpected v1 snapshot parts: %+v", snapshot.Parts)
 	}
+
+	scanHeader, err := decodeColumnManifestHeaderRecordForScan(header)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestHeaderRecordForScan v1: %v", err)
+	}
+	if scanHeader.generation != 7 || scanHeader.expectedParts != 1 {
+		t.Fatalf("unexpected v1 scan header: %+v", scanHeader)
+	}
+	scanRef, reason, err := decodeColumnManifestPartRefForScan(part, asset.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestPartRefForScan v1: %v", err)
+	}
+	if scanRef != asset.Ref || string(reason) != asset.Reason {
+		t.Fatalf("unexpected v1 scan part: ref=%+v reason=%q", scanRef, string(reason))
+	}
+	rewriteRef, _, err := columnAssetRewriteManifestPartRefForPatch(part, asset.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetRewriteManifestPartRefForPatch v1: %v", err)
+	}
+	if rewriteRef != asset.Ref {
+		t.Fatalf("unexpected v1 rewrite ref: %+v", rewriteRef)
+	}
 }
 
 func mustEncodeColumnManifestHeaderRecordVersionM1634(t *testing.T, version uint16) []byte {

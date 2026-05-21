@@ -545,7 +545,8 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	if magic := cur.u32(); magic != columnManifestPartMagic {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion {
+	version := cur.u16()
+	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kindBytes := cur.stringBytes()
@@ -560,7 +561,10 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	length64 := cur.u64()
 	offsets.checksum = cur.pos
 	checksum64 := cur.u64()
-	rows64 := cur.u64()
+	rows64 := uint64(0)
+	if version >= columnManifestRecordVersion {
+		rows64 = cur.u64()
+	}
 	bytes64 := cur.u64()
 	_ = cur.u64() // publish_id; rewrite preserves the original field bytes.
 	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
