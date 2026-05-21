@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -698,6 +699,209 @@ func TestCommandWALPublishReadyReportsPoisonedHandle(t *testing.T) {
 	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
 	}
+}
+
+func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), false)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+	db.testFailCommandWALFlush.Store(false)
+
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return nil
+	})
+	defer unregister()
+	_, err = db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("after"), []byte("poison"), false)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted after poison error=%v, want ErrRecoveryRequired", err)
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("raw publish barrier ran after command WAL handle was poisoned")
+	}
+}
+
+func TestAppendCommandWALPayloadDoesNotRunRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	defer unregister()
+
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"city":"sea"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	lsn, err := db.AppendCommandWALPayload(
+		commitlog.CommandKindCollectionUpdateBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("AppendCommandWALPayload error=%v", err)
+	}
+	if lsn == 0 {
+		t.Fatalf("AppendCommandWALPayload lsn=0, want assigned LSN")
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("higher-level command WAL payload append ran raw publish barrier")
+	}
+}
+
+func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
+	db := &DB{commandWAL: true}
+	var calls []int
+	unregisterFirst := db.RegisterCommandWALRawPublishBarrier(func() error {
+		calls = append(calls, 1)
+		return nil
+	})
+	unregisterSecond := db.RegisterCommandWALRawPublishBarrier(func() error {
+		calls = append(calls, 2)
+		return nil
+	})
+
+	unregisterFirst()
+	unregisterFirst()
+	if got := len(db.commandWALRawBarriers); got != 1 {
+		t.Fatalf("barrier count after unregister=%d, want 1", got)
+	}
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != 2 {
+		t.Fatalf("barrier calls=%v, want only second barrier", calls)
+	}
+
+	unregisterSecond()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after unregister second=%d, want 0", got)
+	}
+}
+
+func TestCommandWALRawPublishBarrierUnregisterWaitsForInFlight(t *testing.T) {
+	db := &DB{commandWAL: true}
+	barrierEntered := make(chan struct{})
+	releaseBarrier := make(chan struct{})
+	unregisterStarted := make(chan struct{})
+	unregisterReturned := make(chan struct{})
+	runDone := make(chan error, 1)
+
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		close(barrierEntered)
+		<-releaseBarrier
+		return nil
+	})
+	go func() {
+		runDone <- db.runCommandWALRawPublishBarriers()
+	}()
+	select {
+	case <-barrierEntered:
+	case <-time.After(time.Second):
+		t.Fatalf("raw publish barrier did not start")
+	}
+	go func() {
+		close(unregisterStarted)
+		unregister()
+		close(unregisterReturned)
+	}()
+	select {
+	case <-unregisterStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("unregister goroutine did not start")
+	}
+	select {
+	case <-unregisterReturned:
+		t.Fatalf("unregister returned before in-flight barrier completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseBarrier)
+	select {
+	case <-unregisterReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("unregister did not return after in-flight barrier completed")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("runCommandWALRawPublishBarriers did not finish")
+	}
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after unregister=%d, want 0", got)
+	}
+}
+
+func TestCommandWALRawPublishBarrierNoopWhenDisabled(t *testing.T) {
+	db := &DB{}
+	var called atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		called.Store(true)
+		return nil
+	})
+	unregister()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count with command WAL disabled=%d, want 0", got)
+	}
+	db.commandWAL = true
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if called.Load() {
+		t.Fatalf("disabled command WAL raw publish barrier was registered")
+	}
+}
+
+func TestCommandWALRawPublishBarrierRejectsCloseHookDrainedDB(t *testing.T) {
+	db := &DB{commandWAL: true}
+	if err := db.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	var called atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		called.Store(true)
+		return nil
+	})
+	unregister()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after late register=%d, want 0", got)
+	}
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if called.Load() {
+		t.Fatalf("late raw publish barrier ran after close hooks drained")
+	}
+}
+
+func TestMarkCommandWALIntentRecoveryRequiredNilNoop(t *testing.T) {
+	db := &DB{}
+	db.MarkCommandWALIntentRecoveryRequired(nil)
+	(*DB)(nil).MarkCommandWALIntentRecoveryRequired(nil)
 }
 
 func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {

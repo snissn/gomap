@@ -1213,6 +1213,27 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false want true")
 	}
+	if _, err := parseConfig([]string{"-target", "mongo", "-treedb-command-wal"}); err == nil || !strings.Contains(err.Error(), "treedb-command-wal is only supported with -target treedb") {
+		t.Fatalf("parse mongo command WAL error=%v, want target error", err)
+	}
+	if cfg.TreeDBMaintenance != treeDBMaintenanceCheckpoint {
+		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceCheckpoint)
+	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-maintenance", treeDBMaintenanceFull}); err == nil || !strings.Contains(err.Error(), "treedb-command-wal does not support -treedb-maintenance full") {
+		t.Fatalf("parse explicit full maintenance error=%v, want command WAL maintenance error", err)
+	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-maintenance", treeDBMaintenanceNone}); err != nil {
+		t.Fatalf("parse command WAL none maintenance: %v", err)
+	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err != nil {
+		t.Fatalf("parse durable command WAL config: %v", err)
+	}
+	for _, profile := range []treedb.Profile{treedb.ProfileFast, treedb.ProfileBench} {
+		_, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(profile)})
+		if err == nil || !strings.Contains(err.Error(), "treedb-command-wal requires a WAL-on treedb-profile") {
+			t.Fatalf("parse command WAL profile %q error=%v, want WAL-on profile error", profile, err)
+		}
+	}
 }
 
 func TestParseConfigProfileOptions(t *testing.T) {
@@ -2529,7 +2550,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"command_wal=true",
+		"treedb_command_wal=true",
 		"buffered_indexed_max_docs=1234",
 		"buffered_indexed_max_bytes=5678",
 		"buffered_indexed_max_root_runs=90",
@@ -2539,6 +2560,18 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
 		}
+	}
+
+	out.Reset()
+	mongoResult := *result
+	mongoResult.Target = "mongo"
+	mongoResult.TreeDBProfile = ""
+	mongoResult.TreeDBCommandWAL = true
+	if err := writeResult(&out, "text", &mongoResult); err != nil {
+		t.Fatalf("writeResult mongo text: %v", err)
+	}
+	if strings.Contains(out.String(), "treedb_command_wal=") {
+		t.Fatalf("mongo text output included TreeDB command WAL line: %q", out.String())
 	}
 
 	out.Reset()
@@ -2562,6 +2595,20 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 			decoded.TreeDBCommandWAL,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
 			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+
+	result.TreeDBCommandWAL = false
+	out.Reset()
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json without command WAL: %v", err)
+	}
+	var decodedMap map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decodedMap); err != nil {
+		t.Fatalf("unmarshal json result without command WAL: %v", err)
+	}
+	got, ok := decodedMap["treedb_command_wal"]
+	if !ok || got != false {
+		t.Fatalf("json treedb_command_wal=%v present=%t, want false and present", got, ok)
 	}
 }
 

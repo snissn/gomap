@@ -358,6 +358,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
+	}
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
 	}
@@ -396,6 +401,11 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
@@ -442,6 +452,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
@@ -620,11 +635,15 @@ func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALInt
 	db.poisonCommandWALAfterPostAppendFailure(&intent.inner)
 }
 
-// MarkCommandWALIntentRecoveryRequired fails this open handle closed after a
-// command frame was appended but the caller could not make the corresponding
-// mutation visible in memory or durable roots. Reopen recovery may apply the
-// frame, so retrying on the same handle can create command-WAL gaps.
+// MarkCommandWALIntentRecoveryRequired marks this open handle as requiring
+// recovery after a command frame was appended but the caller could not make
+// the corresponding mutation visible in memory or durable roots. Reopen
+// recovery may apply the frame, so retrying on the same handle can create
+// command-WAL gaps.
 func (db *DB) MarkCommandWALIntentRecoveryRequired(intent *CommandWALIntent) {
+	if db == nil || intent == nil {
+		return
+	}
 	db.poisonCommandWALAfterPublicPostAppendFailure(intent)
 }
 

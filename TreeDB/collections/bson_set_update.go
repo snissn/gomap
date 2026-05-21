@@ -50,7 +50,7 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // slices until UpdateBSONSet returns.
 //
 // For no-index collections, this path may stage buffered root runs in WAL-off
-// relaxed and WAL-on relaxed modes. In command-WAL durable modes, staged
+// relaxed and WAL-on relaxed modes. In command-WAL (WAL-on) modes, staged
 // updates append their deterministic command frame before returning, and
 // Flush/Close later publishes the covered roots.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
@@ -98,6 +98,10 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	mode := updateBatchModeNoSecondaryUniqueIndexChanges
 	results, batched, err := c.updateBatchOwnedItems(items, mode)
 	if c.commandWALActive(nil) && err == nil && !batched {
+		// updateBatchOwnedItems reports batched=false for this mode only after a
+		// planning-time secondary/unique-index rejection, before staging or
+		// publishing any write. Retrying in ordinary command-WAL mode therefore
+		// cannot double-apply the update.
 		results, batched, err = c.updateBatchOwnedItems(items, updateBatchModeAny)
 	}
 	if !batched && err == nil {
