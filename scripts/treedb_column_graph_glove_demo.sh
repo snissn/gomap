@@ -59,8 +59,9 @@ EOF
 fi
 
 mkdir -p "$DATA_DIR"
-if [[ ! -f "$GLOVE_PATH" ]]; then
-  if [[ ! -f "$ZIP_PATH" ]]; then
+if [[ ! -s "$GLOVE_PATH" ]]; then
+  if [[ ! -s "$ZIP_PATH" ]]; then
+    rm -f "$ZIP_PATH"
     ZIP_TMP="${ZIP_PATH}.tmp.$$"
     rm -f "$ZIP_TMP"
     if ! curl -fL "$ZIP_URL" -o "$ZIP_TMP"; then
@@ -77,7 +78,7 @@ if [[ ! -f "$GLOVE_PATH" ]]; then
   GLOVE_TMP="${GLOVE_PATH}.tmp.$$"
   rm -f "$GLOVE_TMP"
   if ! unzip -p "$ZIP_PATH" glove.6B.50d.txt > "$GLOVE_TMP"; then
-    rm -f "$GLOVE_TMP"
+    rm -f "$GLOVE_TMP" "$ZIP_PATH"
     exit 1
   fi
   if [[ ! -s "$GLOVE_TMP" ]]; then

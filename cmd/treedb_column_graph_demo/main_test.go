@@ -64,6 +64,9 @@ func TestValidateDemoResetDir(t *testing.T) {
 			t.Fatalf("validateDemoResetDir(%q) succeeded, want rejection", unsafe)
 		}
 	}
+	if demoResetDirWithinBase(filepath.Join(string(os.PathSeparator), "usr", "local"), string(os.PathSeparator)) {
+		t.Fatal("filesystem root was accepted as a reset base")
+	}
 }
 
 func TestLoadGloveRowsRejectsInvalidNumericValues(t *testing.T) {

@@ -226,7 +226,7 @@ func validateDemoResetDir(dir string) (string, error) {
 	}
 
 	allowedBases := make([]string, 0, 3)
-	if cwd, err := os.Getwd(); err == nil {
+	if cwd, err := os.Getwd(); err == nil && !demoResetDirIsRoot(cwd) {
 		allowedBases = append(allowedBases, cwd)
 	}
 	allowedBases = append(allowedBases, os.TempDir())
@@ -247,6 +247,9 @@ func demoResetDirWithinBase(abs, base string) bool {
 		return false
 	}
 	baseAbs = filepath.Clean(baseAbs)
+	if demoResetDirIsRoot(baseAbs) {
+		return false
+	}
 	if abs == baseAbs {
 		return false
 	}
@@ -255,6 +258,15 @@ func demoResetDirWithinBase(abs, base string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func demoResetDirIsRoot(path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	return abs == filepath.VolumeName(abs)+string(os.PathSeparator)
 }
 
 func parseConfig(args []string) (demoConfig, error) {
