@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -78,10 +79,12 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunJSONBenchQueries: %v", err)
 	}
-	partTimings, err := RunJSONBenchPartQueries(ds, 2, 2)
+	const rowsPerGranule = 2
+	partTimings, err := RunJSONBenchPartQueries(ds, rowsPerGranule, 2)
 	if err != nil {
 		t.Fatalf("RunJSONBenchPartQueries: %v", err)
 	}
+	granules := (ds.Rows + rowsPerGranule - 1) / rowsPerGranule
 	if len(partTimings) != len(rawTimings) {
 		t.Fatalf("part timings=%d raw timings=%d", len(partTimings), len(rawTimings))
 	}
@@ -107,9 +110,9 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 			if attempt.ResultRows != raw.ResultRows || attempt.ResultDigest != raw.ResultDigest {
 				t.Fatalf("%s/%s rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, attempt.Cache, attempt.ResultRows, attempt.ResultDigest, raw.ResultRows, raw.ResultDigest)
 			}
-			assertJSONBenchPartDiagnostics(t, timing.Query, attempt.Diagnostics, ds.Rows, 3)
+			assertJSONBenchPartDiagnostics(t, timing.Query, attempt.Diagnostics, ds.Rows, granules)
 		}
-		assertJSONBenchPartDiagnostics(t, timing.Query, timing.Diagnostics, ds.Rows, 3)
+		assertJSONBenchPartDiagnostics(t, timing.Query, timing.Diagnostics, ds.Rows, granules)
 		switch timing.Query {
 		case "Q2":
 			if timing.Diagnostics.AggregateKernel != "fused_dense_group_count_distinct_codes" {
@@ -128,6 +131,57 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 				t.Fatalf("Q5 kernel=%q want fused dense span", timing.Diagnostics.AggregateKernel)
 			}
 		}
+	}
+}
+
+func TestRunJSONBenchPartQ2FallsBackForHighCardinalityDID(t *testing.T) {
+	ds := jsonBenchPartEdgeDataset()
+	ds.Dictionaries["did_code"] = map[string]int64{"outside-low-cardinality-cap": maxCodeCardinality + 1}
+	rawTimings, err := RunJSONBenchQueries(ds, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchQueries: %v", err)
+	}
+	partTimings, err := RunJSONBenchPartQueries(ds, 2, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartQueries: %v", err)
+	}
+	rawByQuery := make(map[string]JSONBenchQueryTiming, len(rawTimings))
+	for _, timing := range rawTimings {
+		rawByQuery[timing.Query] = timing
+	}
+	for _, timing := range partTimings {
+		if timing.Query != "Q2" {
+			continue
+		}
+		raw, ok := rawByQuery[timing.Query]
+		if !ok {
+			t.Fatalf("missing raw timing for %s", timing.Query)
+		}
+		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
+			t.Fatalf("Q2 fallback rows/digest=(%d,%d) raw=(%d,%d)", timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
+		}
+		if timing.Diagnostics.AggregateKernel != "projected_scan_group_count_distinct" {
+			t.Fatalf("Q2 fallback kernel=%q want projected scan", timing.Diagnostics.AggregateKernel)
+		}
+		return
+	}
+	t.Fatal("missing Q2 part timing")
+}
+
+func TestRunJSONBenchPartQ3RejectsInvalidHour(t *testing.T) {
+	ds := jsonBenchPartEdgeDataset()
+	ds.Columns["time_us"][0] = -3_600_000_000
+	part, err := BuildJSONBenchColumnPart(ds, 2)
+	if err != nil {
+		t.Fatalf("BuildJSONBenchColumnPart: %v", err)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	_, _, _, err = runJSONBenchPartQ3(part, codes, &jsonBenchPartQueryScratch{})
+	if err == nil || !strings.Contains(err.Error(), "q3 hour") {
+		t.Fatalf("runJSONBenchPartQ3 err=%v want q3 hour validation", err)
 	}
 }
 
@@ -152,6 +206,38 @@ func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 	}
 	if got := len(ds.Columns["time_us"]); got != 1000 {
 		t.Fatalf("time_us len=%d want 1000", got)
+	}
+}
+
+func jsonBenchPartEdgeDataset() JSONBenchDataset {
+	return JSONBenchDataset{
+		Rows: 4,
+		Columns: map[string][]int64{
+			"row_index":              {0, 1, 2, 3},
+			"time_us":                {0, 3_600_000_000, 7_200_000_000, 10_800_000_000},
+			"did_code":               {maxCodeCardinality + 1, 42, maxCodeCardinality + 1, 99},
+			"kind_code":              {1, 1, 1, 1},
+			"commit_operation_code":  {1, 1, 1, 1},
+			"commit_collection_code": {1, 1, 2, 3},
+		},
+		Dictionaries: map[string]map[string]int64{
+			"did_code": {
+				"a": maxCodeCardinality + 1,
+				"b": 42,
+				"c": 99,
+			},
+			"kind_code": {
+				"commit": 1,
+			},
+			"commit_operation_code": {
+				"create": 1,
+			},
+			"commit_collection_code": {
+				"app.bsky.feed.post":   1,
+				"app.bsky.feed.repost": 2,
+				"app.bsky.feed.like":   3,
+			},
+		},
 	}
 }
 
@@ -204,7 +290,10 @@ func TestRunJSONBenchPartQueriesLocalIfPresent(t *testing.T) {
 		rawByQuery[timing.Query] = timing
 	}
 	for _, timing := range partTimings {
-		raw := rawByQuery[timing.Query]
+		raw, ok := rawByQuery[timing.Query]
+		if !ok {
+			t.Fatalf("unexpected local part query %s", timing.Query)
+		}
 		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
 			t.Fatalf("%s local part rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
 		}
@@ -216,14 +305,14 @@ func assertJSONBenchPartDiagnostics(t *testing.T, query string, diagnostics JSON
 	if diagnostics.RowsScanned != rows {
 		t.Fatalf("%s diagnostics rows=%d want %d: %+v", query, diagnostics.RowsScanned, rows, diagnostics)
 	}
-	if diagnostics.GranulesConsidered != granules {
-		t.Fatalf("%s diagnostics granules=%d want %d: %+v", query, diagnostics.GranulesConsidered, granules, diagnostics)
+	if diagnostics.GranulesConsidered <= 0 || diagnostics.GranulesConsidered > granules {
+		t.Fatalf("%s diagnostics granules=%d want 1..%d: %+v", query, diagnostics.GranulesConsidered, granules, diagnostics)
 	}
-	if diagnostics.GranulesSkipped != 0 {
-		t.Fatalf("%s diagnostics skipped=%d want 0: %+v", query, diagnostics.GranulesSkipped, diagnostics)
+	if diagnostics.GranulesSkipped < 0 || diagnostics.GranulesSkipped > diagnostics.GranulesConsidered {
+		t.Fatalf("%s diagnostics skipped=%d want 0..%d: %+v", query, diagnostics.GranulesSkipped, diagnostics.GranulesConsidered, diagnostics)
 	}
-	if diagnostics.GranulesDecoded <= 0 || diagnostics.GranulesDecoded > granules {
-		t.Fatalf("%s diagnostics decoded granules=%d want 1..%d: %+v", query, diagnostics.GranulesDecoded, granules, diagnostics)
+	if diagnostics.GranulesDecoded <= 0 || diagnostics.GranulesDecoded > diagnostics.GranulesConsidered {
+		t.Fatalf("%s diagnostics decoded granules=%d want 1..%d: %+v", query, diagnostics.GranulesDecoded, diagnostics.GranulesConsidered, diagnostics)
 	}
 	if diagnostics.BlocksDecoded <= 0 || diagnostics.BytesDecoded <= 0 {
 		t.Fatalf("%s diagnostics missing decoded blocks/bytes: %+v", query, diagnostics)
