@@ -120,6 +120,40 @@ func TestColumnPhysicalFixedWidthEndianDecodeBenchHelpersV1(t *testing.T) {
 			t.Fatalf("empty uint32 direct view unexpectedly available")
 		}
 	}
+
+	for _, tc := range []struct {
+		name string
+		fn   func()
+	}{
+		{
+			name: "float32_big_endian_truncated",
+			fn: func() {
+				appendFloat32FixedWidthBigEndianForBenchmark(nil, []byte{1, 2, 3})
+			},
+		},
+		{
+			name: "float32_little_endian_truncated",
+			fn: func() {
+				appendFloat32FixedWidthLittleEndianForBenchmark(nil, []byte{1, 2, 3})
+			},
+		},
+		{
+			name: "uint32_big_endian_truncated",
+			fn: func() {
+				appendUint32FixedWidthBigEndianForBenchmark(nil, []byte{1, 2, 3})
+			},
+		},
+		{
+			name: "uint32_little_endian_truncated",
+			fn: func() {
+				appendUint32FixedWidthLittleEndianForBenchmark(nil, []byte{1, 2, 3})
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mustPanicColumnPhysicalFixedWidthBenchmark(t, tc.fn)
+		})
+	}
 }
 
 func BenchmarkColumnPhysicalFixedWidthEndianDecodeV1(b *testing.B) {
@@ -302,6 +336,7 @@ func encodeUint32FixedWidthForBenchmark(values []uint32, order binary.ByteOrder)
 }
 
 func appendFloat32FixedWidthBigEndianForBenchmark(dst []float32, raw []byte) []float32 {
+	requireColumnPhysicalFixedWidth4ForBenchmark(raw)
 	base := len(dst)
 	need := base + len(raw)/4
 	if cap(dst) < need {
@@ -333,6 +368,7 @@ func appendFloat32FixedWidthBigEndianForBenchmark(dst []float32, raw []byte) []f
 }
 
 func appendFloat32FixedWidthLittleEndianForBenchmark(dst []float32, raw []byte) []float32 {
+	requireColumnPhysicalFixedWidth4ForBenchmark(raw)
 	base := len(dst)
 	need := base + len(raw)/4
 	if cap(dst) < need {
@@ -364,6 +400,7 @@ func appendFloat32FixedWidthLittleEndianForBenchmark(dst []float32, raw []byte) 
 }
 
 func appendUint32FixedWidthBigEndianForBenchmark(dst []uint32, raw []byte) []uint32 {
+	requireColumnPhysicalFixedWidth4ForBenchmark(raw)
 	base := len(dst)
 	need := base + len(raw)/4
 	if cap(dst) < need {
@@ -395,6 +432,7 @@ func appendUint32FixedWidthBigEndianForBenchmark(dst []uint32, raw []byte) []uin
 }
 
 func appendUint32FixedWidthLittleEndianForBenchmark(dst []uint32, raw []byte) []uint32 {
+	requireColumnPhysicalFixedWidth4ForBenchmark(raw)
 	base := len(dst)
 	need := base + len(raw)/4
 	if cap(dst) < need {
@@ -456,4 +494,20 @@ func uint32FixedWidthLittleEndianViewForBenchmark(raw []byte) ([]uint32, bool) {
 func columnPhysicalBenchmarkHostLittleEndian() bool {
 	var value uint16 = 1
 	return *(*byte)(unsafe.Pointer(&value)) == 1
+}
+
+func requireColumnPhysicalFixedWidth4ForBenchmark(raw []byte) {
+	if len(raw)%4 != 0 {
+		panic("collections: benchmark fixed-width payload length is not divisible by 4")
+	}
+}
+
+func mustPanicColumnPhysicalFixedWidthBenchmark(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("expected panic")
+		}
+	}()
+	fn()
 }
