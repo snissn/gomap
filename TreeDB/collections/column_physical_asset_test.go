@@ -577,7 +577,7 @@ func TestColumnAssetReadIntegrityCachedVerifyReusesVerifiedRefM1634(t *testing.T
 		t.Fatalf("cached repeated read after corruption: %v", err)
 	}
 	if bytes.Equal(cachedRaw, payload) {
-		t.Fatalf("cached repeated read unexpectedly returned original payload after corruption")
+		t.Fatalf("cached repeated read returned uncorrupted payload; expected corrupted bytes after file mutation")
 	}
 
 	badRef := ref
