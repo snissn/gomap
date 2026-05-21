@@ -829,7 +829,7 @@ func TestCollectionCommandWALUpdateBSONSetUniqueIndexChangePublishesAppliedLSN(t
 	}
 }
 
-func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexPublishesAppliedLSN(t *testing.T) {
+func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexStagesAfterWALAppend(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
@@ -843,7 +843,11 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexPublishesAppliedL
 		},
 	})
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 	col, err := NewCollectionManager(d).OpenCollection("users")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
@@ -866,8 +870,46 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexPublishesAppliedL
 		t.Fatalf("city=%q want sea", got)
 	}
 	assertCollectionIndexIDs(t, col, "email", "ada@example.test", "u1")
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0 before flush", got)
+	}
+	frames := collectionCommandWALFrames(t, dir)
+	var updateFrames []commitlog.CommandEnvelope
+	for _, frame := range frames {
+		if frame.Kind == commitlog.CommandKindCollectionUpdateBatchByID {
+			updateFrames = append(updateFrames, frame)
+		}
+	}
+	if len(updateFrames) != 1 {
+		t.Fatalf("command WAL update frames=%+v all frames=%+v, want one update frame before flush", updateFrames, frames)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
 	if got := d.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	doc, err = reopened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get reopened doc: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("reopened city=%q want sea", got)
+	}
+	assertCollectionIndexIDs(t, reopened, "email", "ada@example.test", "u1")
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
 	}
 }
 
@@ -1751,6 +1793,65 @@ func TestCollectionCommandWALPendingFirstLSNRequiresAppliedNext(t *testing.T) {
 	if err := domain.recordPendingCommandWALLSNLocked(d, 2); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
 		t.Fatalf("recordPendingCommandWALLSNLocked error=%v, want ErrCommandWALAppliedLSNNonContig", err)
 	}
+}
+
+func TestCollectionCommandWALPendingRecordIgnoresAlreadyAppliedLSN(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	if err := d.PublishCommandWALAppliedLSN(2, []backenddb.CommandWALLSNRange{{First: 1, Last: 2}}, false); err != nil {
+		t.Fatalf("PublishCommandWALAppliedLSN: %v", err)
+	}
+	domain := &collectionWriteDomain{}
+	if err := domain.recordPendingCommandWALLSNLocked(d, 2); err != nil {
+		t.Fatalf("recordPendingCommandWALLSNLocked already applied: %v", err)
+	}
+	if domain.pendingCommandWALFirst != 0 || domain.pendingCommandWALLast != 0 {
+		t.Fatalf("pending command WAL range=[%d,%d], want empty", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	if err := domain.recordPendingCommandWALLSNLocked(d, 1); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("recordPendingCommandWALLSNLocked stale error=%v, want ErrCommandWALAppliedLSNNonContig", err)
+	}
+}
+
+func TestRollbackBufferedIndexedDomainRestoresPendingCommandWAL(t *testing.T) {
+	coord := newCollectionCommandWALCoordinator()
+	domain := &collectionWriteDomain{
+		pendingCommandWALFirst: 1,
+		pendingCommandWALLast:  2,
+	}
+	domain.commandWALCoordinator.Store(coord)
+	domain.reserveCommandWALCoordinatorOwnerLocked()
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+
+	domain.pendingCommandWALLast = 3
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	if domain.pendingCommandWALFirst != 1 || domain.pendingCommandWALLast != 2 {
+		t.Fatalf("pending command WAL range=[%d,%d], want [1,2]", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	coord.mu.Lock()
+	if coord.owner != domain {
+		coord.mu.Unlock()
+		t.Fatalf("coordinator owner cleared despite restored pending command WAL")
+	}
+	coord.mu.Unlock()
+
+	emptyCheckpoint := checkpointBufferedIndexedDomain(&collectionWriteDomain{})
+	rollbackBufferedIndexedDomain(domain, emptyCheckpoint)
+	if domain.pendingCommandWALFirst != 0 || domain.pendingCommandWALLast != 0 {
+		t.Fatalf("pending command WAL range=[%d,%d], want empty", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	coord.mu.Lock()
+	if coord.owner != nil {
+		coord.mu.Unlock()
+		t.Fatalf("coordinator owner retained after pending command WAL rollback")
+	}
+	coord.mu.Unlock()
 }
 
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexReopenRecovery(t *testing.T) {

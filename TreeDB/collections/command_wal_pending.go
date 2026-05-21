@@ -385,6 +385,12 @@ func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(db *backen
 		if state == nil {
 			return backenddb.ErrClosed
 		}
+		if lsn < state.AppliedCommandLSN {
+			return fmt.Errorf("%w: pending collection command WAL lsn %d is behind applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, state.AppliedCommandLSN)
+		}
+		if lsn == state.AppliedCommandLSN {
+			return nil
+		}
 		if lsn != state.AppliedCommandLSN+1 {
 			return fmt.Errorf("%w: pending collection command WAL starts at %d after applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, state.AppliedCommandLSN)
 		}

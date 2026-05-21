@@ -924,6 +924,8 @@ type bufferedIndexedCheckpoint struct {
 	uniqueValueMutableRuns map[string]memtable.Table
 	rootRunCount           int
 	indexedDeletesOnly     bool
+	pendingCommandWALFirst uint64
+	pendingCommandWALLast  uint64
 }
 
 type bufferedUniqueValueIndex struct {
@@ -5305,6 +5307,8 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		uniqueValueMutableRuns: cloneMutableRunMap(domain.uniqueValueMutableRuns),
 		rootRunCount:           domain.rootRunCount,
 		indexedDeletesOnly:     domain.indexedDeletesOnly,
+		pendingCommandWALFirst: domain.pendingCommandWALFirst,
+		pendingCommandWALLast:  domain.pendingCommandWALLast,
 	}
 }
 
@@ -5341,6 +5345,13 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.primaryCacheDirty = checkpoint.primaryCacheDirty
 	domain.rootRunCount = checkpoint.rootRunCount
 	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
+	domain.pendingCommandWALFirst = checkpoint.pendingCommandWALFirst
+	domain.pendingCommandWALLast = checkpoint.pendingCommandWALLast
+	if collectionCommandWALDomainPendingLocked(domain) {
+		domain.reserveCommandWALCoordinatorOwnerLocked()
+	} else {
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
+	}
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
 	if checkpoint.primaryRunIndexActive {
@@ -7671,7 +7682,9 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
 		}
-		ordered, cleanupDeltas, err := buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, publishRootRuns, flushUnit.rootPolicies, rootOverlays)
+		var ordered []backenddb.OrderedRootDeltaBatchPublishInput
+		var cleanupDeltas func()
+		ordered, cleanupDeltas, err = buildBufferedRootOverlayDeltaBatchPublishInputs(rootNames, publishRootRuns, flushUnit.rootPolicies, rootOverlays)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
@@ -7698,7 +7711,9 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		}
 	} else {
 		materializeStart := time.Now()
-		ordered, cleanupDeltas, err := buildBufferedRootDeltaBatchPublishInputs(rootNames, publishRootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
+		var ordered []backenddb.OrderedRootDeltaBatchPublishInput
+		var cleanupDeltas func()
+		ordered, cleanupDeltas, err = buildBufferedRootDeltaBatchPublishInputs(rootNames, publishRootRuns, flushUnit.rootBaseIDs, flushUnit.rootPolicies)
 		if err != nil {
 			materializeElapsed = collectionObservedElapsedSince(materializeStart)
 			return err
@@ -12261,6 +12276,18 @@ type directBufferedUpdatePlan struct {
 	stagedBytes                 int64
 }
 
+func (plan *updateBatchPlan) canStageDirectBufferedUpdateAfterCommandWALAppend() bool {
+	return plan != nil &&
+		plan.directBufferedUpdate != nil &&
+		plan.directBufferedUpdate.stagesOnlyPrimaryRoot()
+}
+
+func (direct *directBufferedUpdatePlan) stagesOnlyPrimaryRoot() bool {
+	return direct != nil &&
+		len(direct.templateEntries) == 0 &&
+		len(direct.secondaryRootPlans) == 0
+}
+
 type directBufferedRootEntry struct {
 	key   []byte
 	value []byte
@@ -12818,7 +12845,7 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, secondaryIndexChanges updateBatchSecondaryIndexChangeSummary, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
@@ -12831,14 +12858,22 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch
 	}
-	if c.commandWALActive(nil) {
-		return false
-	}
 	if !meta.Options.BufferedIndexedWrites {
 		return false
 	}
+	if c.commandWALActive(nil) {
+		// The mode excludes secondary-unique changes at the planner boundary;
+		// this runtime guard is the authoritative check for all secondary indexes.
+		return c.canBufferDirectUpdateAck() &&
+			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
+			isBSONDocumentFormat(opts.documentFormat) &&
+			structuredBSONSetBatch &&
+			canBuffer &&
+			!secondaryIndexChanges.any &&
+			!persistIndexStateForOptions(opts)
+	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
-		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+		if secondaryIndexChanges.unique {
 			return false
 		}
 		canBuffer = true
@@ -12882,7 +12917,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			}
 			err = func() error {
 				var unlockCommandWALRawStage func()
-				if commandWALBufferedMode && plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && len(plan.commandWALDocuments) > 0 {
+				if commandWALBufferedMode &&
+					plan.canStageDirectBufferedUpdateAfterCommandWALAppend() &&
+					len(plan.commandWALDocuments) > 0 {
 					intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
 					if err != nil {
 						return err
@@ -13935,7 +13972,13 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateV1CommandWALDocuments != nil {
 		commandWALDocuments = templateV1CommandWALDocuments
 	}
-	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+	var secondaryIndexChanges updateBatchSecondaryIndexChangeSummary
+	if c.commandWALActive(nil) {
+		secondaryIndexChanges = summarizeUpdateBatchSecondaryIndexChanges(runtimes, changed)
+	} else {
+		secondaryIndexChanges.unique = updateBatchChangesSecondaryUniqueIndex(runtimes, changed)
+	}
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && secondaryIndexChanges.unique {
 		_ = snap.Close()
 		return nil, errUpdateBatchChangesSecondaryUniqueIndex
 	}
@@ -13956,7 +13999,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, updateBatchItemsAllHaveBSONSet(items))
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, secondaryIndexChanges, changed, updateBatchItemsAllHaveBSONSet(items))
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -14452,6 +14495,17 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 
 	domain := c.writeDomain
+	commandWALPendingRecorded := false
+	recordPendingCommandWAL := func() error {
+		if plan.bufferedCommandWALLSN == 0 || commandWALPendingRecorded {
+			return nil
+		}
+		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
+			return commandWALBufferedUpdateCommitAmbiguous(err)
+		}
+		commandWALPendingRecorded = true
+		return nil
+	}
 	lockStart := updateBatchStatsNow(detailedStats)
 	domain.mu.Lock()
 	plan.stats.BufferStageLockWait += updateBatchStatsSince(detailedStats, lockStart)
@@ -14586,9 +14640,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		overlayAppendDuration := updateBatchStatsSince(detailedStats, overlayAppendStart)
 		plan.stats.BufferStagePrimaryAppend += overlayAppendDuration
 		plan.stats.BufferStageRootAppend += overlayAppendDuration
-		if err == nil && buffered && plan.bufferedCommandWALLSN != 0 {
-			if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-				return false, commandWALBufferedUpdateCommitAmbiguous(err)
+		if err == nil && buffered {
+			if err := recordPendingCommandWAL(); err != nil {
+				return false, err
 			}
 		}
 		return buffered, err
@@ -14707,6 +14761,11 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			return false, err
 		}
 	}
+	// Record after staging before any synchronous threshold flush; the flush
+	// clears the pending range after it advances AppliedCommandLSN.
+	if err := recordPendingCommandWAL(); err != nil {
+		return false, err
+	}
 	if !primaryOnlyDirectUpdate && shouldFlushBufferedIndexedWrites(domain, plan.meta.Options) {
 		freezePreAppendTables()
 		flushDuration, lockReleased, relockWait, err := c.flushBufferedIndexedAfterThresholdLocked(domain, plan.meta.Options)
@@ -14719,6 +14778,8 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		plan.stats.BufferStageLockWait += updateBatchStatsDuration(detailedStats, relockWait)
 		plan.stats.BufferStageFlush += updateBatchStatsDuration(detailedStats, flushDuration)
 		if err != nil {
+			// The command frame is appended and staged writes are buffered, so a
+			// flush failure is commit-ambiguous and the deferred poison forces recovery.
 			if rollbackOnError {
 				rollbackBufferedIndexedDomain(domain, checkpoint)
 				c.meta = collectionMetaCheckpoint
@@ -14728,10 +14789,10 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	resetCollectionTables(compactedObsolete)
 	plan.stats.BufferedBatches = 1
-	if plan.bufferedCommandWALLSN != 0 {
-		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-			return false, commandWALBufferedUpdateCommitAmbiguous(err)
-		}
+	// If no threshold flush published the range, leave it pending for the next
+	// explicit/background flush. The helper is idempotent if already recorded.
+	if err := recordPendingCommandWAL(); err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -15076,12 +15137,32 @@ func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatch
 	return nil
 }
 
-func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
-	if len(runtimes) == 0 || len(updates) == 0 {
-		return false
+type updateBatchSecondaryIndexChangeSummary struct {
+	any    bool
+	unique bool
+}
+
+func summarizeUpdateBatchSecondaryIndexChanges(runtimes []indexRuntime, updates []preparedBatchUpdate) updateBatchSecondaryIndexChangeSummary {
+	var summary updateBatchSecondaryIndexChangeSummary
+	for runtimeIdx := range runtimes {
+		for _, update := range updates {
+			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
+				summary.any = true
+				if runtimes[runtimeIdx].def.unique {
+					summary.unique = true
+				}
+				if summary.any && summary.unique {
+					return summary
+				}
+			}
+		}
 	}
-	for runtimeIdx, runtime := range runtimes {
-		if !runtime.def.unique {
+	return summary
+}
+
+func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
+	for runtimeIdx := range runtimes {
+		if !runtimes[runtimeIdx].def.unique {
 			continue
 		}
 		for _, update := range updates {
@@ -15091,6 +15172,10 @@ func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []p
 		}
 	}
 	return false
+}
+
+func updateBatchChangesSecondaryIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
+	return summarizeUpdateBatchSecondaryIndexChanges(runtimes, updates).any
 }
 
 func documentIndexRuntimeChanged(oldState, newState documentIndexState, runtime indexRuntime) bool {
