@@ -50,63 +50,80 @@ func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
 }
 
 func TestRunColumnStoreSuiteRejectsRelaxedAssetReadIntegrityWithoutUnsafeM1634(t *testing.T) {
-	dir := t.TempDir()
-	cfg := BenchConfig{
-		Keys:      16,
-		BatchSize: 8,
-		DBsArg:    "treedb",
-		Profile:   "durable",
-		Progress:  false,
-		SeedUsed:  1,
-	}
-	prevAllowUnsafe := *treedbAllowUnsafe
-	prevIntegrity := *columnStoreSuiteAssetReadIntegrityArg
-	*treedbAllowUnsafe = false
-	*columnStoreSuiteAssetReadIntegrityArg = "skip_checksums"
-	t.Cleanup(func() {
-		*treedbAllowUnsafe = prevAllowUnsafe
-		*columnStoreSuiteAssetReadIntegrityArg = prevIntegrity
-	})
-	if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
-		ProfileDir:    dir,
-		ExecutionPath: "native-fastpath",
-		ForcedPath:    columnStorePathSerialColumnScan,
-	}); err == nil || !strings.Contains(err.Error(), "requires -treedb-allow-unsafe") {
-		t.Fatalf("runColumnStoreSuite relaxed read integrity err=%v want unsafe rejection", err)
+	for _, mode := range []string{
+		string(collections.ColumnAssetReadIntegrityCachedVerify),
+		string(collections.ColumnAssetReadIntegritySkipChecksums),
+	} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := BenchConfig{
+				Keys:      16,
+				BatchSize: 8,
+				DBsArg:    "treedb",
+				Profile:   "durable",
+				Progress:  false,
+				SeedUsed:  1,
+			}
+			prevAllowUnsafe := *treedbAllowUnsafe
+			prevIntegrity := *columnStoreSuiteAssetReadIntegrityArg
+			*treedbAllowUnsafe = false
+			*columnStoreSuiteAssetReadIntegrityArg = mode
+			t.Cleanup(func() {
+				*treedbAllowUnsafe = prevAllowUnsafe
+				*columnStoreSuiteAssetReadIntegrityArg = prevIntegrity
+			})
+			if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+				ProfileDir:    dir,
+				ExecutionPath: "native-fastpath",
+				ForcedPath:    columnStorePathSerialColumnScan,
+			}); err == nil || !strings.Contains(err.Error(), "requires -treedb-allow-unsafe") {
+				t.Fatalf("runColumnStoreSuite relaxed read integrity err=%v want unsafe rejection", err)
+			}
+		})
 	}
 }
 
 func TestRunColumnStoreSuiteReportsRelaxedAssetReadIntegrityM1634(t *testing.T) {
-	dir := t.TempDir()
-	cfg := BenchConfig{
-		Keys:      16,
-		BatchSize: 8,
-		DBsArg:    "treedb",
-		Profile:   "durable",
-		Progress:  false,
-		SeedUsed:  1,
-	}
-	prevAllowUnsafe := *treedbAllowUnsafe
-	*treedbAllowUnsafe = true
-	t.Cleanup(func() { *treedbAllowUnsafe = prevAllowUnsafe })
-	if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
-		ProfileDir:               dir,
-		ExecutionPath:            "native-fastpath",
-		ForcedPath:               columnStorePathSerialColumnScan,
-		ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegritySkipChecksums,
-	}); err != nil {
-		t.Fatalf("runColumnStoreSuite relaxed read integrity: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
-	if err != nil {
-		t.Fatalf("read column_store_results.json: %v", err)
-	}
-	var report columnStoreSuiteReport
-	if err := json.Unmarshal(data, &report); err != nil {
-		t.Fatalf("unmarshal column_store_results.json: %v", err)
-	}
-	if got, want := report.ColumnAssetReadIntegrity, string(collections.ColumnAssetReadIntegritySkipChecksums); got != want {
-		t.Fatalf("column_asset_read_integrity=%q want %q", got, want)
+	for _, mode := range []collections.ColumnAssetReadIntegrity{
+		collections.ColumnAssetReadIntegrityCachedVerify,
+		collections.ColumnAssetReadIntegritySkipChecksums,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := BenchConfig{
+				Keys:      16,
+				BatchSize: 8,
+				DBsArg:    "treedb",
+				Profile:   "durable",
+				Progress:  false,
+				SeedUsed:  1,
+			}
+			prevAllowUnsafe := *treedbAllowUnsafe
+			*treedbAllowUnsafe = true
+			t.Cleanup(func() { *treedbAllowUnsafe = prevAllowUnsafe })
+			if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+				ProfileDir:               dir,
+				ExecutionPath:            "native-fastpath",
+				ForcedPath:               columnStorePathSerialColumnScan,
+				ColumnAssetReadIntegrity: mode,
+			}); err != nil {
+				t.Fatalf("runColumnStoreSuite relaxed read integrity: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+			if err != nil {
+				t.Fatalf("read column_store_results.json: %v", err)
+			}
+			var report columnStoreSuiteReport
+			if err := json.Unmarshal(data, &report); err != nil {
+				t.Fatalf("unmarshal column_store_results.json: %v", err)
+			}
+			if got, want := report.ColumnAssetReadIntegrity, string(mode); got != want {
+				t.Fatalf("column_asset_read_integrity=%q want %q", got, want)
+			}
+			if !report.BenchmarkOnlyRelaxed {
+				t.Fatalf("BenchmarkOnlyRelaxed=false want true for %s", mode)
+			}
+		})
 	}
 }
 
@@ -220,6 +237,27 @@ func TestColumnStoreSuiteInheritsTreeDBDisableReadChecksumM1634(t *testing.T) {
 	}
 	if got != collections.ColumnAssetReadIntegrityVerify {
 		t.Fatalf("explicit column asset read integrity=%q want verify override", got)
+	}
+}
+
+func TestColumnStoreSuiteEffectiveAssetReadIntegrityCachedVerifyAliasesM1634(t *testing.T) {
+	prevAllowUnsafe := *treedbAllowUnsafe
+	*treedbAllowUnsafe = true
+	t.Cleanup(func() { *treedbAllowUnsafe = prevAllowUnsafe })
+
+	for _, value := range []collections.ColumnAssetReadIntegrity{
+		collections.ColumnAssetReadIntegrityCachedVerify,
+		collections.ColumnAssetReadIntegrity("cached-verify"),
+		collections.ColumnAssetReadIntegrity("verify_once"),
+		collections.ColumnAssetReadIntegrity("verify-once"),
+	} {
+		got, err := columnStoreSuiteEffectiveAssetReadIntegrity(value)
+		if err != nil {
+			t.Fatalf("columnStoreSuiteEffectiveAssetReadIntegrity(%q): %v", value, err)
+		}
+		if got != collections.ColumnAssetReadIntegrityCachedVerify {
+			t.Fatalf("columnStoreSuiteEffectiveAssetReadIntegrity(%q)=%q want %q", value, got, collections.ColumnAssetReadIntegrityCachedVerify)
+		}
 	}
 }
 
@@ -2274,12 +2312,20 @@ func BenchmarkColumnStoreSuiteSerialPhysicalQueriesM14C(b *testing.B) {
 	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify)
 }
 
+func BenchmarkColumnStoreSuiteSerialPhysicalQueriesCachedVerifyM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityCachedVerify)
+}
+
 func BenchmarkColumnStoreSuiteSerialPhysicalQueriesSkipChecksumsM1634(b *testing.B) {
 	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegritySkipChecksums)
 }
 
 func BenchmarkColumnStoreSuiteAggregateMetadataQueriesM14C(b *testing.B) {
 	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegrityVerify)
+}
+
+func BenchmarkColumnStoreSuiteAggregateMetadataQueriesCachedVerifyM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegrityCachedVerify)
 }
 
 func BenchmarkColumnStoreSuiteAggregateMetadataQueriesSkipChecksumsM1634(b *testing.B) {

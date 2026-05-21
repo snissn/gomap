@@ -77,7 +77,7 @@ var (
 	)
 	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
-	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, skip_checksums; skip_checksums is unsafe and requires -treedb-allow-unsafe)")
+	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
@@ -520,7 +520,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ProductionScope:          "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
 		PhysicalColumnQuery:      "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q4b and q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
 		ColumnAssetReadIntegrity: string(assetReadIntegrity),
-		BenchmarkOnlyRelaxed:     assetReadIntegrity == collections.ColumnAssetReadIntegritySkipChecksums,
+		BenchmarkOnlyRelaxed:     columnStoreSuiteAssetReadIntegrityBenchmarkRelaxed(assetReadIntegrity),
 		StageSeparatedBoundary:   "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
 	}
 	if baseCfg.KeepDir {
@@ -581,13 +581,27 @@ func columnStoreSuiteEffectiveAssetReadIntegrity(opt collections.ColumnAssetRead
 	switch value {
 	case "", string(collections.ColumnAssetReadIntegrityVerify):
 		return collections.ColumnAssetReadIntegrityVerify, nil
+	case string(collections.ColumnAssetReadIntegrityCachedVerify), "cached-verify", "verify_once", "verify-once":
+		if !*treedbAllowUnsafe {
+			return "", errors.New("column_store: column asset read integrity cached_verify requires -treedb-allow-unsafe")
+		}
+		return collections.ColumnAssetReadIntegrityCachedVerify, nil
 	case string(collections.ColumnAssetReadIntegritySkipChecksums), "skip-checksums", "none":
 		if !*treedbAllowUnsafe {
 			return "", errors.New("column_store: column asset read integrity skip_checksums requires -treedb-allow-unsafe")
 		}
 		return collections.ColumnAssetReadIntegritySkipChecksums, nil
 	default:
-		return "", fmt.Errorf("column_store: unsupported column asset read integrity %q; use verify or skip_checksums", value)
+		return "", fmt.Errorf("column_store: unsupported column asset read integrity %q; use verify, cached_verify, or skip_checksums", value)
+	}
+}
+
+func columnStoreSuiteAssetReadIntegrityBenchmarkRelaxed(integrity collections.ColumnAssetReadIntegrity) bool {
+	switch integrity {
+	case collections.ColumnAssetReadIntegrityCachedVerify, collections.ColumnAssetReadIntegritySkipChecksums:
+		return true
+	default:
+		return false
 	}
 }
 
