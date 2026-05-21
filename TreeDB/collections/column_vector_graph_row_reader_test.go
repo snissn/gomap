@@ -210,6 +210,19 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsManifestRowCountMismatchV2B(t 
 	}
 }
 
+func TestColumnVectorGraphPhysicalRowReaderRejectsMutationManifestPartsV2B(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithMutationPartV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	})
+	defer func() { _ = d.Close() }()
+
+	_, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if !errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want visibility-required mutation-part failure", err)
+	}
+}
+
 func TestColumnVectorGraphPhysicalRowReaderRejectsStaleGraphAfterMutationV2B(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -394,6 +407,33 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithManifestRowsV2B(tb testi
 
 func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(tb testing.TB, rows []columnVectorGraphAssetRow, manifestRows int, mutateMeta func(CollectionMeta) CollectionMeta) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	return publishColumnVectorGraphPhysicalReaderTestAssetWithMetaManifestRowsAndBaseAssetsV2B(tb, rows, manifestRows, mutateMeta, nil)
+}
+
+func publishColumnVectorGraphPhysicalReaderTestAssetWithMutationPartV2B(tb testing.TB, rows []columnVectorGraphAssetRow) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
+	return publishColumnVectorGraphPhysicalReaderTestAssetWithMetaManifestRowsAndBaseAssetsV2B(tb, rows, len(rows), nil, func(baseCfg ColumnStoreConfig) []ColumnPreparedAsset {
+		return []ColumnPreparedAsset{{
+			Ref: ColumnAssetRef{
+				Kind:       ColumnAssetKindTCS1PartImage,
+				Namespace:  baseCfg.AssetManager.Namespace,
+				Generation: 2,
+				PartID:     99,
+				FileID:     99,
+				Offset:     0,
+				Length:     1,
+				Checksum:   99,
+			},
+			Bytes:        1,
+			PublishID:    99,
+			GenerationID: 2,
+			Reason:       string(ColumnPublishOperationUpdate),
+		}}
+	})
+}
+
+func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaManifestRowsAndBaseAssetsV2B(tb testing.TB, rows []columnVectorGraphAssetRow, manifestRows int, mutateMeta func(CollectionMeta) CollectionMeta, baseAssets func(ColumnStoreConfig) []ColumnPreparedAsset) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
 		tb.Fatalf("open db: %v", err)
@@ -409,8 +449,12 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(t
 		_ = d.Close()
 		tb.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
 	}
+	var assets []ColumnPreparedAsset
+	if baseAssets != nil {
+		assets = baseAssets(*baseCfg)
+	}
 	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
-	records, manifestIdentity := testColumnGraphManifestRecordsV2A(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, manifestRows)
+	records, manifestIdentity := testColumnGraphManifestRecordsWithBaseAssetsV2B(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, manifestRows, assets)
 	meta := CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{
@@ -429,6 +473,77 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(t
 		tb.Fatalf("OpenCollection: %v", err)
 	}
 	return d, col, def
+}
+
+func testColumnGraphManifestRecordsWithBaseAssetsV2B(tb testing.TB, baseCfg ColumnStoreConfig, def VectorIndexDefinition, identity ColumnManifestIdentity, ref ColumnAssetRef, assetBytes int64, rows int, assets []ColumnPreparedAsset) ([]columnManifestRecord, ColumnManifestIdentity) {
+	tb.Helper()
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", baseCfg, def)
+	if err != nil {
+		tb.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	operation := ColumnPublishOperationInsert
+	if len(assets) != 0 {
+		operation = ColumnPublishOperationUpdate
+	}
+	var payloadBytes int64
+	for _, asset := range assets {
+		payloadBytes += asset.Bytes
+	}
+	input := ColumnPublishManifestEncodeInput{
+		Collection:        "docs",
+		ColumnStore:       baseCfg,
+		Operation:         operation,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             append([]ColumnPreparedAsset(nil), assets...),
+			RowCount:           rows,
+			ColumnPayloadBytes: payloadBytes,
+		},
+	}
+	header, err := encodeColumnManifestHeaderRecord(input, identity.Generation)
+	if err != nil {
+		tb.Fatalf("encodeColumnManifestHeaderRecord: %v", err)
+	}
+	baseRecords := []columnManifestRecord{
+		{key: []byte(columnManifestHeaderRecordKey), value: header},
+	}
+	for _, asset := range assets {
+		value, err := encodeColumnManifestPartRecord(asset)
+		if err != nil {
+			tb.Fatalf("encodeColumnManifestPartRecord: %v", err)
+		}
+		baseRecords = append(baseRecords, columnManifestRecord{
+			key:   columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID),
+			value: value,
+		})
+	}
+	sortColumnManifestRecords(baseRecords)
+	baseChecksum := checksumColumnManifestRecords(input, identity.Generation, baseRecords)
+	record := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: identity.Generation,
+		BaseManifestChecksum:   baseChecksum,
+		BaseSchemaHash:         baseCfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               rows,
+		AssetRef:               ref,
+		AssetBytes:             assetBytes,
+	}
+	encoded, err := encodeColumnVectorGraphManifestRecord(record)
+	if err != nil {
+		tb.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	records := append(baseRecords, columnManifestRecord{key: columnVectorGraphManifestRecordKey(def.Name), value: encoded})
+	sortColumnManifestRecords(records)
+	identity.Checksum = checksumColumnManifestRecords(input, identity.Generation, records)
+	return records, identity
 }
 
 func assertColumnVectorGraphPhysicalRowV2B(tb testing.TB, row columnVectorGraphPhysicalRow, id string, ordinal, rowIndex int, vector []float32, invNorm float32, adjacency []uint32) {

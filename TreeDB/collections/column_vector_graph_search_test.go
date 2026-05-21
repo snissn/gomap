@@ -259,6 +259,42 @@ func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T) {
+	var scratch columnVectorGraphNativeSearchScratch
+	oldID := []byte("old-doc")
+	scratch.results = append(scratch.results,
+		columnVectorGraphNativeSearchResult{Ordinal: 7, ID: oldID, Score: 1},
+		columnVectorGraphNativeSearchResult{Ordinal: 8, ID: oldID, Score: 0.5},
+	)
+	oldResults := scratch.results
+	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+		t.Fatalf("prepare small: %v", err)
+	}
+	if len(scratch.results) != 0 {
+		t.Fatalf("prepared results len=%d want zero", len(scratch.results))
+	}
+	for i, result := range oldResults {
+		if result.ID != nil {
+			t.Fatalf("old result[%d] retained ID alias %q", i, string(result.ID))
+		}
+	}
+	scratch.results = make([]columnVectorGraphNativeSearchResult, 2, 64)
+	scratch.results[0].ID = oldID
+	scratch.results[1].ID = oldID
+	oldResults = scratch.results
+	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+		t.Fatalf("prepare oversized: %v", err)
+	}
+	if cap(scratch.results) > 1+columnVectorGraphNativeScratchOversizeSlack {
+		t.Fatalf("oversized prepared results cap=%d want bounded", cap(scratch.results))
+	}
+	for i, result := range oldResults {
+		if result.ID != nil {
+			t.Fatalf("oversized old result[%d] retained ID alias %q", i, string(result.ID))
+		}
+	}
+}
+
 func TestColumnVectorGraphNativeSearchDoesNotFetchDocumentsV3(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

@@ -760,6 +760,21 @@ func columnManifestPartKeyFromRecordKeyForScan(key []byte) (uint64, uint64, erro
 
 func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) ([]columnManifestAssetRefForScan, int, error) {
 	refs := make([]columnManifestAssetRefForScan, 0, len(records))
+	mutationParts, err := walkColumnManifestAssetRefsFromRecordsForScan(records, activeGeneration, expectedNamespace, func(ref ColumnAssetRef, operation ColumnPublishOperation) error {
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return refs, mutationParts, nil
+}
+
+func columnManifestMutationPartsFromRecordsForScan(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) (int, error) {
+	return walkColumnManifestAssetRefsFromRecordsForScan(records, activeGeneration, expectedNamespace, nil)
+}
+
+func walkColumnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string, visit func(ColumnAssetRef, ColumnPublishOperation) error) (int, error) {
 	mutationParts := 0
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
@@ -767,35 +782,39 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		}
 		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
 		if err != nil {
-			return nil, 0, err
+			return 0, err
 		}
 		// The active manifest root contains the reachable immutable lineage:
 		// the original base parts plus later delta/tombstone parts. Older
 		// generations are therefore live until compaction publishes a root
 		// that omits them; only future-generation records are impossible here.
 		if keyGeneration > activeGeneration {
-			return nil, 0, fmt.Errorf("collections: column manifest part generation=%d is newer than active manifest generation=%d", keyGeneration, activeGeneration)
+			return 0, fmt.Errorf("collections: column manifest part generation=%d is newer than active manifest generation=%d", keyGeneration, activeGeneration)
 		}
 		ref, reason, err := decodeColumnManifestPartRefForScan(record.value, expectedNamespace)
 		if err != nil {
-			return nil, 0, err
+			return 0, err
 		}
 		if ref.Generation != keyGeneration {
-			return nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
+			return 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
 		}
 		if ref.PartID != keyPartID {
-			return nil, 0, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
+			return 0, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
 		}
 		operation, ok := columnPhysicalScanOperationFromBytes(reason)
 		if !ok {
-			return nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
+			return 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		if visit != nil {
+			if err := visit(ref, operation); err != nil {
+				return 0, err
+			}
+		}
 		if operation != ColumnPublishOperationInsert {
 			mutationParts++
 		}
 	}
-	return refs, mutationParts, nil
+	return mutationParts, nil
 }
 
 func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (ColumnAssetRef, []byte, error) {

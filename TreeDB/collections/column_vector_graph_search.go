@@ -125,8 +125,10 @@ func resizeColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearch
 
 func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSearchResult, target int) []columnVectorGraphNativeSearchResult {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		clear(dst)
 		return make([]columnVectorGraphNativeSearchResult, 0, target)
 	}
+	clear(dst)
 	return dst[:0]
 }
 
