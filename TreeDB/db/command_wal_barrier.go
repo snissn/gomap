@@ -6,9 +6,11 @@ import (
 )
 
 type commandWALRawBarrier struct {
-	id   uint64
-	hook func() error
-	wg   sync.WaitGroup
+	id     uint64
+	hook   func() error
+	active bool
+	mu     sync.Mutex
+	wg     sync.WaitGroup
 }
 
 // RegisterCommandWALRawPublishBarrier registers a callback that raw command-WAL
@@ -29,7 +31,7 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	db.commandWALRawBarrierMu.Lock()
 	db.commandWALRawBarrierNextID++
 	id := db.commandWALRawBarrierNextID
-	barrier := &commandWALRawBarrier{id: id, hook: hook}
+	barrier := &commandWALRawBarrier{id: id, hook: hook, active: true}
 	db.commandWALRawBarriers = append(db.commandWALRawBarriers, barrier)
 	db.commandWALRawBarrierMu.Unlock()
 	db.closeHooksMu.Unlock()
@@ -51,6 +53,9 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 			}
 			db.commandWALRawBarrierMu.Unlock()
 			if removed != nil {
+				removed.mu.Lock()
+				removed.active = false
+				removed.mu.Unlock()
 				removed.wg.Wait()
 			}
 		})
@@ -68,7 +73,6 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 	barriers := make([]*commandWALRawBarrier, 0, len(db.commandWALRawBarriers))
 	for _, barrier := range db.commandWALRawBarriers {
 		if barrier != nil && barrier.hook != nil {
-			barrier.wg.Add(1)
 			barriers = append(barriers, barrier)
 		}
 	}
@@ -76,9 +80,17 @@ func (db *DB) runCommandWALRawPublishBarriers() error {
 
 	var errs []error
 	for _, barrier := range barriers {
+		barrier.mu.Lock()
+		if !barrier.active || barrier.hook == nil {
+			barrier.mu.Unlock()
+			continue
+		}
+		hook := barrier.hook
+		barrier.wg.Add(1)
+		barrier.mu.Unlock()
 		func() {
 			defer barrier.wg.Done()
-			if err := barrier.hook(); err != nil {
+			if err := hook(); err != nil {
 				errs = append(errs, err)
 			}
 		}()

@@ -805,6 +805,7 @@ func TestCommandWALRawPublishBarrierUnregisterWaitsForInFlight(t *testing.T) {
 	db := &DB{commandWAL: true}
 	barrierEntered := make(chan struct{})
 	releaseBarrier := make(chan struct{})
+	unregisterStarted := make(chan struct{})
 	unregisterReturned := make(chan struct{})
 	runDone := make(chan error, 1)
 
@@ -822,9 +823,15 @@ func TestCommandWALRawPublishBarrierUnregisterWaitsForInFlight(t *testing.T) {
 		t.Fatalf("raw publish barrier did not start")
 	}
 	go func() {
+		close(unregisterStarted)
 		unregister()
 		close(unregisterReturned)
 	}()
+	select {
+	case <-unregisterStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("unregister goroutine did not start")
+	}
 	select {
 	case <-unregisterReturned:
 		t.Fatalf("unregister returned before in-flight barrier completed")

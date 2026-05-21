@@ -440,6 +440,7 @@ func (domain *collectionWriteDomain) clearPendingCommandWALThroughLocked(lsn uin
 	if lsn >= last {
 		domain.pendingCommandWALFirst = 0
 		domain.pendingCommandWALLast = 0
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
 		return
 	}
 	domain.pendingCommandWALFirst = lsn + 1

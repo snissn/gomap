@@ -2550,7 +2550,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
-		"command_wal=true",
+		"treedb_command_wal=true",
 		"buffered_indexed_max_docs=1234",
 		"buffered_indexed_max_bytes=5678",
 		"buffered_indexed_max_root_runs=90",
@@ -2569,8 +2569,8 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	if err := writeResult(&out, "text", result); err != nil {
 		t.Fatalf("writeResult mongo text: %v", err)
 	}
-	if strings.Contains(out.String(), "command_wal=") {
-		t.Fatalf("mongo text output included TreeDB command_wal line: %q", out.String())
+	if strings.Contains(out.String(), "treedb_command_wal=") {
+		t.Fatalf("mongo text output included TreeDB command WAL line: %q", out.String())
 	}
 
 	out.Reset()

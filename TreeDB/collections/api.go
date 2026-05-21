@@ -155,6 +155,17 @@ func (e *CommitAmbiguousError) Is(target error) bool {
 	return target == ErrCommitAmbiguous
 }
 
+func commandWALBufferedUpdateCommitAmbiguous(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ambiguous *CommitAmbiguousError
+	if errors.As(err, &ambiguous) {
+		return err
+	}
+	return &CommitAmbiguousError{Operation: "command WAL buffered update", Err: err}
+}
+
 // UpdateBatchItem describes one document update in a batch. DocumentID must be
 // non-empty and unique within the batch. Update receives the current stored
 // document bytes and returns the replacement document bytes in the same format
@@ -2242,7 +2253,7 @@ func setTestBeforeCommandWALBufferedUpdateStageLockForTest(fn func()) func() {
 	}
 	testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Store(next)
 	return func() {
-		testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Store(prev)
+		testBeforeCommandWALBufferedUpdateStageLockHook.ptr.CompareAndSwap(next, prev)
 	}
 }
 
@@ -14393,6 +14404,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	defer func() {
 		if err != nil && commandWALStageAppended && c.db != nil {
 			c.db.MarkCommandWALIntentRecoveryRequired(commandWALStageIntent)
+			err = commandWALBufferedUpdateCommitAmbiguous(err)
 		}
 	}()
 	appendCommandWALBeforeStage := func() error {
@@ -14570,7 +14582,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		plan.stats.BufferStageRootAppend += overlayAppendDuration
 		if err == nil && buffered && plan.bufferedCommandWALLSN != 0 {
 			if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-				return false, &CommitAmbiguousError{Operation: "command WAL buffered update", Err: err}
+				return false, commandWALBufferedUpdateCommitAmbiguous(err)
 			}
 		}
 		return buffered, err
@@ -14712,7 +14724,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	plan.stats.BufferedBatches = 1
 	if plan.bufferedCommandWALLSN != 0 {
 		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-			return false, &CommitAmbiguousError{Operation: "command WAL buffered update", Err: err}
+			return false, commandWALBufferedUpdateCommitAmbiguous(err)
 		}
 	}
 	return true, nil

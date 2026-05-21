@@ -1680,17 +1680,15 @@ func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error)
 		return func() {}, false
 	}
 	db.closeHooksMu.Lock()
+	defer db.closeHooksMu.Unlock()
 	if !db.acceptingCloseHooksLocked() {
-		db.closeHooksMu.Unlock()
 		return func() {}, false
 	}
 	if setup != nil && !setup() {
-		db.closeHooksMu.Unlock()
 		return func() {}, true
 	}
 	idx := len(db.closeHooks)
 	db.closeHooks = append(db.closeHooks, hook)
-	db.closeHooksMu.Unlock()
 
 	var once sync.Once
 	return func() {
