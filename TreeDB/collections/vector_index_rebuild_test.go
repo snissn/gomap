@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -242,6 +243,53 @@ func TestColumnGraphRebuildVectorIndexMarksStaleAfterMutationV2A(t *testing.T) {
 	case VectorIndexReasonColumnGraphRebuildNeeded, VectorIndexReasonColumnGraphAssetMismatch:
 	default:
 		t.Fatalf("status reason after mutation=%q, want rebuild-needed or asset-mismatch", status.Reason)
+	}
+}
+
+func TestColumnGraphRebuildVectorIndexExpectedPartsUsesActiveGenerationV2A(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("first RebuildVectorIndex: %v", err)
+	}
+	insertColumnGraphRebuildRowsV2A(t, col, []columnGraphRebuildInputRowV2A{
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	})
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("second RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	activeGenerationParts := 0
+	totalLineageParts := 0
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		totalLineageParts++
+		generation, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)
+		if err != nil {
+			t.Fatalf("column manifest part generation: %v", err)
+		}
+		if generation == manifest.Generation {
+			activeGenerationParts++
+		}
+	}
+	if totalLineageParts <= activeGenerationParts {
+		t.Fatalf("test did not create retained prior-generation parts: total=%d active=%d generation=%d", totalLineageParts, activeGenerationParts, manifest.Generation)
+	}
+	if got, want := manifest.ExpectedParts, uint64(activeGenerationParts); got != want {
+		t.Fatalf("manifest ExpectedParts=%d want active-generation part count %d", got, want)
 	}
 }
 

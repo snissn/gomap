@@ -652,7 +652,13 @@ func columnVectorGraphManifestRecordsWithAppliedCommandLSN(manifest columnManife
 	activePartCount := uint64(0)
 	for _, record := range active {
 		if bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
-			activePartCount++
+			partGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)
+			if err != nil {
+				return nil, err
+			}
+			if partGeneration == manifest.Generation {
+				activePartCount++
+			}
 		}
 	}
 	header := encodeColumnVectorGraphRebuildHeaderRecord(manifest, cfg, appliedCommandLSN, activePartCount)
