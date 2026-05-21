@@ -142,6 +142,9 @@ func (r *GranuleReader) CountInt64RangeWithDiagnostics(granules []EncodedGranule
 	if len(marks) != 0 && len(marks) != len(granules) {
 		return 0, diagnostics, fmt.Errorf("colgranule: marks=%d granules=%d", len(marks), len(granules))
 	}
+	if len(marks) == 0 && len(plan.SortKeyRanges) != 0 {
+		return 0, diagnostics, errors.New("colgranule: sort key ranges require marks")
+	}
 	var sortPlan sortKeyRangePlan
 	var err error
 	if len(marks) != 0 {
