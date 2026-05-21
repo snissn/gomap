@@ -39,6 +39,12 @@ type inputSize struct {
 	n    int
 }
 
+// benchmarkCase names one hash function variant in the tournament.
+type benchmarkCase struct {
+	name string
+	run  func([]byte)
+}
+
 // inputSizes covers the block sizes used by the content hash tournament.
 var inputSizes = []inputSize{
 	{name: "64KiB_ClickHouseMinCompressBlock", n: 64 << 10},
@@ -368,5 +374,14 @@ func BenchmarkContentHashTournament(b *testing.B) {
 				sinkBytes = sha256.Sum256(data)
 			}
 		})
+
+		for _, native := range nativeCRCBenchmarks() {
+			b.Run(size.name+"/"+native.name, func(b *testing.B) {
+				b.SetBytes(int64(len(data)))
+				for i := 0; i < b.N; i++ {
+					native.run(data)
+				}
+			})
+		}
 	}
 }

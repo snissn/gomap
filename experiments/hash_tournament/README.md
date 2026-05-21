@@ -31,11 +31,23 @@ For a longer run:
 go test -run '^$' -bench BenchmarkContentHashTournament -benchtime=2s -count=5
 ```
 
+Native C CRC entries are available behind an explicit cgo build tag:
+
+```sh
+CGO_ENABLED=1 go test -tags nativecrc -run '^$' -bench 'BenchmarkContentHashTournament/.*/(ZlibCRC32_Cgo|LibdeflateCRC32_Cgo)$' -benchtime=1s -count=3
+```
+
+This requires system `zlib` headers plus `libdeflate` discoverable through
+`pkg-config`. The native entries stay behind `-tags nativecrc` so the default
+benchmark remains portable.
+
 ## Competitors
 
 - `CRC32C_Castagnoli_TreeDB`: Go `hash/crc32` with `crc32.Castagnoli`.
 - `CRC32_IEEE`: Go `hash/crc32.ChecksumIEEE`.
 - `CRC32_Koopman`: Go `hash/crc32` with `crc32.Koopman`.
+- `ZlibCRC32_Cgo`: C `zlib` `crc32_z`, enabled with `-tags nativecrc`.
+- `LibdeflateCRC32_Cgo`: C `libdeflate_crc32` via `github.com/4kills/go-libdeflate/v2`, enabled with `-tags nativecrc`.
 - `CRC64_ECMA`: Go `hash/crc64` with `crc64.ECMA`.
 - `CRC64_ISO`: Go `hash/crc64` with `crc64.ISO`.
 - `XXHash64`: `github.com/cespare/xxhash/v2`.
@@ -78,9 +90,17 @@ persisted checksum values.
 ## Current Apple M3 Read
 
 On the local Apple M3 smoke runs, `FarmHash64` and its seeded 64-bit variants
-are the fastest candidates. The 128-bit farm and `XXH3` variants do not beat
-the 64-bit farm path, and the native 32-bit farm variants do not beat the
-current Go `CRC32C_Castagnoli_TreeDB` path.
+are the fastest portable pure-Go candidates. The 128-bit farm and `XXH3`
+variants do not beat the 64-bit farm path, and the native 32-bit farm variants
+do not beat the current Go `CRC32C_Castagnoli_TreeDB` path.
+
+The optional cgo CRC entries are faster than the pure-Go candidates on this
+machine, but they carry native library and cgo deployment tradeoffs:
+
+```text
+ZlibCRC32_Cgo:       ~37.8 GB/s at 1 MiB
+LibdeflateCRC32_Cgo: ~77.5 GB/s at 1 MiB
+```
 
 Representative 1 MiB expanded-run results:
 
