@@ -136,18 +136,37 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 		}
 		scratch = groupRaw
 		groupIsView := readCache.lastView
-		groupAsset, groupPayload, err := decodeColumnDictionaryCodesAssetPayload(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
-		if err != nil {
-			return ColumnPhysicalQueryResult{}, true, err
-		}
+		var groupPayload columnDictionaryCodesAssetPayload
 		var groupCodes []uint32
+		var localToGlobal []uint32
+		var ok bool
 		if !groupIsView {
 			decoded, err := decodeColumnDictionaryCodesAsset(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
 			if err != nil {
 				return ColumnPhysicalQueryResult{}, true, err
 			}
-			groupAsset = decoded
+			groupPayload = columnDictionaryCodesAssetPayload{rowCount: len(decoded.Codes), offset: 0}
 			groupCodes = decoded.Codes
+			localToGlobal, ok = reducer.translateDictionary(decoded.Dictionary)
+		} else {
+			ok = true
+			dictCur, cardinality, rowCount, err := decodeColumnDictionaryCodesAssetHeader(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
+			if err != nil {
+				return ColumnPhysicalQueryResult{}, true, err
+			}
+			localToGlobal = reducer.prepareDictionary(cardinality)
+			for localCode := 0; localCode < cardinality; localCode++ {
+				if !reducer.translateDictionaryValue(localToGlobal, localCode, dictCur.stringBytes()) {
+					ok = false
+				}
+			}
+			if dictCur.err != nil {
+				return ColumnPhysicalQueryResult{}, true, dictCur.err
+			}
+			groupPayload = columnDictionaryCodesAssetPayload{rowCount: rowCount, offset: dictCur.pos}
+		}
+		if !ok {
+			return ColumnPhysicalQueryResult{}, false, nil
 		}
 		valueRaw, err := readCache.read(valueSnapshot.AssetRef, scratch)
 		if err != nil {
@@ -160,10 +179,6 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 		}
 		if groupPayload.rowCount != valuePayload.rowCount || valuePayload.rowCount != valueSnapshot.Rows {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary/int64 row count mismatch group=%d values=%d manifest=%d", groupPayload.rowCount, valuePayload.rowCount, valueSnapshot.Rows)
-		}
-		localToGlobal, ok := reducer.translateDictionary(groupAsset.Dictionary)
-		if !ok {
-			return ColumnPhysicalQueryResult{}, false, nil
 		}
 		valueCur := manifestCursor{raw: valueRaw, pos: valuePayload.offset}
 		if groupCodes != nil {
@@ -372,6 +387,33 @@ func (r *columnDictionaryInt64GroupOneShotReducer) translateDictionary(dictionar
 		localToGlobal[localCode] = globalCode
 	}
 	return localToGlobal, true
+}
+
+func (r *columnDictionaryInt64GroupOneShotReducer) prepareDictionary(cardinality int) []uint32 {
+	if cap(r.localToGlobal) < cardinality {
+		r.localToGlobal = make([]uint32, cardinality)
+	}
+	localToGlobal := r.localToGlobal[:cardinality]
+	if len(r.groupDict) == 0 {
+		r.growScratch(cardinality)
+	}
+	return localToGlobal
+}
+
+func (r *columnDictionaryInt64GroupOneShotReducer) translateDictionaryValue(localToGlobal []uint32, localCode int, value []byte) bool {
+	globalCode, ok := r.groupByValue[unsafeStringFromBytes(value)]
+	if !ok {
+		if len(r.groupDict) >= columnDictionaryInt64GroupMaxGroups || uint64(len(r.groupDict)) == uint64(^uint32(0)) {
+			return false
+		}
+		globalCode = uint32(len(r.groupDict))
+		key := columnDictionaryCodeOwnedString(value)
+		r.groupByValue[key] = globalCode
+		r.groupDict = append(r.groupDict, key)
+		r.growScratch(len(r.groupDict))
+	}
+	localToGlobal[localCode] = globalCode
+	return true
 }
 
 func (r *columnDictionaryInt64GroupOneShotReducer) growScratch(groups int) {
