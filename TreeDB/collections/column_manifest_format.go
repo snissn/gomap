@@ -226,6 +226,13 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			if !retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
 				continue
 			}
+			retain, err := validateRetainedColumnManifestVectorGraphRecordForWrite(record, generation)
+			if err != nil {
+				return nil, err
+			}
+			if !retain {
+				continue
+			}
 			retained = append(retained, columnManifestRecord{
 				key:   bytes.Clone(record.key),
 				value: bytes.Clone(record.value),
@@ -251,6 +258,27 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 		})
 	}
 	return retained, nil
+}
+
+func validateRetainedColumnManifestVectorGraphRecordForWrite(record columnManifestRecord, generation uint64) (bool, error) {
+	graph, err := decodeColumnVectorGraphManifestRecord(record.value)
+	if err != nil {
+		return false, err
+	}
+	keyIndexName := string(record.key[len(columnManifestVectorGraphRecordPrefixBytes):])
+	if graph.IndexName != keyIndexName {
+		return false, fmt.Errorf("collections: column vector graph manifest key index=%q does not match record index=%q", keyIndexName, graph.IndexName)
+	}
+	if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
+		return false, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
+	}
+	if graph.BaseManifestGeneration != graph.AssetRef.Generation {
+		return false, fmt.Errorf("collections: column vector graph base manifest generation=%d does not match asset generation=%d", graph.BaseManifestGeneration, graph.AssetRef.Generation)
+	}
+	if graph.AssetRef.Generation >= generation {
+		return false, nil
+	}
+	return true, nil
 }
 
 func retainColumnManifestVectorGraphRecordForWrite(key []byte, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) bool {

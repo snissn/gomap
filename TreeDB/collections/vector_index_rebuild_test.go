@@ -588,6 +588,74 @@ func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
 	}
 }
 
+func TestColumnGraphManifestRetentionRejectsCorruptVectorGraphRecordV2A(t *testing.T) {
+	records, def, identity := testColumnGraphRetentionRecordsV2A(t)
+	corrupted := false
+	for i := range records {
+		if bytes.Equal(records[i].key, columnVectorGraphManifestRecordKey(def.Name)) {
+			records[i].value = append(bytes.Clone(records[i].value), 0xff)
+			corrupted = true
+			break
+		}
+	}
+	if !corrupted {
+		t.Fatalf("test vector graph record %q missing", def.Name)
+	}
+
+	_, err := retainedColumnManifestRecordsForWrite(records, identity.Generation+1, true, []VectorIndexDefinition{def})
+	if err == nil {
+		t.Fatalf("retained corrupt vector graph record without error")
+	}
+	if !strings.Contains(err.Error(), "trailing bytes in column vector graph manifest record") {
+		t.Fatalf("error=%v, want trailing vector graph manifest error", err)
+	}
+}
+
+func TestColumnGraphManifestRetentionSkipsFutureVectorGraphRecordV2A(t *testing.T) {
+	records, def, identity := testColumnGraphRetentionRecordsV2A(t)
+
+	retained, err := retainedColumnManifestRecordsForWrite(records, identity.Generation, true, []VectorIndexDefinition{def})
+	if err != nil {
+		t.Fatalf("retained future vector graph record: %v", err)
+	}
+	if _, ok := findColumnVectorGraphManifestRecord(retained, def.Name); ok {
+		t.Fatalf("future vector graph record was retained: records=%+v", retained)
+	}
+}
+
+func TestColumnGraphManifestRetentionRejectsMismatchedVectorGraphGenerationV2A(t *testing.T) {
+	records, def, identity := testColumnGraphRetentionRecordsV2A(t)
+	mutated := false
+	for i := range records {
+		if !bytes.Equal(records[i].key, columnVectorGraphManifestRecordKey(def.Name)) {
+			continue
+		}
+		graph, err := decodeColumnVectorGraphManifestRecord(records[i].value)
+		if err != nil {
+			t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
+		}
+		graph.BaseManifestGeneration--
+		encoded, err := encodeColumnVectorGraphManifestRecord(graph)
+		if err != nil {
+			t.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+		}
+		records[i].value = encoded
+		mutated = true
+		break
+	}
+	if !mutated {
+		t.Fatalf("test vector graph record %q missing", def.Name)
+	}
+
+	_, err := retainedColumnManifestRecordsForWrite(records, identity.Generation+1, true, []VectorIndexDefinition{def})
+	if err == nil {
+		t.Fatalf("retained mismatched vector graph generation without error")
+	}
+	if !strings.Contains(err.Error(), "base manifest generation") {
+		t.Fatalf("error=%v, want base manifest generation mismatch", err)
+	}
+}
+
 func TestColumnGraphRebuildManifestRecordsPrunesDroppedVectorGraphsV2A(t *testing.T) {
 	cfg := columnGraphRebuildColumnStoreConfigV2A(2)
 	var err error
@@ -633,6 +701,28 @@ func TestColumnGraphRebuildManifestRecordsPrunesDroppedVectorGraphsV2A(t *testin
 	if _, ok := findColumnVectorGraphManifestRecord(got, defB.Name); ok {
 		t.Fatalf("dropped graph record %q was retained: records=%+v", defB.Name, got)
 	}
+}
+
+func testColumnGraphRetentionRecordsV2A(tb testing.TB) ([]columnManifestRecord, VectorIndexDefinition, ColumnManifestIdentity) {
+	tb.Helper()
+	cfg := columnGraphRebuildColumnStoreConfigV2A(2)
+	var err error
+	cfg, err = normalizeColumnStoreConfig("docs", cfg)
+	if err != nil {
+		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(2, 1)
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  cfg.AssetManager.Namespace,
+		Generation: identity.Generation,
+		FileID:     1,
+		PartID:     1,
+		Length:     128,
+	}
+	records, identity := testColumnGraphManifestRecordsV2A(tb, *cfg, def, identity, ref, ref.Length, 2)
+	return records, def, identity
 }
 
 func TestColumnGraphRebuildVectorIndexNoopPublishesCommandWALV2A(t *testing.T) {
