@@ -477,7 +477,6 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 	case CompressionNone:
 		report.ActualCompression = CompressionNone
 		report.CompressionKept = true
-		report.CompressionFallbackReason = "none_requested"
 		report.StoredBytes = len(raw)
 		return CompressionSelection{Payload: raw, Actual: CompressionNone, Scratch: dst[:0], Report: report}, nil
 	case CompressionSnappy:
@@ -657,8 +656,14 @@ func maxGranuleRawPayloadBytes(encoding Encoding, rows int) int {
 	switch encoding {
 	case EncodingRawInt64:
 		return rows * 8
-	case EncodingDeltaVarint:
+	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 		return rows * binary.MaxVarintLen64
+	case EncodingNullableInt64:
+		return nullableInt64HeaderBytes + 2*bitmapBytes(rows) + rows*binary.MaxVarintLen64
+	case EncodingBoolBitpackRLE:
+		return 2 + rows*binary.MaxVarintLen64
+	case EncodingLowCardinalityUint32:
+		return 1 + binary.MaxVarintLen64 + rows*4
 	default:
 		return -1
 	}

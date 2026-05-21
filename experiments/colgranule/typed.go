@@ -21,6 +21,9 @@ func (b *GranuleBuilder) BuildBool(values []bool) (EncodedGranule, error) {
 	if len(values) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
 	}
+	if err := validateGranuleDecodeRows(len(values)); err != nil {
+		return EncodedGranule{}, err
+	}
 	raw := encodeBoolPayload(b.raw[:0], values)
 	b.raw = raw
 	selection, err := admitCompressionInto(b.compressed[:0], raw, EncodingBoolBitpackRLE, b.cfg.Compression)
@@ -68,6 +71,9 @@ func (r *GranuleReader) CountTrueBool(g EncodedGranule) (int, error) {
 func (b *GranuleBuilder) BuildNullableInt64(values []int64, nulls []bool, defaults []bool, defaultValue int64) (EncodedGranule, error) {
 	if len(values) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	if err := validateGranuleDecodeRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	valueEncoding, err := nullableValueEncoding(b.cfg.Encoding)
 	if err != nil {
@@ -209,6 +215,9 @@ func (r *GranuleReader) DecodeNullableInt64Into(dst []int64, nulls []bool, defau
 func (b *GranuleBuilder) BuildUint32Codes(codes []uint32, cardinality uint32) (EncodedGranule, error) {
 	if len(codes) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	if err := validateGranuleDecodeRows(len(codes)); err != nil {
+		return EncodedGranule{}, err
 	}
 	minCode, maxCode := minMaxUint32(codes)
 	if cardinality == 0 {
@@ -536,6 +545,9 @@ type nullableInt64Header struct {
 }
 
 func parseNullableInt64Header(raw []byte, rows int) (nullableInt64Header, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return nullableInt64Header{}, err
+	}
 	if len(raw) < nullableInt64HeaderBytes {
 		return nullableInt64Header{}, errors.New("colgranule: truncated nullable int64 header")
 	}
@@ -550,7 +562,10 @@ func parseNullableInt64Header(raw []byte, rows int) (nullableInt64Header, error)
 	}
 	nullMaskLen := int(binary.LittleEndian.Uint32(raw[13:17]))
 	defaultMaskLen := int(binary.LittleEndian.Uint32(raw[17:21]))
-	wantMaskLen := bitmapBytes(rows)
+	wantMaskLen, err := bitmapBytesChecked(rows)
+	if err != nil {
+		return nullableInt64Header{}, err
+	}
 	if nullMaskLen != wantMaskLen {
 		return nullableInt64Header{}, fmt.Errorf("colgranule: null mask bytes=%d want=%d", nullMaskLen, wantMaskLen)
 	}
@@ -643,7 +658,7 @@ func bitmapBit(mask []byte, row int) bool {
 }
 
 func boolAt(values []bool, i int) bool {
-	return len(values) != 0 && values[i]
+	return i >= 0 && i < len(values) && values[i]
 }
 
 func validateOptionalBoolRows(name string, rows int, values []bool) error {
