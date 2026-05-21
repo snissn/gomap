@@ -152,6 +152,10 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryNormInvalid) {
 		t.Fatalf("SearchCosine zero err=%v want norm failure", err)
 	}
+	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: -1, EfSearch: 1}, &scratch)
+	if !errors.Is(err, errColumnVectorGraphNativeSearchTopKNegative) {
+		t.Fatalf("SearchCosine top_k err=%v want negative top_k failure", err)
+	}
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: -1}, &scratch)
 	if !errors.Is(err, errColumnVectorGraphNativeSearchEfSearchNegative) {
 		t.Fatalf("SearchCosine ef_search err=%v want negative ef_search failure", err)
