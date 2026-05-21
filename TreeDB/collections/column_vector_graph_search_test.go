@@ -457,16 +457,25 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 16}, &scratch); err != nil {
 		t.Fatalf("warm SearchCosine: %v", err)
 	}
+	var hotErr error
 	allocs := testing.AllocsPerRun(1000, func() {
+		if hotErr != nil {
+			return
+		}
 		got, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 16}, &scratch)
 		if err != nil {
-			t.Fatalf("SearchCosine: %v", err)
+			hotErr = err
+			return
 		}
 		if len(got) == 0 {
-			t.Fatalf("SearchCosine returned no results")
+			hotErr = errors.New("SearchCosine returned no results")
+			return
 		}
 		columnPhysicalScanBenchSum += int64(got[0].Ordinal)
 	})
+	if hotErr != nil {
+		t.Fatalf("SearchCosine: %v", hotErr)
+	}
 	if allocs != 0 {
 		t.Fatalf("hot SearchCosine allocs=%v want zero", allocs)
 	}
@@ -571,6 +580,9 @@ func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
 		if err != nil {
 			b.Fatalf("SearchCosine: %v", err)
 		}
+		if len(got) == 0 {
+			b.Fatalf("SearchCosine returned no results")
+		}
 		columnPhysicalScanBenchSum += int64(got[0].Ordinal)
 		searchStats.Candidates += stats.Candidates
 		searchStats.Edges += stats.Edges
@@ -663,6 +675,10 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 			got, stats, err := worker.reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch)
 			if err != nil {
 				recordParallelErr("SearchCosine: %v", err)
+				continue
+			}
+			if len(got) == 0 {
+				recordParallelErr("SearchCosine returned no results")
 				continue
 			}
 			localSink += int64(got[0].Ordinal)
