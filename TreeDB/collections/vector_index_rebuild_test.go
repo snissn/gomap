@@ -516,6 +516,48 @@ func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegment
 	assertColumnGraphSegmentStatusV2A(t, plan, first.AssetRef.FileID, ColumnAssetReachabilitySegmentReclaimable)
 }
 
+func TestColumnGraphReachabilityPrunesDroppedVectorIndexGraphRefV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	baseCfg, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(2))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(2, 1)
+	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, 2, 1, 1, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1}, InvNorm: 1, Adjacency: []uint32{0}},
+	})
+	if err != nil {
+		t.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
+	}
+	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
+	// Model a metadata-only drop: the stale graph manifest record remains, but
+	// the current catalog no longer declares the column_graph index.
+	publishColumnGraphCatalogForTestV2A(t, d, CollectionMeta{
+		Name:    "docs",
+		Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: columnGraphRebuildColumnStoreConfigV2A(2)},
+	}, identity, records)
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if !plan.Complete {
+		t.Fatalf("reachability plan incomplete: refs=%+v segments=%+v", plan.Refs, plan.Segments)
+	}
+	assertColumnGraphReachabilityRefAbsentV2A(t, plan, prepared.Ref)
+	assertColumnGraphSegmentStatusV2A(t, plan, prepared.Ref.FileID, ColumnAssetReachabilitySegmentReclaimable)
+}
+
 func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0}},
@@ -1097,6 +1139,15 @@ func assertColumnGraphReachabilityEntryV2A(tb testing.TB, plan ColumnAssetReacha
 		return
 	}
 	tb.Fatalf("graph ref %+v missing from reachability entries=%+v", graphRef, plan.Entries)
+}
+
+func assertColumnGraphReachabilityRefAbsentV2A(tb testing.TB, plan ColumnAssetReachabilityPlan, graphRef ColumnAssetRef) {
+	tb.Helper()
+	for _, entry := range plan.Entries {
+		if entry.Ref == graphRef {
+			tb.Fatalf("graph ref %+v unexpectedly retained in reachability entries=%+v", graphRef, plan.Entries)
+		}
+	}
 }
 
 func assertColumnGraphSegmentStatusV2A(tb testing.TB, plan ColumnAssetReachabilityPlan, fileID uint32, want ColumnAssetReachabilitySegmentStatus) {
