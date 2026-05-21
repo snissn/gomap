@@ -186,6 +186,46 @@ func TestColumnPhysicalRowReaderHotBlockFastPathInvalidatesOnEvictionV1(t *testi
 	}
 }
 
+func TestColumnPhysicalRowReaderHotBlockFastPathPreservesInterleavedLRUV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	left := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 1, testColumnPhysicalRowReaderRowsV1(0, 3, normalized))
+	middle := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 2, testColumnPhysicalRowReaderRowsV1(3, 3, normalized))
+	right := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 3, testColumnPhysicalRowReaderRowsV1(6, 3, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, left, middle, right), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"doc_ordinal"},
+		MaxDecodedBlocks:  2,
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnPhysicalRowReaderScratch
+	for _, ordinal := range []int{0, 3, 4, 1, 4, 6} {
+		if _, err := reader.FetchRow(ordinal, &scratch); err != nil {
+			t.Fatalf("FetchRow(%d): %v", ordinal, err)
+		}
+	}
+	if reader.blocks[0] != nil {
+		t.Fatalf("left block survived after interleaved LRU sequence")
+	}
+	if reader.blocks[1] == nil || reader.blocks[2] == nil {
+		t.Fatalf("blocks after interleaved LRU sequence=%v want middle and right", reader.blocks)
+	}
+	row, err := reader.FetchRow(5, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(5): %v", err)
+	}
+	if len(row.Values) != 1 || row.Values[0].Int64 != 5 {
+		t.Fatalf("row=%+v want doc_ordinal 5", row)
+	}
+	stats := reader.Stats()
+	if stats.CacheMisses != 3 || stats.CacheHits != 4 || stats.BlockEvictions != 1 {
+		t.Fatalf("cache stats=%+v want misses=3 hits=4 evictions=1", stats)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsMutationPartsV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())

@@ -330,6 +330,8 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 		}
 	}
 	if len(r.ranges) == 1 {
+		// Single-range readers are common for column_graph assets; skip binary
+		// search entirely after the bounds check above.
 		r.lastRange = 0
 		return 0
 	}
@@ -355,6 +357,9 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 	assetOrdinal := rowRange.assetOrdinal
 	if block := r.lastBlock; block != nil && block.assetOrdinal == assetOrdinal {
 		r.stats.CacheHits++
+		// lastBlock matches only when this block was the previous access, so it
+		// is already at the LRU tail. Interleaved access changes lastBlock and
+		// falls through to the map path, which refreshes LRU with touchBlock.
 		return block, nil
 	}
 	if block := r.blocks[assetOrdinal]; block != nil {
