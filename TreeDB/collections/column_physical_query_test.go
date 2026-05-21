@@ -1969,7 +1969,7 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 		Length:     int64(len(raw)),
 		Checksum:   page.Checksum(raw),
 	}
-	decoded, err := decodeColumnDictionaryCodesAsset(raw, ref, *normalized, "events", "kind")
+	decoded, err := decodeColumnDictionaryCodesAsset(raw, ref, *normalized, "events", "kind", true)
 	if err != nil {
 		t.Fatalf("decodeColumnDictionaryCodesAsset: %v", err)
 	}
@@ -1982,20 +1982,25 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 
 	corrupt := append([]byte(nil), raw...)
 	corrupt[len(corrupt)-1] ^= 0xff
-	if _, err := decodeColumnDictionaryCodesAsset(corrupt, ref, *normalized, "events", "kind"); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, err := decodeColumnDictionaryCodesAsset(corrupt, ref, *normalized, "events", "kind", true); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("checksum corruption err=%v want checksum failure", err)
+	}
+	mismatchedChecksumRef := ref
+	mismatchedChecksumRef.Checksum ^= 1
+	if _, err := decodeColumnDictionaryCodesAsset(raw, mismatchedChecksumRef, *normalized, "events", "kind", false); err != nil {
+		t.Fatalf("skip-checksum decode err=%v want valid raw bytes to decode despite ref checksum mismatch", err)
 	}
 
 	badCode := append([]byte(nil), raw...)
 	badCode[len(badCode)-1] = 9
 	badRef := ref
 	badRef.Checksum = page.Checksum(badCode)
-	if _, err := decodeColumnDictionaryCodesAsset(badCode, badRef, *normalized, "events", "kind"); err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+	if _, err := decodeColumnDictionaryCodesAsset(badCode, badRef, *normalized, "events", "kind", true); err == nil || !strings.Contains(err.Error(), "outside cardinality") {
 		t.Fatalf("bad code err=%v want outside cardinality failure", err)
 	}
 
 	wrongColumnRef := ref
-	if _, err := decodeColumnDictionaryCodesAsset(raw, wrongColumnRef, *normalized, "events", "did"); err == nil || !strings.Contains(err.Error(), "column=") {
+	if _, err := decodeColumnDictionaryCodesAsset(raw, wrongColumnRef, *normalized, "events", "did", true); err == nil || !strings.Contains(err.Error(), "column=") {
 		t.Fatalf("wrong column err=%v want column validation failure", err)
 	}
 }

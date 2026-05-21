@@ -131,15 +131,17 @@ func encodeColumnDictionaryCodesAsset(asset columnDictionaryCodesAsset) ([]byte,
 	return b.Bytes(), nil
 }
 
-func decodeColumnDictionaryCodesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string) (columnDictionaryCodesAsset, error) {
+func decodeColumnDictionaryCodesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnDictionaryCodesAsset, error) {
 	if ref.Kind != ColumnAssetKindTCS1DictionaryCodes {
 		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset ref kind=%q want %q", ref.Kind, ColumnAssetKindTCS1DictionaryCodes)
 	}
 	if int64(len(raw)) != ref.Length {
 		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset length=%d does not match ref length=%d", len(raw), ref.Length)
 	}
-	if checksum := page.Checksum(raw); checksum != ref.Checksum {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	if verifyChecksum {
+		if checksum := page.Checksum(raw); checksum != ref.Checksum {
+			return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+		}
 	}
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnDictionaryCodesAssetMagic {
