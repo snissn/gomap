@@ -93,7 +93,7 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
-	retained, err := retainedColumnManifestPartRecordsForWrite(input.CurrentManifestRecords, generation)
+	retained, err := retainedColumnManifestPartRecordsForWrite(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
@@ -123,13 +123,16 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 	}, nil
 }
 
-func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
+func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
 		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			if !retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				continue
+			}
 			retained = append(retained, columnManifestRecord{
 				key:   bytes.Clone(record.key),
 				value: bytes.Clone(record.value),
@@ -152,6 +155,22 @@ func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, g
 		})
 	}
 	return retained, nil
+}
+
+func retainColumnManifestVectorGraphRecordForWrite(key []byte, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) bool {
+	if !activeVectorIndexesKnown {
+		return true
+	}
+	if !bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) {
+		return false
+	}
+	indexName := string(key[len(columnManifestVectorGraphRecordPrefix):])
+	for _, def := range activeVectorIndexes {
+		if def.Name == indexName && def.Strategy == VectorIndexStrategyColumnGraph {
+			return true
+		}
+	}
+	return false
 }
 
 func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, generation uint64) ([]byte, error) {

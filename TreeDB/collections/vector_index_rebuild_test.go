@@ -108,6 +108,13 @@ func TestColumnGraphRebuildVectorIndexFailsClosedOnZeroVectorV2A(t *testing.T) {
 	}
 }
 
+func TestColumnGraphRebuildVectorIndexFailsClosedOnInvNormOverflowV2A(t *testing.T) {
+	_, err := columnVectorGraphInvNorm([]float32{math.SmallestNonzeroFloat32})
+	if err == nil || !strings.Contains(err.Error(), "fit float32") {
+		t.Fatalf("columnVectorGraphInvNorm err=%v, want float32 overflow failure", err)
+	}
+}
+
 func TestColumnGraphRebuildVectorIndexMarksStaleAfterMutationV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -193,6 +200,36 @@ func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegment
 	}
 	assertColumnGraphReachabilityEntryV2A(t, plan, second.AssetRef)
 	assertColumnGraphSegmentStatusV2A(t, plan, first.AssetRef.FileID, ColumnAssetReachabilitySegmentReclaimable)
+}
+
+func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0}},
+		{id: "doc-b", vector: []float32{0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 2, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	records := loadColumnGraphRebuildManifestRecordsV2A(t, d, "docs")
+
+	retainedWithIndex, err := retainedColumnManifestPartRecordsForWrite(records, graph.BaseManifestGeneration+1, true, []VectorIndexDefinition{def})
+	if err != nil {
+		t.Fatalf("retained active vector graph record: %v", err)
+	}
+	if _, ok := findColumnVectorGraphManifestRecord(retainedWithIndex, def.Name); !ok {
+		t.Fatalf("active vector index graph record was pruned: records=%d", len(retainedWithIndex))
+	}
+
+	retainedAfterDrop, err := retainedColumnManifestPartRecordsForWrite(records, graph.BaseManifestGeneration+1, true, nil)
+	if err != nil {
+		t.Fatalf("retained dropped vector graph record: %v", err)
+	}
+	if _, ok := findColumnVectorGraphManifestRecord(retainedAfterDrop, def.Name); ok {
+		t.Fatalf("dropped vector index graph record was retained: records=%+v", retainedAfterDrop)
+	}
 }
 
 func TestColumnGraphRebuildVectorIndexCommandWALReplayV2A(t *testing.T) {
@@ -359,26 +396,7 @@ func insertColumnGraphRebuildRowsV2A(tb testing.TB, col *Collection, rows []colu
 
 func loadAndScanColumnGraphRebuildRowsV2A(tb testing.TB, d *backenddb.DB, collection string, def VectorIndexDefinition) (columnVectorGraphManifestSnapshot, []columnGraphRebuildScannedRowV2A) {
 	tb.Helper()
-	snap := d.AcquireSnapshot()
-	if snap == nil {
-		tb.Fatal("AcquireSnapshot returned nil")
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, collection)
-	if err != nil {
-		tb.Fatalf("loadCollectionCatalog: %v", err)
-	}
-	if catalog == nil {
-		tb.Fatalf("collection %q missing", collection)
-	}
-	cfg := catalog.meta.Options.ColumnStore
-	if cfg == nil || cfg.ActiveManifest == nil {
-		tb.Fatalf("column store metadata missing active manifest: %+v", catalog.meta.Options.ColumnStore)
-	}
-	records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(collection)))
-	if err != nil {
-		tb.Fatalf("loadColumnManifestRecordsFromRoot: %v", err)
-	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(tb, d, collection)
 	record, ok := findColumnVectorGraphManifestRecord(records, def.Name)
 	if !ok {
 		tb.Fatalf("graph manifest record %q missing from %d records", def.Name, len(records))
@@ -431,6 +449,37 @@ func loadAndScanColumnGraphRebuildRowsV2A(tb testing.TB, d *backenddb.DB, collec
 		}
 	}
 	return graph, rows
+}
+
+func loadColumnGraphRebuildManifestRecordsV2A(tb testing.TB, d *backenddb.DB, collection string) []columnManifestRecord {
+	tb.Helper()
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(tb, d, collection)
+	return records
+}
+
+func loadColumnGraphRebuildManifestRecordsAndConfigV2A(tb testing.TB, d *backenddb.DB, collection string) ([]columnManifestRecord, *ColumnStoreConfig) {
+	tb.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collection)
+	if err != nil {
+		tb.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		tb.Fatalf("collection %q missing", collection)
+	}
+	cfg := catalog.meta.Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil {
+		tb.Fatalf("column store metadata missing active manifest: %+v", catalog.meta.Options.ColumnStore)
+	}
+	records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(collection)))
+	if err != nil {
+		tb.Fatalf("loadColumnManifestRecordsFromRoot: %v", err)
+	}
+	return records, cfg
 }
 
 func assertColumnGraphRebuildLoadedStatusV2A(tb testing.TB, status VectorIndexStatus, indexName string) {

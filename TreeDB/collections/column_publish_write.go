@@ -391,14 +391,16 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 		return ColumnPublishPlan{}, err
 	}
 	return BuildColumnPublishPlan(ColumnPublishPlanInput{
-		Collection:             input.meta.Name,
-		ColumnStore:            input.meta.Options.ColumnStore,
-		ColumnStoreNormalized:  true,
-		Operation:              input.operation,
-		CurrentManifest:        input.meta.Options.ColumnStore.ActiveManifest,
-		CurrentManifestRecords: currentRecords,
-		AppliedCommandLSN:      ctx.AppliedCommandLSN,
-		BaseManifestRootID:     baseManifestRootID,
+		Collection:               input.meta.Name,
+		ColumnStore:              input.meta.Options.ColumnStore,
+		ColumnStoreNormalized:    true,
+		ActiveVectorIndexes:      append([]VectorIndexDefinition(nil), input.meta.VectorIndexes...),
+		ActiveVectorIndexesKnown: true,
+		Operation:                input.operation,
+		CurrentManifest:          input.meta.Options.ColumnStore.ActiveManifest,
+		CurrentManifestRecords:   currentRecords,
+		AppliedCommandLSN:        ctx.AppliedCommandLSN,
+		BaseManifestRootID:       baseManifestRootID,
 		Hooks: ColumnPublishPlanHooks{
 			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)

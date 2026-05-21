@@ -279,7 +279,11 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 	if sum == 0 || math.IsNaN(sum) || math.IsInf(sum, 0) {
 		return 0, errors.New("vector norm must be finite and non-zero")
 	}
-	return float32(1 / math.Sqrt(sum)), nil
+	invNorm := 1 / math.Sqrt(sum)
+	if invNorm > math.MaxFloat32 || math.IsNaN(invNorm) || math.IsInf(invNorm, 0) {
+		return 0, errors.New("vector inverse norm must be finite and fit float32")
+	}
+	return float32(invNorm), nil
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
