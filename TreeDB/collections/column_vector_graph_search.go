@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 )
 
 type columnVectorGraphNativeSearchOptions struct {
@@ -194,6 +195,9 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				break
 			}
 			stats.Edges++
+			if strconv.IntSize == 32 && neighbor > uint32(1<<31-1) {
+				return nil, stats, fmt.Errorf("collections: column_graph neighbor ordinal %d exceeds int range", neighbor)
+			}
 			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}

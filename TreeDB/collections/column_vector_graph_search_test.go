@@ -449,7 +449,6 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	}
 	workers := runtime.GOMAXPROCS(0)
 	benchWorkers := make([]*searchWorker, workers)
-	var workerPool sync.Pool
 	query := append([]float32(nil), input[37].vector...)
 	for i := range benchWorkers {
 		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
@@ -462,7 +461,6 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 			b.Fatalf("warm reader %d SearchCosine: %v", i, err)
 		}
 		benchWorkers[i] = worker
-		workerPool.Put(worker)
 	}
 	var baseStats columnPhysicalRowReaderStats
 	for _, worker := range benchWorkers {
@@ -482,18 +480,18 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	var totalCandidateFetches atomic.Uint64
 	var totalExpansionFetches atomic.Uint64
 	var totalResultFetches atomic.Uint64
+	var nextWorker atomic.Uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		value := workerPool.Get()
-		if value == nil {
+		workerIndex := int(nextWorker.Add(1)) - 1
+		if workerIndex < 0 || workerIndex >= len(benchWorkers) {
 			recordParallelErr("parallel worker requested more than %d prewarmed readers/scratches", workers)
 			for pb.Next() {
 			}
 			return
 		}
-		worker := value.(*searchWorker)
-		defer workerPool.Put(worker)
+		worker := benchWorkers[workerIndex]
 		for pb.Next() {
 			if failed.Load() {
 				continue
