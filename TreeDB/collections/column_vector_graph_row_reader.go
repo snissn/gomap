@@ -136,6 +136,10 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string)
 	if err := validateColumnManifestSnapshot(manifest, records, *cfg, *cfg.ActiveManifest, catalog.meta.Name, "column vector graph row reader"); err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
+	mutationParts, err := columnManifestMutationPartsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
 	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
 	if !ok {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q has no published graph manifest", def.Name)
@@ -170,6 +174,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string)
 			Ref:    graph.AssetRef,
 			Reason: ColumnPublishOperationInsert,
 		}},
+		MutationParts: mutationParts,
 		Diagnostics: columnPhysicalScanDiagnostics{
 			ManifestRoot:               rootID,
 			ManifestGeneration:         cfg.ActiveManifest.Generation,
@@ -177,6 +182,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string)
 			AppliedCommandLSN:          cfg.RecoveryAuthoritativeAppliedCommandLSN,
 			ManifestRecords:            len(records),
 			AssetRefs:                  1,
+			MutationParts:              mutationParts,
 		},
 		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
 		AssetNamespace:     graphCfg.AssetManager.Namespace,
