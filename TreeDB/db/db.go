@@ -1670,9 +1670,11 @@ func (db *DB) RegisterCloseHookIfOpen(hook func() error) (func(), bool) {
 }
 
 // RegisterCloseHookIfOpenAfter runs setup while close-hook registration is
-// serialized with RunCloseHooks, then registers hook if setup returns true.
-// Callers can use setup to publish state that hook owns without exposing that
-// state after close-hook draining has begun.
+// serialized with RunCloseHooks, then registers hook if setup returns true. The
+// returned bool reports that the DB was still accepting close-hook registration
+// and setup, if any, ran inside that accepted registration window. If setup
+// returns false, no hook is retained even though the registration window was
+// accepted.
 func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error) (func(), bool) {
 	if db == nil || hook == nil {
 		return func() {}, false

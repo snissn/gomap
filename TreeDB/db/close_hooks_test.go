@@ -84,3 +84,34 @@ func TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration(t *testi
 		t.Fatalf("setup ran after close hooks drained")
 	}
 }
+
+func TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	setupRan := false
+	hookRan := false
+	unregister, ok := d.RegisterCloseHookIfOpenAfter(func() bool {
+		setupRan = true
+		return false
+	}, func() error {
+		hookRan = true
+		return nil
+	})
+	if !ok {
+		t.Fatalf("RegisterCloseHookIfOpenAfter rejected open DB")
+	}
+	unregister()
+	if !setupRan {
+		t.Fatalf("setup did not run")
+	}
+	if err := d.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	if hookRan {
+		t.Fatalf("close hook ran after setup declined registration")
+	}
+}
