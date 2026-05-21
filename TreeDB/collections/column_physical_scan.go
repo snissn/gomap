@@ -88,6 +88,7 @@ type columnManifestAssetRefForScan struct {
 
 type columnPhysicalScanSnapshotView struct {
 	CollectionName     string
+	Catalog            *collectionCatalog
 	Config             ColumnStoreConfig
 	ColumnStoreEnabled bool
 	CommitSeq          uint64
@@ -236,6 +237,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 	}
 	view := columnPhysicalScanSnapshotView{
 		CollectionName:     collectionName,
+		Catalog:            catalog,
 		Config:             cfg,
 		ColumnStoreEnabled: columnStoreEnabled,
 		CommitSeq:          snapshotState.CommitSeq,

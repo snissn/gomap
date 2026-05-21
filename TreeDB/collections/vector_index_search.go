@@ -192,14 +192,10 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		response.Status = status
 		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %v", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
 	}
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		_ = reader.Close()
-		return nil, response, err
-	}
+	catalog := reader.catalog
 	if catalog == nil {
 		_ = reader.Close()
-		return nil, response, errCollectionNotFound
+		return nil, response, errors.New("collections: column_graph physical row reader missing snapshot catalog")
 	}
 
 	response.Status = VectorIndexStatus{
@@ -366,6 +362,9 @@ func (s *VectorIndexSearcher) Close() error {
 	return closeErr
 }
 
+// columnPhysicalRowReaderStatsDelta reports per-search deltas for mutable
+// fetch/read counters while carrying open-time and resident-byte telemetry as
+// absolute values from the bound reader.
 func columnPhysicalRowReaderStatsDelta(before, after columnPhysicalRowReaderStats) columnPhysicalRowReaderStats {
 	return columnPhysicalRowReaderStats{
 		OpenGranulesRead:      after.OpenGranulesRead,

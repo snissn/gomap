@@ -36,9 +36,10 @@ var (
 // The reader is not concurrency-safe. Parallel native search uses one reader
 // and one scratch per worker over immutable physical graph assets.
 type columnVectorGraphPhysicalRowReader struct {
-	def    VectorIndexDefinition
-	graph  columnVectorGraphManifestSnapshot
-	reader *columnPhysicalRowReader
+	def     VectorIndexDefinition
+	graph   columnVectorGraphManifestSnapshot
+	catalog *collectionCatalog
+	reader  *columnPhysicalRowReader
 }
 
 // columnVectorGraphPhysicalRow aliases caller-owned scratch and cached asset
@@ -80,9 +81,10 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		return nil, err
 	}
 	return &columnVectorGraphPhysicalRowReader{
-		def:    def,
-		graph:  graph,
-		reader: reader,
+		def:     def,
+		graph:   graph,
+		catalog: view.Catalog,
+		reader:  reader,
 	}, nil
 }
 
@@ -188,6 +190,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	}
 	view := columnPhysicalScanSnapshotView{
 		CollectionName:     catalog.meta.Name,
+		Catalog:            catalog,
 		Config:             graphCfg,
 		ColumnStoreEnabled: true,
 		CommitSeq:          state.CommitSeq,
