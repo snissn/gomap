@@ -139,6 +139,7 @@ func main() {
 	must(err)
 	encodedPartQ4Fairness, err := colgranule.RunJSONBenchPartQ4FairnessQueries(ds, *rowsPerGranule, *attempts)
 	must(err)
+	must(validateEncodedPartParity(timings, encodedPartTimings))
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
 	var remainingTpl remainingTreeDBResult
@@ -200,6 +201,30 @@ func readClickHouseResult(path string) clickHouseResult {
 	var result clickHouseResult
 	must(json.Unmarshal(data, &result))
 	return result
+}
+
+func validateEncodedPartParity(reference []colgranule.JSONBenchQueryTiming, encoded []colgranule.JSONBenchPartQueryTiming) error {
+	if len(encoded) == 0 {
+		return nil
+	}
+	if len(reference) != len(encoded) {
+		return fmt.Errorf("encoded part query count=%d want baseline count=%d", len(encoded), len(reference))
+	}
+	for i, got := range encoded {
+		want := reference[i]
+		if got.Query != want.Query {
+			return fmt.Errorf("encoded part query[%d]=%s want baseline query %s", i, got.Query, want.Query)
+		}
+		if got.ResultRows != want.ResultRows || got.ResultDigest != want.ResultDigest {
+			return fmt.Errorf("encoded part %s result rows/digest=(%d,%d) want baseline (%d,%d)", got.Query, got.ResultRows, got.ResultDigest, want.ResultRows, want.ResultDigest)
+		}
+		for attemptIndex, attempt := range got.Attempts {
+			if attempt.ResultRows != want.ResultRows || attempt.ResultDigest != want.ResultDigest {
+				return fmt.Errorf("encoded part %s attempt %d rows/digest=(%d,%d) want baseline (%d,%d)", got.Query, attemptIndex, attempt.ResultRows, attempt.ResultDigest, want.ResultRows, want.ResultDigest)
+			}
+		}
+	}
+	return nil
 }
 
 func measureRemainingTreeDB(ctx context.Context, files []string, rows int, dbDir string, format collections.DocumentFormat, shape remainingShape) (remainingTreeDBResult, error) {
