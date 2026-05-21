@@ -141,6 +141,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
+	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 	acc := newColumnPhysicalQueryMetadataAccumulator(req.Kind)
 	var rawScratch []byte
@@ -241,6 +242,7 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotView(
 	if err != nil {
 		return diag, err
 	}
+	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
 	start, step := columnPhysicalScanRefOrdinalPartition(columnPhysicalScanRequest{RefOrdinalModulo: refModulo, RefOrdinalRemainder: refRemainder})

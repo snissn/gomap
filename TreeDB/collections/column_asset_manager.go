@@ -658,11 +658,18 @@ type columnPhysicalAssetReadCache struct {
 	readIntegrity  ColumnAssetReadIntegrity
 	verifyChecksum bool
 	fileID         uint32
-	file           *os.File
-	files          map[uint32]*os.File
+	file           *columnPhysicalAssetSegmentReader
+	files          map[uint32]*columnPhysicalAssetSegmentReader
 	scratch        []byte
+	returnViews    bool
+	lastView       bool
 	hits           uint64
 	misses         uint64
+}
+
+type columnPhysicalAssetSegmentReader struct {
+	file *os.File
+	mmap []byte
 }
 
 func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPhysicalAssetReadCache, error) {
@@ -696,16 +703,16 @@ func (c *columnPhysicalAssetReadCache) close() error {
 		c.scratch = nil
 	}
 	if c.file != nil {
-		if err := c.file.Close(); err != nil && closeErr == nil {
+		if err := c.file.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 		c.file = nil
 	}
-	for fileID, file := range c.files {
-		if file == nil {
+	for fileID, reader := range c.files {
+		if reader == nil {
 			continue
 		}
-		if err := file.Close(); err != nil && closeErr == nil {
+		if err := reader.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 		delete(c.files, fileID)
@@ -720,9 +727,24 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if ref.Namespace != c.namespace {
 		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
 	}
-	file, err := c.fileForRef(ref)
+	reader, err := c.fileForRef(ref)
 	if err != nil {
 		return nil, err
+	}
+	if c.lastView {
+		dst = nil
+		c.lastView = false
+	}
+	if c.returnViews {
+		if raw, ok, err := reader.readView(ref); err != nil {
+			return nil, err
+		} else if ok {
+			if err := verifyColumnPhysicalAssetReadChecksum(raw, ref, c.verifyChecksum); err != nil {
+				return nil, err
+			}
+			c.lastView = true
+			return raw, nil
+		}
 	}
 	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
 		if cap(c.scratch) < int(ref.Length) {
@@ -733,7 +755,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 		}
 		dst = c.scratch
 	}
-	return readColumnPhysicalAssetFromFileWithChecksum(file, ref, dst, c.verifyChecksum)
+	return readColumnPhysicalAssetFromFileWithChecksum(reader.file, ref, dst, c.verifyChecksum)
 }
 
 func getColumnPhysicalAssetReadScratch(minLen int) []byte {
@@ -755,7 +777,7 @@ func putColumnPhysicalAssetReadScratch(scratch []byte) {
 	columnPhysicalAssetReadScratchPool.Put(scratch[:0])
 }
 
-func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File, error) {
+func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPhysicalAssetSegmentReader, error) {
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return nil, err
 	}
@@ -764,9 +786,9 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 		return c.file, nil
 	}
 	if c.files != nil {
-		if file := c.files[ref.FileID]; file != nil {
+		if reader := c.files[ref.FileID]; reader != nil {
 			c.hits++
-			return file, nil
+			return reader, nil
 		}
 	}
 	c.misses++
@@ -774,21 +796,58 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 	if err != nil {
 		return nil, err
 	}
+	reader := &columnPhysicalAssetSegmentReader{file: file}
+	if c.returnViews {
+		if mapped, err := mmapColumnPhysicalAssetFile(file); err == nil {
+			reader.mmap = mapped
+		}
+	}
 	if c.file == nil && c.files == nil {
 		c.fileID = ref.FileID
-		c.file = file
-		return file, nil
+		c.file = reader
+		return reader, nil
 	}
 	if c.files == nil {
-		c.files = make(map[uint32]*os.File, 2)
+		c.files = make(map[uint32]*columnPhysicalAssetSegmentReader, 2)
 		if c.file != nil {
 			c.files[c.fileID] = c.file
 			c.file = nil
 			c.fileID = 0
 		}
 	}
-	c.files[ref.FileID] = file
-	return file, nil
+	c.files[ref.FileID] = reader
+	return reader, nil
+}
+
+func (r *columnPhysicalAssetSegmentReader) close() error {
+	if r == nil {
+		return nil
+	}
+	unmapErr := munmapColumnPhysicalAssetFile(r.mmap)
+	r.mmap = nil
+	var closeErr error
+	if r.file != nil {
+		closeErr = r.file.Close()
+		r.file = nil
+	}
+	return errors.Join(unmapErr, closeErr)
+}
+
+func (r *columnPhysicalAssetSegmentReader) readView(ref ColumnAssetRef) ([]byte, bool, error) {
+	if r == nil || len(r.mmap) == 0 {
+		return nil, false, nil
+	}
+	if ref.Offset < 0 || ref.Length < 0 || ref.Length > int64(maxCollectionInt) {
+		return nil, false, nil
+	}
+	end := ref.Offset + ref.Length
+	if end < ref.Offset {
+		return nil, false, fmt.Errorf("collections: column physical asset offset=%d length=%d overflows", ref.Offset, ref.Length)
+	}
+	if end > int64(len(r.mmap)) {
+		return nil, false, io.ErrUnexpectedEOF
+	}
+	return r.mmap[ref.Offset:end], true, nil
 }
 
 func readColumnPhysicalAssetFromFile(file *os.File, ref ColumnAssetRef, dst []byte) ([]byte, error) {
