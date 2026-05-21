@@ -210,17 +210,28 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsManifestRowCountMismatchV2B(t 
 	}
 }
 
-func TestColumnVectorGraphPhysicalRowReaderRejectsMutationManifestPartsV2B(t *testing.T) {
+func TestColumnVectorGraphPhysicalRowReaderAllowsBaseMutationManifestPartsV2B(t *testing.T) {
 	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithMutationPartV2B(t, []columnVectorGraphAssetRow{
 		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
 		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
 	})
 	defer func() { _ = d.Close() }()
 
-	_, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
-	if !errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
-		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want visibility-required mutation-part failure", err)
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
+	defer func() { _ = reader.Close() }()
+	scratch := columnPhysicalRowReaderScratch{
+		Values:        make([]columnDeclaredValue, 0, 3),
+		Float32Values: make([]float32, 0, def.Dimensions),
+		Uint32Values:  make([]uint32, 0, def.M),
+	}
+	row, err := reader.FetchRow(0, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow: %v", err)
+	}
+	assertColumnVectorGraphPhysicalRowV2B(t, row, "doc-a", 0, 0, []float32{1, 0, 0}, 1, []uint32{1})
 }
 
 func TestColumnVectorGraphPhysicalRowReaderRejectsStaleGraphAfterMutationV2B(t *testing.T) {
