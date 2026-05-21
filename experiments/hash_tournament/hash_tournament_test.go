@@ -27,6 +27,7 @@ var (
 )
 
 const (
+	// Deterministic seeds keep seeded benchmark variants reproducible.
 	seed64A uint64 = 0x9e3779b97f4a7c15
 	seed64B uint64 = 0xbf58476d1ce4e5b9
 	seed32A uint32 = 0x9e3779b9
