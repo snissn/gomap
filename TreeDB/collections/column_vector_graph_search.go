@@ -16,6 +16,8 @@ const columnVectorGraphNativeScratchOversizeSlack = 16
 // Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
 const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
+var errColumnVectorGraphNativeSearchScratchRequired = errors.New("collections: column_graph native search requires caller-owned scratch")
+
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
@@ -62,7 +64,7 @@ type columnVectorGraphNativeSearchScratch struct {
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
 	if s == nil {
-		return errors.New("collections: column_graph native search requires caller-owned scratch")
+		return errColumnVectorGraphNativeSearchScratchRequired
 	}
 	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 || efSearch < 0 {
 		return fmt.Errorf("collections: column_graph native search received negative sizing input: rowCount=%d dimensions=%d degree=%d topK=%d efSearch=%d", rowCount, dimensions, degree, topK, efSearch)
@@ -174,7 +176,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, nil
 	}
 	if scratch == nil {
-		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: column_graph native search requires caller-owned scratch")
+		return nil, columnVectorGraphNativeSearchStats{}, errColumnVectorGraphNativeSearchScratchRequired
 	}
 	queryInvNorm, err := columnVectorGraphInvNorm(query)
 	if err != nil {
@@ -268,7 +270,11 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 	resultPos := 0
 	if err := r.fetchBatchUnchecked(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
 		if resultPos >= n || scratch.resultOrdinals[resultPos] != row.Ordinal {
-			return fmt.Errorf("collections: column_graph %q result batch returned unexpected or out-of-order row ordinal=%d", r.def.Name, row.Ordinal)
+			expected := -1
+			if resultPos < n {
+				expected = scratch.resultOrdinals[resultPos]
+			}
+			return fmt.Errorf("collections: column_graph %q result batch returned unexpected or out-of-order row ordinal=%d result_pos=%d expected_ordinal=%d", r.def.Name, row.Ordinal, resultPos, expected)
 		}
 		topIndex := scratch.resultOrder[resultPos]
 		if cap(scratch.idBuffers[topIndex]) < len(row.ID) {
