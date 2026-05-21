@@ -2008,14 +2008,14 @@ func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testi
 	for _, agg := range cfg.AggregateMetadata {
 		registered[agg.Name] = true
 	}
-	name := columnStoreSuiteAggregateMetadataName("q5_metadata")
+	name := columnStoreSuiteAggregateMetadataName(columnStoreQueryQ5Metadata)
 	if name == "" {
 		t.Fatal("q5_metadata did not request aggregate metadata")
 	}
 	if !registered[name] {
 		t.Fatalf("q5_metadata requested aggregate metadata %q outside registered names", name)
 	}
-	name = columnStoreSuiteAggregateMetadataName("q4b")
+	name = columnStoreSuiteAggregateMetadataName(columnStoreQueryQ4B)
 	if name == "" {
 		t.Fatal("q4b did not request aggregate metadata")
 	}
