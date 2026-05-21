@@ -103,7 +103,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string)
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errors.New("collections: column_graph physical row reader requires physical column asset support")
 	}
 	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
-		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errors.New("collections: column_graph physical row reader requires active column manifest")
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errors.New("collections: column_graph physical row reader requires active and recovery-authoritative column manifests")
 	}
 	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	if rootID == 0 {

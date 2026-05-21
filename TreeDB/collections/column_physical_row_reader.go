@@ -9,6 +9,8 @@ import (
 
 const defaultColumnPhysicalRowReaderMaxDecodedBlocks = 4
 
+var errColumnPhysicalRowOrdinalOutOfBounds = errors.New("collections: physical column row ordinal outside row_count")
+
 type columnPhysicalRowReaderOptions struct {
 	ProjectedColumns  []string
 	MaxDecodedBlocks  int
@@ -276,7 +278,7 @@ func (r *columnPhysicalRowReader) buildOrdinalRanges() error {
 func (r *columnPhysicalRowReader) fetchRow(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnPhysicalRowReaderRow, error) {
 	rangeIdx := r.rangeIndexForOrdinal(ordinal)
 	if rangeIdx < 0 {
-		return columnPhysicalRowReaderRow{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d", ordinal, r.totalRows)
+		return columnPhysicalRowReaderRow{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, r.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
 	}
 	rowRange := r.ranges[rangeIdx]
 	block, err := r.loadBlock(rowRange)
