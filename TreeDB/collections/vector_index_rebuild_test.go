@@ -113,6 +113,22 @@ func TestColumnGraphRebuildVectorIndexFailsClosedOnInvNormOverflowV2A(t *testing
 	if err == nil || !strings.Contains(err.Error(), "fit float32") {
 		t.Fatalf("columnVectorGraphInvNorm err=%v, want float32 overflow failure", err)
 	}
+
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{math.SmallestNonzeroFloat32, 0, 0}},
+	}
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 0, rows)
+	defer func() { _ = d.Close() }()
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+
+	_, err = col.RebuildVectorIndex(def.Name)
+	if err == nil || !strings.Contains(err.Error(), "fit float32") {
+		t.Fatalf("RebuildVectorIndex err=%v, want float32 overflow failure", err)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
+		t.Fatalf("command WAL frames after failed rebuild=%d want %d", got, framesBefore)
+	}
 }
 
 func TestColumnGraphRebuildVectorIndexMarksStaleAfterMutationV2A(t *testing.T) {

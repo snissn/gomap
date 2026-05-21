@@ -232,6 +232,51 @@ func TestColumnGraphVectorIndexStatusUsesPublishedPhysicalManifestV2A(t *testing
 	}
 }
 
+func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	staleColumnGraphDef := testColumnGraphVectorIndexDefinitionV2A()
+	nativeDef := staleColumnGraphDef
+	nativeDef.Strategy = VectorIndexStrategyNativeRuntime
+	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, staleColumnGraphDef, identity, ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  baseCfg.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     128,
+		Checksum:   7,
+	}, 128, 2)
+	meta := CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{ColumnStore: testColumnGraphBaseColumnStoreConfigV2A()},
+		VectorIndexes: []VectorIndexDefinition{nativeDef},
+	}
+	publishColumnGraphCatalogForTestV2A(t, d, meta, identity, records)
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	status, err := col.columnGraphVectorIndexStatus(staleColumnGraphDef, col.Meta().Options.ColumnStore)
+	if err != nil {
+		t.Fatalf("columnGraphVectorIndexStatus: %v", err)
+	}
+	if status.Strategy != VectorIndexStrategyNativeRuntime || status.State != VectorIndexStateNativeRuntime || status.Reason != VectorIndexReasonNativeRuntime {
+		t.Fatalf("status=%+v want native_runtime after catalog refresh", status)
+	}
+}
+
 func TestColumnGraphVectorIndexStatusFailsClosedOnMissingOrMismatchedAssetV2A(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

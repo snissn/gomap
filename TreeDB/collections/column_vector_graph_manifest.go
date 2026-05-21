@@ -343,6 +343,15 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 	} else {
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
+	switch def.Strategy {
+	case VectorIndexStrategyNativeRuntime:
+		status.State = VectorIndexStateNativeRuntime
+		status.Reason = VectorIndexReasonNativeRuntime
+		return status, nil
+	case VectorIndexStrategyColumnGraph:
+	default:
+		return VectorIndexStatus{}, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
+	}
 	cfg = catalog.meta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
 		status.State = VectorIndexStateColumnGraphUnavailable
