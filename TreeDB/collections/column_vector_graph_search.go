@@ -142,7 +142,7 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 // must be copied before the next SearchCosine call with the same scratch.
 func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	if r == nil || r.reader == nil {
-		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: nil column vector graph physical row reader")
+		return nil, columnVectorGraphNativeSearchStats{}, errNilColumnVectorGraphPhysicalRowReader
 	}
 	if len(query) != r.def.Dimensions {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query dims=%d want %d", r.def.Name, len(query), r.def.Dimensions)
