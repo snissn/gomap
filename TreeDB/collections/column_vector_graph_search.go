@@ -131,10 +131,19 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 }
 
 func resizeColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearchCandidate, target int) []columnVectorGraphSearchCandidate {
+	if len(dst) > 0 {
+		clearColumnVectorGraphNativeCandidateAdjacencyRefs(dst)
+	}
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]columnVectorGraphSearchCandidate, 0, target)
 	}
 	return dst[:0]
+}
+
+func clearColumnVectorGraphNativeCandidateAdjacencyRefs(candidates []columnVectorGraphSearchCandidate) {
+	for i := range candidates {
+		candidates[i].adjacency = nil
+	}
 }
 
 func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSearchResult, target int) []columnVectorGraphNativeSearchResult {
@@ -419,9 +428,11 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphS
 	if len(s.frontier) == 0 {
 		return columnVectorGraphSearchCandidate{}, false
 	}
+	lastIdx := len(s.frontier) - 1
 	best := s.frontier[0]
-	last := s.frontier[len(s.frontier)-1]
-	s.frontier = s.frontier[:len(s.frontier)-1]
+	last := s.frontier[lastIdx]
+	s.frontier[lastIdx].adjacency = nil
+	s.frontier = s.frontier[:lastIdx]
 	if len(s.frontier) > 0 {
 		s.frontier[0] = last
 		s.frontierSiftDown(0)
