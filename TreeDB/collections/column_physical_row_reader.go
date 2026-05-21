@@ -679,7 +679,7 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 	case ColumnStoreValueFloat32Vector:
 		start := len(scratch.Float32Values)
 		var err error
-		scratch.Float32Values, err = cur.appendFloat32SliceWithExpectedLength(scratch.Float32Values, col.VectorDims)
+		scratch.Float32Values, err = cur.appendFloat32SliceWithExpectedLengthAndEncoding(scratch.Float32Values, col.VectorDims, col.FixedWidthEncoding)
 		if err != nil {
 			return err
 		}
@@ -699,6 +699,10 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 }
 
 func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, expected int) ([]float32, error) {
+	return c.appendFloat32SliceWithExpectedLengthAndEncoding(dst, expected, ColumnFixedWidthEncodingDefault)
+}
+
+func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []float32, expected int, encoding ColumnFixedWidthEncoding) ([]float32, error) {
 	n := c.u64()
 	if c.err != nil {
 		return dst, c.err
@@ -729,17 +733,32 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
 	}
 	i := base
-	for ; i+4 <= need; i += 4 {
-		_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
-		dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
-		dst[i+1] = math.Float32frombits(uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7]))
-		dst[i+2] = math.Float32frombits(uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11]))
-		dst[i+3] = math.Float32frombits(uint32(raw[pos+12])<<24 | uint32(raw[pos+13])<<16 | uint32(raw[pos+14])<<8 | uint32(raw[pos+15]))
-		pos += 16
-	}
-	for ; i < need; i++ {
-		dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
-		pos += 4
+	if encoding == ColumnFixedWidthEncodingLittleEndian {
+		for ; i+4 <= need; i += 4 {
+			_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
+			dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)
+			dst[i+1] = math.Float32frombits(uint32(raw[pos+4]) | uint32(raw[pos+5])<<8 | uint32(raw[pos+6])<<16 | uint32(raw[pos+7])<<24)
+			dst[i+2] = math.Float32frombits(uint32(raw[pos+8]) | uint32(raw[pos+9])<<8 | uint32(raw[pos+10])<<16 | uint32(raw[pos+11])<<24)
+			dst[i+3] = math.Float32frombits(uint32(raw[pos+12]) | uint32(raw[pos+13])<<8 | uint32(raw[pos+14])<<16 | uint32(raw[pos+15])<<24)
+			pos += 16
+		}
+		for ; i < need; i++ {
+			dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)
+			pos += 4
+		}
+	} else {
+		for ; i+4 <= need; i += 4 {
+			_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
+			dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
+			dst[i+1] = math.Float32frombits(uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7]))
+			dst[i+2] = math.Float32frombits(uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11]))
+			dst[i+3] = math.Float32frombits(uint32(raw[pos+12])<<24 | uint32(raw[pos+13])<<16 | uint32(raw[pos+14])<<8 | uint32(raw[pos+15]))
+			pos += 16
+		}
+		for ; i < need; i++ {
+			dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
+			pos += 4
+		}
 	}
 	c.pos = end
 	return dst, nil

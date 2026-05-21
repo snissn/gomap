@@ -20,6 +20,7 @@ const (
 	columnPhysicalAssetVersionV2 = uint16(2)
 	columnPhysicalAssetVersionV3 = uint16(3)
 	columnPhysicalAssetVersionV4 = uint16(4)
+	columnPhysicalAssetVersionV5 = uint16(5)
 	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
 )
 
@@ -328,8 +329,12 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		}
 	}
 	var b bytes.Buffer
+	version, err := columnPhysicalAssetVersionForColumns(input.Columns)
+	if err != nil {
+		return nil, columnPhysicalAssetSummary{}, err
+	}
 	writeManifestUint32(&b, columnPhysicalAssetMagic)
-	writeManifestUint16(&b, columnPhysicalAssetVersion)
+	writeManifestUint16(&b, version)
 	writeManifestString(&b, input.Collection)
 	writeManifestString(&b, input.Namespace)
 	writeManifestUint64(&b, input.Generation)
@@ -346,6 +351,9 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		writeManifestBool(&b, col.Nullable)
 		writeManifestBool(&b, col.Dictionary)
 		writeManifestUint64(&b, uint64(col.VectorDims))
+		if version >= columnPhysicalAssetVersionV5 {
+			writeManifestString(&b, string(col.FixedWidthEncoding))
+		}
 	}
 	for _, row := range input.Rows {
 		writeManifestBytes(&b, row.ID)
@@ -353,7 +361,8 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		if row.Deleted {
 			continue
 		}
-		for _, value := range row.Values {
+		for colIdx, value := range row.Values {
+			col := input.Columns[colIdx]
 			writeManifestString(&b, string(value.Type))
 			writeManifestBool(&b, value.Null)
 			writeManifestBool(&b, columnDeclaredValuePresentForEncode(value))
@@ -375,7 +384,7 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 			case ColumnStoreValueString:
 				writeManifestString(&b, value.String)
 			case ColumnStoreValueFloat32Vector:
-				writeManifestFloat32Slice(&b, value.Float32Vector)
+				writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding)
 			case ColumnStoreValueAdjacencyList:
 				writeManifestUint32Slice(&b, value.AdjacencyList)
 			default:
@@ -439,6 +448,15 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			}
 			asset.Columns[i].VectorDims = int(vectorDims)
 		}
+		if version >= columnPhysicalAssetVersionV5 {
+			asset.Columns[i].FixedWidthEncoding = ColumnFixedWidthEncoding(cur.string())
+			if _, err := normalizeColumnFixedWidthEncoding(asset.Columns[i].FixedWidthEncoding); err != nil {
+				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding: %w", i, err)
+			}
+			if asset.Columns[i].FixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(asset.Columns[i].ValueType) {
+				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, asset.Columns[i].ValueType)
+			}
+		}
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
 		row := columnDeclaredRow{
@@ -480,7 +498,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 						value.String = cur.string()
 					case ColumnStoreValueFloat32Vector:
 						if version >= columnPhysicalAssetVersionV4 {
-							value.Float32Vector = cur.float32SliceWithExpectedLength(asset.Columns[colIdx].VectorDims)
+							value.Float32Vector = cur.float32SliceWithExpectedLengthAndEncoding(asset.Columns[colIdx].VectorDims, asset.Columns[colIdx].FixedWidthEncoding)
 						} else {
 							value.Float32Vector = cur.float32Slice()
 						}
@@ -592,11 +610,27 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersion:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5:
 		return true
 	default:
 		return false
 	}
+}
+
+func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, error) {
+	for i, col := range columns {
+		encoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
+		if err != nil {
+			return 0, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding: %w", i, err)
+		}
+		if encoding != ColumnFixedWidthEncodingDefault {
+			if !columnStoreValueTypeSupportsFixedWidthEncoding(col.ValueType) {
+				return 0, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, col.ValueType)
+			}
+			return columnPhysicalAssetVersionV5, nil
+		}
+	}
+	return columnPhysicalAssetVersion, nil
 }
 
 func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value columnDeclaredValue) error {
@@ -639,10 +673,14 @@ func writeManifestBytes(b *bytes.Buffer, value []byte) {
 }
 
 func writeManifestFloat32Slice(b *bytes.Buffer, values []float32) {
+	writeManifestFloat32SliceWithEncoding(b, values, ColumnFixedWidthEncodingDefault)
+}
+
+func writeManifestFloat32SliceWithEncoding(b *bytes.Buffer, values []float32, encoding ColumnFixedWidthEncoding) {
 	writeManifestUint64(b, uint64(len(values)))
 	var buf [4]byte
 	for _, value := range values {
-		binary.BigEndian.PutUint32(buf[:], math.Float32bits(value))
+		putColumnFixedWidthUint32(buf[:], math.Float32bits(value), encoding)
 		_, _ = b.Write(buf[:])
 	}
 }
@@ -654,6 +692,14 @@ func writeManifestUint32Slice(b *bytes.Buffer, values []uint32) {
 		binary.BigEndian.PutUint32(buf[:], value)
 		_, _ = b.Write(buf[:])
 	}
+}
+
+func putColumnFixedWidthUint32(dst []byte, value uint32, encoding ColumnFixedWidthEncoding) {
+	if encoding == ColumnFixedWidthEncodingLittleEndian {
+		binary.LittleEndian.PutUint32(dst, value)
+		return
+	}
+	binary.BigEndian.PutUint32(dst, value)
 }
 
 func (c *manifestCursor) bool() bool {
@@ -703,6 +749,10 @@ func (c *manifestCursor) float32Slice() []float32 {
 }
 
 func (c *manifestCursor) float32SliceWithExpectedLength(expected int) []float32 {
+	return c.float32SliceWithExpectedLengthAndEncoding(expected, ColumnFixedWidthEncodingDefault)
+}
+
+func (c *manifestCursor) float32SliceWithExpectedLengthAndEncoding(expected int, encoding ColumnFixedWidthEncoding) []float32 {
 	n := c.u64()
 	if c.err != nil {
 		return nil
@@ -711,10 +761,14 @@ func (c *manifestCursor) float32SliceWithExpectedLength(expected int) []float32 
 		c.err = fmt.Errorf("collections: float32_vector length=%d want vector_dims=%d", n, expected)
 		return nil
 	}
-	return c.float32SliceAfterLength(n)
+	return c.float32SliceAfterLengthWithEncoding(n, encoding)
 }
 
 func (c *manifestCursor) float32SliceAfterLength(n uint64) []float32 {
+	return c.float32SliceAfterLengthWithEncoding(n, ColumnFixedWidthEncodingDefault)
+}
+
+func (c *manifestCursor) float32SliceAfterLengthWithEncoding(n uint64, encoding ColumnFixedWidthEncoding) []float32 {
 	if c.err != nil {
 		return nil
 	}
@@ -724,7 +778,7 @@ func (c *manifestCursor) float32SliceAfterLength(n uint64) []float32 {
 	}
 	out := make([]float32, int(n))
 	for i := range out {
-		out[i] = math.Float32frombits(binary.BigEndian.Uint32(c.raw[c.pos:]))
+		out[i] = math.Float32frombits(uint32FromColumnFixedWidth(c.raw[c.pos:], encoding))
 		c.pos += 4
 	}
 	return out
@@ -745,6 +799,13 @@ func (c *manifestCursor) uint32Slice() []uint32 {
 		c.pos += 4
 	}
 	return out
+}
+
+func uint32FromColumnFixedWidth(raw []byte, encoding ColumnFixedWidthEncoding) uint32 {
+	if encoding == ColumnFixedWidthEncodingLittleEndian {
+		return binary.LittleEndian.Uint32(raw)
+	}
+	return binary.BigEndian.Uint32(raw)
 }
 
 func (c *manifestCursor) skipUint32Slice() uint64 {

@@ -1822,6 +1822,16 @@ func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expected
 			}
 			vectorDims = int(rawVectorDims)
 		}
+		fixedWidthEncoding := ColumnFixedWidthEncodingDefault
+		if version >= columnPhysicalAssetVersionV5 {
+			fixedWidthEncoding = ColumnFixedWidthEncoding(string(cur.stringBytes()))
+			if _, err := normalizeColumnFixedWidthEncoding(fixedWidthEncoding); err != nil {
+				return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d] fixed_width_encoding: %w", colIdx, err)
+			}
+			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(ColumnStoreValueType(string(valueType))) {
+				return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", colIdx, string(valueType))
+			}
+		}
 		if cur.err != nil {
 			return columnPhysicalAssetScanHeader{}, 0, 0, cur.err
 		}
@@ -1831,9 +1841,10 @@ func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expected
 			!columnPhysicalBytesEqualString(valueType, string(want.ValueType)) ||
 			nullable != want.Nullable ||
 			dictionary != want.Dictionary ||
-			vectorDims != want.VectorDims {
-			return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d} want %+v",
-				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, want)
+			vectorDims != want.VectorDims ||
+			fixedWidthEncoding != want.FixedWidthEncoding {
+			return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d]={Name:%q Path:%q ValueType:%q Nullable:%t Dictionary:%t VectorDims:%d FixedWidthEncoding:%q} want %+v",
+				colIdx, string(name), string(path), string(valueType), nullable, dictionary, vectorDims, fixedWidthEncoding, want)
 		}
 	}
 	return header, version, cur.pos, nil
@@ -2012,7 +2023,7 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			}
 		case ColumnStoreValueFloat32Vector:
 			if selected {
-				value := cur.float32SliceWithExpectedLength(col.VectorDims)
+				value := cur.float32SliceWithExpectedLengthAndEncoding(col.VectorDims, col.FixedWidthEncoding)
 				if cur.err != nil {
 					return cur.err
 				}

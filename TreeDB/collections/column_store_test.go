@@ -408,6 +408,38 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "dictionary",
 		},
 		{
+			name: "unknown fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128, FixedWidthEncoding: "native"}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
+			name: "string fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
+			name: "float32 fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
+			name: "adjacency fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
 			name: "unsupported locator",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

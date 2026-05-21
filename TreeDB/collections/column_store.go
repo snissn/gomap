@@ -60,6 +60,15 @@ const (
 	ColumnStoreValueAdjacencyList ColumnStoreValueType = "adjacency_list"
 )
 
+type ColumnFixedWidthEncoding string
+
+const (
+	// Empty means the current compatibility encoding: manifest-style big-endian
+	// fixed-width element bytes inside the physical part image.
+	ColumnFixedWidthEncodingDefault      ColumnFixedWidthEncoding = ""
+	ColumnFixedWidthEncodingLittleEndian ColumnFixedWidthEncoding = "little_endian"
+)
+
 type ColumnSortDirection string
 
 const (
@@ -159,12 +168,13 @@ type ColumnStoreConfig struct {
 }
 
 type ColumnStoreColumn struct {
-	Name       string               `json:"name"`
-	Path       string               `json:"path"`
-	ValueType  ColumnStoreValueType `json:"value_type"`
-	Nullable   bool                 `json:"nullable,omitempty"`
-	Dictionary bool                 `json:"dictionary,omitempty"`
-	VectorDims int                  `json:"vector_dims,omitempty"`
+	Name               string                   `json:"name"`
+	Path               string                   `json:"path"`
+	ValueType          ColumnStoreValueType     `json:"value_type"`
+	Nullable           bool                     `json:"nullable,omitempty"`
+	Dictionary         bool                     `json:"dictionary,omitempty"`
+	VectorDims         int                      `json:"vector_dims,omitempty"`
+	FixedWidthEncoding ColumnFixedWidthEncoding `json:"fixed_width_encoding,omitempty"`
 }
 
 type ColumnSortKey struct {
@@ -416,6 +426,13 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q value_type: %w", col.Name, err)
 		}
+		fixedWidthEncoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
+		if err != nil {
+			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: %w", col.Name, err)
+		}
+		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(valueType) {
+			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
+		}
 		if valueType == ColumnStoreValueFloat32Vector {
 			if col.VectorDims <= 0 {
 				return fmt.Errorf("collections: invalid column %q vector_dims: must be positive", col.Name)
@@ -563,6 +580,24 @@ func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreV
 		return "", errors.New("value_type is required")
 	default:
 		return "", fmt.Errorf("unsupported value_type %q", valueType)
+	}
+}
+
+func normalizeColumnFixedWidthEncoding(encoding ColumnFixedWidthEncoding) (ColumnFixedWidthEncoding, error) {
+	switch encoding {
+	case ColumnFixedWidthEncodingDefault, ColumnFixedWidthEncodingLittleEndian:
+		return encoding, nil
+	default:
+		return "", fmt.Errorf("unsupported fixed_width_encoding %q", encoding)
+	}
+}
+
+func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueFloat32Vector:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -906,6 +941,9 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashBool(&d, col.Dictionary)
 		if col.ValueType == ColumnStoreValueFloat32Vector {
 			writeHashInt(&d, col.VectorDims)
+		}
+		if col.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+			writeHashString(&d, string(col.FixedWidthEncoding))
 		}
 	}
 	for _, sortKey := range cfg.SortKey {

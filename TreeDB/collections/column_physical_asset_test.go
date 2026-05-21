@@ -257,6 +257,182 @@ func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetFloat32VectorLittleEndianRoundTrip(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+			{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+			{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{{
+		ID: []byte("v1"),
+		Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{
+				math.Float32frombits(0x3f800000),
+				math.Float32frombits(0xc0200000),
+				math.Float32frombits(0x7fc12345),
+			}},
+			{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x3e800000)},
+			{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{0x01020304, 0xa0b0c0d0}},
+		},
+	}}
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "vectors",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        2,
+		PartID:            1,
+		AppliedCommandLSN: 9,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	assertColumnPhysicalAssetFloat32VectorLittleEndianFixture(t, encoded, normalized)
+
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+	}
+	if got := decoded.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("decoded fixed_width_encoding=%q want little_endian", got)
+	}
+	if got := math.Float32bits(decoded.Rows[0].Values[0].Float32Vector[2]); got != 0x7fc12345 {
+		t.Fatalf("decoded vector nan bits=0x%08x want 0x7fc12345", got)
+	}
+	if got := math.Float32bits(decoded.Rows[0].Values[1].Float32); got != 0x3e800000 {
+		t.Fatalf("decoded scalar bits=0x%08x want 0x3e800000", got)
+	}
+	if got := decoded.Rows[0].Values[2].AdjacencyList; len(got) != 2 || got[0] != 0x01020304 || got[1] != 0xa0b0c0d0 {
+		t.Fatalf("decoded adjacency=%x", got)
+	}
+
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"embedding", "embedding_inv_norm", "embedding_neighbors"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	visited := 0
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		visited++
+		if got := math.Float32bits(row.Values[0].Float32Vector[2]); got != 0x7fc12345 {
+			t.Fatalf("scanned vector nan bits=0x%08x want 0x7fc12345", got)
+		}
+		if got := math.Float32bits(row.Values[1].Float32); got != 0x3e800000 {
+			t.Fatalf("scanned scalar bits=0x%08x want 0x3e800000", got)
+		}
+		if got := row.Values[2].AdjacencyList; len(got) != 2 || got[1] != 0xa0b0c0d0 {
+			t.Fatalf("scanned adjacency=%x", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows: %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited=%d want 1", visited)
+	}
+
+	mismatch := *normalized
+	mismatch.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
+	mismatch.Columns[0].FixedWidthEncoding = ColumnFixedWidthEncodingDefault
+	mismatch.SchemaHash = normalized.SchemaHash
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, mismatch); err == nil || !strings.Contains(err.Error(), "column[0]") {
+		t.Fatalf("validate metadata mismatch err=%v want column mismatch", err)
+	}
+}
+
+func assertColumnPhysicalAssetFloat32VectorLittleEndianFixture(t *testing.T, encoded []byte, cfg *ColumnStoreConfig) {
+	t.Helper()
+	cur := manifestCursor{raw: encoded}
+	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
+		t.Fatalf("magic=0x%08x want 0x%08x", magic, columnPhysicalAssetMagic)
+	}
+	if version := cur.u16(); version != columnPhysicalAssetVersionV5 {
+		t.Fatalf("version=%d want %d", version, columnPhysicalAssetVersionV5)
+	}
+	_ = cur.stringBytes()
+	_ = cur.stringBytes()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.stringBytes()
+	_ = cur.u64()
+	columnCount := cur.u64()
+	rowCount := cur.u64()
+	if cur.err != nil {
+		t.Fatalf("header cursor err=%v", cur.err)
+	}
+	if columnCount != uint64(len(cfg.Columns)) || rowCount != 1 {
+		t.Fatalf("column_count=%d row_count=%d", columnCount, rowCount)
+	}
+	for i, col := range cfg.Columns {
+		_ = cur.stringBytes()
+		_ = cur.stringBytes()
+		_ = cur.stringBytes()
+		_ = cur.bool()
+		_ = cur.bool()
+		_ = cur.u64()
+		if got := ColumnFixedWidthEncoding(cur.string()); got != col.FixedWidthEncoding {
+			t.Fatalf("column[%d] fixed_width_encoding=%q want %q", i, got, col.FixedWidthEncoding)
+		}
+	}
+	_ = cur.bytesView()
+	_ = cur.bool()
+	_ = cur.stringBytes()
+	_ = cur.bool()
+	_ = cur.bool()
+	if n := cur.u64(); n != 3 {
+		t.Fatalf("vector length=%d want 3", n)
+	}
+	if got, want := encoded[cur.pos:cur.pos+12], []byte{0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x20, 0xc0, 0x45, 0x23, 0xc1, 0x7f}; !bytes.Equal(got, want) {
+		t.Fatalf("vector payload bytes=% x want % x", got, want)
+	}
+	cur.pos += 12
+	_ = cur.stringBytes()
+	_ = cur.bool()
+	_ = cur.bool()
+	if got, want := encoded[cur.pos:cur.pos+4], []byte{0x3e, 0x80, 0x00, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("float32 payload bytes=% x want % x", got, want)
+	}
+	cur.pos += 4
+	_ = cur.stringBytes()
+	_ = cur.bool()
+	_ = cur.bool()
+	if n := cur.u64(); n != 2 {
+		t.Fatalf("adjacency length=%d want 2", n)
+	}
+	if got, want := encoded[cur.pos:cur.pos+8], []byte{0x01, 0x02, 0x03, 0x04, 0xa0, 0xb0, 0xc0, 0xd0}; !bytes.Equal(got, want) {
+		t.Fatalf("adjacency payload bytes=% x want % x", got, want)
+	}
+	cur.pos += 8
+	if cur.err != nil {
+		t.Fatalf("cursor err=%v", cur.err)
+	}
+	if cur.pos != len(encoded) {
+		t.Fatalf("cursor pos=%d len=%d", cur.pos, len(encoded))
+	}
+}
+
 func TestEncodeColumnPhysicalAssetRejectsMismatchedVectorLength(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
