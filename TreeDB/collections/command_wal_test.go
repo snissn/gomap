@@ -896,6 +896,9 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexStagesAfterWALApp
 		t.Fatalf("reopened city=%q want sea", got)
 	}
 	assertCollectionIndexIDs(t, reopened, "email", "ada@example.test", "u1")
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 1", got)
+	}
 }
 
 func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing.T) {
