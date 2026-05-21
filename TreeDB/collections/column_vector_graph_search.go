@@ -57,6 +57,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
+	resultFetched  []bool
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
@@ -114,6 +115,9 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	}
 	if cap(s.resultOrdinals) < topK {
 		s.resultOrdinals = make([]int, 0, topK)
+	}
+	if cap(s.resultFetched) < topK {
+		s.resultFetched = make([]bool, 0, topK)
 	}
 	return nil
 }
@@ -217,8 +221,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				break
 			}
 			stats.Edges++
-			if uint64(neighbor) >= uint64(rowCount) {
-				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, row.Ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+			if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
+				return nil, stats, err
 			}
 			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
 				return nil, stats, err
@@ -239,6 +243,8 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 	n := len(scratch.top)
 	scratch.resultOrder = scratch.resultOrder[:n]
 	scratch.resultOrdinals = scratch.resultOrdinals[:n]
+	scratch.resultFetched = scratch.resultFetched[:n]
+	clear(scratch.resultFetched)
 	for i := 0; i < n; i++ {
 		scratch.resultOrder[i] = i
 	}
@@ -246,30 +252,29 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 	for fetchPos, topIndex := range scratch.resultOrder {
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
-	fetchPos := 0
-	// FetchBatch preserves request order today; the ordinal check below fails
-	// closed if that contract changes.
+	fetched := 0
 	if err := r.fetchBatchUnchecked(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
-		if fetchPos >= n {
-			return fmt.Errorf("collections: column_graph %q result batch returned extra row ordinal=%d", r.def.Name, row.Ordinal)
+		resultPos := sort.SearchInts(scratch.resultOrdinals, row.Ordinal)
+		if resultPos >= n || scratch.resultOrdinals[resultPos] != row.Ordinal {
+			return fmt.Errorf("collections: column_graph %q result batch returned unexpected row ordinal=%d", r.def.Name, row.Ordinal)
 		}
-		topIndex := scratch.resultOrder[fetchPos]
-		candidate := scratch.top[topIndex]
-		if row.Ordinal != candidate.ordinal {
-			return fmt.Errorf("collections: column_graph %q result batch row ordinal=%d want %d", r.def.Name, row.Ordinal, candidate.ordinal)
+		if scratch.resultFetched[resultPos] {
+			return fmt.Errorf("collections: column_graph %q result batch returned duplicate row ordinal=%d", r.def.Name, row.Ordinal)
 		}
+		scratch.resultFetched[resultPos] = true
+		topIndex := scratch.resultOrder[resultPos]
 		if cap(scratch.idBuffers[topIndex]) < len(row.ID) {
 			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
 		}
 		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(row.ID)]
 		copy(scratch.idBuffers[topIndex], row.ID)
-		fetchPos++
+		fetched++
 		return nil
 	}); err != nil {
 		return err
 	}
-	if fetchPos != n {
-		return fmt.Errorf("collections: column_graph %q result batch rows=%d want %d", r.def.Name, fetchPos, n)
+	if fetched != n {
+		return fmt.Errorf("collections: column_graph %q result batch rows=%d want %d", r.def.Name, fetched, n)
 	}
 	stats.ResultFetches += uint64(n)
 	for i, candidate := range scratch.top {
