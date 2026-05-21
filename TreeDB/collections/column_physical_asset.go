@@ -683,9 +683,19 @@ func writeManifestFloat32Slice(b *bytes.Buffer, values []float32) {
 func writeManifestFloat32SliceWithEncoding(b *bytes.Buffer, values []float32, encoding ColumnFixedWidthEncoding) {
 	writeManifestUint64(b, uint64(len(values)))
 	var buf [4]byte
-	for _, value := range values {
-		putColumnFixedWidthUint32(buf[:], math.Float32bits(value), encoding)
-		_, _ = b.Write(buf[:])
+	switch encoding {
+	case ColumnFixedWidthEncodingDefault:
+		for _, value := range values {
+			binary.BigEndian.PutUint32(buf[:], math.Float32bits(value))
+			_, _ = b.Write(buf[:])
+		}
+	case ColumnFixedWidthEncodingLittleEndian:
+		for _, value := range values {
+			binary.LittleEndian.PutUint32(buf[:], math.Float32bits(value))
+			_, _ = b.Write(buf[:])
+		}
+	default:
+		panic(fmt.Sprintf("collections: unsupported fixed_width_encoding %q", encoding))
 	}
 }
 
@@ -696,14 +706,6 @@ func writeManifestUint32Slice(b *bytes.Buffer, values []uint32) {
 		binary.BigEndian.PutUint32(buf[:], value)
 		_, _ = b.Write(buf[:])
 	}
-}
-
-func putColumnFixedWidthUint32(dst []byte, value uint32, encoding ColumnFixedWidthEncoding) {
-	if encoding == ColumnFixedWidthEncodingLittleEndian {
-		binary.LittleEndian.PutUint32(dst, value)
-		return
-	}
-	binary.BigEndian.PutUint32(dst, value)
 }
 
 func (c *manifestCursor) bool() bool {
@@ -780,9 +782,24 @@ func (c *manifestCursor) float32SliceAfterLengthWithEncoding(n uint64, encoding 
 	if !ok {
 		return nil
 	}
+	littleEndian := false
+	switch encoding {
+	case ColumnFixedWidthEncodingDefault:
+	case ColumnFixedWidthEncodingLittleEndian:
+		littleEndian = true
+	default:
+		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
+		return nil
+	}
 	out := make([]float32, int(n))
 	for i := range out {
-		out[i] = math.Float32frombits(uint32FromColumnFixedWidth(c.raw[c.pos:], encoding))
+		var bits uint32
+		if littleEndian {
+			bits = binary.LittleEndian.Uint32(c.raw[c.pos:])
+		} else {
+			bits = binary.BigEndian.Uint32(c.raw[c.pos:])
+		}
+		out[i] = math.Float32frombits(bits)
 		c.pos += 4
 	}
 	return out
@@ -803,13 +820,6 @@ func (c *manifestCursor) uint32Slice() []uint32 {
 		c.pos += 4
 	}
 	return out
-}
-
-func uint32FromColumnFixedWidth(raw []byte, encoding ColumnFixedWidthEncoding) uint32 {
-	if encoding == ColumnFixedWidthEncodingLittleEndian {
-		return binary.LittleEndian.Uint32(raw)
-	}
-	return binary.BigEndian.Uint32(raw)
 }
 
 func (c *manifestCursor) skipUint32Slice() uint64 {

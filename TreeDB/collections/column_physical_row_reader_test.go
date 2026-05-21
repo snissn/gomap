@@ -512,6 +512,19 @@ func TestColumnPhysicalRowReaderScratchAppendFixedWidthSlicesV1(t *testing.T) {
 		}
 	})
 
+	t.Run("float32_vector_unsupported_encoding", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestFloat32Slice(&b, []float32{1})
+		cur := manifestCursor{raw: b.Bytes()}
+		got, err := cur.appendFloat32SliceWithExpectedLengthAndEncoding([]float32{7}, 1, ColumnFixedWidthEncoding("future"))
+		if err == nil || !strings.Contains(err.Error(), "unsupported fixed_width_encoding") {
+			t.Fatalf("appendFloat32SliceWithExpectedLengthAndEncoding err=%v want unsupported fixed_width_encoding", err)
+		}
+		if fmt.Sprint(got) != "[7]" {
+			t.Fatalf("got=%v want original dst", got)
+		}
+	})
+
 	t.Run("float32_vector_wrong_length", func(t *testing.T) {
 		var b bytes.Buffer
 		writeManifestFloat32Slice(&b, []float32{1, 2})

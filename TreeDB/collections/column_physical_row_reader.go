@@ -715,6 +715,15 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []f
 	if !ok {
 		return dst, c.err
 	}
+	littleEndian := false
+	switch encoding {
+	case ColumnFixedWidthEncodingDefault:
+	case ColumnFixedWidthEncodingLittleEndian:
+		littleEndian = true
+	default:
+		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
+		return dst, c.err
+	}
 	base := len(dst)
 	need := base + int(n)
 	if cap(dst) < need {
@@ -733,7 +742,7 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []f
 		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
 	}
 	i := base
-	if encoding == ColumnFixedWidthEncodingLittleEndian {
+	if littleEndian {
 		for ; i+4 <= need; i += 4 {
 			_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
 			dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)

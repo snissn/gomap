@@ -372,6 +372,18 @@ func TestColumnPhysicalAssetVersionSelectionValidatesAllFixedWidthEncodings(t *t
 	}
 }
 
+func TestColumnPhysicalAssetFloat32SliceRejectsUnsupportedFixedWidthEncoding(t *testing.T) {
+	var b bytes.Buffer
+	writeManifestFloat32Slice(&b, []float32{1})
+	cur := manifestCursor{raw: b.Bytes()}
+	if got := cur.float32SliceWithExpectedLengthAndEncoding(1, ColumnFixedWidthEncoding("future")); got != nil {
+		t.Fatalf("float32SliceWithExpectedLengthAndEncoding got=%v want nil", got)
+	}
+	if cur.err == nil || !strings.Contains(cur.err.Error(), "unsupported fixed_width_encoding") {
+		t.Fatalf("cursor err=%v want unsupported fixed_width_encoding", cur.err)
+	}
+}
+
 func assertColumnPhysicalAssetFloat32VectorLittleEndianFixture(t *testing.T, encoded []byte, cfg *ColumnStoreConfig) {
 	t.Helper()
 	cur := manifestCursor{raw: encoded}
