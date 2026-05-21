@@ -23,27 +23,28 @@ import (
 )
 
 const (
-	columnStorePathRowStoreBaseline   = "row_store_baseline"
-	columnStorePathBTreeIndexBaseline = "b_tree_index_baseline"
-	columnStorePathSerialColumnScan   = "serial_column_scan"
-	columnStorePathAggregateMetadata  = "aggregate_metadata"
-	columnStorePathParallelColumnScan = "parallel_column_scan"
-	columnStoreSuiteBenchTestName     = "column_store"
-	columnStoreSuiteBenchDBName       = "treedb_column_store"
-	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
-	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
-	columnStoreQueryQ1                = "q1"
-	columnStoreQueryQ2                = "q2"
-	columnStoreQueryQ3                = "q3"
-	columnStoreQueryQ4A               = "q4a"
-	columnStoreQueryQ4B               = "q4b"
-	columnStoreQueryQ5                = "q5"
-	columnStoreQueryQ5Metadata        = "q5_metadata"
-	columnStoreSuiteBenchMetricPrefix = "column_store_"
-	columnStoreSuiteAliasFullScanQ1   = "alias_full_scan_from_" + columnStoreQueryQ1
-	columnStoreSuiteAliasPrefixQ4A    = "alias_prefix_scan_from_" + columnStoreQueryQ4A
-	columnStoreSuiteQ5AggregateMin    = "q5_did_time_span_min"
-	columnStoreSuiteQ5AggregateMax    = "q5_did_time_span_max"
+	columnStorePathRowStoreBaseline    = "row_store_baseline"
+	columnStorePathBTreeIndexBaseline  = "b_tree_index_baseline"
+	columnStorePathSerialColumnScan    = "serial_column_scan"
+	columnStorePathAggregateMetadata   = "aggregate_metadata"
+	columnStorePathParallelColumnScan  = "parallel_column_scan"
+	columnStoreSuiteBenchTestName      = "column_store"
+	columnStoreSuiteBenchDBName        = "treedb_column_store"
+	columnStoreSuiteBenchDisplayName   = "TreeDB Column Store"
+	columnStoreSuitePathCanonicalHelp  = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
+	columnStoreQueryQ1                 = "q1"
+	columnStoreQueryQ2                 = "q2"
+	columnStoreQueryQ3                 = "q3"
+	columnStoreQueryQ4A                = "q4a"
+	columnStoreQueryQ4B                = "q4b"
+	columnStoreQueryQ5                 = "q5"
+	columnStoreQueryQ5Metadata         = "q5_metadata"
+	columnStoreSuiteBenchMetricPrefix  = "column_store_"
+	columnStoreSuiteAliasFullScanQ1    = "alias_full_scan_from_" + columnStoreQueryQ1
+	columnStoreSuiteAliasPrefixQ4A     = "alias_prefix_scan_from_" + columnStoreQueryQ4A
+	columnStoreSuiteQ5AggregateMin     = "q5_did_time_span_min"
+	columnStoreSuiteQ5AggregateMax     = "q5_did_time_span_max"
+	columnStoreSuiteMaxInt64DecimalLen = 20 // len("-9223372036854775808")
 )
 
 type columnStoreSuitePathAlias struct {
@@ -1432,8 +1433,7 @@ func columnStoreSuitePhysicalQueryGroupLess(queryName string, left, right collec
 }
 
 func columnStoreHashPhysicalQueryGroup(hash uint64, prefix, key string, value int64) uint64 {
-	const maxInt64DecimalLen = 20 // len("-9223372036854775808")
-	var num [maxInt64DecimalLen]byte
+	var num [columnStoreSuiteMaxInt64DecimalLen]byte
 	hash = columnStoreHashString(hash, prefix)
 	hash = columnStoreHashByte(hash, ':')
 	hash = columnStoreHashString(hash, key)
@@ -1443,9 +1443,8 @@ func columnStoreHashPhysicalQueryGroup(hash uint64, prefix, key string, value in
 }
 
 func columnStoreSuiteFormatPhysicalQueryLine(prefix, key string, value int64) string {
-	const maxInt64DecimalLen = 20 // len("-9223372036854775808")
 	var b strings.Builder
-	var num [maxInt64DecimalLen]byte
+	var num [columnStoreSuiteMaxInt64DecimalLen]byte
 	b.Grow(len(prefix) + 1 + len(key) + 1 + len(num))
 	b.WriteString(prefix)
 	b.WriteByte(':')
