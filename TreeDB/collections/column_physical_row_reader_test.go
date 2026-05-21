@@ -84,6 +84,17 @@ func TestColumnPhysicalRowReaderFetchesLittleEndianFixedWidthRowsV1(t *testing.T
 		t.Fatalf("FetchRow(2): %v", err)
 	}
 	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-002", 2, []float32{2, 2.25, 2.5, 2.75}, []uint32{2, 3, 4})
+
+	if _, err := reader.FetchRow(2, &scratch); err != nil {
+		t.Fatalf("warm FetchRow(2): %v", err)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := reader.FetchRow(2, &scratch); err != nil {
+			t.Fatalf("FetchRow(2): %v", err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("little-endian hot FetchRow allocs=%v want zero", allocs)
+	}
 }
 
 func TestColumnPhysicalRowReaderBatchFetchReusesCachedBlockV1(t *testing.T) {
