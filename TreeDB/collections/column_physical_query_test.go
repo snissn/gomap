@@ -1913,6 +1913,32 @@ func TestColumnPhysicalQueryGroupSortHybridM1634(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQueryExecutorResetClearsDistinctGroupsM1634(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	exec, err := newColumnPhysicalQueryExecutor(*cfg, ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountDistinct,
+		GroupColumn:    "kind",
+		DistinctColumn: "did",
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalQueryExecutor: %v", err)
+	}
+	if err := exec.visitDirectGroupCountDistinct([]byte("kind_a"), true, []byte("did_a"), true); err != nil {
+		t.Fatalf("visit first distinct: %v", err)
+	}
+	if got := exec.groups(); len(got) != 1 || got[0].Key != "kind_a" || got[0].Count != 1 {
+		t.Fatalf("first groups=%+v want kind_a=1", got)
+	}
+	exec.resetForRun()
+	if err := exec.visitDirectGroupCountDistinct([]byte("kind_b"), true, []byte("did_b"), true); err != nil {
+		t.Fatalf("visit second distinct: %v", err)
+	}
+	got := exec.groups()
+	if len(got) != 1 || got[0].Key != "kind_b" || got[0].Count != 1 {
+		t.Fatalf("second groups=%+v want only kind_b=1", got)
+	}
+}
+
 func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 	for _, rows := range []int{1024, 8192} {
 		cases := []struct {

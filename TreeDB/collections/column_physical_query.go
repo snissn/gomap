@@ -696,6 +696,7 @@ type columnPhysicalQueryExecutor struct {
 
 	counts       map[string]int
 	distinct     map[string]map[string]struct{}
+	distinctPool []map[string]struct{}
 	hourCounts   [24]int
 	int64Values  map[string]int64
 	int64Spans   map[string]columnPhysicalQuerySpan
@@ -848,10 +849,13 @@ func (e *columnPhysicalQueryExecutor) resetForRun() {
 	for key := range e.counts {
 		delete(e.counts, key)
 	}
-	for _, set := range e.distinct {
-		for key := range set {
-			delete(set, key)
+	e.distinctPool = e.distinctPool[:0]
+	for key, set := range e.distinct {
+		for value := range set {
+			delete(set, value)
 		}
+		e.distinctPool = append(e.distinctPool, set)
+		delete(e.distinct, key)
 	}
 	for key := range e.int64Values {
 		delete(e.int64Values, key)
@@ -886,11 +890,7 @@ func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) 
 		if err != nil {
 			return err
 		}
-		set := e.distinct[key]
-		if set == nil {
-			set = make(map[string]struct{})
-			e.distinct[key] = set
-		}
+		set := e.distinctSetForGroup(key)
 		set[distinct] = struct{}{}
 	case ColumnPhysicalQueryHourCount:
 		value, err := columnPhysicalQueryInt64Value(values[e.valueIdx])
@@ -933,6 +933,21 @@ func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) 
 		e.int64Spans[key] = cur
 	}
 	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) distinctSetForGroup(key string) map[string]struct{} {
+	set := e.distinct[key]
+	if set != nil {
+		return set
+	}
+	if n := len(e.distinctPool); n > 0 {
+		set = e.distinctPool[n-1]
+		e.distinctPool = e.distinctPool[:n-1]
+	} else {
+		set = make(map[string]struct{})
+	}
+	e.distinct[key] = set
+	return set
 }
 
 func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, expectedOperation ColumnPublishOperation, exec *columnPhysicalQueryExecutor) (columnPhysicalAssetScanSummary, error) {
@@ -1194,11 +1209,7 @@ func (e *columnPhysicalQueryExecutor) visitDirectGroupCountDistinct(group []byte
 	}
 	key := e.interner.internBytes(group)
 	distinctKey := e.interner.internBytes(distinct)
-	set := e.distinct[key]
-	if set == nil {
-		set = make(map[string]struct{})
-		e.distinct[key] = set
-	}
+	set := e.distinctSetForGroup(key)
 	set[distinctKey] = struct{}{}
 	e.reduceRows++
 	return nil
