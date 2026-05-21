@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -8,6 +9,32 @@ import (
 )
 
 var vectorIndexStatusBenchSink VectorIndexStatus
+
+func TestColumnGraphVectorIndexMetadataUsesCollectionMetaVersionV2A(t *testing.T) {
+	raw, err := encodeCollectionMeta(CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding_graph",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 3,
+			Strategy:   VectorIndexStrategyColumnGraph,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("encodeCollectionMeta: %v", err)
+	}
+	var disk collectionMetaDisk
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatalf("unmarshal collectionMetaDisk: %v", err)
+	}
+	if disk.Version != 3 {
+		t.Fatalf("collection metadata version=%d want 3 after adding durable vector_indexes", disk.Version)
+	}
+	if len(disk.VectorIndexes) != 1 || disk.VectorIndexes[0].Name != "embedding_graph" {
+		t.Fatalf("encoded vector indexes=%+v", disk.VectorIndexes)
+	}
+}
 
 func TestColumnGraphVectorIndexMetadataCreateStatusDropReopenV2A(t *testing.T) {
 	dir := t.TempDir()
