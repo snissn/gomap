@@ -2572,6 +2572,15 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 			decoded.TreeDBBufferedIndexedAsyncFlush,
 			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
 	}
+
+	result.TreeDBCommandWAL = false
+	out.Reset()
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json without command WAL: %v", err)
+	}
+	if strings.Contains(out.String(), "treedb_command_wal") {
+		t.Fatalf("json includes false treedb_command_wal field: %s", out.String())
+	}
 }
 
 func TestRecordEffectiveTreeDBCollectionOptionsUsesNormalizedMetadata(t *testing.T) {

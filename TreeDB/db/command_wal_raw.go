@@ -645,6 +645,9 @@ func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALInt
 // mutation visible in memory or durable roots. Reopen recovery may apply the
 // frame, so retrying on the same handle can create command-WAL gaps.
 func (db *DB) MarkCommandWALIntentRecoveryRequired(intent *CommandWALIntent) {
+	if db == nil || intent == nil {
+		return
+	}
 	db.poisonCommandWALAfterPublicPostAppendFailure(intent)
 }
 

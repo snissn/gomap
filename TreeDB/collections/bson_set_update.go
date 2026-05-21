@@ -98,6 +98,8 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	mode := updateBatchModeNoSecondaryUniqueIndexChanges
 	results, batched, err := c.updateBatchOwnedItems(items, mode)
 	if c.commandWALActive(nil) && err == nil && !batched {
+		// Keep the common no-index direct buffered command-WAL fast path narrow.
+		// Indexed/unique cases that cannot use it fall back to ordinary command-WAL semantics.
 		results, batched, err = c.updateBatchOwnedItems(items, updateBatchModeAny)
 	}
 	if !batched && err == nil {

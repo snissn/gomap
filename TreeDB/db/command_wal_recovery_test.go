@@ -731,6 +731,12 @@ func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
 	}
 }
 
+func TestMarkCommandWALIntentRecoveryRequiredNilNoop(t *testing.T) {
+	db := &DB{}
+	db.MarkCommandWALIntentRecoveryRequired(nil)
+	(*DB)(nil).MarkCommandWALIntentRecoveryRequired(nil)
+}
+
 func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

@@ -144,7 +144,7 @@ type benchmarkResult struct {
 	RangeIndex         bool `json:"range_index"`
 
 	TreeDBProfile                                 string              `json:"treedb_profile,omitempty"`
-	TreeDBCommandWAL                              bool                `json:"treedb_command_wal"`
+	TreeDBCommandWAL                              bool                `json:"treedb_command_wal,omitempty"`
 	TreeDBDocumentFormat                          string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage                         string              `json:"treedb_data_root_storage,omitempty"`
 	TreeDBIndexStateRootStorage                   string              `json:"treedb_index_state_root_storage,omitempty"`
