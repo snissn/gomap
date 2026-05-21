@@ -700,6 +700,37 @@ func TestCommandWALPublishReadyReportsPoisonedHandle(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), false)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+	db.testFailCommandWALFlush.Store(false)
+
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return nil
+	})
+	defer unregister()
+	_, err = db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("after"), []byte("poison"), false)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted after poison error=%v, want ErrRecoveryRequired", err)
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("raw publish barrier ran after command WAL handle was poisoned")
+	}
+}
+
 func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

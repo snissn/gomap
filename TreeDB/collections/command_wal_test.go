@@ -948,6 +948,373 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing
 	}
 }
 
+func TestCollectionCommandWALUpdateBSONSetNoIndexDrainsBeforeRawKVCommandWAL(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		_ = d.Close()
+		t.Fatalf("UpdateBSONSet matched=%t modified=%t, want true/true", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0 before raw write", got)
+	}
+	if err := d.Set([]byte("raw"), []byte("v")); err != nil {
+		_ = d.Close()
+		t.Fatalf("raw Set after staged collection update: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		_ = d.Close()
+		t.Fatalf("AppliedCommandLSN after raw write=%d, want staged update and raw frame applied", got)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get staged doc after raw write: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		_ = d.Close()
+		t.Fatalf("city after raw write=%q want sea", got)
+	}
+	raw, err := d.Get([]byte("raw"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get raw key: %v", err)
+	}
+	if !bytes.Equal(raw, []byte("v")) {
+		_ = d.Close()
+		t.Fatalf("raw key=%q, want v", raw)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	doc, err = reopened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get reopened doc: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("reopened city=%q want sea", got)
+	}
+	raw, err = reopen.Get([]byte("raw"))
+	if err != nil {
+		t.Fatalf("Get reopened raw key: %v", err)
+	}
+	if !bytes.Equal(raw, []byte("v")) {
+		t.Fatalf("reopened raw key=%q, want v", raw)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after reopen=%d, want 2", got)
+	}
+}
+
+func TestCollectionCommandWALUpdateBSONSetNoIndexWaitsForRawKVCommandWALPublish(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	attempting := make(chan struct{})
+	done := make(chan error, 1)
+	unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
+		go func() {
+			close(attempting)
+			matched, modified, updateErr := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+				Key:   "city",
+				Value: mustBSONRawValue(t, "sea"),
+			}})
+			if updateErr == nil && (!matched || !modified) {
+				updateErr = errors.New("UpdateBSONSet matched/modified false")
+			}
+			done <- updateErr
+		}()
+		<-attempting
+		select {
+		case updateErr := <-done:
+			if updateErr != nil {
+				return updateErr
+			}
+			return errors.New("collection update completed while raw command WAL publish was open")
+		case <-time.After(25 * time.Millisecond):
+			return nil
+		}
+	})
+	defer unregister()
+
+	if err := d.Set([]byte("raw"), []byte("v")); err != nil {
+		t.Fatalf("raw Set while collection update is waiting: %v", err)
+	}
+	select {
+	case updateErr := <-done:
+		if updateErr != nil {
+			t.Fatalf("UpdateBSONSet after raw publish: %v", updateErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("UpdateBSONSet did not complete after raw publish")
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after raw publish and staged update=%d, want 1", got)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get updated doc: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city after update=%q want sea", got)
+	}
+	raw, err := d.Get([]byte("raw"))
+	if err != nil {
+		t.Fatalf("Get raw key: %v", err)
+	}
+	if !bytes.Equal(raw, []byte("v")) {
+		t.Fatalf("raw key=%q, want v", raw)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush staged update: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 2", got)
+	}
+}
+
+func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotDeadlockRawPublish(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "city", Value: "hnl"}, {Key: "state", Value: "hi"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	closeDB := true
+	defer func() {
+		if closeDB {
+			_ = d.Close()
+		}
+	}()
+
+	var launchSecond atomic.Bool
+	var launchedSecond atomic.Bool
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	var col *Collection
+	unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
+		if !launchSecond.Load() || !launchedSecond.CompareAndSwap(false, true) {
+			return nil
+		}
+		go func() {
+			close(secondStarted)
+			_, _, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+				Key:   "state",
+				Value: mustBSONRawValue(t, "wa"),
+			}})
+			secondDone <- err
+		}()
+		<-secondStarted
+		time.Sleep(200 * time.Millisecond)
+		return nil
+	})
+	defer unregister()
+
+	mgr := NewCollectionManager(d)
+	var err error
+	col, err = mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	matched, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}})
+	if err != nil {
+		t.Fatalf("first UpdateBSONSet: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("first UpdateBSONSet matched=%t modified=%t, want true/true", matched, modified)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after first update=%d, want 0", got)
+	}
+
+	launchSecond.Store(true)
+	rawDone := make(chan error, 1)
+	go func() {
+		rawDone <- d.Set([]byte("raw"), []byte("v"))
+	}()
+	select {
+	case err := <-rawDone:
+		if err != nil {
+			t.Fatalf("raw Set: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		closeDB = false
+		t.Fatalf("raw Set did not complete")
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second UpdateBSONSet: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		closeDB = false
+		t.Fatalf("second UpdateBSONSet did not complete")
+	}
+	raw, err := d.Get([]byte("raw"))
+	if err != nil {
+		t.Fatalf("Get raw key: %v", err)
+	}
+	if string(raw) != "v" {
+		t.Fatalf("raw key=%q, want v", raw)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("city=%q, want sea", got)
+	}
+	if got := bson.Raw(doc).Lookup("state").StringValue(); got != "wa" {
+		t.Fatalf("state=%q, want wa", got)
+	}
+}
+
+func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotReserveBeforeMutation(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "city", Value: "hnl"}, {Key: "state", Value: "hi"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	unlockMutation := col.lockMutation()
+	mutationLocked := true
+	releaseMutation := func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+			mutationLocked = false
+		}
+	}
+	defer releaseMutation()
+
+	updateDone := make(chan error, 1)
+	go func() {
+		_, _, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+			Key:   "city",
+			Value: mustBSONRawValue(t, "sea"),
+		}})
+		updateDone <- err
+	}()
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-updateDone:
+			t.Fatalf("UpdateBSONSet completed while mutation lock was held: %v", err)
+		default:
+		}
+		if collectionCommandWALDomainStageReserved(col.writeDomain) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	intent, err := col.newCollectionUpdateCommandWALIntent(nil, nil)
+	if err != nil {
+		t.Fatalf("newCollectionUpdateCommandWALIntent: %v", err)
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- col.publishCommandWALNoop(intent, false)
+	}()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish no-op while mutation lock held: %v", err)
+		}
+	case <-time.After(time.Second):
+		releaseMutation()
+		t.Fatalf("publish no-op waited on a pre-mutation stage reservation")
+	}
+
+	releaseMutation()
+	select {
+	case err := <-updateDone:
+		if err != nil {
+			t.Fatalf("UpdateBSONSet after mutation release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("UpdateBSONSet did not complete after mutation release")
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN before flushing staged update=%d, want 1", got)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush staged update: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 2 {
+		t.Fatalf("AppliedCommandLSN after flushing staged update=%d, want 2", got)
+	}
+}
+
 func TestCollectionCommandWALUpdateBSONSetNoopFlushesStagedUpdate(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
@@ -1084,6 +1451,146 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexInterleavedCollectionsDrainOwne
 	}
 	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "bos" {
 		t.Fatalf("b.city=%q want bos", got)
+	}
+}
+
+func TestCollectionCommandWALPublishCoordinatorDoesNotHoldCoordinatorWhileDrainingOwner(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids: [][]byte{[]byte("u1")},
+		docs: [][]byte{
+			mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}}),
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, _, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "city",
+		Value: mustBSONRawValue(t, "sea"),
+	}}); err != nil {
+		t.Fatalf("UpdateBSONSet: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0", got)
+	}
+
+	coord := mgr.commandWALCoordinator
+	if coord == nil {
+		t.Fatalf("missing command WAL coordinator")
+	}
+	coord.mu.Lock()
+	if coord.owner != col.writeDomain {
+		coord.mu.Unlock()
+		t.Fatalf("coordinator owner=%p, want collection write domain %p", coord.owner, col.writeDomain)
+	}
+	coord.mu.Unlock()
+
+	col.writeDomain.mu.Lock()
+	drainDone := make(chan error, 1)
+	go func() {
+		unlock, lockErr := mgr.lockCommandWALPublishCoordinator()
+		if lockErr == nil {
+			unlock()
+		}
+		drainDone <- lockErr
+	}()
+	time.Sleep(25 * time.Millisecond)
+	select {
+	case err := <-drainDone:
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("owner drain completed while owner domain lock was held: %v", err)
+	default:
+	}
+
+	coordAvailable := make(chan struct{})
+	go func() {
+		coord.mu.Lock()
+		coord.mu.Unlock()
+		close(coordAvailable)
+	}()
+	select {
+	case <-coordAvailable:
+	case <-time.After(250 * time.Millisecond):
+		col.writeDomain.mu.Unlock()
+		t.Fatalf("publish coordinator stayed locked while waiting for owner domain")
+	}
+
+	col.writeDomain.mu.Unlock()
+	select {
+	case err := <-drainDone:
+		if err != nil {
+			t.Fatalf("owner drain: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("owner drain did not complete after owner domain unlocked")
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after owner drain=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALPublishWaitsForStageReservation(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	unlockStage, err := col.lockCommandWALStageCoordinator()
+	if err != nil {
+		t.Fatalf("lockCommandWALStageCoordinator: %v", err)
+	}
+	releaseStage := func() {
+		if unlockStage != nil {
+			unlockStage()
+			unlockStage = nil
+		}
+	}
+	defer releaseStage()
+
+	intent, err := col.newCollectionUpdateCommandWALIntent(nil, nil)
+	if err != nil {
+		t.Fatalf("newCollectionUpdateCommandWALIntent: %v", err)
+	}
+	publishDone := make(chan error, 1)
+	go func() {
+		publishDone <- col.publishCommandWALNoop(intent, false)
+	}()
+	select {
+	case err := <-publishDone:
+		t.Fatalf("publish completed while staged owner had no pending LSN: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN before releasing stage reservation=%d, want 0", got)
+	}
+
+	releaseStage()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish after stage release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("publish did not complete after stage reservation release")
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after publish=%d, want 1", got)
 	}
 }
 
@@ -1290,6 +1797,34 @@ func TestCollectionCommandWALCreateCollectionPublishesAppliedLSN(t *testing.T) {
 	}
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("reopen AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	replayManager := newCommandWALReplayCollectionManager(d)
+	if replayManager.commandWALCoordinator == nil {
+		t.Fatalf("replay manager missing command WAL coordinator")
+	}
+	if replayManager.commandWALRawUnregister != nil {
+		t.Fatalf("replay manager registered raw publish barrier")
+	}
+	if replayManager.closeUnregister != nil {
+		t.Fatalf("replay manager registered close hook")
+	}
+
+	liveManager := NewCollectionManager(d)
+	if liveManager.commandWALRawUnregister == nil {
+		t.Fatalf("live manager missing raw publish barrier")
+	}
+	if liveManager.closeUnregister == nil {
+		t.Fatalf("live manager missing close hook")
 	}
 }
 

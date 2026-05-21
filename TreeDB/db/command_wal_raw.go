@@ -336,6 +336,11 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
+	}
 	intent := commandWALBatchIntent{
 		kind:          kind,
 		scope:         scope,
@@ -357,6 +362,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
@@ -396,6 +406,11 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
@@ -442,6 +457,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")

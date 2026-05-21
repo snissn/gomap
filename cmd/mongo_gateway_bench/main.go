@@ -721,6 +721,9 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBProfile = profile
+	if err := validateTreeDBCommandWALProfile(cfg.TreeDBCommandWAL, cfg.TreeDBProfile); err != nil {
+		return config{}, err
+	}
 	documentFormat, err := parseTreeDBDocumentFormat(treeDBDocumentFormat)
 	if err != nil {
 		return config{}, err
@@ -765,6 +768,17 @@ func parseTreeDBProfile(raw string) (treedb.Profile, error) {
 	default:
 		return "", fmt.Errorf("unknown treedb-profile %q", raw)
 	}
+}
+
+func validateTreeDBCommandWALProfile(commandWAL bool, profile treedb.Profile) error {
+	if !commandWAL {
+		return nil
+	}
+	opts := treedb.OptionsFor(profile, "")
+	if opts.Durability == backenddb.DurabilityWALOffRelaxed {
+		return fmt.Errorf("treedb-command-wal requires a WAL-on treedb-profile; got %q (use %q or %q)", profile, treedb.ProfileWALOnFast, treedb.ProfileDurable)
+	}
+	return nil
 }
 
 func parseTreeDBDocumentFormat(raw string) (collections.DocumentFormat, error) {
@@ -996,10 +1010,13 @@ func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, erro
 		}
 	}
 
-	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
-	opts.CommandWAL = cfg.TreeDBCommandWAL
-	opts.IndexOuterLeavesInValueLog = true
-	opts.IndexInternalBaseDelta = false
+	opts, err := treeDBBenchmarkOptions(cfg, dir)
+	if err != nil {
+		if removeDir {
+			_ = os.RemoveAll(dir)
+		}
+		return nil, err
+	}
 	open := treedb.OpenBackend
 	if opts.IndexOuterLeavesInValueLog {
 		open = treedb.OpenBackendWithCachedLeafLog
@@ -1034,6 +1051,17 @@ func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, erro
 	}, nil
 }
 
+func treeDBBenchmarkOptions(cfg config, dir string) (treedb.Options, error) {
+	if err := validateTreeDBCommandWALProfile(cfg.TreeDBCommandWAL, cfg.TreeDBProfile); err != nil {
+		return treedb.Options{}, err
+	}
+	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts.CommandWAL = cfg.TreeDBCommandWAL
+	opts.IndexOuterLeavesInValueLog = true
+	opts.IndexInternalBaseDelta = false
+	return opts, nil
+}
+
 func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	dir := cfg.TreeDBDir
 	removeDir := false
@@ -1050,10 +1078,13 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 	}
 
-	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
-	opts.CommandWAL = cfg.TreeDBCommandWAL
-	opts.IndexOuterLeavesInValueLog = true
-	opts.IndexInternalBaseDelta = false
+	opts, err := treeDBBenchmarkOptions(cfg, dir)
+	if err != nil {
+		if removeDir {
+			_ = os.RemoveAll(dir)
+		}
+		return nil, err
+	}
 	open := treedb.OpenBackend
 	if opts.IndexOuterLeavesInValueLog {
 		open = treedb.OpenBackendWithCachedLeafLog

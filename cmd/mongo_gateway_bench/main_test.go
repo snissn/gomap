@@ -1213,6 +1213,15 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false want true")
 	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err != nil {
+		t.Fatalf("parse durable command WAL config: %v", err)
+	}
+	for _, profile := range []treedb.Profile{treedb.ProfileFast, treedb.ProfileBench} {
+		_, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(profile)})
+		if err == nil || !strings.Contains(err.Error(), "treedb-command-wal requires a WAL-on treedb-profile") {
+			t.Fatalf("parse command WAL profile %q error=%v, want WAL-on profile error", profile, err)
+		}
+	}
 }
 
 func TestParseConfigProfileOptions(t *testing.T) {

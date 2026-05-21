@@ -269,6 +269,9 @@ type DB struct {
 	commandWALLiveAcceptedMax atomic.Uint64
 	commandWALLiveCovered     atomic.Uint64
 	commandWALLiveCoveredMax  atomic.Uint64
+	commandWALRawPublishMu    sync.RWMutex
+	commandWALRawBarrierMu    sync.Mutex
+	commandWALRawBarriers     []func() error
 	closing                   atomic.Bool
 }
 
