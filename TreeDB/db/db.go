@@ -1666,6 +1666,14 @@ func (db *DB) RegisterCloseHook(hook func() error) func() {
 // the hook was retained. Callers that attach external state to the hook can use
 // this to avoid leaks when registration races DB close.
 func (db *DB) RegisterCloseHookIfOpen(hook func() error) (func(), bool) {
+	return db.RegisterCloseHookIfOpenAfter(nil, hook)
+}
+
+// RegisterCloseHookIfOpenAfter runs setup while close-hook registration is
+// serialized with RunCloseHooks, then registers hook if setup returns true.
+// Callers can use setup to publish state that hook owns without exposing that
+// state after close-hook draining has begun.
+func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error) (func(), bool) {
 	if db == nil || hook == nil {
 		return func() {}, false
 	}
@@ -1673,6 +1681,10 @@ func (db *DB) RegisterCloseHookIfOpen(hook func() error) (func(), bool) {
 	if !db.acceptingCloseHooksLocked() {
 		db.closeHooksMu.Unlock()
 		return func() {}, false
+	}
+	if setup != nil && !setup() {
+		db.closeHooksMu.Unlock()
+		return func() {}, true
 	}
 	idx := len(db.closeHooks)
 	db.closeHooks = append(db.closeHooks, hook)

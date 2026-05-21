@@ -19,22 +19,22 @@ func collectionCommandWALCoordinatorForDB(db *backenddb.DB) *collectionCommandWA
 	if db == nil {
 		return nil
 	}
-	if existing, ok := collectionCommandWALCoordinators.Load(db); ok {
-		return existing.(*collectionCommandWALCoordinator)
-	}
 	coord := newCollectionCommandWALCoordinator()
-	actual, loaded := collectionCommandWALCoordinators.LoadOrStore(db, coord)
-	if !loaded {
-		if _, ok := db.RegisterCloseHookIfOpen(func() error {
-			collectionCommandWALCoordinators.Delete(db)
-			return nil
-		}); !ok {
-			collectionCommandWALCoordinators.Delete(db)
-			return nil
-		}
-		return coord
+	var actual any
+	var loaded bool
+	if _, ok := db.RegisterCloseHookIfOpenAfter(func() bool {
+		actual, loaded = collectionCommandWALCoordinators.LoadOrStore(db, coord)
+		return !loaded
+	}, func() error {
+		collectionCommandWALCoordinators.Delete(db)
+		return nil
+	}); !ok {
+		return nil
 	}
-	return actual.(*collectionCommandWALCoordinator)
+	if loaded {
+		return actual.(*collectionCommandWALCoordinator)
+	}
+	return coord
 }
 
 func newCollectionCommandWALCoordinator() *collectionCommandWALCoordinator {
