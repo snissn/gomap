@@ -83,7 +83,7 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 			return nil, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn, err)
 		}
 		scratch = raw
-		decoded, err := decodeColumnDictionaryCodesAsset(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, readCache.verifyChecksum)
+		decoded, err := decodeColumnDictionaryCodesAsset(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +200,7 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 			return nil, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn, err)
 		}
 		scratch = groupRaw
-		groupAsset, err := decodeColumnDictionaryCodesAsset(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, readCache.verifyChecksum)
+		groupAsset, err := decodeColumnDictionaryCodesAsset(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +209,7 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 			return nil, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn, err)
 		}
 		scratch = distinctRaw
-		distinctAsset, err := decodeColumnDictionaryCodesAsset(distinctRaw, distinctSnapshot.AssetRef, view.Config, view.CollectionName, req.DistinctColumn, readCache.verifyChecksum)
+		distinctAsset, err := decodeColumnDictionaryCodesAsset(distinctRaw, distinctSnapshot.AssetRef, view.Config, view.CollectionName, req.DistinctColumn, false)
 		if err != nil {
 			return nil, err
 		}

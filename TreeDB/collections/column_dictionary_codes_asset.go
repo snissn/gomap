@@ -26,6 +26,11 @@ type columnDictionaryCodesAsset struct {
 	Codes             []uint32
 }
 
+type columnDictionaryCodesAssetPayload struct {
+	rowCount int
+	offset   int
+}
+
 func buildColumnDictionaryCodesAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow, collection, namespace string, generation, partID, appliedCommandLSN uint64) ([]columnDictionaryCodesAsset, error) {
 	var assets []columnDictionaryCodesAsset
 	for colIdx, col := range cfg.Columns {
@@ -132,48 +137,12 @@ func encodeColumnDictionaryCodesAsset(asset columnDictionaryCodesAsset) ([]byte,
 }
 
 func decodeColumnDictionaryCodesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnDictionaryCodesAsset, error) {
-	if ref.Kind != ColumnAssetKindTCS1DictionaryCodes {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset ref kind=%q want %q", ref.Kind, ColumnAssetKindTCS1DictionaryCodes)
-	}
-	if int64(len(raw)) != ref.Length {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset length=%d does not match ref length=%d", len(raw), ref.Length)
-	}
-	if verifyChecksum {
-		if checksum := page.Checksum(raw); checksum != ref.Checksum {
-			return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
-		}
-	}
-	cur := manifestCursor{raw: raw}
-	if magic := cur.u32(); magic != columnDictionaryCodesAssetMagic {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: bad dictionary codes asset magic=0x%08x", magic)
-	}
-	if version := cur.u16(); version != columnDictionaryCodesAssetVersion {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: unsupported dictionary codes asset version=%d", version)
-	}
-	asset := columnDictionaryCodesAsset{
-		Collection:        cur.string(),
-		Namespace:         cur.string(),
-		Generation:        cur.u64(),
-		PartID:            cur.u64(),
-		AppliedCommandLSN: cur.u64(),
-		SchemaHash:        cur.u64(),
-		ColumnName:        cur.string(),
-	}
-	columnIndex := cur.u64()
-	cardinality := cur.u64()
-	rowCount := cur.u64()
-	if err := cur.err; err != nil {
+	asset, payload, err := decodeColumnDictionaryCodesAssetPayload(raw, ref, cfg, expectedCollection, expectedColumn, verifyChecksum)
+	if err != nil {
 		return columnDictionaryCodesAsset{}, err
 	}
-	if columnIndex > uint64(maxCollectionInt) || cardinality > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
-		return columnDictionaryCodesAsset{}, errors.New("collections: dictionary codes asset dimensions overflow int")
-	}
-	asset.ColumnIndex = int(columnIndex)
-	asset.Dictionary = make([]string, int(cardinality))
-	for i := range asset.Dictionary {
-		asset.Dictionary[i] = cur.string()
-	}
-	asset.Codes = make([]uint32, int(rowCount))
+	cur := manifestCursor{raw: raw, pos: payload.offset}
+	asset.Codes = make([]uint32, payload.rowCount)
 	for i := range asset.Codes {
 		code := cur.u32()
 		if int(code) >= len(asset.Dictionary) {
@@ -187,33 +156,91 @@ func decodeColumnDictionaryCodesAsset(raw []byte, ref ColumnAssetRef, cfg Column
 	if cur.pos != len(raw) {
 		return columnDictionaryCodesAsset{}, errors.New("collections: trailing bytes in dictionary codes asset")
 	}
-	if asset.Collection != expectedCollection {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset collection=%q want %q", asset.Collection, expectedCollection)
+	return asset, nil
+}
+
+func decodeColumnDictionaryCodesAssetPayload(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnDictionaryCodesAsset, columnDictionaryCodesAssetPayload, error) {
+	if ref.Kind != ColumnAssetKindTCS1DictionaryCodes {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset ref kind=%q want %q", ref.Kind, ColumnAssetKindTCS1DictionaryCodes)
 	}
+	if int64(len(raw)) != ref.Length {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset length=%d does not match ref length=%d", len(raw), ref.Length)
+	}
+	if verifyChecksum {
+		if checksum := page.Checksum(raw); checksum != ref.Checksum {
+			return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+		}
+	}
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnDictionaryCodesAssetMagic {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: bad dictionary codes asset magic=0x%08x", magic)
+	}
+	if version := cur.u16(); version != columnDictionaryCodesAssetVersion {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: unsupported dictionary codes asset version=%d", version)
+	}
+	collectionBytes := cur.stringBytes()
+	namespaceBytes := cur.stringBytes()
+	asset := columnDictionaryCodesAsset{
+		Generation:        cur.u64(),
+		PartID:            cur.u64(),
+		AppliedCommandLSN: cur.u64(),
+		SchemaHash:        cur.u64(),
+	}
+	columnNameBytes := cur.stringBytes()
+	columnIndex := cur.u64()
+	cardinality := cur.u64()
+	rowCount := cur.u64()
+	if err := cur.err; err != nil {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, err
+	}
+	if columnIndex > uint64(maxCollectionInt) || cardinality > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, errors.New("collections: dictionary codes asset dimensions overflow int")
+	}
+	if rowCount > uint64((len(raw)-cur.pos)/4) {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, errors.New("collections: dictionary codes asset row count exceeds payload bytes")
+	}
+	asset.ColumnIndex = int(columnIndex)
+	asset.Dictionary = make([]string, int(cardinality))
+	for i := range asset.Dictionary {
+		asset.Dictionary[i] = cur.string()
+	}
+	if cur.err != nil {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, cur.err
+	}
+	if !manifestBytesEqualString(collectionBytes, expectedCollection) {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset collection=%q want %q", string(collectionBytes), expectedCollection)
+	}
+	asset.Collection = expectedCollection
 	if cfg.AssetManager == nil {
-		return columnDictionaryCodesAsset{}, errors.New("collections: dictionary codes asset validation requires asset manager")
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, errors.New("collections: dictionary codes asset validation requires asset manager")
 	}
-	if asset.Namespace != cfg.AssetManager.Namespace || ref.Namespace != cfg.AssetManager.Namespace {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset namespace=%q ref_namespace=%q want %q", asset.Namespace, ref.Namespace, cfg.AssetManager.Namespace)
+	if !manifestBytesEqualString(namespaceBytes, cfg.AssetManager.Namespace) || ref.Namespace != cfg.AssetManager.Namespace {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset namespace=%q ref_namespace=%q want %q", string(namespaceBytes), ref.Namespace, cfg.AssetManager.Namespace)
 	}
+	asset.Namespace = cfg.AssetManager.Namespace
 	if asset.Generation != ref.Generation || asset.PartID != ref.PartID {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset generation/part does not match ref")
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset generation/part does not match ref")
 	}
 	if asset.SchemaHash != cfg.SchemaHash {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset schema_hash=%d want %d", asset.SchemaHash, cfg.SchemaHash)
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset schema_hash=%d want %d", asset.SchemaHash, cfg.SchemaHash)
 	}
 	if asset.AppliedCommandLSN > cfg.RecoveryAuthoritativeAppliedCommandLSN {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset applied_command_lsn=%d is newer than recovery applied_command_lsn=%d", asset.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset applied_command_lsn=%d is newer than recovery applied_command_lsn=%d", asset.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
 	}
-	if expectedColumn != "" && asset.ColumnName != expectedColumn {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset column=%q want %q", asset.ColumnName, expectedColumn)
+	if expectedColumn != "" && !manifestBytesEqualString(columnNameBytes, expectedColumn) {
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset column=%q want %q", string(columnNameBytes), expectedColumn)
+	}
+	if expectedColumn != "" {
+		asset.ColumnName = expectedColumn
+	} else {
+		asset.ColumnName = string(columnNameBytes)
 	}
 	if asset.ColumnIndex < 0 || asset.ColumnIndex >= len(cfg.Columns) {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset column_index=%d outside columns=%d", asset.ColumnIndex, len(cfg.Columns))
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset column_index=%d outside columns=%d", asset.ColumnIndex, len(cfg.Columns))
 	}
 	col := cfg.Columns[asset.ColumnIndex]
 	if col.Name != asset.ColumnName || col.ValueType != ColumnStoreValueString || !col.Dictionary {
-		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset column %q is not a declared dictionary string column", asset.ColumnName)
+		return columnDictionaryCodesAsset{}, columnDictionaryCodesAssetPayload{}, fmt.Errorf("collections: dictionary codes asset column %q is not a declared dictionary string column", asset.ColumnName)
 	}
-	return asset, nil
+	return asset, columnDictionaryCodesAssetPayload{rowCount: int(rowCount), offset: cur.pos}, nil
 }

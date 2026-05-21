@@ -2272,6 +2272,61 @@ func TestColumnPhysicalQuerySerialDictInt64SidecarParityM1634(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tests := []struct {
+		name      string
+		req       ColumnPhysicalQueryRequest
+		maxAllocs float64
+	}{
+		{
+			name:      "q3_int64_values",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
+			maxAllocs: 90,
+		},
+		{
+			name:      "q4a_dictionary_int64",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			maxAllocs: 124,
+		},
+		{
+			name:      "q4b_dictionary_int64",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			maxAllocs: 124,
+		},
+		{
+			name:      "q5_dictionary_int64",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+			maxAllocs: 129,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery preview: %v", err)
+			}
+			if result.Diagnostics.RowMaterializations != 0 {
+				t.Fatalf("preview diagnostics=%+v want sidecar path", result.Diagnostics)
+			}
+			allocs := testing.AllocsPerRun(20, func() {
+				result, err := collection.RunColumnPhysicalQuery(tc.req)
+				if err != nil {
+					panic(fmt.Sprintf("RunColumnPhysicalQuery: %v", err))
+				}
+				if len(result.Groups) == 0 || result.Diagnostics.RowMaterializations != 0 {
+					panic(fmt.Sprintf("bad sidecar result groups=%d diagnostics=%+v", len(result.Groups), result.Diagnostics))
+				}
+			})
+			if allocs > tc.maxAllocs {
+				t.Fatalf("%s routed sidecar allocs/run=%.2f want <= %.2f", tc.name, allocs, tc.maxAllocs)
+			}
+		})
+	}
+}
+
 func TestColumnPhysicalQueryRunnerDistinctSidecarSkipsIdenticalColumnsM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(128)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)

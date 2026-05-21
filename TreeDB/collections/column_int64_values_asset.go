@@ -25,6 +25,11 @@ type columnInt64ValuesAsset struct {
 	Values            []int64
 }
 
+type columnInt64ValuesAssetPayload struct {
+	rowCount int
+	offset   int
+}
+
 func buildColumnInt64ValuesAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow, collection, namespace string, generation, partID, appliedCommandLSN uint64) ([]columnInt64ValuesAsset, error) {
 	var assets []columnInt64ValuesAsset
 	for colIdx, col := range cfg.Columns {
@@ -114,46 +119,12 @@ func encodeColumnInt64ValuesAsset(asset columnInt64ValuesAsset) ([]byte, error) 
 }
 
 func decodeColumnInt64ValuesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnInt64ValuesAsset, error) {
-	if ref.Kind != ColumnAssetKindTCS1Int64Values {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset ref kind=%q want %q", ref.Kind, ColumnAssetKindTCS1Int64Values)
-	}
-	if int64(len(raw)) != ref.Length {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset length=%d does not match ref length=%d", len(raw), ref.Length)
-	}
-	if verifyChecksum {
-		if checksum := page.Checksum(raw); checksum != ref.Checksum {
-			return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
-		}
-	}
-	cur := manifestCursor{raw: raw}
-	if magic := cur.u32(); magic != columnInt64ValuesAssetMagic {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: bad int64 values asset magic=0x%08x", magic)
-	}
-	if version := cur.u16(); version != columnInt64ValuesAssetVersion {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: unsupported int64 values asset version=%d", version)
-	}
-	asset := columnInt64ValuesAsset{
-		Collection:        cur.string(),
-		Namespace:         cur.string(),
-		Generation:        cur.u64(),
-		PartID:            cur.u64(),
-		AppliedCommandLSN: cur.u64(),
-		SchemaHash:        cur.u64(),
-		ColumnName:        cur.string(),
-	}
-	columnIndex := cur.u64()
-	rowCount := cur.u64()
-	if err := cur.err; err != nil {
+	asset, payload, err := decodeColumnInt64ValuesAssetPayload(raw, ref, cfg, expectedCollection, expectedColumn, verifyChecksum)
+	if err != nil {
 		return columnInt64ValuesAsset{}, err
 	}
-	if columnIndex > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
-		return columnInt64ValuesAsset{}, errors.New("collections: int64 values asset dimensions overflow int")
-	}
-	if rowCount > uint64((len(raw)-cur.pos)/8) {
-		return columnInt64ValuesAsset{}, errors.New("collections: int64 values asset row count exceeds payload bytes")
-	}
-	asset.ColumnIndex = int(columnIndex)
-	asset.Values = make([]int64, int(rowCount))
+	cur := manifestCursor{raw: raw, pos: payload.offset}
+	asset.Values = make([]int64, payload.rowCount)
 	for i := range asset.Values {
 		asset.Values[i] = int64(cur.u64())
 	}
@@ -163,33 +134,83 @@ func decodeColumnInt64ValuesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStor
 	if cur.pos != len(raw) {
 		return columnInt64ValuesAsset{}, errors.New("collections: trailing bytes in int64 values asset")
 	}
-	if asset.Collection != expectedCollection {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset collection=%q want %q", asset.Collection, expectedCollection)
+	return asset, nil
+}
+
+func decodeColumnInt64ValuesAssetPayload(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnInt64ValuesAsset, columnInt64ValuesAssetPayload, error) {
+	if ref.Kind != ColumnAssetKindTCS1Int64Values {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset ref kind=%q want %q", ref.Kind, ColumnAssetKindTCS1Int64Values)
 	}
+	if int64(len(raw)) != ref.Length {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset length=%d does not match ref length=%d", len(raw), ref.Length)
+	}
+	if verifyChecksum {
+		if checksum := page.Checksum(raw); checksum != ref.Checksum {
+			return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+		}
+	}
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnInt64ValuesAssetMagic {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: bad int64 values asset magic=0x%08x", magic)
+	}
+	if version := cur.u16(); version != columnInt64ValuesAssetVersion {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: unsupported int64 values asset version=%d", version)
+	}
+	collectionBytes := cur.stringBytes()
+	namespaceBytes := cur.stringBytes()
+	asset := columnInt64ValuesAsset{
+		Generation:        cur.u64(),
+		PartID:            cur.u64(),
+		AppliedCommandLSN: cur.u64(),
+		SchemaHash:        cur.u64(),
+	}
+	columnNameBytes := cur.stringBytes()
+	columnIndex := cur.u64()
+	rowCount := cur.u64()
+	if err := cur.err; err != nil {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, err
+	}
+	if columnIndex > uint64(maxCollectionInt) || rowCount > uint64(maxCollectionInt) {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, errors.New("collections: int64 values asset dimensions overflow int")
+	}
+	if rowCount > uint64((len(raw)-cur.pos)/8) {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, errors.New("collections: int64 values asset row count exceeds payload bytes")
+	}
+	asset.ColumnIndex = int(columnIndex)
+	if !manifestBytesEqualString(collectionBytes, expectedCollection) {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset collection=%q want %q", string(collectionBytes), expectedCollection)
+	}
+	asset.Collection = expectedCollection
 	if cfg.AssetManager == nil {
-		return columnInt64ValuesAsset{}, errors.New("collections: int64 values asset validation requires asset manager")
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, errors.New("collections: int64 values asset validation requires asset manager")
 	}
-	if asset.Namespace != cfg.AssetManager.Namespace || ref.Namespace != cfg.AssetManager.Namespace {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset namespace=%q ref_namespace=%q want %q", asset.Namespace, ref.Namespace, cfg.AssetManager.Namespace)
+	if !manifestBytesEqualString(namespaceBytes, cfg.AssetManager.Namespace) || ref.Namespace != cfg.AssetManager.Namespace {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset namespace=%q ref_namespace=%q want %q", string(namespaceBytes), ref.Namespace, cfg.AssetManager.Namespace)
 	}
+	asset.Namespace = cfg.AssetManager.Namespace
 	if asset.Generation != ref.Generation || asset.PartID != ref.PartID {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset generation/part does not match ref")
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset generation/part does not match ref")
 	}
 	if asset.SchemaHash != cfg.SchemaHash {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset schema_hash=%d want %d", asset.SchemaHash, cfg.SchemaHash)
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset schema_hash=%d want %d", asset.SchemaHash, cfg.SchemaHash)
 	}
 	if asset.AppliedCommandLSN > cfg.RecoveryAuthoritativeAppliedCommandLSN {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset applied_command_lsn=%d is newer than recovery applied_command_lsn=%d", asset.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset applied_command_lsn=%d is newer than recovery applied_command_lsn=%d", asset.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
 	}
-	if expectedColumn != "" && asset.ColumnName != expectedColumn {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset column=%q want %q", asset.ColumnName, expectedColumn)
+	if expectedColumn != "" && !manifestBytesEqualString(columnNameBytes, expectedColumn) {
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset column=%q want %q", string(columnNameBytes), expectedColumn)
+	}
+	if expectedColumn != "" {
+		asset.ColumnName = expectedColumn
+	} else {
+		asset.ColumnName = string(columnNameBytes)
 	}
 	if asset.ColumnIndex < 0 || asset.ColumnIndex >= len(cfg.Columns) {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset column_index=%d outside columns=%d", asset.ColumnIndex, len(cfg.Columns))
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset column_index=%d outside columns=%d", asset.ColumnIndex, len(cfg.Columns))
 	}
 	col := cfg.Columns[asset.ColumnIndex]
 	if col.Name != asset.ColumnName || col.ValueType != ColumnStoreValueInt64 || col.Nullable {
-		return columnInt64ValuesAsset{}, fmt.Errorf("collections: int64 values asset column %q is not a non-null declared int64 column", asset.ColumnName)
+		return columnInt64ValuesAsset{}, columnInt64ValuesAssetPayload{}, fmt.Errorf("collections: int64 values asset column %q is not a non-null declared int64 column", asset.ColumnName)
 	}
-	return asset, nil
+	return asset, columnInt64ValuesAssetPayload{rowCount: int(rowCount), offset: cur.pos}, nil
 }
