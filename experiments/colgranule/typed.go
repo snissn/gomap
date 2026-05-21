@@ -13,7 +13,6 @@ const (
 
 	nullableInt64HeaderBytes = 21
 	maxCodeCardinality       = 1 << 20
-	maxGranuleDecodeRows     = 1 << 20
 )
 
 // BuildBool returns a granule whose payload aliases builder-owned scratch until
@@ -601,16 +600,6 @@ func bitmapBytesChecked(rows int) (int, error) {
 		return 0, err
 	}
 	return bitmapBytes(rows), nil
-}
-
-func validateGranuleDecodeRows(rows int) error {
-	if rows < 0 {
-		return fmt.Errorf("colgranule: negative rows=%d", rows)
-	}
-	if rows > maxGranuleDecodeRows {
-		return fmt.Errorf("colgranule: rows=%d exceed cap %d", rows, maxGranuleDecodeRows)
-	}
-	return nil
 }
 
 func parseBoolRLEHeader(raw []byte) (bool, []byte, error) {

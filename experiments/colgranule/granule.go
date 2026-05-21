@@ -11,7 +11,10 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
-const DefaultRowsPerGranule = 8192
+const (
+	DefaultRowsPerGranule = 8192
+	maxGranuleDecodeRows  = 1 << 20
+)
 
 type Encoding uint8
 
@@ -438,6 +441,16 @@ func decodeDoubleDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error)
 		return nil, errors.New("colgranule: trailing double-delta bytes")
 	}
 	return out, nil
+}
+
+func validateGranuleDecodeRows(rows int) error {
+	if rows < 0 {
+		return fmt.Errorf("colgranule: negative rows=%d", rows)
+	}
+	if rows > maxGranuleDecodeRows {
+		return fmt.Errorf("colgranule: rows=%d exceed cap %d", rows, maxGranuleDecodeRows)
+	}
+	return nil
 }
 
 type CompressionSelection struct {
