@@ -23,7 +23,11 @@ const (
 	columnVectorGraphPhysicalRowValueCount
 )
 
-var errColumnVectorGraphAdjacencyOrdinalOutOfBounds = errors.New("collections: column_graph adjacency ordinal outside row_count")
+var (
+	errColumnVectorGraphAdjacencyOrdinalOutOfBounds = errors.New("column_graph adjacency ordinal outside row_count")
+	errColumnVectorGraphManifestMismatch            = errors.New("column_graph manifest mismatch")
+	errNilColumnVectorGraphPhysicalRowReader        = errors.New("collections: nil column vector graph physical row reader")
+)
 
 // columnVectorGraphPhysicalRowReader fetches graph rows from the persisted
 // column graph asset by ordinal. It is a graph-specific wrapper around the
@@ -137,7 +141,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string)
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
 	if !columnVectorGraphManifestMatchesDefinition(catalog.meta.Name, graph, def, *cfg, manifest, records) {
-		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q graph manifest does not match vector index definition", def.Name)
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q graph manifest does not match vector index definition: %w", def.Name, errColumnVectorGraphManifestMismatch)
 	}
 	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
@@ -197,11 +201,22 @@ func (r *columnVectorGraphPhysicalRowReader) Stats() columnPhysicalRowReaderStat
 	return r.reader.Stats()
 }
 
-func (r *columnVectorGraphPhysicalRowReader) FetchRow(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
+func (r *columnVectorGraphPhysicalRowReader) rowReader() (*columnPhysicalRowReader, error) {
 	if r == nil || r.reader == nil {
-		return columnVectorGraphPhysicalRow{}, errors.New("collections: nil column vector graph physical row reader")
+		return nil, errNilColumnVectorGraphPhysicalRowReader
 	}
-	row, err := r.reader.FetchRow(ordinal, scratch)
+	return r.reader, nil
+}
+
+// FetchRow returns one graph row and performs fail-closed adjacency ordinal
+// validation. Native search uses fetchRowUnchecked and validates each edge once
+// when expanded to avoid duplicate adjacency scans on the hot path.
+func (r *columnVectorGraphPhysicalRowReader) FetchRow(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
+	reader, err := r.rowReader()
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, err
+	}
+	row, err := reader.FetchRow(ordinal, scratch)
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
@@ -209,24 +224,30 @@ func (r *columnVectorGraphPhysicalRowReader) FetchRow(ordinal int, scratch *colu
 }
 
 func (r *columnVectorGraphPhysicalRowReader) fetchRowUnchecked(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
-	if r == nil || r.reader == nil {
-		return columnVectorGraphPhysicalRow{}, errors.New("collections: nil column vector graph physical row reader")
+	reader, err := r.rowReader()
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, err
 	}
-	row, err := r.reader.FetchRow(ordinal, scratch)
+	row, err := reader.FetchRow(ordinal, scratch)
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
 	return r.graphRowFromPhysicalRowUnchecked(row)
 }
 
+// FetchBatch returns graph rows in the underlying reader's batch order and
+// performs fail-closed adjacency ordinal validation for each row. Native search
+// uses fetchBatchUnchecked for final result fetches after validating expanded
+// edges during traversal.
 func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch *columnPhysicalRowReaderScratch, visitor func(columnVectorGraphPhysicalRow) error) error {
-	if r == nil || r.reader == nil {
-		return errors.New("collections: nil column vector graph physical row reader")
+	reader, err := r.rowReader()
+	if err != nil {
+		return err
 	}
 	if visitor == nil {
 		return errors.New("collections: column vector graph physical row reader batch visitor is nil")
 	}
-	return r.reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
+	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
 		graphRow, err := r.graphRowFromPhysicalRow(row)
 		if err != nil {
 			return err
@@ -236,13 +257,14 @@ func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch 
 }
 
 func (r *columnVectorGraphPhysicalRowReader) fetchBatchUnchecked(ordinals []int, scratch *columnPhysicalRowReaderScratch, visitor func(columnVectorGraphPhysicalRow) error) error {
-	if r == nil || r.reader == nil {
-		return errors.New("collections: nil column vector graph physical row reader")
+	reader, err := r.rowReader()
+	if err != nil {
+		return err
 	}
 	if visitor == nil {
 		return errors.New("collections: column vector graph physical row reader batch visitor is nil")
 	}
-	return r.reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
+	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
 		graphRow, err := r.graphRowFromPhysicalRowUnchecked(row)
 		if err != nil {
 			return err
@@ -256,7 +278,7 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	rowCount := r.RowCount()
+	rowCount := r.reader.totalRows
 	for i, neighbor := range graphRow.Adjacency {
 		if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
 			return columnVectorGraphPhysicalRow{}, err
