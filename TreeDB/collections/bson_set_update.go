@@ -50,8 +50,9 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // slices until UpdateBSONSet returns.
 //
 // For no-index collections, this path may stage buffered root runs in WAL-off
-// relaxed and WAL-on relaxed modes; when staged, crash-recoverability is
-// deferred until Flush/Close publishes the buffered runs.
+// relaxed and WAL-on relaxed modes. In command-WAL durable modes, staged
+// updates append their deterministic command frame before returning, and
+// Flush/Close later publishes the covered roots.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err
@@ -95,10 +96,10 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	}
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
 	mode := updateBatchModeNoSecondaryUniqueIndexChanges
-	if c.commandWALActive(nil) {
-		mode = updateBatchModeAny
-	}
 	results, batched, err := c.updateBatchOwnedItems(items, mode)
+	if c.commandWALActive(nil) && ((err == nil && !batched) || errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex)) {
+		results, batched, err = c.updateBatchOwnedItems(items, updateBatchModeAny)
+	}
 	if !batched && err == nil {
 		if c.commandWALActive(nil) {
 			return false, false, errors.New("collections: command WAL BSON $set fallback unexpectedly unbatched")

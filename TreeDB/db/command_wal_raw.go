@@ -114,6 +114,22 @@ func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent 
 	}}
 }
 
+// NewCommandWALCoverageIntent returns an intent for publishing roots that
+// already reflect an appended contiguous command-WAL range. It does not append a
+// new command frame when used with the ordered-root command-WAL publish APIs.
+func NewCommandWALCoverageIntent(appliedLSN uint64, covered CommandWALLSNRange) (*CommandWALIntent, error) {
+	if appliedLSN == 0 {
+		return nil, fmt.Errorf("%w: applied lsn is zero", ErrCommandWALAppliedLSNNonContig)
+	}
+	if covered.First == 0 || covered.Last < covered.First || covered.Last != appliedLSN {
+		return nil, fmt.Errorf("%w: invalid coverage range [%d,%d] for applied %d", ErrCommandWALAppliedLSNNonContig, covered.First, covered.Last, appliedLSN)
+	}
+	return &CommandWALIntent{inner: commandWALBatchIntent{
+		lsn:          appliedLSN,
+		coveredRange: [1]CommandWALLSNRange{covered},
+	}}, nil
+}
+
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
 	if db == nil || !db.commandWAL {
 		return nil, nil
@@ -602,6 +618,14 @@ func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALInt
 		return
 	}
 	db.poisonCommandWALAfterPostAppendFailure(&intent.inner)
+}
+
+// MarkCommandWALIntentRecoveryRequired fails this open handle closed after a
+// command frame was appended but the caller could not make the corresponding
+// mutation visible in memory or durable roots. Reopen recovery may apply the
+// frame, so retrying on the same handle can create command-WAL gaps.
+func (db *DB) MarkCommandWALIntentRecoveryRequired(intent *CommandWALIntent) {
+	db.poisonCommandWALAfterPublicPostAppendFailure(intent)
 }
 
 func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {

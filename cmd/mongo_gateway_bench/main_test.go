@@ -1082,6 +1082,9 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if cfg.TreeDBProfile != treedb.ProfileWALOnFast {
 		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileWALOnFast)
 	}
+	if cfg.TreeDBCommandWAL {
+		t.Fatal("TreeDBCommandWAL=true want false by default")
+	}
 	if got := string(cfg.TreeDBDocumentFormat); got != "template-v1" {
 		t.Fatalf("TreeDBDocumentFormat=%q want template-v1", got)
 	}
@@ -1199,6 +1202,16 @@ func TestParseConfigAcceptsTreeDBBSONDocumentFormat(t *testing.T) {
 	}
 	if got := string(cfg.TreeDBDocumentFormat); got != "bson" {
 		t.Fatalf("TreeDBDocumentFormat=%q want bson", got)
+	}
+}
+
+func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
+	cfg, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal"})
+	if err != nil {
+		t.Fatalf("parse command WAL flag: %v", err)
+	}
+	if !cfg.TreeDBCommandWAL {
+		t.Fatal("TreeDBCommandWAL=false want true")
 	}
 }
 
@@ -2498,6 +2511,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		Collection:                             "docs",
 		Documents:                              1,
 		TreeDBProfile:                          "wal_on_fast",
+		TreeDBCommandWAL:                       true,
 		TreeDBDocumentFormat:                   "bson",
 		TreeDBDataRootStorage:                  "compressed",
 		TreeDBIndexStateRootStorage:            "compressed",
@@ -2515,6 +2529,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	}
 	text := out.String()
 	for _, want := range []string{
+		"command_wal=true",
 		"buffered_indexed_max_docs=1234",
 		"buffered_indexed_max_bytes=5678",
 		"buffered_indexed_max_root_runs=90",
@@ -2537,12 +2552,14 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	if decoded.TreeDBBufferedIndexedWriteMaxDocuments != 1234 ||
 		decoded.TreeDBBufferedIndexedWriteMaxBytes != 5678 ||
 		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 ||
+		!decoded.TreeDBCommandWAL ||
 		!decoded.TreeDBBufferedIndexedAsyncFlush ||
 		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
-		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d async=%t asyncMax=%d want 1234/5678/90/true/3",
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d commandWAL=%t async=%t asyncMax=%d want 1234/5678/90/true/true/3",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
 			decoded.TreeDBBufferedIndexedWriteMaxRootRuns,
+			decoded.TreeDBCommandWAL,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
 			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
 	}

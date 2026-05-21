@@ -87,6 +87,7 @@ type config struct {
 	SecondaryIndexes                              int
 	ClientMode                                    string
 	TreeDBProfile                                 treedb.Profile
+	TreeDBCommandWAL                              bool
 	TreeDBDocumentFormat                          collections.DocumentFormat
 	TreeDBDataRootStorage                         collections.RootStoragePolicy
 	TreeDBIndexStateRootStorage                   collections.RootStoragePolicy
@@ -143,6 +144,7 @@ type benchmarkResult struct {
 	RangeIndex         bool `json:"range_index"`
 
 	TreeDBProfile                                 string              `json:"treedb_profile,omitempty"`
+	TreeDBCommandWAL                              bool                `json:"treedb_command_wal"`
 	TreeDBDocumentFormat                          string              `json:"treedb_document_format,omitempty"`
 	TreeDBDataRootStorage                         string              `json:"treedb_data_root_storage,omitempty"`
 	TreeDBIndexStateRootStorage                   string              `json:"treedb_index_state_root_storage,omitempty"`
@@ -522,6 +524,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; direct/raw/native-wire modes are TreeDB-only")
 	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
 	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
+	fs.BoolVar(&cfg.TreeDBCommandWAL, "treedb-command-wal", false, "enable TreeDB command-WAL mode for -target treedb")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
 	fs.StringVar(&treeDBIndexStateRootStorage, "treedb-index-state-root-storage", treeDBIndexStateRootStorage, "TreeDB collection index-state root storage for -target treedb: default, fast, or compressed")
@@ -994,6 +997,7 @@ func openTreeDBDirectTarget(ctx context.Context, cfg config) (*benchTarget, erro
 	}
 
 	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts.CommandWAL = cfg.TreeDBCommandWAL
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	open := treedb.OpenBackend
@@ -1047,6 +1051,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	}
 
 	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
+	opts.CommandWAL = cfg.TreeDBCommandWAL
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	open := treedb.OpenBackend
@@ -1481,6 +1486,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 			result.TreeDBDir = target.treedbDir
 		}
 		result.TreeDBProfile = string(cfg.TreeDBProfile)
+		result.TreeDBCommandWAL = cfg.TreeDBCommandWAL
 		result.TreeDBDocumentFormat = string(cfg.TreeDBDocumentFormat)
 		result.TreeDBDataRootStorage = string(cfg.TreeDBDataRootStorage)
 		result.TreeDBIndexStateRootStorage = string(cfg.TreeDBIndexStateRootStorage)
@@ -1755,6 +1761,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 		RangeIndex:                             cfg.RangeIndex,
 		PrebuildDocuments:                      cfg.PrebuildDocuments,
 		TreeDBProfile:                          string(cfg.TreeDBProfile),
+		TreeDBCommandWAL:                       cfg.TreeDBCommandWAL,
 		TreeDBDocumentFormat:                   string(cfg.TreeDBDocumentFormat),
 		TreeDBDataRootStorage:                  string(cfg.TreeDBDataRootStorage),
 		TreeDBIndexStateRootStorage:            string(cfg.TreeDBIndexStateRootStorage),
@@ -5914,8 +5921,8 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
 		}
 		if result.TreeDBProfile != "" {
-			fmt.Fprintf(out, "treedb_profile=%s document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
-				result.TreeDBProfile, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
+			fmt.Fprintf(out, "treedb_profile=%s command_wal=%t document_format=%s data_root_storage=%s index_state_root_storage=%s index_root_storage=%s buffered_indexed_max_docs=%d buffered_indexed_max_bytes=%d buffered_indexed_max_root_runs=%d buffered_indexed_async_flush=%t buffered_indexed_async_max_queued_units=%d maintenance=%s read_state=%s\n",
+				result.TreeDBProfile, result.TreeDBCommandWAL, result.TreeDBDocumentFormat, result.TreeDBDataRootStorage,
 				result.TreeDBIndexStateRootStorage, result.TreeDBIndexRootStorage,
 				result.TreeDBBufferedIndexedWriteMaxDocuments, result.TreeDBBufferedIndexedWriteMaxBytes,
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,

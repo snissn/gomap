@@ -992,6 +992,8 @@ type collectionWriteDomain struct {
 	writeGeneration        uint64
 	primaryWriteIndex      *bufferedPrimaryWriteIndex
 	indexedDeletesOnly     bool
+	pendingCommandWALFirst uint64
+	pendingCommandWALLast  uint64
 
 	mutationLockCalls                  atomic.Uint64
 	mutationLockWaitTotalNs            atomic.Uint64
@@ -3299,6 +3301,9 @@ func (c *Collection) canBufferNoIndexInsertBatchAck() bool {
 func (c *Collection) canBufferDirectUpdateAck() bool {
 	if c == nil || c.db == nil || c.writeDomain == nil {
 		return false
+	}
+	if c.db.CommandWALEnabled() {
+		return c.db.DurabilityMode() != backenddb.DurabilityWALOffRelaxed
 	}
 	switch c.db.DurabilityMode() {
 	case backenddb.DurabilityWALOffRelaxed, backenddb.DurabilityWALOnRelaxed:
@@ -7565,6 +7570,10 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	var rootOverlayFilters map[string]collectionRootOverlayFilter
+	commandWALIntent, commandWALAppliedLSN, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
+	if err != nil {
+		return err
+	}
 	if collectionMetaUsesIndexedOverlayRoots(meta) {
 		materializeStart := time.Now()
 		rootOverlayFilters, err = buildCollectionRootOverlayFilters(rootNames, flushUnit.rootRuns, rootOverlays, catalog.rootOverlayFilters)
@@ -7580,9 +7589,15 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
-		})
+		if commandWALIntent != nil {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+			})
+		} else {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+			})
+		}
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 		if err == nil {
@@ -7598,9 +7613,15 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
-		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-		})
+		if commandWALIntent != nil {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			})
+		} else {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+			})
+		}
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 		if err == nil {
@@ -7647,6 +7668,9 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	domain.bufferedBytes = 0
 	domain.mutableCount = 0
 	domain.mutableBytes = 0
+	if commandWALAppliedLSN != 0 {
+		domain.clearPendingCommandWALThroughLocked(commandWALAppliedLSN)
+	}
 	c.meta = meta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	resetIndexedFlushUnits(oldUnits)
@@ -12106,6 +12130,8 @@ type updateBatchPlan struct {
 	policies                    []backenddb.OrderedRootStoragePolicy
 	deltaTables                 []memtable.Table
 	commandWALDocuments         []commitlog.CollectionDocument
+	bufferedCommandWALIntent    *backenddb.CommandWALIntent
+	bufferedCommandWALLSN       uint64
 	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
@@ -12687,9 +12713,6 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
-	if c.commandWALActive(nil) {
-		return false
-	}
 	if len(changed) == 0 {
 		return false
 	}
@@ -12698,6 +12721,9 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 			mode == updateBatchModeNoSecondaryUniqueIndexChanges &&
 			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch
+	}
+	if c.commandWALActive(nil) {
+		return false
 	}
 	if !meta.Options.BufferedIndexedWrites {
 		return false
@@ -12715,7 +12741,8 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 }
 
 func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMode, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
-	if !c.commandWALActive(commandWALIntent) && c.shouldPlanUpdateBatchWithBufferedWrites(mode) {
+	commandWALBufferedMode := c.commandWALActive(commandWALIntent) && commandWALIntent == nil && mode != updateBatchModeAny
+	if (!c.commandWALActive(commandWALIntent) || commandWALBufferedMode) && (c.shouldPlanUpdateBatchWithBufferedWrites(mode) || commandWALBufferedMode) {
 		useBufferedRead := true
 		bufferedReadReplans := 0
 		for {
@@ -12767,12 +12794,31 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						return err
 					}
 					c.meta = plan.meta
+					if commandWALBufferedMode {
+						intent, err := c.newCollectionUpdateCommandWALIntent(nil, nil)
+						if err != nil {
+							return err
+						}
+						if err := c.db.PublishCommandWALNoop(intent, false); err != nil {
+							return err
+						}
+					}
 					results = plan.results
 					return nil
+				}
+				if commandWALBufferedMode && plan.directBufferedUpdate != nil && len(plan.meta.Indexes) == 0 && len(plan.commandWALDocuments) > 0 {
+					intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+					if err != nil {
+						return err
+					}
+					plan.bufferedCommandWALIntent = intent
 				}
 				buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 				if bufferErr != nil {
 					if errors.Is(bufferErr, ErrConcurrentMutation) && useBufferedRead {
+						if commandWALBufferedMode && plan.bufferedCommandWALLSN != 0 {
+							return &CommitAmbiguousError{Operation: "command WAL buffered update", Err: bufferErr}
+						}
 						if !isConcurrentRootModification(bufferErr) && plan.bufferedBase && c.bufferedUpdateBatchPlanCanStillRead(plan) {
 							// The buffered domain moved between planning and staging. Keep
 							// the update in the buffered layer by replanning with a fresh
@@ -12812,7 +12858,14 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					return nil
 				}
 				var publishErr error
-				results, publishErr = c.publishUpdateBatchPlanLocked(plan, nil)
+				publishIntent := commandWALIntent
+				if publishIntent == nil && c.commandWALActive(nil) && len(plan.commandWALDocuments) > 0 {
+					publishIntent, err = c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
+					if err != nil {
+						return err
+					}
+				}
+				results, publishErr = c.publishUpdateBatchPlanLocked(plan, publishIntent)
 				return publishErr
 			})
 			primaryOnlyNoPublish := len(plan.meta.Indexes) == 0 && len(plan.deltaTables) == 0 && plan.directBufferedUpdate == nil
@@ -14216,9 +14269,31 @@ func (c *Collection) stageDirectPrimaryOverlayLocked(domain *collectionWriteDoma
 	return true, nil
 }
 
-func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
+func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (buffered bool, err error) {
 	if c == nil || plan == nil || plan.directBufferedUpdate == nil || len(plan.directBufferedUpdate.primaryEntries) == 0 {
 		return false, nil
+	}
+	commandWALStageIntent := plan.bufferedCommandWALIntent
+	commandWALStageAppended := false
+	defer func() {
+		if err != nil && commandWALStageAppended && c.db != nil {
+			c.db.MarkCommandWALIntentRecoveryRequired(commandWALStageIntent)
+		}
+	}()
+	appendCommandWALBeforeStage := func() error {
+		if commandWALStageIntent == nil || plan.bufferedCommandWALLSN != 0 {
+			return nil
+		}
+		if c.db == nil {
+			return errCollectionDBNil
+		}
+		lsn, appendErr := c.db.AppendCommandWALIntent(commandWALStageIntent, false)
+		if appendErr != nil {
+			return appendErr
+		}
+		plan.bufferedCommandWALLSN = lsn
+		commandWALStageAppended = lsn != 0
+		return nil
 	}
 	direct := plan.directBufferedUpdate
 	detailedStats := c.updateBatchDetailedStatsEnabled()
@@ -14369,12 +14444,20 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	if !primaryOnlyDirectUpdate {
 		overlayWouldFlush = shouldFlushBufferedIndexedWritesAfterAdding(domain, plan.meta.Options, modifiedCount, direct.stagedBytes, 0)
 	}
+	if err := appendCommandWALBeforeStage(); err != nil {
+		return false, err
+	}
 	if canStageDirectPrimaryOverlay(plan, direct, primaryOnlyDirectUpdate, shouldAutoFlushAfterAdding || overlayWouldFlush) {
 		overlayAppendStart := updateBatchStatsNow(detailedStats)
 		buffered, err := c.stageDirectPrimaryOverlayLocked(domain, plan, modifiedCount)
 		overlayAppendDuration := updateBatchStatsSince(detailedStats, overlayAppendStart)
 		plan.stats.BufferStagePrimaryAppend += overlayAppendDuration
 		plan.stats.BufferStageRootAppend += overlayAppendDuration
+		if err == nil && buffered && plan.bufferedCommandWALLSN != 0 {
+			if err := domain.recordPendingCommandWALLSNLocked(plan.bufferedCommandWALLSN); err != nil {
+				return false, err
+			}
+		}
 		return buffered, err
 	}
 	materializePrimaryOverlayLocked(domain)
@@ -14512,11 +14595,19 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	}
 	resetCollectionTables(compactedObsolete)
 	plan.stats.BufferedBatches = 1
+	if plan.bufferedCommandWALLSN != 0 {
+		if err := domain.recordPendingCommandWALLSNLocked(plan.bufferedCommandWALLSN); err != nil {
+			return false, err
+		}
+	}
 	return true, nil
 }
 
 func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, error) {
 	if c == nil || plan == nil {
+		return false, nil
+	}
+	if c.commandWALActive(nil) && plan.bufferedCommandWALIntent == nil {
 		return false, nil
 	}
 	if plan.directBufferedUpdate != nil {
