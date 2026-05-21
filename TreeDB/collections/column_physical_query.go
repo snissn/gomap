@@ -927,8 +927,7 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 		selectedGroup := colIdx == exec.groupColumnIdx
 		selectedValue := colIdx == exec.valueColumnIdx
 		selectedDistinct := colIdx == exec.distinctColumnIdx
-		selected := selectedGroup || selectedValue || selectedDistinct
-		if selected && exec.readIntegrity != ColumnAssetReadIntegritySkipChecksums {
+		if exec.readIntegrity != ColumnAssetReadIntegritySkipChecksums {
 			typeBytes := cur.stringBytes()
 			if cur.err != nil {
 				return nil, false, nil, false, 0, false, cur.err
@@ -937,9 +936,8 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), col.ValueType)
 			}
 		} else {
-			// Header/schema validation and asset checksums already cover the redundant
-			// per-value type tag. Unsafe checksum-skipping reads also skip selected
-			// type tags and rely on the already-validated asset header/schema.
+			// Unsafe checksum-skipping reads also skip redundant per-value type
+			// tags and rely on the already-validated asset header/schema.
 			cur.skipStringBytes()
 			if cur.err != nil {
 				return nil, false, nil, false, 0, false, cur.err
