@@ -20,8 +20,8 @@ type columnVectorGraphNativeSearchStats struct {
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
-// scratch. Copy ID before the next search with the same scratch if retention is
-// required.
+// scratch. Callers must copy the returned result slice and any retained result
+// IDs before the next search with the same scratch.
 type columnVectorGraphNativeSearchResult struct {
 	Ordinal int
 	ID      []byte

@@ -29,7 +29,7 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	query := []float32{0, 0.2, 1}
 	var scratch columnVectorGraphNativeSearchScratch
 	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: len(rows)}, &scratch)
@@ -63,7 +63,7 @@ func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 
 	var scratch columnVectorGraphNativeSearchScratch
 	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 4}, &scratch)
@@ -92,7 +92,7 @@ func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 
 	var scratch columnVectorGraphNativeSearchScratch
 	got, _, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 3}, &scratch)
@@ -119,7 +119,7 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
 	_, _, err = reader.SearchCosine([]float32{1, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, &scratch)
 	if err == nil || !strings.Contains(err.Error(), "query dims=2 want 3") {
@@ -150,7 +150,7 @@ func TestColumnVectorGraphNativeSearchRequiresScratchV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 
 	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: 1}, nil)
 	if err != nil {
@@ -189,7 +189,7 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
 	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 10}, &scratch)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestColumnVectorGraphNativeSearchDoesNotFetchDocumentsV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
 	got, _, err := reader.SearchCosine([]float32{0, 0, 1}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: len(rows)}, &scratch)
 	if err != nil {
@@ -272,7 +272,7 @@ func TestColumnVectorGraphNativeSearchContinuesAcrossDisconnectedComponentsV3(t 
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
 	got, stats, err := reader.SearchCosine([]float32{0, 0, 1}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: len(rows)}, &scratch)
 	if err != nil {
@@ -304,7 +304,7 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	query := append([]float32(nil), input[7].vector...)
 	var scratch columnVectorGraphNativeSearchScratch
 	if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 16}, &scratch); err != nil {
@@ -344,7 +344,7 @@ func TestColumnVectorGraphNativeSearchParallelReadersV3(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open reader %d: %v", i, err)
 		}
-		defer func() { _ = reader.Close() }()
+		defer reader.Close()
 		readers[i] = reader
 	}
 	want, _, err := readers[0].SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &columnVectorGraphNativeSearchScratch{})
@@ -400,7 +400,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
 	if err != nil {
 		b.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
-	defer func() { _ = reader.Close() }()
+	defer reader.Close()
 	query := append([]float32(nil), input[37].vector...)
 	var scratch columnVectorGraphNativeSearchScratch
 	if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &scratch); err != nil {
@@ -456,7 +456,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		if err != nil {
 			b.Fatalf("open reader %d: %v", i, err)
 		}
-		defer func() { _ = reader.Close() }()
+		defer reader.Close()
 		worker := &searchWorker{reader: reader}
 		if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch); err != nil {
 			b.Fatalf("warm reader %d SearchCosine: %v", i, err)
