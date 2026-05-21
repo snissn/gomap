@@ -33,20 +33,43 @@ go test -run '^$' -bench BenchmarkContentHashTournament -benchtime=2s -count=5
 
 - `CRC32C_Castagnoli_TreeDB`: Go `hash/crc32` with `crc32.Castagnoli`.
 - `CRC32_IEEE`: Go `hash/crc32.ChecksumIEEE`.
+- `CRC32_Koopman`: Go `hash/crc32` with `crc32.Koopman`.
 - `XXHash64`: `github.com/cespare/xxhash/v2`.
+- `XXHash64_Digest`: `github.com/cespare/xxhash/v2` streaming digest.
+- `XXHash64_DigestSeeded`: `github.com/cespare/xxhash/v2` seeded streaming digest.
 - `XXH3_64`: `github.com/zeebo/xxh3`.
+- `XXH3_64Seeded`: `github.com/zeebo/xxh3`.
+- `XXH3_128`: `github.com/zeebo/xxh3`.
+- `XXH3_128Seeded`: `github.com/zeebo/xxh3`.
+- `XXH3_64_Hasher`: `github.com/zeebo/xxh3` streaming hasher.
+- `XXH3_64_HasherSeeded`: `github.com/zeebo/xxh3` seeded streaming hasher.
+- `XXH3_128_Hasher`: `github.com/zeebo/xxh3` streaming hasher.
+- `XXH3_128_HasherSeeded`: `github.com/zeebo/xxh3` seeded streaming hasher.
 - `FarmHash64`: `github.com/dgryski/go-farm`.
+- `FarmHash64Seeded`: `github.com/dgryski/go-farm`.
+- `FarmHash64TwoSeeds`: `github.com/dgryski/go-farm`.
+- `FarmFingerprint64`: `github.com/dgryski/go-farm`.
+- `FarmHash128`: `github.com/dgryski/go-farm`.
+- `FarmHash128Seeded`: `github.com/dgryski/go-farm`.
+- `FarmFingerprint128`: `github.com/dgryski/go-farm`.
 - `FarmHash32`: `github.com/dgryski/go-farm`.
+- `FarmHash32Seeded`: `github.com/dgryski/go-farm`.
 - `FarmFingerprint32`: `github.com/dgryski/go-farm`.
 - `MapHash_ProcessLocal`: Go `hash/maphash`.
+- `FNV1_64`: Go `hash/fnv`.
 - `FNV1a_64`: Go `hash/fnv`.
+- `FNV1_32`: Go `hash/fnv`.
 - `FNV1a_32`: Go `hash/fnv`.
+- `FNV1_128`: Go `hash/fnv`.
+- `FNV1a_128`: Go `hash/fnv`.
+- `SHA224`: Go `crypto/sha256`.
 - `SHA256`: Go `crypto/sha256`.
 
-The native 32-bit entries are included because TreeDB's current checksum slot is
-already `uint32`-sized. A fast native 32-bit hash could be a drop-in format
-change while gomap does not need backward compatibility for persisted checksum
-values.
+The suite includes the native output widths exposed by each package for byte
+slice content hashing. The native 32-bit entries are included because TreeDB's
+current checksum slot is already `uint32`-sized. A fast native 32-bit hash could
+be a drop-in format change while gomap does not need backward compatibility for
+persisted checksum values.
 
 ## Initial Apple M3 Read
 
