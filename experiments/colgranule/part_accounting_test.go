@@ -17,8 +17,8 @@ func TestColumnPartByteAccountingReconcilesCategories(t *testing.T) {
 	}
 
 	accounting := part.ByteAccounting()
-	if accounting.Rows != 5 || accounting.Columns != 5 || accounting.Granules != 3 {
-		t.Fatalf("shape=%+v want rows=5 columns=5 granules=3", accounting)
+	if accounting.Rows != part.Descriptor.RowCount || accounting.Columns != len(accounting.ColumnsDetail) || accounting.Granules != len(part.Descriptor.Granules) {
+		t.Fatalf("shape=%+v want rows=%d columns=%d granules=%d", accounting, part.Descriptor.RowCount, len(accounting.ColumnsDetail), len(part.Descriptor.Granules))
 	}
 	if accounting.PhysicalFiles != 0 {
 		t.Fatalf("physical files=%d want 0 for in-memory experiment", accounting.PhysicalFiles)
@@ -48,6 +48,20 @@ func TestColumnPartByteAccountingReconcilesCategories(t *testing.T) {
 	}
 	if len(accounting.CompressionDetail) == 0 {
 		t.Fatal("missing compression detail")
+	}
+}
+
+func TestColumnPartByteAccountingRecomputeTotalsZeroRowsClearsBytesPerRow(t *testing.T) {
+	accounting := ColumnPartByteAccounting{
+		DescriptorBytes: 64,
+		BytesPerRow:     123,
+	}
+	accounting.RecomputeTotals()
+	if accounting.TotalStoredBytes != 64 {
+		t.Fatalf("total bytes=%d want 64", accounting.TotalStoredBytes)
+	}
+	if accounting.BytesPerRow != 0 {
+		t.Fatalf("bytes per row=%f want 0", accounting.BytesPerRow)
 	}
 }
 
