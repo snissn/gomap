@@ -228,7 +228,7 @@ func benchmarkFloat32FixedWidthDirectViewSetup(b *testing.B, raw []byte, valuesP
 		b.Skip("direct little-endian view requires little-endian host")
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(len(raw)))
+	b.ReportMetric(float64(len(raw)), "payload_B/op")
 	b.ReportMetric(float64(valuesPerOp), "values/op")
 	b.ResetTimer()
 	var sum uint64
@@ -247,7 +247,7 @@ func benchmarkUint32FixedWidthDirectViewSetup(b *testing.B, raw []byte, valuesPe
 		b.Skip("direct little-endian view requires little-endian host")
 	}
 	b.ReportAllocs()
-	b.SetBytes(int64(len(raw)))
+	b.ReportMetric(float64(len(raw)), "payload_B/op")
 	b.ReportMetric(float64(valuesPerOp), "values/op")
 	b.ResetTimer()
 	var sum uint64
