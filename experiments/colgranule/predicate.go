@@ -63,6 +63,18 @@ type sortKeyRangePlan struct {
 	empty     bool
 }
 
+type compiledRowSortKeyRange struct {
+	Column string
+	Values []int64
+	Low    int64
+	High   int64
+}
+
+type compiledRowSortKeyRanges struct {
+	ranges [maxSortKeyColumns]compiledRowSortKeyRange
+	count  int
+}
+
 func BuildSortKeyMark(columns []SortKeyColumn) (SortKeyMark, error) {
 	if len(columns) == 0 {
 		return SortKeyMark{}, errors.New("colgranule: empty sort key")
@@ -148,9 +160,6 @@ func (r *GranuleReader) CountInt64RangeWithDiagnostics(granules []EncodedGranule
 	var sortPlan sortKeyRangePlan
 	var err error
 	if len(marks) != 0 {
-		if !containsString(marks[0].Columns, plan.Filter.Column) {
-			return 0, diagnostics, fmt.Errorf("colgranule: filter column %q not present in sort key mark", plan.Filter.Column)
-		}
 		sortPlan, err = compileSortKeyRangePlan(marks[0].Columns, plan.SortKeyRanges)
 		if err != nil {
 			return 0, diagnostics, err
@@ -205,13 +214,19 @@ func (r *GranuleReader) CountInt64RangeWithDiagnostics(granules []EncodedGranule
 
 func compileSortKeyRangePlan(columns []string, ranges []Int64RangePredicate) (sortKeyRangePlan, error) {
 	var plan sortKeyRangePlan
-	if len(ranges) == 0 || len(columns) == 0 {
+	if len(ranges) == 0 {
 		return plan, nil
+	}
+	if len(columns) == 0 {
+		return plan, errors.New("colgranule: sort key ranges require mark columns")
 	}
 	if len(columns) > maxSortKeyColumns {
 		return plan, fmt.Errorf("colgranule: sort key columns=%d exceeds cap %d", len(columns), maxSortKeyColumns)
 	}
 	if err := validateSortKeyColumnNames(columns); err != nil {
+		return plan, err
+	}
+	if err := validateRangePredicates(columns, ranges); err != nil {
 		return plan, err
 	}
 	var upperInclusive [maxSortKeyColumns]int64
@@ -259,44 +274,56 @@ func (m SortKeyMark) countMatchingRows(values []int64, plan PredicatePlan) (int,
 	if len(values) != m.Rows {
 		return 0, fmt.Errorf("colgranule: decoded rows=%d mark rows=%d", len(values), m.Rows)
 	}
-	if len(m.ColumnValues) != len(m.Columns) {
-		return 0, errors.New("colgranule: sort key mark row values missing")
+	compiledRanges, err := m.compileRowSortKeyRanges(plan.SortKeyRanges)
+	if err != nil {
+		return 0, err
 	}
 	count := 0
 	for row, v := range values {
 		if v < plan.Filter.Low || v > plan.Filter.High {
 			continue
 		}
-		matches, err := m.rowMatchesRanges(row, plan.SortKeyRanges)
-		if err != nil {
-			return 0, err
-		}
-		if matches {
+		if compiledRanges.rowMatches(row) {
 			count++
 		}
 	}
 	return count, nil
 }
 
-func (m SortKeyMark) rowMatchesRanges(row int, ranges []Int64RangePredicate) (bool, error) {
+func (m SortKeyMark) compileRowSortKeyRanges(ranges []Int64RangePredicate) (compiledRowSortKeyRanges, error) {
+	if len(m.ColumnValues) != len(m.Columns) {
+		return compiledRowSortKeyRanges{}, errors.New("colgranule: sort key mark row values missing")
+	}
+	if err := validateRangePredicates(m.Columns, ranges); err != nil {
+		return compiledRowSortKeyRanges{}, err
+	}
+	var compiled compiledRowSortKeyRanges
 	for _, predicate := range ranges {
-		if predicate.Empty() {
-			return false, nil
-		}
 		columnIndex := indexString(m.Columns, predicate.Column)
-		if columnIndex < 0 {
-			return false, fmt.Errorf("colgranule: sort key range column %q not present in mark", predicate.Column)
-		}
 		values := m.ColumnValues[columnIndex]
-		if row < 0 || row >= len(values) {
-			return false, fmt.Errorf("colgranule: sort key column %q rows=%d want row %d", predicate.Column, len(values), row)
+		if len(values) != m.Rows {
+			return compiledRowSortKeyRanges{}, fmt.Errorf("colgranule: sort key column %q rows=%d want=%d", predicate.Column, len(values), m.Rows)
 		}
-		value := values[row]
+		compiled.ranges[compiled.count] = compiledRowSortKeyRange{
+			Column: predicate.Column,
+			Values: values,
+			Low:    predicate.Low,
+			High:   predicate.High,
+		}
+		compiled.count++
+	}
+	return compiled, nil
+}
+
+func (r compiledRowSortKeyRanges) rowMatches(row int) bool {
+	for i := 0; i < r.count; i++ {
+		predicate := r.ranges[i]
+		value := predicate.Values[row]
 		if value < predicate.Low || value > predicate.High {
-			return false, nil
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
 
 func findRangePredicate(ranges []Int64RangePredicate, column string) (Int64RangePredicate, bool) {
@@ -316,6 +343,26 @@ func validateSortKeyColumnNames(columns []string) error {
 		for j := 0; j < i; j++ {
 			if columns[j] == column {
 				return fmt.Errorf("colgranule: duplicate sort key column %q", column)
+			}
+		}
+	}
+	return nil
+}
+
+func validateRangePredicates(columns []string, ranges []Int64RangePredicate) error {
+	if len(ranges) > maxSortKeyColumns {
+		return fmt.Errorf("colgranule: sort key ranges=%d exceeds cap %d", len(ranges), maxSortKeyColumns)
+	}
+	for i, predicate := range ranges {
+		if predicate.Column == "" {
+			return fmt.Errorf("colgranule: empty sort key range column at %d", i)
+		}
+		if !containsString(columns, predicate.Column) {
+			return fmt.Errorf("colgranule: sort key range column %q not present in mark", predicate.Column)
+		}
+		for j := 0; j < i; j++ {
+			if ranges[j].Column == predicate.Column {
+				return fmt.Errorf("colgranule: duplicate sort key range column %q", predicate.Column)
 			}
 		}
 	}
