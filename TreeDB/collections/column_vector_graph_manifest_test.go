@@ -582,7 +582,7 @@ func TestColumnVectorGraphReachabilityRejectsBaseAssetGenerationMismatchV2A(t *t
 		Checksum:   7,
 	}
 	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, ref, ref.Length, 2)
-	_, err = columnVectorGraphAssetRefsFromManifestRecordsForReachability(records, identity.Generation, baseCfg.AssetManager.Namespace)
+	_, err = columnVectorGraphAssetRefsFromManifestRecordsForReachability(records, identity.Generation, baseCfg.AssetManager.Namespace, true, []VectorIndexDefinition{def})
 	if err == nil || !strings.Contains(err.Error(), "base manifest generation=7 does not match asset generation=6") {
 		t.Fatalf("reachability err=%v want base/asset generation mismatch", err)
 	}
