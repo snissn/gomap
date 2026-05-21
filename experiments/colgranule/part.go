@@ -76,6 +76,7 @@ type ColumnDefinition struct {
 	Type           ColumnType
 	Encoding       Encoding
 	Compression    Compression
+	CompressionSet bool
 	Cardinality    uint32
 	CodecBlockRows int
 }
@@ -302,15 +303,6 @@ func (s *ColumnPartScanner) ScanProjectedInto(dst map[string][]int64, columns []
 	return out, nil
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *ColumnPartScanner) ValueAt(locator RowLocator, columnName string) (int64, error) {
 	if s.part == nil {
 		return 0, errors.New("colgranule: nil part scanner")
@@ -478,7 +470,7 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 	if def.CodecBlockRows < 0 {
 		return ColumnDefinition{}, fmt.Errorf("colgranule: invalid codec block rows %d for %s", def.CodecBlockRows, def.Name)
 	}
-	if def.Compression == CompressionNone && defaultCompression != CompressionNone {
+	if !def.CompressionSet && def.Compression == CompressionNone && defaultCompression != CompressionNone {
 		def.Compression = defaultCompression
 	}
 	switch def.Type {
@@ -562,6 +554,9 @@ func (b *ColumnPartBuilder) buildGranulesAndLocators(part *ColumnPart, batch Col
 		idLower, idUpper := int64(math.MaxInt64), int64(math.MinInt64)
 		for partRow := start; partRow < end; partRow++ {
 			primaryID := pkValues[b.order[partRow]]
+			if primaryID == math.MaxInt64 {
+				return fmt.Errorf("colgranule: primary id %d cannot form exclusive upper bound", primaryID)
+			}
 			if _, exists := part.Locators[primaryID]; exists {
 				return fmt.Errorf("colgranule: duplicate primary id %d", primaryID)
 			}

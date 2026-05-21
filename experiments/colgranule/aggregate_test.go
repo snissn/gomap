@@ -178,6 +178,26 @@ func TestTimeBucketedGroupedCountsMatchRaw(t *testing.T) {
 	}
 }
 
+func TestTimeBucketedCountCodesRejectsHugeBucketSpan(t *testing.T) {
+	codeGranules, err := buildCodeGranulesForTest([][]uint32{{0, 0}}, 1)
+	if err != nil {
+		t.Fatalf("build code granules: %v", err)
+	}
+	const minInt64 = -1 << 63
+	const maxInt64 = 1<<63 - 1
+	timeBuilder := NewGranuleBuilder(Config{Encoding: EncodingRawInt64, Compression: CompressionNone})
+	timeGranule, err := timeBuilder.BuildInt64([]int64{minInt64, maxInt64})
+	if err != nil {
+		t.Fatalf("BuildInt64 times: %v", err)
+	}
+	timeGranule.Payload = append([]byte(nil), timeGranule.Payload...)
+	var arena AggregateArena
+	_, err = arena.TimeBucketedCountCodes(codeGranules, []EncodedGranule{timeGranule}, 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "aggregate buckets exceed cap") {
+		t.Fatalf("TimeBucketedCountCodes huge span err=%v want aggregate bucket cap", err)
+	}
+}
+
 func buildCodeGranulesForTest(codeSets [][]uint32, cardinality uint32) ([]EncodedGranule, error) {
 	builder := NewGranuleBuilder(Config{Compression: CompressionNone})
 	granules := make([]EncodedGranule, 0, len(codeSets))
