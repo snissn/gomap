@@ -544,10 +544,13 @@ func columnVectorGraphBaseManifestChecksum(manifest columnManifestSnapshot, reco
 	}, manifest.Generation, baseRecords), nil
 }
 
-func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string) ([]ColumnAssetRef, error) {
+func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []columnManifestRecord, activeGeneration uint64, expectedNamespace string, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]ColumnAssetRef, error) {
 	var refs []ColumnAssetRef
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			continue
+		}
+		if !retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
 			continue
 		}
 		graph, err := decodeColumnVectorGraphManifestRecord(record.value)

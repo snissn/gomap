@@ -270,7 +270,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		view.Diagnostics = diag
 		return view, err
 	}
-	graphRefs, err := columnVectorGraphAssetRefsFromManifestRecordsForReachability(records, manifest.Generation, cfg.AssetManager.Namespace)
+	graphRefs, err := columnVectorGraphAssetRefsFromManifestRecordsForReachability(records, manifest.Generation, cfg.AssetManager.Namespace, true, catalog.meta.VectorIndexes)
 	if err != nil {
 		view.Diagnostics = diag
 		return view, err
