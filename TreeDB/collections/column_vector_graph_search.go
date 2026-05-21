@@ -15,6 +15,7 @@ type columnVectorGraphNativeSearchStats struct {
 	Candidates       uint64
 	Edges            uint64
 	CandidateFetches uint64
+	ExpansionFetches uint64
 	ResultFetches    uint64
 }
 
@@ -36,13 +37,17 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
-	rowScratch columnPhysicalRowReaderScratch
-	visitMarks []uint64
-	visitEpoch uint64
-	queue      []int
-	top        []columnVectorGraphSearchCandidate
-	results    []columnVectorGraphNativeSearchResult
-	idBuffers  [][]byte
+	scoreScratch   columnPhysicalRowReaderScratch
+	expandScratch  columnPhysicalRowReaderScratch
+	resultScratch  columnPhysicalRowReaderScratch
+	visitMarks     []uint64
+	visitEpoch     uint64
+	frontier       []columnVectorGraphSearchCandidate
+	top            []columnVectorGraphSearchCandidate
+	results        []columnVectorGraphNativeSearchResult
+	idBuffers      [][]byte
+	resultOrder    []int
+	resultOrdinals []int
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK int) error {
@@ -52,14 +57,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 {
 		return errors.New("collections: column_graph native search received negative sizing input")
 	}
-	if cap(s.rowScratch.Values) < 3 {
-		s.rowScratch.Values = make([]columnDeclaredValue, 0, 3)
-	}
-	if cap(s.rowScratch.Float32Values) < dimensions {
-		s.rowScratch.Float32Values = make([]float32, 0, dimensions)
-	}
-	if cap(s.rowScratch.Uint32Values) < degree {
-		s.rowScratch.Uint32Values = make([]uint32, 0, degree)
+	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
+		prepareColumnVectorGraphNativeRowScratch(rowScratch, dimensions, degree)
 	}
 	if len(s.visitMarks) < rowCount {
 		s.visitMarks = make([]uint64, rowCount)
@@ -69,9 +68,9 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		clear(s.visitMarks)
 		s.visitEpoch = 1
 	}
-	s.queue = s.queue[:0]
-	if cap(s.queue) < rowCount {
-		s.queue = make([]int, 0, rowCount)
+	s.frontier = s.frontier[:0]
+	if cap(s.frontier) < rowCount {
+		s.frontier = make([]columnVectorGraphSearchCandidate, 0, rowCount)
 	}
 	s.top = s.top[:0]
 	if cap(s.top) < topK {
@@ -86,7 +85,25 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		copy(next, s.idBuffers)
 		s.idBuffers = next
 	}
+	if cap(s.resultOrder) < topK {
+		s.resultOrder = make([]int, 0, topK)
+	}
+	if cap(s.resultOrdinals) < topK {
+		s.resultOrdinals = make([]int, 0, topK)
+	}
 	return nil
+}
+
+func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch, dimensions, degree int) {
+	if cap(s.Values) < 3 {
+		s.Values = make([]columnDeclaredValue, 0, 3)
+	}
+	if cap(s.Float32Values) < dimensions {
+		s.Float32Values = make([]float32, 0, dimensions)
+	}
+	if cap(s.Uint32Values) < degree {
+		s.Uint32Values = make([]uint32, 0, degree)
+	}
 }
 
 // SearchCosine traverses the persisted column graph through the physical row
@@ -137,68 +154,180 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, err
 	}
 
-	scratch.markAndEnqueue(0)
 	var stats columnVectorGraphNativeSearchStats
+	if err := r.scoreAndPushFrontier(query, queryInvNorm, 0, topK, scratch, &stats); err != nil {
+		return nil, stats, err
+	}
 	nextSeed := 0
-	for head := 0; stats.Candidates < uint64(efSearch); {
-		if head >= len(scratch.queue) {
+	for stats.Candidates < uint64(efSearch) {
+		candidate, ok := scratch.popFrontier()
+		if !ok {
 			for nextSeed < rowCount && scratch.visitMarks[nextSeed] == scratch.visitEpoch {
 				nextSeed++
 			}
 			if nextSeed >= rowCount {
 				break
 			}
-			scratch.markAndEnqueue(nextSeed)
+			if err := r.scoreAndPushFrontier(query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
+				return nil, stats, err
+			}
 			continue
 		}
-		ordinal := scratch.queue[head]
-		head++
-		row, err := r.FetchRow(ordinal, &scratch.rowScratch)
+		row, err := r.FetchRow(candidate.ordinal, &scratch.expandScratch)
 		if err != nil {
 			return nil, stats, err
 		}
-		stats.CandidateFetches++
-		stats.Candidates++
-		score := columnVectorGraphNativeCosineScore(query, queryInvNorm, row)
-		if math.IsNaN(score) {
-			return nil, stats, fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is NaN", r.def.Name, ordinal)
-		}
-		scratch.insertTop(topK, columnVectorGraphSearchCandidate{ordinal: ordinal, score: score})
+		stats.ExpansionFetches++
 		for _, neighbor := range row.Adjacency {
 			stats.Edges++
-			scratch.markAndEnqueue(int(neighbor))
+			if stats.Candidates >= uint64(efSearch) {
+				break
+			}
+			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
+				return nil, stats, err
+			}
 		}
 	}
 
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
+	if err := r.fetchTopSearchResults(scratch, &stats); err != nil {
+		return nil, stats, err
+	}
+	return scratch.results, stats, nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	n := len(scratch.top)
+	scratch.resultOrder = scratch.resultOrder[:n]
+	scratch.resultOrdinals = scratch.resultOrdinals[:n]
+	for i := 0; i < n; i++ {
+		scratch.resultOrder[i] = i
+	}
+	for i := 1; i < n; i++ {
+		order := scratch.resultOrder[i]
+		ordinal := scratch.top[order].ordinal
+		j := i - 1
+		for j >= 0 && scratch.top[scratch.resultOrder[j]].ordinal > ordinal {
+			scratch.resultOrder[j+1] = scratch.resultOrder[j]
+			j--
+		}
+		scratch.resultOrder[j+1] = order
+	}
+	for fetchPos, topIndex := range scratch.resultOrder {
+		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
+	}
+	fetchPos := 0
+	if err := r.FetchBatch(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
+		if fetchPos >= n {
+			return fmt.Errorf("collections: column_graph %q result batch returned extra row ordinal=%d", r.def.Name, row.Ordinal)
+		}
+		topIndex := scratch.resultOrder[fetchPos]
+		candidate := scratch.top[topIndex]
+		if row.Ordinal != candidate.ordinal {
+			return fmt.Errorf("collections: column_graph %q result batch row ordinal=%d want %d", r.def.Name, row.Ordinal, candidate.ordinal)
+		}
+		if cap(scratch.idBuffers[topIndex]) < len(row.ID) {
+			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
+		}
+		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(row.ID)]
+		copy(scratch.idBuffers[topIndex], row.ID)
+		fetchPos++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if fetchPos != n {
+		return fmt.Errorf("collections: column_graph %q result batch rows=%d want %d", r.def.Name, fetchPos, n)
+	}
+	stats.ResultFetches += uint64(n)
 	for i, candidate := range scratch.top {
-		row, err := r.FetchRow(candidate.ordinal, &scratch.rowScratch)
-		if err != nil {
-			return nil, stats, err
-		}
-		stats.ResultFetches++
-		if cap(scratch.idBuffers[i]) < len(row.ID) {
-			scratch.idBuffers[i] = make([]byte, len(row.ID))
-		}
-		scratch.idBuffers[i] = scratch.idBuffers[i][:len(row.ID)]
-		copy(scratch.idBuffers[i], row.ID)
 		scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
 			Ordinal: candidate.ordinal,
 			ID:      scratch.idBuffers[i],
 			Score:   candidate.score,
 		})
 	}
-	return scratch.results, stats, nil
+	return nil
 }
 
-func (s *columnVectorGraphNativeSearchScratch) markAndEnqueue(ordinal int) {
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if scratch.markVisited(ordinal) {
+		row, err := r.FetchRow(ordinal, &scratch.scoreScratch)
+		if err != nil {
+			return err
+		}
+		stats.CandidateFetches++
+		score, err := columnVectorGraphNativeCosineScore(query, queryInvNorm, row)
+		if err != nil {
+			return err
+		}
+		if math.IsNaN(score) {
+			return fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is NaN", r.def.Name, ordinal)
+		}
+		stats.Candidates++
+		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
+		scratch.insertTop(topK, candidate)
+		scratch.pushFrontier(candidate)
+	}
+	return nil
+}
+
+func (s *columnVectorGraphNativeSearchScratch) markVisited(ordinal int) bool {
 	if ordinal < 0 || ordinal >= len(s.visitMarks) || s.visitMarks[ordinal] == s.visitEpoch {
-		return
+		return false
 	}
 	s.visitMarks[ordinal] = s.visitEpoch
-	s.queue = append(s.queue, ordinal)
+	return true
+}
+
+func (s *columnVectorGraphNativeSearchScratch) pushFrontier(candidate columnVectorGraphSearchCandidate) {
+	s.frontier = append(s.frontier, candidate)
+	s.frontierSiftUp(len(s.frontier) - 1)
+}
+
+func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphSearchCandidate, bool) {
+	if len(s.frontier) == 0 {
+		return columnVectorGraphSearchCandidate{}, false
+	}
+	best := s.frontier[0]
+	last := s.frontier[len(s.frontier)-1]
+	s.frontier = s.frontier[:len(s.frontier)-1]
+	if len(s.frontier) > 0 {
+		s.frontier[0] = last
+		s.frontierSiftDown(0)
+	}
+	return best, true
+}
+
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftUp(idx int) {
+	for idx > 0 {
+		parent := (idx - 1) / 2
+		if !columnVectorGraphSearchCandidateLess(s.frontier[idx], s.frontier[parent]) {
+			return
+		}
+		s.frontier[idx], s.frontier[parent] = s.frontier[parent], s.frontier[idx]
+		idx = parent
+	}
+}
+
+func (s *columnVectorGraphNativeSearchScratch) frontierSiftDown(idx int) {
+	for {
+		left := idx*2 + 1
+		if left >= len(s.frontier) {
+			return
+		}
+		child := left
+		if right := left + 1; right < len(s.frontier) && columnVectorGraphSearchCandidateLess(s.frontier[right], s.frontier[left]) {
+			child = right
+		}
+		if !columnVectorGraphSearchCandidateLess(s.frontier[child], s.frontier[idx]) {
+			return
+		}
+		s.frontier[idx], s.frontier[child] = s.frontier[child], s.frontier[idx]
+		idx = child
+	}
 }
 
 func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate columnVectorGraphSearchCandidate) {
@@ -226,10 +355,13 @@ func columnVectorGraphSearchCandidateLess(left, right columnVectorGraphSearchCan
 	return left.score > right.score
 }
 
-func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, row columnVectorGraphPhysicalRow) float64 {
+func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, row columnVectorGraphPhysicalRow) (float64, error) {
+	if len(row.Vector) != len(query) {
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d", row.Ordinal, len(row.Vector), len(query))
+	}
 	var dot float64
 	for i, v := range query {
 		dot += float64(v) * float64(row.Vector[i])
 	}
-	return dot * float64(queryInvNorm) * float64(row.InvNorm)
+	return dot * float64(queryInvNorm) * float64(row.InvNorm), nil
 }

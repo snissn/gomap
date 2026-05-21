@@ -41,8 +41,66 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	if stats.Candidates != uint64(len(rows)) {
 		t.Fatalf("Candidates=%d want %d", stats.Candidates, len(rows))
 	}
-	if stats.Edges == 0 || stats.CandidateFetches != uint64(len(rows)) || stats.ResultFetches != uint64(len(got)) {
+	if stats.Edges == 0 || stats.CandidateFetches != uint64(len(rows)) || stats.ExpansionFetches == 0 || stats.ResultFetches != uint64(len(got)) {
 		t.Fatalf("stats=%+v want graph traversal row fetch accounting", stats)
+	}
+	if readerStats := reader.Stats(); readerStats.BatchFetches == 0 {
+		t.Fatalf("reader stats=%+v want batched top-k result fetch", readerStats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-start"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{1, 2}},
+		{ID: []byte("doc-low"), Vector: []float32{-1, 0, 0}, InvNorm: 1, Adjacency: []uint32{3}},
+		{ID: []byte("doc-bridge"), Vector: []float32{0.8, 0.6, 0}, InvNorm: 1, Adjacency: []uint32{4}},
+		{ID: []byte("doc-mid"), Vector: []float32{0.5, 0.8660254, 0}, InvNorm: 1},
+		{ID: []byte("doc-best"), Vector: []float32{1, 0, 0}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 4}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 4 || string(got[0].ID) != "doc-best" {
+		t.Fatalf("results=%+v want best-first traversal to reach doc-best before lower-score branch", got)
+	}
+	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ExpansionFetches == 0 {
+		t.Fatalf("stats=%+v want four scored candidates with expansion fetch accounting", stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-start"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{1, 2}},
+		{ID: []byte("doc-low"), Vector: []float32{-1, 0, 0}, InvNorm: 1, Adjacency: []uint32{4, 4}},
+		{ID: []byte("doc-best"), Vector: []float32{1, 0, 0}, InvNorm: 1},
+		{ID: []byte("doc-unused"), Vector: []float32{0, 0, 1}, InvNorm: 1},
+		{ID: []byte("doc-bad"), Vector: []float32{-0.9, 0, 0}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, _, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 3}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 2 || string(got[0].ID) != "doc-best" {
+		t.Fatalf("results=%+v want scoring fetches not to mutate expansion adjacency", got)
 	}
 }
 
@@ -70,6 +128,17 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	_, _, err = reader.SearchCosine([]float32{0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, &scratch)
 	if err == nil || !strings.Contains(err.Error(), "query norm") {
 		t.Fatalf("SearchCosine zero err=%v want norm failure", err)
+	}
+}
+
+func TestColumnVectorGraphNativeCosineScoreRejectsMalformedRowV3(t *testing.T) {
+	_, err := columnVectorGraphNativeCosineScore([]float32{1, 0}, 1, columnVectorGraphPhysicalRow{
+		Ordinal: 7,
+		Vector:  []float32{1},
+		InvNorm: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ordinal=7 vector dims=1 want 2") {
+		t.Fatalf("columnVectorGraphNativeCosineScore err=%v want dimension failure", err)
 	}
 }
 
@@ -286,6 +355,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
 		searchStats.Candidates += stats.Candidates
 		searchStats.Edges += stats.Edges
 		searchStats.CandidateFetches += stats.CandidateFetches
+		searchStats.ExpansionFetches += stats.ExpansionFetches
 		searchStats.ResultFetches += stats.ResultFetches
 	}
 	b.StopTimer()
@@ -334,10 +404,14 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	var totalCandidates atomic.Uint64
 	var totalEdges atomic.Uint64
 	var totalCandidateFetches atomic.Uint64
+	var totalExpansionFetches atomic.Uint64
 	var totalResultFetches atomic.Uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		// testing.B.RunParallel starts GOMAXPROCS workers by default. Keep the
+		// prewarmed reader/scratch arrays sized to that value and do not raise
+		// parallelism here; each worker owns exactly one reader and scratch.
 		worker := int(nextWorker.Add(1)) - 1
 		if worker < 0 || worker >= len(readers) {
 			b.Fatalf("parallel worker=%d outside prewarmed readers=%d", worker, len(readers))
@@ -353,6 +427,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 			totalCandidates.Add(stats.Candidates)
 			totalEdges.Add(stats.Edges)
 			totalCandidateFetches.Add(stats.CandidateFetches)
+			totalExpansionFetches.Add(stats.ExpansionFetches)
 			totalResultFetches.Add(stats.ResultFetches)
 		}
 	})
@@ -366,6 +441,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		Candidates:       totalCandidates.Load(),
 		Edges:            totalEdges.Load(),
 		CandidateFetches: totalCandidateFetches.Load(),
+		ExpansionFetches: totalExpansionFetches.Load(),
 		ResultFetches:    totalResultFetches.Load(),
 	})
 }
@@ -450,6 +526,7 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 		b.ReportMetric(float64(searchStats.Edges)/float64(searchStats.Candidates), "edges/node")
 	}
 	b.ReportMetric(float64(searchStats.CandidateFetches)/float64(n), "candidate_fetches/search")
+	b.ReportMetric(float64(searchStats.ExpansionFetches)/float64(n), "expansion_fetches/search")
 	b.ReportMetric(float64(searchStats.ResultFetches)/float64(n), "result_fetches/search")
 	b.ReportMetric(float64(stats.CacheHits-baseStats.CacheHits)/float64(n), "cache_hits/search")
 	b.ReportMetric(float64(stats.CacheMisses-baseStats.CacheMisses)/float64(n), "cache_misses/search")
