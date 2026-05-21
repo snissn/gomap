@@ -128,7 +128,9 @@ func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSea
 		clear(dst)
 		return make([]columnVectorGraphNativeSearchResult, 0, target)
 	}
-	clear(dst)
+	if len(dst) > target {
+		clear(dst)
+	}
 	return dst[:0]
 }
 
