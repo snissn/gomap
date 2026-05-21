@@ -1504,8 +1504,12 @@ func TestColumnPhysicalDirectQueryValidatesUnselectedTypeTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newColumnPhysicalQueryExecutor relaxed: %v", err)
 	}
-	if _, err := reduceColumnPhysicalAssetDirect(encoded, ref, "events", normalized, ColumnPublishOperationInsert, relaxedExec); err != nil {
+	summary, err := reduceColumnPhysicalAssetDirect(encoded, ref, "events", normalized, ColumnPublishOperationInsert, relaxedExec)
+	if err != nil {
 		t.Fatalf("reduce relaxed: %v", err)
+	}
+	if summary.rows != 1 || relaxedExec.reduceRows != 1 {
+		t.Fatalf("reduce relaxed summary rows=%d reduceRows=%d want 1", summary.rows, relaxedExec.reduceRows)
 	}
 }
 
