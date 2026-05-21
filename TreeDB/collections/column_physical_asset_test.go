@@ -361,6 +361,17 @@ func TestColumnPhysicalAssetFloat32VectorLittleEndianRoundTrip(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetVersionSelectionValidatesAllFixedWidthEncodings(t *testing.T) {
+	columns := []ColumnStoreColumn{
+		{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+	}
+	_, err := columnPhysicalAssetVersionForColumns(columns)
+	if err == nil || !strings.Contains(err.Error(), "column[1]") || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("columnPhysicalAssetVersionForColumns err=%v want later fixed-width validation failure", err)
+	}
+}
+
 func assertColumnPhysicalAssetFloat32VectorLittleEndianFixture(t *testing.T, encoded []byte, cfg *ColumnStoreConfig) {
 	t.Helper()
 	cur := manifestCursor{raw: encoded}

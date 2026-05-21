@@ -618,6 +618,7 @@ func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 }
 
 func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, error) {
+	requiresV5 := false
 	for i, col := range columns {
 		encoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
 		if err != nil {
@@ -627,8 +628,11 @@ func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, 
 			if !columnStoreValueTypeSupportsFixedWidthEncoding(col.ValueType) {
 				return 0, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, col.ValueType)
 			}
-			return columnPhysicalAssetVersionV5, nil
+			requiresV5 = true
 		}
+	}
+	if requiresV5 {
+		return columnPhysicalAssetVersionV5, nil
 	}
 	return columnPhysicalAssetVersion, nil
 }
