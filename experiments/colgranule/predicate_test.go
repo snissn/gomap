@@ -171,7 +171,7 @@ func TestSortKeyRangeIsAppliedWithinMixedGranule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildInt64: %v", err)
 	}
-	mark, err := BuildSortKeyMark([]SortKeyColumn{
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: collections},
 		{Name: "time_us", Values: times},
 	})
