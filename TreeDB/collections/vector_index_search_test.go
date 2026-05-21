@@ -87,6 +87,33 @@ func TestSearchVectorIndexColumnGraphResultIDsAreCapacityIsolatedV4(t *testing.T
 	}
 }
 
+func TestSearchVectorIndexByteAccountingRejectsOverflowV4(t *testing.T) {
+	total, err := addVectorIndexSearchByteTotal(3, 4, 10, "document")
+	if err != nil || total != 7 {
+		t.Fatalf("addVectorIndexSearchByteTotal=%d, %v want 7, nil", total, err)
+	}
+	if _, err := addVectorIndexSearchByteTotal(math.MaxInt-1, 1, math.MaxInt, "document"); err != nil {
+		t.Fatalf("max int edge add failed: %v", err)
+	}
+	if _, err := addVectorIndexSearchByteTotal(8, 3, 10, "document"); err == nil {
+		t.Fatalf("addVectorIndexSearchByteTotal overflow err=nil want failure")
+	}
+	got, err := vectorIndexSearchResultIDBytesLimit([]columnVectorGraphNativeSearchResult{
+		{ID: []byte("abc")},
+		{ID: []byte("de")},
+	}, 5)
+	if err != nil || got != 5 {
+		t.Fatalf("vectorIndexSearchResultIDBytesLimit=%d, %v want 5, nil", got, err)
+	}
+	_, err = vectorIndexSearchResultIDBytesLimit([]columnVectorGraphNativeSearchResult{
+		{ID: []byte("abc")},
+		{ID: []byte("def")},
+	}, 5)
+	if err == nil {
+		t.Fatalf("vectorIndexSearchResultIDBytesLimit overflow err=nil want failure")
+	}
+}
+
 func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

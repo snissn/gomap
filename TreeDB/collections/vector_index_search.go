@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"math"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -266,7 +267,10 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, string(result.ID))
 			}
 			documents[i] = doc
-			totalDocumentBytes += len(doc)
+			totalDocumentBytes, err = addVectorIndexSearchByteTotal(totalDocumentBytes, len(doc), math.MaxInt, "document")
+			if err != nil {
+				return response, err
+			}
 			response.Stats.DocumentsFetched++
 		}
 		if totalDocumentBytes > 0 {
@@ -274,10 +278,17 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		}
 	}
 	response.Results = make([]VectorIndexSearchResult, len(results))
-	idBytes := make([]byte, vectorIndexSearchResultIDBytes(results))
+	idByteCount, err := vectorIndexSearchResultIDBytes(results)
+	if err != nil {
+		return response, err
+	}
+	idBytes := make([]byte, idByteCount)
 	idOffset := 0
 	docOffset := 0
 	for i, result := range results {
+		if len(result.ID) > len(idBytes)-idOffset {
+			return response, errors.New("collections: vector index search result id byte accounting mismatch")
+		}
 		nextIDOffset := idOffset + len(result.ID)
 		id := idBytes[idOffset:nextIDOffset:nextIDOffset]
 		idOffset = nextIDOffset
@@ -292,6 +303,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 			if len(doc) == 0 {
 				response.Results[i].Document = []byte{}
 				continue
+			}
+			if len(doc) > len(documentBytes)-docOffset {
+				return response, errors.New("collections: vector index search document byte accounting mismatch")
 			}
 			nextDocOffset := docOffset + len(doc)
 			responseDoc := documentBytes[docOffset:nextDocOffset:nextDocOffset]
@@ -334,12 +348,27 @@ func (s *VectorIndexSearcher) getDocumentAtBoundSnapshot(documentID []byte) ([]b
 	return reconstructed, true, nil
 }
 
-func vectorIndexSearchResultIDBytes(results []columnVectorGraphNativeSearchResult) int {
+func vectorIndexSearchResultIDBytes(results []columnVectorGraphNativeSearchResult) (int, error) {
+	return vectorIndexSearchResultIDBytesLimit(results, math.MaxInt)
+}
+
+func vectorIndexSearchResultIDBytesLimit(results []columnVectorGraphNativeSearchResult, limit int) (int, error) {
 	var total int
 	for _, result := range results {
-		total += len(result.ID)
+		next, err := addVectorIndexSearchByteTotal(total, len(result.ID), limit, "result id")
+		if err != nil {
+			return 0, err
+		}
+		total = next
 	}
-	return total
+	return total, nil
+}
+
+func addVectorIndexSearchByteTotal(total, n, limit int, label string) (int, error) {
+	if n < 0 || total < 0 || limit < 0 || n > limit-total {
+		return 0, fmt.Errorf("collections: vector index search %s bytes overflow", label)
+	}
+	return total + n, nil
 }
 
 func (s *VectorIndexSearcher) Close() error {
