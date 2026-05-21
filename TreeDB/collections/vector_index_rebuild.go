@@ -10,6 +10,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
+const columnVectorGraphNeighborInsertionLimit = 32
+
 // RebuildVectorIndex rebuilds the named vector index through the collection
 // product lifecycle. V2A only builds and publishes physical column graph assets;
 // it does not load or search a decoded in-memory graph.
@@ -305,19 +307,12 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 			rows[i].Adjacency = nil
 			continue
 		}
-		candidates := make([]columnVectorGraphNeighbor, 0, degree)
-		for j := range rows {
-			if i == j {
-				continue
-			}
-			score := columnVectorGraphCosine(rows[i], rows[j])
-			if math.IsNaN(score) {
-				return fmt.Errorf("collections: column vector graph cosine row[%d,%d] is NaN", i, j)
-			}
-			candidates = insertColumnVectorGraphTopNeighbor(candidates, degree, columnVectorGraphNeighbor{ordinal: j, score: score})
+		candidates, err := topColumnVectorGraphNeighbors(rows, i, degree)
+		if err != nil {
+			return err
 		}
-		neighbors := make([]uint32, degree)
-		for n := 0; n < degree; n++ {
+		neighbors := make([]uint32, len(candidates))
+		for n := range candidates {
 			neighbors[n] = uint32(candidates[n].ordinal)
 		}
 		rows[i].Adjacency = neighbors
@@ -325,10 +320,43 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 	return nil
 }
 
+func topColumnVectorGraphNeighbors(rows []columnVectorGraphAssetRow, row, degree int) ([]columnVectorGraphNeighbor, error) {
+	if degree <= columnVectorGraphNeighborInsertionLimit {
+		candidates := make([]columnVectorGraphNeighbor, 0, degree)
+		for j := range rows {
+			if row == j {
+				continue
+			}
+			score := columnVectorGraphCosine(rows[row], rows[j])
+			if math.IsNaN(score) {
+				return nil, fmt.Errorf("collections: column vector graph cosine row[%d,%d] is NaN", row, j)
+			}
+			candidates = insertColumnVectorGraphTopNeighbor(candidates, degree, columnVectorGraphNeighbor{ordinal: j, score: score})
+		}
+		return candidates, nil
+	}
+
+	candidates := make(columnVectorGraphNeighborHeap, 0, degree)
+	for j := range rows {
+		if row == j {
+			continue
+		}
+		score := columnVectorGraphCosine(rows[row], rows[j])
+		if math.IsNaN(score) {
+			return nil, fmt.Errorf("collections: column vector graph cosine row[%d,%d] is NaN", row, j)
+		}
+		candidates.pushTop(degree, columnVectorGraphNeighbor{ordinal: j, score: score})
+	}
+	sortColumnVectorGraphNeighbors(candidates)
+	return candidates, nil
+}
+
 type columnVectorGraphNeighbor struct {
 	ordinal int
 	score   float64
 }
+
+type columnVectorGraphNeighborHeap []columnVectorGraphNeighbor
 
 func insertColumnVectorGraphTopNeighbor(top []columnVectorGraphNeighbor, limit int, candidate columnVectorGraphNeighbor) []columnVectorGraphNeighbor {
 	if limit <= 0 {
@@ -349,11 +377,74 @@ func insertColumnVectorGraphTopNeighbor(top []columnVectorGraphNeighbor, limit i
 	return top
 }
 
+func (h *columnVectorGraphNeighborHeap) pushTop(limit int, candidate columnVectorGraphNeighbor) {
+	if limit <= 0 {
+		return
+	}
+	if len(*h) < limit {
+		*h = append(*h, candidate)
+		h.siftUp(len(*h) - 1)
+		return
+	}
+	if !columnVectorGraphNeighborLess(candidate, (*h)[0]) {
+		return
+	}
+	(*h)[0] = candidate
+	h.siftDown(0)
+}
+
+func (h columnVectorGraphNeighborHeap) siftUp(idx int) {
+	for idx > 0 {
+		parent := (idx - 1) / 2
+		if !columnVectorGraphNeighborWorse(h[idx], h[parent]) {
+			return
+		}
+		h[idx], h[parent] = h[parent], h[idx]
+		idx = parent
+	}
+}
+
+func (h columnVectorGraphNeighborHeap) siftDown(idx int) {
+	for {
+		left := idx*2 + 1
+		if left >= len(h) {
+			return
+		}
+		child := left
+		if right := left + 1; right < len(h) && columnVectorGraphNeighborWorse(h[right], h[left]) {
+			child = right
+		}
+		if !columnVectorGraphNeighborWorse(h[child], h[idx]) {
+			return
+		}
+		h[idx], h[child] = h[child], h[idx]
+		idx = child
+	}
+}
+
 func columnVectorGraphNeighborLess(left, right columnVectorGraphNeighbor) bool {
 	if left.score == right.score {
 		return left.ordinal < right.ordinal
 	}
 	return left.score > right.score
+}
+
+func columnVectorGraphNeighborWorse(left, right columnVectorGraphNeighbor) bool {
+	if left.score == right.score {
+		return left.ordinal > right.ordinal
+	}
+	return left.score < right.score
+}
+
+func sortColumnVectorGraphNeighbors(neighbors []columnVectorGraphNeighbor) {
+	for i := 1; i < len(neighbors); i++ {
+		candidate := neighbors[i]
+		j := i - 1
+		for ; j >= 0 && columnVectorGraphNeighborLess(candidate, neighbors[j]); j-- {
+			neighbors[j+1] = neighbors[j]
+		}
+		neighbors[j+1] = candidate
+	}
 }
 
 func columnVectorGraphCosine(left, right columnVectorGraphAssetRow) float64 {

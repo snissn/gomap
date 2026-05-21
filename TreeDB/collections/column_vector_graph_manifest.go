@@ -441,6 +441,7 @@ func columnVectorGraphManifestMatchesDefinition(collection string, graph columnV
 		graph.BaseManifestChecksum == baseChecksum &&
 		graph.BaseSchemaHash == cfg.SchemaHash &&
 		graph.GraphSchemaHash == graphCfg.SchemaHash &&
+		graph.AssetRef.Kind == ColumnAssetKindTCS1PartImage &&
 		graph.AssetRef.Namespace == graphCfg.AssetManager.Namespace &&
 		graph.AssetRef.Generation == graph.BaseManifestGeneration
 }
@@ -478,6 +479,9 @@ func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []colu
 		}
 		if graph.AssetRef.Generation > activeGeneration {
 			return nil, fmt.Errorf("collections: column vector graph asset generation=%d is newer than active manifest generation=%d", graph.AssetRef.Generation, activeGeneration)
+		}
+		if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
+			return nil, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
 		}
 		if graph.AssetRef.Namespace != expectedNamespace {
 			return nil, fmt.Errorf("collections: column vector graph asset namespace=%q want %q", graph.AssetRef.Namespace, expectedNamespace)

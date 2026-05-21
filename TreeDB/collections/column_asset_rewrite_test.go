@@ -199,6 +199,36 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testi
 	if graph.AssetRef != newGraphRef {
 		t.Fatalf("patched graph ref=%+v want %+v", graph.AssetRef, newGraphRef)
 	}
+
+	inPlaceRecords := cloneColumnManifestRecords(records)
+	inPlacePatched, inPlaceCount, err := patchColumnAssetRewriteManifestRecordsInPlace(
+		inPlaceRecords,
+		map[ColumnAssetRef]ColumnAssetRef{
+			oldPart.AssetRef: newPartRef,
+			oldGraphRef:      newGraphRef,
+		},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecordsInPlace: %v", err)
+	}
+	if inPlaceCount != 2 {
+		t.Fatalf("in-place patch count=%d want 2", inPlaceCount)
+	}
+	if len(inPlacePatched) != 0 && &inPlacePatched[0] != &inPlaceRecords[0] {
+		t.Fatal("in-place vector graph patch returned a copied record slice")
+	}
+	graphRecord, ok = findColumnVectorGraphManifestRecord(inPlacePatched, testColumnGraphVectorIndexDefinitionV2A().Name)
+	if !ok {
+		t.Fatal("in-place patched graph record missing")
+	}
+	graph, err = decodeColumnVectorGraphManifestRecord(graphRecord.value)
+	if err != nil {
+		t.Fatalf("decode in-place patched graph record: %v", err)
+	}
+	if graph.AssetRef != newGraphRef {
+		t.Fatalf("in-place patched graph ref=%+v want %+v", graph.AssetRef, newGraphRef)
+	}
 }
 
 func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {

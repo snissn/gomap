@@ -358,6 +358,43 @@ func TestColumnGraphVectorIndexStatusFailsClosedOnMissingOrMismatchedAssetV2A(t 
 	})
 }
 
+func TestColumnGraphManifestMatchesDefinitionRejectsNonPartImageRefV2A(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  baseCfg.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     128,
+		Checksum:   7,
+	}
+	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, ref, ref.Length, 2)
+	manifest, err := decodeColumnManifestRecords(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestRecords: %v", err)
+	}
+	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
+	if !ok {
+		t.Fatal("graph record missing")
+	}
+	graph, err := decodeColumnVectorGraphManifestRecord(graphRecord.value)
+	if err != nil {
+		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	graph.AssetRef.Kind = ColumnAssetKind("other_part_image")
+	baseCfg.ActiveManifest = &identity
+	if columnVectorGraphManifestMatchesDefinition("docs", graph, def, *baseCfg, manifest, records) {
+		t.Fatal("manifest matched graph ref with non-TCS1 part-image kind")
+	}
+}
+
 func BenchmarkColumnGraphVectorIndexStatusLoadedV2A(b *testing.B) {
 	dir := b.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
