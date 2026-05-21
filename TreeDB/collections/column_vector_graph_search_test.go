@@ -152,6 +152,9 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryNormInvalid) {
 		t.Fatalf("SearchCosine zero err=%v want norm failure", err)
 	}
+	if !errors.Is(err, errColumnVectorGraphInvNormNormInvalid) {
+		t.Fatalf("SearchCosine zero err=%v want underlying inv_norm failure", err)
+	}
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: -1, EfSearch: 1}, &scratch)
 	if !errors.Is(err, errColumnVectorGraphNativeSearchTopKNegative) {
 		t.Fatalf("SearchCosine top_k err=%v want negative top_k failure", err)
@@ -258,6 +261,9 @@ func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	}
 	if len(scratch.visitMarks) != 1 {
 		t.Fatalf("small visitMarks len=%d want 1", len(scratch.visitMarks))
+	}
+	if cap(scratch.visitMarks) > 1+columnVectorGraphNativeScratchOversizeSlack {
+		t.Fatalf("small visitMarks retained oversized cap=%d", cap(scratch.visitMarks))
 	}
 	if scratch.markVisited(5) {
 		t.Fatalf("markVisited accepted stale ordinal outside current row count")
