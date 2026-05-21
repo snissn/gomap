@@ -4,7 +4,9 @@ This experiment compares candidate content hash functions for block-sized read
 integrity checks. It includes the current TreeDB-style CRC path:
 
 ```go
-crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
+var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+
+crc32.Checksum(data, crc32cTable)
 ```
 
 The benchmark sizes mirror ClickHouse-like compressed block boundaries that are
@@ -94,7 +96,7 @@ XXH3_128:             ~19.13 GB/s
 XXH3_64:              ~18.95 GB/s
 XXHash64:             ~16.88 GB/s
 MapHash_ProcessLocal: ~13.90 GB/s
-CRC32C_Castagnoli:    ~10.64 GB/s
+CRC32C_Castagnoli_TreeDB: ~10.64 GB/s
 FarmHash32Seeded:     ~7.71 GB/s
 FarmFingerprint32:    ~7.67 GB/s
 FarmHash32:           ~7.38 GB/s
