@@ -1946,6 +1946,40 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarParityAndAllocationM1634(t *tes
 	}
 }
 
+func TestColumnPhysicalQueryRunnerDistinctSidecarSkipsIdenticalColumnsM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(128)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "kind"}
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Fatalf("runner Close: %v", err)
+		}
+	}()
+	if runner.dictDistinct != nil {
+		t.Fatal("identical group/distinct columns used dictionary distinct sidecar; want direct fallback")
+	}
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatalf("runner Run: %v", err)
+	}
+	want := []string{"q2:kind_00=1", "q2:kind_01=1", "q2:kind_02=1", "q2:kind_03=1"}
+	if got := columnPhysicalQueryLinesM13B("q2", result.Groups); !equalStringSets(got, want) {
+		t.Fatalf("runner q2 identical-column lines=%v want %v", got, want)
+	}
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+		t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+	}
+	if result.Diagnostics.ProjectedColumns != 1 {
+		t.Fatalf("runner projected columns=%d want direct fallback projection for kind/kind", result.Diagnostics.ProjectedColumns)
+	}
+}
+
 func TestColumnPhysicalQueryDictionaryCodesAreManifestReachableM1634(t *testing.T) {
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(128))
 	defer closeFn()
