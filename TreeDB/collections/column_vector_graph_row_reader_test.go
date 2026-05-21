@@ -197,6 +197,19 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsDefinitionMismatchV2B(t *testi
 	}
 }
 
+func TestColumnVectorGraphPhysicalRowReaderRejectsManifestRowCountMismatchV2B(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithManifestRowsV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	}, 3)
+	defer func() { _ = d.Close() }()
+
+	_, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if !errors.Is(err, errColumnVectorGraphManifestMismatch) || !strings.Contains(err.Error(), "manifest row_count=3 physical_row_count=2") {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want row_count manifest mismatch", err)
+	}
+}
+
 func TestColumnVectorGraphPhysicalRowReaderRejectsStaleGraphAfterMutationV2B(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -371,6 +384,16 @@ func publishColumnVectorGraphPhysicalReaderTestAssetV2B(tb testing.TB, rows []co
 
 func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaV2B(tb testing.TB, rows []columnVectorGraphAssetRow, mutateMeta func(CollectionMeta) CollectionMeta) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	return publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(tb, rows, len(rows), mutateMeta)
+}
+
+func publishColumnVectorGraphPhysicalReaderTestAssetWithManifestRowsV2B(tb testing.TB, rows []columnVectorGraphAssetRow, manifestRows int) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
+	return publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(tb, rows, manifestRows, nil)
+}
+
+func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(tb testing.TB, rows []columnVectorGraphAssetRow, manifestRows int, mutateMeta func(CollectionMeta) CollectionMeta) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
 		tb.Fatalf("open db: %v", err)
@@ -387,7 +410,7 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaV2B(tb testing.TB, r
 		tb.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
 	}
 	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
-	records, manifestIdentity := testColumnGraphManifestRecordsV2A(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
+	records, manifestIdentity := testColumnGraphManifestRecordsV2A(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, manifestRows)
 	meta := CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{

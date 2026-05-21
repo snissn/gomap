@@ -70,6 +70,10 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReader(name string, opts co
 	if err != nil {
 		return nil, err
 	}
+	if got, want := reader.RowCount(), graph.RowCount; got != want {
+		_ = reader.Close()
+		return nil, fmt.Errorf("collections: column_graph %q manifest row_count=%d physical_row_count=%d: %w", def.Name, want, got, errColumnVectorGraphManifestMismatch)
+	}
 	return &columnVectorGraphPhysicalRowReader{
 		def:    def,
 		graph:  graph,
