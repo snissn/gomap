@@ -10,7 +10,10 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
-const DefaultRowsPerGranule = 8192
+const (
+	DefaultRowsPerGranule = 8192
+	maxGranuleDecodeRows  = 1 << 20
+)
 
 type Encoding uint8
 
@@ -285,6 +288,12 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 }
 
 func decodeDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return nil, err
+	}
+	if rows > len(raw) {
+		return nil, fmt.Errorf("colgranule: delta rows=%d exceed payload bytes=%d", rows, len(raw))
+	}
 	out := dst[:0]
 	if cap(out) < rows {
 		out = make([]int64, 0, rows)
@@ -311,6 +320,16 @@ func decodeDeltaVarint(dst []int64, raw []byte, rows int) ([]int64, error) {
 		return nil, errors.New("colgranule: trailing delta bytes")
 	}
 	return out, nil
+}
+
+func validateGranuleDecodeRows(rows int) error {
+	if rows < 0 {
+		return fmt.Errorf("colgranule: negative rows=%d", rows)
+	}
+	if rows > maxGranuleDecodeRows {
+		return fmt.Errorf("colgranule: rows=%d exceed cap %d", rows, maxGranuleDecodeRows)
+	}
+	return nil
 }
 
 func compressPayloadInto(dst []byte, raw []byte, compression Compression) ([]byte, Compression, []byte, error) {

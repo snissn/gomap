@@ -171,6 +171,18 @@ func TestCorruptPayloadsFailClosed(t *testing.T) {
 			},
 		},
 		{
+			name: "delta_huge_rows_tiny_payload",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Rows = maxGranuleDecodeRows + 1
+				g.Payload = []byte{0}
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				g.RawBytes = len(g.Payload)
+				return g
+			},
+		},
+		{
 			name: "snappy_corrupt",
 			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
 			edit: func(g EncodedGranule) EncodedGranule {
