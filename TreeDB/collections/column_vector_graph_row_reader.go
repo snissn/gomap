@@ -26,7 +26,7 @@ const (
 var (
 	errColumnVectorGraphAdjacencyOrdinalOutOfBounds = errors.New("column_graph adjacency ordinal outside row_count")
 	errColumnVectorGraphManifestMismatch            = errors.New("column_graph manifest mismatch")
-	errNilColumnVectorGraphPhysicalRowReader        = errors.New("collections: nil column vector graph physical row reader")
+	errNilColumnVectorGraphPhysicalRowReader        = errors.New("nil column vector graph physical row reader")
 )
 
 // columnVectorGraphPhysicalRowReader fetches graph rows from the persisted
@@ -224,7 +224,7 @@ func (r *columnVectorGraphPhysicalRowReader) FetchRow(ordinal int, scratch *colu
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	return r.graphRowFromPhysicalRow(row)
+	return r.graphRowFromPhysicalRow(row, reader.RowCount())
 }
 
 func (r *columnVectorGraphPhysicalRowReader) fetchRowUnchecked(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
@@ -251,8 +251,9 @@ func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch 
 	if visitor == nil {
 		return errors.New("collections: column vector graph physical row reader batch visitor is nil")
 	}
+	rowCount := reader.RowCount()
 	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
-		graphRow, err := r.graphRowFromPhysicalRow(row)
+		graphRow, err := r.graphRowFromPhysicalRow(row, rowCount)
 		if err != nil {
 			return err
 		}
@@ -277,16 +278,11 @@ func (r *columnVectorGraphPhysicalRowReader) fetchBatchUnchecked(ordinals []int,
 	})
 }
 
-func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnPhysicalRowReaderRow) (columnVectorGraphPhysicalRow, error) {
-	reader, err := r.rowReader()
-	if err != nil {
-		return columnVectorGraphPhysicalRow{}, err
-	}
+func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnPhysicalRowReaderRow, rowCount int) (columnVectorGraphPhysicalRow, error) {
 	graphRow, err := r.graphRowFromPhysicalRowUnchecked(row)
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	rowCount := reader.totalRows
 	for i, neighbor := range graphRow.Adjacency {
 		if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
 			return columnVectorGraphPhysicalRow{}, err
