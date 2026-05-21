@@ -65,7 +65,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		return errors.New("collections: column_graph native search requires caller-owned scratch")
 	}
 	if rowCount < 0 || dimensions < 0 || degree < 0 || topK < 0 || efSearch < 0 {
-		return errors.New("collections: column_graph native search received negative sizing input")
+		return fmt.Errorf("collections: column_graph native search received negative sizing input: rowCount=%d dimensions=%d degree=%d topK=%d efSearch=%d", rowCount, dimensions, degree, topK, efSearch)
 	}
 	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
 		prepareColumnVectorGraphNativeRowScratch(rowScratch, dimensions, degree)

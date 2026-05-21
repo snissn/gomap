@@ -368,6 +368,12 @@ func TestColumnVectorGraphNativeSearchParallelReadersV3(t *testing.T) {
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 	query := append([]float32(nil), input[17].vector...)
 	workers := runtime.GOMAXPROCS(0)
+	if workers < 2 {
+		workers = 2
+	}
+	if workers > 8 {
+		workers = 8
+	}
 	readers := make([]*columnVectorGraphPhysicalRowReader, workers)
 	for i := range readers {
 		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
@@ -523,6 +529,8 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 			return
 		}
 		worker := benchWorkers[workerIndex]
+		var localSink int64
+		var localStats columnVectorGraphNativeSearchStats
 		for pb.Next() {
 			if failed.Load() {
 				continue
@@ -532,13 +540,19 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 				recordParallelErr("SearchCosine: %v", err)
 				continue
 			}
-			sink.Add(int64(got[0].Ordinal))
-			totalCandidates.Add(stats.Candidates)
-			totalEdges.Add(stats.Edges)
-			totalCandidateFetches.Add(stats.CandidateFetches)
-			totalExpansionFetches.Add(stats.ExpansionFetches)
-			totalResultFetches.Add(stats.ResultFetches)
+			localSink += int64(got[0].Ordinal)
+			localStats.Candidates += stats.Candidates
+			localStats.Edges += stats.Edges
+			localStats.CandidateFetches += stats.CandidateFetches
+			localStats.ExpansionFetches += stats.ExpansionFetches
+			localStats.ResultFetches += stats.ResultFetches
 		}
+		sink.Add(localSink)
+		totalCandidates.Add(localStats.Candidates)
+		totalEdges.Add(localStats.Edges)
+		totalCandidateFetches.Add(localStats.CandidateFetches)
+		totalExpansionFetches.Add(localStats.ExpansionFetches)
+		totalResultFetches.Add(localStats.ResultFetches)
 	})
 	b.StopTimer()
 	if errValue := firstErr.Load(); errValue != nil {
