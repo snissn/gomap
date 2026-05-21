@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/trace"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1046,7 +1047,7 @@ func TestColumnStoreSuiteCPUProfileStartsAfterProfileBaselinesM11A(t *testing.T)
 		MutexProfile:         filepath.Join(profileTmpDir, "mutex.pprof"),
 		MutexProfileFraction: 1,
 		profileHooks:         profileHooks,
-	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil {
 		t.Fatalf("profiled queries: %v", err)
 	}
@@ -1190,7 +1191,7 @@ func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T)
 	_, _, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		CPUProfile:   profilePrefix,
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err == nil {
 		t.Fatal("expected CPU profile start failure")
 	}
@@ -1242,7 +1243,7 @@ func TestColumnStoreSuiteHardQueryFailureRemovesCPUArtifactM11A(t *testing.T) {
 	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		CPUProfile:   profilePrefix,
 		profileHooks: profileHooks,
-	}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err == nil {
 		t.Fatal("expected hard query error")
 	}
@@ -1274,7 +1275,7 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	_, _, _, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		BlockProfile: blockPath,
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil {
 		t.Fatalf("empty block delta output should be skipped: %v", err)
 	}
@@ -1326,7 +1327,7 @@ func TestColumnStoreSuiteProfiledQueriesSkipWhitespaceOnlyRuntimeProfilePathsM11
 		BlockProfile: " \t ",
 		MutexProfile: " \n ",
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil || parityErr != nil {
 		t.Fatalf("whitespace-only runtime profiles should be ignored: err=%v parityErr=%v", err, parityErr)
 	}
@@ -1353,7 +1354,7 @@ func TestColumnStoreSuiteProfiledQueriesTrimAllocsDeltaPathM11A(t *testing.T) {
 		AllocsProfile:     " \t" + allocsPrefix + "\t ",
 		AllocsProfileRate: 1,
 		profileHooks:      profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil || parityErr != nil {
 		t.Fatalf("profiled queries failed: err=%v parityErr=%v", err, parityErr)
 	}
@@ -1460,7 +1461,7 @@ func TestColumnStoreSuiteArtifactsPreserveRuntimeDeltaStatErrorsM11A(t *testing.
 
 func TestColumnStoreSuiteProfiledQueriesReturnHardErrorsSeparatelyM11A(t *testing.T) {
 	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 4, 2)
-	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err == nil {
 		t.Fatal("expected hard query error")
 	}
@@ -1886,7 +1887,7 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reference hashes: %v", err)
 	}
-	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row", collections.ColumnAssetReadIntegrityVerify)
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row", collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil {
 		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
 	}
@@ -1937,7 +1938,7 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if got != want {
 			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", alias, got, want)
 		}
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias, collections.ColumnAssetReadIntegrityVerify)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias, collections.ColumnAssetReadIntegrityVerify, nil)
 		if err != nil {
 			t.Fatalf("physical alias %q: %v", alias, err)
 		}
@@ -2011,7 +2012,7 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen collection after asset removal: %v", err)
 	}
-	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify)
+	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify, nil)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing physical assets err=%v want os.ErrNotExist without row fallback", err)
 	}
@@ -2383,7 +2384,7 @@ func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string, readIntegri
 	b.SetBytes(sourceBytes * int64(queryCount))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, readIntegrity)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, readIntegrity, nil)
 		if err != nil {
 			b.Fatalf("queries: %v", err)
 		}
@@ -2436,6 +2437,92 @@ func TestColumnStoreQueryNamesReturnsDefensiveCopyM11A(t *testing.T) {
 	}
 	if len(fresh) != len(columnStoreQueryNameList) {
 		t.Fatalf("fresh query names len = %d, want %d", len(fresh), len(columnStoreQueryNameList))
+	}
+}
+
+func TestColumnStoreSuiteParseQueryNamesM1634(t *testing.T) {
+	t.Run("default all", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames("")
+		if err != nil {
+			t.Fatalf("parse default: %v", err)
+		}
+		if len(got) != len(columnStoreQueryNameList) {
+			t.Fatalf("default len=%d want %d", len(got), len(columnStoreQueryNameList))
+		}
+	})
+	t.Run("subset trims whitespace", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames(" q3, q5 ")
+		if err != nil {
+			t.Fatalf("parse subset: %v", err)
+		}
+		want := []string{columnStoreQueryQ3, columnStoreQueryQ5}
+		if !slices.Equal(got, want) {
+			t.Fatalf("subset=%v want %v", got, want)
+		}
+	})
+	for _, value := range []string{"missing", "q3,q3", "all,q3", "q3,"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := columnStoreSuiteParseQueryNames(value); err == nil {
+				t.Fatalf("parse %q succeeded, want error", value)
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteQueriesCanSelectSingleRoutedPhysicalQueryM1634(t *testing.T) {
+	const rows = 64
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	dir := t.TempDir()
+	db, err := openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathSerialColumnScan)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 16); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before physical query: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	collection, err = collections.NewCollectionManager(db).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify, []string{columnStoreQueryQ3})
+	if err != nil {
+		t.Fatalf("selected physical query: %v", err)
+	}
+	if len(queries) != 1 || queries[0].Name != columnStoreQueryQ3 {
+		t.Fatalf("queries=%+v want only q3", queries)
+	}
+	if len(parity) != 1 || !parity[columnStoreQueryQ3].Pass {
+		t.Fatalf("parity=%+v want passing q3 only", parity)
+	}
+	if queries[0].PlanLabel != columnStorePathSerialColumnScan {
+		t.Fatalf("plan_label=%q want %q", queries[0].PlanLabel, columnStorePathSerialColumnScan)
+	}
+	if queries[0].RowMaterializations != 0 {
+		t.Fatalf("row_materializations=%d want 0 for physical q3", queries[0].RowMaterializations)
 	}
 }
 

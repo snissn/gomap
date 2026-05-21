@@ -77,6 +77,7 @@ var (
 	)
 	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
+	columnStoreSuiteQueryArg              = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5 suite)")
 	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
@@ -107,6 +108,7 @@ type columnStoreSuiteOptions struct {
 	ExecutionPath            string
 	ForcedPath               string
 	Fixture                  string
+	QueryNames               []string
 	ColumnAssetReadIntegrity collections.ColumnAssetReadIntegrity
 	RunBenchprof             bool
 	CorruptReferenceForTest  string
@@ -120,6 +122,7 @@ type columnStoreSuiteReport struct {
 	DataDir                  string                       `json:"data_dir,omitempty"`
 	PathLabel                string                       `json:"path_label,omitempty"`
 	ForcedPath               string                       `json:"forced_path"`
+	QueryNames               []string                     `json:"query_names"`
 	Rows                     int                          `json:"rows"`
 	BatchSize                int                          `json:"batch_size"`
 	Seed                     int64                        `json:"seed"`
@@ -310,6 +313,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if _, err := columnStoreSuitePlanKind(forcedPath); err != nil {
 		return "", err
 	}
+	queryNames, err := columnStoreSuiteEffectiveQueryNames(opts.QueryNames, strings.TrimSpace(*columnStoreSuiteQueryArg))
+	if err != nil {
+		return "", err
+	}
 	assetReadIntegrity, err := columnStoreSuiteEffectiveAssetReadIntegrity(opts.ColumnAssetReadIntegrity)
 	if err != nil {
 		return "", err
@@ -440,9 +447,12 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		if !columnStoreQueryNameKnown(corrupt) {
 			return "", fmt.Errorf("column_store: unknown corrupt reference query %q", corrupt)
 		}
+		if !columnStoreQueryNameSelected(queryNames, corrupt) {
+			return "", fmt.Errorf("column_store: corrupt reference query %q is not selected", corrupt)
+		}
 		rawHashes[corrupt]++
 	}
-	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath, assetReadIntegrity)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames)
 	if err != nil {
 		return "", err
 	}
@@ -485,6 +495,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		Fixture:               fixture,
 		PathLabel:             strings.TrimSpace(opts.ExecutionPath),
 		ForcedPath:            forcedPath,
+		QueryNames:            cloneStringSlice(queryNames),
 		Rows:                  rows,
 		BatchSize:             batchSize,
 		Seed:                  seed,
@@ -975,7 +986,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 	return finish, nil
 }
 
-func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
+func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
 	profileHooks := profileHooksFromConfig(cfg)
 	cleanup := func(paths ...string) {
 		for _, path := range paths {
@@ -1029,7 +1040,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		}
 	}
 
-	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, assetReadIntegrity)
+	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, assetReadIntegrity, queryNames)
 
 	if cpuFile != nil {
 		profileHooks.stopCPUProfile()
@@ -1091,16 +1102,20 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	return queries, parity, runErr, nil
 }
 
-func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
 	path = normalizeColumnStoreSuitePath(path)
 	forceKind, err := columnStoreSuitePlanKind(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNameList))
-	parity := make(map[string]columnStoreParity, len(columnStoreQueryNameList))
+	queryNames, err = columnStoreSuiteEffectiveQueryNames(queryNames, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	queries := make([]columnStoreQueryMetric, 0, len(queryNames))
+	parity := make(map[string]columnStoreParity, len(queryNames))
 	var firstErr error
-	for _, name := range columnStoreQueryNameList {
+	for _, name := range queryNames {
 		queryForceKind := columnStoreSuitePlanKindForQuery(path, name, forceKind)
 		plannerStart := time.Now()
 		plan, err := collection.PlanColumnQuery(columnStoreSuitePlanRequest(name, rows, queryForceKind))
@@ -1655,9 +1670,62 @@ func columnStoreQueryNames() []string {
 	return append([]string(nil), columnStoreQueryNameList[:]...)
 }
 
+func columnStoreSuiteEffectiveQueryNames(explicit []string, flagValue string) ([]string, error) {
+	if len(explicit) > 0 {
+		return columnStoreSuiteNormalizeQueryNames(explicit)
+	}
+	return columnStoreSuiteParseQueryNames(flagValue)
+}
+
+func columnStoreSuiteParseQueryNames(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "all" {
+		return columnStoreQueryNames(), nil
+	}
+	return columnStoreSuiteNormalizeQueryNames(strings.Split(value, ","))
+}
+
+func columnStoreSuiteNormalizeQueryNames(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return columnStoreQueryNames(), nil
+	}
+	out := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, raw := range names {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			return nil, errors.New("column_store: empty query name in -column-store-query")
+		}
+		if name == "all" {
+			if len(names) == 1 {
+				return columnStoreQueryNames(), nil
+			}
+			return nil, errors.New("column_store: all cannot be combined with explicit query names")
+		}
+		if !columnStoreQueryNameKnown(name) {
+			return nil, fmt.Errorf("column_store: unknown query name %q; accepted=%s", name, strings.Join(columnStoreQueryNames(), ","))
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("column_store: duplicate query name %q", name)
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 func columnStoreQueryNameKnown(name string) bool {
 	for _, candidate := range columnStoreQueryNameList {
 		if name == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func columnStoreQueryNameSelected(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
 			return true
 		}
 	}
@@ -2028,6 +2096,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- rows: %s\n", formatInt(report.Rows)))
 	sb.WriteString(fmt.Sprintf("- batchsize: %s\n", formatInt(report.BatchSize)))
 	sb.WriteString(fmt.Sprintf("- forced path: `%s`\n", report.ForcedPath))
+	sb.WriteString(fmt.Sprintf("- query names: %s\n", markdownCodeList(report.QueryNames)))
 	sb.WriteString(fmt.Sprintf("- column asset read integrity: `%s`\n", report.ColumnAssetReadIntegrity))
 	if report.DataDir != "" {
 		sb.WriteString(fmt.Sprintf("- data-dir: `%s`\n", report.DataDir))
