@@ -630,6 +630,59 @@ func TestColumnStoreBenchRunDoesNotFallbackForZeroProcessedPhysicalRowsM14B(t *t
 	}
 }
 
+func TestColumnStoreBenchRunFiltersSelectedQueryOrderM1634(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: columnStoreQueryQ3, RowsProcessed: 30, RowsPerSecond: 300, duration: 10 * time.Millisecond},
+			{Name: columnStoreQueryQ5, RowsProcessed: 30, RowsPerSecond: 500, duration: 10 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	wantOrder := []string{
+		columnStoreSuiteBenchTestName,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5,
+	}
+	if !slices.Equal(run.TestOrder, wantOrder) {
+		t.Fatalf("TestOrder=%v want %v", run.TestOrder, wantOrder)
+	}
+	if strings.Contains(run.Config.TestsArg, columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1) {
+		t.Fatalf("TestsArg includes unselected q1: %q", run.Config.TestsArg)
+	}
+	if _, ok := run.Results[columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1]; ok {
+		t.Fatalf("results include unselected q1: %+v", run.Results)
+	}
+	if _, ok := run.DisplayNames[columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ3]; !ok {
+		t.Fatalf("display names missing selected q3: %+v", run.DisplayNames)
+	}
+}
+
+func TestColumnStoreBenchRunIncludesAliasesOnlyWhenSourceQuerySelectedM1634(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: columnStoreQueryQ1, RowsProcessed: 30, RowsPerSecond: 100, duration: 10 * time.Millisecond},
+			{Name: columnStoreQueryQ4A, RowsProcessed: 30, RowsPerSecond: 400, duration: 10 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	if !slices.Contains(run.TestOrder, columnStoreSuiteAliasFullScanQ1) {
+		t.Fatalf("TestOrder missing q1 alias: %v", run.TestOrder)
+	}
+	if !slices.Contains(run.TestOrder, columnStoreSuiteAliasPrefixQ4A) {
+		t.Fatalf("TestOrder missing q4a alias: %v", run.TestOrder)
+	}
+	if _, ok := run.Results[columnStoreSuiteAliasFullScanQ1]; !ok {
+		t.Fatalf("results missing q1 alias: %+v", run.Results)
+	}
+	if _, ok := run.Results[columnStoreSuiteAliasPrefixQ4A]; !ok {
+		t.Fatalf("results missing q4a alias: %+v", run.Results)
+	}
+}
+
 func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 	tests := []struct {
 		name string

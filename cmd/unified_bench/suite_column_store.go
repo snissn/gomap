@@ -77,7 +77,7 @@ var (
 	)
 	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
-	columnStoreSuiteQueryArg              = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5 suite)")
+	columnStoreSuiteQueryArg              = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5/q5_metadata suite; duplicates are rejected)")
 	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
@@ -2322,35 +2322,20 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	cfg.DBsArg = "treedb"
 	testOrder := []string{
 		columnStoreSuiteBenchTestName,
-		columnStoreSuiteAliasFullScanQ1,
-		columnStoreSuiteAliasPrefixQ4A,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata,
 	}
 	cfg.TestsArg = strings.Join(testOrder, ",")
 	results := make(map[string]map[string]float64)
 	displayNames := map[string]string{
-		columnStoreSuiteBenchTestName:                                  "Column store query phase",
-		columnStoreSuiteAliasFullScanQ1:                                "Alias full scan from q1",
-		columnStoreSuiteAliasPrefixQ4A:                                 "Alias prefix scan from q4a",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1:         "Column q1",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2:         "Column q2",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3:         "Column q3",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A:        "Column q4a",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B:        "Column q4b",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5:         "Column q5",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata: "Column q5 metadata",
+		columnStoreSuiteBenchTestName: "Column store query phase",
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
 	var queryDuration time.Duration
 	var queryRowsProcessed int
 	for _, q := range report.Queries {
 		byName[q.Name] = q
+		metricName := columnStoreSuiteBenchMetricPrefix + q.Name
+		testOrder = append(testOrder, metricName)
+		displayNames[metricName] = columnStoreSuiteBenchDisplayNameForQuery(q.Name)
 		duration := q.duration
 		if duration == 0 && q.DurationMS > 0 {
 			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
@@ -2365,11 +2350,16 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryRowsProcessed) / queryDuration.Seconds()}
 	}
 	if q, ok := byName[columnStoreQueryQ1]; ok {
+		testOrder = append(testOrder, columnStoreSuiteAliasFullScanQ1)
+		displayNames[columnStoreSuiteAliasFullScanQ1] = "Alias full scan from q1"
 		results[columnStoreSuiteAliasFullScanQ1] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if q, ok := byName[columnStoreQueryQ4A]; ok {
+		testOrder = append(testOrder, columnStoreSuiteAliasPrefixQ4A)
+		displayNames[columnStoreSuiteAliasPrefixQ4A] = "Alias prefix scan from q4a"
 		results[columnStoreSuiteAliasPrefixQ4A] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
+	cfg.TestsArg = strings.Join(testOrder, ",")
 	return BenchRun{
 		Config:       cfg,
 		Instances:    []*DBInstance{{Name: columnStoreSuiteBenchDBName, Wrapper: &columnStoreSuiteDBLabel{name: columnStoreSuiteBenchDisplayName}, Dir: dataDir}},
@@ -2381,6 +2371,27 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		},
 		TreeDBStats: map[string]map[string]string{columnStoreSuiteBenchDisplayName: stats},
 		DiskUsage:   map[string]dirDiskUsage{columnStoreSuiteBenchDisplayName: {TotalBytes: uint64(report.ByteAccounting.DBTotalBytes), TotalFiles: report.ByteAccounting.DBTotalFiles}},
+	}
+}
+
+func columnStoreSuiteBenchDisplayNameForQuery(name string) string {
+	switch name {
+	case columnStoreQueryQ1:
+		return "Column q1"
+	case columnStoreQueryQ2:
+		return "Column q2"
+	case columnStoreQueryQ3:
+		return "Column q3"
+	case columnStoreQueryQ4A:
+		return "Column q4a"
+	case columnStoreQueryQ4B:
+		return "Column q4b"
+	case columnStoreQueryQ5:
+		return "Column q5"
+	case columnStoreQueryQ5Metadata:
+		return "Column q5 metadata"
+	default:
+		return "Column " + name
 	}
 }
 

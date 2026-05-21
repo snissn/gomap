@@ -240,7 +240,8 @@ OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
 Use `-column-store-query q3` or a comma-separated subset such as
 `-column-store-query q2,q3,q4b,q5` when collecting query-isolated 100K-1M row
 CPU/allocation profiles. Omit it, or pass `all`, for the default full
-q1-q5/q5_metadata suite.
+q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
+tables and artifact labels stay unambiguous.
 
 The suite writes:
 
