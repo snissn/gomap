@@ -654,17 +654,15 @@ func (c *Collection) runColumnPhysicalQueryInt64ValuesInSnapshotView(view column
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 
-	hour, err := prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
+	result, ok, err := runColumnInt64ValueHourCountOneShot(view, req, &readCache)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
-	if hour == nil {
+	if !ok {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	result := hour.run(view, req)
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
-	result.Diagnostics.Int64ValueHits = result.Diagnostics.DecodedBlocks
 	return result, true, nil
 }
 

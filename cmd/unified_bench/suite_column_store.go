@@ -1694,6 +1694,9 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 	case columnStorePathBTreeIndexBaseline:
 		return "decode-bound B-tree baseline: full unbounded secondary-index walk plus JSON row materialization before reduction; " + markPruning + evidence
 	case columnStorePathSerialColumnScan:
+		if q.DictionaryCodeHits > 0 && q.Int64ValueHits > 0 {
+			return fmt.Sprintf("dictionary-code and int64-value sidecar serial path: dictionary_hits=%d int64_hits=%d avoid full TCPA row-record scan for covered declared columns; setup/read/decode still occurs in this routed measurement; %s%s", q.DictionaryCodeHits, q.Int64ValueHits, markPruning, evidence)
+		}
 		if q.DictionaryCodeHits > 0 {
 			return fmt.Sprintf("dictionary-code sidecar serial path: %d sidecar hits avoid full TCPA row-record scan for declared dictionary columns; setup/read/decode still occurs in this routed measurement; %s%s", q.DictionaryCodeHits, markPruning, evidence)
 		}

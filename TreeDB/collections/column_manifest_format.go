@@ -22,7 +22,7 @@ const (
 
 	columnManifestHeaderMagic   = uint32(0x54434d48) // TCMH
 	columnManifestPartMagic     = uint32(0x54434d50) // TCMP
-	columnManifestRecordVersion = uint16(1)
+	columnManifestRecordVersion = uint16(2)
 )
 
 var (
