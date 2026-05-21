@@ -12,6 +12,8 @@ import (
 	"testing"
 )
 
+const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
+
 func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -295,6 +297,52 @@ func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T)
 	}
 }
 
+func TestColumnVectorGraphNativeSearchScratchClearsRowValueAliasesV3(t *testing.T) {
+	var scratch columnVectorGraphNativeSearchScratch
+	staleBytes := []byte("stale-bytes")
+	staleVector := []float32{1, 2, 3}
+	staleAdjacency := []uint32{4, 5}
+	scratch.scoreScratch.Values = make([]columnDeclaredValue, 1, columnVectorGraphPhysicalRowValueCount)
+	scratch.scoreScratch.Values[0] = columnDeclaredValue{
+		Type:          ColumnStoreValueString,
+		Present:       true,
+		String:        "stale-string",
+		StringBytes:   staleBytes,
+		Float32Vector: staleVector,
+		AdjacencyList: staleAdjacency,
+	}
+	oldValues := scratch.scoreScratch.Values
+	if err := scratch.prepare(1, 3, 2, 1, 1); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if len(scratch.scoreScratch.Values) != 0 {
+		t.Fatalf("prepared row values len=%d want zero", len(scratch.scoreScratch.Values))
+	}
+	for i, value := range oldValues {
+		if value.String != "" || value.StringBytes != nil || value.Float32Vector != nil || value.AdjacencyList != nil {
+			t.Fatalf("old row value[%d] retained aliases: string=%q bytes=%v vector=%v adjacency=%v", i, value.String, value.StringBytes, value.Float32Vector, value.AdjacencyList)
+		}
+	}
+}
+
+func TestColumnVectorGraphNativeSearchScratchClearsIDBufferGrowthAliasesV3(t *testing.T) {
+	stale := []byte("stale-doc")
+	dst := make([][]byte, 1, 4)
+	expanded := dst[:4]
+	expanded[2] = stale
+	dst = expanded[:1]
+
+	dst = resizeColumnVectorGraphNativeIDBuffersScratch(dst, 3)
+	if len(dst) != 3 {
+		t.Fatalf("id buffers len=%d want 3", len(dst))
+	}
+	for i := 1; i < len(dst); i++ {
+		if dst[i] != nil {
+			t.Fatalf("newly exposed id buffer[%d] retained alias %q", i, string(dst[i]))
+		}
+	}
+}
+
 func TestColumnVectorGraphNativeSearchDoesNotFetchDocumentsV3(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -520,6 +568,11 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		scratch columnVectorGraphNativeSearchScratch
 	}
 	workers := runtime.GOMAXPROCS(0)
+	if workers > columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 {
+		workers = columnVectorGraphNativeSearchParallelBenchMaxWorkersV3
+	}
+	previousGOMAXPROCS := runtime.GOMAXPROCS(workers)
+	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
 	benchWorkers := make([]*searchWorker, workers)
 	query := append([]float32(nil), input[37].vector...)
 	for i := range benchWorkers {
@@ -594,6 +647,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}
+	b.ReportMetric(float64(workers), "parallel_workers")
 	columnPhysicalScanBenchSum += sink.Load()
 	var stats columnPhysicalRowReaderStats
 	for _, worker := range benchWorkers {

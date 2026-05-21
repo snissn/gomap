@@ -102,6 +102,7 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 	if cap(s.Values) < columnVectorGraphPhysicalRowValueCount {
 		s.Values = make([]columnDeclaredValue, 0, columnVectorGraphPhysicalRowValueCount)
 	} else {
+		clear(s.Values)
 		s.Values = s.Values[:0]
 	}
 	if cap(s.Float32Values) < dimensions {
@@ -148,7 +149,10 @@ func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][
 		return next
 	}
 	if len(dst) < target {
-		return dst[:target]
+		oldLen := len(dst)
+		dst = dst[:target]
+		clear(dst[oldLen:target])
+		return dst
 	}
 	for i := target; i < len(dst); i++ {
 		dst[i] = nil
