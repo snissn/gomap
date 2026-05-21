@@ -614,7 +614,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				iter.Next()
 				continue
 			}
-			keyGeneration, _, _, err := columnManifestAggregateMetadataKeyFromRecordKey(key)
+			keyGeneration, _, _, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
@@ -642,7 +642,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				iter.Next()
 				continue
 			}
-			keyGeneration, _, _, err := columnManifestDictionaryCodesKeyFromRecordKey(key)
+			keyGeneration, _, _, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
@@ -670,7 +670,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				iter.Next()
 				continue
 			}
-			keyGeneration, _, _, err := columnManifestInt64ValuesKeyFromRecordKey(key)
+			keyGeneration, _, _, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
@@ -784,7 +784,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 				active = append(active, record)
 			}
 		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
-			metadataGeneration, _, _, err := columnManifestAggregateMetadataKeyFromRecordKey(record.key)
+			metadataGeneration, _, _, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(record.key)
 			if err != nil {
 				return nil, err
 			}
@@ -792,7 +792,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 				active = append(active, record)
 			}
 		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
-			dictionaryGeneration, _, _, err := columnManifestDictionaryCodesKeyFromRecordKey(record.key)
+			dictionaryGeneration, _, _, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(record.key)
 			if err != nil {
 				return nil, err
 			}
@@ -800,7 +800,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 				active = append(active, record)
 			}
 		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
-			valuesGeneration, _, _, err := columnManifestInt64ValuesKeyFromRecordKey(record.key)
+			valuesGeneration, _, _, err := columnManifestInt64ValuesKeyPartsFromRecordKey(record.key)
 			if err != nil {
 				return nil, err
 			}
@@ -846,7 +846,7 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			if !sawHeader {
 				continue
 			}
-			metadataGeneration, _, _, err := columnManifestAggregateMetadataKeyFromRecordKey(record.key)
+			metadataGeneration, _, _, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(record.key)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
@@ -857,7 +857,7 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			if !sawHeader {
 				continue
 			}
-			dictionaryGeneration, _, _, err := columnManifestDictionaryCodesKeyFromRecordKey(record.key)
+			dictionaryGeneration, _, _, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(record.key)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
@@ -868,7 +868,7 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 			if !sawHeader {
 				continue
 			}
-			valuesGeneration, _, _, err := columnManifestInt64ValuesKeyFromRecordKey(record.key)
+			valuesGeneration, _, _, err := columnManifestInt64ValuesKeyPartsFromRecordKey(record.key)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
