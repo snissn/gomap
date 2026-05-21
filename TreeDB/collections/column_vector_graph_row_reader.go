@@ -27,9 +27,10 @@ const (
 )
 
 var (
-	errColumnVectorGraphAdjacencyOrdinalOutOfBounds = errors.New("column_graph adjacency ordinal outside row_count")
-	errColumnVectorGraphManifestMismatch            = errors.New("column_graph manifest mismatch")
-	errNilColumnVectorGraphPhysicalRowReader        = errors.New("nil column vector graph physical row reader")
+	errColumnVectorGraphAdjacencyOrdinalOutOfBounds      = errors.New("column_graph adjacency ordinal outside row_count")
+	errColumnVectorGraphManifestMismatch                 = errors.New("column_graph manifest mismatch")
+	errNilColumnVectorGraphPhysicalRowReader             = errors.New("nil column vector graph physical row reader")
+	errColumnVectorGraphPhysicalRowReaderBatchVisitorNil = errors.New("collections: column_graph physical row reader batch visitor is nil")
 )
 
 // columnVectorGraphPhysicalRowReader fetches graph rows from the persisted
@@ -293,7 +294,7 @@ func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch 
 		return err
 	}
 	if visitor == nil {
-		return errors.New("collections: column_graph physical row reader batch visitor is nil")
+		return errColumnVectorGraphPhysicalRowReaderBatchVisitorNil
 	}
 	rowCount := reader.RowCount()
 	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
@@ -311,7 +312,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchBatchUnchecked(ordinals []int,
 		return err
 	}
 	if visitor == nil {
-		return errors.New("collections: column_graph physical row reader batch visitor is nil")
+		return errColumnVectorGraphPhysicalRowReaderBatchVisitorNil
 	}
 	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
 		graphRow, err := r.graphRowFromPhysicalRowUnchecked(row)

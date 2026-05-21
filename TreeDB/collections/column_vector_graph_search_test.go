@@ -269,6 +269,15 @@ func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeScratchCapOversizedOverflowSafeV3(t *testing.T) {
+	if !columnVectorGraphNativeScratchCapOversized(64, 1) {
+		t.Fatalf("expected oversized scratch cap for small target")
+	}
+	if columnVectorGraphNativeScratchCapOversized(math.MaxInt, math.MaxInt/2+1) {
+		t.Fatalf("overflow-sized target must not wrap oversized threshold")
+	}
+}
+
 func TestColumnVectorGraphNativeSearchScratchClearsResultAliasesV3(t *testing.T) {
 	var scratch columnVectorGraphNativeSearchScratch
 	oldID := []byte("old-doc")
@@ -452,6 +461,9 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 		got, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 16}, &scratch)
 		if err != nil {
 			t.Fatalf("SearchCosine: %v", err)
+		}
+		if len(got) == 0 {
+			t.Fatalf("SearchCosine returned no results")
 		}
 		columnPhysicalScanBenchSum += int64(got[0].Ordinal)
 	})
