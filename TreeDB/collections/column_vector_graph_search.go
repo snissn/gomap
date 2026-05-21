@@ -184,7 +184,9 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			}
 			continue
 		}
-		row, err := r.FetchRow(candidate.ordinal, &scratch.expandScratch)
+		// Search validates adjacency as edges are expanded; avoid duplicate
+		// full adjacency scans on score/result fetches.
+		row, err := r.fetchRowUnchecked(candidate.ordinal, &scratch.expandScratch)
 		if err != nil {
 			return nil, stats, err
 		}
@@ -233,7 +235,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
 	fetchPos := 0
-	if err := r.FetchBatch(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
+	if err := r.fetchBatchUnchecked(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
 		if fetchPos >= n {
 			return fmt.Errorf("collections: column_graph %q result batch returned extra row ordinal=%d", r.def.Name, row.Ordinal)
 		}
@@ -268,7 +270,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 
 func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	if scratch.markVisited(ordinal) {
-		row, err := r.FetchRow(ordinal, &scratch.scoreScratch)
+		row, err := r.fetchRowUnchecked(ordinal, &scratch.scoreScratch)
 		if err != nil {
 			return err
 		}
