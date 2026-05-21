@@ -368,6 +368,9 @@ func TestSearchVectorIndexColumnGraphStaleAfterMutationV4(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SearchVectorIndex err=nil want stale/rebuild-needed failure")
 	}
+	if !errors.Is(err, errColumnVectorGraphManifestMismatch) {
+		t.Fatalf("SearchVectorIndex stale err=%v want manifest mismatch wrapping", err)
+	}
 	if got.Status.State != VectorIndexStateColumnGraphRebuildNeeded || !got.Status.RebuildNeeded {
 		t.Fatalf("status=%+v want stale graph to require rebuild", got.Status)
 	}

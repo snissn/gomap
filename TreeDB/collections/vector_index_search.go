@@ -199,7 +199,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 			return nil, response, statusErr
 		}
 		response.Status = status
-		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %v", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
+		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %w", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
 	}
 	catalog := reader.catalog
 	if catalog == nil {
@@ -275,7 +275,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 				return response, err
 			}
 			if !found {
-				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, string(result.ID))
+				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, result.ID)
 			}
 			documents[i] = doc
 			totalDocumentBytes, err = addVectorIndexSearchByteTotal(totalDocumentBytes, len(doc), math.MaxInt, "document")
