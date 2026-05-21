@@ -1226,6 +1226,12 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, err
 	}
+	if bytes64 == 0 {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: column prepared asset bytes=0 must be positive")
+	}
+	if int64(bytes64) != ref.Length {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: column prepared asset bytes=%d does not match ref length=%d", bytes64, ref.Length)
+	}
 	return ref, int(rows64), int64(bytes64), publishID, generationID, reason, nil
 }
 

@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"strings"
@@ -69,6 +70,52 @@ func TestColumnManifestAssetRefsRejectPartIDKeyMismatchM13C(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "key part_id") {
 		t.Fatalf("columnManifestAssetRefsFromRecordsForScan err=%v want key part_id mismatch", err)
 	}
+}
+
+func TestColumnManifestScanViewRejectsPreparedAssetByteMismatchM1634(t *testing.T) {
+	_, _, manifest, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	replaced := false
+	for i := range tampered {
+		if bytes.Equal(tampered[i].key, columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID)) {
+			badRecord := bytes.Clone(tampered[i].value)
+			pos := columnManifestPartRecordBytesOffsetForScanTestM1634(t, badRecord)
+			binary.BigEndian.PutUint64(badRecord[pos:], uint64(asset.Ref.Length+1))
+			tampered[i].value = badRecord
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		t.Fatal("manifest part record not found")
+	}
+	if _, _, _, err := decodeColumnManifestSnapshotViewForScan(tampered, asset.Ref.Namespace); err == nil || !strings.Contains(err.Error(), "does not match ref length") {
+		t.Fatalf("decodeColumnManifestSnapshotViewForScan err=%v want byte/ref length mismatch", err)
+	}
+}
+
+func columnManifestPartRecordBytesOffsetForScanTestM1634(t testing.TB, raw []byte) int {
+	t.Helper()
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestPartMagic {
+		t.Fatalf("bad part magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	cur.skipStringBytes() // kind
+	cur.skipStringBytes() // namespace
+	_ = cur.u64()         // generation
+	_ = cur.u64()         // part_id
+	_ = cur.u64()         // file_id
+	_ = cur.u64()         // offset
+	_ = cur.u64()         // length
+	_ = cur.u64()         // checksum
+	if version >= columnManifestRecordVersion {
+		_ = cur.u64() // rows
+	}
+	if cur.err != nil {
+		t.Fatalf("decode part prefix: %v", cur.err)
+	}
+	return cur.pos
 }
 
 func columnManifestAssetRefFilterTestAssetM13C(generation, partID uint64, reason ColumnPublishOperation) ColumnPreparedAsset {
