@@ -132,7 +132,7 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		}
 		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
 	}
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
 	if closeView != nil {
 		defer closeView()
 	}
@@ -156,7 +156,7 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // until Close and fail-closes for mutation-bearing manifests or unsupported
 // query shapes rather than silently changing semantics.
 func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
 	if err != nil {
 		if closeView != nil {
 			closeView()
@@ -473,7 +473,7 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(
 // Mutation-bearing manifests stay fail-closed until partitioned visibility
 // reconstruction is available.
 func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
-	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
 	if closeView != nil {
 		defer closeView()
 	}
@@ -573,6 +573,22 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	result.Diagnostics.ReduceRows = merged.reduceRows
 	result.Diagnostics.ResultGroups = len(result.Groups)
 	return result, nil
+}
+
+func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) columnManifestScanSidecarFilter {
+	if req.AggregateMetadataName != "" {
+		return columnManifestScanSidecarFilter{AggregateMetadata: true}
+	}
+	switch req.Kind {
+	case ColumnPhysicalQueryGroupCount, ColumnPhysicalQueryGroupCountDistinct:
+		return columnManifestScanSidecarFilter{DictionaryCodes: true}
+	case ColumnPhysicalQueryHourCount:
+		return columnManifestScanSidecarFilter{Int64Values: true}
+	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
+		return columnManifestScanSidecarFilter{DictionaryCodes: true, Int64Values: true}
+	default:
+		return columnManifestScanNoSidecars()
+	}
 }
 
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
