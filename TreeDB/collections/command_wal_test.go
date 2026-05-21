@@ -1087,6 +1087,21 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexInterleavedCollectionsDrainOwne
 	}
 }
 
+func TestCollectionCommandWALPendingFirstLSNRequiresAppliedNext(t *testing.T) {
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	})
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	domain := &collectionWriteDomain{}
+	if err := domain.recordPendingCommandWALLSNLocked(d, 2); !errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("recordPendingCommandWALLSNLocked error=%v, want ErrCommandWALAppliedLSNNonContig", err)
+	}
+}
+
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexReopenRecovery(t *testing.T) {
 	doc1 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}})
 	doc2 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}})

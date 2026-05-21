@@ -187,11 +187,21 @@ func (c *Collection) withCommandWALPublishCoordinator(fn func() error) error {
 	return fn()
 }
 
-func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(lsn uint64) error {
+func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(db *backenddb.DB, lsn uint64) error {
 	if domain == nil || lsn == 0 {
 		return nil
 	}
 	if domain.pendingCommandWALFirst == 0 {
+		if db == nil {
+			return backenddb.ErrClosed
+		}
+		state := db.State()
+		if state == nil {
+			return backenddb.ErrClosed
+		}
+		if lsn != state.AppliedCommandLSN+1 {
+			return fmt.Errorf("%w: pending collection command WAL starts at %d after applied %d", backenddb.ErrCommandWALAppliedLSNNonContig, lsn, state.AppliedCommandLSN)
+		}
 		domain.pendingCommandWALFirst = lsn
 		domain.pendingCommandWALLast = lsn
 		if domain.commandWALCoordinator != nil {

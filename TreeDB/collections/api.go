@@ -14486,7 +14486,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		plan.stats.BufferStagePrimaryAppend += overlayAppendDuration
 		plan.stats.BufferStageRootAppend += overlayAppendDuration
 		if err == nil && buffered && plan.bufferedCommandWALLSN != 0 {
-			if err := domain.recordPendingCommandWALLSNLocked(plan.bufferedCommandWALLSN); err != nil {
+			if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
 				return false, err
 			}
 		}
@@ -14628,7 +14628,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	resetCollectionTables(compactedObsolete)
 	plan.stats.BufferedBatches = 1
 	if plan.bufferedCommandWALLSN != 0 {
-		if err := domain.recordPendingCommandWALLSNLocked(plan.bufferedCommandWALLSN); err != nil {
+		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
 			return false, err
 		}
 	}

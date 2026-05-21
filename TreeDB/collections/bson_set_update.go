@@ -97,7 +97,7 @@ func (c *Collection) updateBSONSetDirect(documentID []byte, spec bsonSetUpdate) 
 	items := []updateBatchItem{newBSONSetUpdateBatchItem(documentID, spec)}
 	mode := updateBatchModeNoSecondaryUniqueIndexChanges
 	results, batched, err := c.updateBatchOwnedItems(items, mode)
-	if c.commandWALActive(nil) && ((err == nil && !batched) || errors.Is(err, errUpdateBatchChangesSecondaryUniqueIndex)) {
+	if c.commandWALActive(nil) && err == nil && !batched {
 		results, batched, err = c.updateBatchOwnedItems(items, updateBatchModeAny)
 	}
 	if !batched && err == nil {
