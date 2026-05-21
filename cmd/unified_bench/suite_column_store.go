@@ -1390,6 +1390,9 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 }
 
 func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []collections.ColumnPhysicalQueryGroup) (uint64, int, error) {
+	// The caller passes a result slice that is no longer used for ordered
+	// reporting after hashing; sort it in-place to avoid copying on the hot
+	// parity path.
 	columnStoreSuiteSortPhysicalQueryGroups(queryName, groups)
 	hash := columnStoreFNV64Offset
 	switch queryName {
@@ -1419,17 +1422,50 @@ func columnStoreSuiteSortPhysicalQueryGroups(queryName string, groups []collecti
 }
 
 func columnStoreSuitePhysicalQueryGroupLess(queryName string, left, right collections.ColumnPhysicalQueryGroup) bool {
-	if left.Key != right.Key {
-		return left.Key < right.Key
-	}
+	leftValue, rightValue := left.Int64, right.Int64
 	switch queryName {
 	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
-		return left.Count < right.Count
+		leftValue, rightValue = int64(left.Count), int64(right.Count)
 	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
-		return left.Int64 < right.Int64
 	default:
 		return false
 	}
+	var leftNum [columnStoreSuiteMaxInt64DecimalLen]byte
+	var rightNum [columnStoreSuiteMaxInt64DecimalLen]byte
+	return columnStoreSuitePhysicalQueryLineSuffixLess(
+		left.Key,
+		strconv.AppendInt(leftNum[:0], leftValue, 10),
+		right.Key,
+		strconv.AppendInt(rightNum[:0], rightValue, 10),
+	)
+}
+
+func columnStoreSuitePhysicalQueryLineSuffixLess(leftKey string, leftValue []byte, rightKey string, rightValue []byte) bool {
+	for idx := 0; ; idx++ {
+		leftByte, leftOK := columnStoreSuitePhysicalQueryLineSuffixByte(leftKey, leftValue, idx)
+		rightByte, rightOK := columnStoreSuitePhysicalQueryLineSuffixByte(rightKey, rightValue, idx)
+		if !leftOK || !rightOK {
+			return !leftOK && rightOK
+		}
+		if leftByte != rightByte {
+			return leftByte < rightByte
+		}
+	}
+}
+
+func columnStoreSuitePhysicalQueryLineSuffixByte(key string, value []byte, idx int) (byte, bool) {
+	if idx < len(key) {
+		return key[idx], true
+	}
+	idx -= len(key)
+	if idx == 0 {
+		return '=', true
+	}
+	idx--
+	if idx < len(value) {
+		return value[idx], true
+	}
+	return 0, false
 }
 
 func columnStoreHashPhysicalQueryGroup(hash uint64, prefix, key string, value int64) uint64 {

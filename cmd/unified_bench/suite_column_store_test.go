@@ -133,45 +133,60 @@ func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
 }
 
 func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.T) {
-	groups := []collections.ColumnPhysicalQueryGroup{
-		{Key: "app.bsky.feed.post", Count: 34},
-		{Key: "app.bsky.feed.like", Count: 12},
-		{Key: "app.bsky.graph.follow", Count: 56},
+	tests := []struct {
+		name      string
+		prefix    string
+		queryName string
+		groups    []collections.ColumnPhysicalQueryGroup
+	}{
+		{
+			name:      "q1_unsorted",
+			prefix:    "q1",
+			queryName: columnStoreQueryQ1,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "app.bsky.feed.post", Count: 34},
+				{Key: "app.bsky.feed.like", Count: 12},
+				{Key: "app.bsky.graph.follow", Count: 56},
+			},
+		},
+		{
+			name:      "q1_prefix_key_and_decimal_lexical_order",
+			prefix:    "q1",
+			queryName: columnStoreQueryQ1,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "a", Count: 2},
+				{Key: "a.b", Count: 1},
+				{Key: "a", Count: 10},
+			},
+		},
+		{
+			name:      "q5_unsorted_boundaries",
+			prefix:    "q5",
+			queryName: columnStoreQueryQ5,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "d000002", Int64: 1<<63 - 1},
+				{Key: "d000001", Int64: -1 << 63},
+			},
+		},
 	}
-	lines, err := columnStoreSuitePhysicalQueryLines("q1", columnStoreQueryQ1, groups)
-	if err != nil {
-		t.Fatalf("columnStoreSuitePhysicalQueryLines: %v", err)
-	}
-	want := columnStoreHashLines(lines)
-	got, count, err := columnStoreSuiteHashPhysicalQueryGroups("q1", columnStoreQueryQ1, groups)
-	if err != nil {
-		t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups: %v", err)
-	}
-	if count != len(groups) {
-		t.Fatalf("result count=%d want %d", count, len(groups))
-	}
-	if got != want {
-		t.Fatalf("direct hash=%016x want line hash=%016x", got, want)
-	}
-
-	spanGroups := []collections.ColumnPhysicalQueryGroup{
-		{Key: "d000002", Int64: 1<<63 - 1},
-		{Key: "d000001", Int64: -1 << 63},
-	}
-	lines, err = columnStoreSuitePhysicalQueryLines("q5", columnStoreQueryQ5, spanGroups)
-	if err != nil {
-		t.Fatalf("columnStoreSuitePhysicalQueryLines q5: %v", err)
-	}
-	want = columnStoreHashLines(lines)
-	got, count, err = columnStoreSuiteHashPhysicalQueryGroups("q5", columnStoreQueryQ5, spanGroups)
-	if err != nil {
-		t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups q5: %v", err)
-	}
-	if count != len(spanGroups) {
-		t.Fatalf("q5 result count=%d want %d", count, len(spanGroups))
-	}
-	if got != want {
-		t.Fatalf("q5 direct hash=%016x want line hash=%016x", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines, err := columnStoreSuitePhysicalQueryLines(tt.prefix, tt.queryName, tt.groups)
+			if err != nil {
+				t.Fatalf("columnStoreSuitePhysicalQueryLines: %v", err)
+			}
+			want := columnStoreHashLines(lines)
+			got, count, err := columnStoreSuiteHashPhysicalQueryGroups(tt.prefix, tt.queryName, tt.groups)
+			if err != nil {
+				t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups: %v", err)
+			}
+			if count != len(tt.groups) {
+				t.Fatalf("result count=%d want %d", count, len(tt.groups))
+			}
+			if got != want {
+				t.Fatalf("direct hash=%016x want line hash=%016x", got, want)
+			}
+		})
 	}
 }
 
