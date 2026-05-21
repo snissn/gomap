@@ -23,6 +23,8 @@ const (
 	columnVectorGraphPhysicalRowValueCount
 )
 
+var errColumnVectorGraphAdjacencyOrdinalOutOfBounds = errors.New("collections: column_graph adjacency ordinal outside row_count")
+
 // columnVectorGraphPhysicalRowReader fetches graph rows from the persisted
 // column graph asset by ordinal. It is a graph-specific wrapper around the
 // generic physical row reader, not a decoded ColumnVectorGraph.
@@ -223,6 +225,9 @@ func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch 
 }
 
 func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnPhysicalRowReaderRow) (columnVectorGraphPhysicalRow, error) {
+	if r == nil {
+		return columnVectorGraphPhysicalRow{}, errors.New("collections: nil column vector graph physical row reader")
+	}
 	if len(row.ID) == 0 {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing document id", r.def.Name, row.Ordinal)
 	}
@@ -247,14 +252,6 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 	if invNorm.Float32 <= 0 || math.IsNaN(float64(invNorm.Float32)) || math.IsInf(float64(invNorm.Float32), 0) {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", r.def.Name, row.Ordinal, invNorm.Float32)
 	}
-	rowCount := r.reader.RowCount()
-	// Fail closed if persisted adjacency points outside the immutable graph.
-	// V3 search relies on this validation before expanding neighbor ordinals.
-	for i, neighbor := range adjacency.AdjacencyList {
-		if uint64(neighbor) >= uint64(rowCount) {
-			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d", r.def.Name, row.Ordinal, i, neighbor, rowCount)
-		}
-	}
 	return columnVectorGraphPhysicalRow{
 		Ordinal:   row.Ordinal,
 		RowIndex:  row.RowIndex,
@@ -263,4 +260,11 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 		InvNorm:   invNorm.Float32,
 		Adjacency: adjacency.AdjacencyList,
 	}, nil
+}
+
+func validateColumnVectorGraphAdjacencyOrdinal(graphName string, ordinal int, adjacencyIndex int, neighbor uint32, rowCount int) error {
+	if uint64(neighbor) >= uint64(rowCount) {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", graphName, ordinal, adjacencyIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+	}
+	return nil
 }
