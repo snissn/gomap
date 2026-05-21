@@ -64,13 +64,13 @@ type columnPhysicalRowReader struct {
 	maxBlocks  int
 	blocks     map[int]*columnPhysicalRowReaderBlock
 	lru        []int
-	// lastRange/lastBlock are a one-entry hot path over the existing bounded
+	// lastRangeIndex/lastBlock are a one-entry hot path over the existing bounded
 	// block cache. They avoid repeating binary range lookup and map/LRU work
 	// when graph/native readers fetch many rows from the same physical granule.
-	lastRange int
-	lastBlock *columnPhysicalRowReaderBlock
-	closed    bool
-	stats     columnPhysicalRowReaderStats
+	lastRangeIndex int
+	lastBlock      *columnPhysicalRowReaderBlock
+	closed         bool
+	stats          columnPhysicalRowReaderStats
 }
 
 type columnPhysicalRowReaderRange struct {
@@ -154,13 +154,13 @@ func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScan
 		return nil, err
 	}
 	reader := &columnPhysicalRowReader{
-		view:       view,
-		projection: projection,
-		readCache:  readCache,
-		closeView:  closeView,
-		maxBlocks:  maxBlocks,
-		blocks:     make(map[int]*columnPhysicalRowReaderBlock, maxBlocks),
-		lastRange:  -1,
+		view:           view,
+		projection:     projection,
+		readCache:      readCache,
+		closeView:      closeView,
+		maxBlocks:      maxBlocks,
+		blocks:         make(map[int]*columnPhysicalRowReaderBlock, maxBlocks),
+		lastRangeIndex: -1,
 		stats: columnPhysicalRowReaderStats{
 			Granules: len(view.AssetRefs),
 		},
@@ -186,7 +186,7 @@ func (r *columnPhysicalRowReader) Close() error {
 		delete(r.blocks, key)
 	}
 	r.lru = r.lru[:0]
-	r.lastRange = -1
+	r.lastRangeIndex = -1
 	r.lastBlock = nil
 	r.stats.ResidentBytes = 0
 	if r.closeView != nil {
@@ -323,16 +323,16 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 	if ordinal < 0 || ordinal >= r.totalRows {
 		return -1
 	}
-	if r.lastRange >= 0 && r.lastRange < len(r.ranges) {
-		rowRange := r.ranges[r.lastRange]
+	if r.lastRangeIndex >= 0 && r.lastRangeIndex < len(r.ranges) {
+		rowRange := r.ranges[r.lastRangeIndex]
 		if ordinal >= rowRange.startOrdinal && ordinal < rowRange.startOrdinal+rowRange.rowCount {
-			return r.lastRange
+			return r.lastRangeIndex
 		}
 	}
 	if len(r.ranges) == 1 {
 		// Single-range readers are common for column_graph assets; skip binary
 		// search entirely after the bounds check above.
-		r.lastRange = 0
+		r.lastRangeIndex = 0
 		return 0
 	}
 	lo, hi := 0, len(r.ranges)
@@ -347,7 +347,7 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 			lo = mid + 1
 			continue
 		}
-		r.lastRange = mid
+		r.lastRangeIndex = mid
 		return mid
 	}
 	return -1

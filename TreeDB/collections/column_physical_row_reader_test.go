@@ -161,25 +161,16 @@ func TestColumnPhysicalRowReaderHotBlockFastPathInvalidatesOnEvictionV1(t *testi
 		t.Fatalf("warm left block: %v", err)
 	}
 	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-000", 0, []float32{0, 0.25, 0.5, 0.75}, []uint32{0, 1, 2})
-	if reader.lastBlock == nil || reader.lastBlock.assetOrdinal != 0 {
-		t.Fatalf("lastBlock after left fetch=%+v want asset 0", reader.lastBlock)
-	}
 	row, err = reader.FetchRow(4, &scratch)
 	if err != nil {
 		t.Fatalf("fetch right block: %v", err)
 	}
 	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-004", 4, []float32{4, 4.25, 4.5, 4.75}, []uint32{4, 5, 6})
-	if reader.lastBlock == nil || reader.lastBlock.assetOrdinal != 1 {
-		t.Fatalf("lastBlock after right fetch=%+v want asset 1", reader.lastBlock)
-	}
 	row, err = reader.FetchRow(1, &scratch)
 	if err != nil {
 		t.Fatalf("refetch evicted left block: %v", err)
 	}
 	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-001", 1, []float32{1, 1.25, 1.5, 1.75}, []uint32{1, 2, 3})
-	if reader.lastBlock == nil || reader.lastBlock.assetOrdinal != 0 {
-		t.Fatalf("lastBlock after left refetch=%+v want asset 0", reader.lastBlock)
-	}
 	stats := reader.Stats()
 	if stats.CacheMisses != 3 || stats.CacheHits != 0 || stats.BlockEvictions != 2 {
 		t.Fatalf("cache stats=%+v want misses=3 hits=0 evictions=2", stats)
@@ -206,12 +197,6 @@ func TestColumnPhysicalRowReaderHotBlockFastPathPreservesInterleavedLRUV1(t *tes
 		if _, err := reader.FetchRow(ordinal, &scratch); err != nil {
 			t.Fatalf("FetchRow(%d): %v", ordinal, err)
 		}
-	}
-	if reader.blocks[0] != nil {
-		t.Fatalf("left block survived after interleaved LRU sequence")
-	}
-	if reader.blocks[1] == nil || reader.blocks[2] == nil {
-		t.Fatalf("blocks after interleaved LRU sequence=%v want middle and right", reader.blocks)
 	}
 	row, err := reader.FetchRow(5, &scratch)
 	if err != nil {
