@@ -60,9 +60,17 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReader(name string, opts co
 		return nil, err
 	}
 	defer func() { _ = snap.Close() }()
-	return c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(name, snap, opts)
+	reader, err := c.openColumnVectorGraphPhysicalRowReaderAtSnapshot(name, snap, opts)
+	if err != nil {
+		return nil, err
+	}
+	reader.detachCatalogFromSnapshot()
+	return reader, nil
 }
 
+// openColumnVectorGraphPhysicalRowReaderAtSnapshot binds the returned reader to
+// the caller-owned snapshot. Callers that close the snapshot before closing the
+// reader must detach the catalog metadata first.
 func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name string, snap *backenddb.Snapshot, opts columnVectorGraphPhysicalRowReaderOptions) (*columnVectorGraphPhysicalRowReader, error) {
 	def, graph, view, err := c.columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(name, snap)
 	if err != nil {
@@ -86,6 +94,17 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		catalog: view.Catalog,
 		reader:  reader,
 	}, nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) detachCatalogFromSnapshot() {
+	if r == nil || r.catalog == nil {
+		return
+	}
+	catalog := r.catalog.copy()
+	r.catalog = catalog
+	if r.reader != nil {
+		r.reader.view.Catalog = catalog
+	}
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {

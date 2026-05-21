@@ -2,8 +2,8 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
-	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -81,9 +81,7 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 		t.Fatalf("SearchVectorIndex: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
-	if len(got.Results[0].Document) == 0 || !strings.Contains(string(got.Results[0].Document), `"did":"doc-c"`) {
-		t.Fatalf("top result document=%q want doc-c JSON materialized after top-k", got.Results[0].Document)
-	}
+	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-c")
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) {
 		t.Fatalf("DocumentsFetched=%d want %d", got.Stats.DocumentsFetched, len(got.Results))
 	}
@@ -134,9 +132,7 @@ func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T
 	if string(got.Results[0].ID) != "doc-a" {
 		t.Fatalf("top result id=%q want doc-a from bound graph snapshot", got.Results[0].ID)
 	}
-	if !strings.Contains(string(got.Results[0].Document), `"did":"doc-a"`) {
-		t.Fatalf("bound snapshot document=%q want pre-delete doc-a", got.Results[0].Document)
-	}
+	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-a")
 	if got.Stats.DocumentsFetched != 1 {
 		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
 	}
@@ -190,8 +186,21 @@ func TestOpenVectorIndexSearcherReusesNativeReaderV4(t *testing.T) {
 	if first.Stats.RowFetches == 0 || second.Stats.RowFetches != first.Stats.RowFetches {
 		t.Fatalf("row fetch stats first=%d second=%d want per-search deltas", first.Stats.RowFetches, second.Stats.RowFetches)
 	}
-	if second.Stats.PhysicalBytesRead < 0 || second.Stats.PhysicalBytesRead > first.Stats.OpenPhysicalBytesRead {
+	if second.Stats.PhysicalBytesRead > first.Stats.OpenPhysicalBytesRead {
 		t.Fatalf("second PhysicalBytesRead=%d want bounded per-search reader delta <= open physical bytes %d", second.Stats.PhysicalBytesRead, first.Stats.OpenPhysicalBytesRead)
+	}
+}
+
+func assertVectorIndexSearchDocumentDIDV4(tb testing.TB, document []byte, want string) {
+	tb.Helper()
+	var got struct {
+		DID string `json:"did"`
+	}
+	if err := json.Unmarshal(document, &got); err != nil {
+		tb.Fatalf("document=%q is not valid JSON: %v", document, err)
+	}
+	if got.DID != want {
+		tb.Fatalf("document did=%q want %q in %q", got.DID, want, document)
 	}
 }
 
