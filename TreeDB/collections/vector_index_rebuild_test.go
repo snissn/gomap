@@ -529,7 +529,7 @@ func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
 	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
 	records := loadColumnGraphRebuildManifestRecordsV2A(t, d, "docs")
 
-	retainedWithIndex, err := retainedColumnManifestPartRecordsForWrite(records, graph.BaseManifestGeneration+1, true, []VectorIndexDefinition{def})
+	retainedWithIndex, err := retainedColumnManifestRecordsForWrite(records, graph.BaseManifestGeneration+1, true, []VectorIndexDefinition{def})
 	if err != nil {
 		t.Fatalf("retained active vector graph record: %v", err)
 	}
@@ -537,7 +537,7 @@ func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
 		t.Fatalf("active vector index graph record was pruned: records=%d", len(retainedWithIndex))
 	}
 
-	retainedAfterDrop, err := retainedColumnManifestPartRecordsForWrite(records, graph.BaseManifestGeneration+1, true, nil)
+	retainedAfterDrop, err := retainedColumnManifestRecordsForWrite(records, graph.BaseManifestGeneration+1, true, nil)
 	if err != nil {
 		t.Fatalf("retained dropped vector graph record: %v", err)
 	}
