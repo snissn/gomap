@@ -65,6 +65,9 @@ func DecodeColumnCollectionManifestView(data []byte) (ColumnCollectionManifestVi
 		if err != nil {
 			return ColumnCollectionManifestView{}, err
 		}
+		if err := validateColumnCollectionManifestViewBody(body); err != nil {
+			return ColumnCollectionManifestView{}, err
+		}
 		return ColumnCollectionManifestView{data: data, body: body}, nil
 	}
 	manifest, err := DecodeColumnCollectionManifest(data)
@@ -82,6 +85,9 @@ func DecodeColumnPreparedAssetRegistryView(data []byte) (ColumnPreparedAssetRegi
 	if isColumnControlPlaneBinary(data, columnWorkspacePreparedBinaryMagic) {
 		body, err := decodeColumnControlPlaneEnvelope(data, columnWorkspacePreparedBinaryMagic, columnWorkspacePreparedBinaryVersion, "prepared registry")
 		if err != nil {
+			return ColumnPreparedAssetRegistryView{}, err
+		}
+		if err := validateColumnPreparedAssetRegistryViewBody(body); err != nil {
 			return ColumnPreparedAssetRegistryView{}, err
 		}
 		return ColumnPreparedAssetRegistryView{data: data, body: body}, nil
@@ -103,6 +109,24 @@ func (v ColumnCollectionManifestView) BodyBytes() int {
 
 func (v ColumnPreparedAssetRegistryView) BodyBytes() int {
 	return len(v.body)
+}
+
+func validateColumnCollectionManifestViewBody(body []byte) error {
+	r := columnBinaryReader{data: body, label: "collection manifest view"}
+	manifest := readColumnCollectionManifestBinary(&r)
+	if err := r.done(); err != nil {
+		return err
+	}
+	return validateColumnCollectionManifest(manifest)
+}
+
+func validateColumnPreparedAssetRegistryViewBody(body []byte) error {
+	r := columnBinaryReader{data: body, label: "prepared registry view"}
+	registry := readColumnPreparedAssetRegistryBinary(&r)
+	if err := r.done(); err != nil {
+		return err
+	}
+	return validateColumnPreparedAssetRegistry(registry)
 }
 
 func PlanColumnAssetReachabilityFromViews(input ColumnAssetReachabilityViewInput) (ColumnAssetReachabilityPlan, error) {

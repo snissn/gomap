@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const maxColumnPartImageStringBytes = 1 << 20
+
 func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	dec := columnPartImageDecoder{data: data}
 	magic, err := dec.u32()
@@ -240,7 +242,10 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 	}
 	optionsColumns := make([]ColumnDefinition, 0, len(desc.Columns))
 	for _, columnDescriptor := range desc.Columns {
-		column := columns[columnDescriptor.Name]
+		column, ok := columns[columnDescriptor.Name]
+		if !ok {
+			return nil, fmt.Errorf("colgranule: descriptor column %s missing decoded column", columnDescriptor.Name)
+		}
 		def := column.Definition
 		if def.Type == ColumnTypeLowCardinalityCode {
 			if def.Cardinality == 0 || def.Cardinality > maxCodeCardinality {
@@ -1180,7 +1185,6 @@ func validateDecodedRowLocatorsPrimaryKey(desc ColumnPartDescriptor, columns map
 	if column.Definition.Type != ColumnTypeInt64 {
 		return fmt.Errorf("colgranule: row locator validation primary key column %s type=%s want int64", primaryColumnName, column.Definition.Type)
 	}
-	primaryValues := make([]int64, desc.RowCount)
 	var reader GranuleReader
 	var scratch []int64
 	for blockIndex, block := range column.Blocks {
@@ -1192,11 +1196,15 @@ func validateDecodedRowLocatorsPrimaryKey(desc ColumnPartDescriptor, columns map
 		if len(values) != block.Descriptor.RowCount {
 			return fmt.Errorf("colgranule: primary key column %s block %d decoded rows=%d want %d", primaryColumnName, blockIndex, len(values), block.Descriptor.RowCount)
 		}
-		copy(primaryValues[block.Descriptor.FirstRow:block.Descriptor.FirstRow+block.Descriptor.RowCount], values)
-	}
-	for primaryID, locator := range locators {
-		if got := primaryValues[locator.PartRow]; got != primaryID {
-			return fmt.Errorf("colgranule: row locator primary id %d points to part row %d with primary key %d", primaryID, locator.PartRow, got)
+		for rowOffset, primaryID := range values {
+			partRow := block.Descriptor.FirstRow + rowOffset
+			locator, ok := locators[primaryID]
+			if !ok {
+				return fmt.Errorf("colgranule: row locator missing primary id %d for part row %d", primaryID, partRow)
+			}
+			if locator.PartRow != partRow {
+				return fmt.Errorf("colgranule: row locator primary id %d points to part row %d want %d", primaryID, locator.PartRow, partRow)
+			}
 		}
 	}
 	return nil
@@ -1220,7 +1228,8 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 				return fmt.Errorf("colgranule: image column %s block %d length=%d outside section", name, i, length)
 			}
 			block.Granule.Payload = image.Bytes[offset : offset+length]
-			block.Granule.PayloadRef = PayloadRef{Kind: PayloadRefInline, Offset: int64(offset), Length: length}
+			// The payload slice is already narrowed to the block bytes; keep inline refs normalized for granule validation.
+			block.Granule.PayloadRef = PayloadRef{Kind: PayloadRefInline, Length: length}
 			offset += length
 		}
 		if offset != sectionEnd {
@@ -1893,6 +1902,9 @@ func (d *columnPartImageDecoder) str() (string, error) {
 	lengthInt, err := d.countToInt(length, "string bytes")
 	if err != nil {
 		return "", err
+	}
+	if lengthInt > maxColumnPartImageStringBytes {
+		return "", fmt.Errorf("colgranule: string bytes=%d exceeds max=%d", lengthInt, maxColumnPartImageStringBytes)
 	}
 	if err := d.require(lengthInt); err != nil {
 		return "", err

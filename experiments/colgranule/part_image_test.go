@@ -3,6 +3,7 @@ package colgranule
 import (
 	"encoding/binary"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,33 @@ func TestColumnPartImageColumnPayloadBytesMatchBlocks(t *testing.T) {
 	}
 }
 
+func TestBuildColumnPartImageRejectsUnsupportedColumnType(t *testing.T) {
+	part, _ := testColumnPartImageFixture(t, false)
+	corruptPart := *part
+	corruptPart.Descriptor.Columns = append([]ColumnPartColumnDescriptor(nil), part.Descriptor.Columns...)
+	corruptPart.Descriptor.Columns[0].Type = ColumnType("unsupported")
+	_, err := BuildColumnPartImage(&corruptPart, ColumnPartImageOptions{})
+	if err == nil {
+		t.Fatal("BuildColumnPartImage accepted an unsupported column type")
+	}
+	if !strings.Contains(err.Error(), "unsupported column type") {
+		t.Fatalf("error %q does not describe unsupported column type", err)
+	}
+}
+
+func TestColumnPartImageDecoderRejectsOversizedString(t *testing.T) {
+	var enc columnPartImageEncoder
+	enc.u32(uint32(maxColumnPartImageStringBytes + 1))
+	dec := columnPartImageDecoder{data: enc.buf}
+	_, err := dec.str()
+	if err == nil {
+		t.Fatal("decoder accepted an oversized string")
+	}
+	if !strings.Contains(err.Error(), "exceeds max") {
+		t.Fatalf("error %q does not describe oversized string", err)
+	}
+}
+
 func TestBuildColumnPartImageRejectsInvalidAggregateMetadataScaledFloats(t *testing.T) {
 	tests := []struct {
 		name string
@@ -167,6 +195,11 @@ func TestColumnPartWithImagePayloadsScansFromImageBytes(t *testing.T) {
 		t.Fatalf("WithImagePayloads: %v", err)
 	}
 	for _, column := range imagePart.Columns {
+		section, ok := image.columnDataSection(column.Definition.Name)
+		if !ok {
+			t.Fatalf("missing image column data section %s", column.Definition.Name)
+		}
+		offset := section.Offset
 		for _, block := range column.Blocks {
 			if block.Descriptor.StoredBytes == 0 {
 				continue
@@ -174,10 +207,10 @@ func TestColumnPartWithImagePayloadsScansFromImageBytes(t *testing.T) {
 			if len(block.Granule.Payload) == 0 {
 				t.Fatalf("column %s block %d stored bytes=%d but payload is empty", column.Definition.Name, block.Descriptor.CodecBlockOrdinal, block.Descriptor.StoredBytes)
 			}
-			offset := int(block.Granule.PayloadRef.Offset)
 			if &block.Granule.Payload[0] != &image.Bytes[offset] {
 				t.Fatalf("column %s block %d payload does not alias image bytes", column.Definition.Name, block.Descriptor.CodecBlockOrdinal)
 			}
+			offset += block.Descriptor.StoredBytes
 		}
 	}
 	scan, err := imagePart.NewScanner().ScanProjected([]string{"id", "time_us", "value", "kind_code", "has_reply"})
