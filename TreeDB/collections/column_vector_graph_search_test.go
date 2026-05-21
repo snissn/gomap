@@ -183,6 +183,10 @@ func TestColumnVectorGraphNativeSearchRequiresScratchV3(t *testing.T) {
 	if len(got) != 0 || stats != (columnVectorGraphNativeSearchStats{}) {
 		t.Fatalf("zero top_k results=%v stats=%+v want empty", got, stats)
 	}
+	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: -1}, nil)
+	if err == nil || !strings.Contains(err.Error(), "ef_search cannot be negative") {
+		t.Fatalf("SearchCosine zero top_k ef_search err=%v want negative ef_search failure", err)
+	}
 
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, nil)
 	if err == nil || !strings.Contains(err.Error(), "requires caller-owned scratch") {
@@ -221,6 +225,10 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 	}
 	if len(got) != 0 || stats != (columnVectorGraphNativeSearchStats{}) {
 		t.Fatalf("empty search results=%v stats=%+v want empty", got, stats)
+	}
+	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: -1}, &scratch)
+	if err == nil || !strings.Contains(err.Error(), "ef_search cannot be negative") {
+		t.Fatalf("SearchCosine empty ef_search err=%v want negative ef_search failure", err)
 	}
 	got, stats, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: 10}, nil)
 	if err != nil {
@@ -471,8 +479,8 @@ func TestColumnVectorGraphNativeSearchParallelReadersV3(t *testing.T) {
 	if workers < 2 {
 		workers = 2
 	}
-	if workers > 8 {
-		workers = 8
+	if workers > columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 {
+		workers = columnVectorGraphNativeSearchParallelBenchMaxWorkersV3
 	}
 	readers := make([]*columnVectorGraphPhysicalRowReader, workers)
 	for i := range readers {

@@ -180,6 +180,10 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if topK < 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search top_k cannot be negative", r.def.Name)
 	}
+	efSearch := opts.EfSearch
+	if efSearch < 0 {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative", r.def.Name)
+	}
 	if topK == 0 || rowCount == 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, nil
 	}
@@ -192,10 +196,6 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	if topK > rowCount {
 		topK = rowCount
-	}
-	efSearch := opts.EfSearch
-	if efSearch < 0 {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative", r.def.Name)
 	}
 	if efSearch == 0 {
 		efSearch = r.def.EfSearch
