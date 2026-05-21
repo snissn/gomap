@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -34,8 +35,8 @@ func TestColumnPartBuildPrimaryEqualsSortKey(t *testing.T) {
 	assertInt64s(t, "value", scan.Columns["value"], []int64{100, 200, 300, 400, 500})
 	assertInt64s(t, "kind_code", scan.Columns["kind_code"], []int64{0, 1, 1, 0, 2})
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{0, 1, 1, 1, 0})
-	if scan.Diagnostics.RowsScanned != 5 || scan.Diagnostics.GranulesConsidered != 3 || scan.Diagnostics.BlocksDecoded != 12 {
-		t.Fatalf("diagnostics=%+v want rows=5 granules=3 blocks=12", scan.Diagnostics)
+	if scan.Diagnostics.RowsScanned != 5 || scan.Diagnostics.GranulesConsidered != 3 || scan.Diagnostics.GranulesDecoded != 3 || scan.Diagnostics.BlocksDecoded != 12 {
+		t.Fatalf("diagnostics=%+v want rows=5 granules=3 decoded=3 blocks=12", scan.Diagnostics)
 	}
 
 	scanner := part.NewScanner()
@@ -124,6 +125,116 @@ func TestColumnPartCodecBlocksCanSplitIndependently(t *testing.T) {
 	assertInt64s(t, "value", scan.Columns["value"], []int64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100})
 	assertInt64s(t, "kind_code", scan.Columns["kind_code"], []int64{2, 0, 1, 2, 0, 1, 2, 1, 0, 1})
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{1, 0, 1, 0, 1, 0, 1, 0, 1, 0})
+	if scan.Diagnostics.GranulesDecoded != 4 || scan.Diagnostics.BlocksDecoded != 14 {
+		t.Fatalf("diagnostics=%+v want decoded=4 blocks=14", scan.Diagnostics)
+	}
+}
+
+func TestColumnPartPreservesExplicitCompressionNoneOverride(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	opts.Compression.Default = CompressionLZ4
+	opts.Columns[2].Compression = CompressionNone
+	opts.Columns[2].CompressionSet = true
+	part, err := BuildColumnPart(13, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {1, 2, 3},
+		"time_us":   {10, 20, 30},
+		"value":     {100, 200, 300},
+		"kind_code": {0, 1, 2},
+		"has_reply": {0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	if got := part.Columns["id"].Definition.Compression; got != CompressionLZ4 {
+		t.Fatalf("id compression=%s want default %s", got, CompressionLZ4)
+	}
+	if got := part.Columns["value"].Definition.Compression; got != CompressionNone {
+		t.Fatalf("value compression=%s want explicit %s", got, CompressionNone)
+	}
+}
+
+func TestScanProjectedIntoDropsStaleColumns(t *testing.T) {
+	part, err := BuildColumnPart(14, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {1, 2, 3},
+		"time_us":   {10, 20, 30},
+		"value":     {100, 200, 300},
+		"kind_code": {0, 1, 2},
+		"has_reply": {0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	scanner := part.NewScanner()
+	dst := map[string][]int64{"stale": {999}}
+	scan, err := scanner.ScanProjectedInto(dst, []string{"id", "value"})
+	if err != nil {
+		t.Fatalf("ScanProjectedInto(id,value): %v", err)
+	}
+	if _, ok := scan.Columns["stale"]; ok {
+		t.Fatalf("stale projection key remained after first scan: %v", scan.Columns)
+	}
+	if _, ok := scan.Columns["value"]; !ok {
+		t.Fatalf("value projection missing after first scan: %v", scan.Columns)
+	}
+	scan, err = scanner.ScanProjectedInto(dst, []string{"id"})
+	if err != nil {
+		t.Fatalf("ScanProjectedInto(id): %v", err)
+	}
+	if _, ok := scan.Columns["value"]; ok {
+		t.Fatalf("narrow projection retained stale value column: %v", scan.Columns)
+	}
+	assertInt64s(t, "id", scan.Columns["id"], []int64{1, 2, 3})
+}
+
+func TestScanProjectedIntoValidatesProjectionBeforeMutatingDestination(t *testing.T) {
+	part, err := BuildColumnPart(15, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {1, 2, 3},
+		"time_us":   {10, 20, 30},
+		"value":     {100, 200, 300},
+		"kind_code": {0, 1, 2},
+		"has_reply": {0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	scanner := part.NewScanner()
+	dst := map[string][]int64{"stale": {999}}
+	if _, err := scanner.ScanProjectedInto(dst, []string{"id", "missing"}); err == nil || !strings.Contains(err.Error(), "missing column") {
+		t.Fatalf("ScanProjectedInto missing column err=%v want missing column", err)
+	}
+	if got, ok := dst["stale"]; !ok || !slices.Equal(got, []int64{999}) || len(dst) != 1 {
+		t.Fatalf("dst mutated after missing projection: %v", dst)
+	}
+	if _, err := scanner.ScanProjectedInto(dst, []string{"id", "id"}); err == nil || !strings.Contains(err.Error(), "duplicate projection column") {
+		t.Fatalf("ScanProjectedInto duplicate column err=%v want duplicate projection column", err)
+	}
+	if got, ok := dst["stale"]; !ok || !slices.Equal(got, []int64{999}) || len(dst) != 1 {
+		t.Fatalf("dst mutated after duplicate projection: %v", dst)
+	}
+}
+
+func TestColumnPartOptionsAreNotMutatedByNormalization(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	opts.Compression.Default = CompressionLZ4
+	part, err := BuildColumnPart(16, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {1, 2, 3},
+		"time_us":   {10, 20, 30},
+		"value":     {100, 200, 300},
+		"kind_code": {0, 1, 2},
+		"has_reply": {0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	if got := part.Columns["id"].Definition.Compression; got != CompressionLZ4 {
+		t.Fatalf("normalized id compression=%s want %s", got, CompressionLZ4)
+	}
+	if opts.Columns[0].Compression != CompressionNone {
+		t.Fatalf("caller options column compression mutated to %s", opts.Columns[0].Compression)
+	}
+	if opts.SortKey.Columns[0].Direction != "" {
+		t.Fatalf("caller sort key direction mutated to %s", opts.SortKey.Columns[0].Direction)
+	}
 }
 
 func TestColumnPartBuilderFailsClosedOnInvalidShape(t *testing.T) {
@@ -167,6 +278,29 @@ func TestColumnPartBuilderFailsClosedOnInvalidShape(t *testing.T) {
 	}})
 	if err == nil || !strings.Contains(err.Error(), "bool value") {
 		t.Fatalf("bool err=%v want bool value", err)
+	}
+	_, err = BuildColumnPart(1, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {math.MaxInt64},
+		"time_us":   {10},
+		"value":     {100},
+		"kind_code": {0},
+		"has_reply": {0},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "cannot form exclusive upper bound") {
+		t.Fatalf("max primary id err=%v want exclusive upper bound failure", err)
+	}
+
+	invalidDefault := opts
+	invalidDefault.Compression.Default = Compression(255)
+	if _, err := NewColumnPartBuilder(invalidDefault); err == nil || !strings.Contains(err.Error(), "unsupported default compression") {
+		t.Fatalf("invalid default compression err=%v want unsupported default compression", err)
+	}
+
+	invalidColumn := opts
+	invalidColumn.Columns[0].Compression = Compression(255)
+	invalidColumn.Columns[0].CompressionSet = true
+	if _, err := NewColumnPartBuilder(invalidColumn); err == nil || !strings.Contains(err.Error(), "unsupported compression") {
+		t.Fatalf("invalid column compression err=%v want unsupported compression", err)
 	}
 }
 
