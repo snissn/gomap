@@ -124,6 +124,7 @@ func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
 		{name: "max_int64", prefix: "q4b", key: "d000003", value: 1<<63 - 1, want: "q4b:d000003=9223372036854775807"},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			if got := columnStoreSuiteFormatPhysicalQueryLine(tt.prefix, tt.key, tt.value); got != tt.want {
 				t.Fatalf("columnStoreSuiteFormatPhysicalQueryLine=%q want %q", got, tt.want)
@@ -170,6 +171,7 @@ func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.
 		},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			groupsForLines := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
 			lines, err := columnStoreSuitePhysicalQueryLines(tt.prefix, tt.queryName, groupsForLines)

@@ -1391,10 +1391,10 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 	return lines, nil
 }
 
+// columnStoreSuiteHashPhysicalQueryGroups sorts groups in-place before hashing.
+// The caller passes a result slice that is no longer used for ordered reporting
+// after hashing; mutating it here avoids copying on the hot parity path.
 func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []collections.ColumnPhysicalQueryGroup) (uint64, int, error) {
-	// The caller passes a result slice that is no longer used for ordered
-	// reporting after hashing; sort it in-place to avoid copying on the hot
-	// parity path.
 	columnStoreSuiteSortPhysicalQueryGroups(queryName, groups)
 	hash := columnStoreFNV64Offset
 	switch queryName {
@@ -1432,42 +1432,60 @@ func columnStoreSuitePhysicalQueryGroupLess(queryName string, left, right collec
 	default:
 		return false
 	}
+	if cmp := columnStoreSuitePhysicalQueryLineKeyPrefixCompare(left.Key, right.Key); cmp != 0 {
+		return cmp < 0
+	}
 	var leftNum [columnStoreSuiteMaxInt64DecimalLen]byte
 	var rightNum [columnStoreSuiteMaxInt64DecimalLen]byte
-	return columnStoreSuitePhysicalQueryLineSuffixLess(
-		left.Key,
+	return columnStoreSuiteBytesLess(
 		strconv.AppendInt(leftNum[:0], leftValue, 10),
-		right.Key,
 		strconv.AppendInt(rightNum[:0], rightValue, 10),
 	)
 }
 
-func columnStoreSuitePhysicalQueryLineSuffixLess(leftKey string, leftValue []byte, rightKey string, rightValue []byte) bool {
+func columnStoreSuitePhysicalQueryLineKeyPrefixCompare(leftKey, rightKey string) int {
 	for idx := 0; ; idx++ {
-		leftByte, leftOK := columnStoreSuitePhysicalQueryLineSuffixByte(leftKey, leftValue, idx)
-		rightByte, rightOK := columnStoreSuitePhysicalQueryLineSuffixByte(rightKey, rightValue, idx)
+		leftByte, leftOK := columnStoreSuitePhysicalQueryLineKeyPrefixByte(leftKey, idx)
+		rightByte, rightOK := columnStoreSuitePhysicalQueryLineKeyPrefixByte(rightKey, idx)
 		if !leftOK || !rightOK {
-			return !leftOK && rightOK
+			if leftOK == rightOK {
+				return 0
+			}
+			if leftOK {
+				return 1
+			}
+			return -1
 		}
 		if leftByte != rightByte {
-			return leftByte < rightByte
+			if leftByte < rightByte {
+				return -1
+			}
+			return 1
 		}
 	}
 }
 
-func columnStoreSuitePhysicalQueryLineSuffixByte(key string, value []byte, idx int) (byte, bool) {
+func columnStoreSuitePhysicalQueryLineKeyPrefixByte(key string, idx int) (byte, bool) {
 	if idx < len(key) {
 		return key[idx], true
 	}
-	idx -= len(key)
-	if idx == 0 {
+	if idx == len(key) {
 		return '=', true
 	}
-	idx--
-	if idx < len(value) {
-		return value[idx], true
-	}
 	return 0, false
+}
+
+func columnStoreSuiteBytesLess(left, right []byte) bool {
+	for idx := 0; ; idx++ {
+		leftOK := idx < len(left)
+		rightOK := idx < len(right)
+		if !leftOK || !rightOK {
+			return !leftOK && rightOK
+		}
+		if left[idx] != right[idx] {
+			return left[idx] < right[idx]
+		}
+	}
 }
 
 func columnStoreHashPhysicalQueryGroup(hash uint64, prefix, key string, value int64) uint64 {
