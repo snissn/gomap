@@ -164,7 +164,7 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 		}
 		cur := manifestCursor{raw: raw, pos: dictCur.pos}
 		if rowCount > len(codeArena)-codeArenaOffset {
-			return nil, fmt.Errorf("collections: dictionary codes asset rows exceed manifest sidecar rows")
+			return nil, fmt.Errorf("collections: dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn)
 		}
 		translated := codeArena[codeArenaOffset : codeArenaOffset+rowCount]
 		codeArenaOffset += rowCount
@@ -294,10 +294,11 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		cur := manifestCursor{raw: raw, pos: dictCur.pos}
 		for i := 0; i < rowCount; i++ {
 			localCode := cur.u32()
-			if int(localCode) >= len(localToGlobal) {
+			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
+			if !ok {
 				return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
 			}
-			reducer.counts[localToGlobal[localCode]]++
+			reducer.counts[localToGlobal[localIdx]]++
 			rows++
 		}
 		if cur.err != nil {
@@ -422,7 +423,7 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		}
 		groupCodeCur := manifestCursor{raw: groupRaw, pos: groupCur.pos}
 		if groupRows > len(groupCodeArena)-groupCodeArenaOffset {
-			return nil, fmt.Errorf("collections: dictionary codes asset rows exceed manifest sidecar rows")
+			return nil, fmt.Errorf("collections: group dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
 		}
 		groupCodes := groupCodeArena[groupCodeArenaOffset : groupCodeArenaOffset+groupRows]
 		groupCodeArenaOffset += groupRows
@@ -485,7 +486,7 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		}
 		distinctCodeCur := manifestCursor{raw: distinctRaw, pos: distinctCur.pos}
 		if distinctRows > len(distinctCodeArena)-distinctCodeArenaOffset {
-			return nil, fmt.Errorf("collections: dictionary codes asset rows exceed manifest sidecar rows")
+			return nil, fmt.Errorf("collections: distinct dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
 		}
 		distinctCodes := distinctCodeArena[distinctCodeArenaOffset : distinctCodeArenaOffset+distinctRows]
 		distinctCodeArenaOffset += distinctRows
