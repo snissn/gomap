@@ -2817,6 +2817,15 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 	}
 }
 
+func TestColumnDictionaryCodeIndexRejectsCorruptWideCodeM1634(t *testing.T) {
+	if idx, ok := columnDictionaryCodeIndex(2, 3); !ok || idx != 2 {
+		t.Fatalf("valid code idx=%d ok=%v want idx=2 ok=true", idx, ok)
+	}
+	if _, ok := columnDictionaryCodeIndex(^uint32(0), 3); ok {
+		t.Fatalf("max uint32 code unexpectedly accepted for cardinality 3")
+	}
+}
+
 func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {
 	wordsPerGroup, totalWords, ok, err := columnDictionaryCodeDistinctSeenWords(4, 129)
 	if err != nil {

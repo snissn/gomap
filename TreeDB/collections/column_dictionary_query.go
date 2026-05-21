@@ -45,6 +45,13 @@ type columnDictionaryCodeGroupCountDistinctAsset struct {
 	distinctCodes []uint32
 }
 
+func columnDictionaryCodeIndex(code uint32, cardinality int) (int, bool) {
+	if uint64(code) >= uint64(cardinality) {
+		return 0, false
+	}
+	return int(code), true
+}
+
 type columnDictionaryCodeGroupCountOneShotReducer struct {
 	dictionary    []string
 	byValue       map[string]uint32
@@ -146,10 +153,11 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 		translated := make([]uint32, rowCount)
 		for codeIdx := range translated {
 			localCode := cur.u32()
-			if int(localCode) >= len(localToGlobal) {
+			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
+			if !ok {
 				return nil, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", codeIdx, localCode, len(localToGlobal))
 			}
-			translated[codeIdx] = localToGlobal[localCode]
+			translated[codeIdx] = localToGlobal[localIdx]
 		}
 		if cur.err != nil {
 			return nil, cur.err
@@ -383,10 +391,11 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		groupCodes := make([]uint32, groupRows)
 		for codeIdx := range groupCodes {
 			groupCode := groupCodeCur.u32()
-			if int(groupCode) >= len(groupLocal) {
+			groupIdx, ok := columnDictionaryCodeIndex(groupCode, len(groupLocal))
+			if !ok {
 				return nil, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", codeIdx, groupCode, len(groupLocal))
 			}
-			groupCodes[codeIdx] = groupLocal[groupCode]
+			groupCodes[codeIdx] = groupLocal[groupIdx]
 		}
 		if groupCodeCur.err != nil {
 			return nil, groupCodeCur.err
@@ -438,10 +447,11 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		distinctCodes := make([]uint32, distinctRows)
 		for codeIdx := range distinctCodes {
 			distinctCode := distinctCodeCur.u32()
-			if int(distinctCode) >= len(distinctLocal) {
+			distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, len(distinctLocal))
+			if !ok {
 				return nil, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", codeIdx, distinctCode, len(distinctLocal))
 			}
-			distinctCodes[codeIdx] = distinctLocal[distinctCode]
+			distinctCodes[codeIdx] = distinctLocal[distinctIdx]
 		}
 		if distinctCodeCur.err != nil {
 			return nil, distinctCodeCur.err
