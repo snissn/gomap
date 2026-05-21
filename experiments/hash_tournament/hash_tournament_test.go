@@ -26,6 +26,12 @@ var (
 	sinkBytes    [32]byte
 )
 
+const (
+	seed64A uint64 = 0x9e3779b97f4a7c15
+	seed64B uint64 = 0xbf58476d1ce4e5b9
+	seed32A uint32 = 0x9e3779b9
+)
+
 type inputSize struct {
 	name string
 	n    int
@@ -40,7 +46,7 @@ var inputSizes = []inputSize{
 
 func makeInput(n int) []byte {
 	data := make([]byte, n)
-	var x uint64 = 0x9e3779b97f4a7c15
+	x := seed64A
 	for i := range data {
 		x ^= x << 7
 		x ^= x >> 9
@@ -99,6 +105,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/XXHash64_Digest", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := xxhash.New()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -108,7 +115,8 @@ func BenchmarkContentHashTournament(b *testing.B) {
 
 		b.Run(size.name+"/XXHash64_DigestSeeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
-			h := xxhash.NewWithSeed(0x9e3779b97f4a7c15)
+			h := xxhash.NewWithSeed(seed64A)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -126,7 +134,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/XXH3_64Seeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				sink64 ^= xxh3.HashSeed(data, 0x9e3779b97f4a7c15)
+				sink64 ^= xxh3.HashSeed(data, seed64A)
 			}
 		})
 
@@ -141,7 +149,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/XXH3_128Seeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				sum := xxh3.Hash128Seed(data, 0x9e3779b97f4a7c15)
+				sum := xxh3.Hash128Seed(data, seed64A)
 				sink64 ^= sum.Lo ^ sum.Hi
 			}
 		})
@@ -149,6 +157,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/XXH3_64_Hasher", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := xxh3.New()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -158,7 +167,8 @@ func BenchmarkContentHashTournament(b *testing.B) {
 
 		b.Run(size.name+"/XXH3_64_HasherSeeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
-			h := xxh3.NewSeed(0x9e3779b97f4a7c15)
+			h := xxh3.NewSeed(seed64A)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -169,6 +179,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/XXH3_128_Hasher", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := xxh3.New()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -179,7 +190,8 @@ func BenchmarkContentHashTournament(b *testing.B) {
 
 		b.Run(size.name+"/XXH3_128_HasherSeeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
-			h := xxh3.NewSeed(0x9e3779b97f4a7c15)
+			h := xxh3.NewSeed(seed64A)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -198,14 +210,14 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FarmHash64Seeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				sink64 ^= farm.Hash64WithSeed(data, 0x9e3779b97f4a7c15)
+				sink64 ^= farm.Hash64WithSeed(data, seed64A)
 			}
 		})
 
 		b.Run(size.name+"/FarmHash64TwoSeeds", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				sink64 ^= farm.Hash64WithSeeds(data, 0x9e3779b97f4a7c15, 0xbf58476d1ce4e5b9)
+				sink64 ^= farm.Hash64WithSeeds(data, seed64A, seed64B)
 			}
 		})
 
@@ -227,7 +239,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FarmHash128Seeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				lo, hi := farm.Hash128WithSeed(data, 0x9e3779b97f4a7c15, 0xbf58476d1ce4e5b9)
+				lo, hi := farm.Hash128WithSeed(data, seed64A, seed64B)
 				sink64 ^= lo ^ hi
 			}
 		})
@@ -250,7 +262,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FarmHash32Seeded", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				sink32 ^= farm.Hash32WithSeed(data, 0x9e3779b9)
+				sink32 ^= farm.Hash32WithSeed(data, seed32A)
 			}
 		})
 
@@ -271,6 +283,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FNV1_64", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := fnv.New64()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -281,6 +294,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FNV1a_64", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := fnv.New64a()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -291,6 +305,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FNV1_32", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := fnv.New32()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -301,6 +316,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 		b.Run(size.name+"/FNV1a_32", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := fnv.New32a()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -312,6 +328,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := fnv.New128()
 			sum := make([]byte, 0, h.Size())
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
@@ -324,6 +341,7 @@ func BenchmarkContentHashTournament(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			h := fnv.New128a()
 			sum := make([]byte, 0, h.Size())
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				h.Reset()
 				_, _ = h.Write(data)
