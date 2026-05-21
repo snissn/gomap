@@ -122,6 +122,77 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsBadAdjacencyOrdinalV2B(t *test
 	}
 }
 
+func TestColumnVectorGraphPhysicalRowReaderUncheckedSkipsAdjacencyBoundsV2B(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{2}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	})
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnPhysicalRowReaderScratch
+	_, err = reader.FetchRow(0, &scratch)
+	if !errors.Is(err, errColumnVectorGraphAdjacencyOrdinalOutOfBounds) {
+		t.Fatalf("FetchRow err=%v want adjacency bounds sentinel", err)
+	}
+	row, err := reader.fetchRowUnchecked(0, &scratch)
+	if err != nil {
+		t.Fatalf("fetchRowUnchecked: %v", err)
+	}
+	if !slices.Equal(row.Adjacency, []uint32{2}) {
+		t.Fatalf("unchecked adjacency=%v want invalid edge retained for search-time validation", row.Adjacency)
+	}
+	var batchRows int
+	err = reader.fetchBatchUnchecked([]int{0}, &scratch, func(row columnVectorGraphPhysicalRow) error {
+		if !slices.Equal(row.Adjacency, []uint32{2}) {
+			t.Fatalf("unchecked batch adjacency=%v want invalid edge retained", row.Adjacency)
+		}
+		batchRows++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("fetchBatchUnchecked: %v", err)
+	}
+	if batchRows != 1 {
+		t.Fatalf("unchecked batch rows=%d want 1", batchRows)
+	}
+}
+
+func TestColumnVectorGraphPhysicalRowReaderUncheckedPreservesValidationV2B(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 0, Adjacency: []uint32{0}},
+	})
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnPhysicalRowReaderScratch
+	_, err = reader.fetchRowUnchecked(0, &scratch)
+	if err == nil || !strings.Contains(err.Error(), "invalid inv_norm") {
+		t.Fatalf("fetchRowUnchecked err=%v want inv_norm validation failure", err)
+	}
+	err = reader.fetchBatchUnchecked([]int{0}, &scratch, func(columnVectorGraphPhysicalRow) error {
+		t.Fatal("visitor should not run for invalid graph row")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid inv_norm") {
+		t.Fatalf("fetchBatchUnchecked err=%v want inv_norm validation failure", err)
+	}
+	err = reader.fetchBatchUnchecked([]int{0}, &scratch, nil)
+	if !errors.Is(err, errColumnVectorGraphPhysicalRowReaderBatchVisitorNil) {
+		t.Fatalf("fetchBatchUnchecked nil visitor err=%v want sentinel", err)
+	}
+	err = reader.FetchBatch([]int{0}, &scratch, nil)
+	if !errors.Is(err, errColumnVectorGraphPhysicalRowReaderBatchVisitorNil) {
+		t.Fatalf("FetchBatch nil visitor err=%v want sentinel", err)
+	}
+}
+
 func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testing.T) {
 	reader := &columnVectorGraphPhysicalRowReader{
 		def:    VectorIndexDefinition{Name: "embedding_graph", Dimensions: 3},
