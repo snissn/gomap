@@ -828,7 +828,7 @@ func TestCollectionCommandWALUpdateBSONSetUniqueIndexChangePublishesAppliedLSN(t
 	}
 }
 
-func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexPublishesAppliedLSN(t *testing.T) {
+func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexStagesAfterWALAppend(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",
 		Options: CollectionOptions{
@@ -865,9 +865,37 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexPublishesAppliedL
 		t.Fatalf("city=%q want sea", got)
 	}
 	assertCollectionIndexIDs(t, col, "email", "ada@example.test", "u1")
-	if got := d.State().AppliedCommandLSN; got != 1 {
-		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0 before flush", got)
 	}
+	frames := collectionCommandWALFrames(t, dir)
+	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+		t.Fatalf("command WAL frames=%+v, want one update frame before flush", frames)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after flush=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	doc, err = reopened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get reopened doc: %v", err)
+	}
+	if got := bson.Raw(doc).Lookup("city").StringValue(); got != "sea" {
+		t.Fatalf("reopened city=%q want sea", got)
+	}
+	assertCollectionIndexIDs(t, reopened, "email", "ada@example.test", "u1")
 }
 
 func TestCollectionCommandWALUpdateBSONSetNoIndexStagesAfterWALAppend(t *testing.T) {
