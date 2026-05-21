@@ -235,6 +235,9 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 	if vector.Type != ColumnStoreValueFloat32Vector || invNorm.Type != ColumnStoreValueFloat32 || adjacency.Type != ColumnStoreValueAdjacencyList {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types: vector=%q inv_norm=%q adjacency=%q", r.def.Name, row.Ordinal, vector.Type, invNorm.Type, adjacency.Type)
 	}
+	if !vector.Present || !invNorm.Present || !adjacency.Present {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", r.def.Name, row.Ordinal)
+	}
 	if vector.Null || invNorm.Null || adjacency.Null {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
 	}

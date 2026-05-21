@@ -133,6 +133,14 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testi
 			t.Fatalf("graphRowFromPhysicalRow err=%v want vector dims failure", err)
 		}
 	})
+	t.Run("missing projected value", func(t *testing.T) {
+		missing := row([]float32{1, 0, 0}, 1)
+		missing.Values[columnVectorGraphPhysicalRowValueVector].Present = false
+		_, err := reader.graphRowFromPhysicalRow(missing)
+		if err == nil || !strings.Contains(err.Error(), "missing graph value") {
+			t.Fatalf("graphRowFromPhysicalRow err=%v want missing value failure", err)
+		}
+	})
 	for _, tc := range []struct {
 		name string
 		inv  float32
