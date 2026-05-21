@@ -1,6 +1,7 @@
 package colgranule
 
 import (
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -126,6 +127,62 @@ func TestColumnPartCodecBlocksCanSplitIndependently(t *testing.T) {
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{1, 0, 1, 0, 1, 0, 1, 0, 1, 0})
 }
 
+func TestColumnPartPreservesExplicitCompressionNoneOverride(t *testing.T) {
+	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
+	opts.Compression.Default = CompressionLZ4
+	opts.Columns[2].Compression = CompressionNone
+	opts.Columns[2].CompressionSet = true
+	part, err := BuildColumnPart(13, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {1, 2, 3},
+		"time_us":   {10, 20, 30},
+		"value":     {100, 200, 300},
+		"kind_code": {0, 1, 2},
+		"has_reply": {0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	if got := part.Columns["id"].Definition.Compression; got != CompressionLZ4 {
+		t.Fatalf("id compression=%s want default %s", got, CompressionLZ4)
+	}
+	if got := part.Columns["value"].Definition.Compression; got != CompressionNone {
+		t.Fatalf("value compression=%s want explicit %s", got, CompressionNone)
+	}
+}
+
+func TestScanProjectedIntoDropsStaleColumns(t *testing.T) {
+	part, err := BuildColumnPart(14, partTestOptions([]SortKeyColumn{{Column: "id"}}), ColumnBatch{Columns: map[string][]int64{
+		"id":        {1, 2, 3},
+		"time_us":   {10, 20, 30},
+		"value":     {100, 200, 300},
+		"kind_code": {0, 1, 2},
+		"has_reply": {0, 1, 0},
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	scanner := part.NewScanner()
+	dst := map[string][]int64{"stale": {999}}
+	scan, err := scanner.ScanProjectedInto(dst, []string{"id", "value"})
+	if err != nil {
+		t.Fatalf("ScanProjectedInto(id,value): %v", err)
+	}
+	if _, ok := scan.Columns["stale"]; ok {
+		t.Fatalf("stale projection key remained after first scan: %v", scan.Columns)
+	}
+	if _, ok := scan.Columns["value"]; !ok {
+		t.Fatalf("value projection missing after first scan: %v", scan.Columns)
+	}
+	scan, err = scanner.ScanProjectedInto(dst, []string{"id"})
+	if err != nil {
+		t.Fatalf("ScanProjectedInto(id): %v", err)
+	}
+	if _, ok := scan.Columns["value"]; ok {
+		t.Fatalf("narrow projection retained stale value column: %v", scan.Columns)
+	}
+	assertInt64s(t, "id", scan.Columns["id"], []int64{1, 2, 3})
+}
+
 func TestColumnPartBuilderFailsClosedOnInvalidShape(t *testing.T) {
 	opts := partTestOptions([]SortKeyColumn{{Column: "id"}})
 	_, err := BuildColumnPart(1, opts, ColumnBatch{Columns: map[string][]int64{
@@ -167,6 +224,16 @@ func TestColumnPartBuilderFailsClosedOnInvalidShape(t *testing.T) {
 	}})
 	if err == nil || !strings.Contains(err.Error(), "bool value") {
 		t.Fatalf("bool err=%v want bool value", err)
+	}
+	_, err = BuildColumnPart(1, opts, ColumnBatch{Columns: map[string][]int64{
+		"id":        {math.MaxInt64},
+		"time_us":   {10},
+		"value":     {100},
+		"kind_code": {0},
+		"has_reply": {0},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "cannot form exclusive upper bound") {
+		t.Fatalf("max primary id err=%v want exclusive upper bound failure", err)
 	}
 }
 

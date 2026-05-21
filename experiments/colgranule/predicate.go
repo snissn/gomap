@@ -265,7 +265,7 @@ func validateSortKeyColumnNames(columns []string) error {
 	return nil
 }
 
-func compareSortKeyRows(columns []SortKeyColumn, left int, right int) int {
+func compareSortKeyRows(columns []SortKeyColumnValues, left int, right int) int {
 	for _, column := range columns {
 		lv := column.Values[left]
 		rv := column.Values[right]

@@ -39,13 +39,13 @@ func TestSortKeyMarkPrefixSummaries(t *testing.T) {
 }
 
 func TestSortKeyMarkRejectsDuplicateOrUnsortedColumns(t *testing.T) {
-	if _, err := BuildSortKeyMark([]SortKeyColumn{
+	if _, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1}},
 		{Name: "collection", Values: []int64{10, 20, 30}},
 	}); err == nil {
 		t.Fatal("BuildSortKeyMark duplicate columns succeeded, want error")
 	}
-	if _, err := BuildSortKeyMark([]SortKeyColumn{
+	if _, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1}},
 		{Name: "time_us", Values: []int64{10, 9, 11}},
 	}); err == nil {
@@ -54,7 +54,7 @@ func TestSortKeyMarkRejectsDuplicateOrUnsortedColumns(t *testing.T) {
 }
 
 func TestEmptySortKeyPredicateIsConstrainedEmpty(t *testing.T) {
-	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "collection", Values: []int64{1, 1, 1}}})
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "collection", Values: []int64{1, 1, 1}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build granules: %v", err)
 	}
-	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2}}})
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: []int64{1, 2}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
 		t.Fatal("CountInt64RangeWithDiagnostics mismatched mark rows succeeded, want error")
 	}
 
-	matchingMark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2, 3}}})
+	matchingMark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: []int64{1, 2, 3}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark matching: %v", err)
 	}
