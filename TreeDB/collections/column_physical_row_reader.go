@@ -343,9 +343,25 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 	if assetOrdinal < 0 || assetOrdinal >= len(r.view.AssetRefs) {
 		return nil, fmt.Errorf("collections: physical column row reader asset ordinal=%d outside refs=%d", assetOrdinal, len(r.view.AssetRefs))
 	}
-	raw, err := r.readCache.read(rowRange.ref, nil)
+	var dst []byte
+	if rowRange.ref.Length >= 0 && rowRange.ref.Length <= int64(maxCollectionInt) {
+		dst = make([]byte, int(rowRange.ref.Length))
+	}
+	// Cached blocks must own stable bytes. The asset read cache reuses scratch
+	// for syscall reads, so storing that scratch would let later cache misses
+	// corrupt already-indexed row offsets.
+	raw, err := r.readCache.read(rowRange.ref, dst)
 	if err != nil {
 		return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
+	}
+	if dst != nil {
+		if len(raw) != len(dst) {
+			return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d length=%d want %d", rowRange.ref.Generation, rowRange.ref.PartID, len(raw), len(dst))
+		}
+		if len(raw) > 0 && &raw[0] != &dst[0] {
+			copy(dst, raw)
+			raw = dst
+		}
 	}
 	rowOffsets, err := indexColumnPhysicalAssetReaderRows(raw, rowRange.version, rowRange.rowsOffset, rowRange.header, &r.view.Config)
 	if err != nil {
@@ -657,7 +673,8 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 		c.err = fmt.Errorf("collections: float32_vector length=%d want vector_dims=%d", n, expected)
 		return dst, c.err
 	}
-	if _, ok := c.fixedWidthSliceByteLen(n, 4, "float32_vector"); !ok {
+	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
 		return dst, c.err
 	}
 	base := len(dst)
@@ -669,10 +686,19 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 	} else {
 		dst = dst[:need]
 	}
-	for i := base; i < need; i++ {
-		dst[i] = math.Float32frombits(binaryBigEndianUint32(c.raw[c.pos:]))
-		c.pos += 4
+	// Keep cursor state out of the per-element loop; vector search decodes
+	// these fixed-width slices for every candidate row fetch.
+	pos := c.pos
+	end := pos + int(byteLen)
+	raw := c.raw
+	if pos < end {
+		_ = raw[end-1]
 	}
+	for i := base; i < need; i++ {
+		dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
+		pos += 4
+	}
+	c.pos = end
 	return dst, nil
 }
 
@@ -681,7 +707,8 @@ func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
 	if c.err != nil {
 		return dst, c.err
 	}
-	if _, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice"); !ok {
+	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice")
+	if !ok {
 		return dst, c.err
 	}
 	base := len(dst)
@@ -693,13 +720,18 @@ func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
 	} else {
 		dst = dst[:need]
 	}
-	for i := base; i < need; i++ {
-		dst[i] = binaryBigEndianUint32(c.raw[c.pos:])
-		c.pos += 4
+	// Keep cursor state out of the per-element loop; vector search decodes
+	// these fixed-width slices for every candidate row fetch.
+	pos := c.pos
+	end := pos + int(byteLen)
+	raw := c.raw
+	if pos < end {
+		_ = raw[end-1]
 	}
+	for i := base; i < need; i++ {
+		dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
+		pos += 4
+	}
+	c.pos = end
 	return dst, nil
-}
-
-func binaryBigEndianUint32(b []byte) uint32 {
-	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }
