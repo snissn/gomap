@@ -487,19 +487,7 @@ func columnVectorGraphManifestMatchStatus(collection string, graph columnVectorG
 	if err != nil {
 		return columnVectorGraphManifestMatchMismatch
 	}
-	if !(graph.IndexName == def.Name &&
-		graph.Field == def.Field &&
-		graph.Metric == def.Metric &&
-		graph.Encoding == def.Encoding &&
-		graph.Dimensions == def.Dimensions &&
-		graph.M == def.M &&
-		graph.EfConstruction == def.EfConstruction &&
-		graph.EfSearch == def.EfSearch &&
-		graph.BaseSchemaHash == cfg.SchemaHash &&
-		graph.GraphSchemaHash == graphCfg.SchemaHash &&
-		graph.AssetRef.Kind == ColumnAssetKindTCS1PartImage &&
-		graph.AssetRef.Namespace == graphCfg.AssetManager.Namespace &&
-		graph.AssetRef.Generation == graph.BaseManifestGeneration) {
+	if !columnVectorGraphCoreParametersMatch(&graph, &def, &cfg, &graphCfg) {
 		return columnVectorGraphManifestMatchMismatch
 	}
 	if graph.BaseManifestGeneration != cfg.ActiveManifest.Generation {
@@ -509,6 +497,30 @@ func columnVectorGraphManifestMatchStatus(collection string, graph columnVectorG
 		return columnVectorGraphManifestMatchMismatch
 	}
 	return columnVectorGraphManifestMatchLoaded
+}
+
+func columnVectorGraphCoreParametersMatch(graph *columnVectorGraphManifestSnapshot, def *VectorIndexDefinition, cfg *ColumnStoreConfig, graphCfg *ColumnStoreConfig) bool {
+	return columnVectorGraphDefinitionParametersMatch(graph, def) &&
+		columnVectorGraphAssetParametersMatch(graph, cfg, graphCfg)
+}
+
+func columnVectorGraphDefinitionParametersMatch(graph *columnVectorGraphManifestSnapshot, def *VectorIndexDefinition) bool {
+	return graph.IndexName == def.Name &&
+		graph.Field == def.Field &&
+		graph.Metric == def.Metric &&
+		graph.Encoding == def.Encoding &&
+		graph.Dimensions == def.Dimensions &&
+		graph.M == def.M &&
+		graph.EfConstruction == def.EfConstruction &&
+		graph.EfSearch == def.EfSearch
+}
+
+func columnVectorGraphAssetParametersMatch(graph *columnVectorGraphManifestSnapshot, cfg *ColumnStoreConfig, graphCfg *ColumnStoreConfig) bool {
+	return graph.BaseSchemaHash == cfg.SchemaHash &&
+		graph.GraphSchemaHash == graphCfg.SchemaHash &&
+		graph.AssetRef.Kind == ColumnAssetKindTCS1PartImage &&
+		graph.AssetRef.Namespace == graphCfg.AssetManager.Namespace &&
+		graph.AssetRef.Generation == graph.BaseManifestGeneration
 }
 
 func columnVectorGraphBaseManifestChecksum(manifest columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig) (uint64, error) {
