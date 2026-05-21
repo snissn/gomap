@@ -81,6 +81,9 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	if len(got.Results[0].Document) == 0 || !strings.Contains(string(got.Results[0].Document), `"did":"doc-c"`) {
 		t.Fatalf("top result document=%q want doc-c JSON materialized after top-k", got.Results[0].Document)
 	}
+	if cap(got.Results[0].Document) != len(got.Results[0].Document) {
+		t.Fatalf("top result document cap=%d len=%d want owned tightly-sized response bytes", cap(got.Results[0].Document), len(got.Results[0].Document))
+	}
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) {
 		t.Fatalf("DocumentsFetched=%d want %d", got.Stats.DocumentsFetched, len(got.Results))
 	}

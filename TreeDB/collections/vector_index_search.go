@@ -257,9 +257,36 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if len(results) == 0 {
 		return response, nil
 	}
+	var documents [][]byte
+	var documentBytes []byte
+	if opts.IncludeDocuments {
+		var inlineDocuments [16][]byte
+		if len(results) <= len(inlineDocuments) {
+			documents = inlineDocuments[:len(results)]
+		} else {
+			documents = make([][]byte, len(results))
+		}
+		totalDocumentBytes := 0
+		for i, result := range results {
+			doc, found, err := s.getDocumentAtBoundSnapshot(result.ID)
+			if err != nil {
+				return response, err
+			}
+			if !found {
+				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, string(result.ID))
+			}
+			documents[i] = doc
+			totalDocumentBytes += len(doc)
+			response.Stats.DocumentsFetched++
+		}
+		if totalDocumentBytes > 0 {
+			documentBytes = make([]byte, totalDocumentBytes)
+		}
+	}
 	response.Results = make([]VectorIndexSearchResult, len(results))
 	idBytes := make([]byte, vectorIndexSearchResultIDBytes(results))
 	idOffset := 0
+	docOffset := 0
 	for i, result := range results {
 		id := idBytes[idOffset : idOffset+len(result.ID)]
 		idOffset += len(result.ID)
@@ -270,20 +297,24 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 			Score:   result.Score,
 		}
 		if opts.IncludeDocuments {
-			doc, found, err := s.getDocumentAtBoundSnapshot(id)
-			if err != nil {
-				return response, err
+			doc := documents[i]
+			if len(doc) == 0 {
+				response.Results[i].Document = []byte{}
+				continue
 			}
-			if !found {
-				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, string(id))
-			}
-			response.Results[i].Document = doc
-			response.Stats.DocumentsFetched++
+			nextDocOffset := docOffset + len(doc)
+			responseDoc := documentBytes[docOffset:nextDocOffset:nextDocOffset]
+			copy(responseDoc, doc)
+			response.Results[i].Document = responseDoc
+			docOffset = nextDocOffset
 		}
 	}
 	return response, nil
 }
 
+// getDocumentAtBoundSnapshot returns snapshot-bound document bytes for immediate
+// use by Search. Search copies them into a response-owned arena before exposing
+// documents to callers, matching Collection.Get retention semantics.
 func (s *VectorIndexSearcher) getDocumentAtBoundSnapshot(documentID []byte) ([]byte, bool, error) {
 	if s == nil || s.snapshot == nil || s.catalog == nil || s.collection == nil {
 		return nil, false, errors.New("collections: nil vector index searcher snapshot")
