@@ -2826,6 +2826,26 @@ func TestColumnDictionaryCodeIndexRejectsCorruptWideCodeM1634(t *testing.T) {
 	}
 }
 
+func TestColumnDictionaryCodeSnapshotRowsM1634(t *testing.T) {
+	view := columnPhysicalScanSnapshotView{
+		AssetRefs: []columnManifestAssetRefForScan{
+			{Ref: ColumnAssetRef{Generation: 2, PartID: 1}, Rows: 3},
+			{Ref: ColumnAssetRef{Generation: 2, PartID: 2}, Rows: 5},
+		},
+	}
+	byPart := map[[2]uint64]columnManifestDictionaryCodesSnapshot{
+		{2, 1}: {AssetRef: ColumnAssetRef{Generation: 2, PartID: 1}},
+		{2, 2}: {AssetRef: ColumnAssetRef{Generation: 2, PartID: 2}},
+	}
+	if rows := columnDictionaryCodeSnapshotRows(view, byPart); rows != 8 {
+		t.Fatalf("rows=%d want 8", rows)
+	}
+	delete(byPart, [2]uint64{2, 2})
+	if rows := columnDictionaryCodeSnapshotRows(view, byPart); rows != 0 {
+		t.Fatalf("missing part rows=%d want 0", rows)
+	}
+}
+
 func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {
 	wordsPerGroup, totalWords, ok, err := columnDictionaryCodeDistinctSeenWords(4, 129)
 	if err != nil {
