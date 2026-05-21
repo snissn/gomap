@@ -303,11 +303,15 @@ func (r *columnVectorGraphPhysicalRowReader) fetchBatchUnchecked(ordinals []int,
 }
 
 func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnPhysicalRowReaderRow) (columnVectorGraphPhysicalRow, error) {
+	reader, err := r.rowReader()
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, err
+	}
 	graphRow, err := r.graphRowFromPhysicalRowUnchecked(row)
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	rowCount := r.reader.totalRows
+	rowCount := reader.totalRows
 	for i, neighbor := range graphRow.Adjacency {
 		if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
 			return columnVectorGraphPhysicalRow{}, err
@@ -321,7 +325,7 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 // this path and validates each edge exactly when it is expanded.
 func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(row columnPhysicalRowReaderRow) (columnVectorGraphPhysicalRow, error) {
 	if r == nil {
-		return columnVectorGraphPhysicalRow{}, errors.New("collections: nil column vector graph physical row reader")
+		return columnVectorGraphPhysicalRow{}, errNilColumnVectorGraphPhysicalRowReader
 	}
 	if len(row.ID) == 0 {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing document id", r.def.Name, row.Ordinal)
