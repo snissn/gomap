@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strconv"
 )
 
 type columnVectorGraphNativeSearchOptions struct {
@@ -190,13 +189,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			return nil, stats, err
 		}
 		stats.ExpansionFetches++
-		for _, neighbor := range row.Adjacency {
+		for i, neighbor := range row.Adjacency {
 			if stats.Candidates >= uint64(efSearch) {
 				break
 			}
 			stats.Edges++
-			if strconv.IntSize == 32 && neighbor > uint32(1<<31-1) {
-				return nil, stats, fmt.Errorf("collections: column_graph neighbor ordinal %d exceeds int range", neighbor)
+			if uint64(neighbor) >= uint64(rowCount) {
+				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, row.Ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
 			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
 				return nil, stats, err

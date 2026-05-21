@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -101,6 +102,26 @@ func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing
 	}
 	if len(got) != 1 || got[0].Ordinal != 2 || string(got[0].ID) != "doc-best" {
 		t.Fatalf("results=%+v want scoring fetches not to mutate expansion adjacency", got)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchRejectsBadAdjacencyOrdinalV3(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-start"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{2}},
+		{ID: []byte("doc-other"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2}, &scratch)
+	if !errors.Is(err, errColumnVectorGraphAdjacencyOrdinalOutOfBounds) {
+		t.Fatalf("SearchCosine err=%v want adjacency bounds sentinel", err)
 	}
 }
 
