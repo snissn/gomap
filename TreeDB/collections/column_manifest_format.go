@@ -665,3 +665,29 @@ func (c *manifestCursor) stringBytes() []byte {
 	c.pos += int(n)
 	return value
 }
+
+func (c *manifestCursor) skip(n uint64) {
+	if c.err != nil {
+		return
+	}
+	if n > uint64(len(c.raw)-c.pos) {
+		c.err = errors.New("collections: short column manifest record")
+		return
+	}
+	c.pos += int(n)
+}
+
+func (c *manifestCursor) skipStringBytes() {
+	if c.err != nil {
+		return
+	}
+	n := c.u64()
+	if c.err != nil {
+		return
+	}
+	if n > uint64(len(c.raw)-c.pos) {
+		c.err = errors.New("collections: short column manifest string")
+		return
+	}
+	c.pos += int(n)
+}
