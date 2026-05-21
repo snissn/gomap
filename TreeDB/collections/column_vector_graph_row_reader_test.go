@@ -2,8 +2,8 @@ package collections
 
 import (
 	"errors"
-	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
@@ -139,7 +139,7 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testi
 		}
 	}
 	t.Run("vector dims", func(t *testing.T) {
-		_, err := reader.graphRowFromPhysicalRow(row([]float32{1, 0}, 1))
+		_, err := reader.graphRowFromPhysicalRow(row([]float32{1, 0}, 1), reader.RowCount())
 		if err == nil || !strings.Contains(err.Error(), "vector dims=2 want 3") {
 			t.Fatalf("graphRowFromPhysicalRow err=%v want vector dims failure", err)
 		}
@@ -147,7 +147,7 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testi
 	t.Run("missing projected value", func(t *testing.T) {
 		missing := row([]float32{1, 0, 0}, 1)
 		missing.Values[columnVectorGraphPhysicalRowValueVector].Present = false
-		_, err := reader.graphRowFromPhysicalRow(missing)
+		_, err := reader.graphRowFromPhysicalRow(missing, reader.RowCount())
 		if err == nil || !strings.Contains(err.Error(), "missing graph value") {
 			t.Fatalf("graphRowFromPhysicalRow err=%v want missing value failure", err)
 		}
@@ -162,7 +162,7 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testi
 		{name: "negative infinity", inv: float32(math.Inf(-1))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := reader.graphRowFromPhysicalRow(row([]float32{1, 0, 0}, tc.inv))
+			_, err := reader.graphRowFromPhysicalRow(row([]float32{1, 0, 0}, tc.inv), reader.RowCount())
 			if err == nil || !strings.Contains(err.Error(), "invalid inv_norm") {
 				t.Fatalf("graphRowFromPhysicalRow err=%v want invalid inv_norm failure", err)
 			}
@@ -172,9 +172,9 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsMalformedGraphRowsV2B(t *testi
 		nilReader := &columnVectorGraphPhysicalRowReader{
 			def: VectorIndexDefinition{Name: "embedding_graph", Dimensions: 3},
 		}
-		_, err := nilReader.graphRowFromPhysicalRow(row([]float32{1, 0, 0}, 1))
+		_, err := nilReader.FetchRow(0, nil)
 		if !errors.Is(err, errNilColumnVectorGraphPhysicalRowReader) {
-			t.Fatalf("graphRowFromPhysicalRow err=%v want nil-reader sentinel", err)
+			t.Fatalf("FetchRow err=%v want nil-reader sentinel", err)
 		}
 	})
 }
@@ -335,13 +335,21 @@ func TestColumnVectorGraphPhysicalRowReaderWarmScratchHotFetchZeroAllocsV2B(t *t
 	if _, err := reader.FetchRow(1, &scratch); err != nil {
 		t.Fatalf("warm FetchRow: %v", err)
 	}
+	var fetchErr error
 	allocs := testing.AllocsPerRun(1000, func() {
+		if fetchErr != nil {
+			return
+		}
 		row, err := reader.FetchRow(1, &scratch)
 		if err != nil {
-			t.Fatalf("FetchRow: %v", err)
+			fetchErr = err
+			return
 		}
 		columnPhysicalScanBenchSum += int64(row.Adjacency[0])
 	})
+	if fetchErr != nil {
+		t.Fatalf("FetchRow: %v", fetchErr)
+	}
 	if allocs != 0 {
 		t.Fatalf("hot FetchRow allocs=%v want zero", allocs)
 	}
@@ -576,7 +584,7 @@ func assertColumnVectorGraphPhysicalRowV2B(tb testing.TB, row columnVectorGraphP
 	if math.Abs(float64(row.InvNorm-invNorm)) > 1e-6 {
 		tb.Fatalf("invNorm=%v want %v", row.InvNorm, invNorm)
 	}
-	if got, want := fmt.Sprint(row.Adjacency), fmt.Sprint(adjacency); got != want {
-		tb.Fatalf("adjacency=%s want %s", got, want)
+	if !slices.Equal(row.Adjacency, adjacency) {
+		tb.Fatalf("adjacency=%v want %v", row.Adjacency, adjacency)
 	}
 }
