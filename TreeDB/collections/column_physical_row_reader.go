@@ -9,7 +9,7 @@ import (
 
 const defaultColumnPhysicalRowReaderMaxDecodedBlocks = 4
 
-var errColumnPhysicalRowOrdinalOutOfBounds = errors.New("collections: physical column row ordinal outside row_count")
+var errColumnPhysicalRowOrdinalOutOfBounds = errors.New("physical column row ordinal outside row_count")
 
 type columnPhysicalRowReaderOptions struct {
 	ProjectedColumns  []string
