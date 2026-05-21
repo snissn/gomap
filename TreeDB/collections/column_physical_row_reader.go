@@ -256,6 +256,7 @@ func (r *columnPhysicalRowReader) buildOrdinalRanges() error {
 		if header.RowCount > maxCollectionInt-totalRows {
 			return errors.New("collections: physical column row reader row count overflows int")
 		}
+		header = cloneColumnPhysicalAssetScanHeader(header)
 		ranges = append(ranges, columnPhysicalRowReaderRange{
 			assetOrdinal: assetOrdinal,
 			ref:          ref,
@@ -337,8 +338,10 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 		header:       rowRange.header,
 		rowOffsets:   rowOffsets,
 	}
-	block.residentBytes = int64(len(block.raw)) + int64(len(block.rowOffsets))*(strconv.IntSize/8)
-	r.evictBlocksForInsert()
+	block.residentBytes = int64(len(block.raw)) + int64(len(block.rowOffsets))*int64(strconv.IntSize/8)
+	if err := r.evictBlocksForInsert(); err != nil {
+		return nil, err
+	}
 	r.blocks[assetOrdinal] = block
 	r.lru = append(r.lru, assetOrdinal)
 	r.stats.DecodedBlocks++
@@ -363,21 +366,29 @@ func (r *columnPhysicalRowReader) touchBlock(assetOrdinal int) {
 	panic(fmt.Sprintf("collections: physical column row reader LRU missing cached asset ordinal=%d", assetOrdinal))
 }
 
-func (r *columnPhysicalRowReader) evictBlocksForInsert() {
+func (r *columnPhysicalRowReader) evictBlocksForInsert() error {
 	for len(r.blocks) >= r.maxBlocks && len(r.lru) > 0 {
 		evict := r.lru[0]
 		copy(r.lru, r.lru[1:])
 		r.lru = r.lru[:len(r.lru)-1]
 		block := r.blocks[evict]
+		if block == nil {
+			return fmt.Errorf("collections: physical column row reader LRU references missing cached asset ordinal=%d", evict)
+		}
 		delete(r.blocks, evict)
-		if block != nil {
-			r.stats.ResidentBytes -= block.residentBytes
-			if r.stats.ResidentBytes < 0 {
-				r.stats.ResidentBytes = 0
-			}
+		r.stats.ResidentBytes -= block.residentBytes
+		if r.stats.ResidentBytes < 0 {
+			r.stats.ResidentBytes = 0
 		}
 		r.stats.BlockEvictions++
 	}
+	return nil
+}
+
+func cloneColumnPhysicalAssetScanHeader(header columnPhysicalAssetScanHeader) columnPhysicalAssetScanHeader {
+	header.Collection = append([]byte(nil), header.Collection...)
+	header.Namespace = append([]byte(nil), header.Namespace...)
+	return header
 }
 
 func (r *columnPhysicalRowReader) decodeRowFromBlock(block *columnPhysicalRowReaderBlock, ordinal, rowIndex int, scratch *columnPhysicalRowReaderScratch) (columnPhysicalRowReaderRow, error) {
