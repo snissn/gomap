@@ -198,6 +198,25 @@ func TestTimeBucketedCountCodesRejectsHugeBucketSpan(t *testing.T) {
 	}
 }
 
+func TestTimeBucketedCountCodesRejectsStaleMinMaxMetadata(t *testing.T) {
+	codeGranules, err := buildCodeGranulesForTest([][]uint32{{0, 0}}, 1)
+	if err != nil {
+		t.Fatalf("build code granules: %v", err)
+	}
+	timeBuilder := NewGranuleBuilder(Config{Encoding: EncodingRawInt64, Compression: CompressionNone})
+	timeGranule, err := timeBuilder.BuildInt64([]int64{0, 10})
+	if err != nil {
+		t.Fatalf("BuildInt64 times: %v", err)
+	}
+	timeGranule.Payload = append([]byte(nil), timeGranule.Payload...)
+	timeGranule.Max = 0
+	var arena AggregateArena
+	_, err = arena.TimeBucketedCountCodes(codeGranules, []EncodedGranule{timeGranule}, 10, 1)
+	if err == nil || !strings.Contains(err.Error(), "outside bucket range") {
+		t.Fatalf("TimeBucketedCountCodes stale min/max err=%v want outside bucket range", err)
+	}
+}
+
 func buildCodeGranulesForTest(codeSets [][]uint32, cardinality uint32) ([]EncodedGranule, error) {
 	builder := NewGranuleBuilder(Config{Compression: CompressionNone})
 	granules := make([]EncodedGranule, 0, len(codeSets))

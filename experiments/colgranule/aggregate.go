@@ -243,7 +243,11 @@ func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, t
 			if code >= header.cardinality || code >= cardinality {
 				return TimeBucketedCounts{}, fmt.Errorf("colgranule: code %d outside cardinality %d", code, cardinality)
 			}
-			bucketIndex := int(floorDiv(timestamp, bucketWidth) - minBucket)
+			bucketIndex64 := floorDiv(timestamp, bucketWidth) - minBucket
+			if bucketIndex64 < 0 || bucketIndex64 >= int64(buckets) {
+				return TimeBucketedCounts{}, fmt.Errorf("colgranule: timestamp %d outside bucket range [%d,%d]", timestamp, minBucket, maxBucket)
+			}
+			bucketIndex := int(bucketIndex64)
 			a.bucketCounts[bucketIndex*int(cardinality)+int(code)]++
 		}
 	}
