@@ -84,12 +84,22 @@ func BuildSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
 		if c.Name == "" {
 			return SortKeyMark{}, fmt.Errorf("colgranule: empty sort key column name at %d", i)
 		}
+		for j := 0; j < i; j++ {
+			if columns[j].Name == c.Name {
+				return SortKeyMark{}, fmt.Errorf("colgranule: duplicate sort key column %q", c.Name)
+			}
+		}
 		if len(c.Values) != rows {
 			return SortKeyMark{}, fmt.Errorf("colgranule: sort key column %s rows=%d want=%d", c.Name, len(c.Values), rows)
 		}
 		mark.Columns[i] = c.Name
 		lower[i] = c.Values[0]
 		last[i] = c.Values[rows-1]
+	}
+	for row := 1; row < rows; row++ {
+		if compareSortKeyRows(columns, row-1, row) > 0 {
+			return SortKeyMark{}, fmt.Errorf("colgranule: sort key rows out of order at row %d", row)
+		}
 	}
 	for prefixLen := 1; prefixLen <= len(columns); prefixLen++ {
 		prefixColumns := append([]string(nil), mark.Columns[:prefixLen]...)
@@ -123,12 +133,18 @@ func (r *GranuleReader) CountInt64RangeWithDiagnostics(granules []EncodedGranule
 	if plan.Filter.Empty() {
 		return 0, diagnostics, nil
 	}
+	if plan.Filter.Column == "" {
+		return 0, diagnostics, errors.New("colgranule: empty filter column")
+	}
 	if len(marks) != 0 && len(marks) != len(granules) {
 		return 0, diagnostics, fmt.Errorf("colgranule: marks=%d granules=%d", len(marks), len(granules))
 	}
 	var sortPlan sortKeyRangePlan
 	var err error
 	if len(marks) != 0 {
+		if !containsString(marks[0].Columns, plan.Filter.Column) {
+			return 0, diagnostics, fmt.Errorf("colgranule: filter column %q not present in sort key mark", plan.Filter.Column)
+		}
 		sortPlan, err = compileSortKeyRangePlan(marks[0].Columns, plan.SortKeyRanges)
 		if err != nil {
 			return 0, diagnostics, err
@@ -140,6 +156,9 @@ func (r *GranuleReader) CountInt64RangeWithDiagnostics(granules []EncodedGranule
 		if len(marks) != 0 {
 			if !sameStringSlice(marks[0].Columns, marks[i].Columns) {
 				return total, diagnostics, errors.New("colgranule: inconsistent sort key mark columns")
+			}
+			if marks[i].Rows != g.Rows {
+				return total, diagnostics, fmt.Errorf("colgranule: mark rows=%d granule rows=%d at granule %d", marks[i].Rows, g.Rows, i)
 			}
 			mayContain, constrained, err := marks[i].mayContainCompiled(sortPlan)
 			if err != nil {
@@ -179,6 +198,9 @@ func compileSortKeyRangePlan(columns []string, ranges []Int64RangePredicate) (so
 	if len(columns) > maxSortKeyColumns {
 		return plan, fmt.Errorf("colgranule: sort key columns=%d exceeds cap %d", len(columns), maxSortKeyColumns)
 	}
+	if err := validateSortKeyColumnNames(columns); err != nil {
+		return plan, err
+	}
 	var upperInclusive [maxSortKeyColumns]int64
 	for _, column := range columns {
 		predicate, ok := findRangePredicate(ranges, column)
@@ -201,11 +223,11 @@ func compileSortKeyRangePlan(columns []string, ranges []Int64RangePredicate) (so
 }
 
 func (m SortKeyMark) mayContainCompiled(plan sortKeyRangePlan) (bool, bool, error) {
-	if plan.prefixLen == 0 {
-		return !plan.empty, false, nil
-	}
 	if plan.empty {
 		return false, true, nil
+	}
+	if plan.prefixLen == 0 {
+		return true, false, nil
 	}
 	if plan.prefixLen > len(m.Prefixes) {
 		return false, true, errors.New("colgranule: missing sort key prefix summary")
@@ -227,6 +249,43 @@ func findRangePredicate(ranges []Int64RangePredicate, column string) (Int64Range
 		}
 	}
 	return Int64RangePredicate{}, false
+}
+
+func validateSortKeyColumnNames(columns []string) error {
+	for i, column := range columns {
+		if column == "" {
+			return fmt.Errorf("colgranule: empty sort key column name at %d", i)
+		}
+		for j := 0; j < i; j++ {
+			if columns[j] == column {
+				return fmt.Errorf("colgranule: duplicate sort key column %q", column)
+			}
+		}
+	}
+	return nil
+}
+
+func compareSortKeyRows(columns []SortKeyColumn, left int, right int) int {
+	for _, column := range columns {
+		lv := column.Values[left]
+		rv := column.Values[right]
+		if lv < rv {
+			return -1
+		}
+		if lv > rv {
+			return 1
+		}
+	}
+	return 0
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func exclusiveUpperBound(values []int64) ([]int64, bool) {
