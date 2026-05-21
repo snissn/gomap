@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -146,15 +145,15 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
 	_, _, err = reader.SearchCosine([]float32{1, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, &scratch)
-	if err == nil || !strings.Contains(err.Error(), "query dims=2 want 3") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryDimensionMismatch) {
 		t.Fatalf("SearchCosine dim err=%v want dimension failure", err)
 	}
 	_, _, err = reader.SearchCosine([]float32{0, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, &scratch)
-	if err == nil || !strings.Contains(err.Error(), "query norm") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchQueryNormInvalid) {
 		t.Fatalf("SearchCosine zero err=%v want norm failure", err)
 	}
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: -1}, &scratch)
-	if err == nil || !strings.Contains(err.Error(), "ef_search cannot be negative") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchEfSearchNegative) {
 		t.Fatalf("SearchCosine ef_search err=%v want negative ef_search failure", err)
 	}
 }
@@ -184,12 +183,12 @@ func TestColumnVectorGraphNativeSearchRequiresScratchV3(t *testing.T) {
 		t.Fatalf("zero top_k results=%v stats=%+v want empty", got, stats)
 	}
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: -1}, nil)
-	if err == nil || !strings.Contains(err.Error(), "ef_search cannot be negative") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchEfSearchNegative) {
 		t.Fatalf("SearchCosine zero top_k ef_search err=%v want negative ef_search failure", err)
 	}
 
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, nil)
-	if err == nil || !strings.Contains(err.Error(), "requires caller-owned scratch") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchScratchRequired) {
 		t.Fatalf("SearchCosine err=%v want caller-owned scratch failure", err)
 	}
 }
@@ -200,7 +199,7 @@ func TestColumnVectorGraphNativeCosineScoreRejectsMalformedRowV3(t *testing.T) {
 		Vector:  []float32{1},
 		InvNorm: 1,
 	})
-	if err == nil || !strings.Contains(err.Error(), "ordinal=7 vector dims=1 want 2") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchCandidateDimensionMismatch) {
 		t.Fatalf("columnVectorGraphNativeCosineScore err=%v want dimension failure", err)
 	}
 }
@@ -227,7 +226,7 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 		t.Fatalf("empty search results=%v stats=%+v want empty", got, stats)
 	}
 	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: -1}, &scratch)
-	if err == nil || !strings.Contains(err.Error(), "ef_search cannot be negative") {
+	if !errors.Is(err, errColumnVectorGraphNativeSearchEfSearchNegative) {
 		t.Fatalf("SearchCosine empty ef_search err=%v want negative ef_search failure", err)
 	}
 	got, stats, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: 10}, nil)

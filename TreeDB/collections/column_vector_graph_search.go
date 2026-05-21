@@ -16,7 +16,13 @@ const columnVectorGraphNativeScratchOversizeSlack = 16
 // Larger result sets switch to sort.Slice so result ordering does not go O(k^2).
 const columnVectorGraphNativeResultOrderInsertionSortLimit = 32
 
-var errColumnVectorGraphNativeSearchScratchRequired = errors.New("collections: column_graph native search requires caller-owned scratch")
+var (
+	errColumnVectorGraphNativeSearchScratchRequired            = errors.New("collections: column_graph native search requires caller-owned scratch")
+	errColumnVectorGraphNativeSearchQueryDimensionMismatch     = errors.New("collections: column_graph native search query dimension mismatch")
+	errColumnVectorGraphNativeSearchQueryNormInvalid           = errors.New("collections: column_graph native search query norm invalid")
+	errColumnVectorGraphNativeSearchEfSearchNegative           = errors.New("collections: column_graph native search ef_search cannot be negative")
+	errColumnVectorGraphNativeSearchCandidateDimensionMismatch = errors.New("collections: column_graph native search candidate dimension mismatch")
+)
 
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
@@ -179,7 +185,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, errNilColumnVectorGraphPhysicalRowReader
 	}
 	if len(query) != r.def.Dimensions {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query dims=%d want %d", r.def.Name, len(query), r.def.Dimensions)
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query dims=%d want %d: %w", r.def.Name, len(query), r.def.Dimensions, errColumnVectorGraphNativeSearchQueryDimensionMismatch)
 	}
 	rowCount := r.RowCount()
 	topK := opts.TopK
@@ -188,17 +194,17 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	efSearch := opts.EfSearch
 	if efSearch < 0 {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative", r.def.Name)
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative: %w", r.def.Name, errColumnVectorGraphNativeSearchEfSearchNegative)
 	}
 	if topK == 0 || rowCount == 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, nil
 	}
 	if scratch == nil {
-		return nil, columnVectorGraphNativeSearchStats{}, errColumnVectorGraphNativeSearchScratchRequired
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q: %w", r.def.Name, errColumnVectorGraphNativeSearchScratchRequired)
 	}
 	queryInvNorm, err := columnVectorGraphInvNorm(query)
 	if err != nil {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w", r.def.Name, err)
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w: %v", r.def.Name, errColumnVectorGraphNativeSearchQueryNormInvalid, err)
 	}
 	if topK > rowCount {
 		topK = rowCount
@@ -217,7 +223,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		degree = 0
 	}
 	if err := scratch.prepare(rowCount, r.def.Dimensions, degree, topK, efSearch); err != nil {
-		return nil, columnVectorGraphNativeSearchStats{}, err
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 
 	var stats columnVectorGraphNativeSearchStats
@@ -442,7 +448,7 @@ func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchC
 
 func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, row columnVectorGraphPhysicalRow) (float64, error) {
 	if len(row.Vector) != len(query) {
-		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d", row.Ordinal, len(row.Vector), len(query))
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", row.Ordinal, len(row.Vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
 	var dot float64
 	for i, v := range query {
