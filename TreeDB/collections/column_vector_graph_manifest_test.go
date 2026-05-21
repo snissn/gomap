@@ -440,6 +440,30 @@ func TestColumnGraphManifestMatchesDefinitionRejectsNonPartImageRefV2A(t *testin
 	}
 }
 
+func TestColumnVectorGraphReachabilityRejectsBaseAssetGenerationMismatchV2A(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  baseCfg.AssetManager.Namespace,
+		Generation: identity.Generation - 1,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     128,
+		Checksum:   7,
+	}
+	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, def, identity, ref, ref.Length, 2)
+	_, err = columnVectorGraphAssetRefsFromManifestRecordsForReachability(records, identity.Generation, baseCfg.AssetManager.Namespace)
+	if err == nil || !strings.Contains(err.Error(), "base manifest generation=7 does not match asset generation=6") {
+		t.Fatalf("reachability err=%v want base/asset generation mismatch", err)
+	}
+}
+
 func BenchmarkColumnGraphVectorIndexStatusLoadedV2A(b *testing.B) {
 	dir := b.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

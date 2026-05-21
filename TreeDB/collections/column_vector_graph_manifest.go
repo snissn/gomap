@@ -491,6 +491,9 @@ func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []colu
 		if graph.AssetRef.Generation > activeGeneration {
 			return nil, fmt.Errorf("collections: column vector graph asset generation=%d is newer than active manifest generation=%d", graph.AssetRef.Generation, activeGeneration)
 		}
+		if graph.BaseManifestGeneration != graph.AssetRef.Generation {
+			return nil, fmt.Errorf("collections: column vector graph base manifest generation=%d does not match asset generation=%d", graph.BaseManifestGeneration, graph.AssetRef.Generation)
+		}
 		if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
 			return nil, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
 		}
