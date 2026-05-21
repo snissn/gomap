@@ -110,6 +110,32 @@ func (c *Collection) lockCommandWALPublishCoordinator() (func(), error) {
 	}
 }
 
+func (c *Collection) lockCommandWALFlushPublishCoordinator(domain *collectionWriteDomain) (func(), error) {
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || domain == nil {
+		return func() {}, nil
+	}
+	coord := domain.commandWALCoordinatorForDomain(c.db)
+	if coord == nil {
+		return func() {}, nil
+	}
+	for {
+		coord.mu.Lock()
+		owner := coord.owner
+		if owner == nil || owner == domain {
+			return coord.mu.Unlock, nil
+		}
+		if !collectionCommandWALDomainHasPending(owner) {
+			coord.owner = nil
+			coord.mu.Unlock()
+			continue
+		}
+		coord.mu.Unlock()
+		if err := flushCollectionWriteDomain(c.db, owner); err != nil {
+			return nil, err
+		}
+	}
+}
+
 func (c *Collection) publishCommandWALNoop(intent *backenddb.CommandWALIntent, sync bool) error {
 	if c == nil || c.db == nil {
 		return errCollectionDBNil

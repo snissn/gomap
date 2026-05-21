@@ -7582,9 +7582,19 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	var rootOverlayFilters map[string]collectionRootOverlayFilter
-	commandWALIntent, commandWALAppliedLSN, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
-	if err != nil {
-		return err
+	var commandWALAppliedLSN uint64
+	publishWithCommandWALCoordinator := func(fn func(*backenddb.CommandWALIntent) error) error {
+		unlock, err := c.lockCommandWALFlushPublishCoordinator(domain)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		commandWALIntent, appliedLSN, err := domain.pendingCommandWALCoverageIntentLocked(c.db)
+		if err != nil {
+			return err
+		}
+		commandWALAppliedLSN = appliedLSN
+		return fn(commandWALIntent)
 	}
 	if collectionMetaUsesIndexedOverlayRoots(meta) {
 		materializeStart := time.Now()
@@ -7601,15 +7611,18 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
-		if commandWALIntent != nil {
-			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
-			})
-		} else {
-			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
-			})
-		}
+		err = publishWithCommandWALCoordinator(func(commandWALIntent *backenddb.CommandWALIntent) error {
+			if commandWALIntent != nil {
+				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+					return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+				})
+			} else {
+				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+					return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
+				})
+			}
+			return err
+		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 		if err == nil {
@@ -7625,15 +7638,18 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		rootDeltaStats := collectionRootDeltaPlanStatsFromOrdered(meta.Name, rootNames, ordered)
 		materializeElapsed = collectionObservedElapsedSince(materializeStart)
 		publishStart := time.Now()
-		if commandWALIntent != nil {
-			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-			})
-		} else {
-			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-			})
-		}
+		err = publishWithCommandWALCoordinator(func(commandWALIntent *backenddb.CommandWALIntent) error {
+			if commandWALIntent != nil {
+				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+					return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+				})
+			} else {
+				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+					return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+				})
+			}
+			return err
+		})
 		publishElapsed = collectionObservedElapsedSince(publishStart)
 		cleanupDeltas()
 		if err == nil {
@@ -14487,7 +14503,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		plan.stats.BufferStageRootAppend += overlayAppendDuration
 		if err == nil && buffered && plan.bufferedCommandWALLSN != 0 {
 			if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-				return false, err
+				return false, &CommitAmbiguousError{Operation: "command WAL buffered update", Err: err}
 			}
 		}
 		return buffered, err
@@ -14629,7 +14645,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	plan.stats.BufferedBatches = 1
 	if plan.bufferedCommandWALLSN != 0 {
 		if err := domain.recordPendingCommandWALLSNLocked(c.db, plan.bufferedCommandWALLSN); err != nil {
-			return false, err
+			return false, &CommitAmbiguousError{Operation: "command WAL buffered update", Err: err}
 		}
 	}
 	return true, nil
