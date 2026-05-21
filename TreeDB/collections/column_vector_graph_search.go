@@ -48,8 +48,9 @@ type columnVectorGraphNativeSearchResult struct {
 }
 
 type columnVectorGraphSearchCandidate struct {
-	ordinal int
-	score   float64
+	ordinal   int
+	score     float64
+	adjacency []uint32
 }
 
 // columnVectorGraphNativeSearchScratch is caller-owned mutable search state.
@@ -67,6 +68,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
+	adjacencyBuf   []uint32
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
@@ -92,12 +94,20 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	if frontierCap < topK {
 		frontierCap = topK
 	}
+	adjacencyCap := 0
+	if frontierCap > 0 && degree > 0 {
+		if frontierCap > math.MaxInt/degree {
+			return fmt.Errorf("collections: column_graph native search adjacency scratch overflows: frontierCap=%d degree=%d", frontierCap, degree)
+		}
+		adjacencyCap = frontierCap * degree
+	}
 	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
 	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topK)
 	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
+	s.adjacencyBuf = resizeColumnVectorGraphNativeUint32Scratch(s.adjacencyBuf, adjacencyCap)
 	return nil
 }
 
@@ -150,6 +160,13 @@ func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint
 		return make([]uint64, target)
 	}
 	return dst[:target]
+}
+
+func resizeColumnVectorGraphNativeUint32Scratch(dst []uint32, target int) []uint32 {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]uint32, 0, target)
+	}
+	return dst[:0]
 }
 
 func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][]byte {
@@ -249,19 +266,14 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			}
 			continue
 		}
-		// Search validates adjacency as edges are expanded; avoid duplicate
-		// full adjacency scans on score/result fetches.
-		row, err := r.fetchRowUnchecked(candidate.ordinal, &scratch.expandScratch)
-		if err != nil {
-			return nil, stats, err
-		}
-		stats.ExpansionFetches++
-		for i, neighbor := range row.Adjacency {
+		// Candidate scoring fetches adjacency once into scratch-owned storage;
+		// expansion validates and consumes that copy without a second row fetch.
+		for i, neighbor := range candidate.adjacency {
 			if stats.Candidates >= uint64(efSearch) {
 				break
 			}
 			stats.Edges++
-			if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
+			if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, candidate.ordinal, i, neighbor, rowCount); err != nil {
 				return nil, stats, err
 			}
 			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
@@ -362,11 +374,32 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float3
 			return fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", r.def.Name, ordinal)
 		}
 		stats.Candidates++
-		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: score}
+		candidate := columnVectorGraphSearchCandidate{
+			ordinal:   ordinal,
+			score:     score,
+			adjacency: scratch.copyCandidateAdjacency(row.Adjacency),
+		}
 		scratch.insertTop(topK, candidate)
 		scratch.pushFrontier(candidate)
 	}
 	return nil
+}
+
+func (s *columnVectorGraphNativeSearchScratch) copyCandidateAdjacency(adjacency []uint32) []uint32 {
+	start := len(s.adjacencyBuf)
+	need := start + len(adjacency)
+	if need > cap(s.adjacencyBuf) {
+		nextCap := cap(s.adjacencyBuf) * 2
+		if nextCap < need {
+			nextCap = need
+		}
+		next := make([]uint32, len(s.adjacencyBuf), nextCap)
+		copy(next, s.adjacencyBuf)
+		s.adjacencyBuf = next
+	}
+	s.adjacencyBuf = s.adjacencyBuf[:need]
+	copy(s.adjacencyBuf[start:need], adjacency)
+	return s.adjacencyBuf[start:need]
 }
 
 func (s *columnVectorGraphNativeSearchScratch) markVisited(ordinal int) bool {
