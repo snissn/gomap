@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,5 +42,39 @@ func TestColumnGraphDemoRunsCloseReopenNativeReaderPath(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "OpenVectorIndexSearcher") {
 		t.Fatalf("demo stderr missing steady-state searcher tip: %s", stderr.String())
+	}
+}
+
+func TestLoadGloveRowsRejectsInvalidNumericValues(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "parse error",
+			content: "bad 0.1 nope\n",
+			want:    `GloVe row "bad" dim 1 parse`,
+		},
+		{
+			name:    "non finite",
+			content: "bad 0.1 NaN\n",
+			want:    `GloVe row "bad" dim 1 has non-finite value`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "glove.txt")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			_, _, err := loadGloveRows(path, 1)
+			if err == nil {
+				t.Fatal("loadGloveRows succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q does not contain %q", err, tt.want)
+			}
+		})
 	}
 }

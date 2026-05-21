@@ -305,8 +305,11 @@ func loadGloveRows(path string, limit int) ([]demoRow, int, error) {
 		vector := make([]float32, dims)
 		for i := 0; i < dims; i++ {
 			value, err := strconv.ParseFloat(fields[i+1], 32)
-			if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+			if err != nil {
 				return nil, 0, fmt.Errorf("GloVe row %q dim %d parse: %w", fields[0], i, err)
+			}
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return nil, 0, fmt.Errorf("GloVe row %q dim %d has non-finite value %g", fields[0], i, value)
 			}
 			vector[i] = float32(value)
 		}
