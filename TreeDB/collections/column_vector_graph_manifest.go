@@ -235,7 +235,7 @@ func columnVectorGraphPhysicalColumnStoreConfig(collection string, base ColumnSt
 	cfg, err := normalizeColumnStoreConfig(collection, &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
-			{Name: columnVectorGraphVectorColumnName, Path: normalizedDef.Field, ValueType: ColumnStoreValueFloat32Vector, VectorDims: normalizedDef.Dimensions},
+			{Name: columnVectorGraphVectorColumnName, Path: normalizedDef.Field, ValueType: ColumnStoreValueFloat32Vector, VectorDims: normalizedDef.Dimensions, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
 			{Name: columnVectorGraphInvNormColumnName, Path: normalizedDef.Field + "_inv_norm", ValueType: ColumnStoreValueFloat32},
 			{Name: columnVectorGraphAdjacencyColumnName, Path: normalizedDef.Field + "_neighbors", ValueType: ColumnStoreValueAdjacencyList},
 		},

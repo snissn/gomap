@@ -69,6 +69,29 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphPhysicalConfigUsesLittleEndianVectorOnlyM1C(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", *baseCfg, testColumnGraphVectorIndexDefinitionV2A())
+	if err != nil {
+		t.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	if len(graphCfg.Columns) != 3 {
+		t.Fatalf("graph columns=%d want 3", len(graphCfg.Columns))
+	}
+	if got := graphCfg.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("vector fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
+	}
+	if got := graphCfg.Columns[1].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+		t.Fatalf("inv_norm fixed_width_encoding=%q want default", got)
+	}
+	if got := graphCfg.Columns[2].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+		t.Fatalf("adjacency fixed_width_encoding=%q want default", got)
+	}
+}
+
 func TestColumnVectorGraphPhysicalAssetWriteRejectsInvalidInputBeforeSegmentAllocationV2A(t *testing.T) {
 	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
 	if err != nil {
@@ -184,6 +207,22 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 	if err := validateColumnPhysicalAssetForManifest(raw, prepared.Ref, prepared.Config); err != nil {
 		t.Fatalf("validate graph asset: %v", err)
 	}
+	if got := columnVectorGraphPhysicalAssetVersionForTestM1C(raw); got != columnPhysicalAssetVersionV5 {
+		t.Fatalf("graph physical asset version=%d want %d", got, columnPhysicalAssetVersionV5)
+	}
+	decoded, err := decodeColumnPhysicalAsset(raw)
+	if err != nil {
+		t.Fatalf("decode graph asset: %v", err)
+	}
+	if got := decoded.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("decoded vector fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
+	}
+	if got := decoded.Columns[1].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+		t.Fatalf("decoded inv_norm fixed_width_encoding=%q want default", got)
+	}
+	if got := decoded.Columns[2].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+		t.Fatalf("decoded adjacency fixed_width_encoding=%q want default", got)
+	}
 	projection, err := newColumnPhysicalScanProjection(prepared.Config, []string{
 		columnVectorGraphVectorColumnName,
 		columnVectorGraphInvNormColumnName,
@@ -221,6 +260,12 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 	if got := invNorms[2]; got != 1 {
 		t.Fatalf("row2 inv_norm=%v want 1", got)
 	}
+}
+
+func columnVectorGraphPhysicalAssetVersionForTestM1C(raw []byte) uint16 {
+	cur := manifestCursor{raw: raw}
+	_ = cur.u32()
+	return cur.u16()
 }
 
 func TestColumnGraphVectorIndexStatusUsesPublishedPhysicalManifestV2A(t *testing.T) {
