@@ -2578,8 +2578,13 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	if err := writeResult(&out, "json", result); err != nil {
 		t.Fatalf("writeResult json without command WAL: %v", err)
 	}
-	if !strings.Contains(out.String(), `"treedb_command_wal": false`) {
-		t.Fatalf("json missing explicit false treedb_command_wal field: %s", out.String())
+	var decodedMap map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decodedMap); err != nil {
+		t.Fatalf("unmarshal json result without command WAL: %v", err)
+	}
+	got, ok := decodedMap["treedb_command_wal"]
+	if !ok || got != false {
+		t.Fatalf("json treedb_command_wal=%v present=%t, want false and present", got, ok)
 	}
 }
 

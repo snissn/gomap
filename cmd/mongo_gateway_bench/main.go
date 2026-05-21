@@ -5959,9 +5959,7 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 				result.TreeDBBufferedIndexedWriteMaxRootRuns, result.TreeDBBufferedIndexedAsyncFlush,
 				result.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits, result.TreeDBMaintenanceMode, result.TreeDBReadState)
 		}
-		if result.TreeDBCommandWAL {
-			fmt.Fprintf(out, "treedb_command_wal=true\n")
-		}
+		fmt.Fprintf(out, "treedb_command_wal=%t\n", result.TreeDBCommandWAL)
 		if result.MongoURI != "" {
 			fmt.Fprintf(out, "mongo_uri=%s\n", result.MongoURI)
 		}
