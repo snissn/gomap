@@ -36,15 +36,29 @@ go test -run '^$' -bench BenchmarkContentHashTournament -benchtime=2s -count=5
 - `XXHash64`: `github.com/cespare/xxhash/v2`.
 - `XXH3_64`: `github.com/zeebo/xxh3`.
 - `FarmHash64`: `github.com/dgryski/go-farm`.
+- `FarmHash32`: `github.com/dgryski/go-farm`.
+- `FarmFingerprint32`: `github.com/dgryski/go-farm`.
 - `MapHash_ProcessLocal`: Go `hash/maphash`.
 - `FNV1a_64`: Go `hash/fnv`.
+- `FNV1a_32`: Go `hash/fnv`.
 - `SHA256`: Go `crypto/sha256`.
+
+The native 32-bit entries are included because TreeDB's current checksum slot is
+already `uint32`-sized. A fast native 32-bit hash could be a drop-in format
+change while gomap does not need backward compatibility for persisted checksum
+values.
 
 ## Initial Apple M3 Read
 
 A short Apple M3 run showed `FarmHash64` as the fastest candidate across the
 four sizes, with `XXH3_64` next and `CRC32C_Castagnoli_TreeDB` around 9-10
 GB/s on larger buffers.
+
+In the native 32-bit set, `FarmHash32` and `FarmFingerprint32` are useful
+drop-in-width candidates, but this local run had both around 7.6 GB/s. That is
+slower than Go's `CRC32C_Castagnoli_TreeDB` path on the same machine, so the
+32-bit candidates need target-hardware validation before replacing the current
+TreeDB checksum slot.
 
 Representative top-contender pass:
 

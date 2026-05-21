@@ -83,6 +83,20 @@ func BenchmarkContentHashTournament(b *testing.B) {
 			}
 		})
 
+		b.Run(size.name+"/FarmHash32", func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				sink32 ^= farm.Hash32(data)
+			}
+		})
+
+		b.Run(size.name+"/FarmFingerprint32", func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				sink32 ^= farm.Fingerprint32(data)
+			}
+		})
+
 		b.Run(size.name+"/MapHash_ProcessLocal", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
@@ -97,6 +111,16 @@ func BenchmarkContentHashTournament(b *testing.B) {
 				h.Reset()
 				_, _ = h.Write(data)
 				sink64 ^= h.Sum64()
+			}
+		})
+
+		b.Run(size.name+"/FNV1a_32", func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			h := fnv.New32a()
+			for i := 0; i < b.N; i++ {
+				h.Reset()
+				_, _ = h.Write(data)
+				sink32 ^= h.Sum32()
 			}
 		})
 
