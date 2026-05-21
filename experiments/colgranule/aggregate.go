@@ -22,6 +22,8 @@ func (a *AggregateArena) Reset() {
 	clear(a.seenInt64)
 }
 
+// GroupedCountCodes returns arena-owned count storage. The returned slice is
+// valid only until the next AggregateArena operation or Reset.
 func (a *AggregateArena) GroupedCountCodes(granules []EncodedGranule, cardinality uint32) ([]uint64, error) {
 	counts, err := a.prepareCounts(granules, cardinality)
 	if err != nil {
@@ -43,6 +45,8 @@ func (a *AggregateArena) GroupedCountCodes(granules []EncodedGranule, cardinalit
 	return counts, nil
 }
 
+// FilteredGroupedCountCodes returns arena-owned count storage. The returned
+// slice is valid only until the next AggregateArena operation or Reset.
 func (a *AggregateArena) FilteredGroupedCountCodes(codeGranules []EncodedGranule, filterGranules []EncodedGranule, filter Int64RangePredicate, cardinality uint32) ([]uint64, PredicateDiagnostics, error) {
 	var diagnostics PredicateDiagnostics
 	if len(codeGranules) != len(filterGranules) {
@@ -60,6 +64,9 @@ func (a *AggregateArena) FilteredGroupedCountCodes(codeGranules []EncodedGranule
 	for i, codeGranule := range codeGranules {
 		filterGranule := filterGranules[i]
 		diagnostics.Considered++
+		if filterGranule.Rows != codeGranule.Rows {
+			return nil, diagnostics, errors.New("colgranule: filter/code row mismatch")
+		}
 		if filterGranule.HasMinMax && (filter.High < filterGranule.Min || filter.Low > filterGranule.Max) {
 			diagnostics.SkippedByMinMax++
 			continue
@@ -185,13 +192,19 @@ func (c TimeBucketedCounts) Count(bucket int64, code uint32) uint64 {
 	if c.BucketWidth <= 0 || code >= c.Cardinality {
 		return 0
 	}
-	bucketIndex := int(bucket - c.MinBucket)
-	if bucketIndex < 0 || bucketIndex >= c.Buckets {
+	bucketOffset := bucket - c.MinBucket
+	if bucketOffset < 0 || bucketOffset >= int64(c.Buckets) {
 		return 0
 	}
-	return c.Counts[bucketIndex*int(c.Cardinality)+int(code)]
+	cell, err := bucketCellIndex(int(bucketOffset), c.Buckets, code, c.Cardinality, len(c.Counts))
+	if err != nil {
+		return 0
+	}
+	return c.Counts[cell]
 }
 
+// TimeBucketedCountCodes returns a result whose Counts slice is arena-owned.
+// Counts is valid only until the next AggregateArena operation or Reset.
 func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, timeGranules []EncodedGranule, bucketWidth int64, cardinality uint32) (TimeBucketedCounts, error) {
 	if len(codeGranules) != len(timeGranules) {
 		return TimeBucketedCounts{}, fmt.Errorf("colgranule: code granules=%d time granules=%d", len(codeGranules), len(timeGranules))
@@ -248,7 +261,11 @@ func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, t
 				return TimeBucketedCounts{}, fmt.Errorf("colgranule: timestamp %d outside bucket range [%d,%d]", timestamp, minBucket, maxBucket)
 			}
 			bucketIndex := int(bucketIndex64)
-			a.bucketCounts[bucketIndex*int(cardinality)+int(code)]++
+			cell, err := bucketCellIndex(bucketIndex, buckets, code, cardinality, len(a.bucketCounts))
+			if err != nil {
+				return TimeBucketedCounts{}, err
+			}
+			a.bucketCounts[cell]++
 		}
 	}
 	return TimeBucketedCounts{
@@ -344,6 +361,20 @@ func boundedBucketCells(minBucket int64, maxBucket int64, cardinality uint32) (i
 	buckets := int(maxBucket - minBucket + 1)
 	cells := buckets * int(cardinality)
 	return buckets, cells, nil
+}
+
+func bucketCellIndex(bucketIndex int, buckets int, code uint32, cardinality uint32, cells int) (int, error) {
+	if bucketIndex < 0 || bucketIndex >= buckets {
+		return 0, fmt.Errorf("colgranule: bucket index %d outside bucket count %d", bucketIndex, buckets)
+	}
+	if code >= cardinality {
+		return 0, fmt.Errorf("colgranule: code %d outside cardinality %d", code, cardinality)
+	}
+	cell := bucketIndex*int(cardinality) + int(code)
+	if cell < 0 || cell >= cells {
+		return 0, fmt.Errorf("colgranule: bucket cell %d outside counts length %d", cell, cells)
+	}
+	return cell, nil
 }
 
 func floorDiv(v int64, width int64) int64 {
