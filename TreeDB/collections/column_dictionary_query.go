@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const columnDictionaryCodeDistinctMaxSeenWords = 1 << 20
+
 type columnDictionaryCodeGroupCountRunner struct {
 	column       string
 	dictionary   []string
@@ -241,9 +243,12 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	if len(runner.assets) == 0 || len(runner.groupDict) == 0 || len(distinctByValue) == 0 {
 		return nil, nil
 	}
-	wordsPerGroup, totalWords, err := columnDictionaryCodeDistinctSeenWords(len(runner.groupDict), len(distinctByValue))
+	wordsPerGroup, totalWords, ok, err := columnDictionaryCodeDistinctSeenWords(len(runner.groupDict), len(distinctByValue))
 	if err != nil {
 		return nil, err
+	}
+	if !ok {
+		return nil, nil
 	}
 	runner.wordsPerGroup = wordsPerGroup
 	runner.groupCounts = make([]int, len(runner.groupDict))
@@ -252,15 +257,19 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	return runner, nil
 }
 
-func columnDictionaryCodeDistinctSeenWords(groupCount, distinctCount int) (int, int, error) {
+func columnDictionaryCodeDistinctSeenWords(groupCount, distinctCount int) (int, int, bool, error) {
 	if groupCount <= 0 || distinctCount <= 0 {
-		return 0, 0, errors.New("collections: dictionary code distinct query requires non-empty group and distinct dictionaries")
+		return 0, 0, false, errors.New("collections: dictionary code distinct query requires non-empty group and distinct dictionaries")
 	}
 	wordsPerGroup := (distinctCount + 63) / 64
 	if wordsPerGroup != 0 && groupCount > maxCollectionInt/wordsPerGroup {
-		return 0, 0, errors.New("collections: dictionary code distinct bitset dimensions overflow int")
+		return 0, 0, false, nil
 	}
-	return wordsPerGroup, groupCount * wordsPerGroup, nil
+	totalWords := groupCount * wordsPerGroup
+	if totalWords > columnDictionaryCodeDistinctMaxSeenWords {
+		return wordsPerGroup, totalWords, false, nil
+	}
+	return wordsPerGroup, totalWords, true, nil
 }
 
 func columnDictionaryCodeSnapshotsByPart(view columnPhysicalScanSnapshotView, column string) map[[2]uint64]columnManifestDictionaryCodesSnapshot {

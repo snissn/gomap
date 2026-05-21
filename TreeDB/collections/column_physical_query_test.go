@@ -2069,15 +2069,21 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 }
 
 func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {
-	wordsPerGroup, totalWords, err := columnDictionaryCodeDistinctSeenWords(4, 129)
+	wordsPerGroup, totalWords, ok, err := columnDictionaryCodeDistinctSeenWords(4, 129)
 	if err != nil {
 		t.Fatalf("columnDictionaryCodeDistinctSeenWords normal: %v", err)
+	}
+	if !ok {
+		t.Fatal("columnDictionaryCodeDistinctSeenWords normal ok=false want true")
 	}
 	if wordsPerGroup != 3 || totalWords != 12 {
 		t.Fatalf("wordsPerGroup=%d totalWords=%d want 3/12", wordsPerGroup, totalWords)
 	}
-	if _, _, err := columnDictionaryCodeDistinctSeenWords(maxCollectionInt, 65); err == nil || !strings.Contains(err.Error(), "overflow") {
-		t.Fatalf("overflow err=%v want overflow failure", err)
+	if _, _, ok, err := columnDictionaryCodeDistinctSeenWords(maxCollectionInt, 65); err != nil || ok {
+		t.Fatalf("overflow ok=%v err=%v want clean fallback", ok, err)
+	}
+	if _, _, ok, err := columnDictionaryCodeDistinctSeenWords(columnDictionaryCodeDistinctMaxSeenWords+1, 1); err != nil || ok {
+		t.Fatalf("oversized bitset ok=%v err=%v want clean fallback", ok, err)
 	}
 }
 
