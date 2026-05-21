@@ -337,15 +337,17 @@ func (s *VectorIndexSearcher) Close() error {
 
 func columnPhysicalRowReaderStatsDelta(before, after columnPhysicalRowReaderStats) columnPhysicalRowReaderStats {
 	return columnPhysicalRowReaderStats{
-		RowFetches:        deltaUint64(before.RowFetches, after.RowFetches),
-		BatchFetches:      deltaUint64(before.BatchFetches, after.BatchFetches),
-		RowsFetched:       deltaUint64(before.RowsFetched, after.RowsFetched),
-		CacheHits:         deltaUint64(before.CacheHits, after.CacheHits),
-		CacheMisses:       deltaUint64(before.CacheMisses, after.CacheMisses),
-		DecodedBlocks:     deltaUint64(before.DecodedBlocks, after.DecodedBlocks),
-		GranulesTouched:   deltaUint64(before.GranulesTouched, after.GranulesTouched),
-		PhysicalBytesRead: deltaInt64(before.PhysicalBytesRead, after.PhysicalBytesRead),
-		MaxResidentBytes:  after.MaxResidentBytes,
+		OpenGranulesRead:      after.OpenGranulesRead,
+		OpenPhysicalBytesRead: after.OpenPhysicalBytesRead,
+		RowFetches:            deltaUint64(before.RowFetches, after.RowFetches),
+		BatchFetches:          deltaUint64(before.BatchFetches, after.BatchFetches),
+		RowsFetched:           deltaUint64(before.RowsFetched, after.RowsFetched),
+		CacheHits:             deltaUint64(before.CacheHits, after.CacheHits),
+		CacheMisses:           deltaUint64(before.CacheMisses, after.CacheMisses),
+		DecodedBlocks:         deltaUint64(before.DecodedBlocks, after.DecodedBlocks),
+		GranulesTouched:       deltaUint64(before.GranulesTouched, after.GranulesTouched),
+		PhysicalBytesRead:     deltaInt64(before.PhysicalBytesRead, after.PhysicalBytesRead),
+		MaxResidentBytes:      after.MaxResidentBytes,
 	}
 }
 

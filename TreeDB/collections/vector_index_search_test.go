@@ -171,8 +171,11 @@ func TestOpenVectorIndexSearcherReusesNativeReaderV4(t *testing.T) {
 			t.Fatalf("second result[%d]=%+v want %+v", i, second.Results[i], first.Results[i])
 		}
 	}
-	if second.Stats.OpenPhysicalBytesRead != first.Stats.OpenPhysicalBytesRead {
-		t.Fatalf("open physical bytes changed first=%d second=%d; want per-search open stats to remain outside Search", first.Stats.OpenPhysicalBytesRead, second.Stats.OpenPhysicalBytesRead)
+	if first.Stats.OpenGranulesRead == 0 || first.Stats.OpenPhysicalBytesRead == 0 {
+		t.Fatalf("first open stats granules=%d physical_bytes=%d want non-zero bound-reader setup telemetry", first.Stats.OpenGranulesRead, first.Stats.OpenPhysicalBytesRead)
+	}
+	if second.Stats.OpenGranulesRead != first.Stats.OpenGranulesRead || second.Stats.OpenPhysicalBytesRead != first.Stats.OpenPhysicalBytesRead {
+		t.Fatalf("open stats changed first=(%d,%d) second=(%d,%d); want stable bound-reader setup telemetry", first.Stats.OpenGranulesRead, first.Stats.OpenPhysicalBytesRead, second.Stats.OpenGranulesRead, second.Stats.OpenPhysicalBytesRead)
 	}
 	if first.Stats.RowFetches == 0 || second.Stats.RowFetches != first.Stats.RowFetches {
 		t.Fatalf("row fetch stats first=%d second=%d want per-search deltas", first.Stats.RowFetches, second.Stats.RowFetches)
