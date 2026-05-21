@@ -2879,6 +2879,39 @@ func TestColumnDictionaryCodePreparedRunnersFallbackOnMixedSidecarCoverageM1634(
 	}
 }
 
+func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	if len(view.AssetRefs) == 0 {
+		t.Fatal("fixture produced no physical asset refs")
+	}
+	view.AssetRefs[0].Rows++
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity: %v", err)
+	}
+	defer func() {
+		if err := readCache.close(); err != nil {
+			t.Fatalf("read cache close: %v", err)
+		}
+	}()
+	if _, err := prepareColumnDictionaryCodeGroupCountRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}, &readCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
+		t.Fatalf("group-count err=%v want manifest row mismatch", err)
+	}
+	if _, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &readCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
+		t.Fatalf("group-count-distinct err=%v want manifest row mismatch", err)
+	}
+}
+
 func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {
 	wordsPerGroup, totalWords, ok, err := columnDictionaryCodeDistinctSeenWords(4, 129)
 	if err != nil {

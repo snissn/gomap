@@ -138,6 +138,9 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 		if err != nil {
 			return nil, err
 		}
+		if rowCount != part.Rows {
+			return nil, fmt.Errorf("collections: dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", rowCount, part.Rows, snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn)
+		}
 		if cap(localToGlobal) < cardinality {
 			localToGlobal = make([]uint32, cardinality)
 		}
@@ -396,6 +399,9 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		if err != nil {
 			return nil, err
 		}
+		if groupRows != part.Rows {
+			return nil, fmt.Errorf("collections: group dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", groupRows, part.Rows, groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
+		}
 		if cap(groupLocal) < groupCardinality {
 			groupLocal = make([]uint32, groupCardinality)
 		}
@@ -450,6 +456,9 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		distinctCur, distinctCardinality, distinctRows, err := decodeColumnDictionaryCodesAssetHeader(distinctRaw, distinctSnapshot.AssetRef, view.Config, view.CollectionName, req.DistinctColumn, false)
 		if err != nil {
 			return nil, err
+		}
+		if distinctRows != part.Rows {
+			return nil, fmt.Errorf("collections: distinct dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", distinctRows, part.Rows, distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
 		}
 		if groupRows != distinctRows {
 			return nil, fmt.Errorf("collections: dictionary code distinct row count mismatch group=%d distinct=%d", groupRows, distinctRows)
