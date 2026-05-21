@@ -106,11 +106,8 @@ type VectorIndexSearcher struct {
 // native physical column reader; native_runtime remains reported as native
 // rather than silently falling back or pretending to use column storage.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
-	if opts.TopK < 0 {
-		return VectorIndexSearchResponse{}, errors.New("collections: vector index search top_k cannot be negative")
-	}
-	if opts.EfSearch < 0 {
-		return VectorIndexSearchResponse{}, errors.New("collections: vector index search ef_search cannot be negative")
+	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
+		return VectorIndexSearchResponse{}, err
 	}
 	searcher, response, err := c.openVectorIndexSearcher(VectorIndexSearcherOptions{
 		IndexName:        opts.IndexName,
@@ -165,7 +162,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 			State:    VectorIndexStateNativeRuntime,
 			Reason:   VectorIndexReasonNativeRuntime,
 		}
-		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; public column_graph search was requested", ErrVectorIndexSearchUnavailable, def.Name)
+		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; SearchVectorIndex currently requires an explicit column_graph index", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		return nil, response, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
@@ -232,11 +229,8 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if s.closed {
 		return response, errors.New("collections: vector index searcher is closed")
 	}
-	if opts.TopK < 0 {
-		return response, errors.New("collections: vector index search top_k cannot be negative")
-	}
-	if opts.EfSearch < 0 {
-		return response, errors.New("collections: vector index search ef_search cannot be negative")
+	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
+		return response, err
 	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
@@ -306,6 +300,16 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		}
 	}
 	return response, nil
+}
+
+func validateVectorIndexSearchRequest(topK, efSearch int) error {
+	if topK < 0 {
+		return errors.New("collections: vector index search top_k cannot be negative")
+	}
+	if efSearch < 0 {
+		return errors.New("collections: vector index search ef_search cannot be negative")
+	}
+	return nil
 }
 
 // getDocumentAtBoundSnapshot returns snapshot-bound document bytes for immediate
