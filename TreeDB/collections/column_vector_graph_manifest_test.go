@@ -81,13 +81,16 @@ func TestColumnVectorGraphPhysicalConfigUsesLittleEndianVectorOnlyM1C(t *testing
 	if len(graphCfg.Columns) != 3 {
 		t.Fatalf("graph columns=%d want 3", len(graphCfg.Columns))
 	}
-	if got := graphCfg.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+	vectorCol := columnVectorGraphPhysicalColumnForTestM1C(t, graphCfg.Columns, columnVectorGraphVectorColumnName)
+	if got := vectorCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
 		t.Fatalf("vector fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
 	}
-	if got := graphCfg.Columns[1].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+	invNormCol := columnVectorGraphPhysicalColumnForTestM1C(t, graphCfg.Columns, columnVectorGraphInvNormColumnName)
+	if got := invNormCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
 		t.Fatalf("inv_norm fixed_width_encoding=%q want default", got)
 	}
-	if got := graphCfg.Columns[2].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+	adjacencyCol := columnVectorGraphPhysicalColumnForTestM1C(t, graphCfg.Columns, columnVectorGraphAdjacencyColumnName)
+	if got := adjacencyCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
 		t.Fatalf("adjacency fixed_width_encoding=%q want default", got)
 	}
 }
@@ -207,20 +210,23 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 	if err := validateColumnPhysicalAssetForManifest(raw, prepared.Ref, prepared.Config); err != nil {
 		t.Fatalf("validate graph asset: %v", err)
 	}
-	if got := columnVectorGraphPhysicalAssetVersionForTestM1C(raw); got != columnPhysicalAssetVersionV5 {
+	if got := columnVectorGraphPhysicalAssetVersionForTestM1C(t, raw); got != columnPhysicalAssetVersionV5 {
 		t.Fatalf("graph physical asset version=%d want %d", got, columnPhysicalAssetVersionV5)
 	}
 	decoded, err := decodeColumnPhysicalAsset(raw)
 	if err != nil {
 		t.Fatalf("decode graph asset: %v", err)
 	}
-	if got := decoded.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+	decodedVectorCol := columnVectorGraphPhysicalColumnForTestM1C(t, decoded.Columns, columnVectorGraphVectorColumnName)
+	if got := decodedVectorCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
 		t.Fatalf("decoded vector fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
 	}
-	if got := decoded.Columns[1].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+	decodedInvNormCol := columnVectorGraphPhysicalColumnForTestM1C(t, decoded.Columns, columnVectorGraphInvNormColumnName)
+	if got := decodedInvNormCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
 		t.Fatalf("decoded inv_norm fixed_width_encoding=%q want default", got)
 	}
-	if got := decoded.Columns[2].FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
+	decodedAdjacencyCol := columnVectorGraphPhysicalColumnForTestM1C(t, decoded.Columns, columnVectorGraphAdjacencyColumnName)
+	if got := decodedAdjacencyCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
 		t.Fatalf("decoded adjacency fixed_width_encoding=%q want default", got)
 	}
 	projection, err := newColumnPhysicalScanProjection(prepared.Config, []string{
@@ -262,10 +268,28 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 	}
 }
 
-func columnVectorGraphPhysicalAssetVersionForTestM1C(raw []byte) uint16 {
+func columnVectorGraphPhysicalColumnForTestM1C(tb testing.TB, columns []ColumnStoreColumn, name string) ColumnStoreColumn {
+	tb.Helper()
+	for _, col := range columns {
+		if col.Name == name {
+			return col
+		}
+	}
+	tb.Fatalf("missing graph physical column %q in %+v", name, columns)
+	return ColumnStoreColumn{}
+}
+
+func columnVectorGraphPhysicalAssetVersionForTestM1C(tb testing.TB, raw []byte) uint16 {
+	tb.Helper()
 	cur := manifestCursor{raw: raw}
-	_ = cur.u32()
-	return cur.u16()
+	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
+		tb.Fatalf("graph physical asset magic=0x%08x want 0x%08x", magic, columnPhysicalAssetMagic)
+	}
+	version := cur.u16()
+	if cur.err != nil {
+		tb.Fatalf("read graph physical asset header: %v", cur.err)
+	}
+	return version
 }
 
 func TestColumnGraphVectorIndexStatusUsesPublishedPhysicalManifestV2A(t *testing.T) {
