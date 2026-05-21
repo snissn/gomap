@@ -221,6 +221,24 @@ func TestColumnGraphRebuildVectorIndexHeapTopKV2A(t *testing.T) {
 	}
 }
 
+func TestColumnGraphRebuildVectorIndexAdjacencyValidatesAllDimsBeforeScoringV2A(t *testing.T) {
+	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 1)
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1},
+		{ID: []byte("doc-b"), Vector: []float32{1}, InvNorm: 1},
+		{ID: []byte("doc-c"), Vector: []float32{0, 1, 0}, InvNorm: 1},
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("buildColumnVectorGraphAdjacency panicked before validating all row dimensions: %v", recovered)
+		}
+	}()
+	err := buildColumnVectorGraphAdjacency(rows, def)
+	if err == nil || !strings.Contains(err.Error(), "row[1] vector dims=1 want 3") {
+		t.Fatalf("buildColumnVectorGraphAdjacency error=%v, want row[1] dimension failure", err)
+	}
+}
+
 func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegmentV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -283,6 +301,85 @@ func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
 	}
 	if _, ok := findColumnVectorGraphManifestRecord(retainedAfterDrop, def.Name); ok {
 		t.Fatalf("dropped vector index graph record was retained: records=%+v", retainedAfterDrop)
+	}
+}
+
+func TestColumnGraphRebuildVectorIndexNoopPublishesCommandWALV2A(t *testing.T) {
+	tests := []struct {
+		name          string
+		strategy      VectorIndexStrategy
+		wantState     VectorIndexState
+		wantReason    VectorIndexReason
+		rebuildNeeded bool
+	}{
+		{
+			name:       "native_strategy",
+			strategy:   VectorIndexStrategyNativeRuntime,
+			wantState:  VectorIndexStateNativeRuntime,
+			wantReason: VectorIndexReasonNativeRuntime,
+		},
+		{
+			name:          "column_graph_physical_support_missing",
+			strategy:      VectorIndexStrategyColumnGraph,
+			wantState:     VectorIndexStateColumnGraphUnavailable,
+			wantReason:    VectorIndexReasonPhysicalColumnAssetSupportMissing,
+			rebuildNeeded: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+				Name:       "embedding_graph",
+				Field:      "embedding",
+				Metric:     VectorMetricCosine,
+				Dimensions: 3,
+				Strategy:   tt.strategy,
+			})
+			if err != nil {
+				t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+			}
+			dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+				Name: "docs",
+				Options: CollectionOptions{
+					DocumentFormat: DocumentFormatJSON,
+				},
+				VectorIndexes: []VectorIndexDefinition{def},
+			})
+			d := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = d.Close() }()
+			col, err := NewCollectionManager(d).OpenCollection("docs")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			framesBefore := countCollectionCommandWALFrames(t, dir)
+			baseLSN := d.State().AppliedCommandLSN
+
+			status, err := col.RebuildVectorIndex(def.Name)
+			if err != nil {
+				t.Fatalf("RebuildVectorIndex: %v", err)
+			}
+			if status.State != tt.wantState || status.Reason != tt.wantReason || status.RebuildNeeded != tt.rebuildNeeded {
+				t.Fatalf("status=%+v want state=%q reason=%q rebuild=%t", status, tt.wantState, tt.wantReason, tt.rebuildNeeded)
+			}
+			if got := d.State().AppliedCommandLSN; got <= baseLSN {
+				t.Fatalf("AppliedCommandLSN after no-op rebuild=%d want > %d", got, baseLSN)
+			}
+			frames := collectionCommandWALFrames(t, dir)
+			if len(frames) != framesBefore+1 {
+				t.Fatalf("command WAL frames after no-op rebuild=%d want %d", len(frames), framesBefore+1)
+			}
+			frame := frames[len(frames)-1]
+			if frame.Kind != commitlog.CommandKindCollectionRebuildVectorIndex || frame.PayloadFormat != commitlog.PayloadFormatCollectionRebuildVectorIndexV1 {
+				t.Fatalf("last command WAL frame kind=%d format=%d, want rebuild vector index v1", frame.Kind, frame.PayloadFormat)
+			}
+			payload, err := commitlog.DecodeCollectionRebuildVectorIndexPayload(frame.Payload)
+			if err != nil {
+				t.Fatalf("DecodeCollectionRebuildVectorIndexPayload: %v", err)
+			}
+			if payload.Collection != "docs" || payload.IndexName != def.Name {
+				t.Fatalf("rebuild payload=%+v want collection=docs index=%s", payload, def.Name)
+			}
+		})
 	}
 }
 

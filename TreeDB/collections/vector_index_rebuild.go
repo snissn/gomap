@@ -62,13 +62,13 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	}
 	if def.Strategy != VectorIndexStrategyColumnGraph {
 		_ = snap.Close()
-		return c.finishRebuildVectorIndexNoopStatus(c.nativeVectorIndexRebuildStatus(def), nil, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, c.nativeVectorIndexRebuildStatus(def), nil, replay)
 	}
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
 		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def)
-		return c.finishRebuildVectorIndexNoopStatus(status, statusErr, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	if normalizedDocumentFormat(baseMeta.Options.DocumentFormat) != DocumentFormatJSON {
 		_ = snap.Close()
@@ -87,12 +87,12 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 	if baseManifestRootID == 0 {
 		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def)
-		return c.finishRebuildVectorIndexNoopStatus(status, statusErr, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	if err := validateColumnManifestIdentityAtRoot(snap, baseManifestRootID, *cfg.ActiveManifest); err != nil {
 		_ = snap.Close()
 		status, statusErr := c.columnGraphVectorIndexStatus(def)
-		return c.finishRebuildVectorIndexNoopStatus(status, statusErr, replay)
+		return c.finishRebuildVectorIndexNoopStatus(name, status, statusErr, replay)
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseManifestRootID)
 	if err != nil {
@@ -182,12 +182,16 @@ func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) V
 	}
 }
 
-func (c *Collection) finishRebuildVectorIndexNoopStatus(status VectorIndexStatus, statusErr error, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
+func (c *Collection) finishRebuildVectorIndexNoopStatus(name string, status VectorIndexStatus, statusErr error, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
 	if statusErr != nil {
 		return VectorIndexStatus{}, statusErr
 	}
-	if replay != nil {
-		if err := c.db.PublishCommandWALNoop(replay, false); err != nil {
+	intent, err := c.newCollectionRebuildVectorIndexCommandWALIntent(name, replay)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if intent != nil {
+		if err := c.db.PublishCommandWALNoop(intent, false); err != nil {
 			return VectorIndexStatus{}, err
 		}
 	}
@@ -319,6 +323,8 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 		if len(rows[i].Vector) != def.Dimensions {
 			return fmt.Errorf("collections: column vector graph row[%d] vector dims=%d want %d", i, len(rows[i].Vector), def.Dimensions)
 		}
+	}
+	for i := range rows {
 		if degree <= 0 {
 			rows[i].Adjacency = nil
 			continue
