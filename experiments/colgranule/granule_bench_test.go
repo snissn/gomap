@@ -492,6 +492,10 @@ func TestCompressionRatios(t *testing.T) {
 }
 
 func reportGranuleBenchMetrics(b *testing.B, rows int, valueBytes int, storedBytes int) {
+	reportGranuleBenchMetrics64(b, rows, int64(valueBytes), int64(storedBytes))
+}
+
+func reportGranuleBenchMetrics64(b *testing.B, rows int, valueBytes int64, storedBytes int64) {
 	b.Helper()
 	if b.N == 0 || rows == 0 {
 		return

@@ -713,3 +713,51 @@ func normalizeBSONValueForTest(value any) any {
 		return value
 	}
 }
+
+func TestValidateEncodedPartParityRejectsMismatchedDigest(t *testing.T) {
+	reference := []colgranule.JSONBenchQueryTiming{{
+		Query:        "Q1",
+		ResultRows:   3,
+		ResultDigest: 10,
+	}}
+	encoded := []colgranule.JSONBenchPartQueryTiming{{
+		Query:        "Q1",
+		ResultRows:   3,
+		ResultDigest: 11,
+		Attempts: []colgranule.JSONBenchPartQueryAttempt{{
+			ResultRows:   3,
+			ResultDigest: 11,
+		}},
+	}}
+	err := validateEncodedPartParity(reference, encoded)
+	if err == nil {
+		t.Fatal("expected encoded part parity error")
+	}
+	if !strings.Contains(err.Error(), "rows/digest") {
+		t.Fatalf("parity error %q does not describe rows/digest mismatch", err)
+	}
+}
+
+func TestValidateEncodedPartParityRejectsMismatchedAttempt(t *testing.T) {
+	reference := []colgranule.JSONBenchQueryTiming{{
+		Query:        "Q2",
+		ResultRows:   4,
+		ResultDigest: 20,
+	}}
+	encoded := []colgranule.JSONBenchPartQueryTiming{{
+		Query:        "Q2",
+		ResultRows:   4,
+		ResultDigest: 20,
+		Attempts: []colgranule.JSONBenchPartQueryAttempt{{
+			ResultRows:   4,
+			ResultDigest: 21,
+		}},
+	}}
+	err := validateEncodedPartParity(reference, encoded)
+	if err == nil {
+		t.Fatal("expected encoded part attempt parity error")
+	}
+	if !strings.Contains(err.Error(), "attempt 0") {
+		t.Fatalf("parity error %q does not describe attempt mismatch", err)
+	}
+}
