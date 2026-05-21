@@ -367,7 +367,10 @@ func (r *columnPhysicalRowReader) touchBlock(assetOrdinal int) {
 }
 
 func (r *columnPhysicalRowReader) evictBlocksForInsert() error {
-	for len(r.blocks) >= r.maxBlocks && len(r.lru) > 0 {
+	for len(r.blocks) >= r.maxBlocks {
+		if len(r.lru) == 0 {
+			return fmt.Errorf("collections: physical column row reader LRU empty with %d cached blocks and max=%d", len(r.blocks), r.maxBlocks)
+		}
 		evict := r.lru[0]
 		copy(r.lru, r.lru[1:])
 		r.lru = r.lru[:len(r.lru)-1]
