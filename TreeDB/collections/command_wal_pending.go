@@ -25,10 +25,13 @@ func collectionCommandWALCoordinatorForDB(db *backenddb.DB) *collectionCommandWA
 	coord := newCollectionCommandWALCoordinator()
 	actual, loaded := collectionCommandWALCoordinators.LoadOrStore(db, coord)
 	if !loaded {
-		db.RegisterCloseHook(func() error {
+		if _, ok := db.RegisterCloseHookIfOpen(func() error {
 			collectionCommandWALCoordinators.Delete(db)
 			return nil
-		})
+		}); !ok {
+			collectionCommandWALCoordinators.Delete(db)
+			return nil
+		}
 		return coord
 	}
 	return actual.(*collectionCommandWALCoordinator)

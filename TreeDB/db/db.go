@@ -1651,16 +1651,28 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	return db, nil
 }
 
+func (db *DB) acceptingCloseHooksLocked() bool {
+	return db != nil && !db.closeHooksClosed && !db.closing.Load()
+}
+
 // RegisterCloseHook registers a callback that runs before Close marks the DB as
 // closing, while normal write/publish APIs are still available.
 func (db *DB) RegisterCloseHook(hook func() error) func() {
+	unregister, _ := db.RegisterCloseHookIfOpen(hook)
+	return unregister
+}
+
+// RegisterCloseHookIfOpen is like RegisterCloseHook, but also reports whether
+// the hook was retained. Callers that attach external state to the hook can use
+// this to avoid leaks when registration races DB close.
+func (db *DB) RegisterCloseHookIfOpen(hook func() error) (func(), bool) {
 	if db == nil || hook == nil {
-		return func() {}
+		return func() {}, false
 	}
 	db.closeHooksMu.Lock()
-	if db.closeHooksClosed || db.closing.Load() {
+	if !db.acceptingCloseHooksLocked() {
 		db.closeHooksMu.Unlock()
-		return func() {}
+		return func() {}, false
 	}
 	idx := len(db.closeHooks)
 	db.closeHooks = append(db.closeHooks, hook)
@@ -1675,7 +1687,7 @@ func (db *DB) RegisterCloseHook(hook func() error) func() {
 			}
 			db.closeHooksMu.Unlock()
 		})
-	}
+	}, true
 }
 
 // RunCloseHooks runs and clears registered close hooks. Wrappers that own a

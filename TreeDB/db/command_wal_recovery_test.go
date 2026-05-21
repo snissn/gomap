@@ -800,6 +800,28 @@ func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawPublishBarrierRejectsCloseHookDrainedDB(t *testing.T) {
+	db := &DB{commandWAL: true}
+	if err := db.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	var called atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		called.Store(true)
+		return nil
+	})
+	unregister()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after late register=%d, want 0", got)
+	}
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if called.Load() {
+		t.Fatalf("late raw publish barrier ran after close hooks drained")
+	}
+}
+
 func TestMarkCommandWALIntentRecoveryRequiredNilNoop(t *testing.T) {
 	db := &DB{}
 	db.MarkCommandWALIntentRecoveryRequired(nil)

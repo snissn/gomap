@@ -1226,6 +1226,19 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotDeadlockRawPublish(t *te
 	}
 }
 
+func TestCollectionCommandWALCoordinatorNotStoredAfterCloseHooksDrained(t *testing.T) {
+	d := &backenddb.DB{}
+	if err := d.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	if coord := collectionCommandWALCoordinatorForDB(d); coord != nil {
+		t.Fatalf("collectionCommandWALCoordinatorForDB after close hooks drained returned non-nil coordinator")
+	}
+	if _, ok := collectionCommandWALCoordinators.Load(d); ok {
+		t.Fatalf("collection command WAL coordinator stored after close hooks drained")
+	}
+}
+
 func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotReserveBeforeMutation(t *testing.T) {
 	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
 		Name: "users",

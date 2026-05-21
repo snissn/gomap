@@ -18,11 +18,17 @@ func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	if db == nil || hook == nil {
 		return func() {}
 	}
+	db.closeHooksMu.Lock()
+	if !db.acceptingCloseHooksLocked() {
+		db.closeHooksMu.Unlock()
+		return func() {}
+	}
 	db.commandWALRawBarrierMu.Lock()
 	db.commandWALRawBarrierNextID++
 	id := db.commandWALRawBarrierNextID
 	db.commandWALRawBarriers = append(db.commandWALRawBarriers, commandWALRawBarrier{id: id, hook: hook})
 	db.commandWALRawBarrierMu.Unlock()
+	db.closeHooksMu.Unlock()
 
 	var once sync.Once
 	return func() {
