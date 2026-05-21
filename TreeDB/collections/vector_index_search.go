@@ -71,8 +71,8 @@ type VectorIndexSearchStats struct {
 	PhysicalBytesRead int64  `json:"physical_bytes_read,omitempty"`
 	MaxResidentBytes  int64  `json:"max_resident_bytes,omitempty"`
 
-	OpenGranulesRead      int   `json:"open_granules_read,omitempty"`
-	OpenPhysicalBytesRead int64 `json:"open_physical_bytes_read,omitempty"`
+	OpenGranulesRead      uint64 `json:"open_granules_read,omitempty"`
+	OpenPhysicalBytesRead int64  `json:"open_physical_bytes_read,omitempty"`
 }
 
 type VectorIndexSearchResponse struct {
@@ -300,10 +300,6 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		}
 		if opts.IncludeDocuments {
 			doc := documents[i]
-			if len(doc) == 0 {
-				response.Results[i].Document = []byte{}
-				continue
-			}
 			if len(doc) > len(documentBytes)-docOffset {
 				return response, errors.New("collections: vector index search document byte accounting mismatch")
 			}
@@ -445,7 +441,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		GranulesTouched:       readerStats.GranulesTouched,
 		PhysicalBytesRead:     readerStats.PhysicalBytesRead,
 		MaxResidentBytes:      readerStats.MaxResidentBytes,
-		OpenGranulesRead:      readerStats.OpenGranulesRead,
+		OpenGranulesRead:      uint64(readerStats.OpenGranulesRead),
 		OpenPhysicalBytesRead: readerStats.OpenPhysicalBytesRead,
 	}
 }
