@@ -2837,12 +2837,18 @@ func TestColumnDictionaryCodeSnapshotRowsM1634(t *testing.T) {
 		{2, 1}: {AssetRef: ColumnAssetRef{Generation: 2, PartID: 1}},
 		{2, 2}: {AssetRef: ColumnAssetRef{Generation: 2, PartID: 2}},
 	}
-	if rows := columnDictionaryCodeSnapshotRows(view, byPart); rows != 8 {
-		t.Fatalf("rows=%d want 8", rows)
+	if rows, ok := columnDictionaryCodeSnapshotRows(view, byPart); rows != 8 || !ok {
+		t.Fatalf("rows=%d ok=%v want 8/true", rows, ok)
 	}
 	delete(byPart, [2]uint64{2, 2})
-	if rows := columnDictionaryCodeSnapshotRows(view, byPart); rows != 0 {
-		t.Fatalf("missing part rows=%d want 0", rows)
+	if rows, ok := columnDictionaryCodeSnapshotRows(view, byPart); rows != 0 || ok {
+		t.Fatalf("missing part rows=%d ok=%v want 0/false", rows, ok)
+	}
+	byPart[[2]uint64{2, 2}] = columnManifestDictionaryCodesSnapshot{AssetRef: ColumnAssetRef{Generation: 2, PartID: 2}}
+	view.AssetRefs[0].Rows = maxCollectionInt
+	view.AssetRefs[1].Rows = 1
+	if rows, ok := columnDictionaryCodeSnapshotRows(view, byPart); rows != 0 || ok {
+		t.Fatalf("overflow rows=%d ok=%v want 0/false", rows, ok)
 	}
 }
 

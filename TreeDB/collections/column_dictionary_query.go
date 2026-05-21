@@ -108,8 +108,8 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 	if !columnDictionaryCodeSnapshotsCoverParts(view, byPart) {
 		return nil, nil
 	}
-	codeArenaRows := columnDictionaryCodeSnapshotRows(view, byPart)
-	if codeArenaRows == 0 {
+	codeArenaRows, ok := columnDictionaryCodeSnapshotRows(view, byPart)
+	if !ok || codeArenaRows == 0 {
 		return nil, nil
 	}
 	globalByValue := make(map[string]uint32)
@@ -355,8 +355,8 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	if !columnDictionaryCodeSnapshotsCoverParts(view, groupByPart) || !columnDictionaryCodeSnapshotsCoverParts(view, distinctByPart) {
 		return nil, nil
 	}
-	codeArenaRows := columnDictionaryCodeSnapshotRows(view, groupByPart)
-	if codeArenaRows == 0 {
+	codeArenaRows, ok := columnDictionaryCodeSnapshotRows(view, groupByPart)
+	if !ok || codeArenaRows == 0 {
 		return nil, nil
 	}
 	runner := &columnDictionaryCodeGroupCountDistinctRunner{
@@ -552,19 +552,19 @@ func columnDictionaryCodeSnapshotsByPart(view columnPhysicalScanSnapshotView, co
 	return byPart
 }
 
-func columnDictionaryCodeSnapshotRows(view columnPhysicalScanSnapshotView, byPart map[[2]uint64]columnManifestDictionaryCodesSnapshot) int {
+func columnDictionaryCodeSnapshotRows(view columnPhysicalScanSnapshotView, byPart map[[2]uint64]columnManifestDictionaryCodesSnapshot) (int, bool) {
 	rows := 0
 	for _, part := range view.AssetRefs {
 		_, ok := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
 		if !ok {
-			return 0
+			return 0, false
 		}
 		if part.Rows > maxCollectionInt-rows {
-			return 0
+			return 0, false
 		}
 		rows += part.Rows
 	}
-	return rows
+	return rows, true
 }
 
 func columnDictionaryCodeSnapshotsCoverParts(view columnPhysicalScanSnapshotView, byPart map[[2]uint64]columnManifestDictionaryCodesSnapshot) bool {
