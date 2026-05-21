@@ -158,6 +158,10 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 			for localCode := 0; localCode < cardinality; localCode++ {
 				if !reducer.translateDictionaryValue(localToGlobal, localCode, dictCur.stringBytes()) {
 					ok = false
+					break
+				}
+				if dictCur.err != nil {
+					break
 				}
 			}
 			if dictCur.err != nil {

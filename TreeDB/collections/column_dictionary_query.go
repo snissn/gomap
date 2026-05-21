@@ -238,6 +238,10 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		for localCode := 0; localCode < cardinality; localCode++ {
 			if !reducer.translateDictionaryValue(localToGlobal, localCode, dictCur.stringBytes()) {
 				ok = false
+				break
+			}
+			if dictCur.err != nil {
+				break
 			}
 		}
 		if dictCur.err != nil {
@@ -568,6 +572,10 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		for localCode := 0; localCode < groupCardinality; localCode++ {
 			if !reducer.translateGroupDictionaryValue(localCode, groupCur.stringBytes()) {
 				ok = false
+				break
+			}
+			if groupCur.err != nil {
+				break
 			}
 		}
 		if groupCur.err != nil {
@@ -593,6 +601,10 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		for localCode := 0; localCode < distinctCardinality; localCode++ {
 			if !reducer.translateDistinctDictionaryValue(localCode, distinctCur.stringBytes()) {
 				ok = false
+				break
+			}
+			if distinctCur.err != nil {
+				break
 			}
 		}
 		if distinctCur.err != nil {
@@ -744,26 +756,6 @@ func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateGroupDic
 	return true
 }
 
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateGroupDictionary(dictionary []string) ([]uint32, bool) {
-	if cap(r.groupLocal) < len(dictionary) {
-		r.groupLocal = make([]uint32, len(dictionary))
-	}
-	localToGlobal := r.groupLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		globalCode, ok := r.groupByValue[value]
-		if !ok {
-			if uint64(len(r.groupDict)) == uint64(^uint32(0)) {
-				return nil, false
-			}
-			globalCode = uint32(len(r.groupDict))
-			r.groupByValue[value] = globalCode
-			r.groupDict = append(r.groupDict, value)
-		}
-		localToGlobal[localCode] = globalCode
-	}
-	return localToGlobal, true
-}
-
 func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) prepareDistinctDictionary(cardinality int) []uint32 {
 	if cap(r.distinctLocal) < cardinality {
 		r.distinctLocal = make([]uint32, cardinality)
@@ -784,47 +776,6 @@ func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateDistinct
 	return true
 }
 
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateDistinctDictionary(dictionary []string) ([]uint32, bool) {
-	if cap(r.distinctLocal) < len(dictionary) {
-		r.distinctLocal = make([]uint32, len(dictionary))
-	}
-	localToGlobal := r.distinctLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		globalCode, ok := r.distinctByValue[value]
-		if !ok {
-			if uint64(len(r.distinctByValue)) == uint64(^uint32(0)) {
-				return nil, false
-			}
-			globalCode = uint32(len(r.distinctByValue))
-			r.distinctByValue[value] = globalCode
-		}
-		localToGlobal[localCode] = globalCode
-	}
-	return localToGlobal, true
-}
-
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateKnownGroupDictionary(dictionary []string) []uint32 {
-	if cap(r.groupLocal) < len(dictionary) {
-		r.groupLocal = make([]uint32, len(dictionary))
-	}
-	localToGlobal := r.groupLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		localToGlobal[localCode] = r.groupByValue[value]
-	}
-	return localToGlobal
-}
-
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateKnownDistinctDictionary(dictionary []string) []uint32 {
-	if cap(r.distinctLocal) < len(dictionary) {
-		r.distinctLocal = make([]uint32, len(dictionary))
-	}
-	localToGlobal := r.distinctLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		localToGlobal[localCode] = r.distinctByValue[value]
-	}
-	return localToGlobal
-}
-
 func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (int, error) {
 	rows := 0
 	for _, asset := range r.assets {
@@ -835,6 +786,9 @@ func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets(view
 		groupMap := r.prepareGroupDictionary(groupCardinality)
 		for localCode := 0; localCode < groupCardinality; localCode++ {
 			groupMap[localCode] = r.groupByValue[unsafeStringFromBytes(groupDictCur.stringBytes())]
+			if groupDictCur.err != nil {
+				break
+			}
 		}
 		if groupDictCur.err != nil {
 			return 0, groupDictCur.err
@@ -846,6 +800,9 @@ func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets(view
 		distinctMap := r.prepareDistinctDictionary(distinctCardinality)
 		for localCode := 0; localCode < distinctCardinality; localCode++ {
 			distinctMap[localCode] = r.distinctByValue[unsafeStringFromBytes(distinctDictCur.stringBytes())]
+			if distinctDictCur.err != nil {
+				break
+			}
 		}
 		if distinctDictCur.err != nil {
 			return 0, distinctDictCur.err
