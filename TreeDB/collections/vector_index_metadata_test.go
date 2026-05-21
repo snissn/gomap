@@ -138,6 +138,35 @@ func TestColumnGraphVectorIndexStatusReportsMissingPhysicalSupportV2A(t *testing
 	}
 }
 
+func TestNativeRuntimeVectorIndexStatusClosedDBReturnsErrClosedV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding_graph",
+			Field:      "embedding",
+			Dimensions: 3,
+			Strategy:   VectorIndexStrategyNativeRuntime,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, err := col.VectorIndexStatus("embedding_graph"); !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("VectorIndexStatus after close err=%v want ErrClosed", err)
+	}
+}
+
 func TestScalarIndexMutationPreservesVectorIndexMetadataV2A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

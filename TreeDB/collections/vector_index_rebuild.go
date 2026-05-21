@@ -11,7 +11,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
-const columnVectorGraphNeighborInsertionLimit = 32
+const (
+	columnVectorGraphNeighborInsertionLimit = 32
+	maxColumnVectorGraphAdjacencyOrdinal    = uint64(^uint32(0))
+)
 
 var (
 	errColumnVectorGraphInvNormEmpty          = errors.New("collections: column_graph vector is empty")
@@ -435,6 +438,9 @@ func columnVectorGraphInvNorm(vector []float32) (float32, error) {
 }
 
 func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def VectorIndexDefinition) error {
+	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
+		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
+	}
 	degree := def.M
 	if degree <= 0 {
 		degree = defaultVectorIndexM
@@ -462,7 +468,11 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 		}
 		neighbors := make([]uint32, len(candidates))
 		for n := range candidates {
-			neighbors[n] = uint32(candidates[n].ordinal)
+			ordinal := candidates[n].ordinal
+			if ordinal < 0 || uint64(ordinal) > maxColumnVectorGraphAdjacencyOrdinal {
+				return fmt.Errorf("collections: column vector graph neighbor ordinal=%d exceeds uint32 adjacency encoding", ordinal)
+			}
+			neighbors[n] = uint32(ordinal)
 		}
 		rows[i].Adjacency = neighbors
 	}

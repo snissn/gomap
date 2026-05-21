@@ -219,7 +219,19 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
 	}
-	def, ok := findVectorIndex(c.meta.VectorIndexes, name)
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return VectorIndexStatus{}, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if catalog == nil {
+		return VectorIndexStatus{}, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
@@ -233,7 +245,7 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 		status.Reason = VectorIndexReasonNativeRuntime
 		return status, nil
 	case VectorIndexStrategyColumnGraph:
-		return c.columnGraphVectorIndexStatus(def.Name)
+		return c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 	default:
 		return VectorIndexStatus{}, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
 	}

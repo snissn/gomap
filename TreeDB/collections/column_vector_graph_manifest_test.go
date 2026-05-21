@@ -518,8 +518,8 @@ func TestColumnGraphVectorIndexStatusFailsClosedOnMissingOrMismatchedAssetV2A(t 
 			t.Fatalf("open collection: %v", err)
 		}
 		status, err := col.VectorIndexStatus(def.Name)
-		if err != nil {
-			t.Fatalf("VectorIndexStatus: %v", err)
+		if err == nil {
+			t.Fatalf("VectorIndexStatus err=nil want missing asset error")
 		}
 		if status.State != VectorIndexStateColumnGraphUnavailable || status.Reason != VectorIndexReasonColumnGraphCorrupt || !status.RebuildNeeded || status.Loaded {
 			t.Fatalf("status=%+v want corrupt unavailable", status)

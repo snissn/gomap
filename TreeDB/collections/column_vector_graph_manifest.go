@@ -409,7 +409,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
-		return status, nil
+		return columnGraphVectorIndexStatusError(status, err)
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
 	if err != nil {
@@ -420,13 +420,13 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
-		return status, nil
+		return columnGraphVectorIndexStatusError(status, err)
 	}
 	if err := validateColumnManifestSnapshot(manifest, records, *cfg, *cfg.ActiveManifest, catalog.meta.Name, "column vector graph status"); err != nil {
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
-		return status, nil
+		return columnGraphVectorIndexStatusError(status, err)
 	}
 	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
 	if !ok {
@@ -440,7 +440,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
-		return status, nil
+		return columnGraphVectorIndexStatusError(status, err)
 	}
 	switch columnVectorGraphManifestMatchStatus(catalog.meta.Name, graph, def, *cfg, manifest, records) {
 	case columnVectorGraphManifestMatchLoaded:
@@ -459,11 +459,18 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.State = VectorIndexStateColumnGraphUnavailable
 		status.Reason = VectorIndexReasonColumnGraphCorrupt
 		status.RebuildNeeded = true
-		return status, nil
+		return columnGraphVectorIndexStatusError(status, err)
 	}
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	return status, nil
+}
+
+func columnGraphVectorIndexStatusError(status VectorIndexStatus, err error) (VectorIndexStatus, error) {
+	if err == nil {
+		return status, nil
+	}
+	return status, fmt.Errorf("collections: column_graph vector index %q status=%s reason=%s: %w", status.Name, status.State, status.Reason, err)
 }
 
 type columnVectorGraphManifestMatch uint8

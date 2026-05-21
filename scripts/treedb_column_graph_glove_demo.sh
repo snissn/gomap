@@ -64,7 +64,12 @@ if [[ ! -s "$GLOVE_PATH" ]]; then
     rm -f "$ZIP_PATH"
     ZIP_TMP="${ZIP_PATH}.tmp.$$"
     rm -f "$ZIP_TMP"
-    if ! curl -fL "$ZIP_URL" -o "$ZIP_TMP"; then
+    if ! curl -fL \
+      --retry 3 \
+      --retry-delay 2 \
+      --connect-timeout 15 \
+      --max-time 600 \
+      "$ZIP_URL" -o "$ZIP_TMP"; then
       rm -f "$ZIP_TMP"
       exit 1
     fi
