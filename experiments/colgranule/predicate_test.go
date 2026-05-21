@@ -15,7 +15,7 @@ func TestSortKeyMarkPrefixSummaries(t *testing.T) {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
 	if mark.Rows != 5 || !slices.Equal(mark.Columns, []string{"collection", "time_us"}) {
-		t.Fatalf("mark rows/columns=(%d,%v)", mark.Rows, mark.Columns)
+		t.Fatalf("mark rows/columns=(%d,%v) want (5,[collection time_us])", mark.Rows, mark.Columns)
 	}
 	if !slices.Equal(mark.Prefixes[0].Lower.Values, []int64{1}) || !slices.Equal(mark.Prefixes[0].UpperExclusive.Values, []int64{3}) {
 		t.Fatalf("prefix 1 bounds=%v/%v want [1]/[3]", mark.Prefixes[0].Lower.Values, mark.Prefixes[0].UpperExclusive.Values)
@@ -139,10 +139,32 @@ func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
 	}
 	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
 		Filter:        Int64RangePredicate{Column: "other_column", Low: 1, High: 3},
-		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 1, High: 3}},
+		SortKeyRanges: []Int64RangePredicate{{Column: "other_column", Low: 1, High: 3}},
 	})
-	if err == nil {
-		t.Fatal("CountInt64RangeWithDiagnostics mismatched filter column succeeded, want error")
+	if err == nil || !strings.Contains(err.Error(), "not present in mark") {
+		t.Fatalf("unknown sort key range err=%v want not present in mark", err)
+	}
+
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
+		Filter: Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{
+			{Column: "time_us", Low: 1, High: 2},
+			{Column: "time_us", Low: 2, High: 3},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate sort key range column") {
+		t.Fatalf("duplicate sort key range err=%v want duplicate sort key range column", err)
+	}
+
+	count, _, err := reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "value", Low: 2, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 2, High: 3}},
+	})
+	if err != nil {
+		t.Fatalf("CountInt64RangeWithDiagnostics non-sort filter: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("non-sort filter count=%d want 2", count)
 	}
 }
 
