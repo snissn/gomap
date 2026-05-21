@@ -1098,12 +1098,9 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 				}
 				rowValues[outputIdx].Float32Vector = value
 			} else {
-				n := cur.skipUint32Slice()
+				cur.skipFloat32SliceWithExpectedLength(col.VectorDims)
 				if cur.err != nil {
 					return cur.err
-				}
-				if n != uint64(col.VectorDims) {
-					return fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, col.VectorDims)
 				}
 			}
 		case ColumnStoreValueAdjacencyList:
