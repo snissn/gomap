@@ -265,6 +265,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		if statusErr != nil {
 			return nil, response, statusErr
 		}
+		status = failClosedColumnGraphReaderOpenStatus(def, status)
 		response.Status = status
 		return nil, response, fmt.Errorf("%w: column_graph %q is not loaded: state=%s reason=%s: %w", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason, err)
 	}
@@ -294,6 +295,22 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	}
 	closeOnErr = false
 	return searcher, response, nil
+}
+
+func failClosedColumnGraphReaderOpenStatus(def VectorIndexDefinition, status VectorIndexStatus) VectorIndexStatus {
+	if status.Name == "" {
+		status.Name = def.Name
+	}
+	if status.Strategy == "" {
+		status.Strategy = def.Strategy
+	}
+	if status.State == VectorIndexStateColumnGraphLoaded || status.Loaded {
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+		status.Loaded = false
+		status.RebuildNeeded = true
+	}
+	return status
 }
 
 // Search runs one vector-index query against the searcher's bound snapshot.

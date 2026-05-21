@@ -295,6 +295,40 @@ func TestSearchVectorIndexColumnGraphUnavailableStatusV4(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexColumnGraphReaderOpenFailureDowngradesLoadedStatusV4(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithManifestRowsV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	}, 3)
+	defer func() { _ = d.Close() }()
+
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus: %v", err)
+	}
+	if status.State != VectorIndexStateColumnGraphLoaded || !status.Loaded {
+		t.Fatalf("test setup status=%+v want loaded before reader row-count validation", status)
+	}
+
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName: def.Name,
+		Query:     []float32{1, 0, 0},
+		TopK:      1,
+	})
+	if !errors.Is(err, ErrVectorIndexSearchUnavailable) || !errors.Is(err, errColumnVectorGraphManifestMismatch) {
+		t.Fatalf("SearchVectorIndex err=%v want unavailable wrapping manifest mismatch", err)
+	}
+	if got.Status.State != VectorIndexStateColumnGraphRebuildNeeded || !got.Status.RebuildNeeded || got.Status.Loaded {
+		t.Fatalf("status=%+v want fail-closed rebuild-needed status", got.Status)
+	}
+	if got.Status.Reason != VectorIndexReasonColumnGraphAssetMismatch {
+		t.Fatalf("status reason=%q want %q", got.Status.Reason, VectorIndexReasonColumnGraphAssetMismatch)
+	}
+	if got.Path != "" || len(got.Results) != 0 {
+		t.Fatalf("response path=%q results=%d want no search path/results on reader open failure", got.Path, len(got.Results))
+	}
+}
+
 func TestColumnGraphVectorIndexStatusUsesCallerSnapshotV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
