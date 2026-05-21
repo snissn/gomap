@@ -52,6 +52,28 @@ func TestGranuleBuilderRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestGranuleBuilderRejectsOversizedRows(t *testing.T) {
+	values := make([]int64, maxGranuleDecodeRows+1)
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone})
+	if _, err := builder.BuildInt64(values); err == nil {
+		t.Fatal("BuildInt64(oversized) succeeded, want error")
+	}
+	if _, err := EncodeInt64(nil, values, Config{Encoding: EncodingRawInt64, Compression: CompressionNone}); err == nil {
+		t.Fatal("EncodeInt64(oversized) succeeded, want error")
+	}
+	if _, err := builder.BuildNullableInt64(values, nil, nil, 0); err == nil {
+		t.Fatal("BuildNullableInt64(oversized) succeeded, want error")
+	}
+	bools := make([]bool, maxGranuleDecodeRows+1)
+	if _, err := builder.BuildBool(bools); err == nil {
+		t.Fatal("BuildBool(oversized) succeeded, want error")
+	}
+	codes := make([]uint32, maxGranuleDecodeRows+1)
+	if _, err := builder.BuildUint32Codes(codes, 1); err == nil {
+		t.Fatal("BuildUint32Codes(oversized) succeeded, want error")
+	}
+}
+
 func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -87,6 +109,22 @@ func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGranuleBuilderSnappyPayloadDoesNotPrefixScratch(t *testing.T) {
+	values := []int64{10, 11, 12, 13, 14, 15, 16, 17}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy})
+	g, err := builder.BuildInt64(values)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	got, err := DecodeInt64(nil, g)
+	if err != nil {
+		t.Fatalf("DecodeInt64: %v", err)
+	}
+	if !slices.Equal(got, values) {
+		t.Fatalf("DecodeInt64=%v want %v", got, values)
 	}
 }
 
@@ -142,6 +180,57 @@ func TestBoolGranuleRoundTripAndCount(t *testing.T) {
 	}
 }
 
+func TestBoolCorruptPayloadsFailClosedBeforeDecodeAllocation(t *testing.T) {
+	tests := []struct {
+		name string
+		rows int
+		raw  []byte
+	}{
+		{
+			name: "invalid_rle_start",
+			rows: 1,
+			raw:  []byte{boolPayloadRLE, 2, 1},
+		},
+		{
+			name: "huge_bitpack_rows",
+			rows: maxGranuleDecodeRows + 1,
+			raw:  []byte{boolPayloadBitpack},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := EncodedGranule{
+				Rows:        tt.rows,
+				Encoding:    EncodingBoolBitpackRLE,
+				Compression: CompressionNone,
+				RawBytes:    len(tt.raw),
+				StoredBytes: len(tt.raw),
+				PayloadRef:  PayloadRef{Kind: PayloadRefInline, Length: len(tt.raw)},
+				Payload:     tt.raw,
+			}
+			var reader GranuleReader
+			if _, err := reader.DecodeBool(g); err == nil {
+				t.Fatal("DecodeBool(corrupt) succeeded, want error")
+			}
+			if _, err := reader.CountTrueBool(g); err == nil {
+				t.Fatal("CountTrueBool(corrupt) succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestBoolAtTreatsShortOptionalBitmapAsFalse(t *testing.T) {
+	if !boolAt([]bool{true}, 0) {
+		t.Fatal("boolAt existing true row returned false")
+	}
+	if boolAt([]bool{true}, 1) {
+		t.Fatal("boolAt out-of-range row returned true")
+	}
+	if boolAt(nil, 0) {
+		t.Fatal("boolAt nil bitmap returned true")
+	}
+}
+
 func TestNullableInt64GranuleRoundTrip(t *testing.T) {
 	values := []int64{10, 20, 30, 40, 50, 60, 70}
 	nulls := []bool{false, true, false, false, false, true, false}
@@ -175,6 +264,24 @@ func TestNullableInt64GranuleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNullableInt64CorruptRowsFailClosedBeforeDecodeAllocation(t *testing.T) {
+	payload := make([]byte, nullableInt64HeaderBytes)
+	payload[0] = byte(EncodingDeltaVarint)
+	g := EncodedGranule{
+		Rows:        maxGranuleDecodeRows + 1,
+		Encoding:    EncodingNullableInt64,
+		Compression: CompressionNone,
+		RawBytes:    len(payload),
+		StoredBytes: len(payload),
+		PayloadRef:  PayloadRef{Kind: PayloadRefInline, Length: len(payload)},
+		Payload:     payload,
+	}
+	var reader GranuleReader
+	if _, _, _, err := reader.DecodeNullableInt64(g); err == nil {
+		t.Fatal("DecodeNullableInt64(corrupt) succeeded, want error")
+	}
+}
+
 func TestLowCardinalityUint32RoundTripAndCounts(t *testing.T) {
 	codes := []uint32{0, 2, 1, 2, 2, 4, 4, 0, 3, 2}
 	builder := NewGranuleBuilder(Config{Compression: CompressionLZ4})
@@ -200,6 +307,42 @@ func TestLowCardinalityUint32RoundTripAndCounts(t *testing.T) {
 	wantCounts := []int{2, 1, 4, 1, 2}
 	if !slices.Equal(counts, wantCounts) {
 		t.Fatalf("CountUint32Codes=%v want %v", counts, wantCounts)
+	}
+}
+
+func TestLowCardinalityUint32CorruptRowsFailClosed(t *testing.T) {
+	payload := []byte{4, 1}
+	g := EncodedGranule{
+		Rows:        maxGranuleDecodeRows + 1,
+		Encoding:    EncodingLowCardinalityUint32,
+		Compression: CompressionNone,
+		RawBytes:    len(payload),
+		StoredBytes: len(payload),
+		PayloadRef:  PayloadRef{Kind: PayloadRefInline, Length: len(payload)},
+		Payload:     payload,
+	}
+	var reader GranuleReader
+	if _, err := reader.DecodeUint32Codes(g); err == nil {
+		t.Fatal("DecodeUint32Codes(corrupt) succeeded, want error")
+	}
+	if _, err := reader.CountUint32Codes(g, nil); err == nil {
+		t.Fatal("CountUint32Codes(corrupt) succeeded, want error")
+	}
+}
+
+func TestCompressionAdmissionReportsNoFallbackWhenNoneRequested(t *testing.T) {
+	g, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionNone})
+	if err != nil {
+		t.Fatalf("EncodeInt64: %v", err)
+	}
+	if g.CodecReport.RequestedCompression != CompressionNone || g.CodecReport.ActualCompression != CompressionNone {
+		t.Fatalf("codec report compression=(%s,%s), want none/none", g.CodecReport.RequestedCompression, g.CodecReport.ActualCompression)
+	}
+	if g.CodecReport.CompressionAttempted {
+		t.Fatalf("compression none unexpectedly attempted compression: %+v", g.CodecReport)
+	}
+	if g.CodecReport.CompressionFallbackReason != "" {
+		t.Fatalf("compression none fallback reason=%q, want empty", g.CodecReport.CompressionFallbackReason)
 	}
 }
 
@@ -237,6 +380,9 @@ func TestUnsupportedCodecIDsFailClosed(t *testing.T) {
 	}
 	if _, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTD}); err == nil {
 		t.Fatal("EncodeInt64 with unsupported zstd succeeded, want error")
+	}
+	if _, err := EncodeInt64(nil, []int64{1, 2, 3}, Config{Encoding: EncodingRawInt64, Compression: CompressionZSTDDict}); err == nil {
+		t.Fatal("EncodeInt64 with unsupported zstd_dict succeeded, want error")
 	}
 }
 
@@ -409,6 +555,51 @@ func TestCorruptPayloadsFailClosed(t *testing.T) {
 			},
 		},
 		{
+			name: "delta_huge_rows_tiny_payload",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Rows = maxGranuleDecodeRows + 1
+				g.Payload = []byte{0}
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				g.RawBytes = len(g.Payload)
+				return g
+			},
+		},
+		{
+			name: "double_delta_truncated",
+			cfg:  Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Payload = g.Payload[:len(g.Payload)-1]
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				return g
+			},
+		},
+		{
+			name: "double_delta_trailing",
+			cfg:  Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Payload = append(append([]byte(nil), g.Payload...), 0)
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				g.RawBytes = len(g.Payload)
+				return g
+			},
+		},
+		{
+			name: "double_delta_huge_rows_tiny_payload",
+			cfg:  Config{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.Rows = maxGranuleDecodeRows + 1
+				g.Payload = []byte{0}
+				g.StoredBytes = len(g.Payload)
+				g.PayloadRef.Length = len(g.Payload)
+				g.RawBytes = len(g.Payload)
+				return g
+			},
+		},
+		{
 			name: "snappy_corrupt",
 			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
 			edit: func(g EncodedGranule) EncodedGranule {
@@ -424,6 +615,38 @@ func TestCorruptPayloadsFailClosed(t *testing.T) {
 			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
 			edit: func(g EncodedGranule) EncodedGranule {
 				g.StoredBytes++
+				return g
+			},
+		},
+		{
+			name: "metadata_bad_payload_ref_kind",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.PayloadRef.Kind = 0
+				return g
+			},
+		},
+		{
+			name: "metadata_bad_payload_ref_length_zero",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.PayloadRef.Length = 0
+				return g
+			},
+		},
+		{
+			name: "metadata_bad_payload_ref_offset",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.PayloadRef.Offset = 1
+				return g
+			},
+		},
+		{
+			name: "metadata_huge_raw_bytes",
+			cfg:  Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
+			edit: func(g EncodedGranule) EncodedGranule {
+				g.RawBytes = maxGranuleRawPayloadBytes(g.Encoding, g.Rows) + 1
 				return g
 			},
 		},
