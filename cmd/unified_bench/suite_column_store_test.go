@@ -110,6 +110,26 @@ func TestRunColumnStoreSuiteReportsRelaxedAssetReadIntegrityM1634(t *testing.T) 
 	}
 }
 
+func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		key    string
+		value  int64
+		want   string
+	}{
+		{name: "count", prefix: "q1", key: "share", value: 12, want: "q1:share=12"},
+		{name: "negative", prefix: "q4a", key: "d000001", value: -42, want: "q4a:d000001=-42"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := columnStoreSuiteFormatPhysicalQueryLine(tt.prefix, tt.key, tt.value); got != tt.want {
+				t.Fatalf("columnStoreSuiteFormatPhysicalQueryLine=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestColumnStoreSuiteInheritsTreeDBDisableReadChecksumM1634(t *testing.T) {
 	prevAllowUnsafe := *treedbAllowUnsafe
 	prevDisableReadChecksum := *treedbDisableReadChecksum

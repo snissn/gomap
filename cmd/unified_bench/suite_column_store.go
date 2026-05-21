@@ -1366,16 +1366,28 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 	switch queryName {
 	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
 		for _, group := range groups {
-			lines = append(lines, fmt.Sprintf("%s:%s=%d", prefix, group.Key, group.Count))
+			lines = append(lines, columnStoreSuiteFormatPhysicalQueryLine(prefix, group.Key, int64(group.Count)))
 		}
 	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
 		for _, group := range groups {
-			lines = append(lines, fmt.Sprintf("%s:%s=%d", prefix, group.Key, group.Int64))
+			lines = append(lines, columnStoreSuiteFormatPhysicalQueryLine(prefix, group.Key, group.Int64))
 		}
 	default:
 		return nil, fmt.Errorf("column_store: unsupported physical query line mapping %q", queryName)
 	}
 	return lines, nil
+}
+
+func columnStoreSuiteFormatPhysicalQueryLine(prefix, key string, value int64) string {
+	var b strings.Builder
+	var num [20]byte
+	b.Grow(len(prefix) + 1 + len(key) + 1 + len(num))
+	b.WriteString(prefix)
+	b.WriteByte(':')
+	b.WriteString(key)
+	b.WriteByte('=')
+	b.Write(strconv.AppendInt(num[:0], value, 10))
+	return b.String()
 }
 
 func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([]columnStoreDecodedEvent, int, int64, error) {
