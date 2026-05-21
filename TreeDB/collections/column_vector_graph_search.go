@@ -129,7 +129,7 @@ func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSea
 		clear(dst)
 		return make([]columnVectorGraphNativeSearchResult, 0, target)
 	}
-	if len(dst) > target {
+	if len(dst) > 0 {
 		clear(dst)
 	}
 	return dst[:0]
@@ -178,7 +178,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	rowCount := r.RowCount()
 	topK := opts.TopK
 	if topK < 0 {
-		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: column_graph native search top_k cannot be negative")
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search top_k cannot be negative", r.def.Name)
 	}
 	if topK == 0 || rowCount == 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, nil
@@ -195,7 +195,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	efSearch := opts.EfSearch
 	if efSearch < 0 {
-		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: column_graph native search ef_search cannot be negative")
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search ef_search cannot be negative", r.def.Name)
 	}
 	if efSearch == 0 {
 		efSearch = r.def.EfSearch

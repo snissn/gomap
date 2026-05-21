@@ -293,7 +293,7 @@ func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch 
 		return err
 	}
 	if visitor == nil {
-		return errors.New("collections: column vector graph physical row reader batch visitor is nil")
+		return errors.New("collections: column_graph physical row reader batch visitor is nil")
 	}
 	rowCount := reader.RowCount()
 	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
@@ -311,7 +311,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchBatchUnchecked(ordinals []int,
 		return err
 	}
 	if visitor == nil {
-		return errors.New("collections: column vector graph physical row reader batch visitor is nil")
+		return errors.New("collections: column_graph physical row reader batch visitor is nil")
 	}
 	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
 		graphRow, err := r.graphRowFromPhysicalRowUnchecked(row)
