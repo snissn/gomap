@@ -978,7 +978,7 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 		switch col.ValueType {
 		case ColumnStoreValueBool:
 			// Bool is not a supported direct query group/value/distinct type.
-			cur.skip(1)
+			_ = cur.bool()
 		case ColumnStoreValueInt64:
 			if selectedValue {
 				v := int64(cur.u64())

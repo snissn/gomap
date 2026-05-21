@@ -116,13 +116,17 @@ const (
 	ColumnStoreProfileBenchmarkRelaxed ColumnStoreProfileSupport = "benchmark-relaxed"
 )
 
-// ColumnAssetReadIntegrity controls hot physical column asset payload checksum
-// verification. It does not change durability, manifest validation, or the
+// ColumnAssetReadIntegrity controls hot physical column asset read validation.
+// It does not change durability, manifest/header/schema validation, or the
 // checksum fields written into typed column asset refs.
 type ColumnAssetReadIntegrity string
 
 const (
-	ColumnAssetReadIntegrityVerify        ColumnAssetReadIntegrity = "verify"
+	ColumnAssetReadIntegrityVerify ColumnAssetReadIntegrity = "verify"
+	// ColumnAssetReadIntegritySkipChecksums is an unsafe relaxed hot-read mode
+	// for benchmark/performance attribution. It skips per-read payload checksum
+	// verification and may skip redundant per-row tags after the asset header and
+	// schema have been validated.
 	ColumnAssetReadIntegritySkipChecksums ColumnAssetReadIntegrity = "skip_checksums"
 )
 
