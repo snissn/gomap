@@ -14,7 +14,7 @@ func TestDocs_ColumnGraphNativeReconstructionInventory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read inventory: %v", err)
 	}
-	text := string(content)
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
 
 	required := []string{
 		"Base branch: `codex/colgranule-m15c-column-asset-rewrite`",
@@ -67,7 +67,7 @@ func TestDocs_ColumnGraphNativePRTemplateSections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read PR template: %v", err)
 	}
-	text := string(content)
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
 
 	requiredHeadings := []string{
 		"## Column Graph Native Workstream (#1646, if applicable)",
