@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -502,6 +503,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	var totalExpansionFetches atomic.Uint64
 	var totalResultFetches atomic.Uint64
 	var nextWorker atomic.Uint64
+	b.SetParallelism(1) // Keep one prewarmed reader/scratch per RunParallel worker.
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -606,7 +608,7 @@ func columnGraphNativeSearchResultsMismatchV3(got, want []columnVectorGraphNativ
 		return fmt.Sprintf("results len=%d want %d got=%+v want=%+v", len(got), len(want), got, want)
 	}
 	for i := range want {
-		if got[i].Ordinal != want[i].Ordinal || string(got[i].ID) != string(want[i].ID) || math.Abs(got[i].Score-want[i].Score) > 1e-6 {
+		if got[i].Ordinal != want[i].Ordinal || !bytes.Equal(got[i].ID, want[i].ID) || math.Abs(got[i].Score-want[i].Score) > 1e-6 {
 			return fmt.Sprintf("result[%d]=%s want %s", i, columnGraphNativeSearchResultStringV3(got[i]), columnGraphNativeSearchResultStringV3(want[i]))
 		}
 	}
