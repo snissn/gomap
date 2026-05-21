@@ -587,6 +587,9 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
+		// groupRaw and distinctRaw are retained for the deferred second pass, so
+		// the path above requires mmap/view-backed reads and falls back before
+		// appending when reads are scratch-backed.
 		reducer.assets = append(reducer.assets, columnDictionaryCodeGroupCountDistinctOneShotAsset{
 			groupRaw:        groupRaw,
 			groupPayload:    groupPayload,

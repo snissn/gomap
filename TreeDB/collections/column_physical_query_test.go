@@ -2185,6 +2185,55 @@ func TestColumnPhysicalQuerySerialDictionarySidecarParityM1634(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQuerySerialDictionaryDistinctOneShotRequiresViewBackedReadsM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}
+	copyCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity copy cache: %v", err)
+	}
+	defer func() {
+		if err := copyCache.close(); err != nil {
+			t.Fatalf("copy cache close: %v", err)
+		}
+	}()
+	copyCache.returnViews = false
+	if _, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, req, &copyCache); err != nil || ok {
+		t.Fatalf("copy-backed one-shot ok=%v err=%v want clean fallback", ok, err)
+	}
+
+	viewCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity view cache: %v", err)
+	}
+	defer func() {
+		if err := viewCache.close(); err != nil {
+			t.Fatalf("view cache close: %v", err)
+		}
+	}()
+	viewCache.returnViews = true
+	result, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, req, &viewCache)
+	if err != nil {
+		t.Fatalf("view-backed one-shot: %v", err)
+	}
+	if !ok {
+		t.Skip("column asset mmap views are unavailable on this platform")
+	}
+	if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B("q2", result.Groups)); got != columnPhysicalQueryReferenceHashM13B("q2", events) {
+		t.Fatalf("view-backed one-shot q2 hash=%d want reference", got)
+	}
+}
+
 func TestColumnPhysicalQuerySerialInt64ValueSidecarParityM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(2048)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
