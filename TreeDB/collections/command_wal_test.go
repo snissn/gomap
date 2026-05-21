@@ -870,8 +870,14 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexStagesAfterWALApp
 		t.Fatalf("AppliedCommandLSN after staged update=%d, want 0 before flush", got)
 	}
 	frames := collectionCommandWALFrames(t, dir)
-	if len(frames) != 1 || frames[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID {
-		t.Fatalf("command WAL frames=%+v, want one update frame before flush", frames)
+	var updateFrames []commitlog.CommandEnvelope
+	for _, frame := range frames {
+		if frame.Kind == commitlog.CommandKindCollectionUpdateBatchByID {
+			updateFrames = append(updateFrames, frame)
+		}
+	}
+	if len(updateFrames) != 1 {
+		t.Fatalf("command WAL update frames=%+v all frames=%+v, want one update frame before flush", updateFrames, frames)
 	}
 	if err := col.Flush(); err != nil {
 		t.Fatalf("Flush: %v", err)

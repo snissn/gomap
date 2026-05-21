@@ -12265,6 +12265,18 @@ type directBufferedUpdatePlan struct {
 	stagedBytes                 int64
 }
 
+func (plan *updateBatchPlan) canStageDirectBufferedUpdateAfterCommandWALAppend() bool {
+	return plan != nil &&
+		plan.directBufferedUpdate != nil &&
+		plan.directBufferedUpdate.stagesOnlyPrimaryRoot()
+}
+
+func (direct *directBufferedUpdatePlan) stagesOnlyPrimaryRoot() bool {
+	return direct != nil &&
+		len(direct.templateEntries) == 0 &&
+		len(direct.secondaryRootPlans) == 0
+}
+
 type directBufferedRootEntry struct {
 	key   []byte
 	value []byte
@@ -12822,7 +12834,7 @@ func (c *Collection) validateUpdateBatchPlanRootDescriptors(plan *updateBatchPla
 	return c.validateRootDescriptorSystemDeltaForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs)
 }
 
-func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, runtimes []indexRuntime, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
+func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts collectionOptions, canBuffer bool, mode updateBatchMode, secondaryIndexChanges updateBatchSecondaryIndexChangeSummary, changed []preparedBatchUpdate, structuredBSONSetBatch bool) bool {
 	if c == nil || c.writeDomain == nil {
 		return false
 	}
@@ -12846,11 +12858,11 @@ func (c *Collection) shouldUseDirectBufferedUpdatePlan(meta CollectionMeta, opts
 			isBSONDocumentFormat(opts.documentFormat) &&
 			structuredBSONSetBatch &&
 			canBuffer &&
-			!updateBatchChangesSecondaryIndex(runtimes, changed) &&
+			!secondaryIndexChanges.any &&
 			!persistIndexStateForOptions(opts)
 	}
 	if mode == updateBatchModeAny && collectionMetaHasSecondaryUniqueIndex(meta) {
-		if updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+		if secondaryIndexChanges.unique {
 			return false
 		}
 		canBuffer = true
@@ -12895,9 +12907,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			err = func() error {
 				var unlockCommandWALRawStage func()
 				if commandWALBufferedMode &&
-					plan.directBufferedUpdate != nil &&
-					len(plan.directBufferedUpdate.templateEntries) == 0 &&
-					len(plan.directBufferedUpdate.secondaryRootPlans) == 0 &&
+					plan.canStageDirectBufferedUpdateAfterCommandWALAppend() &&
 					len(plan.commandWALDocuments) > 0 {
 					intent, err := c.newCollectionUpdateCommandWALIntent(plan.commandWALDocuments, nil)
 					if err != nil {
@@ -13951,7 +13961,8 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateV1CommandWALDocuments != nil {
 		commandWALDocuments = templateV1CommandWALDocuments
 	}
-	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && updateBatchChangesSecondaryUniqueIndex(runtimes, changed) {
+	secondaryIndexChanges := summarizeUpdateBatchSecondaryIndexChanges(runtimes, changed)
+	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && secondaryIndexChanges.unique {
 		_ = snap.Close()
 		return nil, errUpdateBatchChangesSecondaryUniqueIndex
 	}
@@ -13972,7 +13983,7 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	stats.UniqueIndexPreflight += updateBatchStatsSince(detailedStats, phaseStart)
 
 	success := false
-	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, runtimes, changed, updateBatchItemsAllHaveBSONSet(items))
+	canBufferDirectUpdateBatch := c.shouldUseDirectBufferedUpdatePlan(meta, plannerOptions, canBufferIndexedUpdateBatch, mode, secondaryIndexChanges, changed, updateBatchItemsAllHaveBSONSet(items))
 	if canBufferDirectUpdateBatch {
 		phaseStart = updateBatchStatsNow(detailedStats)
 		var templateEntries []directBufferedRootEntry
@@ -15110,35 +15121,35 @@ func rejectBatchUniqueConflicts(runtimes []indexRuntime, updates []preparedBatch
 	return nil
 }
 
-func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
-	if len(runtimes) == 0 || len(updates) == 0 {
-		return false
-	}
-	for runtimeIdx, runtime := range runtimes {
-		if !runtime.def.unique {
-			continue
-		}
-		for _, update := range updates {
-			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
-				return true
-			}
-		}
-	}
-	return false
+type updateBatchSecondaryIndexChangeSummary struct {
+	any    bool
+	unique bool
 }
 
-func updateBatchChangesSecondaryIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
-	if len(runtimes) == 0 || len(updates) == 0 {
-		return false
-	}
+func summarizeUpdateBatchSecondaryIndexChanges(runtimes []indexRuntime, updates []preparedBatchUpdate) updateBatchSecondaryIndexChangeSummary {
+	var summary updateBatchSecondaryIndexChangeSummary
 	for runtimeIdx := range runtimes {
 		for _, update := range updates {
 			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
-				return true
+				summary.any = true
+				if runtimes[runtimeIdx].def.unique {
+					summary.unique = true
+				}
+				if summary.any && summary.unique {
+					return summary
+				}
 			}
 		}
 	}
-	return false
+	return summary
+}
+
+func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
+	return summarizeUpdateBatchSecondaryIndexChanges(runtimes, updates).unique
+}
+
+func updateBatchChangesSecondaryIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
+	return summarizeUpdateBatchSecondaryIndexChanges(runtimes, updates).any
 }
 
 func documentIndexRuntimeChanged(oldState, newState documentIndexState, runtime indexRuntime) bool {
