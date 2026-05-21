@@ -366,7 +366,7 @@ func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Sn
 			return false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(record.ID), err)
 		}
 		rows = append(rows, columnVectorGraphAssetRow{
-			ID:      bytes.Clone(record.ID),
+			ID:      record.ID,
 			Vector:  vector,
 			InvNorm: invNorm,
 		})
