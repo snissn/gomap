@@ -748,6 +748,12 @@ func parseConfig(args []string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
+	if cfg.Target == "treedb" && cfg.TreeDBCommandWAL && maintenance == treeDBMaintenanceFull {
+		if seenFlags["treedb-maintenance"] {
+			return config{}, errors.New("treedb-command-wal does not support -treedb-maintenance full; use checkpoint or none")
+		}
+		maintenance = treeDBMaintenanceCheckpoint
+	}
 	cfg.TreeDBMaintenance = maintenance
 	if cfg.Deletes > cfg.Documents {
 		return config{}, errors.New("deletes cannot exceed documents")

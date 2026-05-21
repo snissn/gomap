@@ -1213,6 +1213,15 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if !cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=false want true")
 	}
+	if cfg.TreeDBMaintenance != treeDBMaintenanceCheckpoint {
+		t.Fatalf("TreeDBMaintenance=%q want %q", cfg.TreeDBMaintenance, treeDBMaintenanceCheckpoint)
+	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-maintenance", treeDBMaintenanceFull}); err == nil || !strings.Contains(err.Error(), "treedb-command-wal does not support -treedb-maintenance full") {
+		t.Fatalf("parse explicit full maintenance error=%v, want command WAL maintenance error", err)
+	}
+	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-maintenance", treeDBMaintenanceNone}); err != nil {
+		t.Fatalf("parse command WAL none maintenance: %v", err)
+	}
 	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err != nil {
 		t.Fatalf("parse durable command WAL config: %v", err)
 	}
