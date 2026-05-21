@@ -115,10 +115,11 @@ func newColumnPhysicalRowReaderFromSnapshotView(view columnPhysicalScanSnapshotV
 }
 
 func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScanSnapshotView, opts columnPhysicalRowReaderOptions, closeView func()) (_ *columnPhysicalRowReader, err error) {
-	if closeView != nil {
+	cleanupCloseView := closeView
+	if cleanupCloseView != nil {
 		defer func() {
-			if err != nil {
-				closeView()
+			if err != nil && cleanupCloseView != nil {
+				cleanupCloseView()
 			}
 		}()
 	}
@@ -158,6 +159,7 @@ func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScan
 			Granules: len(view.AssetRefs),
 		},
 	}
+	cleanupCloseView = nil
 	if err := reader.buildOrdinalRanges(); err != nil {
 		_ = reader.Close()
 		return nil, err

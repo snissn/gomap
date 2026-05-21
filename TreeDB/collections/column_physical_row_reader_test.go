@@ -170,6 +170,26 @@ func TestColumnPhysicalRowReaderClosesSnapshotOnOpenErrorV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderClosesSnapshotOnceOnRangeBuildErrorV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 12, 1, testColumnPhysicalRowReaderRowsV1(0, 1, normalized))
+	ref.FileID++
+	closed := 0
+	_, err := newColumnPhysicalRowReaderFromSnapshotViewWithClose(columnPhysicalRowReaderViewForTestV1(root, normalized, ref), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"embedding", "neighbors"},
+		RequireInsertOnly: true,
+	}, func() {
+		closed++
+	})
+	if err == nil {
+		t.Fatal("newColumnPhysicalRowReaderFromSnapshotViewWithClose succeeded, want range-build error")
+	}
+	if closed != 1 {
+		t.Fatalf("snapshot close calls=%d want 1", closed)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsOutOfRangeOrdinalV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
