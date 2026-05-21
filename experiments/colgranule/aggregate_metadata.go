@@ -75,8 +75,8 @@ type AggregateMetadataStats struct {
 	RowsMatched         int           `json:"rows_matched"`
 	Entries             int           `json:"entries"`
 	ValueBytes          int           `json:"value_bytes"`
-	DescriptorBytes     int           `json:"descriptor_bytes"`
-	TotalBytes          int           `json:"total_bytes"`
+	DescriptorBytes     int           `json:"estimated_descriptor_bytes"`
+	TotalBytes          int           `json:"estimated_total_bytes"`
 	BytesPerPartRow     float64       `json:"bytes_per_part_row"`
 	BytesPerMatchedRow  float64       `json:"bytes_per_matched_row"`
 	Compression         string        `json:"compression"`
@@ -171,6 +171,9 @@ func normalizeAggregateMetadataDefinition(def AggregateMetadataDefinition, colum
 			return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s duplicate predicate column %s", def.Name, predicate.Column)
 		}
 		seenPredicates[predicate.Column] = struct{}{}
+	}
+	if math.IsNaN(def.MaxBytesPerRow) || math.IsInf(def.MaxBytesPerRow, 0) {
+		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s max bytes per row %.3f is not finite", def.Name, def.MaxBytesPerRow)
 	}
 	if def.MaxBytesPerRow < 0 {
 		return AggregateMetadataDefinition{}, fmt.Errorf("colgranule: aggregate metadata %s max bytes per row %.3f is negative", def.Name, def.MaxBytesPerRow)
@@ -276,6 +279,9 @@ func (b *ColumnPartBuilder) buildGroupMinMaxMetadata(part *ColumnPart, batch Col
 			outGranule.MatchedRows++
 			if index, ok := groupIndex[group]; ok {
 				entry := &outGranule.Entries[index]
+				if entry.Count == math.MaxUint32 {
+					return AggregateMetadata{}, fmt.Errorf("colgranule: aggregate metadata %s granule %d group %d count exceeds uint32", def.Name, granule.Ordinal, group)
+				}
 				entry.Count++
 				if value < entry.Min {
 					entry.Min = value
@@ -313,7 +319,7 @@ func (b *ColumnPartBuilder) buildGroupMinMaxMetadata(part *ColumnPart, batch Col
 	metadata.Stats.TotalBytes = metadata.Stats.ValueBytes + metadata.Stats.DescriptorBytes
 	metadata.Stats.Compression = "none_prototype"
 	metadata.Stats.AdmissionMaxBytes = def.MaxBytesPerRow
-	metadata.Stats.AdmissionMeasuredBy = "total_metadata_bytes / part_rows"
+	metadata.Stats.AdmissionMeasuredBy = "estimated_total_metadata_bytes / part_rows"
 	if part.Descriptor.RowCount > 0 {
 		metadata.Stats.BytesPerPartRow = float64(metadata.Stats.TotalBytes) / float64(part.Descriptor.RowCount)
 	}
