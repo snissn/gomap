@@ -197,6 +197,9 @@ func (r *columnVectorGraphPhysicalRowReader) Stats() columnPhysicalRowReaderStat
 	return r.reader.Stats()
 }
 
+// FetchRow returns one graph row and performs fail-closed adjacency ordinal
+// validation. Native search uses fetchRowUnchecked and validates each edge once
+// when expanded to avoid duplicate adjacency scans on the hot path.
 func (r *columnVectorGraphPhysicalRowReader) FetchRow(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
 	if r == nil || r.reader == nil {
 		return columnVectorGraphPhysicalRow{}, errors.New("collections: nil column vector graph physical row reader")
@@ -219,6 +222,10 @@ func (r *columnVectorGraphPhysicalRowReader) fetchRowUnchecked(ordinal int, scra
 	return r.graphRowFromPhysicalRowUnchecked(row)
 }
 
+// FetchBatch returns graph rows in the underlying reader's batch order and
+// performs fail-closed adjacency ordinal validation for each row. Native search
+// uses fetchBatchUnchecked for final result fetches after validating expanded
+// edges during traversal.
 func (r *columnVectorGraphPhysicalRowReader) FetchBatch(ordinals []int, scratch *columnPhysicalRowReaderScratch, visitor func(columnVectorGraphPhysicalRow) error) error {
 	if r == nil || r.reader == nil {
 		return errors.New("collections: nil column vector graph physical row reader")
