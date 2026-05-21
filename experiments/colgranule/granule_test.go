@@ -83,6 +83,22 @@ func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 	}
 }
 
+func TestGranuleBuilderSnappyPayloadDoesNotPrefixScratch(t *testing.T) {
+	values := []int64{10, 11, 12, 13, 14, 15, 16, 17}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy})
+	g, err := builder.BuildInt64(values)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	got, err := DecodeInt64(nil, g)
+	if err != nil {
+		t.Fatalf("DecodeInt64: %v", err)
+	}
+	if !slices.Equal(got, values) {
+		t.Fatalf("DecodeInt64=%v want %v", got, values)
+	}
+}
+
 func TestGranuleReaderReusesBuffersWithoutStaleValues(t *testing.T) {
 	cfg := Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy}
 	long, err := EncodeInt64(nil, []int64{1, 2, 3, 4, 5}, cfg)

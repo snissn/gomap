@@ -322,7 +322,7 @@ func compressPayloadInto(dst []byte, raw []byte, compression Compression) ([]byt
 		if cap(dst) < need {
 			dst = make([]byte, need)
 		} else {
-			dst = dst[:need]
+			dst = dst[:0]
 		}
 		out := snappy.Encode(dst, raw)
 		return out, CompressionSnappy, out, nil
