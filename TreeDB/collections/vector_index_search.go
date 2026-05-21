@@ -182,7 +182,7 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 		MaxDecodedBlocks: opts.MaxDecodedBlocks,
 	})
 	if err != nil {
-		status, statusErr := c.VectorIndexStatus(def.Name)
+		status, statusErr := c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 		if statusErr != nil {
 			return nil, response, statusErr
 		}

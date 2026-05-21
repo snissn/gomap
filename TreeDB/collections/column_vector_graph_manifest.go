@@ -325,15 +325,19 @@ func writeColumnVectorGraphPhysicalAssetToManager(rootDir string, cfg ColumnStor
 }
 
 func (c *Collection) columnGraphVectorIndexStatus(name string) (VectorIndexStatus, error) {
-	status := VectorIndexStatus{
-		Name:     name,
-		Strategy: VectorIndexStrategyColumnGraph,
-	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
+	return c.columnGraphVectorIndexStatusAtSnapshot(name, snap)
+}
+
+func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *backenddb.Snapshot) (VectorIndexStatus, error) {
+	status := VectorIndexStatus{
+		Name:     name,
+		Strategy: VectorIndexStrategyColumnGraph,
+	}
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
 		return VectorIndexStatus{}, err

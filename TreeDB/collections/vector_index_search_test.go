@@ -227,6 +227,40 @@ func TestSearchVectorIndexColumnGraphUnavailableStatusV4(t *testing.T) {
 	}
 }
 
+func TestColumnGraphVectorIndexStatusUsesCallerSnapshotV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+
+	oldSnap := d.AcquireSnapshot()
+	if oldSnap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = oldSnap.Close() }()
+
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	current, err := col.VectorIndexStatus(def.Name)
+	if err != nil {
+		t.Fatalf("VectorIndexStatus current: %v", err)
+	}
+	if current.State != VectorIndexStateColumnGraphLoaded || !current.Loaded {
+		t.Fatalf("current status=%+v want loaded after rebuild", current)
+	}
+
+	old, err := col.columnGraphVectorIndexStatusAtSnapshot(def.Name, oldSnap)
+	if err != nil {
+		t.Fatalf("columnGraphVectorIndexStatusAtSnapshot: %v", err)
+	}
+	if old.State != VectorIndexStateColumnGraphRebuildNeeded || !old.RebuildNeeded || old.Loaded {
+		t.Fatalf("old snapshot status=%+v want rebuild-needed from caller snapshot", old)
+	}
+}
+
 func TestSearchVectorIndexColumnGraphStaleAfterMutationV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
