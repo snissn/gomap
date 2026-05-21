@@ -64,8 +64,13 @@ type columnPhysicalRowReader struct {
 	maxBlocks  int
 	blocks     map[int]*columnPhysicalRowReaderBlock
 	lru        []int
-	closed     bool
-	stats      columnPhysicalRowReaderStats
+	// lastRange/lastBlock are a one-entry hot path over the existing bounded
+	// block cache. They avoid repeating binary range lookup and map/LRU work
+	// when graph/native readers fetch many rows from the same physical granule.
+	lastRange int
+	lastBlock *columnPhysicalRowReaderBlock
+	closed    bool
+	stats     columnPhysicalRowReaderStats
 }
 
 type columnPhysicalRowReaderRange struct {
@@ -155,6 +160,7 @@ func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScan
 		closeView:  closeView,
 		maxBlocks:  maxBlocks,
 		blocks:     make(map[int]*columnPhysicalRowReaderBlock, maxBlocks),
+		lastRange:  -1,
 		stats: columnPhysicalRowReaderStats{
 			Granules: len(view.AssetRefs),
 		},
@@ -180,6 +186,8 @@ func (r *columnPhysicalRowReader) Close() error {
 		delete(r.blocks, key)
 	}
 	r.lru = r.lru[:0]
+	r.lastRange = -1
+	r.lastBlock = nil
 	r.stats.ResidentBytes = 0
 	if r.closeView != nil {
 		r.closeView()
@@ -315,6 +323,16 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 	if ordinal < 0 || ordinal >= r.totalRows {
 		return -1
 	}
+	if r.lastRange >= 0 && r.lastRange < len(r.ranges) {
+		rowRange := r.ranges[r.lastRange]
+		if ordinal >= rowRange.startOrdinal && ordinal < rowRange.startOrdinal+rowRange.rowCount {
+			return r.lastRange
+		}
+	}
+	if len(r.ranges) == 1 {
+		r.lastRange = 0
+		return 0
+	}
 	lo, hi := 0, len(r.ranges)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
@@ -327,6 +345,7 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 			lo = mid + 1
 			continue
 		}
+		r.lastRange = mid
 		return mid
 	}
 	return -1
@@ -334,9 +353,14 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 
 func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRange) (*columnPhysicalRowReaderBlock, error) {
 	assetOrdinal := rowRange.assetOrdinal
+	if block := r.lastBlock; block != nil && block.assetOrdinal == assetOrdinal {
+		r.stats.CacheHits++
+		return block, nil
+	}
 	if block := r.blocks[assetOrdinal]; block != nil {
 		r.stats.CacheHits++
 		r.touchBlock(assetOrdinal)
+		r.lastBlock = block
 		return block, nil
 	}
 	r.stats.CacheMisses++
@@ -379,6 +403,7 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 	r.evictBlocksForInsert()
 	r.blocks[assetOrdinal] = block
 	r.lru = append(r.lru, assetOrdinal)
+	r.lastBlock = block
 	r.stats.DecodedBlocks++
 	r.stats.GranulesTouched++
 	r.stats.PhysicalBytesRead += int64(len(raw))
@@ -409,6 +434,9 @@ func (r *columnPhysicalRowReader) evictBlocksForInsert() {
 		block := r.blocks[evict]
 		delete(r.blocks, evict)
 		if block != nil {
+			if r.lastBlock == block {
+				r.lastBlock = nil
+			}
 			r.stats.ResidentBytes -= block.residentBytes
 			if r.stats.ResidentBytes < 0 {
 				r.stats.ResidentBytes = 0

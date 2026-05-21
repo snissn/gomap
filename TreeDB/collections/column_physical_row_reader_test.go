@@ -137,6 +137,55 @@ func TestColumnPhysicalRowReaderCachedBlocksOwnRawBytesV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderHotBlockFastPathInvalidatesOnEvictionV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	left := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 1, testColumnPhysicalRowReaderRowsV1(0, 4, normalized))
+	right := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 2, testColumnPhysicalRowReaderRowsV1(4, 4, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, left, right), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"embedding", "neighbors"},
+		MaxDecodedBlocks:  1,
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	scratch := columnPhysicalRowReaderScratch{
+		Values:        make([]columnDeclaredValue, 0, 2),
+		Float32Values: make([]float32, 0, normalized.Columns[1].VectorDims),
+		Uint32Values:  make([]uint32, 0, 4),
+	}
+	row, err := reader.FetchRow(0, &scratch)
+	if err != nil {
+		t.Fatalf("warm left block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-000", 0, []float32{0, 0.25, 0.5, 0.75}, []uint32{0, 1, 2})
+	if reader.lastBlock == nil || reader.lastBlock.assetOrdinal != 0 {
+		t.Fatalf("lastBlock after left fetch=%+v want asset 0", reader.lastBlock)
+	}
+	row, err = reader.FetchRow(4, &scratch)
+	if err != nil {
+		t.Fatalf("fetch right block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-004", 4, []float32{4, 4.25, 4.5, 4.75}, []uint32{4, 5, 6})
+	if reader.lastBlock == nil || reader.lastBlock.assetOrdinal != 1 {
+		t.Fatalf("lastBlock after right fetch=%+v want asset 1", reader.lastBlock)
+	}
+	row, err = reader.FetchRow(1, &scratch)
+	if err != nil {
+		t.Fatalf("refetch evicted left block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-001", 1, []float32{1, 1.25, 1.5, 1.75}, []uint32{1, 2, 3})
+	if reader.lastBlock == nil || reader.lastBlock.assetOrdinal != 0 {
+		t.Fatalf("lastBlock after left refetch=%+v want asset 0", reader.lastBlock)
+	}
+	stats := reader.Stats()
+	if stats.CacheMisses != 3 || stats.CacheHits != 0 || stats.BlockEvictions != 2 {
+		t.Fatalf("cache stats=%+v want misses=3 hits=0 evictions=2", stats)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsMutationPartsV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
