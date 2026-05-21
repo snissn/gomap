@@ -635,10 +635,11 @@ func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALInt
 	db.poisonCommandWALAfterPostAppendFailure(&intent.inner)
 }
 
-// MarkCommandWALIntentRecoveryRequired fails this open handle closed after a
-// command frame was appended but the caller could not make the corresponding
-// mutation visible in memory or durable roots. Reopen recovery may apply the
-// frame, so retrying on the same handle can create command-WAL gaps.
+// MarkCommandWALIntentRecoveryRequired marks this open handle as requiring
+// recovery after a command frame was appended but the caller could not make
+// the corresponding mutation visible in memory or durable roots. Reopen
+// recovery may apply the frame, so retrying on the same handle can create
+// command-WAL gaps.
 func (db *DB) MarkCommandWALIntentRecoveryRequired(intent *CommandWALIntent) {
 	if db == nil || intent == nil {
 		return

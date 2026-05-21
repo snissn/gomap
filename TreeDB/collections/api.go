@@ -112,7 +112,10 @@ var (
 )
 
 var testBeforeCommandWALBufferedUpdateStageLockHook struct {
-	mu sync.Mutex
+	ptr atomic.Pointer[testCommandWALBufferedUpdateStageLockHook]
+}
+
+type testCommandWALBufferedUpdateStageLockHook struct {
 	fn func()
 }
 
@@ -2232,23 +2235,21 @@ func runCollectionWaitIndexedAsyncFlushHook() {
 }
 
 func setTestBeforeCommandWALBufferedUpdateStageLockForTest(fn func()) func() {
-	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Lock()
-	prev := testBeforeCommandWALBufferedUpdateStageLockHook.fn
-	testBeforeCommandWALBufferedUpdateStageLockHook.fn = fn
-	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Unlock()
+	prev := testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Load()
+	var next *testCommandWALBufferedUpdateStageLockHook
+	if fn != nil {
+		next = &testCommandWALBufferedUpdateStageLockHook{fn: fn}
+	}
+	testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Store(next)
 	return func() {
-		testBeforeCommandWALBufferedUpdateStageLockHook.mu.Lock()
-		testBeforeCommandWALBufferedUpdateStageLockHook.fn = prev
-		testBeforeCommandWALBufferedUpdateStageLockHook.mu.Unlock()
+		testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Store(prev)
 	}
 }
 
 func runTestBeforeCommandWALBufferedUpdateStageLockHook() {
-	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Lock()
-	fn := testBeforeCommandWALBufferedUpdateStageLockHook.fn
-	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Unlock()
-	if fn != nil {
-		fn()
+	hook := testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Load()
+	if hook != nil && hook.fn != nil {
+		hook.fn()
 	}
 }
 

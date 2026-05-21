@@ -1163,8 +1163,18 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotDeadlockRawPublish(t *te
 	var launchSecond atomic.Bool
 	var launchedSecond atomic.Bool
 	secondStarted := make(chan struct{})
+	secondStagingAttempted := make(chan struct{})
 	secondDone := make(chan error, 1)
+	var signalSecondStaging sync.Once
 	var col *Collection
+	restoreStageLockHook := setTestBeforeCommandWALBufferedUpdateStageLockForTest(func() {
+		if launchedSecond.Load() {
+			signalSecondStaging.Do(func() {
+				close(secondStagingAttempted)
+			})
+		}
+	})
+	defer restoreStageLockHook()
 	unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
 		if !launchSecond.Load() || !launchedSecond.CompareAndSwap(false, true) {
 			return nil
@@ -1178,8 +1188,17 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexDoesNotDeadlockRawPublish(t *te
 			secondDone <- err
 		}()
 		<-secondStarted
-		time.Sleep(200 * time.Millisecond)
-		return nil
+		select {
+		case <-secondStagingAttempted:
+			return nil
+		case err := <-secondDone:
+			if err != nil {
+				return err
+			}
+			return errors.New("second collection update completed before command WAL staging lock")
+		case <-time.After(2 * time.Second):
+			return errors.New("second collection update did not reach command WAL staging lock")
+		}
 	})
 	defer unregister()
 
