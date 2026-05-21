@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -240,11 +241,26 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	if len(runner.assets) == 0 || len(runner.groupDict) == 0 || len(distinctByValue) == 0 {
 		return nil, nil
 	}
-	runner.wordsPerGroup = (len(distinctByValue) + 63) / 64
+	wordsPerGroup, totalWords, err := columnDictionaryCodeDistinctSeenWords(len(runner.groupDict), len(distinctByValue))
+	if err != nil {
+		return nil, err
+	}
+	runner.wordsPerGroup = wordsPerGroup
 	runner.groupCounts = make([]int, len(runner.groupDict))
-	runner.seen = make([]uint64, len(runner.groupDict)*runner.wordsPerGroup)
+	runner.seen = make([]uint64, totalWords)
 	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, len(runner.groupDict))
 	return runner, nil
+}
+
+func columnDictionaryCodeDistinctSeenWords(groupCount, distinctCount int) (int, int, error) {
+	if groupCount <= 0 || distinctCount <= 0 {
+		return 0, 0, errors.New("collections: dictionary code distinct query requires non-empty group and distinct dictionaries")
+	}
+	wordsPerGroup := (distinctCount + 63) / 64
+	if wordsPerGroup != 0 && groupCount > maxCollectionInt/wordsPerGroup {
+		return 0, 0, errors.New("collections: dictionary code distinct bitset dimensions overflow int")
+	}
+	return wordsPerGroup, groupCount * wordsPerGroup, nil
 }
 
 func columnDictionaryCodeSnapshotsByPart(view columnPhysicalScanSnapshotView, column string) map[[2]uint64]columnManifestDictionaryCodesSnapshot {

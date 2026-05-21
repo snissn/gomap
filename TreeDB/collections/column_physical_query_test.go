@@ -2068,6 +2068,19 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 	}
 }
 
+func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {
+	wordsPerGroup, totalWords, err := columnDictionaryCodeDistinctSeenWords(4, 129)
+	if err != nil {
+		t.Fatalf("columnDictionaryCodeDistinctSeenWords normal: %v", err)
+	}
+	if wordsPerGroup != 3 || totalWords != 12 {
+		t.Fatalf("wordsPerGroup=%d totalWords=%d want 3/12", wordsPerGroup, totalWords)
+	}
+	if _, _, err := columnDictionaryCodeDistinctSeenWords(maxCollectionInt, 65); err == nil || !strings.Contains(err.Error(), "overflow") {
+		t.Fatalf("overflow err=%v want overflow failure", err)
+	}
+}
+
 func TestColumnPhysicalQueryRunnerFailsClosedForUnsupportedShapeM1634(t *testing.T) {
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(128))
 	defer closeFn()
