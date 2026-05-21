@@ -32,11 +32,13 @@ const (
 	seed32A uint32 = 0x9e3779b9
 )
 
+// inputSize names one payload length used by the benchmark matrix.
 type inputSize struct {
 	name string
 	n    int
 }
 
+// inputSizes covers the block sizes used by the content hash tournament.
 var inputSizes = []inputSize{
 	{name: "64KiB_ClickHouseMinCompressBlock", n: 64 << 10},
 	{name: "256KiB_Middle", n: 256 << 10},
@@ -44,6 +46,7 @@ var inputSizes = []inputSize{
 	{name: "1MiB_ClickHouseMaxCompressBlock", n: 1 << 20},
 }
 
+// makeInput builds deterministic pseudo-random input data for each benchmark size.
 func makeInput(n int) []byte {
 	data := make([]byte, n)
 	x := seed64A
@@ -56,6 +59,7 @@ func makeInput(n int) []byte {
 	return data
 }
 
+// BenchmarkContentHashTournament compares content hash throughput across block-sized inputs.
 func BenchmarkContentHashTournament(b *testing.B) {
 	for _, size := range inputSizes {
 		data := makeInput(size.n)
