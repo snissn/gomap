@@ -94,6 +94,48 @@ func TestColumnManifestScanViewRejectsPreparedAssetByteMismatchM1634(t *testing.
 	}
 }
 
+func TestColumnManifestScanLoaderRejectsChecksumMismatchM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, _, manifest, _ := columnManifestPlannerOnePartFixtureM14A(t)
+	active := manifest.Identity
+	cfg.ActiveManifest = &active
+	cfg.RecoveryAuthoritativeManifest = &active
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	tamperedCount := 0
+	for i := range tampered {
+		if bytes.HasPrefix(tampered[i].key, columnManifestPartRecordPrefixBytes) {
+			badRecord := bytes.Clone(tampered[i].value)
+			bytesOffset := columnManifestPartRecordBytesOffsetForScanTestM1634(t, badRecord)
+			publishIDOffset := bytesOffset + 8
+			publishID := binary.BigEndian.Uint64(badRecord[publishIDOffset:])
+			binary.BigEndian.PutUint64(badRecord[publishIDOffset:], publishID+1)
+			tampered[i].value = badRecord
+			tamperedCount++
+			break
+		}
+	}
+	if tamperedCount != 1 {
+		t.Fatalf("tampered manifest part records=%d want 1", tamperedCount)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	_, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRoot(snap, rootID, *cfg, manifest.Identity, "events")
+	if err == nil || !strings.Contains(err.Error(), "physical column scan manifest checksum") {
+		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRoot err=%v want checksum mismatch", err)
+	}
+}
+
 func columnManifestPartRecordBytesOffsetForScanTestM1634(t testing.TB, raw []byte) int {
 	t.Helper()
 	cur := manifestCursor{raw: raw}
