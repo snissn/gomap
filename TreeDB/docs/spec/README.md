@@ -89,6 +89,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     distributed/Raft behavior remains target behavior until cluster mode lands.
 - `TreeDB/docs/spec/verification.md`
   - invariants mapped to tests and benchmark harnesses.
+- `TreeDB/docs/spec/column-graph-native-vector-search.md`
+  - user-facing quickstart, benchmark matrix, demo, and caveats for explicit
+    `column_graph` vector indexes that search through the native physical column
+    row reader.
 
 ## Target Gates (Normative Target, Not Current Behavior)
 

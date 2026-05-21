@@ -920,10 +920,13 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderV4(b *testing.B) {
 		EfSearch:         efSearch,
 		MaxDecodedBlocks: 1,
 	}
-	if _, err := col.SearchVectorIndex(opts); err != nil {
+	warm, err := col.SearchVectorIndex(opts)
+	if err != nil {
 		b.Fatalf("warm SearchVectorIndex: %v", err)
 	}
-	var stats VectorIndexSearchStats
+	// Sample deterministic telemetry before the timed loop so reporting does not
+	// add per-iteration work to the public one-shot search benchmark.
+	stats := warm.Stats
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -932,15 +935,9 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderV4(b *testing.B) {
 			b.Fatalf("SearchVectorIndex: %v", err)
 		}
 		vectorSearchBenchSinkOrdinalV4 += got.Results[0].Ordinal
-		stats.Candidates += got.Stats.Candidates
-		stats.Edges += got.Stats.Edges
-		stats.CandidateFetches += got.Stats.CandidateFetches
-		stats.ExpansionFetches += got.Stats.ExpansionFetches
-		stats.ResultFetches += got.Stats.ResultFetches
-		stats.DocumentsFetched += got.Stats.DocumentsFetched
 	}
 	b.StopTimer()
-	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats)
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 }
 
 func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderV4(b *testing.B) {
@@ -974,7 +971,13 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderV4(b *testing.B) {
 	if _, err := searcher.Search(opts); err != nil {
 		b.Fatalf("warm Search: %v", err)
 	}
-	var stats VectorIndexSearchStats
+	measuredStats, err := searcher.Search(opts)
+	if err != nil {
+		b.Fatalf("measure Search stats: %v", err)
+	}
+	// The steady-state benchmark times only Search. Metrics come from a warmed
+	// pre-timer search so telemetry accumulation cannot hide throughput drift.
+	stats := measuredStats.Stats
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -983,15 +986,9 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderV4(b *testing.B) {
 			b.Fatalf("Search: %v", err)
 		}
 		vectorSearchBenchSinkOrdinalV4 += got.Results[0].Ordinal
-		stats.Candidates += got.Stats.Candidates
-		stats.Edges += got.Stats.Edges
-		stats.CandidateFetches += got.Stats.CandidateFetches
-		stats.ExpansionFetches += got.Stats.ExpansionFetches
-		stats.ResultFetches += got.Stats.ResultFetches
-		stats.DocumentsFetched += got.Stats.DocumentsFetched
 	}
 	b.StopTimer()
-	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats)
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 }
 
 func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4(b *testing.B) {
@@ -1017,10 +1014,13 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4(b *testing
 		IncludeDocuments: true,
 		MaxDecodedBlocks: 1,
 	}
-	if _, err := col.SearchVectorIndex(opts); err != nil {
+	warm, err := col.SearchVectorIndex(opts)
+	if err != nil {
 		b.Fatalf("warm SearchVectorIndex: %v", err)
 	}
-	var stats VectorIndexSearchStats
+	// Document materialization remains in the timed loop; metric collection does
+	// not, so allocs/op reflects the public API path instead of test bookkeeping.
+	stats := warm.Stats
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -1029,31 +1029,97 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4(b *testing
 			b.Fatalf("SearchVectorIndex: %v", err)
 		}
 		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
-		stats.Candidates += got.Stats.Candidates
-		stats.Edges += got.Stats.Edges
-		stats.CandidateFetches += got.Stats.CandidateFetches
-		stats.ExpansionFetches += got.Stats.ExpansionFetches
-		stats.ResultFetches += got.Stats.ResultFetches
-		stats.DocumentsFetched += got.Stats.DocumentsFetched
 	}
 	b.StopTimer()
-	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats)
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 }
 
-func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorIndexSearchStats) {
+func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B) {
+	const (
+		rows = 1024
+		dims = 128
+		m    = 16
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	statsSearcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		b.Fatalf("stats OpenVectorIndexSearcher: %v", err)
+	}
+	readerStats := statsSearcher.reader.Stats()
+	stats := VectorIndexSearchStats{
+		OpenGranulesRead:      uint64(readerStats.OpenGranulesRead),
+		OpenPhysicalBytesRead: readerStats.OpenPhysicalBytesRead,
+		MaxResidentBytes:      readerStats.MaxResidentBytes,
+	}
+	if err := statsSearcher.Close(); err != nil {
+		b.Fatalf("Close stats searcher: %v", err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+			IndexName:        def.Name,
+			MaxDecodedBlocks: 1,
+		})
+		if err != nil {
+			b.Fatalf("OpenVectorIndexSearcher: %v", err)
+		}
+		vectorSearchBenchSinkOrdinalV4 += searcher.reader.RowCount()
+		if err := searcher.Close(); err != nil {
+			b.Fatalf("Close searcher: %v", err)
+		}
+	}
+	b.StopTimer()
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
+}
+
+func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorIndexSearchStats, includeOpenPerOp bool) {
 	b.Helper()
 	if n <= 0 {
 		return
 	}
-	b.ReportMetric(float64(stats.Candidates)/float64(n), "candidates/search")
-	b.ReportMetric(float64(stats.Edges)/float64(n), "edges/search")
+	// Callers pass one representative search/setup sample captured outside the
+	// timer; these labels are intentionally per-search or per-open, not averaged
+	// over b.N. Keep aggregation out of the hot benchmark loop.
+	b.ReportMetric(float64(stats.Candidates), "candidates/search")
+	b.ReportMetric(float64(stats.Edges), "edges/search")
 	if stats.Candidates > 0 {
 		b.ReportMetric(float64(stats.Edges)/float64(stats.Candidates), "edges/node")
 	}
-	b.ReportMetric(float64(stats.CandidateFetches)/float64(n), "candidate_fetches/search")
-	b.ReportMetric(float64(stats.ExpansionFetches)/float64(n), "expansion_fetches/search")
-	b.ReportMetric(float64(stats.ResultFetches)/float64(n), "result_fetches/search")
-	b.ReportMetric(float64(stats.DocumentsFetched)/float64(n), "docs_fetched/search")
+	b.ReportMetric(float64(stats.CandidateFetches), "candidate_fetches/search")
+	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")
+	b.ReportMetric(float64(stats.ResultFetches), "result_fetches/search")
+	b.ReportMetric(float64(stats.RowFetches), "row_fetches/search")
+	b.ReportMetric(float64(stats.BatchFetches), "batch_fetches/search")
+	b.ReportMetric(float64(stats.RowsFetched), "rows_fetched/search")
+	b.ReportMetric(float64(stats.CacheHits), "cache_hits/search")
+	b.ReportMetric(float64(stats.CacheMisses), "cache_misses/search")
+	if cacheLookups := stats.CacheHits + stats.CacheMisses; cacheLookups > 0 {
+		b.ReportMetric(float64(stats.CacheHits)/float64(cacheLookups), "cache_hit_ratio")
+	}
+	b.ReportMetric(float64(stats.DecodedBlocks), "decoded_blocks/search")
+	b.ReportMetric(float64(stats.GranulesTouched), "granules_touched/search")
+	b.ReportMetric(float64(stats.PhysicalBytesRead), "physical_B/search")
+	b.ReportMetric(float64(stats.MaxResidentBytes), "max_resident_B")
+	if includeOpenPerOp {
+		b.ReportMetric(float64(stats.OpenGranulesRead), "open_granules/op")
+		b.ReportMetric(float64(stats.OpenPhysicalBytesRead), "open_physical_B/op")
+	}
+	if stats.OpenGranulesRead > 0 {
+		b.ReportMetric(float64(stats.OpenGranulesRead), "max_open_granules")
+	}
+	if stats.OpenPhysicalBytesRead > 0 {
+		b.ReportMetric(float64(stats.OpenPhysicalBytesRead), "max_open_physical_B")
+	}
+	b.ReportMetric(float64(stats.DocumentsFetched), "docs_fetched/search")
 }
 
 var vectorSearchBenchSinkOrdinalV4 int
