@@ -199,6 +199,54 @@ func TestColumnVectorGraphPhysicalRowReaderRejectsStaleGraphAfterMutationV2B(t *
 	}
 }
 
+func TestColumnVectorGraphPhysicalRowReaderRejectsNonRecoveryAuthoritativeManifestV2B(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	badCatalog := catalog.copy()
+	badMeta := copyCollectionMeta(badCatalog.meta)
+	badCfg := badMeta.Options.ColumnStore.copy()
+	recovery := *badCfg.RecoveryAuthoritativeManifest
+	recovery.Checksum++
+	badCfg.RecoveryAuthoritativeManifest = &recovery
+	badMeta.Options.ColumnStore = &badCfg
+	badCatalog.meta = badMeta
+	systemRoot := snapshotSystemRoot(snap)
+	commitSeq := snapshotCommitSeq(snap)
+	if err := snap.Close(); err != nil {
+		t.Fatalf("close snapshot: %v", err)
+	}
+
+	col.catalogMu.Lock()
+	col.catalog = badCatalog
+	col.catalogSystemRoot = systemRoot
+	col.catalogCommitSeq = commitSeq
+	col.catalogMu.Unlock()
+
+	_, err = col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err == nil || !strings.Contains(err.Error(), "active recovery-authoritative column manifest") {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want recovery-authoritative manifest failure", err)
+	}
+}
+
 func TestColumnVectorGraphPhysicalRowReaderWarmScratchHotFetchZeroAllocsV2B(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},

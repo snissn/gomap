@@ -105,6 +105,9 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string)
 	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errors.New("collections: column_graph physical row reader requires active and recovery-authoritative column manifests")
 	}
+	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, errors.New("collections: column_graph physical row reader requires active recovery-authoritative column manifest")
+	}
 	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	if rootID == 0 {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph physical row reader missing manifest root %q", collectionColumnManifestRootName(catalog.meta.Name))
