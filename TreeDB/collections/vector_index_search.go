@@ -12,6 +12,13 @@ import (
 // not currently searchable through the selected product path.
 var ErrVectorIndexSearchUnavailable = errors.New("collections: vector index search unavailable")
 
+// vectorIndexSearchInlineDocumentSliceCap avoids heap allocation for common
+// TopK document materialization while falling back to an exact-sized slice for
+// larger result sets.
+const vectorIndexSearchInlineDocumentSliceCap = 16
+
+// VectorIndexSearchPath identifies the physical implementation used for a
+// public vector-index search.
 type VectorIndexSearchPath string
 
 const (
@@ -21,67 +28,117 @@ const (
 	VectorIndexSearchPathColumnGraphNativeReader VectorIndexSearchPath = "column_graph_native_reader"
 )
 
+// VectorIndexSearchOptions configures a one-shot public collection vector-index
+// search. The column_graph path opens a bounded physical column reader, runs the
+// graph search, and closes the reader before returning.
 type VectorIndexSearchOptions struct {
-	IndexName        string
-	Query            []float32
-	TopK             int
-	EfSearch         int
+	// IndexName is the declared collection vector-index name.
+	IndexName string
+	// Query is the query vector. V4 column_graph search supports cosine indexes.
+	Query []float32
+	// TopK is the maximum number of nearest results to return.
+	TopK int
+	// EfSearch bounds graph exploration. Zero uses the persisted index default.
+	EfSearch int
+	// IncludeDocuments materializes full documents after top-k selection.
 	IncludeDocuments bool
 	// MaxDecodedBlocks bounds the generic physical column reader cache used by
 	// the column_graph path. Zero uses the reader default.
 	MaxDecodedBlocks int
 }
 
+// VectorIndexSearcherOptions configures a reusable snapshot-bound vector-index
+// searcher. Reuse this path for steady-state queries when setup/open cost should
+// not be paid on every search.
 type VectorIndexSearcherOptions struct {
+	// IndexName is the declared collection vector-index name.
 	IndexName string
 	// MaxDecodedBlocks bounds the generic physical column reader cache used by
 	// the column_graph path. Zero uses the reader default.
 	MaxDecodedBlocks int
 }
 
+// VectorIndexSearcherSearchOptions configures one Search call on an opened
+// VectorIndexSearcher.
 type VectorIndexSearcherSearchOptions struct {
-	Query            []float32
-	TopK             int
-	EfSearch         int
+	// Query is the query vector. V4 column_graph search supports cosine indexes.
+	Query []float32
+	// TopK is the maximum number of nearest results to return.
+	TopK int
+	// EfSearch bounds graph exploration. Zero uses the persisted index default.
+	EfSearch int
+	// IncludeDocuments materializes full documents after top-k selection.
 	IncludeDocuments bool
 }
 
+// VectorIndexSearchResult is one public vector-index search hit.
 type VectorIndexSearchResult struct {
-	ID       []byte  `json:"id"`
-	Ordinal  int     `json:"ordinal"`
-	Score    float64 `json:"score"`
-	Document []byte  `json:"document,omitempty"`
+	// ID is the collection document ID. The returned slice is response-owned.
+	ID []byte `json:"id"`
+	// Ordinal is the vector row ordinal in the persisted column_graph index.
+	Ordinal int `json:"ordinal"`
+	// Score is the cosine similarity score for the result.
+	Score float64 `json:"score"`
+	// Document is populated only when IncludeDocuments is true.
+	Document []byte `json:"document,omitempty"`
 }
 
+// VectorIndexSearchStats reports search telemetry. Graph/search and reader
+// counters are per-search deltas unless the field starts with Open; Open*
+// counters describe the bound reader setup performed before Search.
 type VectorIndexSearchStats struct {
-	Candidates       uint64 `json:"candidates,omitempty"`
-	Edges            uint64 `json:"edges,omitempty"`
+	// Candidates is the number of candidate nodes scored by graph search.
+	Candidates uint64 `json:"candidates,omitempty"`
+	// Edges is the number of graph edges considered by graph search.
+	Edges uint64 `json:"edges,omitempty"`
+	// CandidateFetches is the per-search count of vector row fetches for scored candidates.
 	CandidateFetches uint64 `json:"candidate_fetches,omitempty"`
+	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
 	ExpansionFetches uint64 `json:"expansion_fetches,omitempty"`
-	ResultFetches    uint64 `json:"result_fetches,omitempty"`
+	// ResultFetches is the per-search count of vector row fetches for final results.
+	ResultFetches uint64 `json:"result_fetches,omitempty"`
+	// DocumentsFetched is the post-top-k document materialization count.
 	DocumentsFetched uint64 `json:"documents_fetched,omitempty"`
 
-	RowFetches        uint64 `json:"row_fetches,omitempty"`
-	BatchFetches      uint64 `json:"batch_fetches,omitempty"`
-	RowsFetched       uint64 `json:"rows_fetched,omitempty"`
-	CacheHits         uint64 `json:"cache_hits,omitempty"`
-	CacheMisses       uint64 `json:"cache_misses,omitempty"`
-	DecodedBlocks     uint64 `json:"decoded_blocks,omitempty"`
-	GranulesTouched   uint64 `json:"granules_touched,omitempty"`
-	PhysicalBytesRead int64  `json:"physical_bytes_read,omitempty"`
-	MaxResidentBytes  int64  `json:"max_resident_bytes,omitempty"`
+	// RowFetches is the per-search count of physical row-reader fetch calls.
+	RowFetches uint64 `json:"row_fetches,omitempty"`
+	// BatchFetches is the per-search count of physical row-reader batch fetch calls.
+	BatchFetches uint64 `json:"batch_fetches,omitempty"`
+	// RowsFetched is the per-search number of rows returned by physical reader fetches.
+	RowsFetched uint64 `json:"rows_fetched,omitempty"`
+	// CacheHits is the per-search count of decoded-block cache hits.
+	CacheHits uint64 `json:"cache_hits,omitempty"`
+	// CacheMisses is the per-search count of decoded-block cache misses.
+	CacheMisses uint64 `json:"cache_misses,omitempty"`
+	// DecodedBlocks is the per-search count of column blocks decoded after a miss.
+	DecodedBlocks uint64 `json:"decoded_blocks,omitempty"`
+	// GranulesTouched is the per-search count of physical granules touched.
+	GranulesTouched uint64 `json:"granules_touched,omitempty"`
+	// PhysicalBytesRead is the per-search physical byte read delta.
+	PhysicalBytesRead int64 `json:"physical_bytes_read,omitempty"`
+	// MaxResidentBytes is the reader's absolute high-water resident decoded bytes.
+	MaxResidentBytes int64 `json:"max_resident_bytes,omitempty"`
 
-	OpenGranulesRead      uint64 `json:"open_granules_read,omitempty"`
-	OpenPhysicalBytesRead int64  `json:"open_physical_bytes_read,omitempty"`
+	// OpenGranulesRead is the absolute granule count read while opening the bound reader.
+	OpenGranulesRead uint64 `json:"open_granules_read,omitempty"`
+	// OpenPhysicalBytesRead is the absolute physical byte count read while opening the bound reader.
+	OpenPhysicalBytesRead int64 `json:"open_physical_bytes_read,omitempty"`
 }
 
+// VectorIndexSearchResponse is returned by public vector-index search APIs.
 type VectorIndexSearchResponse struct {
-	IndexName string                    `json:"index_name"`
-	Strategy  VectorIndexStrategy       `json:"strategy"`
-	Path      VectorIndexSearchPath     `json:"path,omitempty"`
-	Status    VectorIndexStatus         `json:"status"`
-	Stats     VectorIndexSearchStats    `json:"stats,omitempty"`
-	Results   []VectorIndexSearchResult `json:"results,omitempty"`
+	// IndexName is the searched collection vector-index name.
+	IndexName string `json:"index_name"`
+	// Strategy is the declared vector-index strategy.
+	Strategy VectorIndexStrategy `json:"strategy"`
+	// Path is the implementation path actually used for the search, when one ran.
+	Path VectorIndexSearchPath `json:"path,omitempty"`
+	// Status describes whether the index was loaded, unavailable, or stale.
+	Status VectorIndexStatus `json:"status"`
+	// Stats contains search and reader telemetry.
+	Stats VectorIndexSearchStats `json:"stats,omitempty"`
+	// Results contains top-k hits in descending score order.
+	Results []VectorIndexSearchResult `json:"results,omitempty"`
 }
 
 // VectorIndexSearcher is a reusable, snapshot-bound vector index search handle.
@@ -229,6 +286,8 @@ func (c *Collection) openVectorIndexSearcher(opts VectorIndexSearcherOptions) (*
 	return searcher, response, nil
 }
 
+// Search runs one vector-index query against the searcher's bound snapshot.
+// Returned result IDs and documents are copied into response-owned buffers.
 func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (VectorIndexSearchResponse, error) {
 	var response VectorIndexSearchResponse
 	if s == nil || s.reader == nil || s.collection == nil {
@@ -262,7 +321,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	var documents [][]byte
 	var documentBytes []byte
 	if opts.IncludeDocuments {
-		var inlineDocuments [16][]byte
+		var inlineDocuments [vectorIndexSearchInlineDocumentSliceCap][]byte
 		if len(results) <= len(inlineDocuments) {
 			documents = inlineDocuments[:len(results)]
 		} else {
@@ -378,6 +437,7 @@ func addVectorIndexSearchByteTotal(total, n, limit int, label string) (int, erro
 	return total + n, nil
 }
 
+// Close releases the searcher's bound physical reader and snapshot.
 func (s *VectorIndexSearcher) Close() error {
 	if s == nil || s.closed {
 		return nil
