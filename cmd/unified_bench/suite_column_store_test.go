@@ -120,6 +120,8 @@ func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
 	}{
 		{name: "count", prefix: "q1", key: "share", value: 12, want: "q1:share=12"},
 		{name: "negative", prefix: "q4a", key: "d000001", value: -42, want: "q4a:d000001=-42"},
+		{name: "min_int64", prefix: "q4a", key: "d000002", value: -1 << 63, want: "q4a:d000002=-9223372036854775808"},
+		{name: "max_int64", prefix: "q4b", key: "d000003", value: 1<<63 - 1, want: "q4b:d000003=9223372036854775807"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

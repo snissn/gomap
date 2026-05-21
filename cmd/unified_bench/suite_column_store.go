@@ -1379,8 +1379,9 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 }
 
 func columnStoreSuiteFormatPhysicalQueryLine(prefix, key string, value int64) string {
+	const maxInt64DecimalLen = 20 // len("-9223372036854775808")
 	var b strings.Builder
-	var num [20]byte
+	var num [maxInt64DecimalLen]byte
 	b.Grow(len(prefix) + 1 + len(key) + 1 + len(num))
 	b.WriteString(prefix)
 	b.WriteByte(':')
