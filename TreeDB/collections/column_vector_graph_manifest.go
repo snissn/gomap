@@ -307,10 +307,10 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 
 func writeColumnVectorGraphPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
 	if len(payload) == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
+		return ColumnAssetRef{}, errors.New("collections: column_graph physical asset payload is empty")
 	}
 	if generation == 0 || partID == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
+		return ColumnAssetRef{}, errors.New("collections: column_graph physical asset append requires generation and part_id")
 	}
 	appender, err := newNextColumnPhysicalAssetSegmentAppender(rootDir, cfg)
 	if err != nil {
@@ -324,10 +324,10 @@ func writeColumnVectorGraphPhysicalAssetToManager(rootDir string, cfg ColumnStor
 	return ref, closeErr
 }
 
-func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition) (VectorIndexStatus, error) {
+func (c *Collection) columnGraphVectorIndexStatus(name string) (VectorIndexStatus, error) {
 	status := VectorIndexStatus{
-		Name:     def.Name,
-		Strategy: def.Strategy,
+		Name:     name,
+		Strategy: VectorIndexStrategyColumnGraph,
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -341,8 +341,8 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition) (Ve
 	if catalog == nil {
 		return VectorIndexStatus{}, errCollectionNotFound
 	}
-	if latestDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name); ok {
-		def = latestDef
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
+	if ok {
 		status.Name = def.Name
 		status.Strategy = def.Strategy
 	} else {

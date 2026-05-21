@@ -230,7 +230,7 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 		status.Reason = VectorIndexReasonNativeRuntime
 		return status, nil
 	case VectorIndexStrategyColumnGraph:
-		return c.columnGraphVectorIndexStatus(def)
+		return c.columnGraphVectorIndexStatus(def.Name)
 	default:
 		return VectorIndexStatus{}, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)
 	}

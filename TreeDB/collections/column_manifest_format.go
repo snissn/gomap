@@ -164,13 +164,25 @@ func retainColumnManifestVectorGraphRecordForWrite(key []byte, activeVectorIndex
 	if !bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) {
 		return false
 	}
-	indexName := string(key[len(columnManifestVectorGraphRecordPrefix):])
+	indexName := key[len(columnManifestVectorGraphRecordPrefix):]
 	for _, def := range activeVectorIndexes {
-		if def.Name == indexName && def.Strategy == VectorIndexStrategyColumnGraph {
+		if def.Strategy == VectorIndexStrategyColumnGraph && columnManifestBytesEqualString(indexName, def.Name) {
 			return true
 		}
 	}
 	return false
+}
+
+func columnManifestBytesEqualString(left []byte, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i, b := range left {
+		if b != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, generation uint64) ([]byte, error) {
