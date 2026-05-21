@@ -31,6 +31,10 @@ func RegisterCommandWALReplayHandlers() {
 	})
 }
 
+func newCommandWALReplayCollectionManager(db *backenddb.DB) *CollectionManager {
+	return newCollectionManager(db, collectionManagerOptions{})
+}
+
 func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {
 	return intent != nil || (c != nil && c.db != nil && c.db.CommandWALEnabled())
 }
@@ -200,7 +204,7 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if len(payload.Documents) == 0 {
 		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.OpenCollection(payload.Collection)
 	if err != nil {
 		return err
@@ -220,7 +224,7 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.OpenCollection(payload.Collection)
 	if err != nil {
 		return err
@@ -237,7 +241,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if len(payload.Documents) == 0 {
 		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.OpenCollection(payload.Collection)
 	if err != nil {
 		return err
@@ -273,7 +277,7 @@ func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.Com
 	if meta.Name != payload.Collection {
 		return fmt.Errorf("collections: catalog create payload collection %q does not match metadata name %q", payload.Collection, meta.Name)
 	}
-	_, err = NewCollectionManager(db).createCollectionWithCommandWALIntent(meta, backenddb.NewCommandWALReplayIntent(env))
+	_, err = newCommandWALReplayCollectionManager(db).createCollectionWithCommandWALIntent(meta, backenddb.NewCommandWALReplayIntent(env))
 	return err
 }
 
