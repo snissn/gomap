@@ -137,35 +137,25 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 func TestRunJSONBenchPartQ2FallsBackForHighCardinalityDID(t *testing.T) {
 	ds := jsonBenchPartEdgeDataset()
 	ds.Dictionaries["did_code"] = map[string]int64{"outside-low-cardinality-cap": maxCodeCardinality + 1}
-	rawTimings, err := RunJSONBenchQueries(ds, 1)
+	codes, err := jsonBenchQueryCodes(ds)
 	if err != nil {
-		t.Fatalf("RunJSONBenchQueries: %v", err)
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
 	}
-	partTimings, err := RunJSONBenchPartQueries(ds, 2, 1)
+	rawRows, rawDigest := runJSONBenchQ2(ds, codes)
+	part, err := BuildJSONBenchColumnPart(ds, 2)
 	if err != nil {
-		t.Fatalf("RunJSONBenchPartQueries: %v", err)
+		t.Fatalf("BuildJSONBenchColumnPart: %v", err)
 	}
-	rawByQuery := make(map[string]JSONBenchQueryTiming, len(rawTimings))
-	for _, timing := range rawTimings {
-		rawByQuery[timing.Query] = timing
+	rows, digest, diagnostics, err := runJSONBenchPartQ2(part, codes, &jsonBenchPartQueryScratch{})
+	if err != nil {
+		t.Fatalf("runJSONBenchPartQ2: %v", err)
 	}
-	for _, timing := range partTimings {
-		if timing.Query != "Q2" {
-			continue
-		}
-		raw, ok := rawByQuery[timing.Query]
-		if !ok {
-			t.Fatalf("missing raw timing for %s", timing.Query)
-		}
-		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
-			t.Fatalf("Q2 fallback rows/digest=(%d,%d) raw=(%d,%d)", timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
-		}
-		if timing.Diagnostics.AggregateKernel != "projected_scan_group_count_distinct" {
-			t.Fatalf("Q2 fallback kernel=%q want projected scan", timing.Diagnostics.AggregateKernel)
-		}
-		return
+	if rows != rawRows || digest != rawDigest {
+		t.Fatalf("Q2 fallback rows/digest=(%d,%d) raw=(%d,%d)", rows, digest, rawRows, rawDigest)
 	}
-	t.Fatal("missing Q2 part timing")
+	if diagnostics.AggregateKernel != "projected_scan_group_count_distinct" {
+		t.Fatalf("Q2 fallback kernel=%q want projected scan", diagnostics.AggregateKernel)
+	}
 }
 
 func TestRunJSONBenchPartQ3RejectsInvalidHour(t *testing.T) {
@@ -182,6 +172,35 @@ func TestRunJSONBenchPartQ3RejectsInvalidHour(t *testing.T) {
 	_, _, _, err = runJSONBenchPartQ3(part, codes, &jsonBenchPartQueryScratch{})
 	if err == nil || !strings.Contains(err.Error(), "q3 hour") {
 		t.Fatalf("runJSONBenchPartQ3 err=%v want q3 hour validation", err)
+	}
+}
+
+func TestRunJSONBenchPartQ4RejectsIncompatibleSortKey(t *testing.T) {
+	ds := jsonBenchPartEdgeDataset()
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	cases := []struct {
+		name    string
+		sortKey []SortKeyColumn
+	}{
+		{name: "missing"},
+		{name: "compound", sortKey: []SortKeyColumn{{Column: "time_us"}, {Column: "row_index"}}},
+		{name: "descending", sortKey: []SortKeyColumn{{Column: "time_us", Direction: SortKeyDesc}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			part, err := BuildJSONBenchColumnPart(ds, 2)
+			if err != nil {
+				t.Fatalf("BuildJSONBenchColumnPart: %v", err)
+			}
+			part.Descriptor.SortKey = append([]SortKeyColumn(nil), tc.sortKey...)
+			_, _, _, err = runJSONBenchPartQ4(part, codes, &jsonBenchPartQueryScratch{})
+			if err == nil || !strings.Contains(err.Error(), "q4 early-stop requires") {
+				t.Fatalf("runJSONBenchPartQ4 err=%v want sort-key validation", err)
+			}
+		})
 	}
 }
 

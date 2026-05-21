@@ -3,6 +3,7 @@ package colgranule
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -517,12 +518,12 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		}
 		for row := 0; row < rows; row++ {
 			timestamp := timeValues[row]
+			rowsScanned++
 			if len(top) == 3 && timestamp > top[2].t {
 				scratch.q4Pairs = top
 				diagnostics := queryDiagnosticsFromDecodedPrefix(jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)
 				return len(top), digestQ4Top(top), diagnostics, nil
 			}
-			rowsScanned++
 			kind := readUint32Code(kindHeader.data, kindHeader.width, row)
 			if kind >= kindHeader.cardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: kind code %d outside cardinality %d", kind, kindHeader.cardinality)
@@ -714,6 +715,9 @@ func validateAlignedBlocks(reference []ColumnBlock, others ...[]ColumnBlock) err
 			desc := blocks[i].Descriptor
 			if desc.FirstRow != refDesc.FirstRow || desc.RowCount != refDesc.RowCount {
 				return fmt.Errorf("colgranule: aligned kernel block %d rows=%d+%d want %d+%d", i, desc.FirstRow, desc.RowCount, refDesc.FirstRow, refDesc.RowCount)
+			}
+			if desc.FirstGranule != refDesc.FirstGranule || desc.LastGranule != refDesc.LastGranule {
+				return fmt.Errorf("colgranule: aligned kernel block %d granules=%d..%d want %d..%d", i, desc.FirstGranule, desc.LastGranule, refDesc.FirstGranule, refDesc.LastGranule)
 			}
 		}
 	}
