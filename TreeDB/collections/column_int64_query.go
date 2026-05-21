@@ -24,44 +24,23 @@ func prepareColumnInt64ValueHourCountRunner(view columnPhysicalScanSnapshotView,
 	if readCache == nil {
 		return nil, fmt.Errorf("collections: int64 values query missing read cache")
 	}
-	col, _, ok := columnPhysicalQueryDeclaredColumn(view.Config, req.ValueColumn)
-	if !ok || col.ValueType != ColumnStoreValueInt64 || col.Nullable {
-		return nil, nil
-	}
-	byPart := columnInt64ValueSnapshotsByPart(view, req.ValueColumn)
-	if len(byPart) == 0 {
-		return nil, nil
-	}
-	if !columnInt64ValueSnapshotsCoverParts(view, byPart) {
-		return nil, nil
-	}
 	runner := &columnInt64ValueHourCountRunner{
-		column: req.ValueColumn,
 		assets: make([]columnInt64ValueHourCountAsset, 0, len(view.AssetRefs)),
 	}
-	var scratch []byte
-	for _, part := range view.AssetRefs {
-		snapshot := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
-		raw, err := readCache.read(snapshot.AssetRef, scratch)
-		if err != nil {
-			return nil, fmt.Errorf("collections: int64 values read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, err)
-		}
-		scratch = raw
-		decoded, err := decodeColumnInt64ValuesAsset(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, readCache.verifyChecksum)
-		if err != nil {
-			return nil, err
-		}
-		if len(decoded.Values) != snapshot.Rows {
-			return nil, fmt.Errorf("collections: int64 values asset generation=%d part_id=%d column=%q rows=%d want manifest rows=%d", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, len(decoded.Values), snapshot.Rows)
-		}
+	assetBytes, blocks, ok, err := visitColumnInt64ValueHourCountAssets(view, req, readCache, func(snapshot columnManifestInt64ValuesSnapshot, decoded columnInt64ValuesAsset) error {
 		runner.assets = append(runner.assets, columnInt64ValueHourCountAsset{
 			values: decoded.Values,
 		})
-		runner.assetBytes += snapshot.AssetRef.Length
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if len(runner.assets) == 0 {
+	if !ok || blocks == 0 {
 		return nil, nil
 	}
+	runner.column = req.ValueColumn
+	runner.assetBytes = assetBytes
 	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, 24)
 	return runner, nil
 }
@@ -96,46 +75,21 @@ func runColumnInt64ValueHourCountOneShot(view columnPhysicalScanSnapshotView, re
 	if readCache == nil {
 		return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: int64 values query missing read cache")
 	}
-	col, _, ok := columnPhysicalQueryDeclaredColumn(view.Config, req.ValueColumn)
-	if !ok || col.ValueType != ColumnStoreValueInt64 || col.Nullable {
-		return ColumnPhysicalQueryResult{}, false, nil
-	}
-	byPart := columnInt64ValueSnapshotsByPart(view, req.ValueColumn)
-	if len(byPart) == 0 {
-		return ColumnPhysicalQueryResult{}, false, nil
-	}
-	if !columnInt64ValueSnapshotsCoverParts(view, byPart) {
-		return ColumnPhysicalQueryResult{}, false, nil
-	}
 
 	start := time.Now()
 	var counts [24]int
 	rows := 0
-	assetBytes := int64(0)
-	blocks := 0
-	var scratch []byte
-	for _, part := range view.AssetRefs {
-		snapshot := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
-		raw, err := readCache.read(snapshot.AssetRef, scratch)
-		if err != nil {
-			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: int64 values read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, err)
-		}
-		scratch = raw
-		decoded, err := decodeColumnInt64ValuesAsset(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, readCache.verifyChecksum)
-		if err != nil {
-			return ColumnPhysicalQueryResult{}, true, err
-		}
-		if len(decoded.Values) != snapshot.Rows {
-			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: int64 values asset generation=%d part_id=%d column=%q rows=%d want manifest rows=%d", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, len(decoded.Values), snapshot.Rows)
-		}
+	assetBytes, blocks, ok, err := visitColumnInt64ValueHourCountAssets(view, req, readCache, func(snapshot columnManifestInt64ValuesSnapshot, decoded columnInt64ValuesAsset) error {
 		for _, value := range decoded.Values {
 			counts[columnPhysicalQueryUTCHour(value)]++
 			rows++
 		}
-		assetBytes += snapshot.AssetRef.Length
-		blocks++
+		return nil
+	})
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
 	}
-	if blocks == 0 {
+	if !ok || blocks == 0 {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	groups := make([]ColumnPhysicalQueryGroup, 0, 24)
@@ -162,6 +116,44 @@ func runColumnInt64ValueHourCountOneShot(view columnPhysicalScanSnapshotView, re
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
 	diag.ScanNanos = time.Since(start).Nanoseconds()
 	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, true, nil
+}
+
+func visitColumnInt64ValueHourCountAssets(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, visit func(columnManifestInt64ValuesSnapshot, columnInt64ValuesAsset) error) (int64, int, bool, error) {
+	col, _, ok := columnPhysicalQueryDeclaredColumn(view.Config, req.ValueColumn)
+	if !ok || col.ValueType != ColumnStoreValueInt64 || col.Nullable {
+		return 0, 0, false, nil
+	}
+	byPart := columnInt64ValueSnapshotsByPart(view, req.ValueColumn)
+	if len(byPart) == 0 {
+		return 0, 0, false, nil
+	}
+	if !columnInt64ValueSnapshotsCoverParts(view, byPart) {
+		return 0, 0, false, nil
+	}
+	var scratch []byte
+	assetBytes := int64(0)
+	blocks := 0
+	for _, part := range view.AssetRefs {
+		snapshot := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
+		raw, err := readCache.read(snapshot.AssetRef, scratch)
+		if err != nil {
+			return 0, 0, true, fmt.Errorf("collections: int64 values read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, err)
+		}
+		scratch = raw
+		decoded, err := decodeColumnInt64ValuesAsset(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, readCache.verifyChecksum)
+		if err != nil {
+			return 0, 0, true, err
+		}
+		if len(decoded.Values) != snapshot.Rows {
+			return 0, 0, true, fmt.Errorf("collections: int64 values asset generation=%d part_id=%d column=%q rows=%d want manifest rows=%d", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, len(decoded.Values), snapshot.Rows)
+		}
+		if err := visit(snapshot, decoded); err != nil {
+			return 0, 0, true, err
+		}
+		assetBytes += snapshot.AssetRef.Length
+		blocks++
+	}
+	return assetBytes, blocks, true, nil
 }
 
 func (r *columnInt64ValueHourCountRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) ColumnPhysicalQueryResult {

@@ -20,9 +20,10 @@ const (
 	columnManifestDictionaryCodesRecordPrefix   = "\x04column-manifest/v1/dictionary/"
 	columnManifestInt64ValuesRecordPrefix       = "\x05column-manifest/v1/int64/"
 
-	columnManifestHeaderMagic   = uint32(0x54434d48) // TCMH
-	columnManifestPartMagic     = uint32(0x54434d50) // TCMP
-	columnManifestRecordVersion = uint16(2)
+	columnManifestHeaderMagic     = uint32(0x54434d48) // TCMH
+	columnManifestPartMagic       = uint32(0x54434d50) // TCMP
+	columnManifestRecordVersionV1 = uint16(1)
+	columnManifestRecordVersion   = uint16(2)
 )
 
 var (
@@ -491,7 +492,7 @@ func decodeColumnManifestHeaderRecord(raw []byte) (columnManifestSnapshot, error
 	if magic := cur.u32(); magic != columnManifestHeaderMagic {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: bad column manifest header magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion {
+	if version := cur.u16(); version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: unsupported column manifest header version=%d", version)
 	}
 	collection := cur.string()
@@ -535,7 +536,8 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	if magic := cur.u32(); magic != columnManifestPartMagic {
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion {
+	version := cur.u16()
+	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kind := ColumnAssetKind(cur.string())
@@ -546,7 +548,10 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	offset64 := cur.u64()
 	length64 := cur.u64()
 	checksum64 := cur.u64()
-	rows64 := cur.u64()
+	rows64 := uint64(0)
+	if version >= columnManifestRecordVersion {
+		rows64 = cur.u64()
+	}
 	bytes64 := cur.u64()
 	publishID := cur.u64()
 	generationID := cur.u64()
