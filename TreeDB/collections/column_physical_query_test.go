@@ -1900,6 +1900,19 @@ func TestColumnPhysicalQueryRunnerFailsClosedForUnsupportedShapeM1634(t *testing
 	}
 }
 
+func TestColumnPhysicalQueryGroupSortHybridM1634(t *testing.T) {
+	groups := make([]ColumnPhysicalQueryGroup, 96)
+	for i := range groups {
+		groups[i] = ColumnPhysicalQueryGroup{Key: fmt.Sprintf("key_%03d", len(groups)-i)}
+	}
+	sortColumnPhysicalQueryGroupsByKey(groups)
+	for i := 1; i < len(groups); i++ {
+		if groups[i-1].Key > groups[i].Key {
+			t.Fatalf("groups not sorted at %d: %q > %q", i, groups[i-1].Key, groups[i].Key)
+		}
+	}
+}
+
 func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 	for _, rows := range []int{1024, 8192} {
 		cases := []struct {

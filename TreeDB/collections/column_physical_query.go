@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,6 +90,10 @@ type ColumnPhysicalQueryResult struct {
 // execution state across repeated scans. It is intentionally limited to
 // insert-only direct physical reducers; mutation visibility and planner routing
 // remain owned by RunColumnPhysicalQuery.
+//
+// The runner is not safe for concurrent use; callers must externally
+// synchronize Run and Close. Result groups returned by Run alias runner-owned
+// storage and are valid only until the next Run or Close.
 type ColumnPhysicalQueryRunner struct {
 	collection *Collection
 	view       columnPhysicalScanSnapshotView
@@ -204,6 +210,9 @@ func (r *ColumnPhysicalQueryRunner) Close() error {
 }
 
 // Run executes the prepared direct physical query against the pinned snapshot.
+// The returned Groups slice aliases runner-owned storage to keep hot loops
+// allocation-free; copy Groups before calling Run again or Close if the result
+// must be retained.
 func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	if r == nil || r.closed {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
@@ -1316,6 +1325,13 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 }
 
 func sortColumnPhysicalQueryGroupsByKey(groups []ColumnPhysicalQueryGroup) {
+	const insertionSortLimit = 64
+	if len(groups) > insertionSortLimit {
+		slices.SortFunc(groups, func(a, b ColumnPhysicalQueryGroup) int {
+			return cmp.Compare(a.Key, b.Key)
+		})
+		return
+	}
 	for i := 1; i < len(groups); i++ {
 		group := groups[i]
 		j := i - 1
