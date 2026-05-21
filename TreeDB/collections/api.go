@@ -788,16 +788,18 @@ type IndexDefinition struct {
 }
 
 type CollectionMeta struct {
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Name          string                  `json:"name"`
+	Options       CollectionOptions       `json:"options,omitempty"`
+	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
 }
 
 type collectionMetaDisk struct {
-	Version int               `json:"version"`
-	Name    string            `json:"name"`
-	Options CollectionOptions `json:"options,omitempty"`
-	Indexes []IndexDefinition `json:"indexes,omitempty"`
+	Version       int                     `json:"version"`
+	Name          string                  `json:"name"`
+	Options       CollectionOptions       `json:"options,omitempty"`
+	Indexes       []IndexDefinition       `json:"indexes,omitempty"`
+	VectorIndexes []VectorIndexDefinition `json:"vector_indexes,omitempty"`
 }
 
 type collectionCatalog struct {
@@ -3090,9 +3092,10 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 	}
 
 	newMeta, err := normalizeCollectionMeta(CollectionMeta{
-		Name:    baseMeta.Name,
-		Options: baseMeta.Options,
-		Indexes: nextIndexes,
+		Name:          baseMeta.Name,
+		Options:       baseMeta.Options,
+		Indexes:       nextIndexes,
+		VectorIndexes: baseMeta.VectorIndexes,
 	})
 	if err != nil {
 		return nil, err
@@ -18435,10 +18438,11 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 // normalizeCollectionMeta so disk metadata preserves canonical defaults/order.
 func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	return json.Marshal(collectionMetaDisk{
-		Version: collectionMetaVersion,
-		Name:    meta.Name,
-		Options: meta.Options,
-		Indexes: meta.Indexes,
+		Version:       collectionMetaVersion,
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       meta.Indexes,
+		VectorIndexes: meta.VectorIndexes,
 	})
 }
 
@@ -18451,9 +18455,10 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 		return CollectionMeta{}, fmt.Errorf("collections: unsupported collection metadata version %d", disk.Version)
 	}
 	return normalizeCollectionMeta(CollectionMeta{
-		Name:    disk.Name,
-		Options: disk.Options,
-		Indexes: disk.Indexes,
+		Name:          disk.Name,
+		Options:       disk.Options,
+		Indexes:       disk.Indexes,
+		VectorIndexes: disk.VectorIndexes,
 	})
 }
 
@@ -18525,6 +18530,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[indexes[i].Name] = struct{}{}
 	}
 	meta.Indexes = indexes
+	vectorIndexes, err := normalizeVectorIndexDefinitions(meta.VectorIndexes, seen)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	meta.VectorIndexes = vectorIndexes
 	if meta.Options.DisableIndexedWriteMemtables {
 		meta.Options.BufferedIndexedWrites = false
 		meta.Options.BufferedIndexedWriteMaxDocuments = 0
@@ -18581,9 +18591,10 @@ func normalizeIndexValueType(valueType IndexValueType) (IndexValueType, error) {
 
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
-		Name:    m.Name,
-		Options: copyCollectionOptions(m.Options),
-		Indexes: append([]IndexDefinition(nil), m.Indexes...),
+		Name:          m.Name,
+		Options:       copyCollectionOptions(m.Options),
+		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
+		VectorIndexes: append([]VectorIndexDefinition(nil), m.VectorIndexes...),
 	}
 }
 
@@ -18610,11 +18621,19 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
-	if a.Name != b.Name || !collectionOptionsEqual(a.Options, b.Options) || len(a.Indexes) != len(b.Indexes) {
+	if a.Name != b.Name ||
+		!collectionOptionsEqual(a.Options, b.Options) ||
+		len(a.Indexes) != len(b.Indexes) ||
+		len(a.VectorIndexes) != len(b.VectorIndexes) {
 		return false
 	}
 	for i := range a.Indexes {
 		if a.Indexes[i] != b.Indexes[i] {
+			return false
+		}
+	}
+	for i := range a.VectorIndexes {
+		if a.VectorIndexes[i] != b.VectorIndexes[i] {
 			return false
 		}
 	}
@@ -18635,9 +18654,10 @@ func addIndexToCollectionMeta(meta CollectionMeta, def IndexDefinition) (Collect
 		return CollectionMeta{}, IndexDefinition{}, fmt.Errorf("collections: duplicate index %q", def.Name)
 	}
 	candidate := CollectionMeta{
-		Name:    meta.Name,
-		Options: meta.Options,
-		Indexes: append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       append(append([]IndexDefinition(nil), meta.Indexes...), def),
+		VectorIndexes: append([]VectorIndexDefinition(nil), meta.VectorIndexes...),
 	}
 	normalized, err := normalizeCollectionMeta(candidate)
 	if err != nil {

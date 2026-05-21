@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -212,6 +213,14 @@ func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing
 	if _, err := DecodeCollectionDeleteBatchByIDPayload(payload); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
 	}
+
+	rebuildPayload := make([]byte, collectionRebuildVectorIndexPayloadHeaderSize)
+	binary.LittleEndian.PutUint16(rebuildPayload[:collectionRebuildVectorIndexVersionEnd], collectionRebuildVectorIndexPayloadVersion)
+	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexCollectionLenStart:collectionRebuildVectorIndexCollectionLenEnd], ^uint32(0))
+	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexIndexLenStart:collectionRebuildVectorIndexIndexLenEnd], 1)
+	if _, err := DecodeCollectionRebuildVectorIndexPayload(rebuildPayload); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("DecodeCollectionRebuildVectorIndexPayload huge length error=%v, want ErrCorrupt", err)
+	}
 }
 
 func TestCommandWALFormatGoldenV1CollectionInsertBatchByID(t *testing.T) {
@@ -320,6 +329,47 @@ func TestCommandWALFormatGoldenV1CollectionUpdateBatchByID(t *testing.T) {
 		string(decoded.Documents[0].ID) != "u1" || string(decoded.Documents[0].Document) != `{"name":"Ada","active":true}` ||
 		string(decoded.Documents[1].ID) != "u2" || string(decoded.Documents[1].Document) != `{"name":"Grace","active":true}` {
 		t.Fatalf("decoded collection update payload=%+v", decoded)
+	}
+}
+
+func TestCommandWALFormatV1CollectionRebuildVectorIndex(t *testing.T) {
+	payload, err := EncodeCollectionRebuildVectorIndexPayload("users", "embedding_graph")
+	if err != nil {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload: %v", err)
+	}
+	env := CommandEnvelope{
+		LSN:           15,
+		Kind:          CommandKindCollectionRebuildVectorIndex,
+		Scope:         CommandScopeCollection,
+		PayloadFormat: PayloadFormatCollectionRebuildVectorIndexV1,
+		Payload:       payload,
+	}
+	frame, err := EncodeCommandFrame(env)
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+	assertGoldenHex(t, "command_wal_v1_collection_rebuild_vector_index.hex", frame)
+	got, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame: %v", err)
+	}
+	if got.Kind != CommandKindCollectionRebuildVectorIndex ||
+		got.Scope != CommandScopeCollection ||
+		got.PayloadFormat != PayloadFormatCollectionRebuildVectorIndexV1 {
+		t.Fatalf("decoded collection rebuild mismatch: %+v", got)
+	}
+	decoded, err := DecodeCollectionRebuildVectorIndexPayload(got.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionRebuildVectorIndexPayload: %v", err)
+	}
+	if decoded.Collection != "users" || decoded.IndexName != "embedding_graph" {
+		t.Fatalf("decoded collection rebuild payload=%+v", decoded)
+	}
+	if _, err := EncodeCollectionRebuildVectorIndexPayload("", "embedding_graph"); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "collection name") {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty collection error=%v, want ErrCorrupt with collection name", err)
+	}
+	if _, err := EncodeCollectionRebuildVectorIndexPayload("users", ""); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "index name") {
+		t.Fatalf("EncodeCollectionRebuildVectorIndexPayload empty index error=%v, want ErrCorrupt with index name", err)
 	}
 }
 

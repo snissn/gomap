@@ -23,6 +23,7 @@ func RegisterCommandWALReplayHandlers() {
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionInsertBatchByID, replayCollectionInsertBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionDeleteBatchByID, replayCollectionDeleteBatchByIDCommandWAL)
 		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionUpdateBatchByID, replayCollectionUpdateBatchByIDCommandWAL)
+		backenddb.RegisterCommandWALReplayHandler(commitlog.CommandKindCollectionRebuildVectorIndex, replayCollectionRebuildVectorIndexCommandWAL)
 		backenddb.RegisterCommandWALReplayHandlerWithOptions(
 			commitlog.CommandKindCatalogCreateCollection,
 			replayCatalogCreateCollectionCommandWAL,
@@ -88,6 +89,25 @@ func (c *Collection) newCollectionUpdateCommandWALIntent(docs []commitlog.Collec
 		commitlog.CommandKindCollectionUpdateBatchByID,
 		commitlog.CommandScopeCollection,
 		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+	)
+}
+
+func (c *Collection) newCollectionRebuildVectorIndexCommandWALIntent(indexName string, replay *backenddb.CommandWALIntent) (*backenddb.CommandWALIntent, error) {
+	if replay != nil {
+		return replay, nil
+	}
+	if c == nil || c.db == nil || !c.db.CommandWALEnabled() {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeCollectionRebuildVectorIndexPayload(c.meta.Name, indexName)
+	if err != nil {
+		return nil, err
+	}
+	return c.db.NewCommandWALIntent(
+		commitlog.CommandKindCollectionRebuildVectorIndex,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionRebuildVectorIndexV1,
 		payload,
 	)
 }
@@ -314,6 +334,24 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		}
 	}
 	_, _, err = collection.updateBatchOwnedItemsWithCommandWALIntent(items, updateBatchModeAny, intent)
+	return err
+}
+
+func replayCollectionRebuildVectorIndexCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	payload, err := commitlog.DecodeCollectionRebuildVectorIndexPayload(env.Payload)
+	if err != nil {
+		return err
+	}
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
+	manager := NewCollectionManager(db)
+	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
+	if err != nil {
+		return err
+	}
+	_, err = collection.rebuildVectorIndexWithCommandWALIntent(payload.IndexName, intent)
 	return err
 }
 
