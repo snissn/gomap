@@ -13961,7 +13961,12 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 	if templateV1CommandWALDocuments != nil {
 		commandWALDocuments = templateV1CommandWALDocuments
 	}
-	secondaryIndexChanges := summarizeUpdateBatchSecondaryIndexChanges(runtimes, changed)
+	var secondaryIndexChanges updateBatchSecondaryIndexChangeSummary
+	if c.commandWALActive(nil) {
+		secondaryIndexChanges = summarizeUpdateBatchSecondaryIndexChanges(runtimes, changed)
+	} else {
+		secondaryIndexChanges.unique = updateBatchChangesSecondaryUniqueIndex(runtimes, changed)
+	}
 	if mode == updateBatchModeNoSecondaryUniqueIndexChanges && secondaryIndexChanges.unique {
 		_ = snap.Close()
 		return nil, errUpdateBatchChangesSecondaryUniqueIndex

@@ -843,7 +843,11 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexStagesAfterWALApp
 		},
 	})
 	d := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = d.Close() }()
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
 	col, err := NewCollectionManager(d).OpenCollection("users")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
@@ -888,6 +892,7 @@ func TestCollectionCommandWALUpdateBSONSetIndexedUnchangedIndexStagesAfterWALApp
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	d = nil
 
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
