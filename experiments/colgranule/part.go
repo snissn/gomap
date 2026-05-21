@@ -271,36 +271,61 @@ func (s *ColumnPartScanner) ScanProjectedInto(dst map[string][]int64, columns []
 	if s.part == nil {
 		return ProjectedScanResult{}, errors.New("colgranule: nil part scanner")
 	}
-	if len(columns) == 0 {
-		return ProjectedScanResult{}, errors.New("colgranule: empty projection")
+	projection, err := s.validateProjection(columns)
+	if err != nil {
+		return ProjectedScanResult{}, err
 	}
 	if dst == nil {
-		dst = make(map[string][]int64, len(columns))
-	}
-	for existing := range dst {
-		if !containsString(columns, existing) {
-			delete(dst, existing)
-		}
+		dst = make(map[string][]int64, len(projection))
 	}
 	out := ProjectedScanResult{
 		Rows:    s.part.Descriptor.RowCount,
 		Columns: dst,
 		Diagnostics: PartScanDiagnostics{
 			RowsScanned:        s.part.Descriptor.RowCount,
-			ColumnsProjected:   len(columns),
+			ColumnsProjected:   len(projection),
 			GranulesConsidered: len(s.part.Descriptor.Granules),
 		},
 	}
-	for _, name := range columns {
+	next := make(map[string][]int64, len(projection))
+	for _, name := range projection {
 		values, diagnostics, err := s.scanColumnInto(name, dst[name])
 		if err != nil {
 			return ProjectedScanResult{}, err
 		}
-		out.Columns[name] = values
+		next[name] = values
 		out.Diagnostics.BlocksDecoded += diagnostics.BlocksDecoded
 		out.Diagnostics.BytesDecoded += diagnostics.BytesDecoded
 	}
+	for name := range dst {
+		if _, ok := next[name]; !ok {
+			delete(dst, name)
+		}
+	}
+	for name, values := range next {
+		dst[name] = values
+	}
 	return out, nil
+}
+
+func (s *ColumnPartScanner) validateProjection(columns []string) ([]string, error) {
+	if len(columns) == 0 {
+		return nil, errors.New("colgranule: empty projection")
+	}
+	seen := make(map[string]struct{}, len(columns))
+	for _, name := range columns {
+		if name == "" {
+			return nil, errors.New("colgranule: empty projection column")
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("colgranule: duplicate projection column %s", name)
+		}
+		if _, ok := s.part.Columns[name]; !ok {
+			return nil, fmt.Errorf("colgranule: missing column %s", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return columns, nil
 }
 
 func (s *ColumnPartScanner) ValueAt(locator RowLocator, columnName string) (int64, error) {
@@ -394,6 +419,9 @@ func (s *ColumnPartScanner) decodeBlock(columnType ColumnType, g EncodedGranule)
 }
 
 func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, error) {
+	opts.Columns = append([]ColumnDefinition(nil), opts.Columns...)
+	opts.LogicalPrimaryKey.Columns = append([]string(nil), opts.LogicalPrimaryKey.Columns...)
+	opts.SortKey.Columns = append([]SortKeyColumn(nil), opts.SortKey.Columns...)
 	if opts.SchemaVersion == 0 {
 		opts.SchemaVersion = 1
 	}
@@ -411,6 +439,9 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 	}
 	if opts.PartPolicy.DefaultCodecBlockRows < 0 {
 		return ColumnStoreOptions{}, fmt.Errorf("colgranule: invalid default codec block rows %d", opts.PartPolicy.DefaultCodecBlockRows)
+	}
+	if err := validateCompression(opts.Compression.Default); err != nil {
+		return ColumnStoreOptions{}, fmt.Errorf("colgranule: unsupported default compression %s", opts.Compression.Default)
 	}
 	if len(opts.LogicalPrimaryKey.Columns) != 1 {
 		return ColumnStoreOptions{}, fmt.Errorf("colgranule: experiment requires exactly one logical primary key column, got %d", len(opts.LogicalPrimaryKey.Columns))
@@ -473,6 +504,9 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 	if !def.CompressionSet && def.Compression == CompressionNone && defaultCompression != CompressionNone {
 		def.Compression = defaultCompression
 	}
+	if err := validateCompression(def.Compression); err != nil {
+		return ColumnDefinition{}, fmt.Errorf("colgranule: unsupported compression %s for %s", def.Compression, def.Name)
+	}
 	switch def.Type {
 	case ColumnTypeInt64:
 		if def.Encoding == 0 {
@@ -489,6 +523,15 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		return ColumnDefinition{}, fmt.Errorf("colgranule: unsupported column type %s for %s", def.Type, def.Name)
 	}
 	return def, nil
+}
+
+func validateCompression(compression Compression) error {
+	switch compression {
+	case CompressionNone, CompressionSnappy, CompressionLZ4:
+		return nil
+	default:
+		return fmt.Errorf("colgranule: unsupported compression %s", compression)
+	}
 }
 
 func validateColumnBatch(batch ColumnBatch, defs []ColumnDefinition) (int, error) {
@@ -583,7 +626,7 @@ func (b *ColumnPartBuilder) buildGranulesAndLocators(part *ColumnPart, batch Col
 			}
 			markColumns[i] = SortKeyColumnValues{Name: sortColumn.Column, Values: values}
 		}
-		mark, err := BuildSortKeyMark(markColumns)
+		mark, err := buildOwnedSortKeyMark(markColumns)
 		if err != nil {
 			return err
 		}
