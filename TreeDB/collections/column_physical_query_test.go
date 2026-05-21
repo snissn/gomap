@@ -1511,6 +1511,9 @@ func TestColumnPhysicalDirectQueryValidatesUnselectedTypeTags(t *testing.T) {
 	if summary.rows != 1 || relaxedExec.reduceRows != 1 {
 		t.Fatalf("reduce relaxed summary rows=%d reduceRows=%d want 1", summary.rows, relaxedExec.reduceRows)
 	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", relaxedExec.groups()), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("reduce relaxed groups=%v want %v", got, want)
+	}
 }
 
 func equalStringSets(got, want []string) bool {
