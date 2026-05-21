@@ -364,7 +364,8 @@ func (c *Collection) columnVectorGraphRowsFromCatalogSnapshot(snap *backenddb.Sn
 		if err != nil {
 			return false, fmt.Errorf("collections: column_graph rebuild document id %q: %w", string(record.ID), err)
 		}
-		// Both scan paths pass owned ID bytes into visit; avoid a second per-row copy here.
+		// The scan producers clone iterator keys before calling visit; do
+		// not add another per-row ID copy on the rebuild hot path.
 		rows = append(rows, columnVectorGraphAssetRow{
 			ID:      record.ID,
 			Vector:  vector,
