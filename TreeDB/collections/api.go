@@ -111,7 +111,10 @@ var (
 	)
 )
 
-var testBeforeCommandWALBufferedUpdateStageLock func()
+var testBeforeCommandWALBufferedUpdateStageLockHook struct {
+	mu sync.Mutex
+	fn func()
+}
 
 // CommitAmbiguousError reports that a collection mutation reached its logical
 // commit point before a later visibility, flush, checkpoint, response, or
@@ -2223,6 +2226,27 @@ func runCollectionWaitIndexedAsyncFlushHook() {
 	collectionWaitIndexedAsyncFlushHook.mu.Lock()
 	fn := collectionWaitIndexedAsyncFlushHook.fn
 	collectionWaitIndexedAsyncFlushHook.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func setTestBeforeCommandWALBufferedUpdateStageLockForTest(fn func()) func() {
+	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Lock()
+	prev := testBeforeCommandWALBufferedUpdateStageLockHook.fn
+	testBeforeCommandWALBufferedUpdateStageLockHook.fn = fn
+	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Unlock()
+	return func() {
+		testBeforeCommandWALBufferedUpdateStageLockHook.mu.Lock()
+		testBeforeCommandWALBufferedUpdateStageLockHook.fn = prev
+		testBeforeCommandWALBufferedUpdateStageLockHook.mu.Unlock()
+	}
+}
+
+func runTestBeforeCommandWALBufferedUpdateStageLockHook() {
+	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Lock()
+	fn := testBeforeCommandWALBufferedUpdateStageLockHook.fn
+	testBeforeCommandWALBufferedUpdateStageLockHook.mu.Unlock()
 	if fn != nil {
 		fn()
 	}
@@ -12846,9 +12870,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					}
 					plan.bufferedCommandWALIntent = intent
 					if c.db != nil {
-						if testBeforeCommandWALBufferedUpdateStageLock != nil {
-							testBeforeCommandWALBufferedUpdateStageLock()
-						}
+						runTestBeforeCommandWALBufferedUpdateStageLockHook()
 						unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 						defer unlockCommandWALRawStage()
 					}

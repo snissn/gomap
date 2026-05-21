@@ -1062,14 +1062,12 @@ func TestCollectionCommandWALUpdateBSONSetNoIndexWaitsForRawKVCommandWALPublish(
 	attempting := make(chan struct{})
 	stagingAttempted := make(chan struct{})
 	var signalStagingAttempt sync.Once
-	testBeforeCommandWALBufferedUpdateStageLock = func() {
+	restoreStageLockHook := setTestBeforeCommandWALBufferedUpdateStageLockForTest(func() {
 		signalStagingAttempt.Do(func() {
 			close(stagingAttempted)
 		})
-	}
-	defer func() {
-		testBeforeCommandWALBufferedUpdateStageLock = nil
-	}()
+	})
+	defer restoreStageLockHook()
 	done := make(chan error, 1)
 	unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
 		go func() {
