@@ -209,7 +209,9 @@ type columnStoreQueryExecution struct {
 	ScanDuration           time.Duration
 	ReduceDuration         time.Duration
 	AdapterDuration        time.Duration
-	ParityHashDuration     time.Duration
+	// Set when ProductionHashKnown is true. Fallback line-hash timing is
+	// measured at the call site because it is derived from Lines, not execution.
+	ParityHashDuration time.Duration
 }
 
 type columnStoreByteAccounting struct {
