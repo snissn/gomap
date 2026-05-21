@@ -259,6 +259,7 @@ type PartScanDiagnostics struct {
 	RowsScanned        int
 	ColumnsProjected   int
 	GranulesConsidered int
+	GranulesDecoded    int
 	BlocksDecoded      int
 	BytesDecoded       int
 }
@@ -294,6 +295,9 @@ func (s *ColumnPartScanner) ScanProjectedInto(dst map[string][]int64, columns []
 			return ProjectedScanResult{}, err
 		}
 		next[name] = values
+		if diagnostics.GranulesDecoded > out.Diagnostics.GranulesDecoded {
+			out.Diagnostics.GranulesDecoded = diagnostics.GranulesDecoded
+		}
 		out.Diagnostics.BlocksDecoded += diagnostics.BlocksDecoded
 		out.Diagnostics.BytesDecoded += diagnostics.BytesDecoded
 	}
@@ -363,6 +367,11 @@ func (s *ColumnPartScanner) scanColumnInto(name string, dst []int64) ([]int64, P
 	}
 	out := ensureInt64Len(dst[:0], s.part.Descriptor.RowCount)
 	var diagnostics PartScanDiagnostics
+	granulesDecoded, err := countGranulesCoveredByBlocks(column.Blocks)
+	if err != nil {
+		return nil, diagnostics, fmt.Errorf("colgranule: column %s: %w", name, err)
+	}
+	diagnostics.GranulesDecoded = granulesDecoded
 	for _, block := range column.Blocks {
 		values, err := s.decodeBlock(column.Definition.Type, block.Granule)
 		if err != nil {
@@ -376,6 +385,42 @@ func (s *ColumnPartScanner) scanColumnInto(name string, dst []int64) ([]int64, P
 		diagnostics.BytesDecoded += block.Granule.RawBytes
 	}
 	return out, diagnostics, nil
+}
+
+func countGranulesCoveredByBlocks(blocks []ColumnBlock) (int, error) {
+	total := 0
+	coveredStart := -1
+	coveredEnd := -1
+	prevFirst := -1
+	for _, block := range blocks {
+		first := block.Descriptor.FirstGranule
+		last := block.Descriptor.LastGranule
+		if first < 0 || last < first {
+			return 0, fmt.Errorf("invalid granule range %d..%d", first, last)
+		}
+		if prevFirst >= 0 && first < prevFirst {
+			return 0, fmt.Errorf("granule ranges out of order: %d after %d", first, prevFirst)
+		}
+		prevFirst = first
+		if coveredStart < 0 {
+			coveredStart = first
+			coveredEnd = last
+			continue
+		}
+		if first <= coveredEnd+1 {
+			if last > coveredEnd {
+				coveredEnd = last
+			}
+			continue
+		}
+		total += coveredEnd - coveredStart + 1
+		coveredStart = first
+		coveredEnd = last
+	}
+	if coveredStart >= 0 {
+		total += coveredEnd - coveredStart + 1
+	}
+	return total, nil
 }
 
 func (s *ColumnPartScanner) decodeBlock(columnType ColumnType, g EncodedGranule) ([]int64, error) {

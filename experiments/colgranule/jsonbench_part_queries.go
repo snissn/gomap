@@ -463,7 +463,7 @@ func queryDiagnosticsFromScan(scan PartScanDiagnostics, columns []string, kernel
 	return JSONBenchPartQueryDiagnostics{
 		RowsScanned:        scan.RowsScanned,
 		GranulesConsidered: scan.GranulesConsidered,
-		GranulesDecoded:    scan.GranulesConsidered,
+		GranulesDecoded:    scan.GranulesDecoded,
 		BlocksDecoded:      scan.BlocksDecoded,
 		BytesDecoded:       scan.BytesDecoded,
 		ColumnsProjected:   append([]string(nil), columns...),
@@ -474,21 +474,22 @@ func queryDiagnosticsFromScan(scan PartScanDiagnostics, columns []string, kernel
 func partColumnDiagnostics(part *ColumnPart, columns []string, kernel string) JSONBenchPartQueryDiagnostics {
 	var blocks int
 	var bytes int
-	covered := make(map[int]struct{}, len(part.Descriptor.Granules))
+	var granulesDecoded int
 	for _, name := range columns {
 		column := part.Columns[name]
+		columnGranules, err := countGranulesCoveredByBlocks(column.Blocks)
+		if err == nil && columnGranules > granulesDecoded {
+			granulesDecoded = columnGranules
+		}
 		for _, block := range column.Blocks {
 			blocks++
 			bytes += block.Granule.RawBytes
-			for granule := block.Descriptor.FirstGranule; granule <= block.Descriptor.LastGranule; granule++ {
-				covered[granule] = struct{}{}
-			}
 		}
 	}
 	return JSONBenchPartQueryDiagnostics{
 		RowsScanned:        part.Descriptor.RowCount,
 		GranulesConsidered: len(part.Descriptor.Granules),
-		GranulesDecoded:    len(covered),
+		GranulesDecoded:    granulesDecoded,
 		BlocksDecoded:      blocks,
 		BytesDecoded:       bytes,
 		ColumnsProjected:   append([]string(nil), columns...),

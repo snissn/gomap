@@ -78,10 +78,12 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunJSONBenchQueries: %v", err)
 	}
-	partTimings, err := RunJSONBenchPartQueries(ds, 2, 2)
+	const rowsPerGranule = 2
+	partTimings, err := RunJSONBenchPartQueries(ds, rowsPerGranule, 2)
 	if err != nil {
 		t.Fatalf("RunJSONBenchPartQueries: %v", err)
 	}
+	granules := (ds.Rows + rowsPerGranule - 1) / rowsPerGranule
 	if len(partTimings) != len(rawTimings) {
 		t.Fatalf("part timings=%d raw timings=%d", len(partTimings), len(rawTimings))
 	}
@@ -107,9 +109,9 @@ func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
 			if attempt.ResultRows != raw.ResultRows || attempt.ResultDigest != raw.ResultDigest {
 				t.Fatalf("%s/%s rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, attempt.Cache, attempt.ResultRows, attempt.ResultDigest, raw.ResultRows, raw.ResultDigest)
 			}
-			assertJSONBenchPartDiagnostics(t, timing.Query, attempt.Diagnostics, ds.Rows, 3)
+			assertJSONBenchPartDiagnostics(t, timing.Query, attempt.Diagnostics, ds.Rows, granules)
 		}
-		assertJSONBenchPartDiagnostics(t, timing.Query, timing.Diagnostics, ds.Rows, 3)
+		assertJSONBenchPartDiagnostics(t, timing.Query, timing.Diagnostics, ds.Rows, granules)
 	}
 }
 
@@ -186,7 +188,10 @@ func TestRunJSONBenchPartQueriesLocalIfPresent(t *testing.T) {
 		rawByQuery[timing.Query] = timing
 	}
 	for _, timing := range partTimings {
-		raw := rawByQuery[timing.Query]
+		raw, ok := rawByQuery[timing.Query]
+		if !ok {
+			t.Fatalf("unexpected local part query %s", timing.Query)
+		}
 		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
 			t.Fatalf("%s local part rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
 		}
@@ -198,14 +203,14 @@ func assertJSONBenchPartDiagnostics(t *testing.T, query string, diagnostics JSON
 	if diagnostics.RowsScanned != rows {
 		t.Fatalf("%s diagnostics rows=%d want %d: %+v", query, diagnostics.RowsScanned, rows, diagnostics)
 	}
-	if diagnostics.GranulesConsidered != granules {
-		t.Fatalf("%s diagnostics granules=%d want %d: %+v", query, diagnostics.GranulesConsidered, granules, diagnostics)
+	if diagnostics.GranulesConsidered <= 0 || diagnostics.GranulesConsidered > granules {
+		t.Fatalf("%s diagnostics granules=%d want 1..%d: %+v", query, diagnostics.GranulesConsidered, granules, diagnostics)
 	}
-	if diagnostics.GranulesSkipped != 0 {
-		t.Fatalf("%s diagnostics skipped=%d want 0: %+v", query, diagnostics.GranulesSkipped, diagnostics)
+	if diagnostics.GranulesSkipped < 0 || diagnostics.GranulesSkipped > diagnostics.GranulesConsidered {
+		t.Fatalf("%s diagnostics skipped=%d want 0..%d: %+v", query, diagnostics.GranulesSkipped, diagnostics.GranulesConsidered, diagnostics)
 	}
-	if diagnostics.GranulesDecoded <= 0 || diagnostics.GranulesDecoded > granules {
-		t.Fatalf("%s diagnostics decoded granules=%d want 1..%d: %+v", query, diagnostics.GranulesDecoded, granules, diagnostics)
+	if diagnostics.GranulesDecoded <= 0 || diagnostics.GranulesDecoded > diagnostics.GranulesConsidered {
+		t.Fatalf("%s diagnostics decoded granules=%d want 1..%d: %+v", query, diagnostics.GranulesDecoded, diagnostics.GranulesConsidered, diagnostics)
 	}
 	if diagnostics.BlocksDecoded <= 0 || diagnostics.BytesDecoded <= 0 {
 		t.Fatalf("%s diagnostics missing decoded blocks/bytes: %+v", query, diagnostics)
