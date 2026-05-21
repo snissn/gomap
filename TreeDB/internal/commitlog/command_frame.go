@@ -26,6 +26,12 @@ const (
 	rawKVZeroOpHeaderSize    = 4
 	rawKVZeroOpHeaderSizeV3  = 2
 
+	collectionRebuildVectorIndexPayloadVersion             = uint16(1)
+	collectionRebuildVectorIndexCollectionLenOffset        = 2
+	collectionRebuildVectorIndexIndexLenOffset             = collectionRebuildVectorIndexCollectionLenOffset + 4
+	collectionRebuildVectorIndexPayloadHeaderSize          = collectionRebuildVectorIndexIndexLenOffset + 4
+	collectionRebuildVectorIndexPayloadCollectionNameStart = collectionRebuildVectorIndexPayloadHeaderSize
+
 	externalRefEncodedFixedSize      = 2 + 2 + 4 + 8 + 8 + 8 + sha256.Size
 	commandExtensionEncodedFixedSize = 2 + 2 + 4
 )
@@ -1844,7 +1850,7 @@ func EncodeCollectionRebuildVectorIndexPayload(collection, indexName string) ([]
 	if commandFrameIntExceedsUint32(len(collection)) || commandFrameIntExceedsUint32(len(indexName)) {
 		return nil, ErrRecordTooLarge
 	}
-	total, err := addCommandFrameEncodedSectionLen(2+4+4, len(collection))
+	total, err := addCommandFrameEncodedSectionLen(collectionRebuildVectorIndexPayloadHeaderSize, len(collection))
 	if err != nil {
 		return nil, err
 	}
@@ -1853,24 +1859,24 @@ func EncodeCollectionRebuildVectorIndexPayload(collection, indexName string) ([]
 		return nil, err
 	}
 	payload := make([]byte, total)
-	binary.LittleEndian.PutUint16(payload[0:2], 1)
-	binary.LittleEndian.PutUint32(payload[2:6], uint32(len(collection)))
-	binary.LittleEndian.PutUint32(payload[6:10], uint32(len(indexName)))
-	copy(payload[10:], collection)
-	copy(payload[10+len(collection):], indexName)
+	binary.LittleEndian.PutUint16(payload[:collectionRebuildVectorIndexCollectionLenOffset], collectionRebuildVectorIndexPayloadVersion)
+	binary.LittleEndian.PutUint32(payload[collectionRebuildVectorIndexCollectionLenOffset:collectionRebuildVectorIndexIndexLenOffset], uint32(len(collection)))
+	binary.LittleEndian.PutUint32(payload[collectionRebuildVectorIndexIndexLenOffset:collectionRebuildVectorIndexPayloadHeaderSize], uint32(len(indexName)))
+	copy(payload[collectionRebuildVectorIndexPayloadCollectionNameStart:], collection)
+	copy(payload[collectionRebuildVectorIndexPayloadCollectionNameStart+len(collection):], indexName)
 	return payload, nil
 }
 
 func DecodeCollectionRebuildVectorIndexPayload(payload []byte) (CollectionRebuildVectorIndexPayload, error) {
-	if len(payload) < 10 {
+	if len(payload) < collectionRebuildVectorIndexPayloadHeaderSize {
 		return CollectionRebuildVectorIndexPayload{}, ErrCorrupt
 	}
-	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+	if binary.LittleEndian.Uint16(payload[:collectionRebuildVectorIndexCollectionLenOffset]) != collectionRebuildVectorIndexPayloadVersion {
 		return CollectionRebuildVectorIndexPayload{}, ErrCommandWALUnsupportedVersion
 	}
-	nameLen := binary.LittleEndian.Uint32(payload[2:6])
-	indexLen := binary.LittleEndian.Uint32(payload[6:10])
-	off := 10
+	nameLen := binary.LittleEndian.Uint32(payload[collectionRebuildVectorIndexCollectionLenOffset:collectionRebuildVectorIndexIndexLenOffset])
+	indexLen := binary.LittleEndian.Uint32(payload[collectionRebuildVectorIndexIndexLenOffset:collectionRebuildVectorIndexPayloadHeaderSize])
+	off := collectionRebuildVectorIndexPayloadCollectionNameStart
 	if uint64(nameLen)+uint64(indexLen) > uint64(len(payload)-off) {
 		return CollectionRebuildVectorIndexPayload{}, ErrCorrupt
 	}

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
@@ -326,7 +328,7 @@ func (c *Collection) columnGraphVectorIndexStatus(def VectorIndexDefinition, cfg
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return VectorIndexStatus{}, errors.New("collections: collection db is closed")
+		return VectorIndexStatus{}, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
 	catalog, err := c.catalogForSnapshot(snap)

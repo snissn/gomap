@@ -213,10 +213,10 @@ func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing
 		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload huge count error=%v, want ErrCorrupt", err)
 	}
 
-	rebuildPayload := make([]byte, 10)
-	binary.LittleEndian.PutUint16(rebuildPayload[0:2], 1)
-	binary.LittleEndian.PutUint32(rebuildPayload[2:6], ^uint32(0))
-	binary.LittleEndian.PutUint32(rebuildPayload[6:10], 1)
+	rebuildPayload := make([]byte, collectionRebuildVectorIndexPayloadHeaderSize)
+	binary.LittleEndian.PutUint16(rebuildPayload[:collectionRebuildVectorIndexCollectionLenOffset], collectionRebuildVectorIndexPayloadVersion)
+	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexCollectionLenOffset:collectionRebuildVectorIndexIndexLenOffset], ^uint32(0))
+	binary.LittleEndian.PutUint32(rebuildPayload[collectionRebuildVectorIndexIndexLenOffset:collectionRebuildVectorIndexPayloadHeaderSize], 1)
 	if _, err := DecodeCollectionRebuildVectorIndexPayload(rebuildPayload); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("DecodeCollectionRebuildVectorIndexPayload huge length error=%v, want ErrCorrupt", err)
 	}

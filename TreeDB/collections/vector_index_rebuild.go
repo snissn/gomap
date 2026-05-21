@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -347,7 +348,9 @@ func topColumnVectorGraphNeighbors(rows []columnVectorGraphAssetRow, row, degree
 		}
 		candidates.pushTop(degree, columnVectorGraphNeighbor{ordinal: j, score: score})
 	}
-	sortColumnVectorGraphNeighbors(candidates)
+	sort.Slice(candidates, func(i, j int) bool {
+		return columnVectorGraphNeighborLess(candidates[i], candidates[j])
+	})
 	return candidates, nil
 }
 
@@ -434,17 +437,6 @@ func columnVectorGraphNeighborWorse(left, right columnVectorGraphNeighbor) bool 
 		return left.ordinal > right.ordinal
 	}
 	return left.score < right.score
-}
-
-func sortColumnVectorGraphNeighbors(neighbors []columnVectorGraphNeighbor) {
-	for i := 1; i < len(neighbors); i++ {
-		candidate := neighbors[i]
-		j := i - 1
-		for ; j >= 0 && columnVectorGraphNeighborLess(candidate, neighbors[j]); j-- {
-			neighbors[j+1] = neighbors[j]
-		}
-		neighbors[j+1] = candidate
-	}
 }
 
 func columnVectorGraphCosine(left, right columnVectorGraphAssetRow) float64 {
