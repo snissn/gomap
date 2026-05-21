@@ -211,6 +211,9 @@ func validateDemoResetDir(dir string) (string, error) {
 	if cleanInput == "." || cleanInput == ".." {
 		return "", fmt.Errorf("refusing to reset unsafe directory %q", dir)
 	}
+	if demoResetDirHasParentTraversal(dir) {
+		return "", fmt.Errorf("refusing to reset unsafe directory %q", dir)
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
@@ -242,22 +245,69 @@ func validateDemoResetDir(dir string) (string, error) {
 }
 
 func demoResetDirWithinBase(abs, base string) bool {
-	baseAbs, err := filepath.Abs(base)
+	if demoResetDirHasParentTraversal(abs) || demoResetDirHasParentTraversal(base) {
+		return false
+	}
+	resolvedAbs, err := demoResetDirPhysicalPath(abs)
 	if err != nil {
 		return false
 	}
-	baseAbs = filepath.Clean(baseAbs)
-	if demoResetDirIsRoot(baseAbs) {
+	resolvedBase, err := demoResetDirPhysicalPath(base)
+	if err != nil {
 		return false
 	}
-	if abs == baseAbs {
+	if demoResetDirIsRoot(resolvedBase) {
 		return false
 	}
-	rel, err := filepath.Rel(baseAbs, abs)
+	if resolvedAbs == resolvedBase {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedBase, resolvedAbs)
 	if err != nil {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func demoResetDirPhysicalPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(resolved), nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	missing := []string{}
+	cur := abs
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			parts := append([]string{filepath.Clean(resolved)}, missing...)
+			return filepath.Clean(filepath.Join(parts...)), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", err
+		}
+		missing = append([]string{filepath.Base(cur)}, missing...)
+		cur = parent
+	}
+}
+
+func demoResetDirHasParentTraversal(path string) bool {
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func demoResetDirIsRoot(path string) bool {

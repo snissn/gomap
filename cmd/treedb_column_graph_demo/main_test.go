@@ -64,8 +64,31 @@ func TestValidateDemoResetDir(t *testing.T) {
 			t.Fatalf("validateDemoResetDir(%q) succeeded, want rejection", unsafe)
 		}
 	}
+	parentTraversal := dir + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "escaped"
+	if _, err := validateDemoResetDir(parentTraversal); err == nil {
+		t.Fatal("validateDemoResetDir accepted parent traversal")
+	}
 	if demoResetDirWithinBase(filepath.Join(string(os.PathSeparator), "usr", "local"), string(os.PathSeparator)) {
 		t.Fatal("filesystem root was accepted as a reset base")
+	}
+}
+
+func TestDemoResetDirWithinBaseRejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	allowed := filepath.Join(root, "allowed")
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatalf("mkdir allowed: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	link := filepath.Join(allowed, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if demoResetDirWithinBase(filepath.Join(link, "db"), allowed) {
+		t.Fatal("symlink escape was accepted as inside allowed base")
 	}
 }
 
