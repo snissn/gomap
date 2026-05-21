@@ -49,9 +49,10 @@ type SortKeyPrefixSummary struct {
 }
 
 type SortKeyMark struct {
-	Rows     int
-	Columns  []string
-	Prefixes []SortKeyPrefixSummary
+	Rows         int
+	Columns      []string
+	ColumnValues [][]int64
+	Prefixes     []SortKeyPrefixSummary
 }
 
 type sortKeyRangePlan struct {
@@ -74,9 +75,10 @@ func BuildSortKeyMark(columns []SortKeyColumn) (SortKeyMark, error) {
 		return SortKeyMark{}, errors.New("colgranule: empty sort-key mark")
 	}
 	mark := SortKeyMark{
-		Rows:     rows,
-		Columns:  make([]string, len(columns)),
-		Prefixes: make([]SortKeyPrefixSummary, len(columns)),
+		Rows:         rows,
+		Columns:      make([]string, len(columns)),
+		ColumnValues: make([][]int64, len(columns)),
+		Prefixes:     make([]SortKeyPrefixSummary, len(columns)),
 	}
 	lower := make([]int64, len(columns))
 	last := make([]int64, len(columns))
@@ -93,6 +95,7 @@ func BuildSortKeyMark(columns []SortKeyColumn) (SortKeyMark, error) {
 			return SortKeyMark{}, fmt.Errorf("colgranule: sort key column %s rows=%d want=%d", c.Name, len(c.Values), rows)
 		}
 		mark.Columns[i] = c.Name
+		mark.ColumnValues[i] = append([]int64(nil), c.Values...)
 		lower[i] = c.Values[0]
 		last[i] = c.Values[rows-1]
 	}
@@ -179,9 +182,16 @@ func (r *GranuleReader) CountInt64RangeWithDiagnostics(granules []EncodedGranule
 		}
 		diagnostics.Decoded++
 		count := 0
-		for _, v := range values {
-			if v >= plan.Filter.Low && v <= plan.Filter.High {
-				count++
+		if len(marks) != 0 && len(plan.SortKeyRanges) != 0 {
+			count, err = marks[i].countMatchingRows(values, plan)
+			if err != nil {
+				return total, diagnostics, err
+			}
+		} else {
+			for _, v := range values {
+				if v >= plan.Filter.Low && v <= plan.Filter.High {
+					count++
+				}
 			}
 		}
 		diagnostics.Matched += count
@@ -242,6 +252,50 @@ func (m SortKeyMark) mayContainCompiled(plan sortKeyRangePlan) (bool, bool, erro
 	return true, true, nil
 }
 
+func (m SortKeyMark) countMatchingRows(values []int64, plan PredicatePlan) (int, error) {
+	if len(values) != m.Rows {
+		return 0, fmt.Errorf("colgranule: decoded rows=%d mark rows=%d", len(values), m.Rows)
+	}
+	if len(m.ColumnValues) != len(m.Columns) {
+		return 0, errors.New("colgranule: sort key mark row values missing")
+	}
+	count := 0
+	for row, v := range values {
+		if v < plan.Filter.Low || v > plan.Filter.High {
+			continue
+		}
+		matches, err := m.rowMatchesRanges(row, plan.SortKeyRanges)
+		if err != nil {
+			return 0, err
+		}
+		if matches {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m SortKeyMark) rowMatchesRanges(row int, ranges []Int64RangePredicate) (bool, error) {
+	for _, predicate := range ranges {
+		if predicate.Empty() {
+			return false, nil
+		}
+		columnIndex := indexString(m.Columns, predicate.Column)
+		if columnIndex < 0 {
+			return false, fmt.Errorf("colgranule: sort key range column %q not present in mark", predicate.Column)
+		}
+		values := m.ColumnValues[columnIndex]
+		if row < 0 || row >= len(values) {
+			return false, fmt.Errorf("colgranule: sort key column %q rows=%d want row %d", predicate.Column, len(values), row)
+		}
+		value := values[row]
+		if value < predicate.Low || value > predicate.High {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func findRangePredicate(ranges []Int64RangePredicate, column string) (Int64RangePredicate, bool) {
 	for _, p := range ranges {
 		if p.Column == column {
@@ -280,12 +334,16 @@ func compareSortKeyRows(columns []SortKeyColumn, left int, right int) int {
 }
 
 func containsString(values []string, want string) bool {
-	for _, value := range values {
+	return indexString(values, want) >= 0
+}
+
+func indexString(values []string, want string) int {
+	for i, value := range values {
 		if value == want {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 func exclusiveUpperBound(values []int64) ([]int64, bool) {
