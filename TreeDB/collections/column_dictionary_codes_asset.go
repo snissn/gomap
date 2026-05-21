@@ -202,6 +202,9 @@ func decodeColumnDictionaryCodesAsset(raw []byte, ref ColumnAssetRef, cfg Column
 	if asset.SchemaHash != cfg.SchemaHash {
 		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset schema_hash=%d want %d", asset.SchemaHash, cfg.SchemaHash)
 	}
+	if asset.AppliedCommandLSN > cfg.RecoveryAuthoritativeAppliedCommandLSN {
+		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset applied_command_lsn=%d is newer than recovery applied_command_lsn=%d", asset.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
+	}
 	if expectedColumn != "" && asset.ColumnName != expectedColumn {
 		return columnDictionaryCodesAsset{}, fmt.Errorf("collections: dictionary codes asset column=%q want %q", asset.ColumnName, expectedColumn)
 	}

@@ -1926,6 +1926,7 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeColumnStoreConfig: %v", err)
 	}
+	normalized.RecoveryAuthoritativeAppliedCommandLSN = 42
 	rows := []columnDeclaredRow{
 		{ID: []byte("e1"), Values: []columnDeclaredValue{
 			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
@@ -2002,6 +2003,12 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 	wrongColumnRef := ref
 	if _, err := decodeColumnDictionaryCodesAsset(raw, wrongColumnRef, *normalized, "events", "did", true); err == nil || !strings.Contains(err.Error(), "column=") {
 		t.Fatalf("wrong column err=%v want column validation failure", err)
+	}
+
+	futureLSNCfg := *normalized
+	futureLSNCfg.RecoveryAuthoritativeAppliedCommandLSN = 41
+	if _, err := decodeColumnDictionaryCodesAsset(raw, ref, futureLSNCfg, "events", "kind", true); err == nil || !strings.Contains(err.Error(), "newer than recovery") {
+		t.Fatalf("future lsn err=%v want recovery-authoritative LSN failure", err)
 	}
 }
 
