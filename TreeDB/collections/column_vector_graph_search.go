@@ -57,7 +57,6 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
-	resultFetched  []bool
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
@@ -115,9 +114,6 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	}
 	if cap(s.resultOrdinals) < topK {
 		s.resultOrdinals = make([]int, 0, topK)
-	}
-	if cap(s.resultFetched) < topK {
-		s.resultFetched = make([]bool, 0, topK)
 	}
 	return nil
 }
@@ -243,8 +239,6 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 	n := len(scratch.top)
 	scratch.resultOrder = scratch.resultOrder[:n]
 	scratch.resultOrdinals = scratch.resultOrdinals[:n]
-	scratch.resultFetched = scratch.resultFetched[:n]
-	clear(scratch.resultFetched)
 	for i := 0; i < n; i++ {
 		scratch.resultOrder[i] = i
 	}
@@ -258,11 +252,12 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 		if resultPos >= n || scratch.resultOrdinals[resultPos] != row.Ordinal {
 			return fmt.Errorf("collections: column_graph %q result batch returned unexpected row ordinal=%d", r.def.Name, row.Ordinal)
 		}
-		if scratch.resultFetched[resultPos] {
+		topIndex := scratch.resultOrder[resultPos]
+		if topIndex < 0 {
 			return fmt.Errorf("collections: column_graph %q result batch returned duplicate row ordinal=%d", r.def.Name, row.Ordinal)
 		}
-		scratch.resultFetched[resultPos] = true
-		topIndex := scratch.resultOrder[resultPos]
+		// Mark fetched in-place to avoid another per-search scratch slice.
+		scratch.resultOrder[resultPos] = ^topIndex
 		if cap(scratch.idBuffers[topIndex]) < len(row.ID) {
 			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
 		}
