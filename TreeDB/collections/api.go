@@ -924,6 +924,8 @@ type bufferedIndexedCheckpoint struct {
 	uniqueValueMutableRuns map[string]memtable.Table
 	rootRunCount           int
 	indexedDeletesOnly     bool
+	pendingCommandWALFirst uint64
+	pendingCommandWALLast  uint64
 }
 
 type bufferedUniqueValueIndex struct {
@@ -5305,6 +5307,8 @@ func checkpointBufferedIndexedDomain(domain *collectionWriteDomain) bufferedInde
 		uniqueValueMutableRuns: cloneMutableRunMap(domain.uniqueValueMutableRuns),
 		rootRunCount:           domain.rootRunCount,
 		indexedDeletesOnly:     domain.indexedDeletesOnly,
+		pendingCommandWALFirst: domain.pendingCommandWALFirst,
+		pendingCommandWALLast:  domain.pendingCommandWALLast,
 	}
 }
 
@@ -5341,6 +5345,13 @@ func rollbackBufferedIndexedDomain(domain *collectionWriteDomain, checkpoint buf
 	domain.primaryCacheDirty = checkpoint.primaryCacheDirty
 	domain.rootRunCount = checkpoint.rootRunCount
 	domain.indexedDeletesOnly = checkpoint.indexedDeletesOnly
+	domain.pendingCommandWALFirst = checkpoint.pendingCommandWALFirst
+	domain.pendingCommandWALLast = checkpoint.pendingCommandWALLast
+	if collectionCommandWALDomainPendingLocked(domain) {
+		domain.reserveCommandWALCoordinatorOwnerLocked()
+	} else {
+		domain.clearCommandWALCoordinatorOwnerIfNoPendingLocked()
+	}
 	pendingRuns := indexedFlushUnitPendingRootRunMap(indexedFlushUnitsWithPublishing(checkpoint.indexedPublishingUnits, checkpoint.indexedFlushUnits), checkpoint.rootRuns)
 	domain.primaryIDIndex = rebuildBufferedPrimaryIDIndex(checkpoint.meta.Name, pendingRuns)
 	if checkpoint.primaryRunIndexActive {
@@ -15150,7 +15161,17 @@ func summarizeUpdateBatchSecondaryIndexChanges(runtimes []indexRuntime, updates 
 }
 
 func updateBatchChangesSecondaryUniqueIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {
-	return summarizeUpdateBatchSecondaryIndexChanges(runtimes, updates).unique
+	for runtimeIdx := range runtimes {
+		if !runtimes[runtimeIdx].def.unique {
+			continue
+		}
+		for _, update := range updates {
+			if preparedBatchUpdateIndexChanged(update, runtimeIdx) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func updateBatchChangesSecondaryIndex(runtimes []indexRuntime, updates []preparedBatchUpdate) bool {

@@ -1819,6 +1819,41 @@ func TestCollectionCommandWALPendingRecordIgnoresAlreadyAppliedLSN(t *testing.T)
 	}
 }
 
+func TestRollbackBufferedIndexedDomainRestoresPendingCommandWAL(t *testing.T) {
+	coord := newCollectionCommandWALCoordinator()
+	domain := &collectionWriteDomain{
+		pendingCommandWALFirst: 1,
+		pendingCommandWALLast:  2,
+	}
+	domain.commandWALCoordinator.Store(coord)
+	domain.reserveCommandWALCoordinatorOwnerLocked()
+	checkpoint := checkpointBufferedIndexedDomain(domain)
+
+	domain.pendingCommandWALLast = 3
+	rollbackBufferedIndexedDomain(domain, checkpoint)
+	if domain.pendingCommandWALFirst != 1 || domain.pendingCommandWALLast != 2 {
+		t.Fatalf("pending command WAL range=[%d,%d], want [1,2]", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	coord.mu.Lock()
+	if coord.owner != domain {
+		coord.mu.Unlock()
+		t.Fatalf("coordinator owner cleared despite restored pending command WAL")
+	}
+	coord.mu.Unlock()
+
+	emptyCheckpoint := checkpointBufferedIndexedDomain(&collectionWriteDomain{})
+	rollbackBufferedIndexedDomain(domain, emptyCheckpoint)
+	if domain.pendingCommandWALFirst != 0 || domain.pendingCommandWALLast != 0 {
+		t.Fatalf("pending command WAL range=[%d,%d], want empty", domain.pendingCommandWALFirst, domain.pendingCommandWALLast)
+	}
+	coord.mu.Lock()
+	if coord.owner != nil {
+		coord.mu.Unlock()
+		t.Fatalf("coordinator owner retained after pending command WAL rollback")
+	}
+	coord.mu.Unlock()
+}
+
 func TestCollectionCommandWALUpdateBSONSetUniqueIndexReopenRecovery(t *testing.T) {
 	doc1 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Ada"}, {Key: "city", Value: "hnl"}})
 	doc2 := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "Grace"}, {Key: "city", Value: "nyc"}})
