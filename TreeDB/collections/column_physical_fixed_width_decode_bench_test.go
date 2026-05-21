@@ -121,6 +121,10 @@ func TestColumnPhysicalFixedWidthEndianDecodeBenchHelpersV1(t *testing.T) {
 		}
 	}
 
+	mustPanicColumnPhysicalFixedWidthBenchmark(t, func() {
+		columnPhysicalCopyLittleEndianFloat32Bytes(make([]float32, 1), []byte{1, 2, 3})
+	})
+
 	for _, tc := range []struct {
 		name string
 		fn   func()
@@ -168,6 +172,9 @@ func BenchmarkColumnPhysicalFixedWidthEndianDecodeV1(b *testing.B) {
 			benchmarkFloat32FixedWidthDecodeCopy(b, littleEndianRaw, dims, appendFloat32FixedWidthLittleEndianForBenchmark)
 		})
 		b.Run(fmt.Sprintf("float32_%dd/little_endian_direct_set_copy", dims), func(b *testing.B) {
+			if !columnPhysicalNativeLittleEndian {
+				b.Skip("direct-set copy requires a little-endian host")
+			}
 			benchmarkFloat32FixedWidthDecodeCopy(b, littleEndianRaw, dims, appendFloat32FixedWidthLittleEndianDirectSetForBenchmark)
 		})
 		b.Run(fmt.Sprintf("float32_%dd/little_endian_direct_view_setup", dims), func(b *testing.B) {

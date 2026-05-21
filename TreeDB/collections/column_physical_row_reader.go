@@ -781,13 +781,17 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []f
 }
 
 func columnPhysicalCopyLittleEndianFloat32Bytes(dst []float32, raw []byte) {
-	if len(raw) == 0 {
+	dstByteLen := len(dst) * 4
+	if len(raw) != dstByteLen {
+		panic("collections: invalid little-endian float32_vector direct-copy length")
+	}
+	if dstByteLen == 0 {
 		return
 	}
 	// raw may be byte-unaligned inside a manifest row. Copying into the aligned
 	// scratch []float32 backing store avoids per-element byte assembly without
 	// changing the row reader's scratch-aliasing contract.
-	dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst))), len(raw))
+	dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst))), dstByteLen)
 	copy(dstBytes, raw)
 }
 
