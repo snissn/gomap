@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"errors"
 	"fmt"
 	"time"
 )
@@ -285,7 +284,7 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 
 func columnDictionaryCodeDistinctSeenWords(groupCount, distinctCount int) (int, int, bool, error) {
 	if groupCount <= 0 || distinctCount <= 0 {
-		return 0, 0, false, errors.New("collections: dictionary code distinct query requires non-empty group and distinct dictionaries")
+		return 0, 0, false, nil
 	}
 	wordsPerGroup := (distinctCount + 63) / 64
 	if wordsPerGroup != 0 && groupCount > maxCollectionInt/wordsPerGroup {

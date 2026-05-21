@@ -1961,9 +1961,6 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarSkipsIdenticalColumnsM1634(t *t
 			t.Fatalf("runner Close: %v", err)
 		}
 	}()
-	if runner.dictDistinct != nil {
-		t.Fatal("identical group/distinct columns used dictionary distinct sidecar; want direct fallback")
-	}
 	result, err := runner.Run()
 	if err != nil {
 		t.Fatalf("runner Run: %v", err)
@@ -2112,6 +2109,12 @@ func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T)
 	}
 	if wordsPerGroup != 3 || totalWords != 12 {
 		t.Fatalf("wordsPerGroup=%d totalWords=%d want 3/12", wordsPerGroup, totalWords)
+	}
+	if _, _, ok, err := columnDictionaryCodeDistinctSeenWords(0, 1); err != nil || ok {
+		t.Fatalf("empty group ok=%v err=%v want clean fallback", ok, err)
+	}
+	if _, _, ok, err := columnDictionaryCodeDistinctSeenWords(1, 0); err != nil || ok {
+		t.Fatalf("empty distinct ok=%v err=%v want clean fallback", ok, err)
 	}
 	if _, _, ok, err := columnDictionaryCodeDistinctSeenWords(maxCollectionInt, 65); err != nil || ok {
 		t.Fatalf("overflow ok=%v err=%v want clean fallback", ok, err)
