@@ -1977,6 +1977,82 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarSkipsIdenticalColumnsM1634(t *t
 	}
 }
 
+func TestColumnPhysicalQueryRunnerAggregateMetadataParityAndAllocationM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tests := []struct {
+		name     string
+		hashName string
+		req      ColumnPhysicalQueryRequest
+	}{
+		{
+			name:     "q4b",
+			hashName: "q4b",
+			req:      ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "max_time_us"},
+		},
+		{
+			name:     "q5_metadata",
+			hashName: "q5",
+			req:      ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wantHash := columnPhysicalQueryReferenceHashM13B(tc.hashName, events)
+			baseline, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery baseline: %v", err)
+			}
+			if baseline.Diagnostics.MetadataHits == 0 || baseline.Diagnostics.RowsScanned != 0 || baseline.Diagnostics.DecodedBlocks != 0 {
+				t.Fatalf("baseline diagnostics=%+v want metadata-only path", baseline.Diagnostics)
+			}
+			runner, err := collection.PrepareColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+			}
+			defer func() {
+				if err := runner.Close(); err != nil {
+					t.Fatalf("runner Close: %v", err)
+				}
+			}()
+			for i := 0; i < 3; i++ {
+				result, err := runner.Run()
+				if err != nil {
+					t.Fatalf("runner Run warmup %d: %v", i, err)
+				}
+				if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B(tc.name, result.Groups)); got != wantHash {
+					t.Fatalf("runner %s hash=%d want %d groups=%+v", tc.name, got, wantHash, result.Groups)
+				}
+				if result.Diagnostics.MetadataHits == 0 || result.Diagnostics.RowsScanned != 0 || result.Diagnostics.DecodedBlocks != 0 {
+					t.Fatalf("runner diagnostics=%+v want metadata-only hot path", result.Diagnostics)
+				}
+				if result.Diagnostics.SegmentFileCacheMisses != 0 {
+					t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after metadata prepare", result.Diagnostics)
+				}
+				if result.Diagnostics.ReduceRows != len(events) {
+					t.Fatalf("runner reduce rows=%d want %d diagnostics=%+v", result.Diagnostics.ReduceRows, len(events), result.Diagnostics)
+				}
+				if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned != baseline.Diagnostics.PhysicalBytesScanned {
+					t.Fatalf("runner physical bytes=%d want metadata bytes=%d", result.Diagnostics.PhysicalBytesScanned, baseline.Diagnostics.PhysicalBytesScanned)
+				}
+			}
+			allocs := testing.AllocsPerRun(20, func() {
+				result, err := runner.Run()
+				if err != nil {
+					panic(fmt.Sprintf("runner Run: %v", err))
+				}
+				if len(result.Groups) == 0 {
+					panic("empty metadata result")
+				}
+			})
+			if allocs != 0 {
+				t.Fatalf("runner %s warmed allocs/run=%.2f want 0", tc.name, allocs)
+			}
+		})
+	}
+}
+
 func TestColumnPhysicalQueryDictionaryCodesAreManifestReachableM1634(t *testing.T) {
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(128))
 	defer closeFn()
@@ -2194,7 +2270,9 @@ func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 			{name: "q3", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
 			{name: "q4a", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
 			{name: "q4b", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q4b_metadata", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "max_time_us"}},
 			{name: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5_metadata", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}},
 		}
 		for _, tc := range cases {
 			b.Run(fmt.Sprintf("%s_rows_%d", tc.name, rows), func(b *testing.B) {
@@ -2239,7 +2317,9 @@ func BenchmarkColumnPhysicalQueryRunnerM1634(b *testing.B) {
 			{name: "q3", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
 			{name: "q4a", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
 			{name: "q4b", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q4b_metadata", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "max_time_us"}},
 			{name: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5_metadata", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}},
 		}
 		for _, tc := range cases {
 			b.Run(fmt.Sprintf("%s_rows_%d", tc.name, rows), func(b *testing.B) {

@@ -103,6 +103,7 @@ type ColumnPhysicalQueryRunner struct {
 	readCache    columnPhysicalAssetReadCache
 	dictCount    *columnDictionaryCodeGroupCountRunner
 	dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
+	metadata     *columnAggregateMetadataRunner
 	closed       bool
 }
 
@@ -167,21 +168,34 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	if view.MutationParts > 0 {
 		return nil, fmt.Errorf("%w: prepared physical column query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 	}
-	if req.AggregateMetadataName != "" {
-		return nil, fmt.Errorf("%w: prepared physical column query does not support aggregate metadata yet", ErrColumnQueryPlanUnsupported)
-	}
-	exec, err := newColumnPhysicalQueryExecutor(view.Config, req)
-	if err != nil {
-		return nil, err
-	}
-	if !exec.supportsDirectAssetReduce() {
-		return nil, fmt.Errorf("%w: prepared physical column query requires direct asset reducer", ErrColumnQueryPlanUnsupported)
-	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return nil, err
 	}
 	readCache.returnViews = true
+	var metadata *columnAggregateMetadataRunner
+	var exec *columnPhysicalQueryExecutor
+	if req.AggregateMetadataName != "" {
+		metadata, err = prepareColumnAggregateMetadataRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		if metadata == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: prepared aggregate metadata query requires metadata assets", ErrColumnQueryPlanUnsupported)
+		}
+	} else {
+		exec, err = newColumnPhysicalQueryExecutor(view.Config, req)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		if !exec.supportsDirectAssetReduce() {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: prepared physical column query requires direct asset reducer", ErrColumnQueryPlanUnsupported)
+		}
+	}
 	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
 	if err != nil {
 		_ = readCache.close()
@@ -202,6 +216,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		readCache:    readCache,
 		dictCount:    dictCount,
 		dictDistinct: dictDistinct,
+		metadata:     metadata,
 	}, nil
 }
 
@@ -236,6 +251,9 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	}
 	if r.dictDistinct != nil {
 		return r.dictDistinct.run(r.view, r.req), nil
+	}
+	if r.metadata != nil {
+		return r.metadata.run(r.view, r.req), nil
 	}
 	r.exec.resetForRun()
 	beforeHits := r.readCache.hits
