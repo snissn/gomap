@@ -90,6 +90,22 @@ func TestGranuleBuilderMinMaxMetadata(t *testing.T) {
 	}
 }
 
+func TestGranuleBuilderSnappyPayloadDoesNotPrefixScratch(t *testing.T) {
+	values := []int64{10, 11, 12, 13, 14, 15, 16, 17}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy})
+	g, err := builder.BuildInt64(values)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	got, err := DecodeInt64(nil, g)
+	if err != nil {
+		t.Fatalf("DecodeInt64: %v", err)
+	}
+	if !slices.Equal(got, values) {
+		t.Fatalf("DecodeInt64=%v want %v", got, values)
+	}
+}
+
 func TestBoolGranuleRoundTripAndCount(t *testing.T) {
 	runValues := make([]bool, 192)
 	for i := 64; i < 128; i++ {
