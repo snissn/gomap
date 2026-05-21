@@ -12,6 +12,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
 
 var columnGraphRebuildBenchSinkV2A VectorIndexStatus
@@ -164,6 +165,54 @@ func TestColumnGraphRebuildEmptyInitialManifestWithoutCommandWALFailsClosedV2A(t
 	}
 	if status.Loaded || !status.RebuildNeeded {
 		t.Fatalf("status after rejected empty rebuild=%+v, want not loaded/rebuild-needed", status)
+	}
+}
+
+func TestColumnGraphRebuildNonEmptyWithoutManifestRootFailsClosedV2A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    t.TempDir(),
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	insertColumnGraphRebuildRowsV2A(t, col, []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+	})
+
+	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 1)
+	cfg := columnGraphRebuildColumnStoreConfigV2A(3)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	publishColumnGraphRebuildMetadataWithoutManifestRootV2A(t, d, "docs", cfg, []VectorIndexDefinition{def})
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection after metadata update: %v", err)
+	}
+	_, err = col.RebuildVectorIndex(def.Name)
+	if err == nil || !strings.Contains(err.Error(), "requires an initial physical column manifest root") {
+		t.Fatalf("RebuildVectorIndex err=%v want initial manifest root failure", err)
+	}
+	status, statusErr := col.VectorIndexStatus(def.Name)
+	if statusErr != nil {
+		t.Fatalf("VectorIndexStatus: %v", statusErr)
+	}
+	if status.Loaded || !status.RebuildNeeded || status.Reason != VectorIndexReasonColumnGraphRebuildNeeded {
+		t.Fatalf("status after rejected non-empty rebuild=%+v, want rebuild-needed", status)
 	}
 }
 
@@ -494,6 +543,53 @@ func TestColumnGraphManifestRetentionPrunesDroppedVectorIndexV2A(t *testing.T) {
 	}
 	if _, ok := findColumnVectorGraphManifestRecord(retainedAfterDrop, def.Name); ok {
 		t.Fatalf("dropped vector index graph record was retained: records=%+v", retainedAfterDrop)
+	}
+}
+
+func TestColumnGraphRebuildManifestRecordsPrunesDroppedVectorGraphsV2A(t *testing.T) {
+	cfg := columnGraphRebuildColumnStoreConfigV2A(2)
+	var err error
+	cfg, err = normalizeColumnStoreConfig("docs", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	defA := columnGraphRebuildVectorIndexDefinitionV2A(2, 1)
+	defB, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:       "other_embedding_graph",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          1,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	refA := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: cfg.AssetManager.Namespace, Generation: identity.Generation, FileID: 1, PartID: 1, Length: 1}
+	refB := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: cfg.AssetManager.Namespace, Generation: identity.Generation, FileID: 2, PartID: 2, Length: 1}
+	recordsA, _ := testColumnGraphManifestRecordsV2A(t, *cfg, defA, identity, refA, 1, 1)
+	recordsB, _ := testColumnGraphManifestRecordsV2A(t, *cfg, defB, identity, refB, 1, 1)
+	combined := append([]columnManifestRecord(nil), recordsA...)
+	graphB, ok := findColumnVectorGraphManifestRecord(recordsB, defB.Name)
+	if !ok {
+		t.Fatalf("test graph record %q missing", defB.Name)
+	}
+	combined = append(combined, graphB)
+	sortColumnManifestRecords(combined)
+	manifest, err := decodeColumnManifestSnapshotForScan(combined)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	got, err := columnVectorGraphManifestRecordsWithAppliedCommandLSN(manifest, combined, *cfg, []VectorIndexDefinition{defA}, 99)
+	if err != nil {
+		t.Fatalf("columnVectorGraphManifestRecordsWithAppliedCommandLSN: %v", err)
+	}
+	if _, ok := findColumnVectorGraphManifestRecord(got, defA.Name); !ok {
+		t.Fatalf("active graph record %q was pruned", defA.Name)
+	}
+	if _, ok := findColumnVectorGraphManifestRecord(got, defB.Name); ok {
+		t.Fatalf("dropped graph record %q was retained: records=%+v", defB.Name, got)
 	}
 }
 
@@ -831,6 +927,46 @@ func insertColumnGraphRebuildDualVectorRowsV2A(tb testing.TB, col *Collection, r
 	}
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		tb.Fatalf("InsertBatch: %v", err)
+	}
+}
+
+func publishColumnGraphRebuildMetadataWithoutManifestRootV2A(tb testing.TB, d *backenddb.DB, collection string, cfg *ColumnStoreConfig, vectorIndexes []VectorIndexDefinition) {
+	tb.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatal("AcquireSnapshot returned nil")
+	}
+	catalog, err := loadCollectionCatalog(snap, collection)
+	_ = snap.Close()
+	if err != nil {
+		tb.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	if catalog == nil {
+		tb.Fatalf("collection %q missing", collection)
+	}
+	meta := copyCollectionMeta(catalog.meta)
+	meta.Options.ColumnStore = cfg
+	meta.VectorIndexes = append([]VectorIndexDefinition(nil), vectorIndexes...)
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		tb.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	encoded, err := encodeCollectionMeta(normalized)
+	if err != nil {
+		tb.Fatalf("encodeCollectionMeta: %v", err)
+	}
+	_, _, err = d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		current := d.AcquireSnapshot()
+		if current == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer func() { _ = current.Close() }()
+		return buildSystemTargetIterator(current, map[string][]byte{
+			systemCollectionMetaKey(normalized.Name): encoded,
+		})
+	})
+	if err != nil {
+		tb.Fatalf("publish collection metadata without manifest root: %v", err)
 	}
 }
 
