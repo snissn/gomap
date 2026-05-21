@@ -633,10 +633,12 @@ func columnAssetReadIntegrityVerifyChecksum(integrity ColumnAssetReadIntegrity) 
 
 func columnAssetReadIntegrityLabel(integrity ColumnAssetReadIntegrity) string {
 	switch integrity {
+	case "", ColumnAssetReadIntegrityVerify:
+		return string(ColumnAssetReadIntegrityVerify)
 	case ColumnAssetReadIntegritySkipChecksums:
 		return string(ColumnAssetReadIntegritySkipChecksums)
 	default:
-		return string(ColumnAssetReadIntegrityVerify)
+		return string(integrity)
 	}
 }
 

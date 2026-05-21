@@ -511,6 +511,15 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReadIntegrityLabelPreservesUnsupportedM1634(t *testing.T) {
+	if got := columnAssetReadIntegrityLabel(""); got != string(ColumnAssetReadIntegrityVerify) {
+		t.Fatalf("empty integrity label=%q want %q", got, ColumnAssetReadIntegrityVerify)
+	}
+	if got := columnAssetReadIntegrityLabel(ColumnAssetReadIntegrity("bad-mode")); got != "bad-mode" {
+		t.Fatalf("unsupported integrity label=%q want raw value", got)
+	}
+}
+
 func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
