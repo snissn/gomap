@@ -34,6 +34,8 @@ go test -run '^$' -bench BenchmarkContentHashTournament -benchtime=2s -count=5
 - `CRC32C_Castagnoli_TreeDB`: Go `hash/crc32` with `crc32.Castagnoli`.
 - `CRC32_IEEE`: Go `hash/crc32.ChecksumIEEE`.
 - `CRC32_Koopman`: Go `hash/crc32` with `crc32.Koopman`.
+- `CRC64_ECMA`: Go `hash/crc64` with `crc64.ECMA`.
+- `CRC64_ISO`: Go `hash/crc64` with `crc64.ISO`.
 - `XXHash64`: `github.com/cespare/xxhash/v2`.
 - `XXHash64_Digest`: `github.com/cespare/xxhash/v2` streaming digest.
 - `XXHash64_DigestSeeded`: `github.com/cespare/xxhash/v2` seeded streaming digest.
@@ -96,12 +98,18 @@ CRC32C_Castagnoli:    ~10.64 GB/s
 FarmHash32Seeded:     ~7.71 GB/s
 FarmFingerprint32:    ~7.67 GB/s
 FarmHash32:           ~7.38 GB/s
+SHA256:               ~2.85 GB/s
+CRC64_ECMA:           ~1.99 GB/s
+CRC64_ISO:            ~1.93 GB/s
 ```
 
 Practical read from this machine:
 
 - If the checksum field can move to 64 bits, `FarmHash64` is the strongest
   local candidate to validate on target hardware.
+- Go's standard-library `CRC64_ECMA` and `CRC64_ISO` provide 64-bit CRC-style
+  checksums, but they are much slower than `CRC32C_Castagnoli_TreeDB` and the
+  fast 64-bit fingerprint hashes on this machine.
 - If the checksum field must stay `uint32`, benchmark truncating fast 64-bit
   hashes, such as `uint32(farm.Hash64(data))`, before choosing a native 32-bit
   hash. The native 32-bit farm variants are slower than CRC32C in this run.

@@ -3,6 +3,7 @@ package hashtournament
 import (
 	"crypto/sha256"
 	"hash/crc32"
+	"hash/crc64"
 	"hash/fnv"
 	"hash/maphash"
 	"testing"
@@ -15,6 +16,8 @@ import (
 var (
 	crc32cTable  = crc32.MakeTable(crc32.Castagnoli)
 	koopmanTable = crc32.MakeTable(crc32.Koopman)
+	crc64ECMA    = crc64.MakeTable(crc64.ECMA)
+	crc64ISO     = crc64.MakeTable(crc64.ISO)
 	mapSeed      = maphash.MakeSeed()
 	sink64       uint64
 	sink32       uint32
@@ -69,6 +72,20 @@ func BenchmarkContentHashTournament(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
 				sink32 ^= crc32.Checksum(data, koopmanTable)
+			}
+		})
+
+		b.Run(size.name+"/CRC64_ECMA", func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				sink64 ^= crc64.Checksum(data, crc64ECMA)
+			}
+		})
+
+		b.Run(size.name+"/CRC64_ISO", func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			for i := 0; i < b.N; i++ {
+				sink64 ^= crc64.Checksum(data, crc64ISO)
 			}
 		})
 
