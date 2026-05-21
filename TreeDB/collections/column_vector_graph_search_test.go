@@ -131,6 +131,37 @@ func TestColumnVectorGraphNativeSearchRejectsBadQueryV3(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphNativeSearchRequiresScratchV3(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 0, rows)
+	defer func() { _ = d.Close() }()
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: 1}, nil)
+	if err != nil {
+		t.Fatalf("SearchCosine zero top_k with nil scratch: %v", err)
+	}
+	if len(got) != 0 || stats != (columnVectorGraphNativeSearchStats{}) {
+		t.Fatalf("zero top_k results=%v stats=%+v want empty", got, stats)
+	}
+
+	_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, nil)
+	if err == nil || !strings.Contains(err.Error(), "requires caller-owned scratch") {
+		t.Fatalf("SearchCosine err=%v want caller-owned scratch failure", err)
+	}
+}
+
 func TestColumnVectorGraphNativeCosineScoreRejectsMalformedRowV3(t *testing.T) {
 	_, err := columnVectorGraphNativeCosineScore([]float32{1, 0}, 1, columnVectorGraphPhysicalRow{
 		Ordinal: 7,
@@ -162,6 +193,32 @@ func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 	}
 	if len(got) != 0 || stats != (columnVectorGraphNativeSearchStats{}) {
 		t.Fatalf("empty search results=%v stats=%+v want empty", got, stats)
+	}
+	got, stats, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 0, EfSearch: 10}, nil)
+	if err != nil {
+		t.Fatalf("SearchCosine zero top_k with nil scratch: %v", err)
+	}
+	if len(got) != 0 || stats != (columnVectorGraphNativeSearchStats{}) {
+		t.Fatalf("zero top_k results=%v stats=%+v want empty", got, stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchScratchVisitMarksShrinkV3(t *testing.T) {
+	var scratch columnVectorGraphNativeSearchScratch
+	if err := scratch.prepare(10, 3, 2, 1); err != nil {
+		t.Fatalf("prepare large: %v", err)
+	}
+	if len(scratch.visitMarks) != 10 {
+		t.Fatalf("large visitMarks len=%d want 10", len(scratch.visitMarks))
+	}
+	if err := scratch.prepare(1, 3, 2, 1); err != nil {
+		t.Fatalf("prepare small: %v", err)
+	}
+	if len(scratch.visitMarks) != 1 {
+		t.Fatalf("small visitMarks len=%d want 1", len(scratch.visitMarks))
+	}
+	if scratch.markVisited(5) {
+		t.Fatalf("markVisited accepted stale ordinal outside current row count")
 	}
 }
 
@@ -379,27 +436,32 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		b.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(b, status, def.Name)
+	type searchWorker struct {
+		reader  *columnVectorGraphPhysicalRowReader
+		scratch columnVectorGraphNativeSearchScratch
+	}
 	workers := runtime.GOMAXPROCS(0)
-	readers := make([]*columnVectorGraphPhysicalRowReader, workers)
-	scratches := make([]columnVectorGraphNativeSearchScratch, workers)
+	benchWorkers := make([]*searchWorker, workers)
+	var workerPool sync.Pool
 	query := append([]float32(nil), input[37].vector...)
-	for i := range readers {
+	for i := range benchWorkers {
 		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 		if err != nil {
 			b.Fatalf("open reader %d: %v", i, err)
 		}
 		defer func() { _ = reader.Close() }()
-		readers[i] = reader
-		if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &scratches[i]); err != nil {
+		worker := &searchWorker{reader: reader}
+		if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch); err != nil {
 			b.Fatalf("warm reader %d SearchCosine: %v", i, err)
 		}
+		benchWorkers[i] = worker
+		workerPool.Put(worker)
 	}
 	var baseStats columnPhysicalRowReaderStats
-	for _, reader := range readers {
-		baseStats = addColumnPhysicalRowReaderStatsV3(baseStats, reader.Stats())
+	for _, worker := range benchWorkers {
+		baseStats = addColumnPhysicalRowReaderStatsV3(baseStats, worker.reader.Stats())
 	}
 
-	var nextWorker atomic.Uint32
 	var sink atomic.Int64
 	var totalCandidates atomic.Uint64
 	var totalEdges atomic.Uint64
@@ -409,19 +471,16 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
-		// testing.B.RunParallel starts GOMAXPROCS workers by default. Keep the
-		// prewarmed reader/scratch arrays sized to that value and do not raise
-		// parallelism here; each worker owns exactly one reader and scratch.
-		worker := int(nextWorker.Add(1)) - 1
-		if worker < 0 || worker >= len(readers) {
-			b.Fatalf("parallel worker=%d outside prewarmed readers=%d", worker, len(readers))
+		value := workerPool.Get()
+		if value == nil {
+			b.Fatalf("parallel worker requested more than %d prewarmed readers/scratches", workers)
 		}
-		reader := readers[worker]
-		scratch := &scratches[worker]
+		worker := value.(*searchWorker)
+		defer workerPool.Put(worker)
 		for pb.Next() {
-			got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, scratch)
+			got, stats, err := worker.reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch)
 			if err != nil {
-				b.Fatalf("SearchCosine worker=%d: %v", worker, err)
+				b.Fatalf("SearchCosine: %v", err)
 			}
 			sink.Add(int64(got[0].Ordinal))
 			totalCandidates.Add(stats.Candidates)
@@ -434,8 +493,8 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	b.StopTimer()
 	columnPhysicalScanBenchSum += sink.Load()
 	var stats columnPhysicalRowReaderStats
-	for _, reader := range readers {
-		stats = addColumnPhysicalRowReaderStatsV3(stats, reader.Stats())
+	for _, worker := range benchWorkers {
+		stats = addColumnPhysicalRowReaderStatsV3(stats, worker.reader.Stats())
 	}
 	reportColumnGraphNativeSearchBenchMetricsV3(b, b.N, baseStats, stats, columnVectorGraphNativeSearchStats{
 		Candidates:       totalCandidates.Load(),

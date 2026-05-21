@@ -60,8 +60,10 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	for _, rowScratch := range []*columnPhysicalRowReaderScratch{&s.scoreScratch, &s.expandScratch, &s.resultScratch} {
 		prepareColumnVectorGraphNativeRowScratch(rowScratch, dimensions, degree)
 	}
-	if len(s.visitMarks) < rowCount {
+	if cap(s.visitMarks) < rowCount {
 		s.visitMarks = make([]uint64, rowCount)
+	} else {
+		s.visitMarks = s.visitMarks[:rowCount]
 	}
 	s.visitEpoch++
 	if s.visitEpoch == 0 {
@@ -116,22 +118,20 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if len(query) != r.def.Dimensions {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query dims=%d want %d", r.def.Name, len(query), r.def.Dimensions)
 	}
-	queryInvNorm, err := columnVectorGraphInvNorm(query)
-	if err != nil {
-		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w", r.def.Name, err)
-	}
 	rowCount := r.RowCount()
 	topK := opts.TopK
 	if topK < 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: column_graph native search top_k cannot be negative")
 	}
 	if topK == 0 || rowCount == 0 {
-		if scratch != nil {
-			if err := scratch.prepare(rowCount, r.def.Dimensions, r.def.M, 0); err != nil {
-				return nil, columnVectorGraphNativeSearchStats{}, err
-			}
-		}
 		return nil, columnVectorGraphNativeSearchStats{}, nil
+	}
+	if scratch == nil {
+		return nil, columnVectorGraphNativeSearchStats{}, errors.New("collections: column_graph native search requires caller-owned scratch")
+	}
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w", r.def.Name, err)
 	}
 	if topK > rowCount {
 		topK = rowCount
