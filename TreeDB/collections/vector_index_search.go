@@ -278,8 +278,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	idOffset := 0
 	docOffset := 0
 	for i, result := range results {
-		id := idBytes[idOffset : idOffset+len(result.ID)]
-		idOffset += len(result.ID)
+		nextIDOffset := idOffset + len(result.ID)
+		id := idBytes[idOffset:nextIDOffset:nextIDOffset]
+		idOffset = nextIDOffset
 		copy(id, result.ID)
 		response.Results[i] = VectorIndexSearchResult{
 			ID:      id,

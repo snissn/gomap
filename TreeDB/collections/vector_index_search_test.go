@@ -56,6 +56,36 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	}
 }
 
+func TestSearchVectorIndexColumnGraphResultIDsAreCapacityIsolatedV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            []float32{1, 0, 0},
+		TopK:             2,
+		EfSearch:         len(rows),
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
+	secondID := append([]byte(nil), got.Results[1].ID...)
+	_ = append(got.Results[0].ID, '!')
+	if !bytes.Equal(got.Results[1].ID, secondID) {
+		t.Fatalf("second result ID changed after appending to first result ID: got %q want %q", got.Results[1].ID, secondID)
+	}
+}
+
 func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
