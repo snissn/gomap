@@ -3,6 +3,7 @@ package collections
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -219,44 +220,8 @@ func BenchmarkCollectionVectorIndexNativeRootLoad(b *testing.B) {
 func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearch(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
-	dir := b.TempDir()
-	def := VectorIndexDefinition{
-		Name:       "embedding_graph_only",
-		Field:      "embedding",
-		Metric:     VectorMetricCosine,
-		Dimensions: dims,
-		M:          16,
-	}
-	d, col := openVectorBenchmarkCollectionWithVectorIndex(b, dir, docs, dims, def)
-	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
-	if err != nil {
-		_ = d.Close()
-		b.Fatalf("build native vector index: %v", err)
-	}
-	status, err := index.SaveSnapshot()
-	if err != nil {
-		_ = d.Close()
-		b.Fatalf("save native vector index: %v", err)
-	}
-	if err := d.Close(); err != nil {
-		b.Fatalf("close setup db: %v", err)
-	}
-	d, err = backenddb.Open(backenddb.Options{Dir: dir})
-	if err != nil {
-		b.Fatalf("reopen db: %v", err)
-	}
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_graph_only")
 	defer func() { _ = d.Close() }()
-	col, err = NewCollectionManager(d).OpenCollection("docs")
-	if err != nil {
-		b.Fatalf("open collection: %v", err)
-	}
-	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
-	if err != nil {
-		b.Fatalf("load native vector index: %v", err)
-	}
-	if loaded == nil || !loadStatus.Loaded {
-		b.Fatalf("unexpected native load status loaded=%v status=%+v", loaded != nil, loadStatus)
-	}
 	query := vectorBenchmarkEmbedding(docs/3, dims)
 	warm, err := loaded.searchGraphOnly(query, vectorBenchmarkTopK, 128)
 	if err != nil {
@@ -281,6 +246,113 @@ func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearch(b *testing.B) {
 			b.Fatal("native graph-only vector search returned no results")
 		}
 	}
+}
+
+func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearchParallel(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_graph_only_parallel")
+	defer func() { _ = d.Close() }()
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	warm, err := loaded.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+	if err != nil {
+		b.Fatalf("warm native graph-only parallel search: %v", err)
+	}
+	if len(warm) == 0 {
+		b.Fatal("warm native graph-only parallel search returned no results")
+	}
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(status.BytesDisk), "native_root_bytes")
+	b.ReportMetric(float64(loaded.Stats().BytesMemory), "index_bytes")
+	b.ReportAllocs()
+	b.ResetTimer()
+	runParallelVectorSearchBenchmark(b, func() error {
+		results, err := loaded.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+		if err != nil {
+			return fmt.Errorf("native graph-only vector search: %w", err)
+		}
+		if len(results) == 0 {
+			return errors.New("native graph-only vector search returned no results")
+		}
+		return nil
+	})
+}
+
+func BenchmarkCollectionVectorIndexNativeRootSearch(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_search")
+	defer func() { _ = d.Close() }()
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	opts := VectorIndexSearchOptions{
+		TopK:                 vectorBenchmarkTopK,
+		EfSearch:             128,
+		FetchMultiplier:      16,
+		DisableExactFallback: true,
+	}
+	warm, trace, err := loaded.Search(query, opts)
+	if err != nil {
+		b.Fatalf("warm native vector search: %v", err)
+	}
+	if len(warm) == 0 || trace.RerankCount == 0 {
+		b.Fatalf("warm native vector search results=%d rerank=%d", len(warm), trace.RerankCount)
+	}
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(status.BytesDisk), "native_root_bytes")
+	b.ReportMetric(float64(loaded.Stats().BytesMemory), "index_bytes")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, trace, err := loaded.Search(query, opts)
+		if err != nil {
+			b.Fatalf("native vector search: %v", err)
+		}
+		if len(results) == 0 || trace.RerankCount == 0 {
+			b.Fatalf("native vector search results=%d rerank=%d", len(results), trace.RerankCount)
+		}
+	}
+}
+
+func BenchmarkCollectionVectorIndexNativeRootSearchParallel(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	d, loaded, status := openLoadedNativeVectorBenchmarkIndex(b, docs, dims, "embedding_search_parallel")
+	defer func() { _ = d.Close() }()
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	opts := VectorIndexSearchOptions{
+		TopK:                 vectorBenchmarkTopK,
+		EfSearch:             128,
+		FetchMultiplier:      16,
+		DisableExactFallback: true,
+	}
+	warm, trace, err := loaded.Search(query, opts)
+	if err != nil {
+		b.Fatalf("warm native vector parallel search: %v", err)
+	}
+	if len(warm) == 0 || trace.RerankCount == 0 {
+		b.Fatalf("warm native vector parallel search results=%d rerank=%d", len(warm), trace.RerankCount)
+	}
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(status.BytesDisk), "native_root_bytes")
+	b.ReportMetric(float64(loaded.Stats().BytesMemory), "index_bytes")
+	b.ReportAllocs()
+	b.ResetTimer()
+	runParallelVectorSearchBenchmark(b, func() error {
+		results, trace, err := loaded.Search(query, opts)
+		if err != nil {
+			return fmt.Errorf("native vector search: %w", err)
+		}
+		if len(results) == 0 || trace.RerankCount == 0 {
+			return fmt.Errorf("native vector search results=%d rerank=%d", len(results), trace.RerankCount)
+		}
+		return nil
+	})
 }
 
 func BenchmarkCollectionVectorIndexIncrementalWrite(b *testing.B) {
@@ -580,32 +652,18 @@ func BenchmarkCollectionVectorIndexGraphOnlySearchParallel(b *testing.B) {
 	b.ReportMetric(float64(docs), "docs/index")
 	b.ReportMetric(float64(dims), "dims")
 	b.ReportMetric(float64(index.Stats().BytesMemory), "index_bytes")
+	b.ReportAllocs()
 	b.ResetTimer()
-	var failureMu sync.Mutex
-	var firstFailure string
-	recordFailure := func(format string, args ...any) {
-		failureMu.Lock()
-		defer failureMu.Unlock()
-		if firstFailure == "" {
-			firstFailure = fmt.Sprintf(format, args...)
+	runParallelVectorSearchBenchmark(b, func() error {
+		results, err := index.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+		if err != nil {
+			return fmt.Errorf("graph-only vector search: %w", err)
 		}
-	}
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			results, err := index.searchGraphOnly(query, vectorBenchmarkTopK, 128)
-			if err != nil {
-				recordFailure("graph-only vector search: %v", err)
-				return
-			}
-			if len(results) == 0 {
-				recordFailure("graph-only vector search returned no results")
-				return
-			}
+		if len(results) == 0 {
+			return errors.New("graph-only vector search returned no results")
 		}
+		return nil
 	})
-	if firstFailure != "" {
-		b.Fatal(firstFailure)
-	}
 }
 
 func BenchmarkCollectionVectorIndexSearchInt8(b *testing.B) {
@@ -926,6 +984,75 @@ func vectorBenchmarkWriteBatch(docs, dims int) ([][]byte, [][]byte) {
 		documents[i] = vectorBenchmarkDocument(i, dims)
 	}
 	return ids, documents
+}
+
+func openLoadedNativeVectorBenchmarkIndex(tb testing.TB, docs, dims int, name string) (*backenddb.DB, *VectorIndex, VectorIndexLoadStatus) {
+	tb.Helper()
+	dir := tb.TempDir()
+	def := VectorIndexDefinition{
+		Name:       name,
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: dims,
+		M:          16,
+	}
+	d, col := openVectorBenchmarkCollectionWithVectorIndex(tb, dir, docs, dims, def)
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("build native vector index: %v", err)
+	}
+	saveStatus, err := index.SaveSnapshot()
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("save native vector index: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		tb.Fatalf("close setup db: %v", err)
+	}
+	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		tb.Fatalf("reopen db: %v", err)
+	}
+	col, err = NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("open collection: %v", err)
+	}
+	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("load native vector index: %v", err)
+	}
+	if loaded == nil || !loadStatus.Loaded || loadStatus.RootID != saveStatus.RootID {
+		_ = d.Close()
+		tb.Fatalf("unexpected native load status loaded=%v status=%+v save=%+v", loaded != nil, loadStatus, saveStatus)
+	}
+	return d, loaded, loadStatus
+}
+
+func runParallelVectorSearchBenchmark(b *testing.B, search func() error) {
+	b.Helper()
+	var failureMu sync.Mutex
+	var firstFailure error
+	recordFailure := func(err error) {
+		failureMu.Lock()
+		defer failureMu.Unlock()
+		if firstFailure == nil {
+			firstFailure = err
+		}
+	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if err := search(); err != nil {
+				recordFailure(err)
+				return
+			}
+		}
+	})
+	if firstFailure != nil {
+		b.Fatal(firstFailure)
+	}
 }
 
 func vectorBenchmarkInsertBatches(tb testing.TB, col *Collection, ids, documents [][]byte, batchSize int) {
