@@ -471,6 +471,11 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
+	if work.datasetDir != "" {
+		if err := validateDatasetDocuments(cfg, work); err != nil {
+			return result{}, err
+		}
+	}
 	dir, err := normalizeDemoDir(cfg.dir)
 	if err != nil {
 		return result{}, err
@@ -921,9 +926,6 @@ func insertDocuments(col *collections.Collection, cfg config, work workload) err
 }
 
 func insertDatasetDocuments(col *collections.Collection, cfg config, work workload) error {
-	if err := validateDatasetDocuments(cfg, work); err != nil {
-		return err
-	}
 	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
 	if err != nil {
 		return err
