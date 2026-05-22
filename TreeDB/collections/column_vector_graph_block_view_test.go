@@ -116,6 +116,30 @@ func TestColumnVectorGraphBlockViewRejectsClosedReaderV1(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphBlockViewRejectsClosedReaderWithCachedViewV1(t *testing.T) {
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	})
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	plan, err := newColumnVectorGraphSearchPlan(reader)
+	if err != nil {
+		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
+	}
+	if _, _, err := plan.blockViewForOrdinal(0); err != nil {
+		t.Fatalf("prime cached blockViewForOrdinal: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, _, err := plan.blockViewForOrdinal(0); err == nil || !strings.Contains(err.Error(), "physical column row reader is closed") {
+		t.Fatalf("cached blockViewForOrdinal after close err=%v want closed reader", err)
+	}
+}
+
 func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, []columnVectorGraphAssetRow{
 		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 0, Adjacency: []uint32{0}},

@@ -36,6 +36,11 @@ type columnVectorGraphNativeSearchStats struct {
 	CandidateFetches uint64
 	ExpansionFetches uint64
 	ResultFetches    uint64
+	ScoreBatches     uint64
+	OrdinalsGrouped  uint64
+	BlockViewHits    uint64
+	BlockViewMisses  uint64
+	BlockViewBuilds  uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -69,6 +74,7 @@ type columnVectorGraphNativeSearchScratch struct {
 	resultOrder    []int
 	resultOrdinals []int
 	adjacencyBuf   []uint32
+	searchPlan     columnVectorGraphSearchPlan
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
@@ -257,7 +263,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 
 	var stats columnVectorGraphNativeSearchStats
-	if err := r.scoreAndPushFrontier(query, queryInvNorm, 0, topK, scratch, &stats); err != nil {
+	plan, err := scratch.prepareSearchPlan(r)
+	if err != nil {
+		return nil, stats, err
+	}
+	if err := r.scoreAndPushFrontier(plan, query, queryInvNorm, 0, topK, scratch, &stats); err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
@@ -270,7 +280,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			if nextSeed >= rowCount {
 				break
 			}
-			if err := r.scoreAndPushFrontier(query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontier(plan, query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 			continue
@@ -285,7 +295,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, candidate.ordinal, i, neighbor, rowCount); err != nil {
 				return nil, stats, err
 			}
-			if err := r.scoreAndPushFrontier(query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontier(plan, query, queryInvNorm, int(neighbor), topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 		}
@@ -368,14 +378,35 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 	})
 }
 
-func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(plan *columnVectorGraphSearchPlan, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	if scratch.markVisited(ordinal) {
-		row, err := r.fetchNativeRowUnchecked(ordinal, &scratch.scoreScratch)
+		view, ref, err := plan.blockViewForOrdinal(ordinal)
 		if err != nil {
 			return err
 		}
+		stats.ScoreBatches++
+		stats.OrdinalsGrouped++
+		stats.BlockViewHits = plan.hits
+		stats.BlockViewMisses = plan.misses
+		stats.BlockViewBuilds = plan.builds
+		scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
+		vector, vectorScratch, err := view.vector(ref.rowIndex, scratch.scoreScratch.Float32Values)
+		if err != nil {
+			return err
+		}
+		scratch.scoreScratch.Float32Values = vectorScratch
+		invNorm, err := view.invNorm(ref.rowIndex)
+		if err != nil {
+			return err
+		}
+		scratch.scoreScratch.Uint32Values = scratch.scoreScratch.Uint32Values[:0]
+		adjacency, adjacencyScratch, err := view.adjacency(ref.rowIndex, scratch.scoreScratch.Uint32Values)
+		if err != nil {
+			return err
+		}
+		scratch.scoreScratch.Uint32Values = adjacencyScratch
 		stats.CandidateFetches++
-		score, err := columnVectorGraphNativeCosineScore(query, queryInvNorm, row)
+		score, err := columnVectorGraphNativeCosineScore(query, queryInvNorm, columnVectorGraphPhysicalRow{Ordinal: ordinal, Vector: vector, InvNorm: invNorm})
 		if err != nil {
 			return err
 		}
@@ -386,7 +417,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float3
 		candidate := columnVectorGraphSearchCandidate{
 			ordinal:   ordinal,
 			score:     score,
-			adjacency: scratch.copyCandidateAdjacency(row.Adjacency),
+			adjacency: scratch.copyCandidateAdjacency(adjacency),
 		}
 		scratch.insertTop(topK, candidate)
 		scratch.pushFrontier(candidate)

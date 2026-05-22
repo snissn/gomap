@@ -31,7 +31,34 @@ type columnVectorGraphAdjacencySpan struct {
 }
 
 type columnVectorGraphSearchPlan struct {
-	reader *columnVectorGraphPhysicalRowReader
+	reader     *columnVectorGraphPhysicalRowReader
+	blockViews map[int]*columnVectorGraphBlockView
+	hits       uint64
+	misses     uint64
+	builds     uint64
+}
+
+func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
+	if s == nil {
+		return nil, errColumnVectorGraphNativeSearchScratchRequired
+	}
+	if reader == nil {
+		return nil, errNilColumnVectorGraphPhysicalRowReader
+	}
+	if _, err := reader.rowReader(); err != nil {
+		return nil, err
+	}
+	plan := &s.searchPlan
+	if plan.reader != reader {
+		for k := range plan.blockViews {
+			delete(plan.blockViews, k)
+		}
+		plan.reader = reader
+	}
+	plan.hits = 0
+	plan.misses = 0
+	plan.builds = 0
+	return plan, nil
 }
 
 type columnVectorGraphBlockView struct {
@@ -99,11 +126,33 @@ func (p *columnVectorGraphSearchPlan) blockViewForAssetOrdinal(assetOrdinal int)
 	if assetOrdinal < 0 || assetOrdinal >= len(reader.ranges) {
 		return nil, fmt.Errorf("collections: column_graph block view asset ordinal=%d outside ranges=%d", assetOrdinal, len(reader.ranges))
 	}
+	if p.blockViews != nil {
+		if view := p.blockViews[assetOrdinal]; view != nil {
+			p.hits++
+			return view, nil
+		}
+	}
+	p.misses++
 	block, err := reader.loadBlock(reader.ranges[assetOrdinal])
 	if err != nil {
 		return nil, err
 	}
-	return newColumnVectorGraphBlockView(p.reader, block)
+	view, err := newColumnVectorGraphBlockView(p.reader, block)
+	if err != nil {
+		return nil, err
+	}
+	p.builds++
+	if p.blockViews == nil {
+		p.blockViews = make(map[int]*columnVectorGraphBlockView, reader.maxBlocks)
+	}
+	if reader.maxBlocks > 0 && len(p.blockViews) >= reader.maxBlocks {
+		for existing := range p.blockViews {
+			delete(p.blockViews, existing)
+			break
+		}
+	}
+	p.blockViews[assetOrdinal] = view
+	return view, nil
 }
 
 func newColumnVectorGraphBlockView(reader *columnVectorGraphPhysicalRowReader, block *columnPhysicalRowReaderBlock) (*columnVectorGraphBlockView, error) {
