@@ -171,14 +171,14 @@ func TestColumnAssetReadCacheMappedResourceViewHandlesDoNotAccumulateGateA1736(t
 	if _, err := readCache.read(ref, nil); err != nil {
 		t.Fatalf("read second: %v", err)
 	}
-	if !firstHandle.Released() {
-		t.Fatal("first mapped view handle is still active after next view read")
+	if firstHandle.Released() {
+		t.Fatal("first mapped view handle was released while its mmap-backed bytes remain readable")
 	}
-	if len(readCache.resourceHandles) != 1 || readCache.resourceHandles[0] == firstHandle {
-		t.Fatalf("resource handles after second view read=%d first retained=%v", len(readCache.resourceHandles), len(readCache.resourceHandles) == 1 && readCache.resourceHandles[0] == firstHandle)
+	if len(readCache.resourceHandles) != 1 || readCache.resourceHandles[0] != firstHandle {
+		t.Fatalf("resource handles after duplicate view read=%d first retained=%v", len(readCache.resourceHandles), len(readCache.resourceHandles) == 1 && readCache.resourceHandles[0] == firstHandle)
 	}
 	stats := manager.Stats()
-	if stats.ActiveHandles != 1 || stats.ActiveMappedBytes != int64(len(payload)) || stats.TotalReleases != 1 {
+	if stats.ActiveHandles != 1 || stats.ActiveMappedBytes != int64(len(payload)) || stats.TotalAcquires != 1 || stats.TotalReleases != 0 {
 		t.Fatalf("stats after repeated view read: %+v", stats)
 	}
 }
