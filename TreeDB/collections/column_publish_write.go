@@ -522,6 +522,31 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		Reason:       string(input.operation),
 	}}
 	if hookInput.Operation == ColumnPublishOperationInsert {
+		dictionaryAssets, err := buildColumnDictionaryCodesAssets(hookInput.ColumnStore, rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		for _, dictionary := range dictionaryAssets {
+			encodedDictionary, err := encodeColumnDictionaryCodesAsset(dictionary)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			dictionaryRef, err := writeColumnDictionaryCodesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedDictionary, generation, partID)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if dictionaryRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || dictionaryRef.Kind != ColumnAssetKindTCS1DictionaryCodes ||
+				dictionaryRef.Generation != generation || dictionaryRef.PartID != partID || dictionaryRef.Length != int64(len(encodedDictionary)) {
+				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid dictionary codes asset ref %+v", dictionaryRef)
+			}
+			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
+				Ref:          dictionaryRef,
+				Bytes:        dictionaryRef.Length,
+				PublishID:    hookInput.AppliedCommandLSN,
+				GenerationID: generation,
+				Reason:       dictionary.ColumnName,
+			})
+		}
 		for _, aggregate := range hookInput.ColumnStore.AggregateMetadata {
 			metadata, ok, err := buildColumnAggregateMetadataAsset(hookInput.ColumnStore, rows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
 			if err != nil {

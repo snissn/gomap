@@ -101,6 +101,7 @@ type ColumnPhysicalQueryRunner struct {
 	req        ColumnPhysicalQueryRequest
 	exec       *columnPhysicalQueryExecutor
 	readCache  columnPhysicalAssetReadCache
+	dictCount  *columnDictionaryCodeGroupCountRunner
 	closed     bool
 }
 
@@ -180,6 +181,11 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		return nil, err
 	}
 	readCache.returnViews = true
+	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
+	if err != nil {
+		_ = readCache.close()
+		return nil, err
+	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
 		collection: c,
@@ -188,6 +194,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		req:        req,
 		exec:       exec,
 		readCache:  readCache,
+		dictCount:  dictCount,
 	}, nil
 }
 
@@ -216,6 +223,9 @@ func (r *ColumnPhysicalQueryRunner) Close() error {
 func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	if r == nil || r.closed {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
+	}
+	if r.dictCount != nil {
+		return r.dictCount.run(r.view, r.req), nil
 	}
 	r.exec.resetForRun()
 	beforeHits := r.readCache.hits
