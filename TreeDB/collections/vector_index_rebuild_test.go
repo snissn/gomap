@@ -858,10 +858,11 @@ func TestColumnGraphRebuildVectorIndexCommandWALReplayNoopAdvancesLSNV2A(t *test
 		rebuildNeeded bool
 	}{
 		{
-			name:       "native_strategy",
-			strategy:   VectorIndexStrategyNativeRuntime,
-			wantState:  VectorIndexStateNativeRuntime,
-			wantReason: VectorIndexReasonNativeRuntime,
+			name:          "native_strategy",
+			strategy:      VectorIndexStrategyNativeRuntime,
+			wantState:     VectorIndexStateNativeRuntime,
+			wantReason:    VectorIndexReasonNativeRuntime,
+			rebuildNeeded: true,
 		},
 		{
 			name:          "column_graph_physical_support_missing",

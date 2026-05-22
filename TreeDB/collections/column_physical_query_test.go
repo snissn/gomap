@@ -661,6 +661,41 @@ func TestColumnStoreRetainedPayloadNoneAllowsIndexWhenColumnStoreDisabledM13C(t 
 	}
 }
 
+func TestColumnStoreRetainedPayloadRejectsCreateIndexOnColumnSubtreeM13C(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled:         true,
+			RetainedPayload: ColumnRetainedPayloadNonColumn,
+			Columns: []ColumnStoreColumn{
+				{Name: "repo", Path: "commit.repo", ValueType: ColumnStoreValueString},
+				{Name: "author", Path: "author", ValueType: ColumnStoreValueString},
+			},
+		}},
+	}
+	cases := []struct {
+		name  string
+		field string
+		want  bool
+	}{
+		{name: "exact", field: "commit.repo", want: true},
+		{name: "descendant", field: "commit.repo.id", want: true},
+		{name: "ancestor", field: "commit", want: true},
+		{name: "root descendant", field: "author.name", want: true},
+		{name: "sibling prefix", field: "commit.repository", want: false},
+		{name: "retained payload", field: "payload.repo", want: false},
+	}
+	for _, tc := range cases {
+		err := rejectCreateIndexOnRetainedColumnField(meta, IndexDefinition{Name: tc.name + "_idx", Field: tc.field, ValueType: IndexValueString})
+		if tc.want && (err == nil || !strings.Contains(err.Error(), "retained-payload column field")) {
+			t.Fatalf("%s CreateIndex err=%v want retained-payload column rejection", tc.name, err)
+		}
+		if !tc.want && err != nil {
+			t.Fatalf("%s CreateIndex err=%v want nil", tc.name, err)
+		}
+	}
+}
+
 func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {
@@ -680,7 +715,7 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 		hasPrimaryDocument: true,
 	}}
 	noColumnMeta := CollectionMeta{Name: "events"}
-	if !col.shouldUseDirectBufferedUpdatePlan(noColumnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
+	if !col.shouldUseDirectBufferedUpdatePlan(noColumnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, updateBatchSecondaryIndexChangeSummary{}, changed, true) {
 		t.Fatal("control metadata did not use direct buffered update plan")
 	}
 	columnMeta, err := normalizeCollectionMeta(CollectionMeta{
@@ -695,7 +730,7 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 	if !columnStoreNeedsRetainedPayloadTransform(columnMeta) {
 		t.Fatalf("column metadata does not require retained payload transform: %+v", columnMeta.Options.ColumnStore)
 	}
-	if col.shouldUseDirectBufferedUpdatePlan(columnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
+	if col.shouldUseDirectBufferedUpdatePlan(columnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, updateBatchSecondaryIndexChangeSummary{}, changed, true) {
 		t.Fatal("retained-payload column store used direct buffered update plan")
 	}
 }
@@ -1888,8 +1923,9 @@ func TestColumnPhysicalQueryAdapterAllocationSlopeM13B(t *testing.T) {
 			t.Fatalf("large RunColumnPhysicalQuery: %v", err)
 		}
 	})
-	if largeAllocs > smallAllocs+64 {
-		t.Fatalf("allocation slope looks row-linear: small=%.0f large=%.0f", smallAllocs, largeAllocs)
+	const maxExtraFixtureAllocs = 64 // permits manifest/fixture-scale setup drift while still rejecting row-linear allocation.
+	if largeAllocs > smallAllocs+maxExtraFixtureAllocs {
+		t.Fatalf("allocation slope looks row-linear: small=%.0f large=%.0f max_extra=%.0f", smallAllocs, largeAllocs, float64(maxExtraFixtureAllocs))
 	}
 }
 
@@ -2815,6 +2851,101 @@ func TestColumnDictionaryCodesAssetCodecRejectsCorruptionM1634(t *testing.T) {
 	futureLSNCfg.RecoveryAuthoritativeAppliedCommandLSN = 41
 	if _, err := decodeColumnDictionaryCodesAsset(raw, ref, futureLSNCfg, "events", "kind", true); err == nil || !strings.Contains(err.Error(), "newer than recovery") {
 		t.Fatalf("future lsn err=%v want recovery-authoritative LSN failure", err)
+	}
+}
+
+func TestColumnDictionaryCodeIndexRejectsCorruptWideCodeM1634(t *testing.T) {
+	if idx, ok := columnDictionaryCodeIndex(2, 3); !ok || idx != 2 {
+		t.Fatalf("valid code idx=%d ok=%v want idx=2 ok=true", idx, ok)
+	}
+	if _, ok := columnDictionaryCodeIndex(^uint32(0), 3); ok {
+		t.Fatalf("max uint32 code unexpectedly accepted for cardinality 3")
+	}
+}
+
+func TestColumnDictionaryCodeSnapshotRowsM1634(t *testing.T) {
+	view := columnPhysicalScanSnapshotView{
+		AssetRefs: []columnManifestAssetRefForScan{
+			{Ref: ColumnAssetRef{Generation: 2, PartID: 1}, Rows: 3},
+			{Ref: ColumnAssetRef{Generation: 2, PartID: 2}, Rows: 5},
+		},
+	}
+	byPart := map[[2]uint64]columnManifestDictionaryCodesSnapshot{
+		{2, 1}: {AssetRef: ColumnAssetRef{Generation: 2, PartID: 1}},
+		{2, 2}: {AssetRef: ColumnAssetRef{Generation: 2, PartID: 2}},
+	}
+	if rows, ok := columnDictionaryCodeSnapshotRows(view, byPart); rows != 8 || !ok {
+		t.Fatalf("rows=%d ok=%v want 8/true", rows, ok)
+	}
+	delete(byPart, [2]uint64{2, 2})
+	if rows, ok := columnDictionaryCodeSnapshotRows(view, byPart); rows != 0 || ok {
+		t.Fatalf("missing part rows=%d ok=%v want 0/false", rows, ok)
+	}
+	byPart[[2]uint64{2, 2}] = columnManifestDictionaryCodesSnapshot{AssetRef: ColumnAssetRef{Generation: 2, PartID: 2}}
+	view.AssetRefs[0].Rows = maxCollectionInt
+	view.AssetRefs[1].Rows = 1
+	if rows, ok := columnDictionaryCodeSnapshotRows(view, byPart); rows != 0 || ok {
+		t.Fatalf("overflow rows=%d ok=%v want 0/false", rows, ok)
+	}
+}
+
+func TestColumnDictionaryCodePreparedRunnersFallbackOnMixedSidecarCoverageM1634(t *testing.T) {
+	normalized, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	ns := normalized.AssetManager.Namespace
+	view := columnPhysicalScanSnapshotView{
+		CollectionName: "events",
+		Config:         *normalized,
+		AssetRefs: []columnManifestAssetRefForScan{
+			{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: ns, Generation: 2, PartID: 1}, Reason: ColumnPublishOperationInsert, Rows: 3},
+			{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: ns, Generation: 2, PartID: 2}, Reason: ColumnPublishOperationInsert, Rows: 5},
+		},
+		DictionaryCodes: []columnManifestDictionaryCodesSnapshot{
+			{ColumnName: "kind", AssetRef: ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: ns, Generation: 2, PartID: 1}},
+			{ColumnName: "did", AssetRef: ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: ns, Generation: 2, PartID: 1}},
+		},
+	}
+	readCache := &columnPhysicalAssetReadCache{namespace: ns}
+	if runner, err := prepareColumnDictionaryCodeGroupCountRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}, readCache); err != nil || runner != nil {
+		t.Fatalf("group-count runner=%T err=%v want clean fallback", runner, err)
+	}
+	if runner, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, readCache); err != nil || runner != nil {
+		t.Fatalf("group-count-distinct runner=%T err=%v want clean fallback", runner, err)
+	}
+}
+
+func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	if len(view.AssetRefs) == 0 {
+		t.Fatal("fixture produced no physical asset refs")
+	}
+	view.AssetRefs[0].Rows++
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity: %v", err)
+	}
+	defer func() {
+		if err := readCache.close(); err != nil {
+			t.Fatalf("read cache close: %v", err)
+		}
+	}()
+	if _, err := prepareColumnDictionaryCodeGroupCountRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}, &readCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
+		t.Fatalf("group-count err=%v want manifest row mismatch", err)
+	}
+	if _, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &readCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
+		t.Fatalf("group-count-distinct err=%v want manifest row mismatch", err)
 	}
 }
 

@@ -86,6 +86,7 @@ type columnPhysicalAssetScanHeader struct {
 type columnManifestAssetRefForScan struct {
 	Ref    ColumnAssetRef
 	Reason ColumnPublishOperation
+	Rows   int
 }
 
 type columnManifestScanSidecarFilter struct {
@@ -681,7 +682,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				return columnManifestSnapshot{}, nil, nil, 0, manifestRecords, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
 			livePartRows.add(ref.Generation, ref.PartID, rows)
-			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
 			if ref.Generation == snapshot.Generation {
 				activeParts++
 			}
@@ -876,7 +877,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 	d.Reset()
 	sawHeader := false
 	activeParts := uint64(0)
-	livePartNamespaces := make(map[[2]uint64]string)
+	var livePartRows columnManifestLivePartRowsForScan
 	for iter.Valid() {
 		key := iter.UnsafeKey()
 		if !columnManifestRecordKeyKnownForScan(key) {
@@ -906,6 +907,9 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if err := validateColumnManifestHeaderRecordForScan(header, cfg, identity, collection); err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
+			if header.expectedParts > 0 && header.expectedParts <= uint64(maxCollectionInt) {
+				livePartRows.initCapacity(int(header.expectedParts))
+			}
 			writeHashBytes(&d, header.collection)
 			writeHashBytes(&d, header.operation)
 			writeHashUint64(&d, header.generation)
@@ -926,9 +930,12 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if keyGeneration > header.generation {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part generation=%d is newer than header generation=%d", keyGeneration, header.generation)
 			}
-			ref, reason, err := decodeColumnManifestPartRefForScan(value, cfg.AssetManager.Namespace)
+			ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(value, cfg.AssetManager.Namespace)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
+			}
+			if ref.Kind != ColumnAssetKindTCS1PartImage {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 			}
 			if ref.Generation != keyGeneration {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
@@ -956,7 +963,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
-			livePartNamespaces[[2]uint64{ref.Generation, ref.PartID}] = ref.Namespace
+			livePartRows.add(ref.Generation, ref.PartID, rows)
 			if keyGeneration == header.generation {
 				activeParts++
 			}
@@ -972,19 +979,8 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if keyGeneration > header.generation {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", keyGeneration, header.generation)
 			}
-			metadata, err := decodeColumnManifestAggregateMetadataRecord(key, value)
-			if err != nil {
+			if err := validateColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, header.generation, &livePartRows); err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
-			}
-			if metadata.AssetRef.Namespace != cfg.AssetManager.Namespace {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q want %q", metadata.AssetRef.Namespace, cfg.AssetManager.Namespace)
-			}
-			partNamespace, ok := livePartNamespaces[[2]uint64{metadata.AssetRef.Generation, metadata.AssetRef.PartID}]
-			if !ok {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", metadata.AssetRef.Generation, metadata.AssetRef.PartID)
-			}
-			if metadata.AssetRef.Namespace != partNamespace {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q does not match part namespace=%q", metadata.AssetRef.Namespace, partNamespace)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
@@ -1000,19 +996,8 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if keyGeneration > header.generation {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", keyGeneration, header.generation)
 			}
-			dictionary, err := decodeColumnManifestDictionaryCodesRecord(key, value)
-			if err != nil {
+			if err := validateColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, header.generation, &livePartRows); err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
-			}
-			if dictionary.AssetRef.Namespace != cfg.AssetManager.Namespace {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest dictionary codes namespace=%q want %q", dictionary.AssetRef.Namespace, cfg.AssetManager.Namespace)
-			}
-			partNamespace, ok := livePartNamespaces[[2]uint64{dictionary.AssetRef.Generation, dictionary.AssetRef.PartID}]
-			if !ok {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", dictionary.AssetRef.Generation, dictionary.AssetRef.PartID)
-			}
-			if dictionary.AssetRef.Namespace != partNamespace {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest dictionary codes namespace=%q does not match part namespace=%q", dictionary.AssetRef.Namespace, partNamespace)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
@@ -1028,19 +1013,8 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if keyGeneration > header.generation {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", keyGeneration, header.generation)
 			}
-			values, err := decodeColumnManifestInt64ValuesRecord(key, value)
-			if err != nil {
+			if err := validateColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, header.generation, &livePartRows); err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
-			}
-			if values.AssetRef.Namespace != cfg.AssetManager.Namespace {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values namespace=%q want %q", values.AssetRef.Namespace, cfg.AssetManager.Namespace)
-			}
-			partNamespace, ok := livePartNamespaces[[2]uint64{values.AssetRef.Generation, values.AssetRef.PartID}]
-			if !ok {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", values.AssetRef.Generation, values.AssetRef.PartID)
-			}
-			if values.AssetRef.Namespace != partNamespace {
-				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest int64 values namespace=%q does not match part namespace=%q", values.AssetRef.Namespace, partNamespace)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
@@ -1320,7 +1294,7 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
 		livePartRows.add(ref.Generation, ref.PartID, rows)
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
 		if ref.Generation == snapshot.Generation {
 			activeParts++
 		}
@@ -1630,9 +1604,12 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if keyGeneration > activeGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part generation=%d is newer than active manifest generation=%d", keyGeneration, activeGeneration)
 		}
-		ref, reason, err := decodeColumnManifestPartRefForScan(record.value, expectedNamespace)
+		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, expectedNamespace)
 		if err != nil {
 			return nil, 0, err
+		}
+		if ref.Kind != ColumnAssetKindTCS1PartImage {
+			return nil, 0, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 		}
 		if ref.Generation != keyGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
@@ -1644,7 +1621,7 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if !ok {
 			return nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
 		if operation != ColumnPublishOperationInsert {
 			mutationParts++
 		}

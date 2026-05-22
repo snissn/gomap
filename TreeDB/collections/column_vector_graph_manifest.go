@@ -89,8 +89,8 @@ func encodeColumnVectorGraphManifestRecord(snapshot columnVectorGraphManifestSna
 	writeManifestUint16(&b, columnManifestRecordVersion)
 	writeManifestString(&b, snapshot.IndexName)
 	writeManifestString(&b, snapshot.Field)
-	writeManifestString(&b, string(snapshot.Metric))
-	writeManifestString(&b, string(snapshot.Encoding))
+	writeManifestString(&b, snapshot.Metric.String())
+	writeManifestString(&b, snapshot.Encoding.String())
 	writeManifestUint64(&b, uint64(snapshot.Dimensions))
 	writeManifestUint64(&b, uint64(snapshot.M))
 	writeManifestUint64(&b, uint64(snapshot.EfConstruction))
@@ -121,20 +121,28 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 		return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: unsupported column vector graph manifest version=%d", version)
 	}
 	snapshot := columnVectorGraphManifestSnapshot{
-		IndexName:              cur.string(),
-		Field:                  cur.string(),
-		Metric:                 VectorMetric(cur.string()),
-		Encoding:               VectorIndexEncoding(cur.string()),
-		Dimensions:             int(cur.u64()),
-		M:                      int(cur.u64()),
-		EfConstruction:         int(cur.u64()),
-		EfSearch:               int(cur.u64()),
-		BaseManifestGeneration: cur.u64(),
-		BaseManifestChecksum:   cur.u64(),
-		BaseSchemaHash:         cur.u64(),
-		GraphSchemaHash:        cur.u64(),
-		RowCount:               int(cur.u64()),
+		IndexName: cur.string(),
+		Field:     cur.string(),
 	}
+	metric, err := parseVectorMetric(cur.string())
+	if err != nil {
+		return columnVectorGraphManifestSnapshot{}, err
+	}
+	encoding, err := parseVectorIndexEncoding(cur.string())
+	if err != nil {
+		return columnVectorGraphManifestSnapshot{}, err
+	}
+	snapshot.Metric = metric
+	snapshot.Encoding = encoding
+	snapshot.Dimensions = int(cur.u64())
+	snapshot.M = int(cur.u64())
+	snapshot.EfConstruction = int(cur.u64())
+	snapshot.EfSearch = int(cur.u64())
+	snapshot.BaseManifestGeneration = cur.u64()
+	snapshot.BaseManifestChecksum = cur.u64()
+	snapshot.BaseSchemaHash = cur.u64()
+	snapshot.GraphSchemaHash = cur.u64()
+	snapshot.RowCount = int(cur.u64())
 	snapshot.AssetRef = ColumnAssetRef{
 		Kind:       ColumnAssetKind(cur.string()),
 		Namespace:  cur.string(),

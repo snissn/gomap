@@ -587,15 +587,15 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	return entry.rid, entry.ptr, nil
 }
 
-// ReadRIDAt reads only the RID metadata for ptr and does not verify the record
-// CRC. It avoids full segment scans when the caller's ValuePtr was just produced
-// by this process's value-log write path and only the append RID is needed for a
-// command-WAL external-reference fence.
+// ReadRIDAtUnverified reads only the RID metadata for ptr and does not verify
+// the record CRC. It avoids full segment scans when the caller's ValuePtr was
+// just produced by this process's value-log write path and only the append RID
+// is needed for a command-WAL external-reference fence.
 //
 // It MUST NOT be used on pointers loaded from durable index pages or any other
 // untrusted source; use Reader for integrity-checked reads from durable pointers.
-func ReadRIDAt(f *os.File, ptr page.ValuePtr) (uint64, error) {
-	if f == nil || ptr.Offset < 4 {
+func ReadRIDAtUnverified(f *os.File, fileID uint32, ptr page.ValuePtr) (uint64, error) {
+	if f == nil || fileID == 0 || ptr.FileID != fileID || ptr.Offset < 4 {
 		return 0, ErrCorrupt
 	}
 	// ValuePtr.Offset is stored immediately after the CRC prefix, so the first
