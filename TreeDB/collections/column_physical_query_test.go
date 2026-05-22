@@ -2370,42 +2370,42 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 		{
 			name:      "q1_dictionary_codes",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
-			maxAllocs: 22,
+			maxAllocs: 21,
 		},
 		{
 			name:      "q2_dictionary_codes",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
-			maxAllocs: 41,
+			maxAllocs: 40,
 		},
 		{
 			name:      "q3_int64_values",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
-			maxAllocs: 11,
+			maxAllocs: 10,
 		},
 		{
 			name:      "q4a_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 37,
+			maxAllocs: 36,
 		},
 		{
 			name:      "q4b_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 37,
+			maxAllocs: 36,
 		},
 		{
 			name:      "q5_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 38,
+			maxAllocs: 37,
 		},
 		{
 			name:      "q4b_metadata",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "max_time_us"},
-			maxAllocs: 35,
+			maxAllocs: 34,
 		},
 		{
 			name:      "q5_metadata",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"},
-			maxAllocs: 35,
+			maxAllocs: 34,
 		},
 	}
 	for _, tc := range tests {
