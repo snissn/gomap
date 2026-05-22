@@ -50,27 +50,28 @@ type clickHouseQ4FairnessResult struct {
 }
 
 type comparisonRaw struct {
-	GeneratedAt             string                                `json:"generated_at"`
-	DataPath                string                                `json:"data_path"`
-	Limit                   int                                   `json:"limit"`
-	Rows                    int                                   `json:"rows"`
-	Files                   []string                              `json:"files"`
-	InputBytes              int64                                 `json:"input_bytes"`
-	RowsPerGranule          int                                   `json:"rows_per_granule"`
-	LoadDuration            time.Duration                         `json:"load_duration"`
-	ClickHouseLocal         clickHouseResult                      `json:"clickhouse_local"`
-	RemainingTreeDB         remainingTreeDBResult                 `json:"remaining_treedb"`
-	RemainingTreeDBJSON     remainingTreeDBResult                 `json:"remaining_treedb_json"`
-	RemainingTreeDBTpl      remainingTreeDBResult                 `json:"remaining_treedb_template_v1"`
-	ConservativeBSON        remainingTreeDBResult                 `json:"conservative_remaining_treedb_bson"`
-	ConservativeJSON        remainingTreeDBResult                 `json:"conservative_remaining_treedb_json"`
-	ConservativeTpl         remainingTreeDBResult                 `json:"conservative_remaining_treedb_template_v1"`
-	RawTreeDBJSON           remainingTreeDBResult                 `json:"raw_treedb_json"`
-	QueryTimings            []colgranule.JSONBenchQueryTiming     `json:"query_timings"`
-	EncodedPartQueryTimings []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_query_timings"`
-	EncodedPartQ4Fairness   []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_q4_fairness_timings"`
-	ColumnSummaries         []colgranule.ColumnCodecSummary       `json:"column_summaries"`
-	BestColumnStorage       []bestColumnStorage                   `json:"best_column_storage"`
+	GeneratedAt              string                                `json:"generated_at"`
+	DataPath                 string                                `json:"data_path"`
+	Limit                    int                                   `json:"limit"`
+	Rows                     int                                   `json:"rows"`
+	Files                    []string                              `json:"files"`
+	InputBytes               int64                                 `json:"input_bytes"`
+	RowsPerGranule           int                                   `json:"rows_per_granule"`
+	LoadDuration             time.Duration                         `json:"load_duration"`
+	ClickHouseLocal          clickHouseResult                      `json:"clickhouse_local"`
+	RemainingTreeDB          remainingTreeDBResult                 `json:"remaining_treedb"`
+	RemainingTreeDBJSON      remainingTreeDBResult                 `json:"remaining_treedb_json"`
+	RemainingTreeDBTpl       remainingTreeDBResult                 `json:"remaining_treedb_template_v1"`
+	ConservativeBSON         remainingTreeDBResult                 `json:"conservative_remaining_treedb_bson"`
+	ConservativeJSON         remainingTreeDBResult                 `json:"conservative_remaining_treedb_json"`
+	ConservativeTpl          remainingTreeDBResult                 `json:"conservative_remaining_treedb_template_v1"`
+	RawTreeDBJSON            remainingTreeDBResult                 `json:"raw_treedb_json"`
+	QueryTimings             []colgranule.JSONBenchQueryTiming     `json:"query_timings"`
+	EncodedPartQueryTimings  []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_query_timings"`
+	EncodedPartQ4Fairness    []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_q4_fairness_timings"`
+	AggregateMetadataTimings []colgranule.JSONBenchPartQueryTiming `json:"aggregate_metadata_timings"`
+	ColumnSummaries          []colgranule.ColumnCodecSummary       `json:"column_summaries"`
+	BestColumnStorage        []bestColumnStorage                   `json:"best_column_storage"`
 }
 
 type remainingTreeDBResult struct {
@@ -140,6 +141,14 @@ func main() {
 	encodedPartQ4Fairness, err := colgranule.RunJSONBenchPartQ4FairnessQueries(ds, *rowsPerGranule, *attempts)
 	must(err)
 	must(validateEncodedPartParity(timings, encodedPartTimings))
+	aggregateMetadataTimings, err := colgranule.RunJSONBenchPartAggregateMetadataQueries(ds, *rowsPerGranule, *attempts)
+	if err != nil {
+		if strings.Contains(err.Error(), "rejected by admission") {
+			fmt.Fprintf(os.Stderr, "skipping aggregate metadata timings: %v\n", err)
+		} else {
+			must(err)
+		}
+	}
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
 	var remainingTpl remainingTreeDBResult
@@ -165,27 +174,28 @@ func main() {
 	}
 
 	raw := comparisonRaw{
-		GeneratedAt:             time.Now().UTC().Format(time.RFC3339),
-		DataPath:                *data,
-		Limit:                   *limit,
-		Rows:                    ds.Rows,
-		Files:                   ds.Files,
-		InputBytes:              inputBytes(ds.Files),
-		RowsPerGranule:          *rowsPerGranule,
-		LoadDuration:            loadDuration,
-		ClickHouseLocal:         readClickHouseResult(*clickHouseLocalPath),
-		RemainingTreeDB:         remaining,
-		RemainingTreeDBJSON:     remainingJSON,
-		RemainingTreeDBTpl:      remainingTpl,
-		ConservativeBSON:        conservativeBSON,
-		ConservativeJSON:        conservativeJSON,
-		ConservativeTpl:         conservativeTpl,
-		RawTreeDBJSON:           rawTreeDBJSON,
-		QueryTimings:            timings,
-		EncodedPartQueryTimings: encodedPartTimings,
-		EncodedPartQ4Fairness:   encodedPartQ4Fairness,
-		ColumnSummaries:         summaries,
-		BestColumnStorage:       bestColumns(summaries),
+		GeneratedAt:              time.Now().UTC().Format(time.RFC3339),
+		DataPath:                 *data,
+		Limit:                    *limit,
+		Rows:                     ds.Rows,
+		Files:                    ds.Files,
+		InputBytes:               inputBytes(ds.Files),
+		RowsPerGranule:           *rowsPerGranule,
+		LoadDuration:             loadDuration,
+		ClickHouseLocal:          readClickHouseResult(*clickHouseLocalPath),
+		RemainingTreeDB:          remaining,
+		RemainingTreeDBJSON:      remainingJSON,
+		RemainingTreeDBTpl:       remainingTpl,
+		ConservativeBSON:         conservativeBSON,
+		ConservativeJSON:         conservativeJSON,
+		ConservativeTpl:          conservativeTpl,
+		RawTreeDBJSON:            rawTreeDBJSON,
+		QueryTimings:             timings,
+		EncodedPartQueryTimings:  encodedPartTimings,
+		EncodedPartQ4Fairness:    encodedPartQ4Fairness,
+		AggregateMetadataTimings: aggregateMetadataTimings,
+		ColumnSummaries:          summaries,
+		BestColumnStorage:        bestColumns(summaries),
 	}
 
 	writeJSON(*outJSON, raw)
@@ -944,6 +954,32 @@ func writeMarkdown(path string, raw comparisonRaw) {
 				localShape)
 		}
 	}
+	if len(raw.AggregateMetadataTimings) > 0 {
+		fmt.Fprintf(&b, "\n## Aggregate Metadata Prototype\n\n")
+		fmt.Fprintf(&b, "These M1B timings use exact per-granule `did_code -> min(time_us), max(time_us), count` metadata for declared post/create rows. The prototype stores metadata uncompressed in memory and reports build cost plus estimated byte accounting so later file-backed work can decide admission and compression policies.\n\n")
+		fmt.Fprintf(&b, "| Query | Metadata best | Best cache | Baseline | Speedup | Break-even | Kernel | Metadata rows | Entries | Entries/matched row | Est. bytes | Est. B/part row | Est. B/matched row | Build | Compression |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		for _, timing := range raw.AggregateMetadataTimings {
+			d := timing.Diagnostics
+			baseline := aggregateMetadataBaselineSeconds(raw, timing.Query)
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %s | %s | %s | `%s` | %d | %d | %.3f | %d | %.3f | %.3f | %.6fs | `%s` |\n",
+				timing.Query,
+				timing.Best.Seconds(),
+				timing.BestCache,
+				formatSeconds(baseline),
+				formatSpeedup(timing.Best.Seconds(), baseline),
+				formatBreakEvenQueries(d.AggregateMetadataBuildDuration.Seconds(), baseline, timing.Best.Seconds()),
+				d.AggregateKernel,
+				d.AggregateMetadataRows,
+				d.AggregateMetadataEntries,
+				ratio(float64(d.AggregateMetadataEntries), float64(d.AggregateMetadataRows)),
+				d.AggregateMetadataBytes,
+				d.AggregateMetadataBytesPerRow,
+				ratio(float64(d.AggregateMetadataBytes), float64(d.AggregateMetadataRows)),
+				d.AggregateMetadataBuildDuration.Seconds(),
+				d.AggregateMetadataCompression)
+		}
+	}
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
 	allBest := bestTotal(raw.BestColumnStorage, nil)
 	queryBest := bestTotal(raw.BestColumnStorage, queryPathColumns())
@@ -1114,6 +1150,24 @@ func clickHouseQ4FairnessBest(result clickHouseResult, query string) clickHouseQ
 	return out
 }
 
+func aggregateMetadataBaselineSeconds(raw comparisonRaw, query string) float64 {
+	switch query {
+	case "Q4b-meta":
+		for _, timing := range raw.EncodedPartQ4Fairness {
+			if timing.Query == "Q4b" {
+				return timing.Best.Seconds()
+			}
+		}
+	case "Q5-meta":
+		for _, timing := range raw.EncodedPartQueryTimings {
+			if timing.Query == "Q5" {
+				return timing.Best.Seconds()
+			}
+		}
+	}
+	return 0
+}
+
 func queryPathColumns() map[string]bool {
 	return map[string]bool{
 		"kind_code": true, "commit_operation_code": true, "commit_collection_code": true, "did_code": true, "time_us": true,
@@ -1157,6 +1211,14 @@ func formatSpeedup(numerator, denominator float64) string {
 		return "n/a"
 	}
 	return fmt.Sprintf("%.2fx", ratio(denominator, numerator))
+}
+
+func formatBreakEvenQueries(buildSeconds, baselineSeconds, metadataSeconds float64) string {
+	saved := baselineSeconds - metadataSeconds
+	if buildSeconds <= 0 || saved <= 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f", buildSeconds/saved)
 }
 
 func mib(bytes int64) float64 {

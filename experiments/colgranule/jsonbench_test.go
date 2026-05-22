@@ -205,6 +205,99 @@ func TestRunJSONBenchPartQ4FairnessQueries(t *testing.T) {
 	}
 }
 
+func TestRunJSONBenchPartAggregateMetadataQueries(t *testing.T) {
+	ds := syntheticJSONBenchDataset(256)
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	rawQ4Rows, rawQ4Digest := runJSONBenchQ4(ds, codes)
+	rawQ5Rows, rawQ5Digest := runJSONBenchQ5(ds, codes)
+	timings, err := RunJSONBenchPartAggregateMetadataQueries(ds, 32, 2)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartAggregateMetadataQueries: %v", err)
+	}
+	if len(timings) != 2 {
+		t.Fatalf("aggregate metadata timings=%d want 2", len(timings))
+	}
+	seen := map[string]bool{}
+	for _, timing := range timings {
+		seen[timing.Query] = true
+		if len(timing.Attempts) != 2 || timing.Attempts[0].Cache != "cold" || timing.Attempts[1].Cache != "warm" {
+			t.Fatalf("%s attempts=%+v want cold,warm labels", timing.Query, timing.Attempts)
+		}
+		d := timing.Diagnostics
+		if !d.AggregateMetadataUsed {
+			t.Fatalf("%s did not report aggregate metadata: %+v", timing.Query, d)
+		}
+		if d.AggregateMetadataName != jsonBenchPostCreateDidTimeMetadata {
+			t.Fatalf("%s metadata=%q want %q", timing.Query, d.AggregateMetadataName, jsonBenchPostCreateDidTimeMetadata)
+		}
+		if d.RowsScanned != 0 || d.BlocksDecoded != 0 || d.BytesDecoded != 0 {
+			t.Fatalf("%s diagnostics scanned/decode rows=%d blocks=%d bytes=%d want metadata-only", timing.Query, d.RowsScanned, d.BlocksDecoded, d.BytesDecoded)
+		}
+		if d.AggregateMetadataRows == 0 || d.AggregateMetadataEntries == 0 || d.AggregateMetadataBytes == 0 || d.AggregateMetadataCompression == "" {
+			t.Fatalf("%s missing metadata accounting: %+v", timing.Query, d)
+		}
+		switch timing.Query {
+		case "Q4b-meta":
+			if timing.ResultRows != rawQ4Rows || timing.ResultDigest != rawQ4Digest {
+				t.Fatalf("Q4b-meta rows/digest=(%d,%d) raw=(%d,%d)", timing.ResultRows, timing.ResultDigest, rawQ4Rows, rawQ4Digest)
+			}
+			if d.AggregateKernel != "aggregate_metadata_min_by_user" {
+				t.Fatalf("Q4b-meta kernel=%q want metadata min", d.AggregateKernel)
+			}
+			assertStringSliceEqual(t, d.SortKey, []string{"kind_code", "commit_operation_code", "commit_collection_code", "did_code", "time_us"})
+		case "Q5-meta":
+			if timing.ResultRows != rawQ5Rows || timing.ResultDigest != rawQ5Digest {
+				t.Fatalf("Q5-meta rows/digest=(%d,%d) raw=(%d,%d)", timing.ResultRows, timing.ResultDigest, rawQ5Rows, rawQ5Digest)
+			}
+			if d.AggregateKernel != "aggregate_metadata_span_by_user" {
+				t.Fatalf("Q5-meta kernel=%q want metadata span", d.AggregateKernel)
+			}
+			assertStringSliceEqual(t, d.SortKey, []string{"time_us"})
+		default:
+			t.Fatalf("unexpected aggregate metadata query %s", timing.Query)
+		}
+	}
+	if !seen["Q4b-meta"] || !seen["Q5-meta"] {
+		t.Fatalf("aggregate metadata queries seen=%v want Q4b-meta and Q5-meta", seen)
+	}
+}
+
+func TestJSONBenchAggregateMetadataAdmissionRejectsOversizedMetadata(t *testing.T) {
+	ds := syntheticJSONBenchDataset(256)
+	opts, err := JSONBenchColumnPartOptionsWithAggregateMetadataForLayout(ds, 32, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		t.Fatalf("JSONBenchColumnPartOptionsWithAggregateMetadataForLayout: %v", err)
+	}
+	if len(opts.AggregateMetadata) != 1 {
+		t.Fatalf("aggregate metadata defs=%d want 1", len(opts.AggregateMetadata))
+	}
+	opts.AggregateMetadata[0].MaxBytesPerRow = 0.001
+	part, err := BuildColumnPart(1, opts, ColumnBatch{Rows: ds.Rows, Columns: ds.Columns})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	metadata, ok := part.AggregateMetadataByName(jsonBenchPostCreateDidTimeMetadata)
+	if !ok {
+		t.Fatalf("missing aggregate metadata %s", jsonBenchPostCreateDidTimeMetadata)
+	}
+	if metadata.Stats.Admitted {
+		t.Fatalf("metadata admitted with tiny budget: %+v", metadata.Stats)
+	}
+	if metadata.Stats.RejectedReason == "" || metadata.Stats.TotalBytes == 0 || metadata.Stats.Entries == 0 {
+		t.Fatalf("metadata rejection missing accounting: %+v", metadata.Stats)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	if _, _, _, err := runJSONBenchPartQ5AggregateMetadata(part, codes, &jsonBenchPartQueryScratch{}); err == nil {
+		t.Fatal("runJSONBenchPartQ5AggregateMetadata accepted metadata rejected by admission")
+	}
+}
+
 func TestRunJSONBenchPartQ4EarlyStopRejectsClickHouseOrder(t *testing.T) {
 	ds := syntheticJSONBenchDataset(128)
 	part, err := BuildJSONBenchColumnPartForLayout(ds, 32, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
@@ -482,6 +575,45 @@ func TestRunJSONBenchPartQueriesLocalIfPresent(t *testing.T) {
 		}
 		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
 			t.Fatalf("%s local part rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
+		}
+	}
+}
+
+func TestRunJSONBenchPartAggregateMetadataQueriesLocalIfPresent(t *testing.T) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		t.Skip("JSONBENCH_DATA not set")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("local JSONBench fixture not present at %s", path)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1000)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(local): %v", err)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		t.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	rawQ4Rows, rawQ4Digest := runJSONBenchQ4(ds, codes)
+	rawQ5Rows, rawQ5Digest := runJSONBenchQ5(ds, codes)
+	timings, err := RunJSONBenchPartAggregateMetadataQueries(ds, DefaultRowsPerGranule, 2)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartAggregateMetadataQueries(local): %v", err)
+	}
+	for _, timing := range timings {
+		if !timing.Diagnostics.AggregateMetadataUsed {
+			t.Fatalf("%s local diagnostics did not use aggregate metadata: %+v", timing.Query, timing.Diagnostics)
+		}
+		switch timing.Query {
+		case "Q4b-meta":
+			if timing.ResultRows != rawQ4Rows || timing.ResultDigest != rawQ4Digest {
+				t.Fatalf("Q4b-meta local rows/digest=(%d,%d) raw=(%d,%d)", timing.ResultRows, timing.ResultDigest, rawQ4Rows, rawQ4Digest)
+			}
+		case "Q5-meta":
+			if timing.ResultRows != rawQ5Rows || timing.ResultDigest != rawQ5Digest {
+				t.Fatalf("Q5-meta local rows/digest=(%d,%d) raw=(%d,%d)", timing.ResultRows, timing.ResultDigest, rawQ5Rows, rawQ5Digest)
+			}
 		}
 	}
 }

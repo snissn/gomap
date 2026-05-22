@@ -152,6 +152,97 @@ func BenchmarkJSONBenchQ4SortOrderFairness(b *testing.B) {
 	}
 }
 
+func BenchmarkJSONBenchAggregateMetadataQueries(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	timePart, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, JSONBenchColumnPartLayoutTimeUS)
+	if err != nil {
+		b.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout(time): %v", err)
+	}
+	clickHouseOrderPart, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, JSONBenchColumnPartLayoutClickHouseFilterUserTime)
+	if err != nil {
+		b.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout(clickhouse): %v", err)
+	}
+	codes, err := jsonBenchQueryCodes(ds)
+	if err != nil {
+		b.Fatalf("jsonBenchQueryCodes: %v", err)
+	}
+	queries := []struct {
+		name string
+		part *ColumnPart
+		run  jsonBenchPartQueryRunner
+	}{
+		{"Q4b_metadata_min_by_user", clickHouseOrderPart, runJSONBenchPartQ4ClickHouseOrderAggregateMetadata},
+		{"Q5_metadata_span_by_user", timePart, runJSONBenchPartQ5AggregateMetadata},
+		{"Q4b_row_scan_min_by_user", clickHouseOrderPart, runJSONBenchPartQ4ClickHouseOrder},
+		{"Q5_row_scan_span_by_user", timePart, runJSONBenchPartQ5},
+	}
+	for _, q := range queries {
+		b.Run(q.name, func(b *testing.B) {
+			b.ReportAllocs()
+			scratch := &jsonBenchPartQueryScratch{
+				scanner:   q.part.NewScanner(),
+				projected: make(map[string][]int64, 6),
+			}
+			rows, digest, diagnostics, err := q.run(q.part, codes, scratch)
+			if err != nil {
+				b.Fatal(err)
+			}
+			benchSink += int64(rows) + int64(digest)
+			rowsMeasured := diagnostics.RowsScanned
+			if rowsMeasured == 0 {
+				rowsMeasured = diagnostics.AggregateMetadataEntries
+			}
+			if rowsMeasured == 0 {
+				rowsMeasured = ds.Rows
+			}
+			valueBytes := rowsMeasured * len(diagnostics.ColumnsProjected) * 8
+			if valueBytes == 0 {
+				valueBytes = rowsMeasured * 8
+			}
+			b.SetBytes(int64(valueBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rows, digest, diagnostics, err = q.run(q.part, codes, scratch)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(rows) + int64(digest)
+			}
+			rowsMeasured = diagnostics.RowsScanned
+			storedBytes := diagnostics.BytesDecoded
+			if rowsMeasured == 0 {
+				rowsMeasured = diagnostics.AggregateMetadataEntries
+				storedBytes = diagnostics.AggregateMetadataBytes
+			}
+			reportGranuleBenchMetrics(b, rowsMeasured, valueBytes, storedBytes)
+		})
+	}
+}
+
+func BenchmarkJSONBenchAggregateMetadataBuild(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	for _, layout := range []JSONBenchColumnPartLayout{
+		JSONBenchColumnPartLayoutTimeUS,
+		JSONBenchColumnPartLayoutClickHouseFilterUserTime,
+	} {
+		b.Run(string(layout), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(ds.Rows * len(ds.Columns) * 8))
+			for i := 0; i < b.N; i++ {
+				part, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, layout)
+				if err != nil {
+					b.Fatal(err)
+				}
+				metadata, ok := part.AggregateMetadataByName(jsonBenchPostCreateDidTimeMetadata)
+				if !ok || !metadata.Stats.Admitted {
+					b.Fatalf("metadata missing/rejected: %+v", metadata.Stats)
+				}
+				benchSink += int64(metadata.Stats.TotalBytes)
+			}
+		})
+	}
+}
+
 func syntheticJSONBenchDataset(rows int) JSONBenchDataset {
 	columns := map[string][]int64{
 		"row_index":              make([]int64, rows),
