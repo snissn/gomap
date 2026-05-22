@@ -29,11 +29,14 @@ const (
 )
 
 const columnAssetSegmentWriteLockStripes = 64
+const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
 // without retaining one mutex per temp dir or segment path forever.
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
+
+var columnPhysicalAssetReadScratchPool sync.Pool
 
 // columnAssetSegmentAllocationLocks serialize same-process segment file-id
 // allocation by namespace without retaining one lock per temp dir forever.
@@ -597,6 +600,7 @@ type columnPhysicalAssetReadCache struct {
 	fileID     uint32
 	file       *os.File
 	files      map[uint32]*os.File
+	scratch    []byte
 	hits       uint64
 	misses     uint64
 }
@@ -617,6 +621,10 @@ func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPh
 
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
+	if c.scratch != nil {
+		putColumnPhysicalAssetReadScratch(c.scratch)
+		c.scratch = nil
+	}
 	if c.file != nil {
 		if err := c.file.Close(); err != nil && closeErr == nil {
 			closeErr = err
@@ -646,7 +654,35 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if err != nil {
 		return nil, err
 	}
+	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
+		if cap(c.scratch) < int(ref.Length) {
+			if c.scratch != nil {
+				putColumnPhysicalAssetReadScratch(c.scratch)
+			}
+			c.scratch = getColumnPhysicalAssetReadScratch(int(ref.Length))
+		}
+		dst = c.scratch
+	}
 	return readColumnPhysicalAssetFromFile(file, ref, dst)
+}
+
+func getColumnPhysicalAssetReadScratch(minLen int) []byte {
+	if minLen <= columnPhysicalAssetReadScratchPoolMaxRetainBytes {
+		if pooled, ok := columnPhysicalAssetReadScratchPool.Get().([]byte); ok {
+			if cap(pooled) >= minLen {
+				return pooled[:0]
+			}
+			putColumnPhysicalAssetReadScratch(pooled)
+		}
+	}
+	return make([]byte, 0, minLen)
+}
+
+func putColumnPhysicalAssetReadScratch(scratch []byte) {
+	if scratch == nil || cap(scratch) > columnPhysicalAssetReadScratchPoolMaxRetainBytes {
+		return
+	}
+	columnPhysicalAssetReadScratchPool.Put(scratch[:0])
 }
 
 func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File, error) {
