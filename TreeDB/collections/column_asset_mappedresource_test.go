@@ -135,6 +135,54 @@ func TestColumnAssetReadCacheMappedResourceHeapHandlesOwnStableBytesGateA1736(t 
 	}
 }
 
+func TestColumnAssetReadCacheMappedResourceViewHandlesDoNotAccumulateGateA1736(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("mapped-view-handle-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	manager := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new read cache: %v", err)
+	}
+	defer readCache.close()
+	readCache.returnViews = true
+	if err := readCache.useMappedResourceManager(manager, mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "snapshot-7", Namespace: normalized.AssetManager.Namespace}, "typed-row-asset-read"); err != nil {
+		t.Fatalf("useMappedResourceManager: %v", err)
+	}
+	if _, err := readCache.read(ref, nil); err != nil {
+		t.Fatalf("read first: %v", err)
+	}
+	if len(readCache.resourceHandles) != 1 {
+		t.Fatalf("resource handles after first view read=%d want 1", len(readCache.resourceHandles))
+	}
+	firstHandle := readCache.resourceHandles[0]
+	if firstHandle.Source() != mappedresource.SourceMapped {
+		t.Skip("mmap views are unavailable on this platform")
+	}
+	if _, err := readCache.read(ref, nil); err != nil {
+		t.Fatalf("read second: %v", err)
+	}
+	if !firstHandle.Released() {
+		t.Fatal("first mapped view handle is still active after next view read")
+	}
+	if len(readCache.resourceHandles) != 1 || readCache.resourceHandles[0] == firstHandle {
+		t.Fatalf("resource handles after second view read=%d first retained=%v", len(readCache.resourceHandles), len(readCache.resourceHandles) == 1 && readCache.resourceHandles[0] == firstHandle)
+	}
+	stats := manager.Stats()
+	if stats.ActiveHandles != 1 || stats.ActiveMappedBytes != int64(len(payload)) || stats.TotalReleases != 1 {
+		t.Fatalf("stats after repeated view read: %+v", stats)
+	}
+}
+
 func TestColumnAssetReadCacheMappedResourceScopeValidationGateA1736(t *testing.T) {
 	readCache := columnPhysicalAssetReadCache{namespace: "events"}
 	manager := mappedresource.NewManager()

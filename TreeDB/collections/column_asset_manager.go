@@ -926,29 +926,6 @@ func (c *columnPhysicalAssetReadCache) releaseResourceHandles() error {
 	return releaseErr
 }
 
-func (c *columnPhysicalAssetReadCache) releaseResourceHandlesBySource(source mappedresource.Source) error {
-	if c == nil || len(c.resourceHandles) == 0 {
-		return nil
-	}
-	var releaseErr error
-	kept := c.resourceHandles[:0]
-	for _, handle := range c.resourceHandles {
-		if handle == nil {
-			continue
-		}
-		if handle.Source() == source {
-			if err := handle.Release(); err != nil && releaseErr == nil {
-				releaseErr = err
-			}
-			continue
-		}
-		kept = append(kept, handle)
-	}
-	clear(c.resourceHandles[len(kept):])
-	c.resourceHandles = kept
-	return releaseErr
-}
-
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
 	if err := c.releaseResourceHandles(); err != nil {
@@ -1065,21 +1042,19 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 	if reason == "" {
 		reason = "column_physical_asset_read"
 	}
+	// columnPhysicalAssetReadCache returns implicit byte views/copies without a
+	// caller-visible release hook. Treat the next read as the previous returned
+	// buffer's lifetime boundary so active pins do not grow without bound.
+	if err := c.releaseResourceHandles(); err != nil {
+		return err
+	}
 	handleBytes := raw
-	if source == mappedresource.SourceHeapCopy {
-		// Heap-copy reads use the cache scratch path, so their implicit lifetime
-		// ends when the next heap read may reuse scratch. Keep at most the current
-		// heap handle active; mmap/view handles remain pinned until cache close.
-		if err := c.releaseResourceHandlesBySource(mappedresource.SourceHeapCopy); err != nil {
-			return err
-		}
-		if len(raw) != 0 {
-			// AcquireBytes requires immutable bytes for the handle lifetime. Syscall
-			// reads may return c.scratch, which is reused on later reads, so the
-			// accounting/pin handle owns a stable copy while it is active. The caller
-			// still receives the original raw bytes.
-			handleBytes = append([]byte(nil), raw...)
-		}
+	if source == mappedresource.SourceHeapCopy && len(raw) != 0 {
+		// AcquireBytes requires immutable bytes for the handle lifetime. Syscall
+		// reads may return c.scratch, which is reused on later reads, so the
+		// accounting/pin handle owns a stable copy while it is active. The caller
+		// still receives the original raw bytes.
+		handleBytes = append([]byte(nil), raw...)
 	}
 	handle, err := c.resourceManager.AcquireBytes(key, scope, source, handleBytes, mappedresource.AcquireOptions{
 		Reason:         reason,
