@@ -73,7 +73,7 @@ func TestCollectionMetaVersionPreservedAfterRoundTripV2(t *testing.T) {
 func TestColumnGraphVectorIndexMetadataCreateStatusDropReopenV2A(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
-
+	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 

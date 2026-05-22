@@ -878,7 +878,7 @@ func TestColumnPhysicalRowReaderEvictBlocksNormalEvictionV1(t *testing.T) {
 		blocks: map[int]*columnPhysicalRowReaderBlock{
 			1: block,
 		},
-		lru: []int{1},
+		lru:   []int{1},
 		stats: columnPhysicalRowReaderStats{ResidentBytes: 256},
 	}
 	reader.evictBlocksForInsert()
