@@ -1,15 +1,22 @@
-# TreeDB Profiles (Durable / Fast / Bench)
+# TreeDB Profiles
 
 TreeDB exposes many low-level tuning knobs because real workloads care about
 different trade-offs:
 
-- durability vs throughput
+- WAL path: command WAL, legacy/raw cached WAL, or no WAL
+- ACK guarantee: fsynced, flushed/appended but relaxed, or checkpoint/close only
+- layout policy: conservative/default, production-fast, or benchmark-only
 - predictable latency vs background maintenance
 - steady-state performance vs benchmark determinism
 
 Most callers, however, want a small number of *intention-level* configurations.
 TreeDB profiles provide those as a convenience API. For cached-mode write-path
 semantics (WAL on/off), see `docs/TREEDB_WRITE_PATHS.md`.
+
+The explicit profile names separate the WAL path from durability and layout
+policy. The older short names (`durable`, `wal_on_fast`, `fast`) remain accepted
+as compatibility aliases, but new product decisions should prefer the explicit
+names.
 
 ## Quick Start
 
@@ -20,7 +27,7 @@ import treedb "github.com/snissn/gomap/TreeDB"
 
 func main() {
 	// Recommended: start from a profile and then override a few knobs.
-	opts := treedb.OptionsFor(treedb.ProfileDurable, "./db")
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./db")
 	opts.FlushThreshold = 128 << 20 // optional workload-specific tuning
 
 	db, err := treedb.Open(opts)
@@ -45,9 +52,10 @@ opts.FlushThreshold = 64 << 20
 A `Profile` is a named preset for a small set of **policy** knobs:
 
 - Durability / integrity checks (journal, sync policy, read checksums)
+- WAL path (`CommandWAL`, legacy/raw WAL, or no WAL)
 - Background work (checkpoint / pruning) that can affect latency and
   benchmark stability
-- For `fast` / `wal_on_fast`, the common value-log compression policy used by
+- For fast-layout profiles, the common value-log compression policy used by
   current `run_celestia` deployments:
   - `ValueLog.Compression = auto`
   - `ValueLog.BlockCodec = snappy`
@@ -61,24 +69,86 @@ Profiles intentionally avoid setting most throughput/capacity knobs (like
 
 ## Profiles
 
-### `ProfileDurable` (recommended default)
+### `ProfileCommandWALDurable`
 
-Goal: safest default for production use.
+String name: `command_wal_durable`
+
+Goal: explicit command-WAL durability entry point.
 
 Behavior:
 
-- Keeps cached-mode durability/integrity features enabled:
+- Enables command WAL:
+  - `CommandWAL = true`
+- Keeps durable sync/integrity features enabled:
   - `Durability = DurabilityDurable`
   - `ValueLog.ReadIntegrity = IntegrityVerify`
+- Uses the production-fast collection/index layout bundle:
+  - `IndexOuterLeavesInValueLog = true`
+  - `LeafPrefixCompression = true`
+  - `IndexColumnarLeaves = true`
+  - `IndexPackedValuePtr = true`
+- Pins the current Celestia-style value-log compression defaults.
 - Leaves background workers at their default settings.
-- Leaves index optimization booleans disabled by default.
 
 Use when you want:
 
-- crash recovery aligned with TreeDB’s intended semantics
+- command-WAL recovery aligned with TreeDB’s intended collection/Mongo
+  durability direction
+- durable fsync boundaries
 - corruption detection on reads
 
-### `ProfileFast`
+Note: command-WAL collection support is still gated by the command support matrix
+and performance gates. Do not treat this name alone as broad/default collection
+cutover proof.
+
+### `ProfileCommandWALRelaxed`
+
+String name: `command_wal_relaxed`
+
+Goal: command WAL with relaxed sync/read-integrity knobs for write-heavy
+benchmarks and ingest experiments.
+
+Behavior:
+
+- Enables command WAL:
+  - `CommandWAL = true`
+- Keeps command frames recoverable from the local command-WAL path while relaxing
+  sync/checksum policy:
+  - `Durability = DurabilityWALOnRelaxed`
+  - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
+- Uses the same production-fast collection/index layout and compression defaults
+  as `ProfileCommandWALDurable`.
+
+Use when you want:
+
+- command-WAL path coverage without per-boundary fsync cost
+- benchmark evidence for the future command-WAL default path
+
+### `ProfileLegacyWALDurable`
+
+String name: `legacy_wal_durable`
+
+Compatibility alias: `ProfileDurable` / `durable`
+
+Goal: safest profile for the pre-command-WAL raw/cached WAL path.
+
+Behavior:
+
+- Does not enable command WAL.
+- Keeps legacy/raw WAL durability/integrity features enabled:
+  - `Durability = DurabilityDurable`
+  - `ValueLog.ReadIntegrity = IntegrityVerify`
+- Leaves background workers at their default settings.
+- Leaves most index optimization booleans disabled by default.
+
+Use when you intentionally want the legacy/raw durable WAL path during the
+command-WAL transition.
+
+### `ProfileNoWALFast`
+
+String name: `no_wal_fast`
+
+Compatibility alias: `ProfileFast` / `fast`
 
 Goal: maximize throughput by relaxing safety knobs.
 
@@ -113,7 +183,11 @@ Use when you want:
 - you have an external durability boundary (e.g., higher-layer snapshots), or
   you are willing to trade durability/integrity for throughput
 
-### `ProfileWALOnFast`
+### `ProfileLegacyWALRelaxedFast`
+
+String name: `legacy_wal_relaxed_fast`
+
+Compatibility alias: `ProfileWALOnFast` / `wal_on_fast`
 
 Goal: maximize write throughput while keeping WAL on.
 
@@ -123,13 +197,13 @@ Behavior:
   - `Durability = DurabilityWALOnRelaxed`
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
-- Enables the same index optimization bundle as `ProfileFast`.
+- Enables the same index optimization bundle as `ProfileNoWALFast`.
 - Enables the same Celestia-style value-log compression defaults as
-  `ProfileFast`.
+  `ProfileNoWALFast`.
 
 Use when you want:
 
-- a stable “fast ingest” default that keeps WAL on
+- a stable legacy/raw “fast ingest” default that keeps WAL on
 - benchmarks aligned with the intended cached value-log write path
 
 ### `ProfileBench`
@@ -138,7 +212,7 @@ Goal: benchmark-friendly determinism (“Fast + fewer background surprises”).
 
 Behavior:
 
-- Includes everything from `ProfileFast`
+- Includes everything from `ProfileNoWALFast`
 - Disables background workers that can inject large work mid-run:
   - cached-mode auto-checkpoint triggers disabled
     (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,
@@ -172,11 +246,13 @@ stats, err := db.CompactStorage(ctx, treedb.CompactStorageOptions{
 })
 ```
 
-This is the recommended path for `ProfileFast`, `ProfileWALOnFast`, and
-`ProfileBench` databases. It coordinates `value_vlog` rewrite/GC, `leaf_vlog`
-generation pack/GC, index vacuum, and zero-byte value-log cleanup. Do not
-manually chain `vlog-gc`, `vlog-rewrite`, `leafgen-pack`, `leafgen-gc`, and
-index vacuum unless you are debugging TreeDB internals.
+This is the recommended path for fast-layout profiles such as
+`ProfileCommandWALDurable`, `ProfileCommandWALRelaxed`, `ProfileNoWALFast`,
+`ProfileLegacyWALRelaxedFast`, and `ProfileBench`. It coordinates `value_vlog`
+rewrite/GC, `leaf_vlog` generation pack/GC, index vacuum, and zero-byte
+value-log cleanup. Do not manually chain `vlog-gc`, `vlog-rewrite`,
+`leafgen-pack`, `leafgen-gc`, and index vacuum unless you are debugging TreeDB
+internals.
 
 ## Important Notes
 
@@ -195,7 +271,8 @@ parsing glue into each downstream wrapper.
 
 Recommended surface area for most wrappers:
 
-- Pick a profile first: `durable`, `fast`, or `wal_on_fast`
+- Pick a profile first: `command_wal_durable`, `command_wal_relaxed`,
+  `legacy_wal_durable`, `legacy_wal_relaxed_fast`, `no_wal_fast`, or `bench`
 - Expose a small set of main knobs:
   - durability/profile
   - value-log pointer threshold
@@ -217,7 +294,7 @@ opened, err := treedbkv.Open(treedbkv.OpenConfig{
 	ParentDir:                   dir,
 	Name:                        "application",
 	AdapterName:                 "TreeDB",
-	DefaultProfile:              treedb.ProfileWALOnFast,
+	DefaultProfile:              treedb.ProfileLegacyWALRelaxedFast,
 	DefaultKeepRecent:           1,
 	DefaultAdaptiveMemtableBase: "hash_sorted",
 })

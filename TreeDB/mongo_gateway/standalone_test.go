@@ -28,8 +28,8 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NormalizeStandaloneOptions defaults: %v", err)
 	}
-	if opts.Profile != treedb.ProfileDurable {
-		t.Fatalf("profile=%q want %q", opts.Profile, treedb.ProfileDurable)
+	if opts.Profile != treedb.ProfileLegacyWALDurable {
+		t.Fatalf("profile=%q want %q", opts.Profile, treedb.ProfileLegacyWALDurable)
 	}
 	if opts.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("document format=%q want bson", opts.DefaultCollectionOptions.DocumentFormat)
@@ -50,6 +50,16 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	}
 	if normalized.Profile != treedb.ProfileWALOnFast {
 		t.Fatalf("normalized profile=%q want %q", normalized.Profile, treedb.ProfileWALOnFast)
+	}
+	commandWAL, err := NormalizeStandaloneOptions(StandaloneOptions{
+		Dir:     t.TempDir(),
+		Profile: treedb.Profile("command-wal-durable"),
+	})
+	if err != nil {
+		t.Fatalf("NormalizeStandaloneOptions command WAL profile: %v", err)
+	}
+	if commandWAL.Profile != treedb.ProfileCommandWALDurable {
+		t.Fatalf("command WAL profile=%q want %q", commandWAL.Profile, treedb.ProfileCommandWALDurable)
 	}
 	if normalized.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("normalized document format=%q want bson", normalized.DefaultCollectionOptions.DocumentFormat)

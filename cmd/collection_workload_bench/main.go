@@ -195,7 +195,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.Deletes, "deletes", cfg.Deletes, "native delete operations")
 	fs.StringVar(&readerSweep, "reader-sweep", "1,2,4,8,16,32", "comma-separated reader/writer fanout values")
 	profile := string(cfg.TreeDBProfile)
-	fs.StringVar(&profile, "treedb-profile", profile, "TreeDB profile: bench, fast, wal_on_fast, durable")
+	fs.StringVar(&profile, "treedb-profile", profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	dataRootStorage := string(cfg.DataRootStorage)
 	indexStateRootStorage := string(cfg.IndexStateRootStorage)
 	indexRootStorage := string(cfg.IndexRootStorage)
@@ -370,18 +370,11 @@ func parsePositiveOrZeroInts(raw, label string) ([]int, error) {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case string(treedb.ProfileBench), "":
-		return treedb.ProfileBench, nil
-	case string(treedb.ProfileFast):
-		return treedb.ProfileFast, nil
-	case string(treedb.ProfileWALOnFast):
-		return treedb.ProfileWALOnFast, nil
-	case string(treedb.ProfileDurable):
-		return treedb.ProfileDurable, nil
-	default:
+	profile, ok := treedb.ParseProfile(raw, treedb.ProfileBench)
+	if !ok {
 		return "", fmt.Errorf("unknown treedb-profile %q", raw)
 	}
+	return profile, nil
 }
 
 func parseRootStorage(raw string) (collections.RootStoragePolicy, error) {

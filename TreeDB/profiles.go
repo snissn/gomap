@@ -1,8 +1,10 @@
 package treedb
 
+import "strings"
+
 // Profiles are intentionally defined in the public package so downstream users
 // can pick a coherent option bundle without duplicating the mapping from
-// “intent” (durable vs fast vs bench) to low-level knobs.
+// “intent” (WAL path, ACK guarantee, and layout policy) to low-level knobs.
 
 // Profile is a documented, high-level preset for TreeDB Options.
 //
@@ -12,13 +14,13 @@ package treedb
 // trade-offs (durability vs throughput, steady-state vs benchmark determinism,
 // background maintenance vs predictable latency).
 //
-// In practice, most callers want one of a small number of "bundles":
+// In practice, most callers want one of a small number of explicit bundles:
 //
-//   - "Durable": the safest defaults; favors crash-recovery and integrity.
-//   - "Fast":    higher throughput by relaxing durability/integrity knobs.
-//   - "Bench":   a deterministic variant intended for benchmarking; disables
-//     background workers that can otherwise inject "random" work
-//     (e.g. index vacuum firing mid-run).
+//   - "Command WAL durable": command WAL plus durable sync/integrity.
+//   - "Command WAL relaxed": command WAL plus relaxed sync/integrity.
+//   - "Legacy WAL durable":  pre-command-WAL durable path.
+//   - "No WAL fast":         higher throughput by relaxing durability/integrity.
+//   - "Bench":               a deterministic variant intended for benchmarking.
 //
 // Profiles are intentionally conservative:
 //   - They set the *meaningful policy knobs* (durability/integrity/background),
@@ -31,7 +33,7 @@ package treedb
 // ----------
 //
 //  1. New DB (recommended):
-//     opts := treedb.OptionsFor(treedb.ProfileDurable, "/path/to/db")
+//     opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "/path/to/db")
 //     opts.FlushThreshold = 128 << 20 // optional tuning
 //     db, err := treedb.Open(opts)
 //
@@ -47,11 +49,39 @@ package treedb
 type Profile string
 
 const (
-	// ProfileDurable is the recommended default for production use when you care
-	// about durability and corruption detection.
+	// ProfileCommandWALDurable is the explicit command-WAL production profile for
+	// callers that want command-WAL recovery, durable fsync boundaries, corruption
+	// detection, and the fast collection/index layout bundle.
+	ProfileCommandWALDurable Profile = "command_wal_durable"
+
+	// ProfileCommandWALRelaxed is the explicit command-WAL relaxed profile for
+	// write-heavy benchmark and ingest workloads. It enables command WAL but uses
+	// relaxed sync and read-integrity semantics.
+	ProfileCommandWALRelaxed Profile = "command_wal_relaxed"
+
+	// ProfileLegacyWALDurable is the explicit name for the pre-command-WAL durable
+	// profile. It keeps WAL and checksums enabled, but does not enable CommandWAL.
+	ProfileLegacyWALDurable Profile = "legacy_wal_durable"
+
+	// ProfileLegacyWALRelaxedFast is the explicit name for the pre-command-WAL
+	// relaxed fast profile. It is equivalent to ProfileWALOnFast.
+	ProfileLegacyWALRelaxedFast Profile = "legacy_wal_relaxed_fast"
+
+	// ProfileNoWALFast is the explicit name for the no-WAL fast profile. It is
+	// equivalent to ProfileFast.
+	ProfileNoWALFast Profile = "no_wal_fast"
+
+	// ProfileDurable is the legacy-compatible short name for
+	// ProfileLegacyWALDurable.
 	//
-	// It keeps WAL and checksums enabled and leaves background maintenance at
-	// their default settings.
+	// Prefer ProfileCommandWALDurable for new command-WAL durability decisions, or
+	// ProfileLegacyWALDurable when the old/raw WAL path is intentional.
+	//
+	// This profile keeps WAL and checksums enabled and leaves background
+	// maintenance at its default settings, but it does not enable CommandWAL.
+	//
+	// Deprecated: use ProfileCommandWALDurable or ProfileLegacyWALDurable to make
+	// the WAL path explicit.
 	ProfileDurable Profile = "durable"
 
 	// ProfileFast prioritizes throughput by relaxing durability/integrity knobs.
@@ -72,17 +102,21 @@ const (
 	//
 	// Background maintenance is left enabled by default; it is generally helpful
 	// for keeping the index compact and read-friendly.
+	//
+	// Deprecated: use ProfileNoWALFast when the no-WAL path is intentional.
 	ProfileFast Profile = "fast"
 
-	// ProfileWALOnFast is a "WAL on + relaxed durability" profile intended for
-	// write-heavy benchmarks and ingest workloads.
+	// ProfileWALOnFast is a legacy-compatible short name for
+	// ProfileLegacyWALRelaxedFast. It is a "WAL on + relaxed durability" profile
+	// intended for write-heavy benchmarks and ingest workloads.
 	//
-	// It keeps WAL enabled but disables fsync and value-log read checksums.
-	// After collection WAL lands, successful collection writes in this profile
-	// are process-crash recoverable but still do not have a power-loss fsync
-	// guarantee.
+	// It keeps the legacy/raw WAL path enabled but disables fsync and value-log
+	// read checksums.
 	//
-	// It also pins the same value-log compression policy as ProfileFast.
+	// It also pins the same value-log compression policy as ProfileNoWALFast.
+	//
+	// Deprecated: use ProfileLegacyWALRelaxedFast when the legacy/raw WAL path is
+	// intentional, or ProfileCommandWALRelaxed for the command-WAL relaxed path.
 	ProfileWALOnFast Profile = "wal_on_fast"
 
 	// ProfileBench is a "fast + deterministic" profile intended specifically for
@@ -95,7 +129,51 @@ const (
 	ProfileBench Profile = "bench"
 )
 
+// ProfileFlagHelp is the recommended profile vocabulary for CLI flag help.
+const ProfileFlagHelp = "command_wal_durable, command_wal_relaxed, legacy_wal_durable, legacy_wal_relaxed_fast, no_wal_fast, or bench (aliases: durable, wal_on_fast, fast)"
+
 const fastProfileChunkSize = 4 << 20
+
+// ParseProfile parses a profile name using TreeDB's standard profile vocabulary.
+// Empty input returns fallback. The bool reports whether a known name or empty
+// fallback was accepted.
+func ParseProfile(raw string, fallback Profile) (Profile, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return fallback, true
+	}
+	return NormalizeProfile(Profile(raw))
+}
+
+// NormalizeProfile normalizes supported profile names and aliases to their
+// public Profile constants.
+func NormalizeProfile(profile Profile) (Profile, bool) {
+	switch normalizeProfileToken(string(profile)) {
+	case string(ProfileCommandWALDurable):
+		return ProfileCommandWALDurable, true
+	case string(ProfileCommandWALRelaxed):
+		return ProfileCommandWALRelaxed, true
+	case string(ProfileLegacyWALDurable):
+		return ProfileLegacyWALDurable, true
+	case string(ProfileLegacyWALRelaxedFast):
+		return ProfileLegacyWALRelaxedFast, true
+	case string(ProfileNoWALFast):
+		return ProfileNoWALFast, true
+	case string(ProfileDurable):
+		return ProfileDurable, true
+	case string(ProfileFast):
+		return ProfileFast, true
+	case string(ProfileWALOnFast), "walonfast":
+		return ProfileWALOnFast, true
+	case string(ProfileBench):
+		return ProfileBench, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeProfileToken(raw string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(raw)), "-", "_")
+}
 
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
 //
@@ -126,17 +204,25 @@ func ApplyProfile(opts *Options, profile Profile) {
 		return
 	}
 
-	switch profile {
-	case ProfileDurable:
+	normalized, ok := NormalizeProfile(profile)
+	if !ok {
+		// Unknown profile: no-op (callers can still use Options directly).
+		return
+	}
+
+	switch normalized {
+	case ProfileCommandWALDurable:
+		applyCommandWALDurableProfile(opts)
+	case ProfileCommandWALRelaxed:
+		applyCommandWALRelaxedProfile(opts)
+	case ProfileDurable, ProfileLegacyWALDurable:
 		applyDurableProfile(opts)
-	case ProfileFast:
+	case ProfileFast, ProfileNoWALFast:
 		applyFastProfile(opts)
-	case ProfileWALOnFast:
+	case ProfileWALOnFast, ProfileLegacyWALRelaxedFast:
 		applyWALOnFastProfile(opts)
 	case ProfileBench:
 		applyBenchProfile(opts)
-	default:
-		// Unknown profile: no-op (callers can still use Options directly).
 	}
 }
 
@@ -212,6 +298,18 @@ func applyWALOnFastProfile(opts *Options) {
 	}
 
 	applyIndexOptimizationsProfile(opts)
+}
+
+func applyCommandWALDurableProfile(opts *Options) {
+	applyWALOnFastProfile(opts)
+	opts.CommandWAL = true
+	opts.Durability = DurabilityDurable
+	opts.ValueLog.ReadIntegrity = IntegrityVerify
+}
+
+func applyCommandWALRelaxedProfile(opts *Options) {
+	applyWALOnFastProfile(opts)
+	opts.CommandWAL = true
 }
 
 func applyBenchProfile(opts *Options) {

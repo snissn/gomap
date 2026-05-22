@@ -36,7 +36,7 @@ type OpenConfig struct {
 	AdapterName string
 	// DBFileSuffix defaults to ".db".
 	DBFileSuffix string
-	// DefaultProfile defaults to treedb.ProfileWALOnFast.
+	// DefaultProfile defaults to treedb.ProfileLegacyWALRelaxedFast.
 	DefaultProfile treedb.Profile
 	// DefaultKeepRecent is applied when the env override is unset.
 	DefaultKeepRecent uint64
@@ -68,22 +68,12 @@ type Opened struct {
 // to fallback for empty or unknown values.
 func ParseProfile(raw string, fallback treedb.Profile) treedb.Profile {
 	if fallback == "" {
-		fallback = treedb.ProfileWALOnFast
+		fallback = treedb.ProfileLegacyWALRelaxedFast
 	}
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "":
-		return fallback
-	case "fast":
-		return treedb.ProfileFast
-	case "wal_on_fast", "walonfast":
-		return treedb.ProfileWALOnFast
-	case "durable":
-		return treedb.ProfileDurable
-	case "bench":
-		return treedb.ProfileBench
-	default:
-		return fallback
+	if profile, ok := treedb.ParseProfile(raw, fallback); ok {
+		return profile
 	}
+	return fallback
 }
 
 // ResolveOptions converts downstream wrapper defaults and standard TREEDB_*

@@ -98,7 +98,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	cfg := cliConfig{
 		addr:                    mongogateway.DefaultStandaloneAddr,
 		dir:                     defaultDirFromEnv(),
-		profile:                 string(treedb.ProfileDurable),
+		profile:                 string(treedb.ProfileLegacyWALDurable),
 		documentFormat:          string(mongogateway.DefaultStandaloneDocumentFormat),
 		dataRootStorage:         rootStorageFlagValue(collections.RootStorageDefault),
 		indexStateStorage:       rootStorageFlagValue(collections.RootStorageDefault),
@@ -110,7 +110,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.SetOutput(flagSetOutput(args, stderr))
 	fs.StringVar(&cfg.addr, "addr", cfg.addr, "TCP listen address for MongoDB clients")
 	fs.StringVar(&cfg.dir, "dir", cfg.dir, "TreeDB root directory")
-	fs.StringVar(&cfg.profile, "profile", cfg.profile, "TreeDB profile: durable, fast, wal_on_fast, or bench")
+	fs.StringVar(&cfg.profile, "profile", cfg.profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.StringVar(&cfg.documentFormat, "document-format", cfg.documentFormat, "default collection document format: bson, json, or template-v1")
 	fs.StringVar(&cfg.dataRootStorage, "data-root-storage", cfg.dataRootStorage, "default collection data root storage: default, fast, or compressed")
 	fs.StringVar(&cfg.indexStateStorage, "index-state-storage", cfg.indexStateStorage, "default collection index-state storage: default, fast, or compressed")

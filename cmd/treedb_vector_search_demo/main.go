@@ -277,7 +277,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.datasetDir, "dataset-dir", "", "Optional exported vector dataset directory to load documents and queries from")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
-	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
+	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
@@ -369,18 +369,11 @@ func parseConfig(args []string) (config, error) {
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
-	switch treedb.Profile(strings.ToLower(strings.TrimSpace(raw))) {
-	case "", treedb.ProfileBench:
-		return treedb.ProfileBench, nil
-	case treedb.ProfileDurable:
-		return treedb.ProfileDurable, nil
-	case treedb.ProfileFast:
-		return treedb.ProfileFast, nil
-	case treedb.ProfileWALOnFast:
-		return treedb.ProfileWALOnFast, nil
-	default:
+	profile, ok := treedb.ParseProfile(raw, treedb.ProfileBench)
+	if !ok {
 		return "", fmt.Errorf("unsupported -profile %q", raw)
 	}
+	return profile, nil
 }
 
 func parseSearchConcurrency(raw string) ([]int, error) {
