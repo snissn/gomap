@@ -520,6 +520,67 @@ func TestColumnAssetReadIntegrityLabelPreservesUnsupportedM1634(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReadCacheViewsRequireExplicitOptInM1634(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("column-asset-reader-view-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+
+	copyCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new copy read cache: %v", err)
+	}
+	copyRaw, err := copyCache.read(ref, nil)
+	if err != nil {
+		_ = copyCache.close()
+		t.Fatalf("copy cache read: %v", err)
+	}
+	if !bytes.Equal(copyRaw, payload) {
+		_ = copyCache.close()
+		t.Fatalf("copy cache raw=%q want %q", copyRaw, payload)
+	}
+	if copyCache.lastView {
+		_ = copyCache.close()
+		t.Fatalf("copy cache returned an mmap view without opt-in")
+	}
+	if copyCache.file != nil && len(copyCache.file.mmap) != 0 {
+		_ = copyCache.close()
+		t.Fatalf("copy cache mapped segment without opt-in")
+	}
+	if err := copyCache.close(); err != nil {
+		t.Fatalf("copy cache close: %v", err)
+	}
+
+	viewCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new view read cache: %v", err)
+	}
+	viewCache.returnViews = true
+	viewRaw, err := viewCache.read(ref, nil)
+	if err != nil {
+		_ = viewCache.close()
+		t.Fatalf("view cache read: %v", err)
+	}
+	if !bytes.Equal(viewRaw, payload) {
+		_ = viewCache.close()
+		t.Fatalf("view cache raw=%q want %q", viewRaw, payload)
+	}
+	if viewCache.file != nil && len(viewCache.file.mmap) != 0 && !viewCache.lastView {
+		_ = viewCache.close()
+		t.Fatalf("view cache mapped segment but did not report view return")
+	}
+	if err := viewCache.close(); err != nil {
+		t.Fatalf("view cache close: %v", err)
+	}
+}
+
 func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
