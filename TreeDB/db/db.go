@@ -263,18 +263,22 @@ type DB struct {
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
-	commandWALFlushPoisoned   atomic.Bool
-	commandWALStatsMu         sync.Mutex
-	commandWALRequiredFeature bool
-	commandWALRequiredErr     string
-	commandWALStatsAppliedLSN uint64
-	commandWALStatsSummary    commandWALStatsSummary
-	commandWALStatsOK         bool
-	commandWALLiveAccepted    atomic.Uint64
-	commandWALLiveAcceptedMax atomic.Uint64
-	commandWALLiveCovered     atomic.Uint64
-	commandWALLiveCoveredMax  atomic.Uint64
-	closing                   atomic.Bool
+	commandWALFlushPoisoned    atomic.Bool
+	commandWALStatsMu          sync.Mutex
+	commandWALRequiredFeature  bool
+	commandWALRequiredErr      string
+	commandWALStatsAppliedLSN  uint64
+	commandWALStatsSummary     commandWALStatsSummary
+	commandWALStatsOK          bool
+	commandWALLiveAccepted     atomic.Uint64
+	commandWALLiveAcceptedMax  atomic.Uint64
+	commandWALLiveCovered      atomic.Uint64
+	commandWALLiveCoveredMax   atomic.Uint64
+	commandWALRawPublishMu     sync.RWMutex
+	commandWALRawBarrierMu     sync.Mutex
+	commandWALRawBarrierNextID uint64
+	commandWALRawBarriers      []*commandWALRawBarrier
+	closing                    atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
@@ -1566,7 +1570,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// If a directory requires command replay but this open is not command-WAL
 		// enabled, fail closed before legacy replay can misinterpret typed frames.
 		// Frames already covered by AppliedCommandLSN are filtered below.
-		if err := requireNoUnappliedCommandWAL(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
@@ -1665,20 +1669,44 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	return db, nil
 }
 
+func (db *DB) acceptingCloseHooksLocked() bool {
+	return db != nil && !db.closeHooksClosed && !db.closing.Load()
+}
+
 // RegisterCloseHook registers a callback that runs before Close marks the DB as
 // closing, while normal write/publish APIs are still available.
 func (db *DB) RegisterCloseHook(hook func() error) func() {
+	unregister, _ := db.RegisterCloseHookIfOpen(hook)
+	return unregister
+}
+
+// RegisterCloseHookIfOpen is like RegisterCloseHook, but also reports whether
+// the hook was retained. Callers that attach external state to the hook can use
+// this to avoid leaks when registration races DB close.
+func (db *DB) RegisterCloseHookIfOpen(hook func() error) (func(), bool) {
+	return db.RegisterCloseHookIfOpenAfter(nil, hook)
+}
+
+// RegisterCloseHookIfOpenAfter runs setup while close-hook registration is
+// serialized with RunCloseHooks, then registers hook if setup returns true. The
+// returned bool reports that the DB was still accepting close-hook registration
+// and setup, if any, ran inside that accepted registration window. If setup
+// returns false, no hook is retained even though the registration window was
+// accepted.
+func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error) (func(), bool) {
 	if db == nil || hook == nil {
-		return func() {}
+		return func() {}, false
 	}
 	db.closeHooksMu.Lock()
-	if db.closeHooksClosed || db.closing.Load() {
-		db.closeHooksMu.Unlock()
-		return func() {}
+	defer db.closeHooksMu.Unlock()
+	if !db.acceptingCloseHooksLocked() {
+		return func() {}, false
+	}
+	if setup != nil && !setup() {
+		return func() {}, true
 	}
 	idx := len(db.closeHooks)
 	db.closeHooks = append(db.closeHooks, hook)
-	db.closeHooksMu.Unlock()
 
 	var once sync.Once
 	return func() {
@@ -1689,7 +1717,7 @@ func (db *DB) RegisterCloseHook(hook func() error) func() {
 			}
 			db.closeHooksMu.Unlock()
 		})
-	}
+	}, true
 }
 
 // RunCloseHooks runs and clears registered close hooks. Wrappers that own a
@@ -2005,6 +2033,9 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 		return page.MetaPageBody{}, false
 	}
 	body := data[page.PageHeaderSize:]
+	// Meta page selection is still commit-sequence based. The command-WAL V1
+	// decoder only changes how the selected page interprets the reserved
+	// AppliedCommandLSN extension bytes: unmarked legacy pages decode as zero.
 	return page.DecodeMetaBodyCommandWALV1(body), true
 }
 

@@ -27,11 +27,11 @@ func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
 }
 
 func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
-	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
-	})
+	}, 0)
 	if got := intent.AssignedLSN(); got != 0 {
 		t.Fatalf("zero-lsn replay AssignedLSN=%d, want 0", got)
 	}
@@ -58,12 +58,12 @@ func TestCommandWALReplayIntentZeroLSNFailsClosedM10C(t *testing.T) {
 }
 
 func TestCommandWALReplayIntentRequiresActiveRecoveryFrameM10C(t *testing.T) {
-	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
 		LSN:           7,
 		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
-	})
+	}, 0)
 	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -142,7 +142,7 @@ func TestCommandWALReplayIntentRequiresActiveRecoveryTokenM10C(t *testing.T) {
 	d.commandWALReplayLSN.Store(env.LSN)
 	d.commandWALReplayToken.Store(99)
 
-	forged := NewCommandWALReplayIntent(env)
+	forged := newCommandWALReplayIntent(env, 0)
 	if _, err := d.AppendCommandWALIntent(forged, false); !errors.Is(err, ErrCommandWALRejected) {
 		t.Fatalf("AppendCommandWALIntent forged replay error=%v, want ErrCommandWALRejected", err)
 	} else if !strings.Contains(err.Error(), "missing recovery token") {

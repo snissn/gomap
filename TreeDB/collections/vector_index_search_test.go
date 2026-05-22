@@ -193,7 +193,7 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 			Field:      "embedding",
 			Metric:     VectorMetricCosine,
 			Dimensions: 3,
-			Strategy:   VectorIndexStrategyNativeRuntime,
+			Strategy:   VectorIndexStrategyColumnGraph,
 		}},
 	}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
@@ -220,8 +220,8 @@ func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 	if !errors.Is(err, ErrVectorIndexSearchUnavailable) {
 		t.Fatalf("SearchVectorIndex err=%v want search unavailable", err)
 	}
-	if got.Status.State != VectorIndexStateNativeRuntime || got.Status.Reason != VectorIndexReasonNativeRuntime {
-		t.Fatalf("status=%+v want native_runtime unavailable response", got.Status)
+	if got.Status.State != VectorIndexStateColumnGraphUnavailable || got.Status.Reason != VectorIndexReasonPhysicalColumnAssetSupportMissing {
+		t.Fatalf("status=%+v want column_graph unavailable response", got.Status)
 	}
 	if got := mgr.StatsSnapshot().PendingDocuments; got != 0 {
 		t.Fatalf("PendingDocuments after SearchVectorIndex=%d want flushed before snapshot", got)
@@ -717,7 +717,7 @@ func TestSearchVectorIndexColumnGraphUsesSnapshotMetadataV4(t *testing.T) {
 	mutated := false
 	for i := range col.meta.VectorIndexes {
 		if col.meta.VectorIndexes[i].Name == def.Name {
-			col.meta.VectorIndexes[i].Metric = VectorMetric("dot")
+			col.meta.VectorIndexes[i].Metric = VectorMetric(255)
 			col.meta.VectorIndexes[i].Strategy = VectorIndexStrategyNativeRuntime
 			mutated = true
 		}
@@ -751,7 +751,7 @@ func TestSearchVectorIndexColumnGraphRejectsUnsupportedMetricV4(t *testing.T) {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	mutateCurrentSnapshotVectorIndexForTestV4(t, d, col, def.Name, func(def *VectorIndexDefinition) {
-		def.Metric = VectorMetric("dot")
+		def.Metric = VectorMetric(255)
 	})
 
 	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{

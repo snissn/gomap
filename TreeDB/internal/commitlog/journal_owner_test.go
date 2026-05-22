@@ -219,6 +219,46 @@ func TestCommandJournalDefaultSegmentSeqUsesLatestSegment(t *testing.T) {
 	}
 }
 
+func TestCommandJournalAppendsToPreexistingZeroByteSegment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, CommandSegmentName(0, 1))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile zero segment: %v", err)
+	}
+
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	lsn, err := j.AppendCommand(CommandEnvelope{
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		_ = j.Close()
+		t.Fatalf("AppendCommand: %v", err)
+	}
+	if lsn != 1 {
+		_ = j.Close()
+		t.Fatalf("LSN=%d, want 1", lsn)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	frames, err := ScanCommandFrames(path, Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames: %v", err)
+	}
+	if len(frames) != 1 || frames[0].LSN != 1 {
+		t.Fatalf("frames=%+v, want one LSN 1 frame", frames)
+	}
+}
+
 func TestCommandJournalRejectsExplicitSegmentBehindLaneTail(t *testing.T) {
 	dir := t.TempDir()
 	first, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: 1})

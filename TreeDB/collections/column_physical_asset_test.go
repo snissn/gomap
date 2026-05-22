@@ -1521,6 +1521,17 @@ func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 		t.Fatalf("decode corrupt manifest records err=%v want trailing-bytes failure", err)
 	}
 
+	badKeyRecords := cloneColumnManifestRecords(manifest.Records)
+	for i := range badKeyRecords {
+		if bytes.Equal(badKeyRecords[i].key, columnManifestPartRecordKey(ref.Generation, ref.PartID)) {
+			badKeyRecords[i].key = columnManifestPartRecordKey(ref.Generation+1, ref.PartID)
+			break
+		}
+	}
+	if _, err := decodeColumnManifestRecords(badKeyRecords); err == nil || !strings.Contains(err.Error(), "part key") {
+		t.Fatalf("decode manifest records with mismatched part key err=%v want part-key failure", err)
+	}
+
 	badIdentity := manifest.Identity
 	badIdentity.Checksum++
 	badDelta := delta
