@@ -110,6 +110,90 @@ func TestRunColumnStoreSuiteReportsRelaxedAssetReadIntegrityM1634(t *testing.T) 
 	}
 }
 
+func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		key    string
+		value  int64
+		want   string
+	}{
+		{name: "count", prefix: "q1", key: "share", value: 12, want: "q1:share=12"},
+		{name: "negative", prefix: "q4a", key: "d000001", value: -42, want: "q4a:d000001=-42"},
+		{name: "min_int64", prefix: "q4a", key: "d000002", value: -1 << 63, want: "q4a:d000002=-9223372036854775808"},
+		{name: "max_int64", prefix: "q4b", key: "d000003", value: 1<<63 - 1, want: "q4b:d000003=9223372036854775807"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := columnStoreSuiteFormatPhysicalQueryLine(tt.prefix, tt.key, tt.value); got != tt.want {
+				t.Fatalf("columnStoreSuiteFormatPhysicalQueryLine=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.T) {
+	tests := []struct {
+		name      string
+		prefix    string
+		queryName string
+		groups    []collections.ColumnPhysicalQueryGroup
+	}{
+		{
+			name:      "q1_unsorted",
+			prefix:    "q1",
+			queryName: columnStoreQueryQ1,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "app.bsky.feed.post", Count: 34},
+				{Key: "app.bsky.feed.like", Count: 12},
+				{Key: "app.bsky.graph.follow", Count: 56},
+			},
+		},
+		{
+			name:      "q1_prefix_key_and_decimal_lexical_order",
+			prefix:    "q1",
+			queryName: columnStoreQueryQ1,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "a", Count: 2},
+				{Key: "a.b", Count: 1},
+				{Key: "a", Count: 10},
+			},
+		},
+		{
+			name:      "q5_unsorted_boundaries",
+			prefix:    "q5",
+			queryName: columnStoreQueryQ5,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "d000002", Int64: 1<<63 - 1},
+				{Key: "d000001", Int64: -1 << 63},
+			},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			groupsForLines := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
+			lines, err := columnStoreSuitePhysicalQueryLines(tt.prefix, tt.queryName, groupsForLines)
+			if err != nil {
+				t.Fatalf("columnStoreSuitePhysicalQueryLines: %v", err)
+			}
+			want := columnStoreHashLines(lines)
+			groupsForHash := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
+			got, count, err := columnStoreSuiteHashPhysicalQueryGroups(tt.prefix, tt.queryName, groupsForHash)
+			if err != nil {
+				t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups: %v", err)
+			}
+			if count != len(tt.groups) {
+				t.Fatalf("result count=%d want %d", count, len(tt.groups))
+			}
+			if got != want {
+				t.Fatalf("direct hash=%016x want line hash=%016x", got, want)
+			}
+		})
+	}
+}
+
 func TestColumnStoreSuiteInheritsTreeDBDisableReadChecksumM1634(t *testing.T) {
 	prevAllowUnsafe := *treedbAllowUnsafe
 	prevDisableReadChecksum := *treedbDisableReadChecksum
