@@ -13164,10 +13164,10 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 			if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
 				return err
 			}
-			c.meta = plan.meta
 			if err := c.requireColumnStoreCommandWAL(plan.meta, commandWALIntent); err != nil {
 				return err
 			}
+			c.meta = plan.meta
 			if c.commandWALActive(commandWALIntent) {
 				if commandWALIntent == nil {
 					commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(nil, nil)

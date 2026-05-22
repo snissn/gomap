@@ -634,12 +634,12 @@ func TestPublishCommandWALNoopRequiresCommandWALEnabled(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
 		LSN:           1,
 		Kind:          commitlog.CommandKindRawKVBatch,
 		Scope:         commitlog.CommandScopeRawKV,
 		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
-	})
+	}, 0)
 	if err := db.PublishCommandWALNoop(intent, false); !errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("PublishCommandWALNoop error=%v, want ErrCommandWALUnsupported", err)
 	}
@@ -666,12 +666,12 @@ func TestCommandWALRejectsUnloggedCommit(t *testing.T) {
 }
 
 func TestCommandWALReplayIntentRequestsSynchronousPublish(t *testing.T) {
-	intent := NewCommandWALReplayIntent(commitlog.CommandEnvelope{
+	intent := newCommandWALReplayIntent(commitlog.CommandEnvelope{
 		LSN:           1,
 		Kind:          commitlog.CommandKindRawKVBatch,
 		Scope:         commitlog.CommandScopeRawKV,
 		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
-	})
+	}, 0)
 	if !commandWALIntentPublishSync(intent, false) {
 		t.Fatal("replay intent did not request synchronous publish")
 	}
