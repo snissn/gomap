@@ -31,7 +31,7 @@ type PredicateDiagnostics struct {
 	Matched         int
 }
 
-type SortKeyColumn struct {
+type SortKeyColumnValues struct {
 	Name   string
 	Values []int64
 }
@@ -75,7 +75,15 @@ type compiledRowSortKeyRanges struct {
 	count  int
 }
 
-func BuildSortKeyMark(columns []SortKeyColumn) (SortKeyMark, error) {
+func BuildSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
+	return buildSortKeyMark(columns, true)
+}
+
+func buildOwnedSortKeyMark(columns []SortKeyColumnValues) (SortKeyMark, error) {
+	return buildSortKeyMark(columns, false)
+}
+
+func buildSortKeyMark(columns []SortKeyColumnValues, copyValues bool) (SortKeyMark, error) {
 	if len(columns) == 0 {
 		return SortKeyMark{}, errors.New("colgranule: empty sort key")
 	}
@@ -107,7 +115,11 @@ func BuildSortKeyMark(columns []SortKeyColumn) (SortKeyMark, error) {
 			return SortKeyMark{}, fmt.Errorf("colgranule: sort key column %s rows=%d want=%d", c.Name, len(c.Values), rows)
 		}
 		mark.Columns[i] = c.Name
-		mark.ColumnValues[i] = append([]int64(nil), c.Values...)
+		if copyValues {
+			mark.ColumnValues[i] = append([]int64(nil), c.Values...)
+		} else {
+			mark.ColumnValues[i] = c.Values
+		}
 		lower[i] = c.Values[0]
 		last[i] = c.Values[rows-1]
 	}
@@ -369,7 +381,7 @@ func validateRangePredicates(columns []string, ranges []Int64RangePredicate) err
 	return nil
 }
 
-func compareSortKeyRows(columns []SortKeyColumn, left int, right int) int {
+func compareSortKeyRows(columns []SortKeyColumnValues, left int, right int) int {
 	for _, column := range columns {
 		lv := column.Values[left]
 		rv := column.Values[right]

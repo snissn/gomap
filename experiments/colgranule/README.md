@@ -9,8 +9,14 @@ It currently covers:
 - 8192-row default int64 granules;
 - raw int64 encoding;
 - delta + zigzag varint encoding;
+- double-delta-style int64 encoding;
+- nullable/default-heavy int64, bool bitpack/RLE, and low-cardinality code paths;
 - none, snappy, and lz4 compression;
 - min/max metadata and range-scan skip;
+- sort-key marks and predicate pruning diagnostics;
+- aggregate kernels over encoded granules;
+- non-durable in-memory column parts made from row-aligned granules and
+  independently split column codec blocks;
 - JSONBench Bluesky fixture loading into int64-derived columns.
 
 ## Local JSONBench Data

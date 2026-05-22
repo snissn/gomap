@@ -7,7 +7,7 @@ import (
 )
 
 func TestSortKeyMarkPrefixSummaries(t *testing.T) {
-	mark, err := BuildSortKeyMark([]SortKeyColumn{
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1, 2, 2}},
 		{Name: "time_us", Values: []int64{10, 20, 30, 5, 15}},
 	})
@@ -40,13 +40,13 @@ func TestSortKeyMarkPrefixSummaries(t *testing.T) {
 }
 
 func TestSortKeyMarkRejectsDuplicateOrUnsortedColumns(t *testing.T) {
-	if _, err := BuildSortKeyMark([]SortKeyColumn{
+	if _, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1}},
 		{Name: "collection", Values: []int64{10, 20, 30}},
 	}); err == nil {
 		t.Fatal("BuildSortKeyMark duplicate columns succeeded, want error")
 	}
-	if _, err := BuildSortKeyMark([]SortKeyColumn{
+	if _, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1}},
 		{Name: "time_us", Values: []int64{10, 9, 11}},
 	}); err == nil {
@@ -55,7 +55,7 @@ func TestSortKeyMarkRejectsDuplicateOrUnsortedColumns(t *testing.T) {
 }
 
 func TestEmptySortKeyPredicateIsConstrainedEmpty(t *testing.T) {
-	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "collection", Values: []int64{1, 1, 1}}})
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "collection", Values: []int64{1, 1, 1}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
 		t.Fatalf("missing marks err=%v want sort key ranges require marks", err)
 	}
 
-	mark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2}}})
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: []int64{1, 2}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
 		t.Fatal("CountInt64RangeWithDiagnostics mismatched mark rows succeeded, want error")
 	}
 
-	matchingMark, err := BuildSortKeyMark([]SortKeyColumn{{Name: "time_us", Values: []int64{1, 2, 3}}})
+	matchingMark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: []int64{1, 2, 3}}})
 	if err != nil {
 		t.Fatalf("BuildSortKeyMark matching: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestSortKeyRangeIsAppliedWithinMixedGranule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildInt64: %v", err)
 	}
-	mark, err := BuildSortKeyMark([]SortKeyColumn{
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: collections},
 		{Name: "time_us", Values: times},
 	})
@@ -253,7 +253,7 @@ func TestMarkAndMinMaxSkipsDoNotDecodeCorruptPayload(t *testing.T) {
 	g.StoredBytes = len(g.Payload)
 	g.PayloadRef.Length = len(g.Payload)
 	g.RawBytes = len(g.Payload)
-	mark, err := BuildSortKeyMark([]SortKeyColumn{
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 		{Name: "collection", Values: []int64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}},
 		{Name: "time_us", Values: []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
 	})
@@ -335,7 +335,7 @@ func buildCompositeSortFixtureForTest() ([]EncodedGranule, []SortKeyMark, []int6
 			}
 			owned := g
 			owned.Payload = append([]byte(nil), g.Payload...)
-			mark, err := BuildSortKeyMark([]SortKeyColumn{
+			mark, err := BuildSortKeyMark([]SortKeyColumnValues{
 				{Name: "collection", Values: collections},
 				{Name: "time_us", Values: times},
 			})
