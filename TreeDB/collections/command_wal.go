@@ -31,6 +31,10 @@ func RegisterCommandWALReplayHandlers() {
 	})
 }
 
+func newCommandWALReplayCollectionManager(db *backenddb.DB) *CollectionManager {
+	return newCollectionManager(db, collectionManagerOptions{})
+}
+
 func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {
 	return intent != nil || (c != nil && c.db != nil && c.db.CommandWALEnabled())
 }
@@ -208,7 +212,7 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -232,7 +236,7 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -257,7 +261,7 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	manager := NewCollectionManager(db)
+	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
 		return err
@@ -297,7 +301,7 @@ func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.Com
 	if err != nil {
 		return err
 	}
-	_, err = NewCollectionManager(db).createCollectionWithCommandWALIntent(meta, intent)
+	_, err = newCommandWALReplayCollectionManager(db).createCollectionWithCommandWALIntent(meta, intent)
 	return err
 }
 
