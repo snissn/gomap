@@ -1,9 +1,10 @@
 module github.com/snissn/gomap
 
-go 1.23.0
+go 1.25.0
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
+	github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/buger/jsonparser v1.1.2
 	github.com/cespare/xxhash/v2 v2.3.0
@@ -23,11 +24,13 @@ require (
 	github.com/tidwall/gjson v1.14.3
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
+	github.com/tphakala/simd v1.0.22
 	github.com/yuin/goldmark v1.7.13
 	github.com/zeebo/xxh3 v1.0.2
 	go.etcd.io/bbolt v1.4.3
 	go.mongodb.org/mongo-driver/v2 v2.6.0
-	golang.org/x/sys v0.35.0
+	golang.org/x/sys v0.38.0
+	gonum.org/v1/gonum v0.16.0
 	gonum.org/v1/plot v0.16.0
 )
 

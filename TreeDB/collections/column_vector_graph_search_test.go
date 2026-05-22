@@ -13,6 +13,41 @@ import (
 
 const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
 
+type columnVectorGraphNativeSearchBenchShapeV3 struct {
+	rows                int
+	dims                int
+	m                   int
+	topK                int
+	efSearch            int
+	queryOrdinal        int
+	directPhysicalAsset bool
+}
+
+func columnVectorGraphNativeSearchSmallBenchShapeV3() columnVectorGraphNativeSearchBenchShapeV3 {
+	return columnVectorGraphNativeSearchBenchShapeV3{
+		rows:         1024,
+		dims:         128,
+		m:            16,
+		topK:         10,
+		efSearch:     128,
+		queryOrdinal: 37,
+	}
+}
+
+func columnVectorGraphNativeSearchProduction8192BenchShapeV3() columnVectorGraphNativeSearchBenchShapeV3 {
+	return columnVectorGraphNativeSearchBenchShapeV3{
+		rows:         8192,
+		dims:         128,
+		m:            16,
+		topK:         10,
+		efSearch:     128,
+		queryOrdinal: 4096,
+		// Publish the physical graph asset directly so repeated benchmark counts
+		// measure the native search loop, not O(rows^2) rebuild adjacency setup.
+		directPhysicalAsset: true,
+	}
+}
+
 func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -258,6 +293,21 @@ func TestColumnVectorGraphNativeCosineScoreRejectsMalformedRowV3(t *testing.T) {
 	})
 	if !errors.Is(err, errColumnVectorGraphNativeSearchCandidateDimensionMismatch) {
 		t.Fatalf("columnVectorGraphNativeCosineScore err=%v want dimension failure", err)
+	}
+}
+
+func TestColumnVectorGraphNativeCosineScoreFallsBackWhenFloat32DotUnderflowsV3(t *testing.T) {
+	tiny := float32(math.SmallestNonzeroFloat32)
+	got, err := columnVectorGraphNativeCosineScore([]float32{tiny}, 1, columnVectorGraphPhysicalRow{
+		Ordinal: 7,
+		Vector:  []float32{tiny},
+		InvNorm: 1,
+	})
+	if err != nil {
+		t.Fatalf("columnVectorGraphNativeCosineScore: %v", err)
+	}
+	if got <= 0 {
+		t.Fatalf("columnVectorGraphNativeCosineScore=%g want positive float64 fallback score", got)
 	}
 }
 
@@ -605,29 +655,25 @@ func TestColumnVectorGraphNativeSearchParallelReadersV3(t *testing.T) {
 }
 
 func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
-	const (
-		rows     = 1024
-		dims     = 128
-		m        = 16
-		topK     = 10
-		efSearch = 128
-	)
-	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
-	defer func() { _ = d.Close() }()
-	status, err := col.RebuildVectorIndex(def.Name)
-	if err != nil {
-		b.Fatalf("RebuildVectorIndex: %v", err)
-	}
-	assertColumnGraphRebuildLoadedStatusV2A(b, status, def.Name)
+	benchmarkColumnVectorGraphNativeSearchCosineV3(b, columnVectorGraphNativeSearchSmallBenchShapeV3())
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineProduction8192V3(b *testing.B) {
+	benchmarkColumnVectorGraphNativeSearchCosineV3(b, columnVectorGraphNativeSearchProduction8192BenchShapeV3())
+}
+
+func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
+	b.Helper()
+	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(b, shape)
+	defer closeFn()
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
 		b.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
 	defer reader.Close()
-	query := append([]float32(nil), input[37].vector...)
 	var scratch columnVectorGraphNativeSearchScratch
-	if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &scratch); err != nil {
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch}
+	if _, _, err := reader.SearchCosine(query, opts, &scratch); err != nil {
 		b.Fatalf("warm SearchCosine: %v", err)
 	}
 	baseStats := reader.Stats()
@@ -635,7 +681,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &scratch)
+		got, stats, err := reader.SearchCosine(query, opts, &scratch)
 		if err != nil {
 			b.Fatalf("SearchCosine: %v", err)
 		}
@@ -651,25 +697,22 @@ func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
 	}
 	b.StopTimer()
 	stats := reader.Stats()
+	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
 	reportColumnGraphNativeSearchBenchMetricsV3(b, b.N, baseStats, stats, searchStats)
 }
 
 func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
-	const (
-		rows     = 1024
-		dims     = 128
-		m        = 16
-		topK     = 10
-		efSearch = 128
-	)
-	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
-	defer func() { _ = d.Close() }()
-	status, err := col.RebuildVectorIndex(def.Name)
-	if err != nil {
-		b.Fatalf("RebuildVectorIndex: %v", err)
-	}
-	assertColumnGraphRebuildLoadedStatusV2A(b, status, def.Name)
+	benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b, columnVectorGraphNativeSearchSmallBenchShapeV3())
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineParallelProduction8192V3(b *testing.B) {
+	benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b, columnVectorGraphNativeSearchProduction8192BenchShapeV3())
+}
+
+func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
+	b.Helper()
+	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(b, shape)
+	defer closeFn()
 	type searchWorker struct {
 		reader  *columnVectorGraphPhysicalRowReader
 		scratch columnVectorGraphNativeSearchScratch
@@ -681,7 +724,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 	previousGOMAXPROCS := runtime.GOMAXPROCS(workers)
 	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
 	benchWorkers := make([]*searchWorker, workers)
-	query := append([]float32(nil), input[37].vector...)
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch}
 	for i := range benchWorkers {
 		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 		if err != nil {
@@ -689,7 +732,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		}
 		defer reader.Close()
 		worker := &searchWorker{reader: reader}
-		if _, _, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch); err != nil {
+		if _, _, err := reader.SearchCosine(query, opts, &worker.scratch); err != nil {
 			b.Fatalf("warm reader %d SearchCosine: %v", i, err)
 		}
 		benchWorkers[i] = worker
@@ -731,7 +774,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 			if failed.Load() {
 				continue
 			}
-			got, stats, err := worker.reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &worker.scratch)
+			got, stats, err := worker.reader.SearchCosine(query, opts, &worker.scratch)
 			if err != nil {
 				recordParallelErr("SearchCosine: %v", err)
 				continue
@@ -755,6 +798,7 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		totalResultFetches.Add(localStats.ResultFetches)
 	})
 	b.StopTimer()
+	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
 	if errValue := firstErr.Load(); errValue != nil {
 		b.Fatalf("%s", errValue.(string))
 	}
@@ -771,6 +815,87 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 		ExpansionFetches: totalExpansionFetches.Load(),
 		ResultFetches:    totalResultFetches.Load(),
 	})
+}
+
+func reportColumnGraphNativeSearchBenchShapeMetricsV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
+	b.Helper()
+	b.ReportMetric(float64(shape.rows), "rows")
+	b.ReportMetric(float64(shape.dims), "dims")
+	b.ReportMetric(float64(shape.m), "degree")
+	b.ReportMetric(float64(shape.topK), "top_k")
+	b.ReportMetric(float64(shape.efSearch), "ef_search")
+}
+
+func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) (func(), *Collection, VectorIndexDefinition, []float32) {
+	b.Helper()
+	if shape.queryOrdinal < 0 || shape.queryOrdinal >= shape.rows {
+		b.Fatalf("query ordinal=%d out of range rows=%d", shape.queryOrdinal, shape.rows)
+	}
+	if shape.directPhysicalAsset {
+		rows := columnVectorGraphNativeSearchBenchAssetRowsV3(b, shape.rows, shape.dims, shape.m)
+		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(b, shape.dims, shape.m, rows)
+		query := append([]float32(nil), rows[shape.queryOrdinal].Vector...)
+		return func() { _ = d.Close() }, col, def, query
+	}
+	input := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, shape.dims, shape.m, input)
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		_ = d.Close()
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(b, status, def.Name)
+	query := append([]float32(nil), input[shape.queryOrdinal].vector...)
+	return func() { _ = d.Close() }, col, def, query
+}
+
+func columnVectorGraphNativeSearchBenchAssetRowsV3(tb testing.TB, rows, dims, degree int) []columnVectorGraphAssetRow {
+	tb.Helper()
+	out := make([]columnVectorGraphAssetRow, rows)
+	for row := range out {
+		vector := columnVectorGraphNativeSearchBenchEmbeddingV3(row, dims)
+		invNorm, err := columnVectorGraphInvNorm(vector)
+		if err != nil {
+			tb.Fatalf("columnVectorGraphInvNorm row %d: %v", row, err)
+		}
+		adjacency := make([]uint32, 0, degree)
+		for edge := 0; edge < degree; edge++ {
+			step := edge/2 + 1
+			neighbor := row + step
+			if edge%2 == 1 {
+				neighbor = row - step
+			}
+			neighbor %= rows
+			if neighbor < 0 {
+				neighbor += rows
+			}
+			adjacency = append(adjacency, uint32(neighbor))
+		}
+		out[row] = columnVectorGraphAssetRow{
+			ID:        []byte(fmt.Sprintf("doc-%06d", row)),
+			Vector:    vector,
+			InvNorm:   invNorm,
+			Adjacency: adjacency,
+		}
+	}
+	return out
+}
+
+func columnVectorGraphNativeSearchBenchEmbeddingV3(id, dims int) []float32 {
+	out := make([]float32, dims)
+	var norm float64
+	x := float64(id + 1)
+	for i := range out {
+		d := float64(i + 1)
+		value := math.Sin(x*d*0.013) + math.Cos((x+17)*d*0.007) + math.Sin(float64((id%31)+1)*d*0.019)
+		out[i] = float32(value)
+		norm += value * value
+	}
+	scale := 1 / math.Sqrt(norm)
+	for i := range out {
+		out[i] = float32(float64(out[i]) * scale)
+	}
+	return out
 }
 
 func exactColumnGraphTopKForTest(tb testing.TB, rows []columnGraphRebuildInputRowV2A, query []float32, topK int) []columnVectorGraphNativeSearchResult {
@@ -847,6 +972,8 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	if n <= 0 {
 		return
 	}
+	b.ReportMetric(float64(stats.Rows), "graph_rows")
+	b.ReportMetric(float64(stats.Granules), "graph_granules")
 	b.ReportMetric(float64(searchStats.Candidates)/float64(n), "candidates/search")
 	b.ReportMetric(float64(searchStats.Edges)/float64(n), "edges/search")
 	if searchStats.Candidates > 0 {
