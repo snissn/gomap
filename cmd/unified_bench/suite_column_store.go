@@ -75,8 +75,9 @@ var (
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
 	)
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
-	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
+	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
+	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
+	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, skip_checksums; skip_checksums is unsafe and requires -treedb-allow-unsafe)")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
@@ -102,39 +103,41 @@ var (
 )
 
 type columnStoreSuiteOptions struct {
-	ProfileDir              string
-	ExecutionPath           string
-	ForcedPath              string
-	Fixture                 string
-	RunBenchprof            bool
-	CorruptReferenceForTest string
+	ProfileDir               string
+	ExecutionPath            string
+	ForcedPath               string
+	Fixture                  string
+	ColumnAssetReadIntegrity collections.ColumnAssetReadIntegrity
+	RunBenchprof             bool
+	CorruptReferenceForTest  string
 }
 
 type columnStoreSuiteReport struct {
-	GeneratedAt            string                       `json:"generated_at"`
-	Suite                  string                       `json:"suite"`
-	Profile                string                       `json:"profile"`
-	Fixture                string                       `json:"fixture"`
-	DataDir                string                       `json:"data_dir,omitempty"`
-	PathLabel              string                       `json:"path_label,omitempty"`
-	ForcedPath             string                       `json:"forced_path"`
-	Rows                   int                          `json:"rows"`
-	BatchSize              int                          `json:"batch_size"`
-	Seed                   int64                        `json:"seed"`
-	CacheLabel             string                       `json:"cache_label"`
-	AcceptedForcedPaths    []string                     `json:"accepted_forced_paths"`
-	FailClosedForcedPaths  []string                     `json:"fail_closed_forced_paths"`
-	Stages                 []columnStoreStageMetric     `json:"stages"`
-	Queries                []columnStoreQueryMetric     `json:"queries"`
-	Parity                 map[string]columnStoreParity `json:"parity"`
-	ByteAccounting         columnStoreByteAccounting    `json:"byte_accounting"`
-	Manifest               columnStoreManifestMetric    `json:"manifest"`
-	Artifacts              columnStoreArtifactPaths     `json:"artifacts,omitempty"`
-	ProductionScope        string                       `json:"production_scope"`
-	PhysicalColumnQuery    string                       `json:"physical_column_query"`
-	BenchmarkOnlyRelaxed   bool                         `json:"benchmark_only_relaxed"`
-	StageSeparatedBoundary string                       `json:"stage_separated_boundary"`
-	ProfileFinalizeError   string                       `json:"profile_finalize_error,omitempty"`
+	GeneratedAt              string                       `json:"generated_at"`
+	Suite                    string                       `json:"suite"`
+	Profile                  string                       `json:"profile"`
+	Fixture                  string                       `json:"fixture"`
+	DataDir                  string                       `json:"data_dir,omitempty"`
+	PathLabel                string                       `json:"path_label,omitempty"`
+	ForcedPath               string                       `json:"forced_path"`
+	Rows                     int                          `json:"rows"`
+	BatchSize                int                          `json:"batch_size"`
+	Seed                     int64                        `json:"seed"`
+	CacheLabel               string                       `json:"cache_label"`
+	AcceptedForcedPaths      []string                     `json:"accepted_forced_paths"`
+	FailClosedForcedPaths    []string                     `json:"fail_closed_forced_paths"`
+	Stages                   []columnStoreStageMetric     `json:"stages"`
+	Queries                  []columnStoreQueryMetric     `json:"queries"`
+	Parity                   map[string]columnStoreParity `json:"parity"`
+	ByteAccounting           columnStoreByteAccounting    `json:"byte_accounting"`
+	Manifest                 columnStoreManifestMetric    `json:"manifest"`
+	Artifacts                columnStoreArtifactPaths     `json:"artifacts,omitempty"`
+	ProductionScope          string                       `json:"production_scope"`
+	PhysicalColumnQuery      string                       `json:"physical_column_query"`
+	ColumnAssetReadIntegrity string                       `json:"column_asset_read_integrity"`
+	BenchmarkOnlyRelaxed     bool                         `json:"benchmark_only_relaxed"`
+	StageSeparatedBoundary   string                       `json:"stage_separated_boundary"`
+	ProfileFinalizeError     string                       `json:"profile_finalize_error,omitempty"`
 }
 
 type columnStoreStageMetric struct {
@@ -298,6 +301,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if _, err := columnStoreSuitePlanKind(forcedPath); err != nil {
 		return "", err
 	}
+	assetReadIntegrity, err := columnStoreSuiteEffectiveAssetReadIntegrity(opts.ColumnAssetReadIntegrity)
+	if err != nil {
+		return "", err
+	}
 	if err := validateColumnStoreSuiteDBSelection(baseCfg.DBsArg, baseCfg.DBsExcludeArg); err != nil {
 		return "", err
 	}
@@ -426,7 +433,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		}
 		rawHashes[corrupt]++
 	}
-	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath, assetReadIntegrity)
 	if err != nil {
 		return "", err
 	}
@@ -501,10 +508,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			ManifestRoot:                    manifestIdentity.ManifestRoot,
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
-		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
-		PhysicalColumnQuery:    "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q4b and q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
-		BenchmarkOnlyRelaxed:   false,
-		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
+		ProductionScope:          "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
+		PhysicalColumnQuery:      "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q4b and q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
+		ColumnAssetReadIntegrity: string(assetReadIntegrity),
+		BenchmarkOnlyRelaxed:     assetReadIntegrity == collections.ColumnAssetReadIntegritySkipChecksums,
+		StageSeparatedBoundary:   "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
 	}
 	if baseCfg.KeepDir {
 		report.DataDir = dataDir
@@ -547,6 +555,30 @@ func columnStoreSuiteEffectiveProfile(profile string) (string, error) {
 		return "", fmt.Errorf("column_store: profile %q is benchmark-relaxed and unsupported for M11B production column-store writes; use -profile durable", profile)
 	default:
 		return "", fmt.Errorf("column_store: unsupported profile %q; use durable for the M11B production gate", profile)
+	}
+}
+
+func columnStoreSuiteEffectiveAssetReadIntegrity(opt collections.ColumnAssetReadIntegrity) (collections.ColumnAssetReadIntegrity, error) {
+	value := strings.ToLower(strings.TrimSpace(string(opt)))
+	if value == "" {
+		if flagExplicit("column-store-asset-read-integrity") {
+			value = strings.ToLower(strings.TrimSpace(*columnStoreSuiteAssetReadIntegrityArg))
+		} else if *treedbDisableReadChecksum {
+			value = string(collections.ColumnAssetReadIntegritySkipChecksums)
+		} else {
+			value = strings.ToLower(strings.TrimSpace(*columnStoreSuiteAssetReadIntegrityArg))
+		}
+	}
+	switch value {
+	case "", string(collections.ColumnAssetReadIntegrityVerify):
+		return collections.ColumnAssetReadIntegrityVerify, nil
+	case string(collections.ColumnAssetReadIntegritySkipChecksums), "skip-checksums", "none":
+		if !*treedbAllowUnsafe {
+			return "", errors.New("column_store: column asset read integrity skip_checksums requires -treedb-allow-unsafe")
+		}
+		return collections.ColumnAssetReadIntegritySkipChecksums, nil
+	default:
+		return "", fmt.Errorf("column_store: unsupported column asset read integrity %q; use verify or skip_checksums", value)
 	}
 }
 
@@ -920,7 +952,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 	return finish, nil
 }
 
-func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
+func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
 	profileHooks := profileHooksFromConfig(cfg)
 	cleanup := func(paths ...string) {
 		for _, path := range paths {
@@ -974,7 +1006,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		}
 	}
 
-	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path)
+	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, assetReadIntegrity)
 
 	if cpuFile != nil {
 		profileHooks.stopCPUProfile()
@@ -1036,7 +1068,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	return queries, parity, runErr, nil
 }
 
-func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
 	path = normalizeColumnStoreSuitePath(path)
 	forceKind, err := columnStoreSuitePlanKind(path)
 	if err != nil {
@@ -1061,7 +1093,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: refusing to route through row store; reason=%s: %w", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
 		}
 
-		exec, err := executeColumnStoreSuiteQueryWithPlan(collection, rows, name, plan)
+		exec, err := executeColumnStoreSuiteQueryWithPlan(collection, rows, name, plan, assetReadIntegrity)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1175,7 +1207,7 @@ func columnStoreSuiteAggregateMetadataName(name string) string {
 	}
 }
 
-func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, rows int, queryName string, plan collections.ColumnQueryPlan) (columnStoreQueryExecution, error) {
+func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, rows int, queryName string, plan collections.ColumnQueryPlan, assetReadIntegrity collections.ColumnAssetReadIntegrity) (columnStoreQueryExecution, error) {
 	switch plan.Kind {
 	case collections.ColumnQueryPlanRowStoreBaseline:
 		scanStart := time.Now()
@@ -1234,13 +1266,13 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 			ReduceDuration:         reduceElapsed,
 		}, nil
 	case collections.ColumnQueryPlanSerialColumnScan, collections.ColumnQueryPlanAggregateMetadata, collections.ColumnQueryPlanParallelColumnScan:
-		return executeColumnStoreSuitePhysicalQuery(collection, queryName, plan)
+		return executeColumnStoreSuitePhysicalQuery(collection, queryName, plan, assetReadIntegrity)
 	default:
 		return columnStoreQueryExecution{}, fmt.Errorf("column_store: executable path %q is not implemented: %w", plan.Kind, collections.ErrColumnQueryPlanUnsupported)
 	}
 }
 
-func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, queryName string, plan collections.ColumnQueryPlan) (columnStoreQueryExecution, error) {
+func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, queryName string, plan collections.ColumnQueryPlan, assetReadIntegrity collections.ColumnAssetReadIntegrity) (columnStoreQueryExecution, error) {
 	req, err := columnStoreSuitePhysicalQueryRequest(queryName)
 	if err != nil {
 		return columnStoreQueryExecution{}, err
@@ -1250,6 +1282,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	} else {
 		req.AggregateMetadataName = ""
 	}
+	req.ColumnAssetReadIntegrity = assetReadIntegrity
 	start := time.Now()
 	var result collections.ColumnPhysicalQueryResult
 	switch plan.Kind {
@@ -1808,6 +1841,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- rows: %s\n", formatInt(report.Rows)))
 	sb.WriteString(fmt.Sprintf("- batchsize: %s\n", formatInt(report.BatchSize)))
 	sb.WriteString(fmt.Sprintf("- forced path: `%s`\n", report.ForcedPath))
+	sb.WriteString(fmt.Sprintf("- column asset read integrity: `%s`\n", report.ColumnAssetReadIntegrity))
 	if report.DataDir != "" {
 		sb.WriteString(fmt.Sprintf("- data-dir: `%s`\n", report.DataDir))
 	}

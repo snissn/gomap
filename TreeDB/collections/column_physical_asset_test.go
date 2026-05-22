@@ -499,6 +499,25 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	if _, err := readColumnPhysicalAssetFromManager(root, ref); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("read corrupt asset err=%v want checksum failure", err)
 	}
+	relaxedRaw, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("relaxed read corrupt asset: %v", err)
+	}
+	if bytes.Equal(relaxedRaw, raw) {
+		t.Fatalf("relaxed read returned uncorrupted payload")
+	}
+	if err := validateColumnPhysicalAssetForManifest(relaxedRaw, ref, *normalized); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("manifest validation err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetReadIntegrityLabelPreservesUnsupportedM1634(t *testing.T) {
+	if got := columnAssetReadIntegrityLabel(""); got != string(ColumnAssetReadIntegrityVerify) {
+		t.Fatalf("empty integrity label=%q want %q", got, ColumnAssetReadIntegrityVerify)
+	}
+	if got := columnAssetReadIntegrityLabel(ColumnAssetReadIntegrity("bad-mode")); got != "bad-mode" {
+		t.Fatalf("unsupported integrity label=%q want raw value", got)
+	}
 }
 
 func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
