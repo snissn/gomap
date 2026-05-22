@@ -667,6 +667,10 @@ func columnWorkspaceCacheKey(entry ColumnWorkspacePartManifest) string {
 }
 
 func encodeColumnWorkspaceManifestEnvelope(manifest ColumnWorkspaceManifest) ([]byte, error) {
+	return encodeColumnWorkspaceManifestBinaryEnvelope(manifest)
+}
+
+func encodeColumnWorkspaceManifestJSONEnvelope(manifest ColumnWorkspaceManifest) ([]byte, error) {
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, err
@@ -681,6 +685,17 @@ func encodeColumnWorkspaceManifestEnvelope(manifest ColumnWorkspaceManifest) ([]
 }
 
 func decodeColumnWorkspaceManifestEnvelope(data []byte) (columnWorkspaceManifestEnvelope, error) {
+	if isColumnControlPlaneBinary(data, columnWorkspaceManifestBinaryMagic) {
+		manifest, err := decodeColumnWorkspaceManifestBinaryEnvelope(data)
+		if err != nil {
+			return columnWorkspaceManifestEnvelope{}, err
+		}
+		return columnWorkspaceManifestEnvelope{
+			Magic:    columnWorkspaceManifestMagic,
+			Version:  columnWorkspaceManifestVersion,
+			Manifest: manifest,
+		}, nil
+	}
 	var env columnWorkspaceManifestEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return columnWorkspaceManifestEnvelope{}, err
@@ -702,6 +717,10 @@ func decodeColumnWorkspaceManifestEnvelope(data []byte) (columnWorkspaceManifest
 }
 
 func encodeColumnPreparedAssetRegistryEnvelope(registry ColumnPreparedAssetRegistry) ([]byte, error) {
+	return encodeColumnPreparedAssetRegistryBinaryEnvelope(registry)
+}
+
+func encodeColumnPreparedAssetRegistryJSONEnvelope(registry ColumnPreparedAssetRegistry) ([]byte, error) {
 	if err := validateColumnPreparedAssetRegistry(registry); err != nil {
 		return nil, err
 	}
@@ -719,6 +738,9 @@ func encodeColumnPreparedAssetRegistryEnvelope(registry ColumnPreparedAssetRegis
 }
 
 func decodeColumnPreparedAssetRegistryEnvelope(data []byte) (ColumnPreparedAssetRegistry, error) {
+	if isColumnControlPlaneBinary(data, columnWorkspacePreparedBinaryMagic) {
+		return decodeColumnPreparedAssetRegistryBinaryEnvelope(data)
+	}
 	var env columnPreparedAssetRegistryEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return ColumnPreparedAssetRegistry{}, err

@@ -2,7 +2,7 @@ package colgranule
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,67 +84,74 @@ func TestColumnCollectionManifestRejectsUnknownVersionAndChecksumMismatch(t *tes
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	var env columnCollectionManifestEnvelope
-	if err := json.Unmarshal(data, &env); err != nil {
-		t.Fatalf("unmarshal manifest: %v", err)
-	}
-	env.Version = columnCollectionManifestVersion + 1
-	corrupt, err := json.Marshal(env)
-	if err != nil {
-		t.Fatalf("marshal corrupt version: %v", err)
-	}
+	corrupt := append([]byte(nil), data...)
+	binary.LittleEndian.PutUint16(corrupt[4:], columnCollectionManifestBinaryVersion+1)
 	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
 		t.Fatalf("WriteFile version: %v", err)
 	}
-	if _, err := workspace.LoadCollectionManifest(); err == nil || !strings.Contains(err.Error(), "unsupported collection manifest version") {
+	if _, err := workspace.LoadCollectionManifest(); err == nil || !strings.Contains(err.Error(), "unsupported collection manifest binary version") {
 		t.Fatalf("LoadCollectionManifest version err=%v want unsupported version", err)
 	}
 
-	env.Version = columnCollectionManifestVersion
-	env.Manifest.ActiveGeneration++
-	corrupt, err = json.Marshal(env)
-	if err != nil {
-		t.Fatalf("marshal checksum mismatch: %v", err)
-	}
+	corrupt = append([]byte(nil), data...)
+	corrupt[len(corrupt)-1] ^= 0xff
 	if err := os.WriteFile(path, corrupt, 0o644); err != nil {
 		t.Fatalf("WriteFile checksum: %v", err)
 	}
-	if _, err := workspace.LoadCollectionManifest(); err == nil || !strings.Contains(err.Error(), "collection manifest checksum") {
+	if _, err := workspace.LoadCollectionManifest(); err == nil || !strings.Contains(err.Error(), "collection manifest binary checksum") {
 		t.Fatalf("LoadCollectionManifest checksum err=%v want checksum mismatch", err)
 	}
 }
 
-func TestColumnCollectionManifestCompactEncodeAndPrettyFallback(t *testing.T) {
+func TestColumnCollectionManifestBinaryEncodeDecodeAndLegacyFallback(t *testing.T) {
 	manifest := syntheticColumnCollectionManifestForBenchmark(2)
 	payload, err := EncodeColumnCollectionManifest(manifest)
 	if err != nil {
 		t.Fatalf("EncodeColumnCollectionManifest: %v", err)
 	}
-	if bytes.Contains(payload, []byte("\n")) {
-		t.Fatalf("encoded manifest contains newlines, want compact envelope")
+	if !bytes.HasPrefix(payload, []byte(columnCollectionManifestBinaryMagic)) {
+		t.Fatalf("manifest payload magic=%q want binary %q", payload[:min(len(payload), 4)], columnCollectionManifestBinaryMagic)
+	}
+	if binary.LittleEndian.Uint16(payload[4:]) != columnCollectionManifestBinaryVersion {
+		t.Fatalf("manifest binary version=%d want %d", binary.LittleEndian.Uint16(payload[4:]), columnCollectionManifestBinaryVersion)
 	}
 	decoded, err := DecodeColumnCollectionManifest(payload)
 	if err != nil {
-		t.Fatalf("DecodeColumnCollectionManifest compact: %v", err)
+		t.Fatalf("DecodeColumnCollectionManifest binary: %v", err)
 	}
 	if decoded.ActiveGeneration != manifest.ActiveGeneration || len(decoded.PartSet.BaseParts) != len(manifest.PartSet.BaseParts) {
-		t.Fatalf("decoded compact manifest generation/parts=(%d,%d) want (%d,%d)", decoded.ActiveGeneration, len(decoded.PartSet.BaseParts), manifest.ActiveGeneration, len(manifest.PartSet.BaseParts))
+		t.Fatalf("decoded binary manifest generation/parts=(%d,%d) want (%d,%d)", decoded.ActiveGeneration, len(decoded.PartSet.BaseParts), manifest.ActiveGeneration, len(manifest.PartSet.BaseParts))
 	}
 
-	var env columnCollectionManifestEnvelope
-	if err := json.Unmarshal(payload, &env); err != nil {
-		t.Fatalf("unmarshal compact envelope: %v", err)
-	}
-	pretty, err := json.MarshalIndent(env, "", "  ")
+	legacy, err := encodeColumnCollectionManifestJSONEnvelope(manifest)
 	if err != nil {
-		t.Fatalf("MarshalIndent envelope: %v", err)
+		t.Fatalf("encode legacy manifest: %v", err)
 	}
-	decoded, err = DecodeColumnCollectionManifest(pretty)
+	decoded, err = DecodeColumnCollectionManifest(legacy)
 	if err != nil {
-		t.Fatalf("DecodeColumnCollectionManifest pretty fallback: %v", err)
+		t.Fatalf("DecodeColumnCollectionManifest legacy: %v", err)
 	}
 	if decoded.ActiveGeneration != manifest.ActiveGeneration || len(decoded.PartSet.BaseParts) != len(manifest.PartSet.BaseParts) {
-		t.Fatalf("decoded pretty manifest generation/parts=(%d,%d) want (%d,%d)", decoded.ActiveGeneration, len(decoded.PartSet.BaseParts), manifest.ActiveGeneration, len(manifest.PartSet.BaseParts))
+		t.Fatalf("decoded legacy manifest generation/parts=(%d,%d) want (%d,%d)", decoded.ActiveGeneration, len(decoded.PartSet.BaseParts), manifest.ActiveGeneration, len(manifest.PartSet.BaseParts))
+	}
+}
+
+func TestColumnCollectionManifestBinaryRejectsHeaderAndChecksumCorruption(t *testing.T) {
+	manifest := syntheticColumnCollectionManifestForBenchmark(2)
+	payload, err := EncodeColumnCollectionManifest(manifest)
+	if err != nil {
+		t.Fatalf("EncodeColumnCollectionManifest: %v", err)
+	}
+	badVersion := append([]byte(nil), payload...)
+	binary.LittleEndian.PutUint16(badVersion[4:], columnCollectionManifestBinaryVersion+1)
+	if _, err := DecodeColumnCollectionManifest(badVersion); err == nil || !strings.Contains(err.Error(), "unsupported collection manifest binary version") {
+		t.Fatalf("DecodeColumnCollectionManifest version err=%v want unsupported binary version", err)
+	}
+
+	badChecksum := append([]byte(nil), payload...)
+	badChecksum[len(badChecksum)-1] ^= 0xff
+	if _, err := DecodeColumnCollectionManifest(badChecksum); err == nil || !strings.Contains(err.Error(), "collection manifest binary checksum") {
+		t.Fatalf("DecodeColumnCollectionManifest checksum err=%v want binary checksum mismatch", err)
 	}
 }
 
