@@ -89,9 +89,13 @@ type columnManifestAssetRefForScan struct {
 }
 
 type columnManifestScanSidecarFilter struct {
-	AggregateMetadata bool
-	DictionaryCodes   bool
-	Int64Values       bool
+	AggregateMetadata     bool
+	AggregateMetadataName string
+	DictionaryCodes       bool
+	DictionaryColumn      string
+	DictionaryColumn2     string
+	Int64Values           bool
+	Int64Column           string
 }
 
 func columnManifestScanAllSidecars() columnManifestScanSidecarFilter {
@@ -104,6 +108,60 @@ func columnManifestScanAllSidecars() columnManifestScanSidecarFilter {
 
 func columnManifestScanNoSidecars() columnManifestScanSidecarFilter {
 	return columnManifestScanSidecarFilter{}
+}
+
+func (f columnManifestScanSidecarFilter) aggregateMetadataNameForScan(name []byte) (string, bool) {
+	if !f.AggregateMetadata {
+		return "", false
+	}
+	if f.AggregateMetadataName == "" {
+		return "", true
+	}
+	if columnManifestBytesEqualString(name, f.AggregateMetadataName) {
+		return f.AggregateMetadataName, true
+	}
+	return "", false
+}
+
+func (f columnManifestScanSidecarFilter) dictionaryColumnNameForScan(columnName []byte) (string, bool) {
+	if !f.DictionaryCodes {
+		return "", false
+	}
+	if f.DictionaryColumn == "" && f.DictionaryColumn2 == "" {
+		return "", true
+	}
+	if columnManifestBytesEqualString(columnName, f.DictionaryColumn) {
+		return f.DictionaryColumn, true
+	}
+	if f.DictionaryColumn2 != "" && columnManifestBytesEqualString(columnName, f.DictionaryColumn2) {
+		return f.DictionaryColumn2, true
+	}
+	return "", false
+}
+
+func (f columnManifestScanSidecarFilter) int64ColumnNameForScan(columnName []byte) (string, bool) {
+	if !f.Int64Values {
+		return "", false
+	}
+	if f.Int64Column == "" {
+		return "", true
+	}
+	if columnManifestBytesEqualString(columnName, f.Int64Column) {
+		return f.Int64Column, true
+	}
+	return "", false
+}
+
+func columnManifestBytesEqualString(raw []byte, value string) bool {
+	if len(raw) != len(value) {
+		return false
+	}
+	for i, b := range raw {
+		if b != value[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func columnManifestDictionarySidecarColumns(cfg ColumnStoreConfig) int {
@@ -654,7 +712,12 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				iter.Next()
 				continue
 			}
-			if !filter.AggregateMetadata {
+			_, _, name, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
+			}
+			preferredName, include := filter.aggregateMetadataNameForScan(name)
+			if !include {
 				if err := validateColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows); err != nil {
 					return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 				}
@@ -662,7 +725,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				writeHashBytes(&d, value)
 				break
 			}
-			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows)
+			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows, preferredName)
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 			}
@@ -674,7 +737,12 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				iter.Next()
 				continue
 			}
-			if !filter.DictionaryCodes {
+			_, _, columnName, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
+			}
+			preferredColumnName, include := filter.dictionaryColumnNameForScan(columnName)
+			if !include {
 				if err := validateColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows); err != nil {
 					return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 				}
@@ -682,7 +750,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				writeHashBytes(&d, value)
 				break
 			}
-			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows)
+			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows, preferredColumnName)
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 			}
@@ -694,7 +762,12 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				iter.Next()
 				continue
 			}
-			if !filter.Int64Values {
+			_, _, columnName, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
+			}
+			preferredColumnName, include := filter.int64ColumnNameForScan(columnName)
+			if !include {
 				if err := validateColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows); err != nil {
 					return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 				}
@@ -702,7 +775,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				writeHashBytes(&d, value)
 				break
 			}
-			values, err := decodeColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows)
+			values, err := decodeColumnManifestInt64ValuesRecordForScan(key, value, cfg.AssetManager.Namespace, snapshot.Generation, livePartRows, preferredColumnName)
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, err
 			}
@@ -1242,19 +1315,19 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 	for _, record := range records {
 		switch {
 		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
-			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows)
+			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows, "")
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, err
 			}
 			snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
 		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
-			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows)
+			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows, "")
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, err
 			}
 			snapshot.DictionaryCodes = append(snapshot.DictionaryCodes, dictionary)
 		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
-			values, err := decodeColumnManifestInt64ValuesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows)
+			values, err := decodeColumnManifestInt64ValuesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows, "")
 			if err != nil {
 				return columnManifestSnapshot{}, nil, 0, err
 			}
@@ -1267,7 +1340,7 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 	return snapshot, refs, mutationParts, nil
 }
 
-func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) (columnManifestAggregateMetadataSnapshot, error) {
+func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int, preferredName string) (columnManifestAggregateMetadataSnapshot, error) {
 	generation, partID, name, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestAggregateMetadataSnapshot{}, err
@@ -1291,9 +1364,12 @@ func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expecte
 	if !bytes.Equal(name, reason) {
 		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata key name=%q does not match record name=%q", string(name), string(reason))
 	}
+	if preferredName == "" {
+		preferredName = string(name)
+	}
 	return columnManifestAggregateMetadataSnapshot{
 		AssetRef:     ref,
-		Name:         string(name),
+		Name:         preferredName,
 		Bytes:        bytesValue,
 		PublishID:    publishID,
 		GenerationID: generationID,
@@ -1327,7 +1403,7 @@ func validateColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expec
 	return nil
 }
 
-func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) (columnManifestDictionaryCodesSnapshot, error) {
+func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int, preferredColumnName string) (columnManifestDictionaryCodesSnapshot, error) {
 	generation, partID, columnName, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestDictionaryCodesSnapshot{}, err
@@ -1351,9 +1427,12 @@ func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedN
 	if !bytes.Equal(columnName, reason) {
 		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes key column=%q does not match record column=%q", string(columnName), string(reason))
 	}
+	if preferredColumnName == "" {
+		preferredColumnName = string(columnName)
+	}
 	return columnManifestDictionaryCodesSnapshot{
 		AssetRef:     ref,
-		ColumnName:   string(columnName),
+		ColumnName:   preferredColumnName,
 		Bytes:        bytesValue,
 		PublishID:    publishID,
 		GenerationID: generationID,
@@ -1387,7 +1466,7 @@ func validateColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expecte
 	return nil
 }
 
-func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) (columnManifestInt64ValuesSnapshot, error) {
+func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int, preferredColumnName string) (columnManifestInt64ValuesSnapshot, error) {
 	generation, partID, columnName, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestInt64ValuesSnapshot{}, err
@@ -1415,9 +1494,12 @@ func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNames
 	if !bytes.Equal(columnName, reason) {
 		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values key column=%q does not match record column=%q", string(columnName), string(reason))
 	}
+	if preferredColumnName == "" {
+		preferredColumnName = string(columnName)
+	}
 	return columnManifestInt64ValuesSnapshot{
 		AssetRef:     ref,
-		ColumnName:   string(columnName),
+		ColumnName:   preferredColumnName,
 		Rows:         rows,
 		Bytes:        bytesValue,
 		PublishID:    publishID,
