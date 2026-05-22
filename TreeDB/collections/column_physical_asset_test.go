@@ -1300,7 +1300,7 @@ func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeColumnStoreConfig: %v", err)
 	}
-	payload := []byte{0xab, 0x9b, 0xe0, 0x9b}
+	payload := []byte{0x9d, 0x0a, 0xd9, 0x6d}
 	if checksum := page.Checksum(payload); checksum != 0 {
 		t.Fatalf("test payload checksum=%d, want 0", checksum)
 	}
