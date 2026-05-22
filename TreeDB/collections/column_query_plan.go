@@ -265,7 +265,7 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
 	case req.Capabilities.PhysicalAssetCount <= 0:
-		return "no durable physical column assets are available"
+		return "physical column scanner is not implemented yet"
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
 		return "active column manifest is not recovery-authoritative"
 	}

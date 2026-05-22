@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -92,7 +91,15 @@ const (
 type ColumnAssetManagerKind string
 
 const (
-	ColumnAssetManagerValueLog ColumnAssetManagerKind = "value-log"
+	// ColumnAssetManagerValueLogShaped is an isolated typed column asset manager
+	// that reuses value-log-like segment refs. It must not mean ordinary TreeDB
+	// value_vlog ownership.
+	ColumnAssetManagerValueLogShaped ColumnAssetManagerKind = "value-log-shaped"
+	// ColumnAssetManagerValueLog is kept as a source-compatible alias for the
+	// value-log-shaped column asset manager.
+	ColumnAssetManagerValueLog = ColumnAssetManagerValueLogShaped
+
+	columnAssetManagerLegacyValueLog ColumnAssetManagerKind = "value-log"
 )
 
 type ColumnLocatorStrategy string
@@ -147,6 +154,8 @@ type ColumnAggregateMetadata struct {
 }
 
 type ColumnAssetManagerConfig struct {
+	// Kind names the typed column asset manager backend. The V1 value-log-shaped
+	// backend owns an isolated column asset namespace; it is not ordinary value_vlog.
 	Kind              ColumnAssetManagerKind `json:"kind,omitempty"`
 	IsolatedNamespace bool                   `json:"isolated_namespace,omitempty"`
 	Namespace         string                 `json:"namespace,omitempty"`
@@ -319,7 +328,10 @@ func normalizeColumnStoreConfig(collection string, in *ColumnStoreConfig) (*Colu
 		out.AssetManager = &ColumnAssetManagerConfig{}
 	}
 	if out.AssetManager.Kind == "" {
-		out.AssetManager.Kind = ColumnAssetManagerValueLog
+		out.AssetManager.Kind = ColumnAssetManagerValueLogShaped
+	}
+	if out.AssetManager.Kind == columnAssetManagerLegacyValueLog {
+		out.AssetManager.Kind = ColumnAssetManagerValueLogShaped
 	}
 	if out.AssetManager.Namespace == "" {
 		out.AssetManager.Namespace = defaultColumnAssetNamespace(collection)
@@ -426,14 +438,14 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	if cfg.AssetManager == nil {
 		return errors.New("collections: column_store requires asset manager metadata")
 	}
-	if cfg.AssetManager.Kind != ColumnAssetManagerValueLog {
+	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
 		return fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
 	}
 	if !cfg.AssetManager.IsolatedNamespace {
 		return errors.New("collections: column asset manager requires isolated namespace")
 	}
-	if strings.TrimSpace(cfg.AssetManager.Namespace) == "" || strings.Contains(cfg.AssetManager.Namespace, "\x00") {
-		return errors.New("collections: invalid column asset namespace")
+	if _, err := cleanColumnAssetNamespace(cfg.AssetManager.Namespace); err != nil {
+		return err
 	}
 	if cfg.ManifestRoot == nil {
 		return errors.New("collections: column_store requires column manifest root descriptor")
@@ -825,6 +837,12 @@ func writeHashString(d *xxhash.Digest, s string) {
 	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(s)))
 	_, _ = d.Write(lenBuf[:])
 	_, _ = d.WriteString(s)
+}
+
+func writeHashUint64(d *xxhash.Digest, value uint64) {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], value)
+	_, _ = d.Write(buf[:])
 }
 
 func writeHashBool(d *xxhash.Digest, value bool) {

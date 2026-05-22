@@ -1,11 +1,9 @@
 package collections
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 
-	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
@@ -19,7 +17,10 @@ type columnWritePublishInput struct {
 	baseRootIDs        map[string]uint64
 	commandWALIntent   *backenddb.CommandWALIntent
 	operation          ColumnPublishOperation
+	documents          []columnWriteDocument
 	rows               int
+	declaredRows       []columnDeclaredRow
+	declaredRowsReady  bool
 	commandBytes       int64
 	rowRemainderBytes  int64
 	columnPayloadBytes int64
@@ -83,6 +84,11 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	if input.commandWALIntent == nil {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
+	preparedInput, err := prepareColumnWritePublishInputBeforeCommandWAL(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	input = preparedInput
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -142,6 +148,11 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	if input.commandWALIntent == nil {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("%w: column-store publish requires command WAL intent", backenddb.ErrCommandWALContextMissingFrame)
 	}
+	preparedInput, err := prepareColumnWritePublishInputBeforeCommandWAL(input)
+	if err != nil {
+		return 0, nil, CollectionMeta{}, nil, err
+	}
+	input = preparedInput
 	columnRootName := collectionColumnManifestRootName(input.meta.Name)
 	columnBaseRoot := uint64(0)
 	if input.catalog != nil {
@@ -180,7 +191,6 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	var err error
 	newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
@@ -270,6 +280,37 @@ func combineOrderedRootGroupPreflight(first, second backenddb.OrderedRootGroupPr
 	}
 }
 
+func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInput) (columnWritePublishInput, error) {
+	switch input.operation {
+	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
+		if input.rows == 0 {
+			input.declaredRowsReady = true
+			return input, nil
+		}
+		if len(input.documents) != input.rows {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s documents=%d rows=%d", input.operation, len(input.documents), input.rows)
+		}
+		if normalizedDocumentFormat(input.meta.Options.DocumentFormat) != DocumentFormatJSON {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s requires JSON document format in M12A, got %q", input.operation, input.meta.Options.DocumentFormat)
+		}
+		if input.meta.Options.ColumnStore == nil {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s missing column-store config", input.operation)
+		}
+		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*input.meta.Options.ColumnStore, input.documents)
+		if err != nil {
+			return columnWritePublishInput{}, err
+		}
+		input.declaredRows = rows
+		input.declaredRowsReady = true
+		return input, nil
+	case ColumnPublishOperationDelete:
+		input.declaredRowsReady = true
+		return input, nil
+	default:
+		return columnWritePublishInput{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
+	}
+}
+
 func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, error) {
 	if input.commandWALIntent != nil {
 		return c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, input.commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -312,76 +353,94 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 		AppliedCommandLSN:     ctx.AppliedCommandLSN,
 		BaseManifestRootID:    baseManifestRootID,
 		Hooks: ColumnPublishPlanHooks{
-			PrepareAssets: func(ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
-				return ColumnPublishPreparedAssets{
-					RowCount:           input.rows,
-					CommandBytes:       input.commandBytes,
-					RowRemainderBytes:  input.rowRemainderBytes,
-					ColumnPayloadBytes: input.columnPayloadBytes,
-				}, nil
+			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
 			},
 			EncodeManifest: encodeColumnManifestIdentityForWrite,
 		},
 	})
 }
 
+func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+	prepared := ColumnPublishPreparedAssets{
+		RowCount:           input.rows,
+		CommandBytes:       input.commandBytes,
+		RowRemainderBytes:  input.rowRemainderBytes,
+		ColumnPayloadBytes: input.columnPayloadBytes,
+	}
+	switch input.operation {
+	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate:
+		if input.rows == 0 {
+			return prepared, nil
+		}
+		rows := input.declaredRows
+		if !input.declaredRowsReady {
+			var err error
+			fallback, err := prepareColumnWritePublishInputBeforeCommandWAL(input)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			rows = fallback.declaredRows
+		}
+		if len(rows) != input.rows {
+			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s prepared rows=%d rows=%d", input.operation, len(rows), input.rows)
+		}
+		generation := uint64(1)
+		if hookInput.CurrentManifest != nil {
+			generation = hookInput.CurrentManifest.Generation + 1
+		}
+		const partID = uint64(1)
+		encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+			Collection:        hookInput.Collection,
+			Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
+			Generation:        generation,
+			PartID:            partID,
+			AppliedCommandLSN: hookInput.AppliedCommandLSN,
+			Operation:         hookInput.Operation,
+			SchemaHash:        hookInput.ColumnStore.SchemaHash,
+			Columns:           hookInput.ColumnStore.Columns,
+			Rows:              rows,
+		})
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, partID)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		if err := validateColumnPhysicalAssetForManifest(encoded, ref, hookInput.ColumnStore); err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		if prepared.CommandBytes == 0 {
+			prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
+		}
+		prepared.RowCount = summary.RowCount
+		prepared.ColumnPayloadBytes = summary.PayloadBytes
+		prepared.Assets = []ColumnPreparedAsset{{
+			Ref:          ref,
+			Bytes:        ref.Length,
+			PublishID:    hookInput.AppliedCommandLSN,
+			GenerationID: generation,
+			Reason:       string(input.operation),
+		}}
+		return prepared, nil
+	case ColumnPublishOperationDelete:
+		return prepared, nil
+	default:
+		return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
+	}
+}
+
+func columnWriteDocumentsBytes(docs []columnWriteDocument) int64 {
+	var total int64
+	for _, doc := range docs {
+		total += int64(len(doc.ID) + len(doc.Document))
+	}
+	return total
+}
+
 func encodeColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput) (ColumnPublishManifestEncodeResult, error) {
-	if err := validateColumnPublishPreparedAssets(input.Prepared); err != nil {
-		return ColumnPublishManifestEncodeResult{}, err
-	}
-	generation := uint64(1)
-	if input.CurrentManifest != nil {
-		generation = input.CurrentManifest.Generation + 1
-	}
-	identity := ColumnManifestIdentity{
-		Generation: generation,
-		Format:     columnManifestFormatTCS1,
-		Version:    columnManifestIdentityVersion,
-		Checksum:   checksumColumnManifestIdentityForWrite(input, generation),
-	}
-	return ColumnPublishManifestEncodeResult{
-		Identity:      identity,
-		ManifestBytes: columnManifestIdentityRecordSize,
-	}, nil
-}
-
-func checksumColumnManifestIdentityForWrite(input ColumnPublishManifestEncodeInput, generation uint64) uint64 {
-	var d xxhash.Digest
-	writeHashString(&d, input.Collection)
-	writeHashString(&d, string(input.Operation))
-	writeHashUint64(&d, generation)
-	writeHashUint64(&d, input.AppliedCommandLSN)
-	writeHashUint64(&d, input.ColumnStore.SchemaHash)
-	if input.CurrentManifest != nil {
-		writeHashUint64(&d, input.CurrentManifest.Generation)
-		writeHashUint64(&d, input.CurrentManifest.Checksum)
-	}
-	writeHashUint64(&d, uint64(input.Prepared.RowCount))
-	writeHashUint64(&d, uint64(input.Prepared.CommandBytes))
-	writeHashUint64(&d, uint64(input.Prepared.RowRemainderBytes))
-	writeHashUint64(&d, uint64(input.Prepared.ColumnPayloadBytes))
-	for _, asset := range input.Prepared.Assets {
-		writeHashString(&d, string(asset.Ref.Kind))
-		writeHashUint64(&d, uint64(asset.Ref.FileID))
-		writeHashUint64(&d, uint64(asset.Ref.Offset))
-		writeHashUint64(&d, uint64(asset.Ref.Length))
-		writeHashUint64(&d, uint64(asset.Ref.Checksum))
-		writeHashUint64(&d, uint64(asset.Bytes))
-		writeHashUint64(&d, asset.PublishID)
-		writeHashUint64(&d, asset.GenerationID)
-		writeHashString(&d, asset.Reason)
-	}
-	sum := d.Sum64()
-	if sum == 0 {
-		return 1
-	}
-	return sum
-}
-
-func writeHashUint64(d *xxhash.Digest, value uint64) {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], value)
-	_, _ = d.Write(buf[:])
+	return encodeColumnManifestForWrite(input)
 }
 
 func appendColumnManifestRootPublishBase(rootNames []string, baseRootIDs map[string]uint64, columnRootName string, columnBaseRoot uint64) ([]string, map[string]uint64, error) {

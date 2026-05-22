@@ -8858,6 +8858,15 @@ func (c *Collection) insertBatchOnceWithLockState(
 		resetCollectionRunTables(plan.runs)
 		return nil, err
 	}
+	var commandWALDocuments []commitlog.CollectionDocument
+	if commandWALIntent != nil && commandWALActive {
+		commandWALDocuments, err = collectionDocumentsFromBatchInput(ids, documents)
+		if err != nil {
+			closePlanningSnapshot()
+			resetCollectionRunTables(plan.runs)
+			return nil, err
+		}
+	}
 	if commandWALIntent == nil && commandWALActive {
 		var docs []commitlog.CollectionDocument
 		if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
@@ -8875,6 +8884,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				return nil, err
 			}
 		}
+		commandWALDocuments = docs
 		commandWALIntent, err = c.newCollectionInsertCommandWALIntent(docs, nil)
 		if err != nil {
 			closePlanningSnapshot()
@@ -8933,6 +8943,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationInsert,
+				documents:        columnWriteDocumentsFromCommitLog(commandWALDocuments),
 				rows:             len(plan.resultIDs),
 			})
 			return err
@@ -9397,6 +9408,7 @@ func (c *Collection) insertBatchNoIndex(
 				baseRootIDs:      columnBaseRootIDs,
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationInsert,
+				documents:        columnWriteDocumentsFromNoIndexEntries(entries),
 				rows:             len(entries),
 			})
 			return err
@@ -12641,11 +12653,14 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
 	var commandWALIntent *backenddb.CommandWALIntent
+	var columnDocuments []columnWriteDocument
 	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
-		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent([]commitlog.CollectionDocument{{
+		docs := []commitlog.CollectionDocument{{
 			ID:       bytes.Clone(documentID),
 			Document: bytes.Clone(commandWALDocument),
-		}}, nil)
+		}}
+		columnDocuments = columnWriteDocumentsFromCommitLog(docs)
+		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent(docs, nil)
 		if err != nil {
 			return false, false, err
 		}
@@ -12666,6 +12681,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationUpdate,
+				documents:        columnDocuments,
 				rows:             1,
 			})
 			return err
@@ -14814,6 +14830,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 				baseRootIDs:      cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationUpdate,
+				documents:        columnWriteDocumentsFromCommitLog(plan.commandWALDocuments),
 				rows:             plan.stats.Modified,
 			})
 			return err

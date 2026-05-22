@@ -182,8 +182,11 @@ type columnStoreByteAccounting struct {
 	RetainedPayloadBytesNote        string   `json:"retained_payload_bytes_note,omitempty"`
 	ColumnAssetBytes                int64    `json:"column_asset_bytes"`
 	ColumnAssetBytesNote            string   `json:"column_asset_bytes_note,omitempty"`
+	ColumnAssetStoreBytes           int64    `json:"column_asset_store_bytes"`
 	ManifestControlBytes            int64    `json:"manifest_control_bytes"`
 	ManifestControlMissing          []string `json:"manifest_control_missing,omitempty"`
+	OrdinaryValueLogBytes           int64    `json:"ordinary_value_vlog_bytes"`
+	LeafLogBytes                    int64    `json:"leaf_vlog_bytes"`
 	CommandWALBytesBeforeCheckpoint int64    `json:"command_wal_bytes_before_checkpoint"`
 	TotalReconstructableBytes       int64    `json:"total_reconstructable_bytes"`
 	DBTotalBytes                    int64    `json:"db_total_bytes"`
@@ -408,8 +411,23 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: manifest/control byte accounting: %w", err)
 	}
+	columnAssetBytes, err := columnStoreSuiteColumnAssetUsage(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("column_store: column asset byte accounting: %w", err)
+	}
+	ordinaryValueLogBytes, err := columnStoreSuiteOptionalDirBytes(backenddb.ValueLogDirPath(dataDir))
+	if err != nil {
+		return "", fmt.Errorf("column_store: ordinary value_vlog byte accounting: %w", err)
+	}
+	leafLogBytes, err := columnStoreSuiteOptionalDirBytes(backenddb.LeafLogDirPath(dataDir))
+	if err != nil {
+		return "", fmt.Errorf("column_store: leaf_vlog byte accounting: %w", err)
+	}
+	columnAssetBytesNote := ""
+	if columnAssetBytes == 0 {
+		columnAssetBytesNote = "M12A expected isolated physical column assets; zero bytes means no column assets were published"
+	}
 	retainedPayloadBytes := sourceBytes
-	columnAssetBytes := int64(0)
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	report := columnStoreSuiteReport{
 		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
@@ -430,11 +448,14 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            retainedPayloadBytes,
-			RetainedPayloadBytesNote:        "M11B retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
+			RetainedPayloadBytesNote:        "M12A retains the source JSONBench payload as the reconstructable row baseline; retained-payload stripping is a later milestone",
 			ColumnAssetBytes:                columnAssetBytes,
-			ColumnAssetBytesNote:            "not measured in M11B because physical column assets are not published yet",
+			ColumnAssetBytesNote:            columnAssetBytesNote,
+			ColumnAssetStoreBytes:           columnAssetBytes,
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
+			OrdinaryValueLogBytes:           ordinaryValueLogBytes,
+			LeafLogBytes:                    leafLogBytes,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
 			TotalReconstructableBytes:       totalReconstructableBytes,
 			DBTotalBytes:                    totalBytes,
@@ -447,8 +468,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			ManifestRoot:                    manifestIdentity.ManifestRoot,
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
-		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus M11B planner diagnostics",
-		PhysicalColumnQuery:    "physical column assets/scanners are not implemented in M11B; serial/aggregate/parallel physical labels fail closed through the planner",
+		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus M12A isolated physical column asset writer",
+		PhysicalColumnQuery:    "M12A publishes physical column assets but physical scanners are not implemented yet; serial/aggregate/parallel physical labels fail closed through the planner",
 		BenchmarkOnlyRelaxed:   false,
 		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, scan, reduce, and parity hash stages are timed separately for the forced execution label",
 	}
@@ -1076,9 +1097,9 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 		EstimatedRows:         rows,
 		ForceKind:             forceKind,
 		Capabilities: collections.ColumnQueryPlannerCapabilities{
-			// M11B deliberately has no physical column assets yet; this keeps
-			// recovery-authoritative physical planner gates unreachable until
-			// a later physical-asset scanner milestone wires real assets.
+			// M12A publishes physical column assets but deliberately has no
+			// scanner yet; keep physical planner gates unreachable until a
+			// later scanner milestone wires real asset reads.
 			SerialColumnScan:       true,
 			AggregateMetadata:      true,
 			ParallelColumnScan:     true,
@@ -1428,6 +1449,22 @@ func columnStoreSuiteDirUsage(root string) (int64, int, error) {
 	return bytes, files, nil
 }
 
+func columnStoreSuiteColumnAssetUsage(root string) (int64, error) {
+	assetRoot := backenddb.ColumnAssetRootDirPath(root)
+	return columnStoreSuiteOptionalDirBytes(assetRoot)
+}
+
+func columnStoreSuiteOptionalDirBytes(root string) (int64, error) {
+	bytes, _, err := columnStoreSuiteDirUsage(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return bytes, nil
+}
+
 func columnStoreSuiteManifestControlUsage(root string) (int64, []string, error) {
 	var total int64
 	var missing []string
@@ -1509,10 +1546,13 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	if report.ByteAccounting.ColumnAssetBytesNote != "" {
 		sb.WriteString(fmt.Sprintf("- column_asset_bytes_note: %s\n", report.ByteAccounting.ColumnAssetBytesNote))
 	}
+	sb.WriteString(fmt.Sprintf("- column_asset_store_bytes: %d\n", report.ByteAccounting.ColumnAssetStoreBytes))
 	sb.WriteString(fmt.Sprintf("- manifest_control_bytes: %d\n", report.ByteAccounting.ManifestControlBytes))
 	if len(report.ByteAccounting.ManifestControlMissing) != 0 {
 		sb.WriteString(fmt.Sprintf("- manifest_control_missing: %s\n", markdownCodeList(report.ByteAccounting.ManifestControlMissing)))
 	}
+	sb.WriteString(fmt.Sprintf("- ordinary_value_vlog_bytes: %d\n", report.ByteAccounting.OrdinaryValueLogBytes))
+	sb.WriteString(fmt.Sprintf("- leaf_vlog_bytes: %d\n", report.ByteAccounting.LeafLogBytes))
 	sb.WriteString(fmt.Sprintf("- command_wal_bytes_before_checkpoint: %d\n", report.ByteAccounting.CommandWALBytesBeforeCheckpoint))
 	sb.WriteString(fmt.Sprintf("- total_reconstructable_bytes: %d\n", report.ByteAccounting.TotalReconstructableBytes))
 	sb.WriteString(fmt.Sprintf("- db_total_bytes: %d across %d files\n\n", report.ByteAccounting.DBTotalBytes, report.ByteAccounting.DBTotalFiles))

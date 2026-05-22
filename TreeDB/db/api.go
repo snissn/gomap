@@ -306,6 +306,15 @@ func (db *DB) Dir() string {
 	return db.dir
 }
 
+// ColumnAssetRootDir returns the isolated physical root for typed column asset
+// manager payloads. It is separate from ordinary value_vlog and leaf_vlog.
+func (db *DB) ColumnAssetRootDir() string {
+	if db == nil {
+		return ""
+	}
+	return ColumnAssetRootDirPath(db.dir)
+}
+
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {

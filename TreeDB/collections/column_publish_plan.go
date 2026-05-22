@@ -42,13 +42,18 @@ const (
 	ColumnAssetKindTCS1PartImage ColumnAssetKind = "tcs1_part_image"
 )
 
-// ColumnAssetRef is the durable value-log-owned address of a column asset.
+// ColumnAssetRef is the durable typed address of a column-asset-manager-owned
+// object. It is value-log-shaped, but it must not imply ordinary value_vlog
+// ownership.
 type ColumnAssetRef struct {
-	Kind     ColumnAssetKind
-	FileID   uint32
-	Offset   int64
-	Length   int64
-	Checksum uint32
+	Kind       ColumnAssetKind
+	Namespace  string
+	Generation uint64
+	PartID     uint64
+	FileID     uint32
+	Offset     int64
+	Length     int64
+	Checksum   uint32
 }
 
 // ColumnPreparedAsset describes an immutable asset staged for manifest publish.
@@ -125,6 +130,7 @@ type ColumnPublishManifestEncodeInput struct {
 type ColumnPublishManifestEncodeResult struct {
 	Identity      ColumnManifestIdentity
 	ManifestBytes int64
+	Records       []columnManifestRecord
 }
 
 // ColumnPublishClosureValidationInput is passed to the durability-closure
@@ -210,6 +216,7 @@ type ColumnManifestRootDelta struct {
 	StoragePolicy  RootStoragePolicy
 	Identity       ColumnManifestIdentity
 	IdentityRecord [columnManifestIdentityRecordSize]byte
+	Records        []columnManifestRecord
 }
 
 // ColumnPublishLifecycleSummary summarizes lifecycle/GC-relevant asset effects
@@ -406,7 +413,7 @@ func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.Ordere
 	}
 	return backenddb.OrderedRootPublishInput{
 		BaseRoot:      delta.BaseRootID,
-		Iter:          columnManifestIdentityRecordIterator(delta.IdentityRecord),
+		Iter:          columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records),
 		StoragePolicy: policy,
 	}, nil
 }
@@ -429,7 +436,7 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.O
 	}
 	return backenddb.OrderedRootDeltaPublishInput{
 		BaseRoot:      delta.BaseRootID,
-		Iter:          columnManifestIdentityRecordIterator(delta.IdentityRecord),
+		Iter:          columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records),
 		StoragePolicy: policy,
 	}, nil
 }
@@ -450,7 +457,7 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backen
 	if err != nil {
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
-	iter := columnManifestIdentityRecordIterator(delta.IdentityRecord)
+	iter := columnManifestRootRecordIterator(delta.IdentityRecord, delta.Records)
 	defer func() { _ = iter.Close() }()
 	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
 	if err != nil {
@@ -686,6 +693,7 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		StoragePolicy:  cfg.ManifestRoot.StoragePolicy,
 		Identity:       manifest.Identity,
 		IdentityRecord: encodeColumnManifestIdentityRecordArray(manifest.Identity),
+		Records:        cloneColumnManifestRecords(manifest.Records),
 	}, nil
 }
 
@@ -744,6 +752,27 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, baseR
 	}
 	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
 		return errors.New("identity record does not match manifest identity")
+	}
+	if len(delta.Records) == 0 {
+		return errors.New("manifest records omitted")
+	}
+	snapshot, err := decodeColumnManifestRecords(delta.Records)
+	if err != nil {
+		return err
+	}
+	if snapshot.Generation != identity.Generation {
+		return fmt.Errorf("manifest records generation=%d does not match identity generation=%d", snapshot.Generation, identity.Generation)
+	}
+	checksum := checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
+		Collection: snapshot.Collection,
+		ColumnStore: ColumnStoreConfig{
+			SchemaHash: snapshot.SchemaHash,
+		},
+		Operation:         snapshot.Operation,
+		AppliedCommandLSN: snapshot.AppliedCommandLSN,
+	}, snapshot.Generation, delta.Records)
+	if checksum != identity.Checksum {
+		return fmt.Errorf("manifest records checksum=%d does not match identity checksum=%d", checksum, identity.Checksum)
 	}
 	return nil
 }
@@ -864,6 +893,15 @@ func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 			return errors.New("collections: column asset ref kind is required")
 		}
 		return fmt.Errorf("collections: unsupported column asset ref kind %q", ref.Kind)
+	}
+	if ref.Namespace == "" {
+		return errors.New("collections: column asset ref namespace is required")
+	}
+	if ref.Generation == 0 {
+		return errors.New("collections: column asset ref generation is required")
+	}
+	if ref.PartID == 0 {
+		return errors.New("collections: column asset ref part_id is required")
 	}
 	if ref.FileID == 0 {
 		return errors.New("collections: column asset ref file_id is required")

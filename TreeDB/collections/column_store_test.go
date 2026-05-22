@@ -103,6 +103,22 @@ func TestColumnStoreMetadataRoundTripsReopenAndCacheIdentity(t *testing.T) {
 	}
 }
 
+func TestColumnStoreNormalizesLegacyValueLogAssetManagerNameM12A(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.AssetManager = &ColumnAssetManagerConfig{
+		Kind:              columnAssetManagerLegacyValueLog,
+		IsolatedNamespace: true,
+		Namespace:         "events/column-assets",
+	}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig legacy value-log-shaped manager: %v", err)
+	}
+	if normalized.AssetManager == nil || normalized.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
+		t.Fatalf("asset manager kind=%+v want %q", normalized.AssetManager, ColumnAssetManagerValueLogShaped)
+	}
+}
+
 func TestColumnStoreActiveManifestRootValidates(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -397,6 +413,42 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			},
 			want: "column manifest root descriptor",
 		},
+		{
+			name: "invalid asset namespace traversal",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: "events/../escape"},
+			},
+			want: "invalid column asset namespace",
+		},
+		{
+			name: "invalid asset namespace windows volume",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: "C:events/column-assets"},
+			},
+			want: "invalid column asset namespace",
+		},
+		{
+			name: "invalid asset namespace whitespace",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: " events/column-assets "},
+			},
+			want: "invalid column asset namespace",
+		},
+		{
+			name: "invalid asset namespace nul",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				AssetManager: &ColumnAssetManagerConfig{Namespace: "events/\x00/column-assets"},
+			},
+			want: "invalid column asset namespace",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -685,7 +737,7 @@ func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
 	if got := cfg.Reconstruction; got != ColumnReconstructionRetainedPayloadAndColumns {
 		t.Fatalf("reconstruction=%q want %q", got, ColumnReconstructionRetainedPayloadAndColumns)
 	}
-	if cfg.AssetManager == nil || cfg.AssetManager.Kind != ColumnAssetManagerValueLog || !cfg.AssetManager.IsolatedNamespace || cfg.AssetManager.Namespace != "events/column-assets" {
+	if cfg.AssetManager == nil || cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped || !cfg.AssetManager.IsolatedNamespace || cfg.AssetManager.Namespace != "events/column-assets" {
 		t.Fatalf("unexpected asset manager metadata: %+v", cfg.AssetManager)
 	}
 	if cfg.Locator == nil || cfg.Locator.Strategy != ColumnLocatorStrategySideIndex {

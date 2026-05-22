@@ -22,6 +22,9 @@ func TestLayoutPaths_DefaultSplitDirs(t *testing.T) {
 	if got, want := layout.leafVLogDir, filepath.Join(dir, leafVLogDirName); got != want {
 		t.Fatalf("leafVLogDir=%q, want %q", got, want)
 	}
+	if got, want := layout.columnAssetDir, filepath.Join(dir, columnAssetDirName); got != want {
+		t.Fatalf("columnAssetDir=%q, want %q", got, want)
+	}
 }
 
 func TestOpen_FreshDBCreatesSplitStorageDirs(t *testing.T) {
@@ -36,7 +39,7 @@ func TestOpen_FreshDBCreatesSplitStorageDirs(t *testing.T) {
 	}
 
 	layout := resolveStorageLayout(dir)
-	for _, path := range []string{layout.walDir, layout.valueVLogDir, layout.leafVLogDir} {
+	for _, path := range []string{layout.walDir, layout.valueVLogDir, layout.leafVLogDir, layout.columnAssetDir} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("Stat(%s): %v", path, err)
@@ -45,6 +48,32 @@ func TestOpen_FreshDBCreatesSplitStorageDirs(t *testing.T) {
 			t.Fatalf("expected %s to be a directory", path)
 		}
 	}
+}
+
+func TestEnsureStorageLayoutDirsSyncsRootForColumnAssetsM12A(t *testing.T) {
+	dir := t.TempDir()
+	var synced []string
+	previous := syncStorageLayoutDir
+	syncStorageLayoutDir = func(path string) error {
+		synced = append(synced, path)
+		return nil
+	}
+	t.Cleanup(func() {
+		syncStorageLayoutDir = previous
+	})
+
+	if err := ensureStorageLayoutDirs(dir); err != nil {
+		t.Fatalf("ensureStorageLayoutDirs: %v", err)
+	}
+	if _, err := os.Stat(ColumnAssetRootDirPath(dir)); err != nil {
+		t.Fatalf("Stat(column_assets): %v", err)
+	}
+	for _, path := range synced {
+		if path == dir {
+			return
+		}
+	}
+	t.Fatalf("new storage layout dirs did not sync DB root %q; synced=%v", dir, synced)
 }
 
 func TestHasLegacyMixedWALValueSegments_DetectsValueLogsInWAL(t *testing.T) {

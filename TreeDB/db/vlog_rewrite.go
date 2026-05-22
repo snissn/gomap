@@ -3850,15 +3850,26 @@ func (w *rewriteWriter) CurrentValueLogSegment() (string, uint32, bool) {
 		return "", 0, false
 	}
 	if w.leafDir != "" {
-		if w.leafCurrentPath == "" || w.leafCurrentFileID == 0 {
-			return "", 0, false
-		}
-		return w.leafCurrentPath, w.leafCurrentFileID, true
+		return w.currentLeafValueLogSegment()
+	}
+	return w.currentPrimaryValueLogSegment()
+}
+
+func (w *rewriteWriter) currentPrimaryValueLogSegment() (string, uint32, bool) {
+	if w == nil {
+		return "", 0, false
 	}
 	if w.currentPath == "" || w.currentFileID == 0 {
 		return "", 0, false
 	}
 	return w.currentPath, w.currentFileID, true
+}
+
+func (w *rewriteWriter) currentLeafValueLogSegment() (string, uint32, bool) {
+	if w == nil || w.leafCurrentPath == "" || w.leafCurrentFileID == 0 {
+		return "", 0, false
+	}
+	return w.leafCurrentPath, w.leafCurrentFileID, true
 }
 
 func (w *rewriteWriter) ensureWriter() error {

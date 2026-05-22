@@ -502,6 +502,68 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 	}
 }
 
+func TestCommandWALInstalledAppendersUseSplitValueAndLeafDirs(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appender := db.currentValueLogAppender()
+	if appender == nil {
+		t.Fatal("value-log appender was not installed")
+	}
+	if db.leafPageLog == nil {
+		t.Fatal("leaf-page log was not installed")
+	}
+	if _, err := db.AppendValueLogValues([][]byte{[]byte(strings.Repeat("row-value-", 64))}); err != nil {
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if _, err := db.leafPageLog.AppendLeafPage(bytes.Repeat([]byte("l"), page.PageSize)); err != nil {
+		t.Fatalf("AppendLeafPage: %v", err)
+	}
+	if err := appender.Flush(); err != nil {
+		t.Fatalf("value appender Flush: %v", err)
+	}
+	if err := db.leafPageLog.Flush(); err != nil {
+		t.Fatalf("leaf page log Flush: %v", err)
+	}
+
+	valuePath, valueFileID, ok := appender.CurrentValueLogSegment()
+	if !ok {
+		t.Fatal("value appender did not report current segment")
+	}
+	leafPath, leafFileID, ok := db.currentLeafPageLogSegment()
+	if !ok {
+		t.Fatal("leaf page log did not report current segment")
+	}
+	if got, want := filepath.Dir(valuePath), ValueLogDirPath(dir); got != want {
+		t.Fatalf("value appender path dir=%q want %q", got, want)
+	}
+	if got, want := filepath.Dir(leafPath), LeafLogDirPath(dir); got != want {
+		t.Fatalf("leaf page log path dir=%q want %q", got, want)
+	}
+	if valueFileID == leafFileID {
+		t.Fatalf("value and leaf segments share file id %d", valueFileID)
+	}
+}
+
+func TestReplayInlineLeafPageLogCurrentSegmentNilAppenderM12A(t *testing.T) {
+	path, fileID, ok := (replayInlineLeafPageLog{}).CurrentValueLogSegment()
+	if ok || path != "" || fileID != 0 {
+		t.Fatalf("CurrentValueLogSegment with nil appender = (%q, %d, %v), want empty false", path, fileID, ok)
+	}
+}
+
 func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
