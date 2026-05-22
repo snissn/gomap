@@ -286,6 +286,9 @@ func (d *DB) DeleteSync(key []byte) error {
 	return d.DB.DeleteSync(key)
 }
 
+// Stats is safe to call after Close. The unified-bench harness uses that
+// post-close snapshot to capture TreeDB stats after final checkpoint/cleanup
+// work has run.
 func (d *DB) Stats() map[string]string { return d.DB.Stats() }
 
 func (d *DB) Print() error { return d.DB.Print() }

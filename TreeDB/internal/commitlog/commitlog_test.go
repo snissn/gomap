@@ -73,6 +73,271 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogWriteReadLargeRawBatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := make([]Record, 2048)
+	value := bytes.Repeat([]byte("v"), 128)
+	for i := range records {
+		records[i] = Record{
+			Op:    OpSetInline,
+			Key:   []byte{byte(i), byte(i >> 8), byte(i >> 16)},
+			Value: value,
+			Seq:   7,
+		}
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append large raw batch: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != len(records) {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	for i := range records {
+		if got[i].Op != records[i].Op || got[i].Seq != records[i].Seq ||
+			!bytes.Equal(got[i].Key, records[i].Key) || !bytes.Equal(got[i].Value, records[i].Value) {
+			_ = reader.Close()
+			t.Fatalf("record %d mismatch", i)
+		}
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogWriteReadZeroInlineBatchCompact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := make([]Record, 8000)
+	value := make([]byte, 128)
+	for i := range records {
+		var key [8]byte
+		binary.LittleEndian.PutUint64(key[:], uint64(i))
+		records[i] = Record{
+			Op:    OpSetInline,
+			Key:   bytes.Clone(key[:]),
+			Value: value,
+			Seq:   11,
+		}
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append zero inline batch: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if len(data) < segmentHeaderSize+batchHeaderSize+recordHeaderSize {
+		t.Fatalf("unexpected compact segment size %d", len(data))
+	}
+	payloadLen := int(binary.LittleEndian.Uint32(data[0:4]) & segmentLenMask)
+	wantPayloadLen := zeroInlineBatchHeaderSize + len(records)*(zeroInlineRecordHeaderSize+8)
+	if payloadLen != wantPayloadLen {
+		t.Fatalf("payload len=%d, want compact len %d", payloadLen, wantPayloadLen)
+	}
+	if got := data[segmentHeaderSize]; got != zeroInlineBatchVersion {
+		t.Fatalf("raw batch version=%d, want compact zero batch version %d", got, zeroInlineBatchVersion)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != len(records) {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	for i := range got {
+		if got[i].Op != OpSetInline || got[i].Seq != 11 || !bytes.Equal(got[i].Value, value) {
+			_ = reader.Close()
+			t.Fatalf("decoded record %d mismatch: op=%d seq=%d value_len=%d", i, got[i].Op, got[i].Seq, len(got[i].Value))
+		}
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogWriteReadZeroInlineBatchFuncCompact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	count := 8000
+	keys := make([][]byte, count)
+	for i := range keys {
+		var key [8]byte
+		binary.LittleEndian.PutUint64(key[:], uint64(i))
+		keys[i] = bytes.Clone(key[:])
+	}
+	if err := writer.AppendZeroInlineBatchFunc(count, 22, 128, func(i int) []byte {
+		return keys[i]
+	}); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append zero inline batch func: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	payloadLen := int(binary.LittleEndian.Uint32(data[0:4]) & segmentLenMask)
+	wantPayloadLen := zeroInlineBatchHeaderSize + count*(zeroInlineRecordHeaderSize+8)
+	if payloadLen != wantPayloadLen {
+		t.Fatalf("payload len=%d, want compact len %d", payloadLen, wantPayloadLen)
+	}
+	if got := data[segmentHeaderSize]; got != zeroInlineBatchVersion {
+		t.Fatalf("raw batch version=%d, want compact zero batch version %d", got, zeroInlineBatchVersion)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != count {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), count)
+	}
+	value := make([]byte, 128)
+	for i := range got {
+		if got[i].Op != OpSetInline || got[i].Seq != 22 || !bytes.Equal(got[i].Key, keys[i]) || !bytes.Equal(got[i].Value, value) {
+			_ = reader.Close()
+			t.Fatalf("decoded record %d mismatch: op=%d seq=%d key_len=%d value_len=%d", i, got[i].Op, got[i].Seq, len(got[i].Key), len(got[i].Value))
+		}
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogWriteReadMixedZeroInlineRecordCompact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetInline, Key: []byte("zero"), Value: make([]byte, 16), Seq: 1},
+		{Op: OpDelete, Key: []byte("gone"), Seq: 1},
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append mixed zero batch: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if got := data[segmentHeaderSize]; got != Version {
+		t.Fatalf("raw batch version=%d, want v1", got)
+	}
+	if got := data[segmentHeaderSize+batchHeaderSize]; got != OpSetInlineZero {
+		t.Fatalf("raw op=%d, want compact zero op %d", got, OpSetInlineZero)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != len(records) {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	if got[0].Op != OpSetInline || !bytes.Equal(got[0].Value, records[0].Value) {
+		_ = reader.Close()
+		t.Fatalf("decoded zero record mismatch: op=%d value=%x", got[0].Op, got[0].Value)
+	}
+	if got[1].Op != OpDelete {
+		_ = reader.Close()
+		t.Fatalf("decoded delete op=%d, want delete", got[1].Op)
+	}
+	_ = reader.Close()
+}
+
+func TestWriterRotateToWithSyncSkipsDirSyncWhenRelaxed(t *testing.T) {
+	dir := t.TempDir()
+	path0 := filepath.Join(dir, "commit-0.log")
+	path1 := filepath.Join(dir, "commit-1.log")
+	path2 := filepath.Join(dir, "commit-2.log")
+
+	oldSyncDirFn := syncDirFn
+	defer func() { syncDirFn = oldSyncDirFn }()
+	calls := 0
+	syncDirFn = func(string) error {
+		calls++
+		return nil
+	}
+
+	writer, err := NewWriterWithOptions(path0, Options{})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+	calls = 0
+	if err := writer.RotateToWithSync(path1, false); err != nil {
+		t.Fatalf("relaxed RotateToWithSync: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("relaxed RotateToWithSync syncDir calls=%d, want 0", calls)
+	}
+	if err := writer.RotateToWithSync(path2, true); err != nil {
+		t.Fatalf("strict RotateToWithSync: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("strict RotateToWithSync syncDir calls=%d, want 1", calls)
+	}
+}
+
 func TestCommitLogWriteReadBatchCompressed(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

@@ -7,6 +7,7 @@ import (
 	"math/bits"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -81,6 +82,7 @@ type AppendOnly struct {
 
 	entries        []appendOnlyEntry
 	baseEntriesLen int
+	orderedKey64   []uint64
 	latest         map[string]int
 	latest64       map[uint64]int
 	snapshot       []*appendOnlyEntry
@@ -94,6 +96,7 @@ type AppendOnly struct {
 	ordered     bool
 	latestDirty bool
 	frozen      bool
+	frozenFast  atomic.Bool
 	hasLast     bool
 	lastIdx     int
 
@@ -319,6 +322,13 @@ func appendOnlyEntryKey(ent *appendOnlyEntry) []byte {
 		return ent.inlineKey[:]
 	}
 	return ent.key
+}
+
+func appendOnlyEntryInlineKeyU64(ent *appendOnlyEntry) (uint64, bool) {
+	if ent == nil || !ent.keyInline {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(ent.inlineKey[:]), true
 }
 
 func cloneBytes(src []byte) []byte {
@@ -879,6 +889,37 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 		return nil
 	}
 	active := m.entries[:m.count]
+	if key64, ok := appendOnlyKeyU64(key); ok {
+		if len(m.orderedKey64) == len(active) {
+			idx := sort.Search(len(m.orderedKey64), func(i int) bool {
+				return m.orderedKey64[i] >= key64
+			})
+			if idx >= len(active) || m.orderedKey64[idx] != key64 {
+				return nil
+			}
+			return &active[idx]
+		}
+		idx := sort.Search(len(active), func(i int) bool {
+			if entryKey64, ok := appendOnlyEntryInlineKeyU64(&active[i]); ok {
+				return entryKey64 >= key64
+			}
+			return bytes.Compare(appendOnlyEntryKey(&active[i]), key) >= 0
+		})
+		if idx >= len(active) {
+			return nil
+		}
+		ent := &active[idx]
+		if entryKey64, ok := appendOnlyEntryInlineKeyU64(ent); ok {
+			if entryKey64 != key64 {
+				return nil
+			}
+			return ent
+		}
+		if !bytes.Equal(appendOnlyEntryKey(ent), key) {
+			return nil
+		}
+		return ent
+	}
 	idx := sort.Search(len(active), func(i int) bool {
 		return bytes.Compare(appendOnlyEntryKey(&active[i]), key) >= 0
 	})
@@ -892,7 +933,52 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 	return ent
 }
 
+func (m *AppendOnly) getEntryFrozen(key []byte) ([]byte, page.ValuePtr, byte, bool, bool) {
+	if m == nil {
+		return nil, page.ValuePtr{}, 0, false, true
+	}
+	if m.ordered {
+		ent := m.orderedLookupEntryLocked(key)
+		if ent == nil {
+			return nil, page.ValuePtr{}, 0, false, true
+		}
+		return ent.value, ent.ptr, ent.flags, true, true
+	}
+	if m.latestDirty {
+		return nil, page.ValuePtr{}, 0, false, false
+	}
+	if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
+		if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+			ent := &m.entries[idx]
+			if bytes.Equal(appendOnlyEntryKey(ent), key) {
+				return ent.value, ent.ptr, ent.flags, true, true
+			}
+		}
+	}
+	if m.latest != nil {
+		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+			ent := &m.entries[idx]
+			if bytes.Equal(appendOnlyEntryKey(ent), key) {
+				return ent.value, ent.ptr, ent.flags, true, true
+			}
+		}
+	}
+	return nil, page.ValuePtr{}, 0, false, true
+}
+
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
+	if m.frozenFast.Load() {
+		val, _, flags, found, ok := m.getEntryFrozen(key)
+		if ok {
+			if !found {
+				return nil, false, false
+			}
+			if flags&node.FlagTombstone != 0 {
+				return nil, true, true
+			}
+			return val, false, true
+		}
+	}
 	for {
 		m.mu.RLock()
 		if ent := m.orderedLookupEntryLocked(key); ent != nil {
@@ -953,6 +1039,12 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	if m.frozenFast.Load() {
+		val, ptr, flags, found, ok := m.getEntryFrozen(key)
+		if ok {
+			return val, ptr, flags, found
+		}
+	}
 	for {
 		m.mu.RLock()
 		if ent := m.orderedLookupEntryLocked(key); ent != nil {
@@ -1024,8 +1116,31 @@ func (m *AppendOnly) Freeze() {
 		m.mu.Unlock()
 		return
 	}
+	m.buildOrderedKey64Locked()
 	m.frozen = true
+	m.frozenFast.Store(true)
 	m.mu.Unlock()
+}
+
+func (m *AppendOnly) buildOrderedKey64Locked() {
+	if !m.ordered || m.count == 0 {
+		m.orderedKey64 = m.orderedKey64[:0]
+		return
+	}
+	for i := 0; i < m.count; i++ {
+		if !m.entries[i].keyInline {
+			m.orderedKey64 = m.orderedKey64[:0]
+			return
+		}
+	}
+	if cap(m.orderedKey64) < m.count {
+		m.orderedKey64 = make([]uint64, m.count)
+	} else {
+		m.orderedKey64 = m.orderedKey64[:m.count]
+	}
+	for i := 0; i < m.count; i++ {
+		m.orderedKey64[i] = binary.BigEndian.Uint64(m.entries[i].inlineKey[:])
+	}
 }
 
 func (m *AppendOnly) acquireIteratorLeaseLocked() {
@@ -1080,6 +1195,7 @@ func (m *AppendOnly) Release() {
 	entries := m.entries
 	m.entries = nil
 	m.baseEntriesLen = 0
+	m.orderedKey64 = nil
 	m.latest = nil
 	m.latest64 = nil
 	m.snapshot = nil
@@ -1093,6 +1209,7 @@ func (m *AppendOnly) Release() {
 	m.ordered = true
 	m.latestDirty = false
 	m.frozen = false
+	m.frozenFast.Store(false)
 	m.hasLast = false
 	m.lastIdx = -1
 	putAppendOnlyEntries(entries)
@@ -1190,9 +1307,11 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	}
 	m.count = 0
 	m.sizeBytes = 0
+	m.orderedKey64 = m.orderedKey64[:0]
 	m.ordered = true
 	m.latestDirty = false
 	m.frozen = false
+	m.frozenFast.Store(false)
 	m.hasLast = false
 	m.lastIdx = -1
 

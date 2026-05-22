@@ -3,11 +3,14 @@ package treedb_test
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -41,6 +44,32 @@ func leafFlagsInIndex(t *testing.T, indexPath string) uint16 {
 
 	t.Fatalf("no leaf pages found in %s", indexPath)
 	return 0
+}
+
+func TestOfflineMaintenanceRejectsCommandWALBeforeSideStoreOpen(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := treedbdb.SaveFormatConfig(mainDir, treedbdb.FormatConfig{RequiredFeatures: []string{treedbdb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	// If public offline maintenance reaches side-store wiring, this malformed
+	// dictdb path returns a different error. command_wal_v1 must fail first even
+	// when IgnoreFormatConfig is set.
+	if err := os.MkdirAll(filepath.Join(root, "dictdb", "index.db"), 0o755); err != nil {
+		t.Fatalf("mkdir malformed dictdb index: %v", err)
+	}
+
+	for _, ignoreFormatConfig := range []bool{false, true} {
+		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig}); !errors.Is(err, treedb.ErrCommandWALUnsupported) {
+			t.Fatalf("VacuumIndexOffline IgnoreFormatConfig=%v error=%v, want ErrCommandWALUnsupported", ignoreFormatConfig, err)
+		}
+		if _, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig}); !errors.Is(err, treedb.ErrCommandWALUnsupported) {
+			t.Fatalf("ValueLogRewriteOffline IgnoreFormatConfig=%v error=%v, want ErrCommandWALUnsupported", ignoreFormatConfig, err)
+		}
+	}
 }
 
 func TestVacuumIndexOffline_LoadsPersistedFormatConfig(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,7 @@ var treeGetAppendInlineHitsTotal atomic.Uint64
 var treeGetAppendInlineBytesTotal atomic.Uint64
 var treeGetAppendPointerHitsTotal atomic.Uint64
 var treeGetAppendPointerBytesTotal atomic.Uint64
+var treeHotReadStatsEnabled = os.Getenv("TREEDB_HOT_PATH_STATS") != ""
 
 func ReadPathStatsSnapshot() ReadPathStats {
 	return ReadPathStats{
@@ -49,6 +51,26 @@ func ReadPathStatsSnapshot() ReadPathStats {
 		GetAppendInlineBytesTotal:  treeGetAppendInlineBytesTotal.Load(),
 		GetAppendPointerHitsTotal:  treeGetAppendPointerHitsTotal.Load(),
 		GetAppendPointerBytesTotal: treeGetAppendPointerBytesTotal.Load(),
+	}
+}
+
+func recordTreeGetAppendInline(n int) {
+	if !treeHotReadStatsEnabled {
+		return
+	}
+	treeGetAppendInlineHitsTotal.Add(1)
+	if n > 0 {
+		treeGetAppendInlineBytesTotal.Add(uint64(n))
+	}
+}
+
+func recordTreeGetAppendPointer(n int) {
+	if !treeHotReadStatsEnabled {
+		return
+	}
+	treeGetAppendPointerHitsTotal.Add(1)
+	if n > 0 {
+		treeGetAppendPointerBytesTotal.Add(uint64(n))
 	}
 }
 
@@ -324,7 +346,7 @@ func validateLeafLogNodeInto(dst *node.Node, data []byte, ptr page.LogRecordRef,
 	if len(data) != page.PageSize {
 		return fmt.Errorf("invalid leaf page size %d for leaf-log ref file=%d offset=%d", len(data), ptr.FileID, ptr.Offset)
 	}
-	node.InitNodeView(dst, data)
+	node.InitFreshNodeView(dst, data)
 	if verifyChecksum && !dst.VerifyChecksum() {
 		return fmt.Errorf("checksum mismatch on leaf-log ref file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
@@ -370,7 +392,7 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 	if err != nil {
 		return err
 	}
-	node.InitNodeView(dst, data) // VerifyChecksum is fast (CRC32C hardware accelerated).
+	node.InitFreshNodeView(dst, data) // VerifyChecksum is fast (CRC32C hardware accelerated).
 	// We use Verified Cache to skip it if already checked.
 	if verifyAlways || !t.pager.IsVerified(pageID) {
 		if !dst.VerifyChecksum() {
@@ -414,11 +436,19 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 					}
 				}
 			}
-			childRef, _, err := n.SearchInternalChildRef(key)
-			if err != nil {
-				return node.LeafEntry{}, err
+			if n.InternalLeafLogRefsEnabled() {
+				childRef, _, err := n.SearchInternalChildRef(key)
+				if err != nil {
+					return node.LeafEntry{}, err
+				}
+				currRef = childRef
+			} else {
+				childID, _, err := n.SearchInternalChildID(key)
+				if err != nil {
+					return node.LeafEntry{}, err
+				}
+				currRef = page.PageChildRef(childID)
 			}
-			currRef = childRef
 
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
@@ -562,11 +592,19 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					}
 				}
 			}
-			childRef, _, err := n.SearchInternalChildRef(key)
-			if err != nil {
-				return nil, page.ValuePtr{}, 0, false, err
+			if n.InternalLeafLogRefsEnabled() {
+				childRef, _, err := n.SearchInternalChildRef(key)
+				if err != nil {
+					return nil, page.ValuePtr{}, 0, false, err
+				}
+				currRef = childRef
+			} else {
+				childID, _, err := n.SearchInternalChildID(key)
+				if err != nil {
+					return nil, page.ValuePtr{}, 0, false, err
+				}
+				currRef = page.PageChildRef(childID)
 			}
-			currRef = childRef
 
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
@@ -667,17 +705,13 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, err
 	}
 	if appendedDirect {
-		treeGetAppendInlineHitsTotal.Add(1)
-		if n := len(val) - len(dst); n > 0 {
-			treeGetAppendInlineBytesTotal.Add(uint64(n))
-		}
+		recordTreeGetAppendInline(len(val) - len(dst))
 		return val, nil
 	}
 	if flags&node.FlagTombstone != 0 {
 		return dst, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
-		treeGetAppendPointerHitsTotal.Add(1)
 		if t.slabKeyAppender != nil {
 			oldLen := len(dst)
 			tail, err := t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst[oldLen:oldLen])
@@ -685,22 +719,21 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 				return dst, err
 			}
 			if oldLen == 0 {
-				if len(tail) > 0 {
-					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
-				}
+				recordTreeGetAppendPointer(len(tail))
 				return tail, nil
 			}
 			if len(tail) == 0 {
+				recordTreeGetAppendPointer(0)
 				return dst[:oldLen], nil
 			}
 			if cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
-					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
+					recordTreeGetAppendPointer(len(tail))
 					return dst[:oldLen+len(tail)], nil
 				}
 			}
-			treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
+			recordTreeGetAppendPointer(len(tail))
 			return append(dst[:oldLen], tail...), nil
 		}
 		if t.slabKeyReader != nil {
@@ -709,9 +742,10 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 				return dst, err
 			}
 			if out == nil {
+				recordTreeGetAppendPointer(0)
 				return dst, nil
 			}
-			treeGetAppendPointerBytesTotal.Add(uint64(len(out)))
+			recordTreeGetAppendPointer(len(out))
 			return append(dst, out...), nil
 		}
 		if t.slabAppender != nil {
@@ -721,22 +755,21 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 				return dst, err
 			}
 			if oldLen == 0 {
-				if len(tail) > 0 {
-					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
-				}
+				recordTreeGetAppendPointer(len(tail))
 				return tail, nil
 			}
 			if len(tail) == 0 {
+				recordTreeGetAppendPointer(0)
 				return dst[:oldLen], nil
 			}
 			if cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
-					treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
+					recordTreeGetAppendPointer(len(tail))
 					return dst[:oldLen+len(tail)], nil
 				}
 			}
-			treeGetAppendPointerBytesTotal.Add(uint64(len(tail)))
+			recordTreeGetAppendPointer(len(tail))
 			return append(dst[:oldLen], tail...), nil
 		}
 		out, err := t.slabReader.ReadUnsafe(ptr)
@@ -744,19 +777,17 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 			return dst, err
 		}
 		if out == nil {
+			recordTreeGetAppendPointer(0)
 			return dst, nil
 		}
-		treeGetAppendPointerBytesTotal.Add(uint64(len(out)))
+		recordTreeGetAppendPointer(len(out))
 		return append(dst, out...), nil
 	}
 	if val == nil {
-		treeGetAppendInlineHitsTotal.Add(1)
+		recordTreeGetAppendInline(0)
 		return dst, nil
 	}
-	treeGetAppendInlineHitsTotal.Add(1)
-	if len(val) > 0 {
-		treeGetAppendInlineBytesTotal.Add(uint64(len(val)))
-	}
+	recordTreeGetAppendInline(len(val))
 	return append(dst, val...), nil
 }
 
@@ -815,11 +846,19 @@ func (t *Tree) Has(key []byte) (bool, error) {
 					}
 				}
 			}
-			childRef, _, err := n.SearchInternalChildRef(key)
-			if err != nil {
-				return false, err
+			if n.InternalLeafLogRefsEnabled() {
+				childRef, _, err := n.SearchInternalChildRef(key)
+				if err != nil {
+					return false, err
+				}
+				currRef = childRef
+			} else {
+				childID, _, err := n.SearchInternalChildID(key)
+				if err != nil {
+					return false, err
+				}
+				currRef = page.PageChildRef(childID)
 			}
-			currRef = childRef
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {

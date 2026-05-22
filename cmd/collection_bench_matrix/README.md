@@ -14,6 +14,10 @@ OUT=/tmp/collection-matrix-$(date +%s)
 ./bin/collection-bench-matrix -out-dir "$OUT" -batch-size 16000 -benchtime 100000x
 ```
 
+By default, TreeDB collection cells use the `production_wal_on_fast` engine
+(WAL on with the fast/relaxed sync profile). Pass `-engine production_fast` when
+you need the no-WAL cached control.
+
 Useful focused variants:
 
 ```sh

@@ -15,6 +15,8 @@ scripts/bench_collections_harness.sh \
 
 The default run captures:
 
+- TreeDB collection benchmark cells using `production_wal_on_fast` unless
+  `TREEDB_COLLECTION_BENCH_ENGINE` or `--engine` overrides it.
 - JSON collection shape benchmarks.
 - `template-v1` collection shape benchmarks.
 - primary read shapes for both `Get` and reusable-buffer `GetInto`.
@@ -180,8 +182,9 @@ profiles for the existing fixed-document indexed insert/checkpoint benchmarks.
 - `TREEDB_COLLECTION_HARNESS_PROFILE_BENCH_LIST`
 - `TREEDB_COLLECTION_HARNESS_TIMED_PROFILE_DOCS`
 
-The default collection storage policy remains production-oriented:
-`data_outer=true,index_outer=false`.
+The default collection benchmark engine is `production_wal_on_fast` (WAL on with
+the fast/relaxed sync profile). The default collection storage policy remains
+production-oriented: `data_outer=true,index_outer=false`.
 
 Collection insert benchmark rows, including the collection-shape inserts and the
 fixed indexed insert/checkpoint variants used for timed profiling, report

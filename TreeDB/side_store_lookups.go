@@ -90,6 +90,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			dictOpts.ChunkSize = dictChunk
 			dictOpts.DisableBackgroundPrune = true
 			dictOpts.IgnoreFormatConfig = false
+			dictOpts.CommandWAL = false
 			// Side stores must never require dict/template lookups themselves.
 			dictOpts.IndexOuterLeavesInValueLog = false
 			dictOpts.ValueLog.DictLookup = nil
@@ -159,6 +160,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 			templateOpts.ChunkSize = templateChunk
 			templateOpts.DisableBackgroundPrune = true
 			templateOpts.IgnoreFormatConfig = false
+			templateOpts.CommandWAL = false
 			templateOpts.IndexOuterLeavesInValueLog = false
 			templateOpts.ValueLog.DictLookup = nil
 			templateOpts.ValueLog.Compression = db.ValueLogCompressionOff

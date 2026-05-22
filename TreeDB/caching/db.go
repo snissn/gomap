@@ -118,6 +118,7 @@ var batchSetViewBytesTotal atomic.Uint64
 var batchSetCallerSamplesTotal atomic.Uint64
 var batchSetCallerSampleSeq atomic.Uint64
 var batchSetCallerStatsMap sync.Map
+var hotPathStatsEnabled = os.Getenv("TREEDB_HOT_PATH_STATS") != ""
 var dbGetCallerSamplesTotal atomic.Uint64
 var dbGetCallerSampleSeq atomic.Uint64
 var dbGetCallerStatsMap sync.Map
@@ -2308,6 +2309,13 @@ func (db *DB) valueLogDictClassRangesForRecords(records []valuelog.Record) []val
 	if len(records) == 0 {
 		return nil
 	}
+	if db == nil || db.dictClassMode() != vlogDictClassModeSplitOuterLeaf {
+		return []valueLogDictClassRange{{
+			start: 0,
+			end:   len(records),
+			class: vlogDictClassSingleValue,
+		}}
+	}
 	ranges := make([]valueLogDictClassRange, 0, 4)
 	start := 0
 	class := db.valueLogDictClassForValue(records[0].Value)
@@ -2810,6 +2818,14 @@ type backendBatchReserveHint interface {
 	Reserve(int)
 }
 
+type physicalBackendBatchSizer interface {
+	NewPhysicalBatchWithSize(size int) batch.Interface
+}
+
+type physicalBackendBatcher interface {
+	NewPhysicalBatch() batch.Interface
+}
+
 type backendBatchSetViewer interface {
 	SetView(key, value []byte) error
 }
@@ -2824,6 +2840,30 @@ type backendBatchPointerSetter interface {
 
 type backendBatchPointerSetterView interface {
 	SetPointerView(key []byte, ptr page.ValuePtr) error
+}
+
+type backendBatchCommandWALPublisher interface {
+	SetCommandWALPublish(appliedLSN uint64, covered []backenddb.CommandWALLSNRange) error
+}
+
+type checkpointCommandWALPublish struct {
+	appliedLSN uint64
+	ranges     []backenddb.CommandWALLSNRange
+	consumed   bool
+}
+
+func (p *checkpointCommandWALPublish) attach(backendBatch batch.Interface) (bool, error) {
+	if p == nil || p.consumed || p.appliedLSN == 0 {
+		return false, nil
+	}
+	publisher, ok := backendBatch.(backendBatchCommandWALPublisher)
+	if !ok {
+		return false, errors.New("cachingdb: backend batch cannot publish command wal applied lsn")
+	}
+	if err := publisher.SetCommandWALPublish(p.appliedLSN, p.ranges); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
@@ -3385,6 +3425,29 @@ func (db *DB) SetDictStore(store DictStore) {
 		})
 	}
 	db.ensureValueLogDictTrainer()
+}
+
+// SetCommandWALCheckpointPublishHook installs an optional hook that lets a
+// caller publish already-covered command-WAL LSNs in the same backend commit
+// that Checkpoint uses for its root/sync boundary. Checkpoint may call the hook
+// more than once when a piggyback attempt is prepared but not consumed; hook
+// implementations must therefore be idempotent and safe to reinvoke within one
+// checkpoint.
+func (db *DB) SetCommandWALCheckpointPublishHook(h func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)) {
+	if db == nil {
+		return
+	}
+	db.commandWALCheckpointPublish = h
+}
+
+// SetCommandWALCheckpointCutoverHook installs an optional hook called while
+// Checkpoint still holds the write cutover lock. Command-WAL publishers use it
+// to cap AppliedCommandLSN publication to writes included in this checkpoint.
+func (db *DB) SetCommandWALCheckpointCutoverHook(h func()) {
+	if db == nil {
+		return
+	}
+	db.commandWALCheckpointCutover = h
 }
 
 // SetTemplateStore installs the template store used for template compression.
@@ -6085,6 +6148,14 @@ func (db *DB) newBackendBatchWithSize(size int) batch.Interface {
 	if maxSize > 0 && size > maxSize {
 		size = maxSize
 	}
+	if physical, ok := db.backend.(physicalBackendBatchSizer); ok {
+		return physical.NewPhysicalBatchWithSize(size)
+	}
+	if size == 0 {
+		if physical, ok := db.backend.(physicalBackendBatcher); ok {
+			return physical.NewPhysicalBatch()
+		}
+	}
 	if sizer, ok := db.backend.(batchSizer); ok {
 		return sizer.NewBatchWithSize(size)
 	}
@@ -6476,6 +6547,7 @@ type DB struct {
 	bpCond      *sync.Cond
 
 	// Commit workers removed; backend commits are synchronous.
+	journalOwner *commitlog.JournalOwner
 
 	checkpointMu      sync.Mutex
 	checkpointCond    *sync.Cond
@@ -6529,6 +6601,8 @@ type DB struct {
 	rootPublishedSet                 *publishedRootSet
 	rootPublishStats                 rootDomainPublishTelemetry
 	rootPublishHook                  func(*rootPublishGroup) error
+	commandWALCheckpointPublish      func(sync bool) (uint64, []backenddb.CommandWALLSNRange, error)
+	commandWALCheckpointCutover      func()
 	dirtyRootPublishGroupID          uint64
 	dirtyRootPublishGroupPending     bool
 	rootPublishRetryPending          bool
@@ -6771,6 +6845,8 @@ type DB struct {
 	checkpointTotalNs                                            atomic.Uint64
 	checkpointMaxNs                                              atomic.Uint64
 	checkpointNoopSkips                                          atomic.Uint64
+	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
+	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
 	checkpointFlushMuWaitMaxNs                                   atomic.Uint64
 	checkpointAutoVacuumRuns                                     atomic.Uint64
@@ -9027,6 +9103,27 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
 		return nil, err
 	}
+	disableJournal := opts.DisableWAL
+	var journalOwner *commitlog.JournalOwner
+	journalOwnerTransferred := false
+	if !disableJournal {
+		// Cached read-write opens take a process-wide journal owner so split WAL
+		// writers cannot race command-WAL LSN ownership in the same directory.
+		// TreeDB read-only opens use the db.openReadOnly path, which never enters
+		// caching.Open and therefore never acquires this exclusive owner.
+		var err error
+		journalOwner, err = commitlog.AcquireJournalOwner(walDir)
+		if err != nil {
+			return nil, fmt.Errorf("cachingdb: acquire command journal owner for %s: %w", walDir, err)
+		}
+		// Cached DB uses this owner as a lock-only handle while raw WAL writers
+		// are open. LSN assignment belongs to CommandJournal, not this path.
+		defer func() {
+			if !journalOwnerTransferred && journalOwner != nil {
+				_ = journalOwner.Close()
+			}
+		}()
+	}
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
@@ -9189,7 +9286,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
 	}
-	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
 	for _, seg := range segments {
 		if !seg.valueLog {
@@ -9569,15 +9665,24 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// never receive values. Value-log appends allocate the current lane segment
 	// on first write instead.
 	if !db.disableJournal {
+		cleanupJournalOpenFailure := func(upToLane int) {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.Close()
+				db.valueLogReader = nil
+			}
+			for j := 0; j <= upToLane && j < len(db.lanes); j++ {
+				db.cleanupLaneWALWriters(&db.lanes[j])
+			}
+			if db.journalOwner != nil {
+				_ = db.journalOwner.Close()
+				db.journalOwner = nil
+			}
+		}
+		db.journalOwner = journalOwner
+		journalOwnerTransferred = true
 		for i := range db.lanes {
 			if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
-				if db.valueLogReader != nil {
-					_ = db.valueLogReader.Close()
-					db.valueLogReader = nil
-				}
-				for j := 0; j <= i && j < len(db.lanes); j++ {
-					db.cleanupLaneWALWriters(&db.lanes[j])
-				}
+				cleanupJournalOpenFailure(i)
 				return nil, err
 			}
 		}
@@ -10673,6 +10778,19 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	for i := range records {
 		records[i].Seq = seq
 	}
+}
+
+func allZeroBytes(p []byte) bool {
+	for _, b := range p {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func sameNonEmptyBytesData(a, b []byte) bool {
+	return len(a) > 0 && len(a) == len(b) && &a[0] == &b[0]
 }
 
 type domainIngressOp uint8
@@ -12113,6 +12231,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	for i := range requests {
 		req := &requests[i]
 		if len(req.records) == 1 {
@@ -12122,14 +12241,12 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 				l.walMu.Unlock()
 				return err
 			}
-			totalBytes += db.logRecordSize(rec.Key, rec.Value)
 		} else {
 			err := w.AppendBatch(req.records)
 			if err != nil {
 				l.walMu.Unlock()
 				return err
 			}
-			totalBytes += db.logBatchSize(req.records)
 		}
 		if req.sync {
 			needSync = true
@@ -12141,6 +12258,7 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 			return err
 		}
 	}
+	totalBytes = w.Size() - beforeSize
 	l.walMu.Unlock()
 
 	if totalBytes > 0 {
@@ -12947,7 +13065,10 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 
 	db.assignCommitSeq(records)
+	return db.appendWALPrepared(l, records, durability)
+}
 
+func (db *DB) appendWALPrepared(l *lane, records []logRecord, durability journalDurability) error {
 	switch durability {
 	case journalDurabilitySync:
 		return db.appendWALDirect(l, records, true)
@@ -12956,6 +13077,106 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	default:
 		return db.appendWALInline(l, records, false)
 	}
+}
+
+func (db *DB) appendWALAssigned(l *lane, records []logRecord, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+
+	return db.appendWALPrepared(l, records, durability)
+}
+
+type zeroInlineBatchCommitWriter interface {
+	AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, keyAt func(int) []byte) error
+}
+
+func (db *DB) appendWALZeroInlineEntries(l *lane, entries []batch.Entry, seq uint64, valueLen int, durability journalDurability) (bool, error) {
+	if db.disableJournal {
+		return true, nil
+	}
+	if len(entries) == 0 {
+		return true, nil
+	}
+	if l == nil {
+		return true, errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return true, errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return true, err
+	}
+	db.walAckMu.Unlock()
+
+	var (
+		totalBytes int64
+		err        error
+	)
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return true, errWALUnavailable
+	}
+	beforeSize := w.Size()
+	zw, ok := w.(zeroInlineBatchCommitWriter)
+	if !ok {
+		l.walMu.Unlock()
+		return false, nil
+	}
+	err = zw.AppendZeroInlineBatchFunc(len(entries), seq, valueLen, func(i int) []byte {
+		return entries[i].Key
+	})
+	if err == nil {
+		switch durability {
+		case journalDurabilitySync:
+			err = w.Sync()
+		case journalDurabilityFlush:
+			err = w.Flush()
+		}
+	}
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
+	}
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return true, err
+	}
+
+	if totalBytes > 0 {
+		l.walLiveBytes.Add(totalBytes)
+	}
+	return true, nil
 }
 
 func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurability) error {
@@ -13289,7 +13510,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if n := len(records); n > 0 {
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
-	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
+	autoRawBypass := db.shouldBypassAutoRawValueCompression(dictID, records, selectorUnitPayloadBytes, payloadKindForFallback)
+	writeMode, blockCodec, selectorProbe := vlogWriteOff, db.valueLogBlockCodec, false
+	if !autoRawBypass {
+		writeMode, blockCodec, selectorProbe = db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes, outerLeafPayloadsOnly)
+	}
 	normalizeNoDictBlockCodec := func() {
 		if writeMode != vlogWriteBlock {
 			return
@@ -13384,7 +13609,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		//
 		// When no dict is available, we write raw frames (uncompressed) and still
 		// benefit from fewer syscalls and less framing work.
-		if paused && db.disableJournal {
+		if autoRawBypass && db.forceValueLogPointers {
+			k = valuelog.MaxFrameK
+		} else if paused && db.disableJournal {
 			k = valuelog.MaxFrameK
 		} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
 			k = cur
@@ -13608,7 +13835,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	if err == nil && !rawBatchUsed {
 		useRawBatch := dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
-		preferBufferedRaw := useRawBatch && hasRawBufferedInto
+		preferBufferedRaw := useRawBatch && hasRawBufferedInto && !autoRawBypass
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
 			var (
@@ -14450,16 +14677,18 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	if len(records) == 1 {
 		rec := records[0]
 		err = w.Append(rec)
-		totalBytes = db.logRecordSize(rec.Key, rec.Value)
 	} else {
 		err = w.AppendBatch(records)
-		totalBytes = db.logBatchSize(records)
 	}
 	if err == nil && flush {
 		err = w.Flush()
+	}
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
 	}
 	l.walMu.Unlock()
 
@@ -14489,10 +14718,14 @@ func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	beforeSize := w.Size()
 	err := w.Append(record)
-	totalBytes := db.logRecordSize(record.Key, record.Value)
 	if err == nil && flush {
 		err = w.Flush()
+	}
+	totalBytes := int64(0)
+	if err == nil {
+		totalBytes = w.Size() - beforeSize
 	}
 	l.walMu.Unlock()
 
@@ -19304,6 +19537,15 @@ func (db *DB) Checkpoint() error {
 	hasMutable := db.mutableBytes.Load() > 0
 	hasQueue := len(db.queue) > 0
 	hasDirtyVLog := db.hasDirtyValueLogLanes()
+	hasLiveWAL := false
+	if !db.disableJournal {
+		for i := range db.lanes {
+			if db.lanes[i].walLiveBytes.Load() > 0 {
+				hasLiveWAL = true
+				break
+			}
+		}
+	}
 	if hasMutable {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
@@ -19311,14 +19553,35 @@ func (db *DB) Checkpoint() error {
 			return err
 		}
 		hasQueue = len(db.queue) > 0
+		hasLiveWAL = hasLiveWAL || !db.disableJournal
+	} else if !hasQueue && !hasDirtyVLog && !hasLiveWAL && db.commandWALCheckpointPublish == nil {
+		db.mu.Unlock()
+		releaseWriteMu()
+		db.checkpointNoopSkips.Add(1)
+		if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+			return err
+		}
+		db.checkValueLogRetention()
+		db.scheduleRetainedValueLogPrune()
+		return nil
 	} else if db.disableJournal && !hasQueue && !hasDirtyVLog {
 		// Checkpoint-kick retries may need to rotate current value-log segments
 		// even when there is no new foreground dirtiness, so observed-source GC
 		// can re-check recently rewritten active sources.
 		forceVLogRotate := db.vlogGenerationCheckpointKickPending.Load()
 		if !forceVLogRotate {
+			db.snapshotCommandWALCheckpointCutover()
 			db.mu.Unlock()
 			releaseWriteMu()
+			if db.commandWALCheckpointPublish != nil {
+				commandWALAppliedLSN, commandWALRanges, err := db.commandWALCheckpointPublish(!db.relaxedSync)
+				if err != nil {
+					return err
+				}
+				if _, err := db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges); err != nil {
+					return err
+				}
+			}
 			db.checkpointNoopSkips.Add(1)
 			if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
 				return err
@@ -19331,6 +19594,7 @@ func (db *DB) Checkpoint() error {
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
 	ridBeforeWALRotate := db.nextRID.Load()
+	db.snapshotCommandWALCheckpointCutover()
 	db.mu.Unlock()
 	rotateLaneIDs := make([]int, 0, len(db.lanes))
 	for i := range db.lanes {
@@ -19368,8 +19632,40 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 
+	var (
+		commandWALAppliedLSN       uint64
+		commandWALRanges           []backenddb.CommandWALLSNRange
+		commandWALPublishPiggyback *checkpointCommandWALPublish
+	)
+	if db.commandWALCheckpointPublish != nil && db.canPiggybackCommandWALCheckpointPublish(true) {
+		var err error
+		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
+		if err != nil {
+			return err
+		}
+		if commandWALAppliedLSN != 0 && len(commandWALRanges) == 1 {
+			commandWALPublishPiggyback = &checkpointCommandWALPublish{
+				appliedLSN: commandWALAppliedLSN,
+				ranges:     commandWALRanges,
+			}
+		}
+	}
+
 	// Flush all queued memtables with backend sync.
-	db.flushAllLocked(true)
+	bgErrBefore := db.backgroundError()
+	db.flushAllLocked(true, commandWALPublishPiggyback)
+	if bgErr := db.backgroundError(); bgErr != nil && bgErrBefore == nil {
+		return bgErr
+	}
+
+	commandWALPublishCovered := commandWALPublishPiggyback != nil && commandWALPublishPiggyback.consumed
+	if !commandWALPublishCovered && db.commandWALCheckpointPublish != nil {
+		var err error
+		commandWALAppliedLSN, commandWALRanges, err = db.commandWALCheckpointPublish(!db.relaxedSync)
+		if err != nil {
+			return err
+		}
+	}
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
@@ -19377,6 +19673,9 @@ func (db *DB) Checkpoint() error {
 		nonEmptyBytes = 0
 		for _, seg := range segments {
 			if seg.valueLog != db.walUsesValueLog() {
+				continue
+			}
+			if db.commandWALCheckpointPublish != nil && commitlog.IsCommandSegmentName(filepath.Base(seg.path)) {
 				continue
 			}
 			filtered = append(filtered, seg)
@@ -19387,9 +19686,15 @@ func (db *DB) Checkpoint() error {
 		segments = filtered
 	}
 	// New logic: perform sync write only if not relaxedSync
+	needsCommandWALPublish := commandWALAppliedLSN != 0 && !commandWALPublishCovered
 	var commitErr error
-	if nonEmptyBytes > 0 {
-		if db.relaxedSync {
+	if nonEmptyBytes > 0 || needsCommandWALPublish {
+		if needsCommandWALPublish {
+			// This backend batch is also the checkpoint durability boundary for any
+			// non-command WAL segments observed above, so command-LSN publication and
+			// ordinary cached checkpoint proof are not mutually exclusive.
+			_, commitErr = db.publishCommandWALCheckpointApplied(commandWALAppliedLSN, commandWALRanges)
+		} else if db.relaxedSync {
 			backendBatch := db.backend.NewBatch()
 			// If relaxed sync, just write the batch without forcing sync
 			commitErr = backendBatch.Write()
@@ -19444,7 +19749,7 @@ func (db *DB) Checkpoint() error {
 		db.mu.Unlock()
 		db.forgetValueLogRetain(path)
 	}
-	if removed {
+	if removed && !db.relaxedSync {
 		db.syncDirBestEffort(db.dir)
 	}
 	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
@@ -19456,6 +19761,91 @@ func (db *DB) Checkpoint() error {
 	db.trimRetainedArenasAfterFlush(true)
 
 	return nil
+}
+
+func (db *DB) publishCommandWALCheckpointApplied(appliedLSN uint64, ranges []backenddb.CommandWALLSNRange) (bool, error) {
+	if appliedLSN == 0 {
+		return false, nil
+	}
+	backendBatch := db.newBackendBatchWithSize(0)
+	publisher, ok := backendBatch.(backendBatchCommandWALPublisher)
+	if !ok {
+		_ = backendBatch.Close()
+		return false, errors.New("cachingdb: backend batch cannot publish command wal applied lsn")
+	}
+	if err := publisher.SetCommandWALPublish(appliedLSN, ranges); err != nil {
+		_ = backendBatch.Close()
+		return false, err
+	}
+	var err error
+	if db.relaxedSync {
+		err = backendBatch.Write()
+	} else {
+		err = backendBatch.WriteSync()
+	}
+	cerr := backendBatch.Close()
+	if err == nil {
+		err = cerr
+	}
+	if err == nil {
+		db.commandWALCheckpointPublishSeparate.Add(1)
+	}
+	return true, err
+}
+
+func (db *DB) snapshotCommandWALCheckpointCutover() {
+	if db == nil || db.commandWALCheckpointCutover == nil {
+		return
+	}
+	db.commandWALCheckpointCutover()
+}
+
+func (db *DB) canPiggybackCommandWALCheckpointPublish(sync bool) bool {
+	if db == nil || db.commandWALCheckpointPublish == nil {
+		return false
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	queueLen := len(db.queue)
+	if queueLen == 0 {
+		return false
+	}
+	laneID := 0
+	if len(db.queueLaneIDs) > 0 {
+		laneID = int(db.queueLaneIDs[0])
+	}
+	for i := 0; i < queueLen; i++ {
+		unitLaneID := 0
+		if i < len(db.queueLaneIDs) {
+			unitLaneID = int(db.queueLaneIDs[i])
+		}
+		if unitLaneID != laneID {
+			return false
+		}
+	}
+
+	maxMemtables := 1
+	targetBytes := int64(0)
+	if db.flushBuildConcurrency > 1 || db.deferredValueLogEnabled() {
+		maxMemtables = flushCombineMaxMemtables
+		targetBytes = flushCombineTargetBytes
+		desired := db.flushThreshold * 4
+		if desired > flushCombineTargetBytesMax {
+			desired = flushCombineTargetBytesMax
+		}
+		if desired > targetBytes {
+			targetBytes = desired
+		}
+	}
+	units, _, _, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
+	if len(units) != queueLen || totalLen <= 0 {
+		return false
+	}
+	// Chunked checkpoint flushes attach command-LSN publication to the final
+	// backend batch. Intermediate chunks publish roots without advancing
+	// AppliedCommandLSN, so crash recovery either replays the command frames or
+	// observes the final root/applied-LSN tuple together.
+	return true
 }
 
 func (db *DB) waitForStop() {
@@ -19734,7 +20124,7 @@ func (db *DB) Close() error {
 	// This avoids dropping pending memtables on close.
 	if hadMemtables {
 		// flushMu is already held by Close.
-		db.flushAllLocked(true)
+		db.flushAllLocked(true, nil)
 	}
 
 	close(db.closeCh)
@@ -19873,6 +20263,12 @@ func (db *DB) Close() error {
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
+	if db.journalOwner != nil {
+		if err := db.journalOwner.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		db.journalOwner = nil
+	}
 
 	db.waitForRetainedValueLogPrune()
 	if err := db.backend.Close(); err != nil {
@@ -19914,6 +20310,27 @@ func (db *DB) SetSync(key, value []byte) error {
 	unlock := db.lockUpdateKey(key)
 	defer unlock()
 	return db.set(key, value, true)
+}
+
+// SetAfterCommandWALAppend applies a point Set after appendCommand succeeds.
+// appendCommand runs while holding the same per-key serialization lock as Set,
+// after cached-mode preflight has ruled out ordinary rejection paths and before
+// the mutation becomes visible in the mutable table. This is for public
+// command-WAL mode, where command WAL durability replaces the cached redo log.
+func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if value == nil {
+		return ErrValueNil
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.setDirectAfterCommandWALAppend(key, value, appendCommand)
 }
 
 // Update applies fn to the current value for key and writes the returned
@@ -20029,7 +20446,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Unlock()
 
 	db.flushMu.Lock()
-	db.flushAllLocked(sync)
+	db.flushAllLocked(sync, nil)
 	db.flushMu.Unlock()
 	return db.backgroundError()
 }
@@ -20238,6 +20655,145 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	if needSyncBarrier {
 		if err := db.syncBarrierAfterWrite(true); err != nil {
 			return err
+		}
+	}
+
+	db.noteWrite()
+	db.maybeAssistFlush()
+	return nil
+}
+
+func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
+	if !db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
+	}
+	db.writeMu.RLock()
+	needRotate := false
+	var ptr page.ValuePtr
+	var retainPath string
+	usePointer := false
+	debugPtr := db.debugFlushPointers
+
+	shard := db.shardForKey(key)
+
+	eligible := db.shouldWriteViaValueLogForKeyValue(key, value)
+	valueLogEnabled := db.valueLogEnabled()
+	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
+	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
+		allowPointers = false
+	}
+	addBytesForLimit := int64(len(key) + len(value))
+	if allowPointers && db.memtableValueLogPointers {
+		addBytesForLimit = int64(len(key) + page.ValuePtrSize)
+	}
+	if maxMemtableBytesPerShard > 0 {
+		if addBytesForLimit > maxMemtableBytesPerShard {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+		shard.mu.Lock()
+		exceedsLimit := db.shardExceedsLimit(shard, addBytesForLimit)
+		shard.mu.Unlock()
+		if exceedsLimit {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+	}
+	if debugPtr && eligible {
+		db.debugPtrEligible.Add(1)
+	}
+
+	var lane *lane
+	if allowPointers {
+		l, err := db.pickLane(false, db.laneForShardIndex(db.shardIndex(key)))
+		if err != nil {
+			db.writeMu.RUnlock()
+			return err
+		}
+		lane = l
+
+		dictID := uint64(0)
+		class := db.valueLogDictClassForValue(value)
+		if db.dictStore != nil && (db.valueLogDictTrain.TrainBytes > 0 || db.dictClassMode() == vlogDictClassModeSplitOuterLeaf) {
+			id, err := db.currentDictIDForClass(context.Background(), class)
+			if err != nil {
+				db.writeMu.RUnlock()
+				return err
+			}
+			dictID = id
+		} else {
+			dictID = db.dictCurrentCached.Load()
+		}
+
+		rid := db.nextRID.Add(1)
+		appendPtr, retain, appendErr := db.appendValueLogOneRaw(lane, dictID, nil, rid, value, journalDurabilityNone)
+		if appendErr != nil {
+			db.writeMu.RUnlock()
+			return appendErr
+		}
+		ptr = appendPtr
+		retainPath = retain
+		usePointer = true
+		if debugPtr {
+			db.debugPtrUsed.Add(1)
+		}
+	} else if debugPtr && eligible {
+		if !valueLogEnabled {
+			db.debugPtrDisabled.Add(1)
+		} else {
+			db.debugPtrDenied.Add(1)
+		}
+	}
+
+	if err := appendCommand(); err != nil {
+		if retainPath != "" {
+			db.markValueLogRetain(retainPath)
+		}
+		db.writeMu.RUnlock()
+		return err
+	}
+
+	shard.mu.Lock()
+	if usePointer {
+		memVal := []byte(nil)
+		if !db.memtableValueLogPointers {
+			memVal = value
+		}
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
+			copy(owned, memVal)
+			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+		} else {
+			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+		}
+	} else {
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+			copy(owned, value)
+			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+		} else {
+			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		}
+	}
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+	db.noteWriteKey(key)
+
+	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	db.writeMu.RUnlock()
+
+	if retainPath != "" {
+		db.markValueLogRetain(retainPath)
+	}
+	if needRotate {
+		if err := db.maybeRotateMemtable(true); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: post-command-wal set rotate failed: %w", err))
 		}
 	}
 
@@ -20870,6 +21426,21 @@ func (db *DB) DeleteSync(key []byte) error {
 	return db.delete(key, true)
 }
 
+// DeleteAfterCommandWALAppend applies a point Delete after appendCommand
+// succeeds under the same per-key serialization lock as Delete.
+func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error) error {
+	if len(key) == 0 {
+		return ErrKeyEmpty
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	db.waitForCheckpoint()
+	unlock := db.lockUpdateKey(key)
+	defer unlock()
+	return db.deleteDirectAfterCommandWALAppend(key, appendCommand)
+}
+
 func (db *DB) lockUpdateKey(key []byte) func() {
 	if db == nil {
 		return func() {}
@@ -20949,6 +21520,53 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	if needSyncBarrier {
 		if err := db.syncBarrierAfterWrite(true); err != nil {
 			return err
+		}
+	}
+
+	db.noteWrite()
+	db.maybeAssistFlush()
+	return nil
+}
+
+func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func() error) error {
+	if !db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
+	}
+	db.writeMu.RLock()
+	needRotate := false
+
+	shard := db.shardForKey(key)
+	shard.mu.Lock()
+	if db.shardExceedsLimit(shard, int64(len(key))) {
+		shard.mu.Unlock()
+		db.writeMu.RUnlock()
+		return ErrMemtableFull
+	}
+	shard.mu.Unlock()
+
+	if err := appendCommand(); err != nil {
+		db.writeMu.RUnlock()
+		return err
+	}
+
+	shard.mu.Lock()
+	shard.mem.Delete(key)
+	shard.rng.add(key)
+	newBytes := shard.mem.Size()
+	delta := newBytes - shard.bytes
+	shard.bytes = newBytes
+	db.mutableBytes.Add(delta)
+	shard.mu.Unlock()
+	db.noteWriteKey(key)
+
+	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
+		needRotate = true
+	}
+	db.writeMu.RUnlock()
+
+	if needRotate {
+		if err := db.maybeRotateMemtable(true); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: post-command-wal delete rotate failed: %w", err))
 		}
 	}
 
@@ -21377,7 +21995,7 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	if l.wal != nil {
 		oldPath := l.walPath
 		oldSize := l.wal.Size()
-		if err := l.wal.RotateTo(path); err != nil {
+		if err := l.wal.RotateToWithSync(path, !db.relaxedSync); err != nil {
 			return err
 		}
 		l.walSeq = nextSeq
@@ -21734,10 +22352,10 @@ func (db *DB) pickFlushLane() (int, bool) {
 func (db *DB) flushAll(reqSync bool) {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.flushAllLocked(reqSync)
+	db.flushAllLocked(reqSync, nil)
 }
 
-func (db *DB) flushAllLocked(reqSync bool) {
+func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish) {
 	origSync := reqSync
 	syncFlag := db.flushSyncRequested(reqSync)
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
@@ -21785,6 +22403,9 @@ func (db *DB) flushAllLocked(reqSync bool) {
 	if activeCount == 0 {
 		return
 	}
+	if activeCount != 1 {
+		commandPublish = nil
+	}
 	var wg sync.WaitGroup
 	wg.Add(activeCount)
 	for i := 0; i < lanes; i++ {
@@ -21797,7 +22418,7 @@ func (db *DB) flushAllLocked(reqSync bool) {
 				db.flushLaneMu[laneID].Lock()
 				defer db.flushLaneMu[laneID].Unlock()
 			}
-			for db.flushLaneOnce(syncFlag, laneID) {
+			for db.flushLaneOnceWithCommandPublish(syncFlag, laneID, commandPublish) {
 			}
 			wg.Done()
 		}()
@@ -22002,6 +22623,10 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 }
 
 func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
+	return db.flushLaneOnceWithCommandPublish(sync, laneID, nil)
+}
+
+func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPublish *checkpointCommandWALPublish) bool {
 	db.mu.Lock()
 	queueLen := len(db.queue)
 	if queueLen == 0 {
@@ -22341,7 +22966,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 
 		var err error
+		commandPublishAttached := false
 		if backendPendingOps > 0 {
+			var attachErr error
+			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+			if attachErr != nil {
+				db.reportError(attachErr)
+				_ = backendBatch.Close()
+				return false
+			}
 			db.backendWriteBatchesTotal.Add(1)
 			if sync {
 				err = backendBatch.WriteSync()
@@ -22349,6 +22982,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				err = backendBatch.Write()
 			}
 		} else if sync && emittedChunk {
+			var attachErr error
+			commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+			if attachErr != nil {
+				db.reportError(attachErr)
+				_ = backendBatch.Close()
+				return false
+			}
 			// If we emitted intermediate chunks and happened to land exactly on a
 			// chunk boundary, force a single durability boundary at the end.
 			db.backendWriteBatchesTotal.Add(1)
@@ -22361,6 +23001,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if err != nil {
 			db.reportError(err)
 			return false
+		}
+		if commandPublishAttached {
+			commandPublish.consumed = true
+			db.commandWALCheckpointPublishPiggybacked.Add(1)
 		}
 
 		db.mu.Lock()
@@ -22448,6 +23092,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	// to reduce peak allocator demand (and thus index.db high-watermark growth)
 	// under small KeepRecent windows.
 	chunkBackend := totalLen > backendEntriesCap
+	emittedChunk := false
 
 	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
@@ -22483,6 +23128,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return nil
 			}
 
+			emittedChunk = true
 			db.backendWriteBatchesTotal.Add(1)
 			// If sync==true, we only need a single durability boundary at the end of
 			// the flush. Write the intermediate chunks without fsync to avoid
@@ -22630,7 +23276,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	}
 
 	var err error
+	commandPublishAttached := false
 	if backendPendingOps > 0 {
+		var attachErr error
+		commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+		if attachErr != nil {
+			db.reportError(attachErr)
+			_ = backendBatch.Close()
+			return false
+		}
 		db.backendWriteBatchesTotal.Add(1)
 		if sync {
 			err = backendBatch.WriteSync()
@@ -22644,6 +23298,35 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		if err != nil {
 			db.reportError(err)
 			return false
+		}
+		if commandPublishAttached {
+			commandPublish.consumed = true
+			db.commandWALCheckpointPublishPiggybacked.Add(1)
+		}
+	} else if sync && emittedChunk {
+		var attachErr error
+		commandPublishAttached, attachErr = commandPublish.attach(backendBatch)
+		if attachErr != nil {
+			db.reportError(attachErr)
+			_ = backendBatch.Close()
+			return false
+		}
+		// If the sequential path landed exactly on a chunk boundary, this empty
+		// final batch provides the single sync boundary for the prior chunks and
+		// can carry the command-WAL AppliedCommandLSN publication.
+		db.backendWriteBatchesTotal.Add(1)
+		err = backendBatch.WriteSync()
+		cerr := backendBatch.Close()
+		if err == nil {
+			err = cerr
+		}
+		if err != nil {
+			db.reportError(err)
+			return false
+		}
+		if commandPublishAttached {
+			commandPublish.consumed = true
+			db.commandWALCheckpointPublishPiggybacked.Add(1)
 		}
 	} else {
 		if err := backendBatch.Close(); err != nil {
@@ -24226,6 +24909,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.flushmu_wait_total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.flushmu_wait_max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointFlushMuWaitMaxNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
+	stats["treedb.cache.command_wal.checkpoint_publish.piggybacked"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishPiggybacked.Load())
+	stats["treedb.cache.command_wal.checkpoint_publish.separate"] = fmt.Sprintf("%d", db.commandWALCheckpointPublishSeparate.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_runs"] = fmt.Sprintf("%d", db.checkpointAutoVacuumRuns.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_pages"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastPages.Load())
 	stats["treedb.cache.checkpoint.auto_vacuum_last_internal_fill_p50_ppm"] = fmt.Sprintf("%d", db.checkpointAutoVacuumLastInternalP50.Load())
@@ -26709,12 +27394,14 @@ type Batch struct {
 	closed bool
 	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
 	// must not borrow the batch arena when any view op is present.
-	hasViewOps     bool
-	streamEligible bool
-	streamTried    bool
-	firstKey       []byte
-	lastKey        []byte
-	batchRange     keyRange
+	hasViewOps       bool
+	streamEligible   bool
+	streamTried      bool
+	streamBypassOff  bool
+	firstKey         []byte
+	lastKey          []byte
+	batchRange       keyRange
+	commandWALAppend func() error
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -26738,6 +27425,16 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
+}
+
+// DisableStreamingBypass keeps subsequent writes on the cached memtable path.
+// Command-WAL public batches use this so the command frame can be appended
+// after cached preflight and before the batch becomes visible.
+func (b *Batch) DisableStreamingBypass() {
+	if b == nil {
+		return
+	}
+	b.streamBypassOff = true
 }
 
 func clampAppendOnlyEntryHint(entries int) int {
@@ -27160,11 +27857,13 @@ func (b *Batch) Reset() {
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
+	b.streamBypassOff = false
 	b.hasViewOps = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
 	b.maxEntries = 0
+	b.commandWALAppend = nil
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
@@ -27531,8 +28230,10 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
-	batchSetCallsTotal.Add(1)
-	batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	if hotPathStatsEnabled {
+		batchSetCallsTotal.Add(1)
+		batchSetBytesTotal.Add(uint64(len(key) + len(value)))
+	}
 	maybeRecordBatchSetCallerSample(len(key) + len(value))
 
 	idx := len(b.entries)
@@ -27592,8 +28293,16 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
-	batchSetViewCallsTotal.Add(1)
-	batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
+	return b.SetViewValidated(key, value)
+}
+
+// SetViewValidated is SetView for callers that already performed public input
+// validation. The caller must still keep key/value immutable until Write/Close.
+func (b *Batch) SetViewValidated(key, value []byte) error {
+	if hotPathStatsEnabled {
+		batchSetViewCallsTotal.Add(1)
+		batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
+	}
 
 	if b.backend != nil {
 		b.batchRange.add(key)
@@ -27677,7 +28386,12 @@ func (b *Batch) DeleteView(key []byte) error {
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
+	return b.DeleteViewValidated(key)
+}
 
+// DeleteViewValidated is DeleteView for callers that already performed public
+// input validation. The caller must keep key immutable until Write/Close.
+func (b *Batch) DeleteViewValidated(key []byte) error {
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)
@@ -27811,7 +28525,7 @@ func batchCopyArenaInitCapForEntries(entries int) int {
 }
 
 func (b *Batch) maybeSwitchToStreaming() {
-	if b.streamTried || !b.streamEligible || b.backend != nil {
+	if b.streamBypassOff || b.streamTried || !b.streamEligible || b.backend != nil {
 		return
 	}
 	// Streaming writes directly to the backend batch and therefore bypasses the
@@ -27889,6 +28603,36 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+// WriteAfterCommandWALAppend writes a cached batch by running appendCommand
+// after cached write preflight succeeds and before the mutation becomes
+// visible in the mutable table. This is intentionally limited to command-WAL
+// public mode, where the cached redo log is disabled.
+func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error {
+	if b == nil || b.db == nil {
+		return backenddb.ErrClosed
+	}
+	if b.closed {
+		return ErrBatchClosed
+	}
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	if !b.db.disableJournal {
+		return fmt.Errorf("cachingdb: command wal batch writes require disabled cached redo log")
+	}
+	b.db.waitForCheckpoint()
+	if b.backend != nil {
+		return fmt.Errorf("cachingdb: command wal batch writes require cached memtable path")
+	}
+
+	prevAppend := b.commandWALAppend
+	b.commandWALAppend = appendCommand
+	defer func() {
+		b.commandWALAppend = prevAppend
+	}()
+	return b.writeRegular(sync)
+}
+
 func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -27955,7 +28699,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if !b.db.deferredValueLogEnabled() {
 		return false, nil
 	}
-	if b.backend != nil || !b.streamEligible {
+	if b.backend != nil || b.streamBypassOff || !b.streamEligible {
 		return false, nil
 	}
 	if b.firstKey == nil || b.lastKey == nil {
@@ -28046,6 +28790,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
+	commandWALAppended := false
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -28076,10 +28821,33 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.shardIdxs = shardIdxs
 	allDeletes := true
+	zeroInlineWALBatch := !b.db.disableJournal
+	zeroInlineValueLen := -1
+	var zeroInlineValueRef []byte
 	for i := range b.entries {
 		op := &b.entries[i]
 		if op.Type != batch.OpDelete {
 			allDeletes = false
+		}
+		if zeroInlineWALBatch {
+			if op.Type != batch.OpPut || op.IsPtr || len(op.Value) == 0 {
+				zeroInlineWALBatch = false
+			} else {
+				if zeroInlineValueLen < 0 {
+					zeroInlineValueLen = len(op.Value)
+				} else if zeroInlineValueLen != len(op.Value) {
+					zeroInlineWALBatch = false
+				}
+				if zeroInlineWALBatch {
+					if sameNonEmptyBytesData(op.Value, zeroInlineValueRef) {
+						// Same immutable value buffer as the first zero value in this batch.
+					} else if allZeroBytes(op.Value) {
+						zeroInlineValueRef = op.Value
+					} else {
+						zeroInlineWALBatch = false
+					}
+				}
+			}
 		}
 		idx := b.db.shardIndex(op.Key)
 		shardIdxs[i] = idx
@@ -28217,7 +28985,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if durability == journalDurabilitySync {
 			defer b.db.releaseLaneSync(lane)
 		}
-		if !b.db.disableJournal {
+		if !b.db.disableJournal && allowPointers {
 			rids = make([]uint64, len(b.entries))
 		}
 	}
@@ -28425,28 +29193,51 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 
 	if !b.db.disableJournal {
-		records := b.walBuf[:0]
-		if cap(records) < len(b.entries) {
-			records = make([]logRecord, 0, len(b.entries))
-		}
-		for i := range b.entries {
-			op := &b.entries[i]
-			switch op.Type {
-			case batch.OpDelete:
-				records = append(records, logRecord{Op: logOpDelete, Key: op.Key})
-			case batch.OpPut:
-				if rids != nil && rids[i] != 0 {
-					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
-				} else {
-					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value})
-				}
+		seq := b.db.nextCommitSeq.Add(1)
+		handledZeroInline := false
+		if zeroInlineWALBatch && rids == nil && zeroInlineValueLen > 0 {
+			var err error
+			handledZeroInline, err = b.db.appendWALZeroInlineEntries(lane, b.entries, seq, zeroInlineValueLen, durability)
+			if err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
+			if handledZeroInline {
+				b.walBuf = b.walBuf[:0]
 			}
 		}
-		b.walBuf = records
-		if err := b.db.appendWAL(lane, records, durability); err != nil {
+		if !handledZeroInline {
+			records := b.walBuf[:0]
+			if cap(records) < len(b.entries) {
+				records = make([]logRecord, 0, len(b.entries))
+			}
+			for i := range b.entries {
+				op := &b.entries[i]
+				switch op.Type {
+				case batch.OpDelete:
+					records = append(records, logRecord{Op: logOpDelete, Key: op.Key, Seq: seq})
+				case batch.OpPut:
+					if rids != nil && rids[i] != 0 {
+						records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i], Seq: seq})
+					} else {
+						records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq})
+					}
+				}
+			}
+			b.walBuf = records
+			if err := b.db.appendWALAssigned(lane, records, durability); err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
+		}
+	}
+
+	if b.commandWALAppend != nil {
+		if err := b.commandWALAppend(); err != nil {
 			b.db.writeMu.RUnlock()
 			return err
 		}
+		commandWALAppended = true
 	}
 
 	if !allDeletes {
@@ -28702,12 +29493,20 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 	if needRotate {
 		if err := b.db.maybeRotateMemtable(true); err != nil {
-			return err
+			if commandWALAppended {
+				b.db.reportError(fmt.Errorf("cachingdb: post-command-wal batch rotate failed: %w", err))
+			} else {
+				return err
+			}
 		}
 	}
 	if needSyncBarrier {
 		if err := b.db.syncBarrierAfterWrite(true); err != nil {
-			return err
+			if commandWALAppended {
+				b.db.reportError(fmt.Errorf("cachingdb: post-command-wal batch sync barrier failed: %w", err))
+			} else {
+				return err
+			}
 		}
 	}
 

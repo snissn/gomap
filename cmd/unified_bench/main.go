@@ -4152,25 +4152,29 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	for _, inst := range instances {
 		wrapperName := inst.Wrapper.Name()
 		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
+		var statsSnapshot map[string]string
 		if hasStatsProvider {
 			if cp, ok := inst.Wrapper.(checkpointer); ok {
 				if err := cp.Checkpoint(); err != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s before final stats: %w", inst.Name, err)
 				}
 			}
+			statsSnapshot = sp.Stats()
 		}
 		if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}
-		if hasStatsProvider {
-			snap := sp.Stats()
-			if len(snap) > 0 {
-				copySnap := make(map[string]string, len(snap))
-				for k, v := range snap {
-					copySnap[k] = v
-				}
-				treedbStats[wrapperName] = copySnap
+		if hasStatsProvider && isTreeDBInstance(inst) {
+			if postCloseStats := sp.Stats(); len(postCloseStats) > 0 {
+				statsSnapshot = postCloseStats
 			}
+		}
+		if len(statsSnapshot) > 0 {
+			copySnap := make(map[string]string, len(statsSnapshot))
+			for k, v := range statsSnapshot {
+				copySnap[k] = v
+			}
+			treedbStats[wrapperName] = copySnap
 		}
 		if cfg.TreeDBVlogRewriteAfterRun && isTreeDBInstance(inst) {
 			beforeUsage, _ := computeDirDiskUsage(inst.Dir)
@@ -4853,12 +4857,24 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		label string
 		alts  []string
 	}{
+		{label: "write_path.mode", alts: []string{"treedb.write_path.mode"}},
+		{label: "write_path.redo_log", alts: []string{"treedb.write_path.redo_log"}},
 		{label: "vlog_mmap.read.hits", alts: []string{"treedb.cache.vlog_mmap.read.hits", "treedb.vlog.mmap_read.hits"}},
 		{label: "vlog_mmap.read.miss_out_of_range", alts: []string{"treedb.cache.vlog_mmap.read.miss_out_of_range", "treedb.vlog.mmap_read.miss_out_of_range"}},
 		{label: "vlog_mmap.read.miss_no_mapping", alts: []string{"treedb.cache.vlog_mmap.read.miss_no_mapping", "treedb.vlog.mmap_read.miss_no_mapping"}},
 		{label: "vlog_mmap.read.miss_dead_mapping_cap", alts: []string{"treedb.cache.vlog_mmap.read.miss_dead_mapping_cap", "treedb.vlog.mmap_read.miss_dead_mapping_cap"}},
 		{label: "vlog_mmap.read.fallback_readat", alts: []string{"treedb.cache.vlog_mmap.read.fallback_readat", "treedb.vlog.mmap_read.fallback_readat"}},
 		{label: "vlog_mmap.read.hit_ratio", alts: []string{"treedb.cache.vlog_mmap.read.hit_ratio", "treedb.vlog.mmap_read.hit_ratio"}},
+		{label: "applied_command_lsn", alts: []string{"treedb.applied_command_lsn"}},
+		{label: "command_wal.enabled", alts: []string{"treedb.command_wal.enabled"}},
+		{label: "command_wal.required_feature", alts: []string{"treedb.command_wal.required_feature"}},
+		{label: "command_wal.live_accepted_frames", alts: []string{"treedb.command_wal.live_accepted_frames"}},
+		{label: "command_wal.live_accepted_max_lsn", alts: []string{"treedb.command_wal.live_accepted_max_lsn"}},
+		{label: "command_wal.live_covered_frames", alts: []string{"treedb.command_wal.live_covered_frames"}},
+		{label: "command_wal.live_covered_max_lsn", alts: []string{"treedb.command_wal.live_covered_max_lsn"}},
+		{label: "command_wal.frames", alts: []string{"treedb.command_wal.frames"}},
+		{label: "command_wal.typed_segments", alts: []string{"treedb.command_wal.typed_segments"}},
+		{label: "command_wal.max_lsn", alts: []string{"treedb.command_wal.max_lsn"}},
 		{label: "leaf_generation.generations.pinned", alts: []string{"treedb.leaf_generation.generations.pinned"}},
 		{label: "leaf_generation.pins.total", alts: []string{"treedb.leaf_generation.pins.total"}},
 		{label: "publish.ordered_root_delta_group.calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.calls_total"}},
