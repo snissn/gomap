@@ -15,76 +15,112 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
-	defaultDocs        = 10000
-	defaultDimensions  = 64
-	defaultQueries     = 1000
-	defaultTopK        = 10
-	defaultBatchSize   = 512
-	defaultM           = 16
-	defaultEfConstruct = 128
-	defaultEfSearch    = 128
+	defaultDocs                  = 10000
+	defaultDimensions            = 64
+	defaultQueries               = 10000
+	defaultSearchConcurrency     = "2,4,8,16,32,64,128"
+	defaultTopK                  = 10
+	defaultBatchSize             = 512
+	defaultM                     = 16
+	defaultEfConstruct           = 128
+	defaultEfSearch              = 128
+	defaultValuePointerThreshold = 1024
+	defaultLeafGenerationTarget  = 4 << 20
 )
 
 type config struct {
-	dir                  string
-	keepDir              bool
-	docs                 int
-	dimensions           int
-	queries              int
-	validateQueries      int
-	validateDocs         int
-	topK                 int
-	batchSize            int
-	m                    int
-	efConstruction       int
-	efSearch             int
-	minRecall            float64
-	compact              bool
-	compactSyncEachPhase bool
-	disableExactFallback bool
-	requireValueLogBytes bool
-	requireLeafVLogBytes bool
-	jsonOut              bool
+	dir                   string
+	keepDir               bool
+	matrix                bool
+	profile               treedb.Profile
+	docs                  int
+	dimensions            int
+	queries               int
+	searchConcurrency     []int
+	validateQueries       int
+	validateDocs          int
+	topK                  int
+	batchSize             int
+	m                     int
+	efConstruction        int
+	efSearch              int
+	valuePointerThreshold int
+	leafGenerationTarget  int64
+	minRecall             float64
+	compact               bool
+	compactSyncEachPhase  bool
+	disableExactFallback  bool
+	requireValueLogBytes  bool
+	requireLeafVLogBytes  bool
+	jsonOut               bool
+
+	indexOuterLeavesInValueLog *bool
 }
 
 type result struct {
-	Dir                  string                         `json:"dir"`
-	KeptDir              bool                           `json:"kept_dir"`
-	Docs                 int                            `json:"docs"`
-	Dimensions           int                            `json:"dimensions"`
-	Queries              int                            `json:"queries"`
-	ValidateQueries      int                            `json:"validate_queries"`
-	ValidateDocs         int                            `json:"validate_docs"`
-	TopK                 int                            `json:"top_k"`
-	M                    int                            `json:"m"`
-	EfConstruction       int                            `json:"ef_construction"`
-	EfSearch             int                            `json:"ef_search"`
-	MinRecall            float64                        `json:"min_recall"`
-	Compact              bool                           `json:"compact"`
-	CompactSyncEachPhase bool                           `json:"compact_sync_each_phase"`
-	DisableExactFallback bool                           `json:"disable_exact_fallback"`
-	Insert               phaseResult                    `json:"insert"`
-	Rebuild              phaseResult                    `json:"rebuild"`
-	CompactPhase         phaseResult                    `json:"compact_phase"`
-	ReopenLoad           phaseResult                    `json:"reopen_load"`
-	Validation           validationResult               `json:"validation"`
-	Search               searchBenchmarkResult          `json:"search"`
-	StorageBeforeCompact storageReport                  `json:"storage_before_compact"`
-	StorageAfterCompact  storageReport                  `json:"storage_after_compact"`
-	IndexStatsBefore     collections.VectorIndexStats   `json:"index_stats_before_compact"`
-	IndexStatsLoaded     collections.VectorIndexStats   `json:"index_stats_loaded"`
-	NativeRootBytes      int64                          `json:"native_root_bytes"`
-	CompactStorage       *backenddb.CompactStorageStats `json:"compact_storage,omitempty"`
-	FormatConfig         *backenddb.FormatConfig        `json:"format_config,omitempty"`
-	StorageExpectation   storageExpectationReport       `json:"storage_expectation"`
-	Memory               memoryReport                   `json:"memory"`
+	Dir                   string                         `json:"dir"`
+	KeptDir               bool                           `json:"kept_dir"`
+	Profile               string                         `json:"profile"`
+	Docs                  int                            `json:"docs"`
+	Dimensions            int                            `json:"dimensions"`
+	Queries               int                            `json:"queries"`
+	SearchConcurrency     []int                          `json:"search_concurrency"`
+	ValidateQueries       int                            `json:"validate_queries"`
+	ValidateDocs          int                            `json:"validate_docs"`
+	TopK                  int                            `json:"top_k"`
+	M                     int                            `json:"m"`
+	EfConstruction        int                            `json:"ef_construction"`
+	EfSearch              int                            `json:"ef_search"`
+	ValuePointerThreshold int                            `json:"value_pointer_threshold"`
+	LeafGenerationTarget  int64                          `json:"leaf_generation_segment_target"`
+	MinRecall             float64                        `json:"min_recall"`
+	Compact               bool                           `json:"compact"`
+	CompactSyncEachPhase  bool                           `json:"compact_sync_each_phase"`
+	DisableExactFallback  bool                           `json:"disable_exact_fallback"`
+	Insert                phaseResult                    `json:"insert"`
+	Rebuild               phaseResult                    `json:"rebuild"`
+	CompactPhase          phaseResult                    `json:"compact_phase"`
+	ReopenLoad            phaseResult                    `json:"reopen_load"`
+	Validation            validationResult               `json:"validation"`
+	Search                searchBenchmarkResult          `json:"search"`
+	SearchBenchmarks      []searchBenchmarkResult        `json:"search_benchmarks"`
+	StorageBeforeCompact  storageReport                  `json:"storage_before_compact"`
+	StorageAfterCompact   storageReport                  `json:"storage_after_compact"`
+	IndexStatsBefore      collections.VectorIndexStats   `json:"index_stats_before_compact"`
+	IndexStatsLoaded      collections.VectorIndexStats   `json:"index_stats_loaded"`
+	NativeRootBytes       int64                          `json:"native_root_bytes"`
+	CompactStorage        *backenddb.CompactStorageStats `json:"compact_storage,omitempty"`
+	FormatConfig          *backenddb.FormatConfig        `json:"format_config,omitempty"`
+	StorageExpectation    storageExpectationReport       `json:"storage_expectation"`
+	Memory                memoryReport                   `json:"memory"`
+}
+
+type matrixResult struct {
+	Dir               string             `json:"dir"`
+	KeptDir           bool               `json:"kept_dir"`
+	Profile           string             `json:"profile"`
+	Docs              int                `json:"docs"`
+	Dimensions        int                `json:"dimensions"`
+	Queries           int                `json:"queries"`
+	SearchConcurrency []int              `json:"search_concurrency"`
+	TopK              int                `json:"top_k"`
+	Cases             []matrixCaseResult `json:"cases"`
+}
+
+type matrixCaseResult struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Result      result `json:"result"`
 }
 
 type phaseResult struct {
@@ -103,6 +139,7 @@ type validationResult struct {
 }
 
 type searchBenchmarkResult struct {
+	Concurrency          int     `json:"concurrency"`
 	Queries              int     `json:"queries"`
 	TotalDurationNanos   int64   `json:"total_duration_nanos"`
 	AvgNanos             float64 `json:"avg_nanos"`
@@ -151,6 +188,22 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if cfg.matrix {
+		res, err := executeMatrix(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		if cfg.jsonOut {
+			enc := json.NewEncoder(stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(res)
+		}
+		printMatrixText(stdout, res)
+		if !res.KeptDir {
+			fmt.Fprintf(stderr, "temporary db removed; rerun with -keep-dir to inspect files\n")
+		}
+		return nil
+	}
 	res, err := execute(context.Background(), cfg)
 	if err != nil {
 		return err
@@ -169,27 +222,36 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func parseConfig(args []string) (config, error) {
 	cfg := config{
-		docs:                 defaultDocs,
-		dimensions:           defaultDimensions,
-		queries:              defaultQueries,
-		validateQueries:      32,
-		validateDocs:         16,
-		topK:                 defaultTopK,
-		batchSize:            defaultBatchSize,
-		m:                    defaultM,
-		efConstruction:       defaultEfConstruct,
-		efSearch:             defaultEfSearch,
-		minRecall:            0.95,
-		compact:              true,
-		disableExactFallback: true,
+		docs:                  defaultDocs,
+		dimensions:            defaultDimensions,
+		queries:               defaultQueries,
+		validateQueries:       32,
+		validateDocs:          16,
+		topK:                  defaultTopK,
+		batchSize:             defaultBatchSize,
+		m:                     defaultM,
+		efConstruction:        defaultEfConstruct,
+		efSearch:              defaultEfSearch,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.95,
+		matrix:                true,
+		compact:               false,
+		disableExactFallback:  true,
+		profile:               treedb.ProfileBench,
 	}
+	profileRaw := string(cfg.profile)
+	searchConcurrencyRaw := defaultSearchConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory; explicit directories are kept")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
+	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
+	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
+	fs.StringVar(&searchConcurrencyRaw, "search-concurrency", searchConcurrencyRaw, "Comma-separated parallel ANN search concurrency levels; serial concurrency=1 is always included")
 	fs.IntVar(&cfg.validateQueries, "validate-queries", cfg.validateQueries, "Number of queries to validate against exact search")
 	fs.IntVar(&cfg.validateDocs, "validate-docs", cfg.validateDocs, "Number of documents to read and byte-validate after compaction/reopen")
 	fs.IntVar(&cfg.topK, "top-k", cfg.topK, "Nearest-neighbor result count")
@@ -197,8 +259,10 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.m, "m", cfg.m, "HNSW max neighbor parameter")
 	fs.IntVar(&cfg.efConstruction, "ef-construction", cfg.efConstruction, "HNSW efConstruction")
 	fs.IntVar(&cfg.efSearch, "ef-search", cfg.efSearch, "HNSW efSearch for ANN queries")
+	fs.IntVar(&cfg.valuePointerThreshold, "value-pointer-threshold", cfg.valuePointerThreshold, "Value-log pointer threshold for the demo DB in bytes; 0 uses the selected TreeDB profile default")
+	fs.Int64Var(&cfg.leafGenerationTarget, "leaf-generation-segment-target", cfg.leafGenerationTarget, "Leaf value-log generation segment target for the demo DB in bytes; a positive value opts the demo into leaf generation rolling, 0 uses the selected TreeDB profile default")
 	fs.Float64Var(&cfg.minRecall, "min-recall", cfg.minRecall, "Minimum validation recall@topK")
-	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reads")
+	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reopen/validation/search")
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
@@ -207,6 +271,16 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	searchConcurrency, err := parseSearchConcurrency(searchConcurrencyRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.searchConcurrency = searchConcurrency
+	profile, err := parseProfile(profileRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.profile = profile
 	if cfg.docs <= 0 {
 		return config{}, errors.New("-docs must be positive")
 	}
@@ -234,6 +308,12 @@ func parseConfig(args []string) (config, error) {
 	if cfg.efSearch <= 0 {
 		return config{}, errors.New("-ef-search must be positive")
 	}
+	if cfg.valuePointerThreshold < 0 {
+		return config{}, errors.New("-value-pointer-threshold cannot be negative")
+	}
+	if cfg.leafGenerationTarget < 0 {
+		return config{}, errors.New("-leaf-generation-segment-target cannot be negative")
+	}
 	if cfg.minRecall < 0 || cfg.minRecall > 1 {
 		return config{}, errors.New("-min-recall must be in [0,1]")
 	}
@@ -252,14 +332,112 @@ func parseConfig(args []string) (config, error) {
 	if cfg.validateQueries == 0 && cfg.minRecall > 0 {
 		return config{}, errors.New("-min-recall must be 0 when -validate-queries is 0")
 	}
-	if cfg.validateQueries+cfg.queries > cfg.docs {
-		return config{}, errors.New("-validate-queries plus -queries cannot exceed -docs")
-	}
 	return cfg, nil
 }
 
+func parseProfile(raw string) (treedb.Profile, error) {
+	switch treedb.Profile(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", treedb.ProfileBench:
+		return treedb.ProfileBench, nil
+	case treedb.ProfileDurable:
+		return treedb.ProfileDurable, nil
+	case treedb.ProfileFast:
+		return treedb.ProfileFast, nil
+	case treedb.ProfileWALOnFast:
+		return treedb.ProfileWALOnFast, nil
+	default:
+		return "", fmt.Errorf("unsupported -profile %q", raw)
+	}
+}
+
+func parseSearchConcurrency(raw string) ([]int, error) {
+	parts := strings.Split(raw, ",")
+	out := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts)+1)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -search-concurrency value %q", part)
+		}
+		if value <= 1 {
+			return nil, fmt.Errorf("-search-concurrency values must be greater than 1: %d", value)
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	if len(out) == 0 {
+		return nil, errors.New("-search-concurrency must include at least one value greater than 1")
+	}
+	return out, nil
+}
+
+func applySearchBenchmarkDefaults(cfg *config) error {
+	if len(cfg.searchConcurrency) == 0 {
+		concurrency, err := parseSearchConcurrency(defaultSearchConcurrency)
+		if err != nil {
+			return err
+		}
+		cfg.searchConcurrency = concurrency
+	}
+	return nil
+}
+
+func defaultProfile(profile treedb.Profile) treedb.Profile {
+	if profile == "" {
+		return treedb.ProfileBench
+	}
+	return profile
+}
+
+func normalizeDemoDir(dir string) (string, error) {
+	if dir == "" {
+		return "", nil
+	}
+	clean := filepath.Clean(dir)
+	if filepath.Base(clean) == "maindb" {
+		return "", fmt.Errorf("demo -dir must be a TreeDB root directory, not a maindb directory; pass %q instead", filepath.Dir(clean))
+	}
+	return clean, nil
+}
+
+func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error) {
+	opts := treedb.OptionsFor(defaultProfile(cfg.profile), dir)
+	if cfg.indexOuterLeavesInValueLog != nil {
+		opts.IndexOuterLeavesInValueLog = *cfg.indexOuterLeavesInValueLog
+		opts.IndexInternalBaseDelta = !*cfg.indexOuterLeavesInValueLog
+	}
+	if cfg.valuePointerThreshold > 0 {
+		opts.ValueLog.PointerThreshold = cfg.valuePointerThreshold
+	}
+	if cfg.leafGenerationTarget > 0 {
+		// A positive demo-local target is an explicit opt-in to sealed leaf
+		// generations, including under the deterministic bench profile.
+		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+		opts.ValueLog.Generational.LeafSegmentTargetBytes = cfg.leafGenerationTarget
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		return treedb.OpenBackendWithCachedLeafLog(opts)
+	}
+	return treedb.OpenBackend(opts)
+}
+
 func execute(ctx context.Context, cfg config) (result, error) {
-	dir := cfg.dir
+	cfg.profile = defaultProfile(cfg.profile)
+	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
+		return result{}, err
+	}
+	dir, err := normalizeDemoDir(cfg.dir)
+	if err != nil {
+		return result{}, err
+	}
 	explicitDir := dir != ""
 	cleanup := func() {}
 	if dir == "" {
@@ -306,66 +484,65 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		EfSearch:       cfg.efSearch,
 	}
 	res := result{
-		Dir:                  dir,
-		KeptDir:              cfg.keepDir || explicitDir,
-		Docs:                 cfg.docs,
-		Dimensions:           cfg.dimensions,
-		Queries:              cfg.queries,
-		ValidateQueries:      cfg.validateQueries,
-		ValidateDocs:         cfg.validateDocs,
-		TopK:                 cfg.topK,
-		M:                    cfg.m,
-		EfConstruction:       cfg.efConstruction,
-		EfSearch:             cfg.efSearch,
-		MinRecall:            cfg.minRecall,
-		Compact:              cfg.compact,
-		CompactSyncEachPhase: cfg.compactSyncEachPhase,
-		DisableExactFallback: cfg.disableExactFallback,
+		Dir:                   dir,
+		KeptDir:               cfg.keepDir || explicitDir,
+		Profile:               string(cfg.profile),
+		Docs:                  cfg.docs,
+		Dimensions:            cfg.dimensions,
+		Queries:               cfg.queries,
+		SearchConcurrency:     append([]int(nil), cfg.searchConcurrency...),
+		ValidateQueries:       cfg.validateQueries,
+		ValidateDocs:          cfg.validateDocs,
+		TopK:                  cfg.topK,
+		M:                     cfg.m,
+		EfConstruction:        cfg.efConstruction,
+		EfSearch:              cfg.efSearch,
+		ValuePointerThreshold: cfg.valuePointerThreshold,
+		LeafGenerationTarget:  cfg.leafGenerationTarget,
+		MinRecall:             cfg.minRecall,
+		Compact:               cfg.compact,
+		CompactSyncEachPhase:  cfg.compactSyncEachPhase,
+		DisableExactFallback:  cfg.disableExactFallback,
 	}
 
-	d, err := backenddb.Open(backenddb.Options{
-		Dir: dir,
-		ValueLog: backenddb.ValueLogOptions{
-			Compression: backenddb.ValueLogCompressionAuto,
-		},
-	})
+	d, cleanupBackend, err := openDemoBackend(cfg, dir)
 	if err != nil {
 		return result{}, err
 	}
 	mgr := collections.NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "docs"}); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	col, err := mgr.OpenCollection("docs")
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 
 	insertStart := time.Now()
 	if err := insertDocuments(col, cfg.docs, cfg.dimensions, cfg.batchSize); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	if err := col.Flush(); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	res.Insert = phaseSince(insertStart)
 
 	if _, err := col.CreateVectorIndex(def); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	rebuildStart := time.Now()
 	status, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	if !status.NativeRootLoaded || status.RootID == 0 {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, fmt.Errorf("unexpected native vector root status: %+v", status)
 	}
 	res.Rebuild = phaseSince(rebuildStart)
@@ -373,12 +550,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	res.IndexStatsBefore = status.Stats
 
 	if err := d.Checkpoint(); err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 	res.StorageBeforeCompact, err = storageUsage(dir, cfg.docs)
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
 
@@ -389,23 +566,23 @@ func execute(ctx context.Context, cfg config) (result, error) {
 			SyncEachPhase: cfg.compactSyncEachPhase,
 		})
 		if err != nil {
-			_ = d.Close()
+			_ = cleanupBackend()
 			return result{}, err
 		}
 		res.CompactPhase = phaseSince(compactStart)
 		res.CompactStorage = &stats
 		if err := d.Checkpoint(); err != nil {
-			_ = d.Close()
+			_ = cleanupBackend()
 			return result{}, err
 		}
 	}
 	res.StorageAfterCompact, err = storageUsage(dir, cfg.docs)
 	if err != nil {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, err
 	}
-	if format, ok, err := backenddb.LoadFormatConfig(dir); err != nil {
-		_ = d.Close()
+	if format, ok, err := loadFormatConfig(dir); err != nil {
+		_ = cleanupBackend()
 		return result{}, err
 	} else if ok {
 		res.FormatConfig = &format
@@ -418,31 +595,33 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		IndexBytes:           res.StorageAfterCompact.Domains["index.db"],
 	}
 	if cfg.requireValueLogBytes && res.StorageExpectation.ValueLogBytes == 0 {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, errors.New("compacted storage has zero value_vlog bytes")
 	}
 	if cfg.requireLeafVLogBytes && res.StorageExpectation.LeafVLogBytes == 0 {
-		_ = d.Close()
+		_ = cleanupBackend()
 		return result{}, errors.New("compacted storage has zero leaf_vlog bytes")
 	}
 	mgr = nil
 	col = nil
-	if err := d.Close(); err != nil {
+	if err := cleanupBackend(); err != nil {
 		return result{}, err
 	}
+	cleanupBackend = nil
 	d = nil
 	runtime.GC()
 
 	reopenStart := time.Now()
-	d, err = backenddb.Open(backenddb.Options{Dir: dir})
+	d, cleanupBackend, err = openDemoBackend(cfg, dir)
 	if err != nil {
 		return result{}, err
 	}
 	closeReopened := func() error {
-		if d == nil {
+		if cleanupBackend == nil {
 			return nil
 		}
-		err := d.Close()
+		err := cleanupBackend()
+		cleanupBackend = nil
 		d = nil
 		return err
 	}
@@ -485,11 +664,14 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res.Validation = validation
 
-	search, err := benchmarkSearch(loaded, cfg)
+	searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg)
 	if err != nil {
 		return result{}, err
 	}
-	res.Search = search
+	res.SearchBenchmarks = searchBenchmarks
+	if len(searchBenchmarks) > 0 {
+		res.Search = searchBenchmarks[0]
+	}
 	if err := closeReopened(); err != nil {
 		return result{}, err
 	}
@@ -510,6 +692,113 @@ func allocDeltaBytes(after, before uint64) int64 {
 		return -int64(maxInt64)
 	}
 	return -int64(delta)
+}
+
+func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
+	cfg.profile = defaultProfile(cfg.profile)
+	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
+		return matrixResult{}, err
+	}
+	root, err := normalizeDemoDir(cfg.dir)
+	if err != nil {
+		return matrixResult{}, err
+	}
+	explicitRoot := root != ""
+	cleanup := func() {}
+	if root == "" {
+		tmp, err := os.MkdirTemp("", "treedb-vector-search-matrix-*")
+		if err != nil {
+			return matrixResult{}, err
+		}
+		root = tmp
+		if !cfg.keepDir {
+			cleanup = func() { _ = os.RemoveAll(tmp) }
+		}
+	} else {
+		info, err := os.Stat(root)
+		if err == nil {
+			if !info.IsDir() {
+				return matrixResult{}, fmt.Errorf("-dir %q exists and is not a directory", root)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil {
+				return matrixResult{}, err
+			}
+			if len(entries) > 0 {
+				return matrixResult{}, fmt.Errorf("-dir %q already exists and is not empty; choose a new directory", root)
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if err := os.MkdirAll(root, 0o755); err != nil {
+				return matrixResult{}, err
+			}
+		} else {
+			return matrixResult{}, err
+		}
+	}
+	if !cfg.keepDir {
+		defer cleanup()
+	}
+
+	inlineLeaves := false
+	leafVLog := true
+	cases := []struct {
+		name        string
+		description string
+		compact     bool
+		outerLeaves *bool
+	}{
+		{
+			name:        "index_db_outer_leaves",
+			description: "1558-style layout: outer B-tree leaves stay in index.db",
+			compact:     false,
+			outerLeaves: &inlineLeaves,
+		},
+		{
+			name:        "leaf_vlog_before_compact",
+			description: "1560 layout: outer B-tree leaves in leaf_vlog before CompactStorageFull",
+			compact:     false,
+			outerLeaves: &leafVLog,
+		},
+		{
+			name:        "leaf_vlog_after_compact",
+			description: "1560 layout: outer B-tree leaves in leaf_vlog after CompactStorageFull",
+			compact:     true,
+			outerLeaves: &leafVLog,
+		},
+	}
+	out := matrixResult{
+		Dir:               root,
+		KeptDir:           cfg.keepDir || explicitRoot,
+		Profile:           string(cfg.profile),
+		Docs:              cfg.docs,
+		Dimensions:        cfg.dimensions,
+		Queries:           cfg.queries,
+		SearchConcurrency: append([]int(nil), cfg.searchConcurrency...),
+		TopK:              cfg.topK,
+		Cases:             make([]matrixCaseResult, 0, len(cases)),
+	}
+	for _, testCase := range cases {
+		caseCfg := cfg
+		caseCfg.matrix = false
+		caseCfg.keepDir = true
+		caseCfg.compact = testCase.compact
+		caseCfg.dir = filepath.Join(root, testCase.name)
+		caseCfg.indexOuterLeavesInValueLog = testCase.outerLeaves
+		if testCase.name == "index_db_outer_leaves" {
+			caseCfg.requireLeafVLogBytes = false
+		}
+		res, err := execute(ctx, caseCfg)
+		if err != nil {
+			return matrixResult{}, fmt.Errorf("%s: %w", testCase.name, err)
+		}
+		res.KeptDir = out.KeptDir
+		out.Cases = append(out.Cases, matrixCaseResult{
+			Name:        testCase.name,
+			Description: testCase.description,
+			Result:      res,
+		})
+	}
+	return out, nil
 }
 
 func insertDocuments(col *collections.Collection, docs, dims, batchSize int) error {
@@ -573,40 +862,101 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 }
 
 func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkResult, error) {
+	return benchmarkSearchConcurrent(idx, cfg, 1)
+}
+
+func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config) ([]searchBenchmarkResult, error) {
+	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
+	levels = append(levels, 1)
+	levels = append(levels, cfg.searchConcurrency...)
+	out := make([]searchBenchmarkResult, 0, len(levels))
+	for _, concurrency := range levels {
+		bench, err := benchmarkSearchConcurrent(idx, cfg, concurrency)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bench)
+	}
+	return out, nil
+}
+
+func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, concurrency int) (searchBenchmarkResult, error) {
+	if concurrency <= 0 {
+		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
+	}
 	queries := syntheticQueries(cfg.queries, cfg.docs, cfg.dimensions, cfg.validateQueries)
 	latencies := make([]int64, len(queries))
+	var next atomic.Int64
 	var candidatesTotal int64
 	var rerankTotal int64
-	var exactFallbacks int
-	startAll := time.Now()
-	for i, query := range queries {
-		start := time.Now()
-		results, trace, err := idx.Search(query, collections.VectorIndexSearchOptions{
-			TopK:                 cfg.topK,
-			EfSearch:             cfg.efSearch,
-			DisableExactFallback: cfg.disableExactFallback,
-		})
-		if err != nil {
-			return searchBenchmarkResult{}, err
-		}
-		latencies[i] = time.Since(start).Nanoseconds()
-		if len(results) == 0 {
-			return searchBenchmarkResult{}, errors.New("vector search returned no results")
-		}
-		candidatesTotal += int64(trace.CandidatesExamined)
-		rerankTotal += int64(trace.RerankCount)
-		if trace.ExactFallbackReason != "" {
-			exactFallbacks++
+	var exactFallbacks int64
+	var errMu sync.Mutex
+	var firstErr error
+	setErr := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
+	worker := func() {
+		for {
+			i := int(next.Add(1) - 1)
+			if i >= len(queries) {
+				return
+			}
+			start := time.Now()
+			results, trace, err := idx.Search(queries[i], collections.VectorIndexSearchOptions{
+				TopK:                 cfg.topK,
+				EfSearch:             cfg.efSearch,
+				DisableExactFallback: cfg.disableExactFallback,
+			})
+			if err != nil {
+				setErr(err)
+				return
+			}
+			latencies[i] = time.Since(start).Nanoseconds()
+			if len(results) == 0 {
+				setErr(errors.New("vector search returned no results"))
+				return
+			}
+			atomic.AddInt64(&candidatesTotal, int64(trace.CandidatesExamined))
+			atomic.AddInt64(&rerankTotal, int64(trace.RerankCount))
+			if trace.ExactFallbackReason != "" {
+				atomic.AddInt64(&exactFallbacks, 1)
+			}
+		}
+	}
+	startAll := time.Now()
+	if concurrency == 1 {
+		worker()
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(concurrency)
+		for i := 0; i < concurrency; i++ {
+			go func() {
+				defer wg.Done()
+				worker()
+			}()
+		}
+		wg.Wait()
+	}
 	total := time.Since(startAll)
+	if firstErr != nil {
+		return searchBenchmarkResult{}, firstErr
+	}
+	var latencyTotal int64
+	for _, latency := range latencies {
+		latencyTotal += latency
+	}
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	avg := float64(total.Nanoseconds()) / float64(len(queries))
+	avg := float64(latencyTotal) / float64(len(queries))
 	opsPerSecond := 0.0
 	if total > 0 {
 		opsPerSecond = float64(len(queries)) / total.Seconds()
 	}
 	return searchBenchmarkResult{
+		Concurrency:          concurrency,
 		Queries:              len(queries),
 		TotalDurationNanos:   total.Nanoseconds(),
 		AvgNanos:             avg,
@@ -617,7 +967,7 @@ func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkR
 		P99Nanos:             percentile(latencies, 0.99),
 		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
 		AvgRerank:            float64(rerankTotal) / float64(len(queries)),
-		ExactFallbacks:       exactFallbacks,
+		ExactFallbacks:       int(exactFallbacks),
 		DisableExactFallback: cfg.disableExactFallback,
 	}, nil
 }
@@ -642,18 +992,31 @@ func validationQueries(count, docs, dims int) [][]float32 {
 func syntheticQueries(count, docs, dims, offset int) [][]float32 {
 	queries := make([][]float32, count)
 	stride := queryDocStride(docs)
+	start := 0
+	span := docs
+	if offset > 0 {
+		if offset < docs {
+			start = offset
+			span = docs - offset
+		} else {
+			start = docs
+			span = 0
+		}
+	}
 	for i := 0; i < count; i++ {
-		queries[i] = embedding(syntheticQueryID(i, docs, offset, stride), dims)
+		queries[i] = embedding(syntheticQueryID(i, docs, start, span, stride), dims)
 	}
 	return queries
 }
 
-func syntheticQueryID(i, docs, offset, stride int) int {
-	id := i + offset
-	if docs <= 0 || id >= docs {
-		return id
+func syntheticQueryID(i, docs, start, span, stride int) int {
+	if docs <= 0 || span <= 0 {
+		return start + i
 	}
-	return queryDocIndex(id, docs, stride)
+	if i < span {
+		return queryDocIndex(start+i, docs, stride)
+	}
+	return docs + i - span
 }
 
 func queryDocStride(docs int) int {
@@ -766,8 +1129,7 @@ func storageUsage(dir string, docs int) (storageReport, error) {
 		if err != nil {
 			return err
 		}
-		group := strings.SplitN(rel, string(os.PathSeparator), 2)[0]
-		report.Domains[group] += size
+		report.Domains[storageDomain(rel)] += size
 		return nil
 	})
 	if err != nil {
@@ -777,6 +1139,36 @@ func storageUsage(dir string, docs int) (storageReport, error) {
 		report.BytesPerDoc = float64(report.TotalBytes) / float64(docs)
 	}
 	return report, nil
+}
+
+func storageDomain(rel string) string {
+	rel = filepath.ToSlash(rel)
+	parts := strings.Split(rel, "/")
+	if len(parts) == 0 {
+		return rel
+	}
+	if len(parts) > 1 && parts[0] == "maindb" {
+		return storageDomain(strings.Join(parts[1:], "/"))
+	}
+	if len(parts) > 1 && (parts[0] == "dictdb" || parts[0] == "templatedb") {
+		return parts[0]
+	}
+	switch parts[0] {
+	case "leaf_vlog", "value_vlog", "wal":
+		return parts[0]
+	case "index.db", "journal.wal", "format.json", "LOCK", "vlog_ref_counts.meta":
+		return parts[0]
+	default:
+		return parts[0]
+	}
+}
+
+func loadFormatConfig(dir string) (backenddb.FormatConfig, bool, error) {
+	format, ok, err := backenddb.LoadFormatConfig(dir)
+	if err != nil || ok {
+		return format, ok, err
+	}
+	return backenddb.LoadFormatConfig(filepath.Join(dir, "maindb"))
 }
 
 func phaseSince(start time.Time) phaseResult {
@@ -807,8 +1199,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d\n",
-		res.Dir, res.KeptDir, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_native_vector_index: %.3fs native_root_bytes=%d\n", res.Rebuild.Seconds, res.NativeRootBytes)
@@ -834,6 +1226,8 @@ func printText(w io.Writer, res result) {
 		res.Search.OpsPerSecond,
 		res.Search.ExactFallbacks)
 	fmt.Fprintf(w, "avg_candidates=%.1f avg_rerank=%.1f\n", res.Search.AvgCandidates, res.Search.AvgRerank)
+	fmt.Fprintf(w, "\nParallel Search Benchmark\n")
+	printSearchBenchmarks(w, res.SearchBenchmarks)
 	fmt.Fprintf(w, "\nStorage\n")
 	fmt.Fprintf(w, "before_compact_total=%d bytes (%.1f/doc)\n", res.StorageBeforeCompact.TotalBytes, res.StorageBeforeCompact.BytesPerDoc)
 	fmt.Fprintf(w, "after_compact_total=%d bytes (%.1f/doc)\n", res.StorageAfterCompact.TotalBytes, res.StorageAfterCompact.BytesPerDoc)
@@ -851,6 +1245,57 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "\nMemory\n")
 	fmt.Fprintf(w, "index_bytes_memory=%d load_alloc_delta=%d alloc_after_load=%d\n",
 		res.Memory.IndexBytesMemory, res.Memory.LoadAllocDeltaBytes, res.Memory.AllocAfterLoadBytes)
+}
+
+func printMatrixText(w io.Writer, res matrixResult) {
+	fmt.Fprintf(w, "TreeDB vector search matrix\n")
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d search_concurrency=%s\n",
+		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, joinInts(res.SearchConcurrency))
+	for _, testCase := range res.Cases {
+		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
+		fmt.Fprintf(w, "%s\n", testCase.Description)
+		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
+			testCase.Result.StorageAfterCompact.TotalBytes,
+			testCase.Result.StorageAfterCompact.BytesPerDoc)
+		fmt.Fprintf(w, "storage_domains index_db=%d value_vlog=%d leaf_vlog=%d\n",
+			testCase.Result.StorageExpectation.IndexBytes,
+			testCase.Result.StorageExpectation.ValueLogBytes,
+			testCase.Result.StorageExpectation.LeafVLogBytes)
+		if testCase.Result.FormatConfig != nil {
+			fmt.Fprintf(w, "format index_outer_leaves_in_vlog=%t leaf_prefix_compression=%t vlog_compression=%s\n",
+				testCase.Result.FormatConfig.IndexOuterLeavesInValueLog,
+				testCase.Result.FormatConfig.LeafPrefixCompression,
+				testCase.Result.FormatConfig.ValueLogCompression)
+		}
+		fmt.Fprintf(w, "vector_search avg=%.2fus p95=%.2fus recall_at_%d=%.4f\n",
+			testCase.Result.Search.AvgMicros,
+			float64(testCase.Result.Search.P95Nanos)/1000,
+			testCase.Result.TopK,
+			testCase.Result.Validation.Recall)
+		printSearchBenchmarks(w, testCase.Result.SearchBenchmarks)
+	}
+}
+
+func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
+	for _, bench := range benchmarks {
+		fmt.Fprintf(w, "search concurrency=%d queries=%d avg=%.2fus p50=%.2fus p95=%.2fus p99=%.2fus ops/sec=%.1f exact_fallbacks=%d\n",
+			bench.Concurrency,
+			bench.Queries,
+			bench.AvgMicros,
+			float64(bench.P50Nanos)/1000,
+			float64(bench.P95Nanos)/1000,
+			float64(bench.P99Nanos)/1000,
+			bench.OpsPerSecond,
+			bench.ExactFallbacks)
+	}
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return strings.Join(parts, ",")
 }
 
 func printDomains(w io.Writer, label string, domains map[string]int64) {
