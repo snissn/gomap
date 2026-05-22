@@ -535,7 +535,11 @@ func columnVectorGraphNativeCosineScoreVectorTrusted(query []float32, queryInvNo
 	}
 	dot := float64(vectorDotProductFloat32SameLen(query, vector))
 	score := dot * float64(queryInvNorm) * float64(invNorm)
-	if !math.IsInf(score, 0) && !math.IsNaN(score) {
+	if trustedFinite {
+		if score >= -math.MaxFloat64 && score <= math.MaxFloat64 {
+			return score, nil
+		}
+	} else if !math.IsInf(score, 0) && !math.IsNaN(score) {
 		return score, nil
 	}
 	dot = columnVectorGraphNativeDotProductFloat64(query, vector)
