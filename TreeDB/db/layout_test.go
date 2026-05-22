@@ -50,6 +50,41 @@ func TestOpen_FreshDBCreatesSplitStorageDirs(t *testing.T) {
 	}
 }
 
+func TestDBColumnAssetRootDirDoesNotAllocateM1634(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	want := ColumnAssetRootDirPath(dir)
+	if got := db.ColumnAssetRootDir(); got != want {
+		t.Fatalf("ColumnAssetRootDir=%q, want %q", got, want)
+	}
+	if got := testing.AllocsPerRun(1000, func() {
+		_ = db.ColumnAssetRootDir()
+	}); got != 0 {
+		t.Fatalf("ColumnAssetRootDir allocated %.2f times per call", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	readonly, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("Open readonly: %v", err)
+	}
+	defer readonly.Close()
+	if got := readonly.ColumnAssetRootDir(); got != want {
+		t.Fatalf("readonly ColumnAssetRootDir=%q, want %q", got, want)
+	}
+	if got := testing.AllocsPerRun(1000, func() {
+		_ = readonly.ColumnAssetRootDir()
+	}); got != 0 {
+		t.Fatalf("readonly ColumnAssetRootDir allocated %.2f times per call", got)
+	}
+}
+
 func TestEnsureStorageLayoutDirsSyncsRootForColumnAssetsM12A(t *testing.T) {
 	dir := t.TempDir()
 	var synced []string

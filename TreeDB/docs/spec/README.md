@@ -89,6 +89,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     distributed/Raft behavior remains target behavior until cluster mode lands.
 - `TreeDB/docs/spec/verification.md`
   - invariants mapped to tests and benchmark harnesses.
+- `TreeDB/docs/spec/column-graph-native-vector-search.md`
+  - user-facing quickstart, benchmark matrix, demo, and caveats for explicit
+    `column_graph` vector indexes that search through the native physical column
+    row reader.
 
 ## Target Gates (Normative Target, Not Current Behavior)
 
@@ -112,6 +116,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - draft target architecture for rewriting the cached collections execution
     path around native root domains, vectorized probes, and native grouped
     publish.
+- `TreeDB/docs/spec/native-ann-vector-index.md`
+  - draft target architecture and implementation plan for turning the
+    collection ANN vector graph into a native persisted TreeDB secondary index.
 - `TreeDB/docs/spec/collections-native-fastpath-roadmap.md`
   - draft implementation roadmap for the native cached collections rewrite,
     including PR slices, acceptance criteria, and performance gates.

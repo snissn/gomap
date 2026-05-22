@@ -15,9 +15,14 @@ const (
 	maxCodeCardinality       = 1 << 20
 )
 
+// BuildBool returns a granule whose payload aliases builder-owned scratch until
+// the next builder Build* or Reset call.
 func (b *GranuleBuilder) BuildBool(values []bool) (EncodedGranule, error) {
 	if len(values) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	if err := validateGranuleDecodeRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	raw := encodeBoolPayload(b.raw[:0], values)
 	b.raw = raw
@@ -61,9 +66,14 @@ func (r *GranuleReader) CountTrueBool(g EncodedGranule) (int, error) {
 	return countTrueBoolPayload(raw, g.Rows)
 }
 
+// BuildNullableInt64 returns a granule whose payload aliases builder-owned
+// scratch until the next builder Build* or Reset call.
 func (b *GranuleBuilder) BuildNullableInt64(values []int64, nulls []bool, defaults []bool, defaultValue int64) (EncodedGranule, error) {
 	if len(values) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	if err := validateGranuleDecodeRows(len(values)); err != nil {
+		return EncodedGranule{}, err
 	}
 	valueEncoding, err := nullableValueEncoding(b.cfg.Encoding)
 	if err != nil {
@@ -200,9 +210,14 @@ func (r *GranuleReader) DecodeNullableInt64Into(dst []int64, nulls []bool, defau
 	return out, nullOut, defaultOut, nil
 }
 
+// BuildUint32Codes returns a granule whose payload aliases builder-owned
+// scratch until the next builder Build* or Reset call.
 func (b *GranuleBuilder) BuildUint32Codes(codes []uint32, cardinality uint32) (EncodedGranule, error) {
 	if len(codes) == 0 {
 		return EncodedGranule{}, errors.New("colgranule: empty granule")
+	}
+	if err := validateGranuleDecodeRows(len(codes)); err != nil {
+		return EncodedGranule{}, err
 	}
 	minCode, maxCode := minMaxUint32(codes)
 	if cardinality == 0 {
@@ -295,34 +310,39 @@ func encodeBoolPayload(dst []byte, values []bool) []byte {
 }
 
 func decodeBoolPayload(dst []bool, raw []byte, rows int) ([]bool, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return nil, err
+	}
 	if len(raw) == 0 {
 		return nil, errors.New("colgranule: missing bool payload mode")
 	}
-	out := ensureBoolLen(dst, rows)
 	switch raw[0] {
 	case boolPayloadBitpack:
 		mask := raw[1:]
-		if len(mask) != bitmapBytes(rows) {
-			return nil, fmt.Errorf("colgranule: bool bitpack bytes=%d want=%d", len(mask), bitmapBytes(rows))
+		need, err := bitmapBytesChecked(rows)
+		if err != nil {
+			return nil, err
 		}
+		if len(mask) != need {
+			return nil, fmt.Errorf("colgranule: bool bitpack bytes=%d want=%d", len(mask), need)
+		}
+		out := ensureBoolLen(dst, rows)
 		for i := 0; i < rows; i++ {
 			out[i] = bitmapBit(mask, i)
 		}
+		return out, nil
 	case boolPayloadRLE:
-		if len(raw) < 2 {
-			return nil, errors.New("colgranule: truncated bool rle header")
+		value, data, err := parseBoolRLEHeader(raw)
+		if err != nil {
+			return nil, err
 		}
-		value := raw[1] != 0
-		data := raw[2:]
+		if err := validateBoolRLERuns(data, rows); err != nil {
+			return nil, err
+		}
+		out := ensureBoolLen(dst, rows)
 		row := 0
 		for len(data) > 0 && row < rows {
 			run, n := binary.Uvarint(data)
-			if n <= 0 {
-				return nil, errors.New("colgranule: malformed bool rle run")
-			}
-			if run == 0 || run > uint64(rows-row) {
-				return nil, errors.New("colgranule: invalid bool rle run")
-			}
 			for i := 0; i < int(run); i++ {
 				out[row+i] = value
 			}
@@ -330,27 +350,28 @@ func decodeBoolPayload(dst []bool, raw []byte, rows int) ([]bool, error) {
 			value = !value
 			data = data[n:]
 		}
-		if row != rows {
-			return nil, fmt.Errorf("colgranule: bool rle rows=%d want=%d", row, rows)
-		}
-		if len(data) != 0 {
-			return nil, errors.New("colgranule: trailing bool rle bytes")
-		}
+		return out, nil
 	default:
 		return nil, fmt.Errorf("colgranule: unsupported bool payload mode %d", raw[0])
 	}
-	return out, nil
 }
 
 func countTrueBoolPayload(raw []byte, rows int) (int, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return 0, err
+	}
 	if len(raw) == 0 {
 		return 0, errors.New("colgranule: missing bool payload mode")
 	}
 	switch raw[0] {
 	case boolPayloadBitpack:
 		mask := raw[1:]
-		if len(mask) != bitmapBytes(rows) {
-			return 0, fmt.Errorf("colgranule: bool bitpack bytes=%d want=%d", len(mask), bitmapBytes(rows))
+		need, err := bitmapBytesChecked(rows)
+		if err != nil {
+			return 0, err
+		}
+		if len(mask) != need {
+			return 0, fmt.Errorf("colgranule: bool bitpack bytes=%d want=%d", len(mask), need)
 		}
 		count := 0
 		fullBytes := rows / 8
@@ -363,11 +384,10 @@ func countTrueBoolPayload(raw []byte, rows int) (int, error) {
 		}
 		return count, nil
 	case boolPayloadRLE:
-		if len(raw) < 2 {
-			return 0, errors.New("colgranule: truncated bool rle header")
+		value, data, err := parseBoolRLEHeader(raw)
+		if err != nil {
+			return 0, err
 		}
-		value := raw[1] != 0
-		data := raw[2:]
 		row := 0
 		count := 0
 		for len(data) > 0 && row < rows {
@@ -476,6 +496,9 @@ type uint32CodesHeader struct {
 }
 
 func parseUint32CodesHeader(raw []byte, rows int) (uint32CodesHeader, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return uint32CodesHeader{}, err
+	}
 	if len(raw) < 2 {
 		return uint32CodesHeader{}, errors.New("colgranule: truncated code header")
 	}
@@ -491,6 +514,9 @@ func parseUint32CodesHeader(raw []byte, rows int) (uint32CodesHeader, error) {
 		return uint32CodesHeader{}, fmt.Errorf("colgranule: invalid code cardinality %d", cardinality64)
 	}
 	data := raw[1+n:]
+	if rows > int(^uint(0)>>1)/int(width) {
+		return uint32CodesHeader{}, fmt.Errorf("colgranule: code rows=%d width=%d overflow", rows, width)
+	}
 	need := rows * int(width)
 	if len(data) != need {
 		return uint32CodesHeader{}, fmt.Errorf("colgranule: code data bytes=%d want=%d", len(data), need)
@@ -519,6 +545,9 @@ type nullableInt64Header struct {
 }
 
 func parseNullableInt64Header(raw []byte, rows int) (nullableInt64Header, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return nullableInt64Header{}, err
+	}
 	if len(raw) < nullableInt64HeaderBytes {
 		return nullableInt64Header{}, errors.New("colgranule: truncated nullable int64 header")
 	}
@@ -533,7 +562,10 @@ func parseNullableInt64Header(raw []byte, rows int) (nullableInt64Header, error)
 	}
 	nullMaskLen := int(binary.LittleEndian.Uint32(raw[13:17]))
 	defaultMaskLen := int(binary.LittleEndian.Uint32(raw[17:21]))
-	wantMaskLen := bitmapBytes(rows)
+	wantMaskLen, err := bitmapBytesChecked(rows)
+	if err != nil {
+		return nullableInt64Header{}, err
+	}
 	if nullMaskLen != wantMaskLen {
 		return nullableInt64Header{}, fmt.Errorf("colgranule: null mask bytes=%d want=%d", nullMaskLen, wantMaskLen)
 	}
@@ -578,12 +610,55 @@ func bitmapBytes(rows int) int {
 	return (rows + 7) / 8
 }
 
+func bitmapBytesChecked(rows int) (int, error) {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return 0, err
+	}
+	return bitmapBytes(rows), nil
+}
+
+func parseBoolRLEHeader(raw []byte) (bool, []byte, error) {
+	if len(raw) < 2 {
+		return false, nil, errors.New("colgranule: truncated bool rle header")
+	}
+	switch raw[1] {
+	case 0:
+		return false, raw[2:], nil
+	case 1:
+		return true, raw[2:], nil
+	default:
+		return false, nil, fmt.Errorf("colgranule: invalid bool rle start value %d", raw[1])
+	}
+}
+
+func validateBoolRLERuns(data []byte, rows int) error {
+	row := 0
+	for len(data) > 0 && row < rows {
+		run, n := binary.Uvarint(data)
+		if n <= 0 {
+			return errors.New("colgranule: malformed bool rle run")
+		}
+		if run == 0 || run > uint64(rows-row) {
+			return errors.New("colgranule: invalid bool rle run")
+		}
+		row += int(run)
+		data = data[n:]
+	}
+	if row != rows {
+		return fmt.Errorf("colgranule: bool rle rows=%d want=%d", row, rows)
+	}
+	if len(data) != 0 {
+		return errors.New("colgranule: trailing bool rle bytes")
+	}
+	return nil
+}
+
 func bitmapBit(mask []byte, row int) bool {
 	return mask[row/8]&(1<<uint(row%8)) != 0
 }
 
 func boolAt(values []bool, i int) bool {
-	return len(values) != 0 && values[i]
+	return i >= 0 && i < len(values) && values[i]
 }
 
 func validateOptionalBoolRows(name string, rows int, values []bool) error {

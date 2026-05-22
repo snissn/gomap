@@ -40,6 +40,15 @@ type ColumnAssetKind string
 const (
 	// ColumnAssetKindTCS1PartImage references an immutable TCS1 part image.
 	ColumnAssetKindTCS1PartImage ColumnAssetKind = "tcs1_part_image"
+	// ColumnAssetKindTCS1AggregateMetadata references grouped aggregate metadata
+	// stored as a typed column asset beside physical part images.
+	ColumnAssetKindTCS1AggregateMetadata ColumnAssetKind = "tcs1_aggregate_metadata"
+	// ColumnAssetKindTCS1DictionaryCodes references low-cardinality dictionary
+	// codes derived from one declared dictionary string column in a TCS1 part.
+	ColumnAssetKindTCS1DictionaryCodes ColumnAssetKind = "tcs1_dictionary_codes"
+	// ColumnAssetKindTCS1Int64Values references dense int64 values derived from
+	// one non-null declared int64 column in a TCS1 part.
+	ColumnAssetKindTCS1Int64Values ColumnAssetKind = "tcs1_int64_values"
 )
 
 // ColumnAssetRef is the durable typed address of a column-asset-manager-owned
@@ -59,6 +68,7 @@ type ColumnAssetRef struct {
 // ColumnPreparedAsset describes an immutable asset staged for manifest publish.
 type ColumnPreparedAsset struct {
 	Ref          ColumnAssetRef
+	Rows         int
 	Bytes        int64
 	PublishID    uint64
 	GenerationID uint64
@@ -68,15 +78,17 @@ type ColumnPreparedAsset struct {
 // ColumnPublishPlanInput contains the normalized collection state and stage
 // hooks required to build an atomic column manifest publish plan.
 type ColumnPublishPlanInput struct {
-	Collection             string
-	ColumnStore            *ColumnStoreConfig
-	ColumnStoreNormalized  bool
-	Operation              ColumnPublishOperation
-	CurrentManifest        *ColumnManifestIdentity
-	CurrentManifestRecords []columnManifestRecord
-	AppliedCommandLSN      uint64
-	BaseManifestRootID     uint64
-	Hooks                  ColumnPublishPlanHooks
+	Collection               string
+	ColumnStore              *ColumnStoreConfig
+	ColumnStoreNormalized    bool
+	ActiveVectorIndexes      []VectorIndexDefinition
+	ActiveVectorIndexesKnown bool
+	Operation                ColumnPublishOperation
+	CurrentManifest          *ColumnManifestIdentity
+	CurrentManifestRecords   []columnManifestRecord
+	AppliedCommandLSN        uint64
+	BaseManifestRootID       uint64
+	Hooks                    ColumnPublishPlanHooks
 }
 
 // ColumnPublishPlanHooks provide the engine-specific stages for a publish plan.
@@ -119,13 +131,15 @@ type ColumnPublishPreparedAssets struct {
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
 type ColumnPublishManifestEncodeInput struct {
-	Collection             string
-	ColumnStore            ColumnStoreConfig
-	Operation              ColumnPublishOperation
-	AppliedCommandLSN      uint64
-	CurrentManifest        *ColumnManifestIdentity
-	CurrentManifestRecords []columnManifestRecord
-	Prepared               ColumnPublishPreparedAssets
+	Collection               string
+	ColumnStore              ColumnStoreConfig
+	ActiveVectorIndexes      []VectorIndexDefinition
+	ActiveVectorIndexesKnown bool
+	Operation                ColumnPublishOperation
+	AppliedCommandLSN        uint64
+	CurrentManifest          *ColumnManifestIdentity
+	CurrentManifestRecords   []columnManifestRecord
+	Prepared                 ColumnPublishPreparedAssets
 }
 
 // ColumnPublishManifestEncodeResult identifies the encoded manifest generation.
@@ -648,13 +662,15 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		return ColumnPublishManifestEncodeResult{}, errors.New("collections: column publish manifest encode hook is required")
 	}
 	return input.Hooks.EncodeManifest(ColumnPublishManifestEncodeInput{
-		Collection:             input.Collection,
-		ColumnStore:            columnPublishHookConfig(cfg),
-		Operation:              input.Operation,
-		AppliedCommandLSN:      input.AppliedCommandLSN,
-		CurrentManifest:        cloneColumnManifestIdentityPtr(input.CurrentManifest),
-		CurrentManifestRecords: cloneColumnManifestRecords(input.CurrentManifestRecords),
-		Prepared:               cloneColumnPublishPreparedAssets(prepared),
+		Collection:               input.Collection,
+		ColumnStore:              columnPublishHookConfig(cfg),
+		ActiveVectorIndexes:      append([]VectorIndexDefinition(nil), input.ActiveVectorIndexes...),
+		ActiveVectorIndexesKnown: input.ActiveVectorIndexesKnown,
+		Operation:                input.Operation,
+		AppliedCommandLSN:        input.AppliedCommandLSN,
+		CurrentManifest:          cloneColumnManifestIdentityPtr(input.CurrentManifest),
+		CurrentManifestRecords:   cloneColumnManifestRecords(input.CurrentManifestRecords),
+		Prepared:                 cloneColumnPublishPreparedAssets(prepared),
 	})
 }
 
@@ -866,6 +882,7 @@ func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedA
 
 type columnPreparedAssetMatchKey struct {
 	Ref          ColumnAssetRef
+	Rows         int
 	Bytes        int64
 	PublishID    uint64
 	GenerationID uint64
@@ -874,6 +891,7 @@ type columnPreparedAssetMatchKey struct {
 func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAssetMatchKey {
 	return columnPreparedAssetMatchKey{
 		Ref:          asset.Ref,
+		Rows:         asset.Rows,
 		Bytes:        asset.Bytes,
 		PublishID:    asset.PublishID,
 		GenerationID: asset.GenerationID,
@@ -883,6 +901,9 @@ func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAsse
 func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if err := validateColumnAssetRefForPlan(asset.Ref); err != nil {
 		return err
+	}
+	if asset.Rows < 0 {
+		return fmt.Errorf("collections: column prepared asset rows=%d cannot be negative", asset.Rows)
 	}
 	if asset.Bytes <= 0 {
 		return fmt.Errorf("collections: column prepared asset bytes=%d must be positive", asset.Bytes)
@@ -895,7 +916,7 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	switch ref.Kind {
-	case ColumnAssetKindTCS1PartImage:
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
 	default:
 		if ref.Kind == "" {
 			return errors.New("collections: column asset ref kind is required")

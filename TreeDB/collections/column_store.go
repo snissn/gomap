@@ -60,6 +60,15 @@ const (
 	ColumnStoreValueAdjacencyList ColumnStoreValueType = "adjacency_list"
 )
 
+type ColumnFixedWidthEncoding string
+
+const (
+	// Empty means the current compatibility encoding: manifest-style big-endian
+	// fixed-width element bytes inside the physical part image.
+	ColumnFixedWidthEncodingDefault      ColumnFixedWidthEncoding = ""
+	ColumnFixedWidthEncodingLittleEndian ColumnFixedWidthEncoding = "little_endian"
+)
+
 type ColumnSortDirection string
 
 const (
@@ -119,6 +128,26 @@ const (
 	ColumnStoreProfileBenchmarkRelaxed ColumnStoreProfileSupport = "benchmark-relaxed"
 )
 
+// ColumnAssetReadIntegrity controls hot physical column asset read validation.
+// It does not change durability, manifest/header/schema validation, or the
+// checksum fields written into typed column asset refs.
+type ColumnAssetReadIntegrity string
+
+const (
+	ColumnAssetReadIntegrityVerify ColumnAssetReadIntegrity = "verify"
+	// ColumnAssetReadIntegrityCachedVerify verifies each immutable typed asset
+	// ref on first process read, then skips repeated hot-read CRC work for the
+	// same ref. It is a benchmark-relaxed mode: post-verification file
+	// corruption can be missed until the cache entry is evicted or the process
+	// restarts.
+	ColumnAssetReadIntegrityCachedVerify ColumnAssetReadIntegrity = "cached_verify"
+	// ColumnAssetReadIntegritySkipChecksums is an unsafe relaxed hot-read mode
+	// for benchmark/performance attribution. It skips per-read payload checksum
+	// verification and may skip redundant per-row tags after the asset header and
+	// schema have been validated.
+	ColumnAssetReadIntegritySkipChecksums ColumnAssetReadIntegrity = "skip_checksums"
+)
+
 type ColumnStoreConfig struct {
 	Enabled                                bool                          `json:"enabled,omitempty"`
 	Columns                                []ColumnStoreColumn           `json:"columns,omitempty"`
@@ -139,12 +168,13 @@ type ColumnStoreConfig struct {
 }
 
 type ColumnStoreColumn struct {
-	Name       string               `json:"name"`
-	Path       string               `json:"path"`
-	ValueType  ColumnStoreValueType `json:"value_type"`
-	Nullable   bool                 `json:"nullable,omitempty"`
-	Dictionary bool                 `json:"dictionary,omitempty"`
-	VectorDims int                  `json:"vector_dims,omitempty"`
+	Name               string                   `json:"name"`
+	Path               string                   `json:"path"`
+	ValueType          ColumnStoreValueType     `json:"value_type"`
+	Nullable           bool                     `json:"nullable,omitempty"`
+	Dictionary         bool                     `json:"dictionary,omitempty"`
+	VectorDims         int                      `json:"vector_dims,omitempty"`
+	FixedWidthEncoding ColumnFixedWidthEncoding `json:"fixed_width_encoding,omitempty"`
 }
 
 type ColumnSortKey struct {
@@ -153,9 +183,10 @@ type ColumnSortKey struct {
 }
 
 type ColumnAggregateMetadata struct {
-	Name   string              `json:"name"`
-	Column string              `json:"column,omitempty"`
-	Kind   ColumnAggregateKind `json:"kind"`
+	Name        string              `json:"name"`
+	Column      string              `json:"column,omitempty"`
+	GroupColumn string              `json:"group_column,omitempty"`
+	Kind        ColumnAggregateKind `json:"kind"`
 }
 
 type ColumnAssetManagerConfig struct {
@@ -395,6 +426,13 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q value_type: %w", col.Name, err)
 		}
+		fixedWidthEncoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
+		if err != nil {
+			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: %w", col.Name, err)
+		}
+		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(valueType) {
+			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
+		}
 		if valueType == ColumnStoreValueFloat32Vector {
 			if col.VectorDims <= 0 {
 				return fmt.Errorf("collections: invalid column %q vector_dims: must be positive", col.Name)
@@ -402,7 +440,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		} else if col.VectorDims != 0 {
 			return fmt.Errorf("collections: invalid column %q vector_dims: only float32_vector columns may set vector_dims", col.Name)
 		}
-		if col.Dictionary && !columnStoreValueTypeSupportsDictionary(valueType) {
+		if col.Dictionary && valueType != ColumnStoreValueString {
 			return fmt.Errorf("collections: invalid column %q dictionary: unsupported for value_type %q", col.Name, valueType)
 		}
 		if _, ok := columnNames[col.Name]; ok {
@@ -433,19 +471,21 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err := ValidateIndexName(aggregate.Name); err != nil {
 			return fmt.Errorf("collections: invalid aggregate metadata %q name: %w", aggregate.Name, err)
 		}
-		var columnType ColumnStoreValueType
 		if aggregate.Column != "" {
-			var ok bool
-			columnType, ok = columnTypes[aggregate.Column]
-			if !ok {
+			if _, ok := columnNames[aggregate.Column]; !ok {
 				return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+			}
+		}
+		if aggregate.GroupColumn != "" {
+			if _, ok := columnNames[aggregate.GroupColumn]; !ok {
+				return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
 			}
 		}
 		if err := validateColumnAggregateKind(aggregate.Kind, aggregate.Column); err != nil {
 			return fmt.Errorf("collections: invalid aggregate metadata %q: %w", aggregate.Name, err)
 		}
-		if aggregate.Column != "" && !columnStoreValueTypeSupportsAggregate(columnType, aggregate.Kind) {
-			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, columnType)
+		if err := validateColumnAggregateMetadataPhysicalSpec(aggregate, columnTypes); err != nil {
+			return err
 		}
 		if _, ok := aggregateNames[aggregate.Name]; ok {
 			return fmt.Errorf("collections: duplicate aggregate metadata %q", aggregate.Name)
@@ -540,6 +580,32 @@ func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreV
 	}
 }
 
+func normalizeColumnFixedWidthEncoding(encoding ColumnFixedWidthEncoding) (ColumnFixedWidthEncoding, error) {
+	switch encoding {
+	case ColumnFixedWidthEncodingDefault, ColumnFixedWidthEncodingLittleEndian:
+		return encoding, nil
+	default:
+		return "", fmt.Errorf("unsupported fixed_width_encoding %q", encoding)
+	}
+}
+
+func columnFixedWidthEncodingIsLittleEndian(encoding ColumnFixedWidthEncoding) (bool, error) {
+	normalized, err := normalizeColumnFixedWidthEncoding(encoding)
+	if err != nil {
+		return false, err
+	}
+	return normalized == ColumnFixedWidthEncodingLittleEndian, nil
+}
+
+func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+		return true
+	default:
+		return false
+	}
+}
+
 func columnStoreValueTypeSupportsDictionary(valueType ColumnStoreValueType) bool {
 	return valueType == ColumnStoreValueString
 }
@@ -548,31 +614,6 @@ func columnStoreValueTypeSupportsSort(valueType ColumnStoreValueType) bool {
 	switch valueType {
 	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
 		return true
-	default:
-		return false
-	}
-}
-
-func columnStoreValueTypeSupportsAggregate(valueType ColumnStoreValueType, kind ColumnAggregateKind) bool {
-	switch kind {
-	case ColumnAggregateCount:
-		return true
-	case ColumnAggregateMin, ColumnAggregateMax:
-		return columnStoreValueTypeSupportsSort(valueType)
-	case ColumnAggregateSum:
-		switch valueType {
-		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble:
-			return true
-		default:
-			return false
-		}
-	case ColumnAggregateCountDistinct:
-		switch valueType {
-		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
-			return true
-		default:
-			return false
-		}
 	default:
 		return false
 	}
@@ -590,6 +631,49 @@ func validateColumnAggregateKind(kind ColumnAggregateKind, column string) error 
 	default:
 		return fmt.Errorf("unsupported aggregate kind %q", kind)
 	}
+}
+
+func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetadata, columnTypes map[string]ColumnStoreValueType) error {
+	switch aggregate.Kind {
+	case ColumnAggregateMin, ColumnAggregateMax:
+		valueType, ok := columnTypes[aggregate.Column]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+		}
+		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueAdjacencyList {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
+		}
+		if aggregate.GroupColumn == "" {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q requires a group column", aggregate.Name, aggregate.Kind)
+		}
+		groupType, ok := columnTypes[aggregate.GroupColumn]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
+		}
+		if groupType != ColumnStoreValueString {
+			return fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, groupType, ColumnStoreValueString)
+		}
+		if valueType != ColumnStoreValueInt64 && valueType != ColumnStoreValueFloat32 && valueType != ColumnStoreValueDouble {
+			return fmt.Errorf("collections: aggregate metadata %q value column %q has type %q, want %q, %q, or %q", aggregate.Name, aggregate.Column, valueType, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble)
+		}
+	case ColumnAggregateSum:
+		valueType, ok := columnTypes[aggregate.Column]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+		}
+		if valueType != ColumnStoreValueInt64 && valueType != ColumnStoreValueFloat32 && valueType != ColumnStoreValueDouble {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
+		}
+	case ColumnAggregateCountDistinct:
+		valueType, ok := columnTypes[aggregate.Column]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+		}
+		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueAdjacencyList {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
+		}
+	}
+	return nil
 }
 
 func validateColumnManifestIdentity(identity ColumnManifestIdentity) error {
@@ -876,10 +960,11 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, col.Name)
 		writeHashString(&d, col.Path)
 		writeHashString(&d, string(col.ValueType))
+		writeHashUint64(&d, uint64(col.VectorDims))
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)
-		if col.ValueType == ColumnStoreValueFloat32Vector {
-			writeHashInt(&d, col.VectorDims)
+		if col.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+			writeHashString(&d, string(col.FixedWidthEncoding))
 		}
 	}
 	for _, sortKey := range cfg.SortKey {
@@ -889,6 +974,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 	for _, aggregate := range cfg.AggregateMetadata {
 		writeHashString(&d, aggregate.Name)
 		writeHashString(&d, aggregate.Column)
+		writeHashString(&d, aggregate.GroupColumn)
 		writeHashString(&d, string(aggregate.Kind))
 	}
 	if cfg.AssetManager != nil {
@@ -927,12 +1013,6 @@ func writeHashBool(d *xxhash.Digest, value bool) {
 	if value {
 		b[0] = 1
 	}
-	_, _ = d.Write(b[:])
-}
-
-func writeHashInt(d *xxhash.Digest, value int) {
-	var b [8]byte
-	binary.LittleEndian.PutUint64(b[:], uint64(value))
 	_, _ = d.Write(b[:])
 }
 

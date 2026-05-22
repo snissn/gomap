@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"os"
 	"strings"
@@ -69,6 +70,94 @@ func TestColumnManifestAssetRefsRejectPartIDKeyMismatchM13C(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "key part_id") {
 		t.Fatalf("columnManifestAssetRefsFromRecordsForScan err=%v want key part_id mismatch", err)
 	}
+}
+
+func TestColumnManifestScanViewRejectsPreparedAssetByteMismatchM1634(t *testing.T) {
+	_, _, manifest, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	replaced := false
+	for i := range tampered {
+		if bytes.Equal(tampered[i].key, columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID)) {
+			badRecord := bytes.Clone(tampered[i].value)
+			pos := columnManifestPartRecordBytesOffsetForScanTestM1634(t, badRecord)
+			binary.BigEndian.PutUint64(badRecord[pos:], uint64(asset.Ref.Length+1))
+			tampered[i].value = badRecord
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		t.Fatal("manifest part record not found")
+	}
+	if _, _, _, err := decodeColumnManifestSnapshotViewForScan(tampered, asset.Ref.Namespace); err == nil || !strings.Contains(err.Error(), "does not match ref length") {
+		t.Fatalf("decodeColumnManifestSnapshotViewForScan err=%v want byte/ref length mismatch", err)
+	}
+}
+
+func TestColumnManifestScanLoaderRejectsChecksumMismatchM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, _, manifest, _ := columnManifestPlannerOnePartFixtureM14A(t)
+	active := manifest.Identity
+	cfg.ActiveManifest = &active
+	cfg.RecoveryAuthoritativeManifest = &active
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 1
+
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	tamperedCount := 0
+	for i := range tampered {
+		if bytes.HasPrefix(tampered[i].key, columnManifestPartRecordPrefixBytes) {
+			badRecord := bytes.Clone(tampered[i].value)
+			bytesOffset := columnManifestPartRecordBytesOffsetForScanTestM1634(t, badRecord)
+			publishIDOffset := bytesOffset + 8
+			publishID := binary.BigEndian.Uint64(badRecord[publishIDOffset:])
+			binary.BigEndian.PutUint64(badRecord[publishIDOffset:], publishID+1)
+			tampered[i].value = badRecord
+			tamperedCount++
+			break
+		}
+	}
+	if tamperedCount != 1 {
+		t.Fatalf("tampered manifest part records=%d want 1", tamperedCount)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRoot(snap, rootID, *cfg, manifest.Identity, "events", false, nil)
+	if err == nil || !strings.Contains(err.Error(), "physical column scan manifest checksum") {
+		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRoot err=%v want checksum mismatch", err)
+	}
+}
+
+func columnManifestPartRecordBytesOffsetForScanTestM1634(t testing.TB, raw []byte) int {
+	t.Helper()
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestPartMagic {
+		t.Fatalf("bad part magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	cur.skipStringBytes() // kind
+	cur.skipStringBytes() // namespace
+	_ = cur.u64()         // generation
+	_ = cur.u64()         // part_id
+	_ = cur.u64()         // file_id
+	_ = cur.u64()         // offset
+	_ = cur.u64()         // length
+	_ = cur.u64()         // checksum
+	if version >= columnManifestRecordVersion {
+		_ = cur.u64() // rows
+	}
+	if cur.err != nil {
+		t.Fatalf("decode part prefix: %v", cur.err)
+	}
+	return cur.pos
 }
 
 func columnManifestAssetRefFilterTestAssetM13C(generation, partID uint64, reason ColumnPublishOperation) ColumnPreparedAsset {
@@ -647,6 +736,9 @@ func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.
 	if _, err := col.loadColumnManifestRecordsForPublish(rootID, "events", *cfg); err != nil {
 		t.Fatalf("load untampered manifest for publish: %v", err)
 	}
+	if _, err := col.loadColumnManifestRecordsForPublish(0, "events", *cfg); err == nil || !strings.Contains(err.Error(), "missing manifest root") {
+		t.Fatalf("load active manifest with missing root err=%v want missing root rejection", err)
+	}
 
 	tampered := cloneColumnManifestRecords(manifest.Records)
 	tamperedCount := 0
@@ -727,6 +819,81 @@ func TestColumnManifestPlannerCapabilitiesRejectPartIDKeyMismatchM14A(t *testing
 	}
 }
 
+func TestColumnManifestPlannerCapabilitiesRejectOrphanAggregateMetadataM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, _, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	metadata := asset
+	metadata.Ref.Kind = ColumnAssetKindTCS1AggregateMetadata
+	metadata.Ref.PartID = asset.Ref.PartID + 1
+	metadata.Ref.Offset += metadata.Ref.Length
+	metadata.Ref.Length = 256
+	metadata.Bytes = metadata.Ref.Length
+	metadata.Reason = "min_time_us"
+	input.Prepared.Assets = []ColumnPreparedAsset{asset, metadata}
+	manifest, err := encodeColumnManifestForWrite(input)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, manifest.Records)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, manifest.Identity, "events")
+	if err == nil || !strings.Contains(err.Error(), "matching live part") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want matching live part failure", err)
+	}
+}
+
+func TestColumnManifestSnapshotSidecarFilterStillValidatesSkippedRecordsM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, _, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	dictionary := asset
+	dictionary.Ref.Kind = ColumnAssetKindTCS1DictionaryCodes
+	dictionary.Ref.PartID = asset.Ref.PartID + 1
+	dictionary.Ref.Offset += dictionary.Ref.Length
+	dictionary.Ref.Length = 256
+	dictionary.Bytes = dictionary.Ref.Length
+	dictionary.Reason = "kind"
+	input.Prepared.Assets = []ColumnPreparedAsset{asset, dictionary}
+	manifest, err := encodeColumnManifestForWrite(input)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, manifest.Records)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+		snap,
+		rootID,
+		*cfg,
+		manifest.Identity,
+		"events",
+		columnManifestScanSidecarFilter{Int64Values: true},
+		false,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "matching live part") {
+		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want skipped sidecar validation failure", err)
+	}
+}
+
 func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {
@@ -767,6 +934,56 @@ func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *t
 	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, tamperedIdentity, "events")
 	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 2") {
 		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want active part-count mismatch", err)
+	}
+}
+
+func TestColumnManifestScanRejectsHugeExpectedPartsWithoutPreallocM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, manifest, _ := columnManifestPlannerOnePartFixtureM14A(t)
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	replaced := false
+	for i := range tampered {
+		if bytes.Equal(tampered[i].key, columnManifestHeaderRecordKeyBytes) {
+			header := bytes.Clone(tampered[i].value)
+			binary.BigEndian.PutUint64(header[len(header)-8:], ^uint64(0))
+			tampered[i].value = header
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		t.Fatal("manifest header record not found")
+	}
+	tamperedIdentity := manifest.Identity
+	tamperedIdentity.Checksum = checksumColumnManifestRecords(input, tamperedIdentity.Generation, tampered)
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, tamperedIdentity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, tamperedIdentity, "events")
+	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want huge part-count mismatch", err)
+	}
+	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+		snap,
+		rootID,
+		*cfg,
+		tamperedIdentity,
+		"events",
+		columnManifestScanAllSidecars(),
+		false,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
+		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want huge active part-count mismatch", err)
 	}
 }
 
@@ -1017,12 +1234,13 @@ func prepareColumnPhysicalScannerCorruptionFixtureM13A(t *testing.T) (string, Co
 		t.Fatalf("Insert: %v", err)
 	}
 	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
-	if len(refs) != 1 {
+	physicalRefs := columnManifestPhysicalAssetRefsForTestM1634(refs)
+	if len(physicalRefs) != 1 {
 		_ = d.Close()
 		t.Fatalf("refs=%+v want one", refs)
 	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	return dir, refs[0]
+	return dir, physicalRefs[0]
 }

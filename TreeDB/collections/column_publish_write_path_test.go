@@ -586,9 +586,9 @@ func TestColumnStoreMutationAssetsPublishAndReopenM12C(t *testing.T) {
 	if len(reopenParts) != 3 {
 		t.Fatalf("reopen manifest parts=%+v, want 3", reopenParts)
 	}
-	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[0], ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
-	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
-	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[2], ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, reopenParts, ColumnPublishOperationInsert), ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, reopenParts, ColumnPublishOperationUpdate), ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, reopenParts, ColumnPublishOperationDelete), ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
 }
 
 func TestColumnStoreUpdateBatchMutationAssetsPublishM12C(t *testing.T) {
@@ -625,7 +625,7 @@ func TestColumnStoreUpdateBatchMutationAssetsPublishM12C(t *testing.T) {
 	if len(parts) != 2 {
 		t.Fatalf("manifest parts=%+v, want insert and update parts", parts)
 	}
-	assertColumnPhysicalAssetRowsM12C(t, d, col, parts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationUpdate), ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
 }
 
 func TestColumnStoreSupportMatrixRejectsNonJSONInsertBeforeCommandAppendM12B(t *testing.T) {
@@ -696,10 +696,11 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	insertLSN := d.State().AppliedCommandLSN
 	assertColumnManifestStateM10B(t, col, 1, insertLSN, mgr)
 	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
-	if len(refs) != 1 {
+	physicalRefs := columnManifestPhysicalAssetRefsForTestM1634(refs)
+	if len(physicalRefs) != 1 {
 		t.Fatalf("manifest refs=%+v, want one physical asset ref", refs)
 	}
-	ref := refs[0]
+	ref := physicalRefs[0]
 	if ref.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace || ref.Length <= 0 {
 		t.Fatalf("invalid physical asset ref: %+v", ref)
 	}
@@ -730,12 +731,13 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	reopened := openColumnStoreCollectionM10B(t, reopen)
 	assertColumnManifestStateM10B(t, reopened, 1, insertLSN)
 	reopenRefs := columnManifestAssetRefsForCollectionM12A(t, reopen, reopened)
-	if len(reopenRefs) != 1 || reopenRefs[0] != ref {
+	reopenPhysicalRefs := columnManifestPhysicalAssetRefsForTestM1634(reopenRefs)
+	if len(reopenPhysicalRefs) != 1 || reopenPhysicalRefs[0] != ref {
 		t.Fatalf("reopen refs=%+v want %+v", reopenRefs, []ColumnAssetRef{ref})
 	}
 	reopenSnapshot := columnManifestSnapshotForCollectionM12A(t, reopen, reopened)
-	if reopenSnapshot.Generation != 1 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenRefs[0] {
-		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenRefs[0])
+	if reopenSnapshot.Generation != 1 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenPhysicalRefs[0] {
+		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenPhysicalRefs[0])
 	}
 	reopenRaw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), reopenRefs[0])
 	if err != nil {
@@ -1015,8 +1017,8 @@ func TestColumnStoreCommandWALReplayPublishesMutationAssetsM12C(t *testing.T) {
 			if len(parts) != 2 {
 				t.Fatalf("replay manifest parts=%+v, want insert and %s parts", parts, tc.name)
 			}
-			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, parts[0], ColumnPublishOperationInsert, []string{"e1"}, []bool{false})
-			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, parts[1], tc.wantOperation, tc.wantIDs, tc.wantDeleted)
+			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationInsert), ColumnPublishOperationInsert, []string{"e1"}, []bool{false})
+			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, parts, tc.wantOperation), tc.wantOperation, tc.wantIDs, tc.wantDeleted)
 		})
 	}
 }
@@ -1860,6 +1862,16 @@ func columnManifestAssetRefsForCollectionM12A(t testing.TB, d *backenddb.DB, col
 		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
 	}
 	return refs
+}
+
+func columnManifestPhysicalAssetRefsForTestM1634(refs []ColumnAssetRef) []ColumnAssetRef {
+	out := make([]ColumnAssetRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Kind == ColumnAssetKindTCS1PartImage {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func columnManifestAllPartsForCollectionM12C(t testing.TB, d *backenddb.DB, col *Collection) []columnManifestPartSnapshot {

@@ -134,6 +134,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 - `-treedb-bg-vacuum-interval` TreeDB: background index vacuum interval (0=disabled)
 - `-treedb-bg-vacuum-span-ppm` TreeDB: background index vacuum span ratio threshold (ppm), `0`=default
 - `-treedb-allow-unsafe` TreeDB: allow unsafe durability/integrity options (required for unsafe toggles)
+- `-column-store-asset-read-integrity` column-store typed asset hot-read integrity for `-suite column_store` physical paths (`verify|cached_verify|skip_checksums`). `cached_verify` verifies each immutable typed asset ref once per process cache entry, then skips repeated hot-read CRC for that ref; post-verification file corruption may go undetected until cache eviction or process restart. `skip_checksums` skips hot-read CRC. Both relaxed modes require `-treedb-allow-unsafe`; when unset, `-treedb-disable-read-checksum` also disables typed column-asset hot-read CRC verification for the suite.
 - `-treedb-vlog-dict` TreeDB: value-log dict compression mode (`default|on|off|both`)
 - `-treedb-vlog-rewrite-min-segment-age-ms` TreeDB: minimum source segment age for online generational rewrite (`0`=default)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
@@ -212,15 +213,14 @@ counters used by raw-engine review gates.
 ## Column Store Suite
 
 Use `column_store` as the canonical native TreeDB column-store benchmark entry
-point. M11B measures the production column-enabled collection manifest/control
-path, planner diagnostics, and executable row-store / B-tree baseline labels
-with a durable command-WAL profile and a deterministic JSONBench-shaped fixture.
+point. It measures the production column-enabled collection manifest/control
+path, durable command-WAL publication, isolated physical column assets, planner
+diagnostics, parity, byte accounting, and executable row-store / B-tree /
+physical-column labels with a deterministic JSONBench-shaped fixture.
 `-profile balanced` is accepted as a `durable` alias for the column store suite
 so the unified-bench default still exercises the durable gate. The runnable
-execution labels are `row_store_baseline` and `b_tree_index_baseline`; physical
-column labels (`serial_column_scan`, `aggregate_metadata`,
-`parallel_column_scan`) still fail closed through the planner because durable
-physical column assets/scanners are not implemented yet.
+execution labels are `row_store_baseline`, `b_tree_index_baseline`,
+`serial_column_scan`, `aggregate_metadata`, and `parallel_column_scan`.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
@@ -236,6 +236,12 @@ OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
   -column-store-path row_store_baseline \
   -progress=false
 ```
+
+Use `-column-store-query q3` or a comma-separated subset such as
+`-column-store-query q2,q3,q4b,q5` when collecting query-isolated 100K-1M row
+CPU/allocation profiles. Omit it, or pass `all`, for the default full
+q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
+tables and artifact labels stay unambiguous.
 
 The suite writes:
 
@@ -255,8 +261,26 @@ explicitly and include the fail-closed evidence. The suite reports measured
 assets are published, plus explicit `column_asset_store_bytes`,
 `ordinary_value_vlog_bytes`, and `leaf_vlog_bytes` splits so M12+ evidence does
 not confuse typed column assets with row value-log or leaf-log storage.
-`retained_payload_bytes` equals the source JSONBench payload until
-retained-payload stripping lands.
+`retained_payload_bytes` reports the row/remainder payload for the selected
+path; physical paths that strip declared columns into column assets should
+report less retained payload than the source JSONBench document bytes.
+
+For post-V1 production-vs-experiment attribution, use the slope harness:
+
+```bash
+RUN_DIR=/tmp/treedb_column_store_slope_$(date +%Y%m%d_%H%M%S) \
+  KEYCOUNTS=10000,100000,500000 \
+  ROUTED_PATHS=serial_column_scan,aggregate_metadata,parallel_column_scan \
+  scripts/treedb_column_store_slope_profile.sh
+```
+
+The harness builds `unified-bench`, runs routed production `column_store` cases
+into per-keycount/per-path profile directories, captures direct production
+package benchmarks for the TCPA asset scanner / collection scanner / query
+adapter, captures the older `experiments/colgranule` encoded-kernel baselines,
+and writes `summary.tsv` plus `summary.md`. Use the generated HTML reports for
+review and keep ClickHouse-equivalent JSONBench context tied to
+`experiments/colgranule/JSONBENCH_COMPARISON_REPORT.md`.
 
 ## Notes
 

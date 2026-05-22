@@ -29,11 +29,15 @@ const (
 )
 
 const columnAssetSegmentWriteLockStripes = 64
+const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
+const columnAssetVerifiedChecksumCacheSlots = 4096
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
 // without retaining one mutex per temp dir or segment path forever.
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
+
+var columnPhysicalAssetReadScratchPool sync.Pool
 
 // columnAssetSegmentAllocationLocks serialize same-process segment file-id
 // allocation by namespace without retaining one lock per temp dir forever.
@@ -46,10 +50,54 @@ var columnAssetSegmentAllocationLocks [columnAssetSegmentWriteLockStripes]sync.M
 // of truth for file-id ownership.
 var columnAssetSegmentAllocationCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentAllocationCache
 
+var columnAssetVerifiedChecksumCache = struct {
+	sync.Mutex
+	entries [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry
+}{}
+
+var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
+
+type columnAssetVerifiedChecksumEntry struct {
+	key   columnAssetVerifiedChecksumKey
+	valid bool
+}
+
+type columnAssetVerifiedChecksumFileIdentity struct {
+	dev             uint64
+	ino             uint64
+	size            int64
+	modTimeUnixNano int64
+	valid           bool
+}
+
+type columnAssetVerifiedChecksumKey struct {
+	rootDir    string
+	kind       ColumnAssetKind
+	namespace  string
+	generation uint64
+	partID     uint64
+	fileID     uint32
+	offset     int64
+	length     int64
+	checksum   uint32
+	fileDev    uint64
+	fileIno    uint64
+	fileSize   int64
+	fileModNS  int64
+}
+
 type columnAssetSegmentAllocationCache struct {
 	segmentDir string
 	nextFileID uint32
 	valid      bool
+}
+
+type columnAssetManagerNamespacePathCache struct {
+	sync.Mutex
+	rootDir   string
+	namespace string
+	value     columnAssetManagerNamespace
+	valid     bool
 }
 
 type columnAssetManagerNamespace struct {
@@ -67,13 +115,21 @@ func columnAssetManagerNamespaceForRoot(rootDir, namespace string) (columnAssetM
 	if rootDir == "" {
 		return columnAssetManagerNamespace{}, errors.New("collections: column asset manager root dir is required")
 	}
+	cache := &columnAssetManagerNamespacePathCaches[columnAssetNamespacePathCacheIndex(rootDir, namespace)]
+	cache.Lock()
+	if cache.valid && cache.rootDir == rootDir && cache.namespace == namespace {
+		value := cache.value
+		cache.Unlock()
+		return value, nil
+	}
+	cache.Unlock()
 	cleanNamespace, err := cleanColumnAssetNamespace(namespace)
 	if err != nil {
 		return columnAssetManagerNamespace{}, err
 	}
 	namespaceRoot := filepath.Join(rootDir, filepath.FromSlash(cleanNamespace))
 	assetDir := filepath.Join(namespaceRoot, columnAssetManagerAssetsDirName)
-	return columnAssetManagerNamespace{
+	value := columnAssetManagerNamespace{
 		ManagerRootDir: rootDir,
 		RootDir:        namespaceRoot,
 		AssetDir:       assetDir,
@@ -82,7 +138,33 @@ func columnAssetManagerNamespaceForRoot(rootDir, namespace string) (columnAssetM
 		PreparedDir:    filepath.Join(namespaceRoot, columnAssetManagerPreparedDirName),
 		QuarantineDir:  filepath.Join(namespaceRoot, columnAssetManagerQuarantineDirName),
 		TempDir:        filepath.Join(namespaceRoot, columnAssetManagerTempDirName),
-	}, nil
+	}
+	cache.Lock()
+	cache.rootDir = rootDir
+	cache.namespace = namespace
+	cache.value = value
+	cache.valid = true
+	cache.Unlock()
+	return value, nil
+}
+
+func columnAssetNamespacePathCacheIndex(rootDir, namespace string) uint64 {
+	const (
+		fnvOffset64 = 14695981039346656037
+		fnvPrime64  = 1099511628211
+	)
+	hash := uint64(fnvOffset64)
+	for i := 0; i < len(rootDir); i++ {
+		hash ^= uint64(rootDir[i])
+		hash *= fnvPrime64
+	}
+	hash ^= '/'
+	hash *= fnvPrime64
+	for i := 0; i < len(namespace); i++ {
+		hash ^= uint64(namespace[i])
+		hash *= fnvPrime64
+	}
+	return hash % uint64(len(columnAssetManagerNamespacePathCaches))
 }
 
 func cleanColumnAssetNamespace(namespace string) (string, error) {
@@ -189,10 +271,30 @@ func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]s
 }
 
 func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
-	return writeColumnPhysicalAssetToManagerSegment(rootDir, cfg, payload, generation, partID, columnAssetM12ASegmentFileID)
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID)
+}
+
+func writeColumnAggregateMetadataAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1AggregateMetadata, generation, partID)
+}
+
+func writeColumnDictionaryCodesAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1DictionaryCodes, generation, partID)
+}
+
+func writeColumnInt64ValuesAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1Int64Values, generation, partID)
+}
+
+func writeColumnAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
 }
 
 func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
+	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID, fileID)
+}
+
+func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
 	if cfg.AssetManager == nil {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires asset manager")
 	}
@@ -220,7 +322,7 @@ func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreCon
 		return ColumnAssetRef{}, err
 	}
 	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
+		Kind:       kind,
 		Namespace:  cfg.AssetManager.Namespace,
 		Generation: generation,
 		PartID:     partID,
@@ -438,6 +540,10 @@ func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return a.appendKind(payload, ColumnAssetKindTCS1PartImage, generation, partID)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
 	if a == nil || a.file == nil {
 		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
 	}
@@ -451,7 +557,7 @@ func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, 
 		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
 	}
 	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
+		Kind:       kind,
 		Namespace:  a.cfg.AssetManager.Namespace,
 		Generation: generation,
 		PartID:     partID,
@@ -559,7 +665,15 @@ func readColumnPhysicalAssetFromManager(rootDir string, ref ColumnAssetRef) ([]b
 }
 
 func readColumnPhysicalAssetFromManagerInto(rootDir string, ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	return readColumnPhysicalAssetFromManagerIntoWithIntegrity(rootDir, ref, dst, ColumnAssetReadIntegrityVerify)
+}
+
+func readColumnPhysicalAssetFromManagerIntoWithIntegrity(rootDir string, ref ColumnAssetRef, dst []byte, integrity ColumnAssetReadIntegrity) ([]byte, error) {
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return nil, err
+	}
+	verifyChecksum, err := columnAssetReadIntegrityVerifyChecksum(integrity)
+	if err != nil {
 		return nil, err
 	}
 	if ref.Length > int64(maxCollectionInt) {
@@ -585,49 +699,197 @@ func readColumnPhysicalAssetFromManagerInto(rootDir string, ref ColumnAssetRef, 
 	if n != len(raw) {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if checksum := page.Checksum(raw); checksum != ref.Checksum {
-		return nil, fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	if err := verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, verifyChecksum, integrity, rootDir, columnAssetVerifiedChecksumFileIdentityFromFile(file)); err != nil {
+		return nil, err
 	}
 	return raw, nil
 }
 
+func columnAssetReadIntegrityVerifyChecksum(integrity ColumnAssetReadIntegrity) (bool, error) {
+	switch integrity {
+	case "", ColumnAssetReadIntegrityVerify:
+		return true, nil
+	case ColumnAssetReadIntegrityCachedVerify:
+		return true, nil
+	case ColumnAssetReadIntegritySkipChecksums:
+		return false, nil
+	default:
+		return false, fmt.Errorf("collections: unsupported column asset read integrity %q", integrity)
+	}
+}
+
+func columnAssetReadIntegrityLabel(integrity ColumnAssetReadIntegrity) string {
+	switch integrity {
+	case "", ColumnAssetReadIntegrityVerify:
+		return string(ColumnAssetReadIntegrityVerify)
+	case ColumnAssetReadIntegrityCachedVerify:
+		return string(ColumnAssetReadIntegrityCachedVerify)
+	case ColumnAssetReadIntegritySkipChecksums:
+		return string(ColumnAssetReadIntegritySkipChecksums)
+	default:
+		return string(integrity)
+	}
+}
+
+func verifyColumnPhysicalAssetReadChecksum(raw []byte, ref ColumnAssetRef, verify bool) error {
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, verify, ColumnAssetReadIntegrityVerify, "", columnAssetVerifiedChecksumFileIdentity{})
+}
+
+func verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw []byte, ref ColumnAssetRef, verify bool, integrity ColumnAssetReadIntegrity, rootDir string, fileIdentity columnAssetVerifiedChecksumFileIdentity) error {
+	if !verify {
+		return nil
+	}
+	if integrity == ColumnAssetReadIntegrityCachedVerify && columnAssetVerifiedChecksumCacheContains(rootDir, ref, fileIdentity) {
+		return nil
+	}
+	if checksum := page.Checksum(raw); checksum != ref.Checksum {
+		return fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	}
+	if integrity == ColumnAssetReadIntegrityCachedVerify {
+		columnAssetVerifiedChecksumCacheStore(rootDir, ref, fileIdentity)
+	}
+	return nil
+}
+
+func columnAssetVerifiedChecksumCacheContains(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) bool {
+	if !fileIdentity.valid {
+		return false
+	}
+	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
+	idx := columnAssetVerifiedChecksumCacheIndex(key)
+	columnAssetVerifiedChecksumCache.Lock()
+	entry := columnAssetVerifiedChecksumCache.entries[idx]
+	columnAssetVerifiedChecksumCache.Unlock()
+	return entry.valid && entry.key == key
+}
+
+func columnAssetVerifiedChecksumCacheStore(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) {
+	if !fileIdentity.valid {
+		return
+	}
+	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
+	idx := columnAssetVerifiedChecksumCacheIndex(key)
+	columnAssetVerifiedChecksumCache.Lock()
+	columnAssetVerifiedChecksumCache.entries[idx] = columnAssetVerifiedChecksumEntry{key: key, valid: true}
+	columnAssetVerifiedChecksumCache.Unlock()
+}
+
+func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) columnAssetVerifiedChecksumKey {
+	return columnAssetVerifiedChecksumKey{
+		rootDir:    rootDir,
+		kind:       ref.Kind,
+		namespace:  ref.Namespace,
+		generation: ref.Generation,
+		partID:     ref.PartID,
+		fileID:     ref.FileID,
+		offset:     ref.Offset,
+		length:     ref.Length,
+		checksum:   ref.Checksum,
+		fileDev:    fileIdentity.dev,
+		fileIno:    fileIdentity.ino,
+		fileSize:   fileIdentity.size,
+		fileModNS:  fileIdentity.modTimeUnixNano,
+	}
+}
+
+func columnAssetVerifiedChecksumCacheIndex(key columnAssetVerifiedChecksumKey) int {
+	h := uint64(1469598103934665603)
+	h = columnAssetVerifiedChecksumCacheHashString(h, key.rootDir)
+	h = columnAssetVerifiedChecksumCacheHashString(h, string(key.kind))
+	h = columnAssetVerifiedChecksumCacheHashString(h, key.namespace)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.generation)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.partID)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileID))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.offset))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.length))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.checksum))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.fileDev)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.fileIno)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileSize))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileModNS))
+	return int(h % columnAssetVerifiedChecksumCacheSlots)
+}
+
+func columnAssetVerifiedChecksumCacheHashString(h uint64, s string) uint64 {
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211
+	}
+	return h
+}
+
+func columnAssetVerifiedChecksumCacheHashUint64(h uint64, v uint64) uint64 {
+	for i := 0; i < 8; i++ {
+		h ^= uint64(byte(v >> (i * 8)))
+		h *= 1099511628211
+	}
+	return h
+}
+
 type columnPhysicalAssetReadCache struct {
-	namespace  string
-	segmentDir string
-	fileID     uint32
-	file       *os.File
-	files      map[uint32]*os.File
-	hits       uint64
-	misses     uint64
+	namespace      string
+	rootDir        string
+	segmentDir     string
+	readIntegrity  ColumnAssetReadIntegrity
+	verifyChecksum bool
+	fileID         uint32
+	file           *columnPhysicalAssetSegmentReader
+	files          map[uint32]*columnPhysicalAssetSegmentReader
+	scratch        []byte
+	returnViews    bool
+	lastView       bool
+	hits           uint64
+	misses         uint64
+}
+
+type columnPhysicalAssetSegmentReader struct {
+	file     *os.File
+	mmap     []byte
+	identity columnAssetVerifiedChecksumFileIdentity
 }
 
 func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPhysicalAssetReadCache, error) {
+	return newColumnPhysicalAssetReadCacheWithIntegrity(rootDir, namespace, ColumnAssetReadIntegrityVerify)
+}
+
+func newColumnPhysicalAssetReadCacheWithIntegrity(rootDir string, namespace string, integrity ColumnAssetReadIntegrity) (columnPhysicalAssetReadCache, error) {
 	if namespace == "" {
 		return columnPhysicalAssetReadCache{}, errors.New("collections: column asset read cache namespace is required")
+	}
+	verifyChecksum, err := columnAssetReadIntegrityVerifyChecksum(integrity)
+	if err != nil {
+		return columnPhysicalAssetReadCache{}, err
 	}
 	managerNamespace, err := columnAssetManagerNamespaceForRoot(rootDir, namespace)
 	if err != nil {
 		return columnPhysicalAssetReadCache{}, err
 	}
 	return columnPhysicalAssetReadCache{
-		namespace:  namespace,
-		segmentDir: managerNamespace.SegmentDir,
+		namespace:      namespace,
+		rootDir:        rootDir,
+		segmentDir:     managerNamespace.SegmentDir,
+		readIntegrity:  integrity,
+		verifyChecksum: verifyChecksum,
 	}, nil
 }
 
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
+	if c.scratch != nil {
+		putColumnPhysicalAssetReadScratch(c.scratch)
+		c.scratch = nil
+	}
 	if c.file != nil {
-		if err := c.file.Close(); err != nil && closeErr == nil {
+		if err := c.file.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 		c.file = nil
 	}
-	for fileID, file := range c.files {
-		if file == nil {
+	for fileID, reader := range c.files {
+		if reader == nil {
 			continue
 		}
-		if err := file.Close(); err != nil && closeErr == nil {
+		if err := reader.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 		delete(c.files, fileID)
@@ -642,14 +904,79 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if ref.Namespace != c.namespace {
 		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
 	}
-	file, err := c.fileForRef(ref)
+	reader, err := c.fileForRef(ref)
 	if err != nil {
 		return nil, err
 	}
-	return readColumnPhysicalAssetFromFile(file, ref, dst)
+	if c.lastView {
+		dst = nil
+		c.lastView = false
+	}
+	if c.returnViews {
+		if raw, ok, err := reader.readView(ref); err != nil {
+			return nil, err
+		} else if ok {
+			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+				return nil, err
+			}
+			c.lastView = true
+			return raw, nil
+		}
+	}
+	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
+		if cap(c.scratch) < int(ref.Length) {
+			if c.scratch != nil {
+				putColumnPhysicalAssetReadScratch(c.scratch)
+			}
+			c.scratch = getColumnPhysicalAssetReadScratch(int(ref.Length))
+		}
+		dst = c.scratch
+	}
+	raw, err := readColumnPhysicalAssetFromFileWithChecksum(reader.file, ref, dst, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
-func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File, error) {
+func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) error {
+	if c == nil {
+		return errors.New("collections: nil column physical asset read cache")
+	}
+	var fileIdentity columnAssetVerifiedChecksumFileIdentity
+	if reader != nil {
+		fileIdentity = reader.identity
+		if c.readIntegrity == ColumnAssetReadIntegrityCachedVerify {
+			fileIdentity = columnAssetVerifiedChecksumFileIdentityFromFile(reader.file)
+			reader.identity = fileIdentity
+		}
+	}
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
+}
+
+func getColumnPhysicalAssetReadScratch(minLen int) []byte {
+	if minLen <= columnPhysicalAssetReadScratchPoolMaxRetainBytes {
+		if pooled, ok := columnPhysicalAssetReadScratchPool.Get().([]byte); ok {
+			if cap(pooled) >= minLen {
+				return pooled[:0]
+			}
+			putColumnPhysicalAssetReadScratch(pooled)
+		}
+	}
+	return make([]byte, 0, minLen)
+}
+
+func putColumnPhysicalAssetReadScratch(scratch []byte) {
+	if scratch == nil || cap(scratch) > columnPhysicalAssetReadScratchPoolMaxRetainBytes {
+		return
+	}
+	columnPhysicalAssetReadScratchPool.Put(scratch[:0])
+}
+
+func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPhysicalAssetSegmentReader, error) {
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return nil, err
 	}
@@ -658,9 +985,9 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 		return c.file, nil
 	}
 	if c.files != nil {
-		if file := c.files[ref.FileID]; file != nil {
+		if reader := c.files[ref.FileID]; reader != nil {
 			c.hits++
-			return file, nil
+			return reader, nil
 		}
 	}
 	c.misses++
@@ -668,24 +995,68 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File,
 	if err != nil {
 		return nil, err
 	}
+	reader := &columnPhysicalAssetSegmentReader{
+		file:     file,
+		identity: columnAssetVerifiedChecksumFileIdentityFromFile(file),
+	}
+	if c.returnViews {
+		if mapped, err := mmapColumnPhysicalAssetFile(file); err == nil {
+			reader.mmap = mapped
+		}
+	}
 	if c.file == nil && c.files == nil {
 		c.fileID = ref.FileID
-		c.file = file
-		return file, nil
+		c.file = reader
+		return reader, nil
 	}
 	if c.files == nil {
-		c.files = make(map[uint32]*os.File, 2)
+		c.files = make(map[uint32]*columnPhysicalAssetSegmentReader, 2)
 		if c.file != nil {
 			c.files[c.fileID] = c.file
 			c.file = nil
 			c.fileID = 0
 		}
 	}
-	c.files[ref.FileID] = file
-	return file, nil
+	c.files[ref.FileID] = reader
+	return reader, nil
+}
+
+func (r *columnPhysicalAssetSegmentReader) close() error {
+	if r == nil {
+		return nil
+	}
+	unmapErr := munmapColumnPhysicalAssetFile(r.mmap)
+	r.mmap = nil
+	var closeErr error
+	if r.file != nil {
+		closeErr = r.file.Close()
+		r.file = nil
+	}
+	return errors.Join(unmapErr, closeErr)
+}
+
+func (r *columnPhysicalAssetSegmentReader) readView(ref ColumnAssetRef) ([]byte, bool, error) {
+	if r == nil || len(r.mmap) == 0 {
+		return nil, false, nil
+	}
+	if ref.Offset < 0 || ref.Length < 0 || ref.Length > int64(maxCollectionInt) {
+		return nil, false, nil
+	}
+	end := ref.Offset + ref.Length
+	if end < ref.Offset {
+		return nil, false, fmt.Errorf("collections: column physical asset offset=%d length=%d overflows", ref.Offset, ref.Length)
+	}
+	if end > int64(len(r.mmap)) {
+		return nil, false, io.ErrUnexpectedEOF
+	}
+	return r.mmap[ref.Offset:end], true, nil
 }
 
 func readColumnPhysicalAssetFromFile(file *os.File, ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	return readColumnPhysicalAssetFromFileWithChecksum(file, ref, dst, true)
+}
+
+func readColumnPhysicalAssetFromFileWithChecksum(file *os.File, ref ColumnAssetRef, dst []byte, verifyChecksum bool) ([]byte, error) {
 	if file == nil {
 		return nil, errors.New("collections: nil column physical asset segment file")
 	}
@@ -703,8 +1074,8 @@ func readColumnPhysicalAssetFromFile(file *os.File, ref ColumnAssetRef, dst []by
 	if n != len(raw) {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if checksum := page.Checksum(raw); checksum != ref.Checksum {
-		return nil, fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	if err := verifyColumnPhysicalAssetReadChecksum(raw, ref, verifyChecksum); err != nil {
+		return nil, err
 	}
 	return raw, nil
 }

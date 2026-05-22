@@ -408,6 +408,30 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "dictionary",
 		},
 		{
+			name: "unknown fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128, FixedWidthEncoding: "native"}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
+			name: "string fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
+			name: "float32 fixed width encoding rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
 			name: "unsupported locator",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
@@ -490,6 +514,41 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "column manifest root descriptor",
 		},
 		{
+			name: "aggregate min missing group column",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", Kind: ColumnAggregateMin}},
+			},
+			want: "requires a group column",
+		},
+		{
+			name: "aggregate min group column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin}},
+			},
+			want: "group column",
+		},
+		{
+			name: "aggregate min value column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueString},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin}},
+			},
+			want: "value column",
+		},
+		{
 			name: "invalid asset namespace traversal",
 			cfg: &ColumnStoreConfig{
 				Enabled:      true,
@@ -536,6 +595,20 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 	}
 }
 
+func TestColumnStoreAdjacencyFixedWidthEncodingNormalizes(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	if got := meta.Options.ColumnStore.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("adjacency fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
+	}
+}
+
 func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	cfg.Columns = append(cfg.Columns,
@@ -545,8 +618,8 @@ func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	)
 	cfg.SortKey = append(cfg.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
 	cfg.AggregateMetadata = append(cfg.AggregateMetadata,
-		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMin},
-		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMax},
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
 	)
 	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
 	if err != nil {
@@ -564,8 +637,8 @@ func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	)
 	changed.SortKey = append(changed.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
 	changed.AggregateMetadata = append(changed.AggregateMetadata,
-		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMin},
-		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMax},
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
 	)
 	changedMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: changed}})
 	if err != nil {
@@ -583,8 +656,8 @@ func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	)
 	changed.SortKey = append(changed.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
 	changed.AggregateMetadata = append(changed.AggregateMetadata,
-		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMin},
-		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", Kind: ColumnAggregateMax},
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
 	)
 	changedMeta, err = normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: changed}})
 	if err != nil {
@@ -848,8 +921,8 @@ func testColumnStoreConfig(active *ColumnManifestIdentity) *ColumnStoreConfig {
 		SortKey: []ColumnSortKey{{Column: "time_us"}},
 		AggregateMetadata: []ColumnAggregateMetadata{
 			{Name: "rows", Kind: ColumnAggregateCount},
-			{Name: "min_time_us", Column: "time_us", Kind: ColumnAggregateMin},
-			{Name: "max_time_us", Column: "time_us", Kind: ColumnAggregateMax},
+			{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin},
+			{Name: "max_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMax},
 		},
 		ActiveManifest:                active,
 		RecoveryAuthoritativeManifest: recovery,

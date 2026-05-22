@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/trace"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,218 @@ func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
 		t.Fatal("columnStoreSuiteRetainedPayloadFromDocument accepted trailing JSON value")
 	} else if !strings.Contains(err.Error(), "trailing JSON value") {
 		t.Fatalf("columnStoreSuiteRetainedPayloadFromDocument err=%v want trailing JSON value", err)
+	}
+}
+
+func TestRunColumnStoreSuiteRejectsRelaxedAssetReadIntegrityWithoutUnsafeM1634(t *testing.T) {
+	for _, mode := range []string{
+		string(collections.ColumnAssetReadIntegrityCachedVerify),
+		string(collections.ColumnAssetReadIntegritySkipChecksums),
+	} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := BenchConfig{
+				Keys:      16,
+				BatchSize: 8,
+				DBsArg:    "treedb",
+				Profile:   "durable",
+				Progress:  false,
+				SeedUsed:  1,
+			}
+			prevAllowUnsafe := *treedbAllowUnsafe
+			prevIntegrity := *columnStoreSuiteAssetReadIntegrityArg
+			*treedbAllowUnsafe = false
+			*columnStoreSuiteAssetReadIntegrityArg = mode
+			t.Cleanup(func() {
+				*treedbAllowUnsafe = prevAllowUnsafe
+				*columnStoreSuiteAssetReadIntegrityArg = prevIntegrity
+			})
+			if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+				ProfileDir:    dir,
+				ExecutionPath: "native-fastpath",
+				ForcedPath:    columnStorePathSerialColumnScan,
+			}); err == nil || !strings.Contains(err.Error(), "requires -treedb-allow-unsafe") {
+				t.Fatalf("runColumnStoreSuite relaxed read integrity err=%v want unsafe rejection", err)
+			}
+		})
+	}
+}
+
+func TestRunColumnStoreSuiteReportsRelaxedAssetReadIntegrityM1634(t *testing.T) {
+	for _, mode := range []collections.ColumnAssetReadIntegrity{
+		collections.ColumnAssetReadIntegrityCachedVerify,
+		collections.ColumnAssetReadIntegritySkipChecksums,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := BenchConfig{
+				Keys:      16,
+				BatchSize: 8,
+				DBsArg:    "treedb",
+				Profile:   "durable",
+				Progress:  false,
+				SeedUsed:  1,
+			}
+			prevAllowUnsafe := *treedbAllowUnsafe
+			*treedbAllowUnsafe = true
+			t.Cleanup(func() { *treedbAllowUnsafe = prevAllowUnsafe })
+			if _, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+				ProfileDir:               dir,
+				ExecutionPath:            "native-fastpath",
+				ForcedPath:               columnStorePathSerialColumnScan,
+				ColumnAssetReadIntegrity: mode,
+			}); err != nil {
+				t.Fatalf("runColumnStoreSuite relaxed read integrity: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+			if err != nil {
+				t.Fatalf("read column_store_results.json: %v", err)
+			}
+			var report columnStoreSuiteReport
+			if err := json.Unmarshal(data, &report); err != nil {
+				t.Fatalf("unmarshal column_store_results.json: %v", err)
+			}
+			if got, want := report.ColumnAssetReadIntegrity, string(mode); got != want {
+				t.Fatalf("column_asset_read_integrity=%q want %q", got, want)
+			}
+			if !report.BenchmarkOnlyRelaxed {
+				t.Fatalf("BenchmarkOnlyRelaxed=false want true for %s", mode)
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteFormatPhysicalQueryLineM1634(t *testing.T) {
+	tests := []struct {
+		name   string
+		prefix string
+		key    string
+		value  int64
+		want   string
+	}{
+		{name: "count", prefix: "q1", key: "share", value: 12, want: "q1:share=12"},
+		{name: "negative", prefix: "q4a", key: "d000001", value: -42, want: "q4a:d000001=-42"},
+		{name: "min_int64", prefix: "q4a", key: "d000002", value: -1 << 63, want: "q4a:d000002=-9223372036854775808"},
+		{name: "max_int64", prefix: "q4b", key: "d000003", value: 1<<63 - 1, want: "q4b:d000003=9223372036854775807"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := columnStoreSuiteFormatPhysicalQueryLine(tt.prefix, tt.key, tt.value); got != tt.want {
+				t.Fatalf("columnStoreSuiteFormatPhysicalQueryLine=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteHashPhysicalQueryGroupsMatchesLineHashM1634(t *testing.T) {
+	tests := []struct {
+		name      string
+		prefix    string
+		queryName string
+		groups    []collections.ColumnPhysicalQueryGroup
+	}{
+		{
+			name:      "q1_unsorted",
+			prefix:    "q1",
+			queryName: columnStoreQueryQ1,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "app.bsky.feed.post", Count: 34},
+				{Key: "app.bsky.feed.like", Count: 12},
+				{Key: "app.bsky.graph.follow", Count: 56},
+			},
+		},
+		{
+			name:      "q1_prefix_key_and_decimal_lexical_order",
+			prefix:    "q1",
+			queryName: columnStoreQueryQ1,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "a", Count: 2},
+				{Key: "a.b", Count: 1},
+				{Key: "a", Count: 10},
+			},
+		},
+		{
+			name:      "q5_unsorted_boundaries",
+			prefix:    "q5",
+			queryName: columnStoreQueryQ5,
+			groups: []collections.ColumnPhysicalQueryGroup{
+				{Key: "d000002", Int64: 1<<63 - 1},
+				{Key: "d000001", Int64: -1 << 63},
+			},
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			groupsForLines := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
+			lines, err := columnStoreSuitePhysicalQueryLines(tt.prefix, tt.queryName, groupsForLines)
+			if err != nil {
+				t.Fatalf("columnStoreSuitePhysicalQueryLines: %v", err)
+			}
+			want := columnStoreHashLines(lines)
+			groupsForHash := append([]collections.ColumnPhysicalQueryGroup(nil), tt.groups...)
+			got, count, err := columnStoreSuiteHashPhysicalQueryGroups(tt.prefix, tt.queryName, groupsForHash)
+			if err != nil {
+				t.Fatalf("columnStoreSuiteHashPhysicalQueryGroups: %v", err)
+			}
+			if count != len(tt.groups) {
+				t.Fatalf("result count=%d want %d", count, len(tt.groups))
+			}
+			if got != want {
+				t.Fatalf("direct hash=%016x want line hash=%016x", got, want)
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteInheritsTreeDBDisableReadChecksumM1634(t *testing.T) {
+	prevAllowUnsafe := *treedbAllowUnsafe
+	prevDisableReadChecksum := *treedbDisableReadChecksum
+	prevIntegrity := *columnStoreSuiteAssetReadIntegrityArg
+	*treedbAllowUnsafe = true
+	*treedbDisableReadChecksum = true
+	*columnStoreSuiteAssetReadIntegrityArg = string(collections.ColumnAssetReadIntegrityVerify)
+	t.Cleanup(func() {
+		*treedbAllowUnsafe = prevAllowUnsafe
+		*treedbDisableReadChecksum = prevDisableReadChecksum
+		*columnStoreSuiteAssetReadIntegrityArg = prevIntegrity
+	})
+
+	got, err := columnStoreSuiteEffectiveAssetReadIntegrity("")
+	if err != nil {
+		t.Fatalf("columnStoreSuiteEffectiveAssetReadIntegrity: %v", err)
+	}
+	if got != collections.ColumnAssetReadIntegritySkipChecksums {
+		t.Fatalf("column asset read integrity=%q want inherited %q", got, collections.ColumnAssetReadIntegritySkipChecksums)
+	}
+	got, err = columnStoreSuiteEffectiveAssetReadIntegrity(collections.ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		t.Fatalf("explicit verify integrity: %v", err)
+	}
+	if got != collections.ColumnAssetReadIntegrityVerify {
+		t.Fatalf("explicit column asset read integrity=%q want verify override", got)
+	}
+}
+
+func TestColumnStoreSuiteEffectiveAssetReadIntegrityCachedVerifyAliasesM1634(t *testing.T) {
+	prevAllowUnsafe := *treedbAllowUnsafe
+	*treedbAllowUnsafe = true
+	t.Cleanup(func() { *treedbAllowUnsafe = prevAllowUnsafe })
+
+	for _, value := range []collections.ColumnAssetReadIntegrity{
+		collections.ColumnAssetReadIntegrityCachedVerify,
+		collections.ColumnAssetReadIntegrity("cached-verify"),
+		collections.ColumnAssetReadIntegrity("verify_once"),
+		collections.ColumnAssetReadIntegrity("verify-once"),
+	} {
+		got, err := columnStoreSuiteEffectiveAssetReadIntegrity(value)
+		if err != nil {
+			t.Fatalf("columnStoreSuiteEffectiveAssetReadIntegrity(%q): %v", value, err)
+		}
+		if got != collections.ColumnAssetReadIntegrityCachedVerify {
+			t.Fatalf("columnStoreSuiteEffectiveAssetReadIntegrity(%q)=%q want %q", value, got, collections.ColumnAssetReadIntegrityCachedVerify)
+		}
 	}
 }
 
@@ -386,7 +599,7 @@ func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing
 	}
 }
 
-func TestColumnStoreBenchRunFallsBackToRowsForLegacyArtifactsM14B(t *testing.T) {
+func TestColumnStoreBenchRunFallsBackToRowMaterializationsForLegacyArtifactsM14B(t *testing.T) {
 	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
 		Rows:      30,
 		BatchSize: 10,
@@ -414,6 +627,59 @@ func TestColumnStoreBenchRunDoesNotFallbackForZeroProcessedPhysicalRowsM14B(t *t
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
 	if got != 0 {
 		t.Fatalf("aggregate rows/sec=%f want zero without legacy row materialization fallback", got)
+	}
+}
+
+func TestColumnStoreBenchRunFiltersSelectedQueryOrderM1634(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: columnStoreQueryQ3, RowsProcessed: 30, RowsPerSecond: 300, duration: 10 * time.Millisecond},
+			{Name: columnStoreQueryQ5, RowsProcessed: 30, RowsPerSecond: 500, duration: 10 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	wantOrder := []string{
+		columnStoreSuiteBenchTestName,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5,
+	}
+	if !slices.Equal(run.TestOrder, wantOrder) {
+		t.Fatalf("TestOrder=%v want %v", run.TestOrder, wantOrder)
+	}
+	if columnStoreTestCommaListContains(run.Config.TestsArg, columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1) {
+		t.Fatalf("TestsArg includes unselected q1: %q", run.Config.TestsArg)
+	}
+	if _, ok := run.Results[columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1]; ok {
+		t.Fatalf("results include unselected q1: %+v", run.Results)
+	}
+	if _, ok := run.DisplayNames[columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ3]; !ok {
+		t.Fatalf("display names missing selected q3: %+v", run.DisplayNames)
+	}
+}
+
+func TestColumnStoreBenchRunIncludesAliasesOnlyWhenSourceQuerySelectedM1634(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: columnStoreQueryQ1, RowsProcessed: 30, RowsPerSecond: 100, duration: 10 * time.Millisecond},
+			{Name: columnStoreQueryQ4A, RowsProcessed: 30, RowsPerSecond: 400, duration: 10 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	if !slices.Contains(run.TestOrder, columnStoreSuiteAliasFullScanQ1) {
+		t.Fatalf("TestOrder missing q1 alias: %v", run.TestOrder)
+	}
+	if !slices.Contains(run.TestOrder, columnStoreSuiteAliasPrefixQ4A) {
+		t.Fatalf("TestOrder missing q4a alias: %v", run.TestOrder)
+	}
+	if _, ok := run.Results[columnStoreSuiteAliasFullScanQ1]; !ok {
+		t.Fatalf("results missing q1 alias: %+v", run.Results)
+	}
+	if _, ok := run.Results[columnStoreSuiteAliasPrefixQ4A]; !ok {
+		t.Fatalf("results missing q4a alias: %+v", run.Results)
 	}
 }
 
@@ -481,7 +747,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			want: []string{"decode-bound", "effective_rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
-			name: "scan backed aggregate fallback",
+			name: "aggregate metadata fallback without metadata hits",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ5Metadata,
 				PlanLabel:           columnStorePathAggregateMetadata,
@@ -491,7 +757,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				BytesRead:           96 << 10,
 				MetadataHits:        0,
 			},
-			want: []string{"fallback-bound", "scan-backed", "aggregate metadata", "mark-pruning not active", "metadata_hits=0"},
+			want: []string{"fallback-bound", "metadata hits reported", "physical scan/reroute", "mark-pruning not active", "metadata_hits=0"},
 		},
 		{
 			name: "metadata hit future path",
@@ -600,7 +866,7 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 				Name:                     columnStoreQueryQ5Metadata,
 				PlanLabel:                columnStorePathAggregateMetadata,
 				RowsProcessed:            1024,
-				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer; mark-pruning not active",
+				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits reported, so evidence must be treated as a physical scan/reroute rather than the metadata-asset fast path; mark-pruning not active",
 			},
 			{
 				Name:                     "q|pipe`tick",
@@ -658,6 +924,9 @@ func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) 
 	}
 	if got, want := markdownTableText(`a\\\\\\\\|b|c`), `a\\\\\\\\\|b\|c`; got != want {
 		t.Fatalf("markdownTableText long backslash run=%q want %q", got, want)
+	}
+	if got, want := markdownTableText("uses `prepared` runner"), "uses \\`prepared\\` runner"; got != want {
+		t.Fatalf("markdownTableText escaped backticks=%q want %q", got, want)
 	}
 	if got, want := markdownCodeTableText("\r\n"), "`"+markdownTableEmptyCell+"`"; got != want {
 		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)
@@ -834,7 +1103,7 @@ func TestColumnStoreSuiteCPUProfileStartsAfterProfileBaselinesM11A(t *testing.T)
 		MutexProfile:         filepath.Join(profileTmpDir, "mutex.pprof"),
 		MutexProfileFraction: 1,
 		profileHooks:         profileHooks,
-	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(fixture), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil {
 		t.Fatalf("profiled queries: %v", err)
 	}
@@ -978,7 +1247,7 @@ func TestColumnStoreSuiteCPUProfileStartFailureRemovesArtifactM11A(t *testing.T)
 	_, _, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		CPUProfile:   profilePrefix,
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err == nil {
 		t.Fatal("expected CPU profile start failure")
 	}
@@ -1030,7 +1299,7 @@ func TestColumnStoreSuiteHardQueryFailureRemovesCPUArtifactM11A(t *testing.T) {
 	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		CPUProfile:   profilePrefix,
 		profileHooks: profileHooks,
-	}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err == nil {
 		t.Fatal("expected hard query error")
 	}
@@ -1062,7 +1331,7 @@ func TestColumnStoreSuiteRuntimeDeltaSkipsEmptyOutputM11A(t *testing.T) {
 	_, _, _, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{
 		BlockProfile: blockPath,
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil {
 		t.Fatalf("empty block delta output should be skipped: %v", err)
 	}
@@ -1114,7 +1383,7 @@ func TestColumnStoreSuiteProfiledQueriesSkipWhitespaceOnlyRuntimeProfilePathsM11
 		BlockProfile: " \t ",
 		MutexProfile: " \n ",
 		profileHooks: profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil || parityErr != nil {
 		t.Fatalf("whitespace-only runtime profiles should be ignored: err=%v parityErr=%v", err, parityErr)
 	}
@@ -1141,7 +1410,7 @@ func TestColumnStoreSuiteProfiledQueriesTrimAllocsDeltaPathM11A(t *testing.T) {
 		AllocsProfile:     " \t" + allocsPrefix + "\t ",
 		AllocsProfileRate: 1,
 		profileHooks:      profileHooks,
-	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline)
+	}, collection, len(events), rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil || parityErr != nil {
 		t.Fatalf("profiled queries failed: err=%v parityErr=%v", err, parityErr)
 	}
@@ -1248,7 +1517,7 @@ func TestColumnStoreSuiteArtifactsPreserveRuntimeDeltaStatErrorsM11A(t *testing.
 
 func TestColumnStoreSuiteProfiledQueriesReturnHardErrorsSeparatelyM11A(t *testing.T) {
 	collection, events, rawHashes := newColumnStoreSuiteTestCollectionM11A(t, 4, 2)
-	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(BenchConfig{}, collection, len(events)+1, rawHashes, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify, nil)
 	if err == nil {
 		t.Fatal("expected hard query error")
 	}
@@ -1333,6 +1602,33 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		if q.BytesRead <= 0 || q.RowsPerSecond <= 0 || q.NsPerRow <= 0 {
 			t.Fatalf("query %s missing physical throughput metrics: %+v", q.Name, q)
 		}
+		if q.Name == columnStoreQueryQ1 || q.Name == columnStoreQueryQ2 {
+			if q.DictionaryCodeHits == 0 {
+				t.Fatalf("query %s dictionary_code_hits=%d want sidecar hits", q.Name, q.DictionaryCodeHits)
+			}
+			if !strings.Contains(q.ThroughputInterpretation, "dictionary-code sidecar serial path") {
+				t.Fatalf("query %s throughput_interpretation=%q want dictionary sidecar classification", q.Name, q.ThroughputInterpretation)
+			}
+			continue
+		}
+		if q.Name == columnStoreQueryQ3 {
+			if q.Int64ValueHits == 0 {
+				t.Fatalf("query %s int64_value_hits=%d want sidecar hits", q.Name, q.Int64ValueHits)
+			}
+			if !strings.Contains(q.ThroughputInterpretation, "int64-value sidecar serial path") {
+				t.Fatalf("query %s throughput_interpretation=%q want int64 sidecar classification", q.Name, q.ThroughputInterpretation)
+			}
+			continue
+		}
+		if q.Name == columnStoreQueryQ4A || q.Name == columnStoreQueryQ4B || q.Name == columnStoreQueryQ5 || q.Name == columnStoreQueryQ5Metadata {
+			if q.DictionaryCodeHits == 0 || q.Int64ValueHits == 0 {
+				t.Fatalf("query %s dictionary_code_hits=%d int64_value_hits=%d want dictionary+int64 sidecar hits", q.Name, q.DictionaryCodeHits, q.Int64ValueHits)
+			}
+			if !strings.Contains(q.ThroughputInterpretation, "dictionary-code and int64-value sidecar serial path") {
+				t.Fatalf("query %s throughput_interpretation=%q want dictionary+int64 sidecar classification", q.Name, q.ThroughputInterpretation)
+			}
+			continue
+		}
 		if !strings.Contains(q.ThroughputInterpretation, "physical serial scan") {
 			t.Fatalf("query %s throughput_interpretation=%q want serial physical classification", q.Name, q.ThroughputInterpretation)
 		}
@@ -1383,7 +1679,8 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {
-				if tc.forcedPath == columnStorePathAggregateMetadata && q.Name != columnStoreQueryQ5Metadata {
+				metadataFastPath := q.Name == columnStoreQueryQ4B || q.Name == columnStoreQueryQ5Metadata
+				if tc.forcedPath == columnStorePathAggregateMetadata && !metadataFastPath {
 					if q.PlanLabel != columnStorePathSerialColumnScan {
 						t.Fatalf("query %s plan_label=%q want %q under aggregate_metadata forced path", q.Name, q.PlanLabel, columnStorePathSerialColumnScan)
 					}
@@ -1412,13 +1709,23 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				}
 			}
 			if tc.forcedPath == columnStorePathAggregateMetadata {
+				q4b := queryMetrics[columnStoreQueryQ4B]
+				if q4b.PlanLabel != columnStorePathAggregateMetadata {
+					t.Fatalf("q4b plan_label=%q want %q", q4b.PlanLabel, columnStorePathAggregateMetadata)
+				}
+				if q4b.MetadataHits == 0 {
+					t.Fatalf("q4b metadata_hits=0 want aggregate metadata fast path: %+v", q4b)
+				}
+				if !strings.Contains(q4b.ThroughputInterpretation, "metadata-bound") {
+					t.Fatalf("q4b throughput_interpretation=%q want metadata-bound aggregate classification", q4b.ThroughputInterpretation)
+				}
 				interpretation := queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation
 				if queryMetrics[columnStoreQueryQ5Metadata].MetadataHits > 0 {
 					if !strings.Contains(interpretation, "metadata-bound") {
 						t.Fatalf("q5_metadata throughput_interpretation=%q want metadata-bound aggregate classification", interpretation)
 					}
 				} else if !strings.Contains(interpretation, "fallback-bound") {
-					t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", interpretation)
+					t.Fatalf("q5_metadata throughput_interpretation=%q want aggregate fallback classification", interpretation)
 				}
 			}
 			if got := queryMetrics[columnStoreQueryQ5Metadata].PlanLabel; got != tc.q5Plan {
@@ -1598,7 +1905,7 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 			t.Fatalf("query %s missing B-tree baseline implementation note: %+v", q.Name, q)
 		}
 	}
-	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") || !strings.Contains(q.ImplementationNote, "physical_aggregate_metadata_path") {
+	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") {
 		t.Fatalf("q5_metadata should report both q5 aliasing and B-tree baseline scan semantics: %+v", q)
 	}
 	if got, want := queryMetrics["q5_metadata"].ProductionHash, queryMetrics["q5"].ProductionHash; got != want {
@@ -1636,7 +1943,7 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reference hashes: %v", err)
 	}
-	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row")
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row", collections.ColumnAssetReadIntegrityVerify, nil)
 	if err != nil {
 		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
 	}
@@ -1687,7 +1994,7 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if got != want {
 			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", alias, got, want)
 		}
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias, collections.ColumnAssetReadIntegrityVerify, nil)
 		if err != nil {
 			t.Fatalf("physical alias %q: %v", alias, err)
 		}
@@ -1761,7 +2068,7 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen collection after asset removal: %v", err)
 	}
-	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan)
+	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify, nil)
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing physical assets err=%v want os.ErrNotExist without row fallback", err)
 	}
@@ -1976,6 +2283,19 @@ func columnStoreTestStringSliceContains(values []string, want string) bool {
 	return false
 }
 
+func columnStoreTestCommaListContains(values string, want string) bool {
+	for _, value := range strings.Split(values, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing.T) {
 	cfg := columnStoreSuiteConfig()
 	var names []string
@@ -1997,12 +2317,19 @@ func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testi
 	for _, agg := range cfg.AggregateMetadata {
 		registered[agg.Name] = true
 	}
-	name := columnStoreSuiteAggregateMetadataName("q5_metadata")
+	name := columnStoreSuiteAggregateMetadataName(columnStoreQueryQ5Metadata)
 	if name == "" {
 		t.Fatal("q5_metadata did not request aggregate metadata")
 	}
 	if !registered[name] {
 		t.Fatalf("q5_metadata requested aggregate metadata %q outside registered names", name)
+	}
+	name = columnStoreSuiteAggregateMetadataName(columnStoreQueryQ4B)
+	if name == "" {
+		t.Fatal("q4b did not request aggregate metadata")
+	}
+	if !registered[name] {
+		t.Fatalf("q4b requested aggregate metadata %q outside registered names", name)
 	}
 }
 
@@ -2044,26 +2371,42 @@ func TestColumnStoreSuiteREADMEDocumentsCommandM11A(t *testing.T) {
 }
 
 func BenchmarkColumnStoreSuiteRowBaselineQueriesM11B(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathRowStoreBaseline)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathRowStoreBaseline, collections.ColumnAssetReadIntegrityVerify)
 }
 
 func BenchmarkColumnStoreSuiteBTreeIndexBaselineQueriesM11B(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline, collections.ColumnAssetReadIntegrityVerify)
 }
 
 func BenchmarkColumnStoreSuiteSerialPhysicalQueriesM14C(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify)
+}
+
+func BenchmarkColumnStoreSuiteSerialPhysicalQueriesCachedVerifyM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityCachedVerify)
+}
+
+func BenchmarkColumnStoreSuiteSerialPhysicalQueriesSkipChecksumsM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegritySkipChecksums)
 }
 
 func BenchmarkColumnStoreSuiteAggregateMetadataQueriesM14C(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegrityVerify)
+}
+
+func BenchmarkColumnStoreSuiteAggregateMetadataQueriesCachedVerifyM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegrityCachedVerify)
+}
+
+func BenchmarkColumnStoreSuiteAggregateMetadataQueriesSkipChecksumsM1634(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata, collections.ColumnAssetReadIntegritySkipChecksums)
 }
 
 func BenchmarkColumnStoreSuiteParallelPhysicalQueriesM14C(b *testing.B) {
-	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathParallelColumnScan)
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathParallelColumnScan, collections.ColumnAssetReadIntegrityVerify)
 }
 
-func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
+func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string, readIntegrity collections.ColumnAssetReadIntegrity) {
 	const rows = 10_000
 	const batchSize = 1_000
 
@@ -2110,7 +2453,7 @@ func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
 	b.SetBytes(sourceBytes * int64(queryCount))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, readIntegrity, nil)
 		if err != nil {
 			b.Fatalf("queries: %v", err)
 		}
@@ -2163,6 +2506,101 @@ func TestColumnStoreQueryNamesReturnsDefensiveCopyM11A(t *testing.T) {
 	}
 	if len(fresh) != len(columnStoreQueryNameList) {
 		t.Fatalf("fresh query names len = %d, want %d", len(fresh), len(columnStoreQueryNameList))
+	}
+}
+
+func TestColumnStoreSuiteParseQueryNamesM1634(t *testing.T) {
+	t.Run("default all", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames("")
+		if err != nil {
+			t.Fatalf("parse default: %v", err)
+		}
+		if len(got) != len(columnStoreQueryNameList) {
+			t.Fatalf("default len=%d want %d", len(got), len(columnStoreQueryNameList))
+		}
+	})
+	t.Run("subset trims whitespace and normalizes case", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames(" Q3, q5 ")
+		if err != nil {
+			t.Fatalf("parse subset: %v", err)
+		}
+		want := []string{columnStoreQueryQ3, columnStoreQueryQ5}
+		if !slices.Equal(got, want) {
+			t.Fatalf("subset=%v want %v", got, want)
+		}
+	})
+	t.Run("all normalizes case", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames(" All ")
+		if err != nil {
+			t.Fatalf("parse all: %v", err)
+		}
+		if len(got) != len(columnStoreQueryNameList) {
+			t.Fatalf("all len=%d want %d", len(got), len(columnStoreQueryNameList))
+		}
+	})
+	for _, value := range []string{"missing", "q3,q3", "all,q3", "q3,"} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := columnStoreSuiteParseQueryNames(value); err == nil {
+				t.Fatalf("parse %q succeeded, want error", value)
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteQueriesCanSelectSingleRoutedPhysicalQueryM1634(t *testing.T) {
+	const rows = 64
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	dir := t.TempDir()
+	db, err := openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathSerialColumnScan)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 16); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before physical query: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	collection, err = collections.NewCollectionManager(db).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection: %v", err)
+	}
+
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan, collections.ColumnAssetReadIntegrityVerify, []string{columnStoreQueryQ3})
+	if err != nil {
+		t.Fatalf("selected physical query: %v", err)
+	}
+	if len(queries) != 1 || queries[0].Name != columnStoreQueryQ3 {
+		t.Fatalf("queries=%+v want only q3", queries)
+	}
+	if len(parity) != 1 || !parity[columnStoreQueryQ3].Pass {
+		t.Fatalf("parity=%+v want passing q3 only", parity)
+	}
+	if queries[0].PlanLabel != columnStorePathSerialColumnScan {
+		t.Fatalf("plan_label=%q want %q", queries[0].PlanLabel, columnStorePathSerialColumnScan)
+	}
+	if queries[0].RowMaterializations != 0 {
+		t.Fatalf("row_materializations=%d want 0 for physical q3", queries[0].RowMaterializations)
 	}
 }
 

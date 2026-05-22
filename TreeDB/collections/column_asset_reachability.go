@@ -271,6 +271,58 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 			input.recoveryRefs++
 		}
 	}
+	for i, metadataRef := range view.AggregateMetadata {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(metadataRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(metadataRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
+	for i, dictionaryRef := range view.DictionaryCodes {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(dictionaryRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(dictionaryRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
+	for i, valuesRef := range view.Int64Values {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(valuesRef.AssetRef, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(valuesRef.AssetRef, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
+	for i, ref := range view.GraphAssetRefs {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(ref, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(ref, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
 	if err := input.addRefs(ctx, opts.CandidateRefs, ColumnAssetReachabilitySourceCandidate); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -303,7 +355,7 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 }
 
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
-	expectedRefs := len(view.AssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
+	expectedRefs := len(view.AssetRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
 		rootDir:        view.ColumnAssetRootDir,
 		collection:     view.CollectionName,
@@ -969,7 +1021,7 @@ func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
 }
 
 func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
-	return ref.Kind == ColumnAssetKindTCS1PartImage &&
+	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values) &&
 		ref.Namespace == namespace &&
 		ref.Generation != 0 &&
 		ref.PartID != 0 &&

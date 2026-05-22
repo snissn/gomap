@@ -24,6 +24,10 @@ type columnPhysicalVisibilityResult struct {
 }
 
 func (c *Collection) scanColumnPhysicalVisibleRows(projected []string) (columnPhysicalVisibilityResult, error) {
+	return c.scanColumnPhysicalVisibleRowsWithReadIntegrity(projected, ColumnAssetReadIntegrityVerify)
+}
+
+func (c *Collection) scanColumnPhysicalVisibleRowsWithReadIntegrity(projected []string, readIntegrity ColumnAssetReadIntegrity) (columnPhysicalVisibilityResult, error) {
 	if c == nil {
 		return columnPhysicalVisibilityResult{}, errCollectionNil
 	}
@@ -53,7 +57,7 @@ func (c *Collection) scanColumnPhysicalVisibleRows(projected []string) (columnPh
 	if cfgPtr != nil {
 		cfg = cfgPtr.copy()
 	}
-	return c.scanColumnPhysicalVisibleRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, projected)
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotWithReadIntegrity(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, projected, readIntegrity)
 }
 
 func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshot(
@@ -65,7 +69,20 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshot(
 	columnStoreEnabled bool,
 	projected []string,
 ) (columnPhysicalVisibilityResult, error) {
-	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargets(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, nil, projected)
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotWithReadIntegrity(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, projected, ColumnAssetReadIntegrityVerify)
+}
+
+func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotWithReadIntegrity(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	collectionName string,
+	rootID uint64,
+	cfg ColumnStoreConfig,
+	columnStoreEnabled bool,
+	projected []string,
+	readIntegrity ColumnAssetReadIntegrity,
+) (columnPhysicalVisibilityResult, error) {
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadIntegrity(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, nil, projected, readIntegrity)
 }
 
 func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargets(
@@ -78,9 +95,24 @@ func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargets(
 	targets *columnPhysicalVisibilityTargetIDs,
 	projected []string,
 ) (columnPhysicalVisibilityResult, error) {
+	return c.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadIntegrity(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, targets, projected, ColumnAssetReadIntegrityVerify)
+}
+
+func (c *Collection) scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadIntegrity(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	collectionName string,
+	rootID uint64,
+	cfg ColumnStoreConfig,
+	columnStoreEnabled bool,
+	targets *columnPhysicalVisibilityTargetIDs,
+	projected []string,
+	readIntegrity ColumnAssetReadIntegrity,
+) (columnPhysicalVisibilityResult, error) {
 	var latest columnPhysicalVisibilityIndex
 	diag, err := c.scanColumnPhysicalRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, columnPhysicalScanRequest{
 		ProjectedColumns: projected,
+		ReadIntegrity:    readIntegrity,
 		Visitor: func(row columnPhysicalScanRowView) error {
 			if targets != nil && !targets.contains(row.ID) {
 				return nil

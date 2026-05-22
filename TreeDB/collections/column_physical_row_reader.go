@@ -5,9 +5,17 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"unsafe"
 )
 
 const defaultColumnPhysicalRowReaderMaxDecodedBlocks = 4
+
+var errColumnPhysicalRowOrdinalOutOfBounds = errors.New("physical column row ordinal outside row_count")
+
+var columnPhysicalNativeLittleEndian = func() bool {
+	var value uint16 = 1
+	return *(*byte)(unsafe.Pointer(&value)) == 1
+}()
 
 type columnPhysicalRowReaderOptions struct {
 	ProjectedColumns  []string
@@ -56,13 +64,19 @@ type columnPhysicalRowReader struct {
 	view       columnPhysicalScanSnapshotView
 	projection columnPhysicalScanProjection
 	readCache  columnPhysicalAssetReadCache
+	closeView  func()
 	ranges     []columnPhysicalRowReaderRange
 	totalRows  int
 	maxBlocks  int
 	blocks     map[int]*columnPhysicalRowReaderBlock
 	lru        []int
-	closed     bool
-	stats      columnPhysicalRowReaderStats
+	// lastRangeIndex/lastBlock are a one-entry hot path over the existing bounded
+	// block cache. They avoid repeating binary range lookup and map/LRU work
+	// when graph/native readers fetch many rows from the same physical granule.
+	lastRangeIndex int
+	lastBlock      *columnPhysicalRowReaderBlock
+	closed         bool
+	stats          columnPhysicalRowReaderStats
 }
 
 type columnPhysicalRowReaderRange struct {
@@ -98,16 +112,28 @@ type columnPhysicalRowReaderRow struct {
 
 func (c *Collection) openColumnPhysicalRowReader(opts columnPhysicalRowReaderOptions) (*columnPhysicalRowReader, error) {
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
-	if closeView != nil {
-		defer closeView()
-	}
 	if err != nil {
+		if closeView != nil {
+			closeView()
+		}
 		return nil, err
 	}
-	return newColumnPhysicalRowReaderFromSnapshotView(view, opts)
+	return newColumnPhysicalRowReaderFromSnapshotViewWithClose(view, opts, closeView)
 }
 
 func newColumnPhysicalRowReaderFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnPhysicalRowReaderOptions) (*columnPhysicalRowReader, error) {
+	return newColumnPhysicalRowReaderFromSnapshotViewWithClose(view, opts, nil)
+}
+
+func newColumnPhysicalRowReaderFromSnapshotViewWithClose(view columnPhysicalScanSnapshotView, opts columnPhysicalRowReaderOptions, closeView func()) (_ *columnPhysicalRowReader, err error) {
+	cleanupCloseView := closeView
+	if cleanupCloseView != nil {
+		defer func() {
+			if err != nil && cleanupCloseView != nil {
+				cleanupCloseView()
+			}
+		}()
+	}
 	cfg := view.Config
 	if !view.ColumnStoreEnabled || !cfg.Enabled {
 		return nil, errors.New("collections: physical column row reader requires enabled column_store")
@@ -134,15 +160,18 @@ func newColumnPhysicalRowReaderFromSnapshotView(view columnPhysicalScanSnapshotV
 		return nil, err
 	}
 	reader := &columnPhysicalRowReader{
-		view:       view,
-		projection: projection,
-		readCache:  readCache,
-		maxBlocks:  maxBlocks,
-		blocks:     make(map[int]*columnPhysicalRowReaderBlock, maxBlocks),
+		view:           view,
+		projection:     projection,
+		readCache:      readCache,
+		closeView:      closeView,
+		maxBlocks:      maxBlocks,
+		blocks:         make(map[int]*columnPhysicalRowReaderBlock, maxBlocks),
+		lastRangeIndex: -1,
 		stats: columnPhysicalRowReaderStats{
 			Granules: len(view.AssetRefs),
 		},
 	}
+	cleanupCloseView = nil
 	if err := reader.buildOrdinalRanges(); err != nil {
 		_ = reader.Close()
 		return nil, err
@@ -163,7 +192,13 @@ func (r *columnPhysicalRowReader) Close() error {
 		delete(r.blocks, key)
 	}
 	r.lru = r.lru[:0]
+	r.lastRangeIndex = -1
+	r.lastBlock = nil
 	r.stats.ResidentBytes = 0
+	if r.closeView != nil {
+		r.closeView()
+		r.closeView = nil
+	}
 	return closeErr
 }
 
@@ -277,7 +312,7 @@ func (r *columnPhysicalRowReader) buildOrdinalRanges() error {
 func (r *columnPhysicalRowReader) fetchRow(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnPhysicalRowReaderRow, error) {
 	rangeIdx := r.rangeIndexForOrdinal(ordinal)
 	if rangeIdx < 0 {
-		return columnPhysicalRowReaderRow{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d", ordinal, r.totalRows)
+		return columnPhysicalRowReaderRow{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, r.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
 	}
 	rowRange := r.ranges[rangeIdx]
 	block, err := r.loadBlock(rowRange)
@@ -295,6 +330,18 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 	if ordinal < 0 || ordinal >= r.totalRows {
 		return -1
 	}
+	if r.lastRangeIndex >= 0 && r.lastRangeIndex < len(r.ranges) {
+		rowRange := r.ranges[r.lastRangeIndex]
+		if ordinal >= rowRange.startOrdinal && ordinal < rowRange.startOrdinal+rowRange.rowCount {
+			return r.lastRangeIndex
+		}
+	}
+	if len(r.ranges) == 1 {
+		// Single-range readers are common for column_graph assets; skip binary
+		// search entirely after the bounds check above.
+		r.lastRangeIndex = 0
+		return 0
+	}
 	lo, hi := 0, len(r.ranges)
 	for lo < hi {
 		mid := lo + (hi-lo)/2
@@ -307,6 +354,7 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 			lo = mid + 1
 			continue
 		}
+		r.lastRangeIndex = mid
 		return mid
 	}
 	return -1
@@ -314,18 +362,43 @@ func (r *columnPhysicalRowReader) rangeIndexForOrdinal(ordinal int) int {
 
 func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRange) (*columnPhysicalRowReaderBlock, error) {
 	assetOrdinal := rowRange.assetOrdinal
+	if block := r.lastBlock; block != nil && block.assetOrdinal == assetOrdinal {
+		r.stats.CacheHits++
+		// lastBlock matches only when this block was the previous access, so it
+		// is already at the LRU tail. Interleaved access changes lastBlock and
+		// falls through to the map path, which refreshes LRU with touchBlock.
+		return block, nil
+	}
 	if block := r.blocks[assetOrdinal]; block != nil {
 		r.stats.CacheHits++
 		r.touchBlock(assetOrdinal)
+		r.lastBlock = block
 		return block, nil
 	}
 	r.stats.CacheMisses++
 	if assetOrdinal < 0 || assetOrdinal >= len(r.view.AssetRefs) {
 		return nil, fmt.Errorf("collections: physical column row reader asset ordinal=%d outside refs=%d", assetOrdinal, len(r.view.AssetRefs))
 	}
-	raw, err := r.readCache.read(rowRange.ref, nil)
+	var dst []byte
+	if rowRange.ref.Length >= 0 && rowRange.ref.Length <= int64(maxCollectionInt) {
+		dst = make([]byte, int(rowRange.ref.Length))
+	}
+	// Cached blocks must own stable bytes. The asset read cache reuses scratch
+	// for syscall reads, so storing that scratch would let later cache misses
+	// corrupt already-indexed row offsets. Malformed lengths skip the owned
+	// destination and are rejected by the read/index checks below.
+	raw, err := r.readCache.read(rowRange.ref, dst)
 	if err != nil {
 		return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d: %w", rowRange.ref.Generation, rowRange.ref.PartID, err)
+	}
+	if dst != nil {
+		if len(raw) != len(dst) {
+			return nil, fmt.Errorf("collections: physical column row reader read generation=%d part_id=%d length=%d want %d", rowRange.ref.Generation, rowRange.ref.PartID, len(raw), len(dst))
+		}
+		if len(raw) > 0 && &raw[0] != &dst[0] {
+			copy(dst, raw)
+			raw = dst
+		}
 	}
 	rowOffsets, err := indexColumnPhysicalAssetReaderRows(raw, rowRange.version, rowRange.rowsOffset, rowRange.header, &r.view.Config)
 	if err != nil {
@@ -344,6 +417,7 @@ func (r *columnPhysicalRowReader) loadBlock(rowRange columnPhysicalRowReaderRang
 	}
 	r.blocks[assetOrdinal] = block
 	r.lru = append(r.lru, assetOrdinal)
+	r.lastBlock = block
 	r.stats.DecodedBlocks++
 	r.stats.GranulesTouched++
 	r.stats.PhysicalBytesRead += int64(len(raw))
@@ -379,6 +453,9 @@ func (r *columnPhysicalRowReader) evictBlocksForInsert() error {
 			return fmt.Errorf("collections: physical column row reader LRU references missing cached asset ordinal=%d", evict)
 		}
 		delete(r.blocks, evict)
+		if r.lastBlock == block {
+			r.lastBlock = nil
+		}
 		r.stats.ResidentBytes -= block.residentBytes
 		if r.stats.ResidentBytes < 0 {
 			r.stats.ResidentBytes = 0
@@ -622,7 +699,7 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 	case ColumnStoreValueFloat32Vector:
 		start := len(scratch.Float32Values)
 		var err error
-		scratch.Float32Values, err = cur.appendFloat32SliceWithExpectedLength(scratch.Float32Values, col.VectorDims)
+		scratch.Float32Values, err = cur.appendFloat32SliceWithExpectedLengthAndEncoding(scratch.Float32Values, col.VectorDims, col.FixedWidthEncoding)
 		if err != nil {
 			return err
 		}
@@ -630,7 +707,7 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 	case ColumnStoreValueAdjacencyList:
 		start := len(scratch.Uint32Values)
 		var err error
-		scratch.Uint32Values, err = cur.appendUint32Slice(scratch.Uint32Values)
+		scratch.Uint32Values, err = cur.appendUint32SliceWithEncoding(scratch.Uint32Values, col.FixedWidthEncoding)
 		if err != nil {
 			return err
 		}
@@ -642,6 +719,10 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 }
 
 func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, expected int) ([]float32, error) {
+	return c.appendFloat32SliceWithExpectedLengthAndEncoding(dst, expected, ColumnFixedWidthEncodingDefault)
+}
+
+func (c *manifestCursor) appendFloat32SliceWithExpectedLengthAndEncoding(dst []float32, expected int, encoding ColumnFixedWidthEncoding) ([]float32, error) {
 	n := c.u64()
 	if c.err != nil {
 		return dst, c.err
@@ -650,7 +731,13 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 		c.err = fmt.Errorf("collections: float32_vector length=%d want vector_dims=%d", n, expected)
 		return dst, c.err
 	}
-	if _, ok := c.fixedWidthSliceByteLen(n, 4, "float32_vector"); !ok {
+	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
+		return dst, c.err
+	}
+	littleEndian, err := columnFixedWidthEncodingIsLittleEndian(encoding)
+	if err != nil {
+		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
 		return dst, c.err
 	}
 	base := len(dst)
@@ -662,19 +749,82 @@ func (c *manifestCursor) appendFloat32SliceWithExpectedLength(dst []float32, exp
 	} else {
 		dst = dst[:need]
 	}
-	for i := base; i < need; i++ {
-		dst[i] = math.Float32frombits(binaryBigEndianUint32(c.raw[c.pos:]))
-		c.pos += 4
+	// Keep cursor state out of the per-element loop; vector search decodes
+	// these fixed-width slices for every candidate row fetch.
+	pos := c.pos
+	end := pos + int(byteLen)
+	raw := c.raw
+	if pos < end {
+		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
 	}
+	if littleEndian && columnPhysicalNativeLittleEndian {
+		columnPhysicalCopyLittleEndianFloat32Bytes(dst[base:need], raw[pos:end])
+		c.pos = end
+		return dst, nil
+	}
+	i := base
+	if littleEndian {
+		for ; i+4 <= need; i += 4 {
+			_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
+			dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)
+			dst[i+1] = math.Float32frombits(uint32(raw[pos+4]) | uint32(raw[pos+5])<<8 | uint32(raw[pos+6])<<16 | uint32(raw[pos+7])<<24)
+			dst[i+2] = math.Float32frombits(uint32(raw[pos+8]) | uint32(raw[pos+9])<<8 | uint32(raw[pos+10])<<16 | uint32(raw[pos+11])<<24)
+			dst[i+3] = math.Float32frombits(uint32(raw[pos+12]) | uint32(raw[pos+13])<<8 | uint32(raw[pos+14])<<16 | uint32(raw[pos+15])<<24)
+			pos += 16
+		}
+		for ; i < need; i++ {
+			dst[i] = math.Float32frombits(uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24)
+			pos += 4
+		}
+	} else {
+		for ; i+4 <= need; i += 4 {
+			_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
+			dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
+			dst[i+1] = math.Float32frombits(uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7]))
+			dst[i+2] = math.Float32frombits(uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11]))
+			dst[i+3] = math.Float32frombits(uint32(raw[pos+12])<<24 | uint32(raw[pos+13])<<16 | uint32(raw[pos+14])<<8 | uint32(raw[pos+15]))
+			pos += 16
+		}
+		for ; i < need; i++ {
+			dst[i] = math.Float32frombits(uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3]))
+			pos += 4
+		}
+	}
+	c.pos = end
 	return dst, nil
 }
 
+func columnPhysicalCopyLittleEndianFloat32Bytes(dst []float32, raw []byte) {
+	dstByteLen := len(dst) * 4
+	if len(raw) != dstByteLen {
+		panic("collections: invalid little-endian float32_vector direct-copy length")
+	}
+	if dstByteLen == 0 {
+		return
+	}
+	// raw may be byte-unaligned inside a manifest row. Copying into the aligned
+	// scratch []float32 backing store avoids per-element byte assembly without
+	// changing the row reader's scratch-aliasing contract.
+	dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst))), dstByteLen)
+	copy(dstBytes, raw)
+}
+
 func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
+	return c.appendUint32SliceWithEncoding(dst, ColumnFixedWidthEncodingDefault)
+}
+
+func (c *manifestCursor) appendUint32SliceWithEncoding(dst []uint32, encoding ColumnFixedWidthEncoding) ([]uint32, error) {
 	n := c.u64()
 	if c.err != nil {
 		return dst, c.err
 	}
-	if _, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice"); !ok {
+	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice")
+	if !ok {
+		return dst, c.err
+	}
+	littleEndian, err := columnFixedWidthEncodingIsLittleEndian(encoding)
+	if err != nil {
+		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
 		return dst, c.err
 	}
 	base := len(dst)
@@ -686,13 +836,38 @@ func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
 	} else {
 		dst = dst[:need]
 	}
-	for i := base; i < need; i++ {
-		dst[i] = binaryBigEndianUint32(c.raw[c.pos:])
-		c.pos += 4
+	pos := c.pos
+	end := pos + int(byteLen)
+	raw := c.raw
+	if pos < end {
+		_ = raw[end-1]
 	}
+	if littleEndian && columnPhysicalNativeLittleEndian {
+		dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst[base:need]))), int(byteLen))
+		copy(dstBytes, raw[pos:end])
+		c.pos = end
+		return dst, nil
+	}
+	i := base
+	if littleEndian {
+		for ; i < need; i++ {
+			dst[i] = uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24
+			pos += 4
+		}
+	} else {
+		for ; i+4 <= need; i += 4 {
+			_ = raw[pos+15]
+			dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
+			dst[i+1] = uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7])
+			dst[i+2] = uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11])
+			dst[i+3] = uint32(raw[pos+12])<<24 | uint32(raw[pos+13])<<16 | uint32(raw[pos+14])<<8 | uint32(raw[pos+15])
+			pos += 16
+		}
+		for ; i < need; i++ {
+			dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
+			pos += 4
+		}
+	}
+	c.pos = end
 	return dst, nil
-}
-
-func binaryBigEndianUint32(b []byte) uint32 {
-	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 }

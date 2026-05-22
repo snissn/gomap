@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -257,6 +258,216 @@ func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetFloat32VectorLittleEndianRoundTrip(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+			{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+			{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{{
+		ID: []byte("v1"),
+		Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{
+				math.Float32frombits(0x3f800000),
+				math.Float32frombits(0xc0200000),
+				math.Float32frombits(0x7fc12345),
+			}},
+			{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x3e800000)},
+			{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{0x01020304, 0xa0b0c0d0}},
+		},
+	}}
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "vectors",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        2,
+		PartID:            1,
+		AppliedCommandLSN: 9,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	assertColumnPhysicalAssetFloat32VectorLittleEndianFixture(t, encoded, normalized)
+
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+	}
+	if got := decoded.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("decoded fixed_width_encoding=%q want little_endian", got)
+	}
+	if got := math.Float32bits(decoded.Rows[0].Values[0].Float32Vector[2]); got != 0x7fc12345 {
+		t.Fatalf("decoded vector nan bits=0x%08x want 0x7fc12345", got)
+	}
+	if got := math.Float32bits(decoded.Rows[0].Values[1].Float32); got != 0x3e800000 {
+		t.Fatalf("decoded scalar bits=0x%08x want 0x3e800000", got)
+	}
+	if got := decoded.Rows[0].Values[2].AdjacencyList; len(got) != 2 || got[0] != 0x01020304 || got[1] != 0xa0b0c0d0 {
+		t.Fatalf("decoded adjacency=%x", got)
+	}
+
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"embedding", "embedding_inv_norm", "embedding_neighbors"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	visited := 0
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		visited++
+		if got := math.Float32bits(row.Values[0].Float32Vector[2]); got != 0x7fc12345 {
+			t.Fatalf("scanned vector nan bits=0x%08x want 0x7fc12345", got)
+		}
+		if got := math.Float32bits(row.Values[1].Float32); got != 0x3e800000 {
+			t.Fatalf("scanned scalar bits=0x%08x want 0x3e800000", got)
+		}
+		if got := row.Values[2].AdjacencyList; len(got) != 2 || got[1] != 0xa0b0c0d0 {
+			t.Fatalf("scanned adjacency=%x", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalAssetRows: %v", err)
+	}
+	if visited != 1 {
+		t.Fatalf("visited=%d want 1", visited)
+	}
+
+	mismatch := *normalized
+	mismatch.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
+	mismatch.Columns[0].FixedWidthEncoding = ColumnFixedWidthEncodingDefault
+	mismatch.SchemaHash = normalized.SchemaHash
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, mismatch); err == nil || !strings.Contains(err.Error(), "column[0]") {
+		t.Fatalf("validate metadata mismatch err=%v want column mismatch", err)
+	}
+}
+
+func TestColumnPhysicalAssetVersionSelectionValidatesAllFixedWidthEncodings(t *testing.T) {
+	columns := []ColumnStoreColumn{
+		{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+	}
+	_, err := columnPhysicalAssetVersionForColumns(columns)
+	if err == nil || !strings.Contains(err.Error(), "column[1]") || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("columnPhysicalAssetVersionForColumns err=%v want later fixed-width validation failure", err)
+	}
+}
+
+func TestColumnPhysicalAssetFloat32SliceRejectsUnsupportedFixedWidthEncoding(t *testing.T) {
+	var b bytes.Buffer
+	writeManifestFloat32Slice(&b, []float32{1})
+	cur := manifestCursor{raw: b.Bytes()}
+	if got := cur.float32SliceWithExpectedLengthAndEncoding(1, ColumnFixedWidthEncoding("future")); got != nil {
+		t.Fatalf("float32SliceWithExpectedLengthAndEncoding got=%v want nil", got)
+	}
+	if cur.err == nil || !strings.Contains(cur.err.Error(), "unsupported fixed_width_encoding") {
+		t.Fatalf("cursor err=%v want unsupported fixed_width_encoding", cur.err)
+	}
+}
+
+func TestColumnPhysicalAssetFloat32SliceWriteRejectsUnsupportedFixedWidthEncoding(t *testing.T) {
+	var b bytes.Buffer
+	err := writeManifestFloat32SliceWithEncoding(&b, []float32{1}, ColumnFixedWidthEncoding("future"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported fixed_width_encoding") {
+		t.Fatalf("writeManifestFloat32SliceWithEncoding err=%v want unsupported fixed_width_encoding", err)
+	}
+	if b.Len() != 0 {
+		t.Fatalf("buffer len=%d want 0 after rejected write", b.Len())
+	}
+}
+
+func assertColumnPhysicalAssetFloat32VectorLittleEndianFixture(t *testing.T, encoded []byte, cfg *ColumnStoreConfig) {
+	t.Helper()
+	cur := manifestCursor{raw: encoded}
+	if magic := cur.u32(); magic != columnPhysicalAssetMagic {
+		t.Fatalf("magic=0x%08x want 0x%08x", magic, columnPhysicalAssetMagic)
+	}
+	if version := cur.u16(); version != columnPhysicalAssetVersionV5 {
+		t.Fatalf("version=%d want %d", version, columnPhysicalAssetVersionV5)
+	}
+	_ = cur.stringBytes()
+	_ = cur.stringBytes()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.stringBytes()
+	_ = cur.u64()
+	columnCount := cur.u64()
+	rowCount := cur.u64()
+	if cur.err != nil {
+		t.Fatalf("header cursor err=%v", cur.err)
+	}
+	if columnCount != uint64(len(cfg.Columns)) || rowCount != 1 {
+		t.Fatalf("column_count=%d row_count=%d", columnCount, rowCount)
+	}
+	for i, col := range cfg.Columns {
+		_ = cur.stringBytes()
+		_ = cur.stringBytes()
+		_ = cur.stringBytes()
+		_ = cur.bool()
+		_ = cur.bool()
+		_ = cur.u64()
+		if got := ColumnFixedWidthEncoding(cur.string()); got != col.FixedWidthEncoding {
+			t.Fatalf("column[%d] fixed_width_encoding=%q want %q", i, got, col.FixedWidthEncoding)
+		}
+	}
+	_ = cur.bytesView()
+	_ = cur.bool()
+	_ = cur.stringBytes()
+	_ = cur.bool()
+	_ = cur.bool()
+	if n := cur.u64(); n != 3 {
+		t.Fatalf("vector length=%d want 3", n)
+	}
+	if got, want := encoded[cur.pos:cur.pos+12], []byte{0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x20, 0xc0, 0x45, 0x23, 0xc1, 0x7f}; !bytes.Equal(got, want) {
+		t.Fatalf("vector payload bytes=% x want % x", got, want)
+	}
+	cur.pos += 12
+	_ = cur.stringBytes()
+	_ = cur.bool()
+	_ = cur.bool()
+	if got, want := encoded[cur.pos:cur.pos+4], []byte{0x3e, 0x80, 0x00, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("float32 payload bytes=% x want % x", got, want)
+	}
+	cur.pos += 4
+	_ = cur.stringBytes()
+	_ = cur.bool()
+	_ = cur.bool()
+	if n := cur.u64(); n != 2 {
+		t.Fatalf("adjacency length=%d want 2", n)
+	}
+	if got, want := encoded[cur.pos:cur.pos+8], []byte{0x01, 0x02, 0x03, 0x04, 0xa0, 0xb0, 0xc0, 0xd0}; !bytes.Equal(got, want) {
+		t.Fatalf("adjacency payload bytes=% x want % x", got, want)
+	}
+	cur.pos += 8
+	if cur.err != nil {
+		t.Fatalf("cursor err=%v", cur.err)
+	}
+	if cur.pos != len(encoded) {
+		t.Fatalf("cursor pos=%d len=%d", cur.pos, len(encoded))
+	}
+}
+
 func TestEncodeColumnPhysicalAssetRejectsMismatchedVectorLength(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
@@ -401,6 +612,70 @@ func TestColumnPhysicalAssetScannerRejectsMismatchedVectorLength(t *testing.T) {
 				t.Fatalf("scanColumnPhysicalAssetRows err=%v want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnPhysicalAssetScannerUnprojectedVectorTruncationNamesVectorType(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+			{Name: "score", Path: "score", ValueType: ColumnStoreValueFloat32},
+		},
+	}
+	normalized, err := normalizeColumnStoreConfig("vectors", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+
+	var raw bytes.Buffer
+	writeManifestUint32(&raw, columnPhysicalAssetMagic)
+	writeManifestUint16(&raw, columnPhysicalAssetVersion)
+	writeManifestString(&raw, "vectors")
+	writeManifestString(&raw, normalized.AssetManager.Namespace)
+	writeManifestUint64(&raw, 2)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 9)
+	writeManifestString(&raw, string(ColumnPublishOperationInsert))
+	writeManifestUint64(&raw, normalized.SchemaHash)
+	writeManifestUint64(&raw, uint64(len(normalized.Columns)))
+	writeManifestUint64(&raw, 1)
+	for _, col := range normalized.Columns {
+		writeManifestString(&raw, col.Name)
+		writeManifestString(&raw, col.Path)
+		writeManifestString(&raw, string(col.ValueType))
+		writeManifestBool(&raw, col.Nullable)
+		writeManifestBool(&raw, col.Dictionary)
+		writeManifestUint64(&raw, uint64(col.VectorDims))
+	}
+	writeManifestBytes(&raw, []byte("v1"))
+	writeManifestBool(&raw, false)
+	writeManifestString(&raw, string(ColumnStoreValueFloat32Vector))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestUint64(&raw, 3)
+	writeManifestUint32(&raw, math.Float32bits(1))
+
+	encoded := raw.Bytes()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 2,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"score"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+		t.Fatalf("visitor should not run for truncated vector: %+v", row)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "short column binary float32_vector") {
+		t.Fatalf("scanColumnPhysicalAssetRows err=%v want float32_vector truncation label", err)
 	}
 }
 
@@ -731,6 +1006,291 @@ func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	}
 	if _, err := readColumnPhysicalAssetFromManager(root, ref); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("read corrupt asset err=%v want checksum failure", err)
+	}
+	relaxedRaw, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("relaxed read corrupt asset: %v", err)
+	}
+	if bytes.Equal(relaxedRaw, raw) {
+		t.Fatalf("relaxed read returned uncorrupted payload")
+	}
+	if err := validateColumnPhysicalAssetForManifest(relaxedRaw, ref, *normalized); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("manifest validation err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetReadIntegrityLabelPreservesUnsupportedM1634(t *testing.T) {
+	if got := columnAssetReadIntegrityLabel(""); got != string(ColumnAssetReadIntegrityVerify) {
+		t.Fatalf("empty integrity label=%q want %q", got, ColumnAssetReadIntegrityVerify)
+	}
+	if got := columnAssetReadIntegrityLabel(ColumnAssetReadIntegrityCachedVerify); got != string(ColumnAssetReadIntegrityCachedVerify) {
+		t.Fatalf("cached integrity label=%q want %q", got, ColumnAssetReadIntegrityCachedVerify)
+	}
+	if got := columnAssetReadIntegrityLabel(ColumnAssetReadIntegrity("bad-mode")); got != "bad-mode" {
+		t.Fatalf("unsupported integrity label=%q want raw value", got)
+	}
+}
+
+func TestColumnAssetReadIntegrityCachedVerifyFirstReadRejectsCorruptionM1634(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("cached-verify-first-read-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+	corruptColumnAssetPayloadByte(t, root, ref)
+
+	if _, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegrityCachedVerify); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("cached first corrupt read err=%v want checksum failure", err)
+	}
+	if _, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegrityCachedVerify); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("cached repeated corrupt read err=%v want checksum failure after rejected first read", err)
+	}
+}
+
+func TestColumnAssetReadIntegrityCachedVerifyReusesVerifiedRefM1634(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("cached-verify-reuse-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+
+	raw, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegrityCachedVerify)
+	if err != nil {
+		t.Fatalf("cached first read: %v", err)
+	}
+	if !bytes.Equal(raw, payload) {
+		t.Fatalf("cached first read raw=%q want %q", raw, payload)
+	}
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	verifiedFile, err := os.Open(assetPath)
+	if err != nil {
+		t.Fatalf("Open verified asset: %v", err)
+	}
+	identity := columnAssetVerifiedChecksumFileIdentityFromFile(verifiedFile)
+	if err := verifiedFile.Close(); err != nil {
+		t.Fatalf("Close verified asset: %v", err)
+	}
+	if !identity.valid {
+		t.Skip("cached verify reuse requires stable column asset file identity")
+	}
+	verifiedInfo, err := os.Stat(assetPath)
+	if err != nil {
+		t.Fatalf("Stat verified asset: %v", err)
+	}
+	corruptColumnAssetPayloadByte(t, root, ref)
+	if err := os.Chtimes(assetPath, verifiedInfo.ModTime(), verifiedInfo.ModTime()); err != nil {
+		t.Fatalf("restore verified asset modtime: %v", err)
+	}
+
+	if _, err := readColumnPhysicalAssetFromManager(root, ref); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("strict corrupt read err=%v want checksum failure", err)
+	}
+	cachedRaw, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegrityCachedVerify)
+	if err != nil {
+		t.Fatalf("cached repeated read after corruption: %v", err)
+	}
+	if bytes.Equal(cachedRaw, payload) {
+		t.Fatalf("cached repeated read returned uncorrupted payload; expected corrupted bytes after file mutation")
+	}
+
+	badRef := ref
+	badRef.Checksum++
+	if _, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, badRef, nil, ColumnAssetReadIntegrityCachedVerify); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("cached read with changed checksum err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetReadCacheCachedVerifyRefreshesOpenFileIdentityM1634(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("cached-verify-open-reader-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegrityCachedVerify)
+	if err != nil {
+		t.Fatalf("new cached read cache: %v", err)
+	}
+	defer func() {
+		if err := readCache.close(); err != nil {
+			t.Fatalf("read cache close: %v", err)
+		}
+	}()
+	raw, err := readCache.read(ref, nil)
+	if err != nil {
+		t.Fatalf("cached first read: %v", err)
+	}
+	if !bytes.Equal(raw, payload) {
+		t.Fatalf("cached first read raw=%q want %q", raw, payload)
+	}
+
+	corruptColumnAssetPayloadByte(t, root, ref)
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	changedModTime := time.Now().Add(2 * time.Hour).Round(0)
+	if err := os.Chtimes(assetPath, changedModTime, changedModTime); err != nil {
+		t.Fatalf("Chtimes corrupt asset: %v", err)
+	}
+
+	if _, err := readCache.read(ref, nil); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("cached same-reader read after corruption err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnAssetReadIntegrityCachedVerifyRejectsRecreatedSegmentM1634(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("cached-verify-recreated-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+	if _, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegrityCachedVerify); err != nil {
+		t.Fatalf("cached first read: %v", err)
+	}
+
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	corrupt := bytes.Clone(payload)
+	corrupt[0] ^= 0xff
+	if err := os.Remove(assetPath); err != nil {
+		t.Fatalf("Remove recreated asset target: %v", err)
+	}
+	if err := os.WriteFile(assetPath, corrupt, 0o600); err != nil {
+		t.Fatalf("WriteFile recreated asset: %v", err)
+	}
+	recreatedModTime := time.Now().Add(2 * time.Hour).Round(0)
+	if err := os.Chtimes(assetPath, recreatedModTime, recreatedModTime); err != nil {
+		t.Fatalf("Chtimes recreated asset: %v", err)
+	}
+
+	if _, err := readColumnPhysicalAssetFromManagerIntoWithIntegrity(root, ref, nil, ColumnAssetReadIntegrityCachedVerify); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("cached read after recreated segment err=%v want checksum failure", err)
+	}
+}
+
+func resetColumnAssetVerifiedChecksumCacheForTest(t *testing.T) {
+	t.Helper()
+	columnAssetVerifiedChecksumCache.Lock()
+	columnAssetVerifiedChecksumCache.entries = [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry{}
+	columnAssetVerifiedChecksumCache.Unlock()
+	t.Cleanup(func() {
+		columnAssetVerifiedChecksumCache.Lock()
+		columnAssetVerifiedChecksumCache.entries = [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry{}
+		columnAssetVerifiedChecksumCache.Unlock()
+	})
+}
+
+func corruptColumnAssetPayloadByte(t *testing.T, root string, ref ColumnAssetRef) {
+	t.Helper()
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile corrupt target: %v", err)
+	}
+	if _, err := file.WriteAt([]byte{0xff}, ref.Offset); err != nil {
+		_ = file.Close()
+		t.Fatalf("WriteAt corrupt target: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close corrupt target: %v", err)
+	}
+}
+
+func TestColumnAssetReadCacheViewsRequireExplicitOptInM1634(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("column-asset-reader-view-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+
+	copyCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new copy read cache: %v", err)
+	}
+	copyRaw, err := copyCache.read(ref, nil)
+	if err != nil {
+		_ = copyCache.close()
+		t.Fatalf("copy cache read: %v", err)
+	}
+	if !bytes.Equal(copyRaw, payload) {
+		_ = copyCache.close()
+		t.Fatalf("copy cache raw=%q want %q", copyRaw, payload)
+	}
+	if copyCache.lastView {
+		_ = copyCache.close()
+		t.Fatalf("copy cache returned an mmap view without opt-in")
+	}
+	if copyCache.file != nil && len(copyCache.file.mmap) != 0 {
+		_ = copyCache.close()
+		t.Fatalf("copy cache mapped segment without opt-in")
+	}
+	if err := copyCache.close(); err != nil {
+		t.Fatalf("copy cache close: %v", err)
+	}
+
+	viewCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new view read cache: %v", err)
+	}
+	viewCache.returnViews = true
+	viewRaw, err := viewCache.read(ref, nil)
+	if err != nil {
+		_ = viewCache.close()
+		t.Fatalf("view cache read: %v", err)
+	}
+	if !bytes.Equal(viewRaw, payload) {
+		_ = viewCache.close()
+		t.Fatalf("view cache raw=%q want %q", viewRaw, payload)
+	}
+	if viewCache.file != nil && len(viewCache.file.mmap) != 0 && !viewCache.lastView {
+		_ = viewCache.close()
+		t.Fatalf("view cache mapped segment but did not report view return")
+	}
+	if err := viewCache.close(); err != nil {
+		t.Fatalf("view cache close: %v", err)
 	}
 }
 
@@ -1343,6 +1903,17 @@ func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 		t.Fatalf("decode corrupt manifest records err=%v want trailing-bytes failure", err)
 	}
 
+	badKeyRecords := cloneColumnManifestRecords(manifest.Records)
+	for i := range badKeyRecords {
+		if bytes.Equal(badKeyRecords[i].key, columnManifestPartRecordKey(ref.Generation, ref.PartID)) {
+			badKeyRecords[i].key = columnManifestPartRecordKey(ref.Generation+1, ref.PartID)
+			break
+		}
+	}
+	if _, err := decodeColumnManifestRecords(badKeyRecords); err == nil || !strings.Contains(err.Error(), "part key") {
+		t.Fatalf("decode manifest records with mismatched part key err=%v want part-key failure", err)
+	}
+
 	badIdentity := manifest.Identity
 	badIdentity.Checksum++
 	badDelta := delta
@@ -1351,6 +1922,116 @@ func TestColumnManifestBinaryRecordsAndGCEnumerableAssetRefsM12A(t *testing.T) {
 	badDelta.StoragePolicy = normalized.ManifestRoot.StoragePolicy
 	if err := validateColumnManifestRootDeltaForPlan(badDelta, delta.BaseRootID, *normalized, badIdentity); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("validate bad manifest checksum err=%v want checksum failure", err)
+	}
+}
+
+func TestColumnManifestAggregateMetadataRequiresLivePartM1634(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	part := testColumnPublishPreparedAssetM10A()
+	part.Ref.Generation = 5
+	part.Ref.PartID = 3
+	part.GenerationID = part.Ref.Generation
+	part.Reason = string(ColumnPublishOperationInsert)
+	metadata := part
+	metadata.Ref.Kind = ColumnAssetKindTCS1AggregateMetadata
+	metadata.Ref.Offset += metadata.Ref.Length
+	metadata.Ref.Length = 256
+	metadata.Bytes = metadata.Ref.Length
+	metadata.Reason = "min_time_us"
+
+	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 99,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             []ColumnPreparedAsset{part, metadata},
+			RowCount:           10,
+			ColumnPayloadBytes: part.Bytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	snapshot, err := decodeColumnManifestRecords(manifest.Records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestRecords valid metadata: %v", err)
+	}
+	if got, want := len(snapshot.AggregateMetadata), 1; got != want {
+		t.Fatalf("aggregate metadata refs=%d want %d", got, want)
+	}
+
+	withoutPart := make([]columnManifestRecord, 0, len(manifest.Records)-1)
+	for _, record := range manifest.Records {
+		if bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		withoutPart = append(withoutPart, record)
+	}
+	if _, err := decodeColumnManifestRecords(withoutPart); err == nil || !strings.Contains(err.Error(), "matching live part") {
+		t.Fatalf("decode metadata without part err=%v want matching live part failure", err)
+	}
+
+	namespaceMismatch := cloneColumnManifestRecords(manifest.Records)
+	badMetadata := metadata
+	badMetadata.Ref.Namespace = "wrong/column-assets"
+	badValue, err := encodeColumnManifestPartRecord(badMetadata)
+	if err != nil {
+		t.Fatalf("encode bad metadata: %v", err)
+	}
+	for i := range namespaceMismatch {
+		if bytes.HasPrefix(namespaceMismatch[i].key, columnManifestAggregateMetadataRecordPrefixBytes) {
+			namespaceMismatch[i].value = badValue
+		}
+	}
+	if _, err := decodeColumnManifestRecords(namespaceMismatch); err == nil || !strings.Contains(err.Error(), "does not match part namespace") {
+		t.Fatalf("decode metadata namespace mismatch err=%v want namespace failure", err)
+	}
+}
+
+func TestColumnAggregateMetadataDecodeRejectsNilAssetManagerM1634(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 99
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1AggregateMetadata,
+		Namespace:  cfg.AssetManager.Namespace,
+		Generation: 5,
+		PartID:     3,
+		FileID:     4,
+		Offset:     4096,
+		Length:     256,
+		Checksum:   0xdecafbad,
+	}
+	raw, err := encodeColumnAggregateMetadataAsset(columnAggregateMetadataAsset{
+		Collection:        "events",
+		Namespace:         cfg.AssetManager.Namespace,
+		Generation:        ref.Generation,
+		PartID:            ref.PartID,
+		AppliedCommandLSN: cfg.RecoveryAuthoritativeAppliedCommandLSN,
+		SchemaHash:        cfg.SchemaHash,
+		AggregateName:     "min_time_us",
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Rows:              1,
+		Entries: []columnAggregateMetadataEntry{
+			{Group: "d1", Count: 1, Min: 10, Max: 10},
+		},
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnAggregateMetadataAsset: %v", err)
+	}
+	ref.Length = int64(len(raw))
+	ref.Checksum = page.Checksum(raw)
+	cfg.AssetManager = nil
+	_, err = decodeColumnAggregateMetadataAsset(raw, ref, *cfg, "events", "min_time_us")
+	if err == nil || !strings.Contains(err.Error(), "requires column asset manager") {
+		t.Fatalf("decodeColumnAggregateMetadataAsset err=%v want asset-manager failure", err)
 	}
 }
 
@@ -1547,9 +2228,10 @@ func BenchmarkColumnPhysicalAssetVectorScanV1(b *testing.B) {
 		cases := []struct {
 			name      string
 			projected []string
+			vector    bool
 		}{
 			{name: "score_only_skip_vector_adj", projected: []string{"embedding_inv_norm"}},
-			{name: "vector_and_adjacency", projected: []string{"embedding", "embedding_neighbors"}},
+			{name: "vector_and_adjacency", projected: []string{"embedding", "embedding_neighbors"}, vector: true},
 		}
 		for _, tc := range cases {
 			b.Run(fmt.Sprintf("rows_%d/%s", rows, tc.name), func(b *testing.B) {
@@ -1559,20 +2241,22 @@ func BenchmarkColumnPhysicalAssetVectorScanV1(b *testing.B) {
 				}
 				var scanned int64
 				var sum int64
+				consumeRow := func(row columnPhysicalScanRowView) error {
+					sum += int64(row.Values[0].Float32 * 1000)
+					return nil
+				}
+				if tc.vector {
+					consumeRow = func(row columnPhysicalScanRowView) error {
+						sum += int64(len(row.Values[0].Float32Vector) + len(row.Values[1].AdjacencyList))
+						return nil
+					}
+				}
 				b.ReportAllocs()
 				b.SetBytes(int64(len(encoded)))
 				b.ReportMetric(float64(rows), "rows/op")
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					summary, err := scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
-						switch tc.name {
-						case "score_only_skip_vector_adj":
-							sum += int64(row.Values[0].Float32 * 1000)
-						case "vector_and_adjacency":
-							sum += int64(len(row.Values[0].Float32Vector) + len(row.Values[1].AdjacencyList))
-						}
-						return nil
-					})
+					summary, err := scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, consumeRow)
 					if err != nil {
 						b.Fatal(err)
 					}

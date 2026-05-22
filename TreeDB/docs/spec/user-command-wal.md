@@ -283,6 +283,7 @@ replayable without adding query-wide mutation semantics.
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
 | Collection/catalog metadata | create collection | `CatalogCreateCollection` | PR6 implementation: `WAL-supported`; payload carries canonical collection metadata, replay is idempotent for matching metadata and fail-closed for incompatible metadata. |
 | Collection/index metadata | create/drop index | future catalog command | `WAL-rejected` in PR6; public index DDL fails before frame append or `AppliedCommandLSN` advancement until index catalog commands land. |
+| Collection vector index rebuild | explicit index name through `Collection.RebuildVectorIndex` | `CollectionRebuildVectorIndex` | V2A/#1658 implementation: `WAL-supported` for explicit `column_graph` rebuild/publish maintenance. Payload carries only collection and index names; replay rebuilds physical column graph assets or publishes a defined no-op status boundary. |
 | Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
 | User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
@@ -986,6 +987,40 @@ PR6 evidence:
   `AppliedCommandLSN` and frame count unchanged;
 - performance artifact:
   `artifacts/command-wal/pr6/bench.txt`.
+
+### PR 6.5: Collection/catalog command-WAL performance polish
+
+Deliverables:
+
+- consolidate the PR4, PR5, and PR6 collection/catalog command-WAL performance
+  artifacts before matrix hardening and public raw KV default cutover;
+- apply the strict default-ready throughput gate to collection/catalog lanes:
+  command-WAL throughput divided by the relevant WAL-off baseline throughput
+  must be greater than `1.01x`; anything not strictly greater than `1.01x`
+  fails;
+- explicitly prevent PR9 public raw KV performance evidence from being reused as
+  a collection command-WAL default-readiness claim;
+- convert any below-gate collection overhead into a follow-up issue with exact
+  lane thresholds.
+
+Acceptance:
+
+- catalog create remains default-ready on performance evidence because the PR6
+  artifact shows command-WAL create throughput above the WAL-off baseline;
+- collection insert/delete/update command-WAL lanes remain supported command
+  kinds but are not default-ready performance lanes until the follow-up issue
+  clears strict `>1.01x` throughput for every supported lane;
+- PR9 must restrict default-readiness claims to public raw KV unless it adds
+  new collection/catalog performance artifacts that clear the same strict gate.
+
+PR6.5 evidence:
+
+- consolidated performance summary:
+  `artifacts/command-wal/pr6_5/collection-catalog-performance-summary.md`;
+- acceptance artifact:
+  `artifacts/command-wal/pr6_5/acceptance.json`;
+- follow-up issue for the below-gate collection lanes:
+  `https://github.com/snissn/gomap/issues/1584`.
 
 ### PR 7: Matrix enforcement and future-command guardrails
 
