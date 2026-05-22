@@ -5,7 +5,7 @@ go 1.23.0
 require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/dgryski/go-farm v0.0.0-20240924180020-3414d57e47da
-	github.com/snissn/go-crc32-asm v0.0.0-20260522013757-a412646a9aef
+	github.com/snissn/go-crc32-asm v0.0.0-20260522185432-b461ce8f936d
 	github.com/zeebo/xxh3 v1.1.0
 )
 

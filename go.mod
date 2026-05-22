@@ -18,7 +18,7 @@ require (
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721
-	github.com/snissn/go-crc32-asm v0.0.0-20260522013757-a412646a9aef
+	github.com/snissn/go-crc32-asm v0.0.0-20260522185432-b461ce8f936d
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tidwall/btree v1.8.1
