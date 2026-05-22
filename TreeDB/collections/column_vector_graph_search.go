@@ -385,6 +385,10 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		view = refView
 		rowIndex = ref.rowIndex
 	}
+	localTrustedFiniteScoring := trustedFiniteScoring
+	if singleBlockView == nil {
+		localTrustedFiniteScoring = view.trustedFiniteScoring
+	}
 	stats.ScoreBatches++
 	stats.OrdinalsGrouped++
 	stats.BlockViewHits = plan.hits
@@ -395,7 +399,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 	scratch.scoreScratch.Float32Values = vectorScratch
 	invNorm := view.invNormUnchecked(rowIndex)
 	stats.CandidateFetches++
-	score, err := columnVectorGraphNativeCosineScoreVectorTrusted(query, queryInvNorm, ordinal, vector, invNorm, trustedFiniteScoring)
+	score, err := columnVectorGraphNativeCosineScoreVectorTrusted(query, queryInvNorm, ordinal, vector, invNorm, localTrustedFiniteScoring)
 	if err != nil {
 		return err
 	}

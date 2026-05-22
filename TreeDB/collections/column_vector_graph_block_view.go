@@ -318,14 +318,17 @@ func (v *columnVectorGraphBlockView) validateFiniteVectorPayload(start, end, dim
 	}
 	raw := v.block.raw[start:end]
 	if columnPhysicalNativeLittleEndian {
-		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(raw))), dims)
-		for i, value := range vector {
-			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
-				v.trustedFiniteScoring = false
-				return fmt.Errorf("collections: column_graph %q ordinal=%d vector[%d] is not finite", v.reader.def.Name, ordinal, i)
+		ptr := unsafe.Pointer(unsafe.SliceData(raw))
+		if uintptr(ptr)%unsafe.Alignof(float32(0)) == 0 {
+			vector := unsafe.Slice((*float32)(ptr), dims)
+			for i, value := range vector {
+				if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+					v.trustedFiniteScoring = false
+					return fmt.Errorf("collections: column_graph %q ordinal=%d vector[%d] is not finite", v.reader.def.Name, ordinal, i)
+				}
 			}
+			return nil
 		}
-		return nil
 	}
 	pos := start
 	for i := 0; i < dims; i++ {
