@@ -12,6 +12,10 @@ import (
 type VectorIndexStatus struct {
 	Definition          VectorIndexDefinition
 	Name                string
+	Strategy            VectorIndexStrategy
+	State               VectorIndexState
+	Reason              VectorIndexReason
+	Loaded              bool
 	RootName            string
 	RootID              uint64
 	NativeRootLoaded    bool
@@ -28,7 +32,7 @@ type VectorIndexStatus struct {
 func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 	status, err := c.vectorIndexStatus(name, true)
 	if err != nil {
-		return VectorIndexStatus{}, err
+		return status, err
 	}
 	return status, nil
 }
@@ -44,6 +48,13 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	}
 	if c.db == nil {
 		return VectorIndexStatus{}, errCollectionDBNil
+	}
+	defForStrategy, err := c.declaredVectorIndexDefinition(name)
+	if err != nil {
+		return VectorIndexStatus{}, err
+	}
+	if defForStrategy.Strategy == VectorIndexStrategyColumnGraph || c.db.CommandWALEnabled() {
+		return c.rebuildVectorIndexWithCommandWALIntent(name, nil)
 	}
 	// Rebuild publishes a full replacement graph root. Hold the same mutation
 	// barrier used by writes across the primary scan and root publish so no
@@ -86,6 +97,10 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 	status := VectorIndexStatus{
 		Definition:          def,
 		Name:                def.Name,
+		Strategy:            def.Strategy,
+		State:               VectorIndexStateNativeRuntime,
+		Reason:              VectorIndexReasonNativeRuntime,
+		Loaded:              native.Loaded,
 		RootName:            collectionVectorIndexRootName(c.meta.Name, def.Name),
 		RootID:              native.RootID,
 		NativeRootLoaded:    native.Loaded,
@@ -170,14 +185,22 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	if !ok {
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
+	if def.Strategy == VectorIndexStrategyColumnGraph {
+		return c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
+	}
 
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
 	rootID, overlayRootIDs := vectorIndexStatusRootID(catalog, rootName)
 	status := VectorIndexStatus{
 		Definition: def,
 		Name:       def.Name,
+		Strategy:   def.Strategy,
 		RootName:   rootName,
 		RootID:     rootID,
+	}
+	if def.Strategy == VectorIndexStrategyNativeRuntime {
+		status.State = VectorIndexStateNativeRuntime
+		status.Reason = VectorIndexReasonNativeRuntime
 	}
 	registeredRuntimeStale := false
 	if runtimeIdx := c.registeredVectorIndex(def.Name); runtimeIdx != nil {

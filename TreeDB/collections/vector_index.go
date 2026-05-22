@@ -62,6 +62,38 @@ const (
 	VectorIndexEncodingInt8
 )
 
+type VectorIndexStrategy string
+
+const (
+	VectorIndexStrategyNativeRuntime VectorIndexStrategy = "native_runtime"
+	// VectorIndexStrategyColumnGraph selects the physical column-store graph path.
+	// Until graph assets are built and published, status must report unavailable
+	// or rebuild-needed rather than falling back to a decoded in-memory graph.
+	VectorIndexStrategyColumnGraph VectorIndexStrategy = "column_graph"
+)
+
+type VectorIndexState string
+
+const (
+	VectorIndexStateNativeRuntime            VectorIndexState = "native_runtime"
+	VectorIndexStateColumnGraphLoaded        VectorIndexState = "column_graph_loaded"
+	VectorIndexStateColumnGraphUnavailable   VectorIndexState = "column_graph_unavailable"
+	VectorIndexStateColumnGraphRebuildNeeded VectorIndexState = "column_graph_rebuild_needed"
+)
+
+type VectorIndexReason string
+
+const (
+	VectorIndexReasonNativeRuntime                     VectorIndexReason = "native_runtime_index"
+	VectorIndexReasonColumnGraphRebuildNeeded          VectorIndexReason = "column_graph_rebuild_needed"
+	VectorIndexReasonPhysicalColumnAssetSupportMissing VectorIndexReason = "physical_column_asset_support_missing"
+	VectorIndexReasonColumnGraphAssetMismatch          VectorIndexReason = "column_graph_asset_mismatch"
+	VectorIndexReasonColumnGraphCorrupt                VectorIndexReason = "column_graph_corrupt"
+	VectorIndexReasonColumnGraphUnsupportedVisibility  VectorIndexReason = "column_graph_unsupported_visibility"
+	VectorIndexReasonColumnGraphUnsupportedMetric      VectorIndexReason = "column_graph_unsupported_metric"
+	VectorIndexReasonUnsupportedStrategy               VectorIndexReason = "unsupported_vector_index_strategy"
+)
+
 func (e VectorIndexEncoding) String() string {
 	switch e {
 	case VectorIndexEncodingFloat32:
@@ -125,6 +157,10 @@ type VectorIndexOptions struct {
 
 // VectorIndexSearchOptions configures one in-memory vector index search.
 type VectorIndexSearchOptions struct {
+	// IndexName is used by collection-level physical column_graph search.
+	IndexName string
+	// Query is used by collection-level physical column_graph search.
+	Query                []float32
 	TopK                 int
 	EfSearch             int
 	FetchMultiplier      int
@@ -132,6 +168,10 @@ type VectorIndexSearchOptions struct {
 	IndexRangeFilter     *VectorIndexRangeFilter
 	ExactFilterMaxDocs   int
 	DisableExactFallback bool
+	// IncludeDocuments materializes full documents after column_graph top-k selection.
+	IncludeDocuments bool
+	// MaxDecodedBlocks bounds the physical column row reader cache for column_graph search.
+	MaxDecodedBlocks int
 }
 
 // VectorIndexTrace reports how one vector-index search was executed.
@@ -551,7 +591,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 
 	declared := make(map[string]VectorIndexDefinition, len(c.meta.VectorIndexes))
 	for _, def := range c.meta.VectorIndexes {
-		declared[def.Name] = def
+		if vectorIndexDefinitionUsesNativeRuntime(def) {
+			declared[def.Name] = def
+		}
 	}
 	for _, index := range c.registeredVectorIndexes() {
 		def, ok := declared[index.name]
@@ -567,6 +609,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	}
 	var rebuilt map[string]struct{}
 	for _, def := range c.meta.VectorIndexes {
+		if !vectorIndexDefinitionUsesNativeRuntime(def) {
+			continue
+		}
 		if index := c.registeredVectorIndex(def.Name); index != nil {
 			if index.validateNativeSnapshotDefinition(def) == "" {
 				index.setNativePersistent(true)
@@ -608,7 +653,13 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 	if !catalogCurrent {
 		return false
 	}
-	if len(defs) == 0 {
+	nativeDefs := make([]VectorIndexDefinition, 0, len(defs))
+	for _, def := range defs {
+		if vectorIndexDefinitionUsesNativeRuntime(def) {
+			nativeDefs = append(nativeDefs, def)
+		}
+	}
+	if len(nativeDefs) == 0 {
 		for _, index := range c.registeredVectorIndexes() {
 			if index.isNativePersistent() {
 				return false
@@ -616,8 +667,8 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 		}
 		return true
 	}
-	declared := make(map[string]struct{}, len(defs))
-	for _, def := range defs {
+	declared := make(map[string]struct{}, len(nativeDefs))
+	for _, def := range nativeDefs {
 		declared[def.Name] = struct{}{}
 		index := c.registeredVectorIndex(def.Name)
 		if index == nil || !index.isNativePersistent() || index.validateNativeSnapshotDefinition(def) != "" {
@@ -633,6 +684,10 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 		}
 	}
 	return true
+}
+
+func vectorIndexDefinitionUsesNativeRuntime(def VectorIndexDefinition) bool {
+	return def.Strategy == "" || def.Strategy == VectorIndexStrategyNativeRuntime
 }
 
 func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {

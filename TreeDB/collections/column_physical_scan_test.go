@@ -130,7 +130,7 @@ func TestColumnManifestScanLoaderRejectsChecksumMismatchM1634(t *testing.T) {
 		t.Fatal("AcquireSnapshot returned nil")
 	}
 	defer func() { _ = snap.Close() }()
-	_, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRoot(snap, rootID, *cfg, manifest.Identity, "events")
+	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRoot(snap, rootID, *cfg, manifest.Identity, "events", false, nil)
 	if err == nil || !strings.Contains(err.Error(), "physical column scan manifest checksum") {
 		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRoot err=%v want checksum mismatch", err)
 	}
@@ -876,13 +876,15 @@ func TestColumnManifestSnapshotSidecarFilterStillValidatesSkippedRecordsM1634(t 
 	}
 	defer func() { _ = snap.Close() }()
 
-	_, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
 		snap,
 		rootID,
 		*cfg,
 		manifest.Identity,
 		"events",
 		columnManifestScanSidecarFilter{Int64Values: true},
+		false,
+		nil,
 	)
 	if err == nil || !strings.Contains(err.Error(), "matching live part") {
 		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want skipped sidecar validation failure", err)

@@ -1552,6 +1552,7 @@ func TestColumnPhysicalDirectQueryValidatesUnselectedTypeTags(t *testing.T) {
 		writeManifestString(&raw, string(col.ValueType))
 		writeManifestBool(&raw, col.Nullable)
 		writeManifestBool(&raw, col.Dictionary)
+		writeManifestUint64(&raw, uint64(col.VectorDims))
 	}
 	writeManifestBytes(&raw, []byte("e1"))
 	writeManifestBool(&raw, false)

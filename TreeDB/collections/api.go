@@ -841,6 +841,7 @@ type VectorIndexDefinition struct {
 	EfConstruction   int                 `json:"ef_construction,omitempty"`
 	EfSearch         int                 `json:"ef_search,omitempty"`
 	Encoding         VectorIndexEncoding `json:"encoding,omitempty"`
+	Strategy         VectorIndexStrategy `json:"strategy,omitempty"`
 	SchemaGeneration uint64              `json:"schema_generation,omitempty"`
 }
 
@@ -19257,8 +19258,30 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	if err != nil {
 		return VectorIndexDefinition{}, err
 	}
+	strategy, err := normalizeVectorIndexStrategy(def.Strategy)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
 	def.Metric = metric
 	def.Encoding = encoding
+	def.Strategy = strategy
+	if def.Strategy == VectorIndexStrategyColumnGraph {
+		if def.Metric != VectorMetricCosine {
+			return VectorIndexDefinition{}, fmt.Errorf("collections: column_graph vector index %q supports only metric %q", def.Name, VectorMetricCosine)
+		}
+		if def.Encoding != VectorIndexEncodingFloat32 {
+			return VectorIndexDefinition{}, fmt.Errorf("collections: column_graph vector index %q supports only encoding %q", def.Name, VectorIndexEncodingFloat32)
+		}
+	}
+	if def.M < 0 {
+		return VectorIndexDefinition{}, errors.New("m cannot be negative")
+	}
+	if def.EfConstruction < 0 {
+		return VectorIndexDefinition{}, errors.New("ef_construction cannot be negative")
+	}
+	if def.EfSearch < 0 {
+		return VectorIndexDefinition{}, errors.New("ef_search cannot be negative")
+	}
 	if def.M <= 0 {
 		def.M = defaultVectorIndexM
 	}
@@ -19272,6 +19295,17 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 		def.EfSearch = defaultVectorIndexEfSearch
 	}
 	return def, nil
+}
+
+func normalizeVectorIndexStrategy(strategy VectorIndexStrategy) (VectorIndexStrategy, error) {
+	switch strategy {
+	case "":
+		return VectorIndexStrategyNativeRuntime, nil
+	case VectorIndexStrategyNativeRuntime, VectorIndexStrategyColumnGraph:
+		return strategy, nil
+	default:
+		return "", fmt.Errorf("unsupported strategy %q", strategy)
+	}
 }
 
 func (m CollectionMeta) copy() *CollectionMeta {
