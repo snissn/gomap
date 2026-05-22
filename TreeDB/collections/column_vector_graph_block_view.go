@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"unsafe"
 )
 
 var errColumnVectorGraphBlockViewRowOutOfBounds = errors.New("column_graph block view row outside block")
@@ -158,6 +157,9 @@ func (p *columnVectorGraphSearchPlan) blockViewForAssetOrdinal(assetOrdinal int)
 			p.hits++
 			return p.singleBlockView, nil
 		}
+	}
+	if reader.closed {
+		return nil, errors.New("collections: physical column row reader is closed")
 	}
 	if assetOrdinal < 0 || assetOrdinal >= len(reader.ranges) {
 		return nil, fmt.Errorf("collections: column_graph block view asset ordinal=%d outside ranges=%d", assetOrdinal, len(reader.ranges))
@@ -383,11 +385,6 @@ func (v *columnVectorGraphBlockView) vector(rowIndex int, scratch []float32) ([]
 	if span.dims == 0 {
 		return nil, scratch, nil
 	}
-	if columnPhysicalNativeLittleEndian {
-		raw := v.block.raw[span.start:span.end]
-		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(raw))), span.dims)
-		return vector, scratch, nil
-	}
 	base := len(scratch)
 	need := base + span.dims
 	if cap(scratch) < need {
@@ -396,6 +393,10 @@ func (v *columnVectorGraphBlockView) vector(rowIndex int, scratch []float32) ([]
 		scratch = next
 	} else {
 		scratch = scratch[:need]
+	}
+	if columnPhysicalNativeLittleEndian {
+		columnPhysicalCopyLittleEndianFloat32Bytes(scratch[base:need], v.block.raw[span.start:span.end])
+		return scratch[base:need], scratch, nil
 	}
 	pos := span.start
 	for i := base; i < need; i++ {
