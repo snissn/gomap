@@ -1,10 +1,12 @@
 package collections
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -1575,6 +1577,82 @@ func TestCollectionVectorIndexNativeRootStaleHandleSingleInsertMaintainsGraph(t 
 		t.Fatalf("search reloaded vector index: %v", err)
 	}
 	requireVectorResultIDs(t, results, "a", "c")
+}
+
+func TestCollectionVectorIndexNativeDeltaPersistsPromotedEntryMeta(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("base"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert base: %v", err)
+	}
+	index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	if _, err := index.SaveSnapshot(); err != nil {
+		t.Fatalf("save snapshot: %v", err)
+	}
+
+	index.mu.RLock()
+	oldMaxLevel := index.maxLevel
+	index.mu.RUnlock()
+	var promotedID []byte
+	for i := 0; i < 100000; i++ {
+		candidate := []byte(fmt.Sprintf("promoted-%d", i))
+		if index.levelForDocumentID(candidate) > oldMaxLevel {
+			promotedID = candidate
+			break
+		}
+	}
+	if len(promotedID) == 0 {
+		t.Fatalf("could not find promoted entry id above level %d", oldMaxLevel)
+	}
+	if _, err := col.Insert(promotedID, []byte(`{"embedding":[0.9,0.1]}`)); err != nil {
+		t.Fatalf("insert promoted: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush promoted delta: %v", err)
+	}
+
+	loaded, status, err := col.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("vector index did not load loaded=%v status=%+v", loaded != nil, status)
+	}
+	loaded.mu.RLock()
+	entry := loaded.entry
+	var entryDocumentID []byte
+	if entry >= 0 && entry < len(loaded.nodes) {
+		entryDocumentID = append([]byte(nil), loaded.nodes[entry].documentID...)
+	}
+	loadedMaxLevel := loaded.maxLevel
+	loaded.mu.RUnlock()
+	if !bytes.Equal(entryDocumentID, promotedID) {
+		t.Fatalf("loaded entry document=%q want promoted %q", entryDocumentID, promotedID)
+	}
+	if loadedMaxLevel <= oldMaxLevel {
+		t.Fatalf("loaded max level=%d want above old level %d", loadedMaxLevel, oldMaxLevel)
+	}
 }
 
 func TestCollectionVectorIndexNativeRootFlushAllOnClosePersistsDirtyGraph(t *testing.T) {

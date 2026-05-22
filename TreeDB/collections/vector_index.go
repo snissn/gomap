@@ -359,10 +359,18 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
-	empty := len(c.vectorIndexes) == 0
-	if empty && c.manager != nil {
+	if !c.hasNativePersistentVectorIndexLocked() && c.manager != nil {
 		c.manager.unregisterCollectionHandle(c)
 	}
+}
+
+func (c *Collection) hasNativePersistentVectorIndexLocked() bool {
+	for _, index := range c.vectorIndexes {
+		if index != nil && index.isNativePersistent() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {
@@ -492,9 +500,19 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 		}
 		return true
 	}
+	declared := make(map[string]struct{}, len(defs))
 	for _, def := range defs {
+		declared[def.Name] = struct{}{}
 		index := c.registeredVectorIndex(def.Name)
 		if index == nil || index.validateNativeSnapshotDefinition(def) != "" {
+			return false
+		}
+	}
+	for _, index := range c.registeredVectorIndexes() {
+		if !index.isNativePersistent() {
+			continue
+		}
+		if _, ok := declared[index.name]; !ok {
 			return false
 		}
 	}
@@ -512,7 +530,7 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	if len(indexes) == 0 {
 		return nil
 	}
-	if c.manager != nil {
+	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
 		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
@@ -539,7 +557,7 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if len(indexes) == 0 {
 		return nil
 	}
-	if c.manager != nil {
+	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
 		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
@@ -548,6 +566,15 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 		}
 	}
 	return nil
+}
+
+func vectorIndexListHasNativePersistent(indexes []*VectorIndex) bool {
+	for _, index := range indexes {
+		if index != nil && index.isNativePersistent() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) error {
