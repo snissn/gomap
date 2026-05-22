@@ -20,7 +20,7 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 				},
 				SortKey: []ColumnSortKey{{Column: "time_us"}},
 				AggregateMetadata: []ColumnAggregateMetadata{
-					{Name: "q5_did_time_span", Column: "time_us", Kind: ColumnAggregateMin},
+					{Name: "q5_did_time_span", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin},
 				},
 			}},
 			Indexes: []IndexDefinition{
@@ -347,9 +347,13 @@ func TestColumnQueryPlannerM11BCountsOnlyRequestFeasibleCandidates(t *testing.T)
 		Name: "events",
 		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
 			Enabled: true,
-			Columns: []ColumnStoreColumn{{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString}},
+			Columns: []ColumnStoreColumn{
+				{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+				{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			},
 			AggregateMetadata: []ColumnAggregateMetadata{
-				{Name: "q5_did_time_span", Column: "time_us", Kind: ColumnAggregateMin},
+				{Name: "q5_did_time_span", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin},
 			},
 		}},
 		Indexes: []IndexDefinition{
@@ -827,8 +831,12 @@ func TestColumnQueryPlannerM11BRejectsUnknownAggregateMetadata(t *testing.T) {
 		Name: "events",
 		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
 			Enabled: true,
+			Columns: []ColumnStoreColumn{
+				{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			},
 			AggregateMetadata: []ColumnAggregateMetadata{
-				{Name: "known_span", Column: "time_us", Kind: ColumnAggregateMin},
+				{Name: "known_span", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin},
 			},
 		}},
 	}}
@@ -903,8 +911,12 @@ func TestColumnQueryPlannerM11BMatchesAggregateMetadataNamesCaseSensitivelyAfter
 		Name: "events",
 		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
 			Enabled: true,
+			Columns: []ColumnStoreColumn{
+				{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			},
 			AggregateMetadata: []ColumnAggregateMetadata{
-				{Name: "q5_did_time_span", Column: "time_us", Kind: ColumnAggregateMin},
+				{Name: "q5_did_time_span", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin},
 			},
 		}},
 	}}
@@ -1297,7 +1309,7 @@ func TestColumnQueryPlannerM14BRoutesForcedPhysicalPlansFromManifestCapabilities
 			if got, want := plan.Diagnostics.DeclaredColumnCount, 3; got != want {
 				t.Fatalf("declared columns=%d want %d", got, want)
 			}
-			if got, want := plan.Diagnostics.AggregateMetadataCount, 3; got != want {
+			if got, want := plan.Diagnostics.AggregateMetadataCount, 2; got != want {
 				t.Fatalf("aggregate metadata count=%d want %d", got, want)
 			}
 			if plan.Diagnostics.MutationParts != 0 {
