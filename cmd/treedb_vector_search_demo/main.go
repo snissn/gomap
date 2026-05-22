@@ -1941,11 +1941,11 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
-	fmt.Fprintf(w, "rebuild_native_vector_index: %.3fs native_root_bytes=%d\n", res.Rebuild.Seconds, res.NativeRootBytes)
+	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)
 	if res.Compact {
 		fully := false
 		if res.CompactStorage != nil {
@@ -1960,7 +1960,7 @@ func printText(w io.Writer, res result) {
 	} else {
 		fmt.Fprintf(w, "index_vacuum: skipped\n")
 	}
-	fmt.Fprintf(w, "reopen_and_load_native_index: %.3fs\n", res.ReopenLoad.Seconds)
+	fmt.Fprintf(w, "reopen_and_load_vector_index path=%s: %.3fs\n", resultSearchPath(res), res.ReopenLoad.Seconds)
 	fmt.Fprintf(w, "\nValidation\n")
 	fmt.Fprintf(w, "documents_checked=%d queries_checked=%d recall_at_%d=%.4f overlap=%d/%d\n",
 		res.Validation.DocumentsChecked, res.Validation.QueriesChecked, res.TopK, res.Validation.Recall, res.Validation.Overlap, res.Validation.ExactTotal)
@@ -2007,6 +2007,10 @@ func printMatrixText(w io.Writer, res matrixResult) {
 	for _, testCase := range res.Cases {
 		fmt.Fprintf(w, "\nCase %s\n", testCase.Name)
 		fmt.Fprintf(w, "%s\n", testCase.Description)
+		fmt.Fprintf(w, "backend=%s vector_index_strategy=%s vector_index_search_path=%s\n",
+			resultBackend(testCase.Result),
+			resultStrategy(testCase.Result),
+			resultSearchPath(testCase.Result))
 		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
 			testCase.Result.StorageAfterCompact.TotalBytes,
 			testCase.Result.StorageAfterCompact.BytesPerDoc)
@@ -2032,6 +2036,27 @@ func printMatrixText(w io.Writer, res matrixResult) {
 			testCase.Result.Validation.Recall)
 		printSearchBenchmarks(w, testCase.Result.SearchBenchmarks)
 	}
+}
+
+func resultBackend(res result) string {
+	if res.Backend != "" {
+		return res.Backend
+	}
+	return resultBackendForStrategy(resultStrategy(res))
+}
+
+func resultStrategy(res result) collections.VectorIndexStrategy {
+	if res.VectorIndexStrategy != "" {
+		return res.VectorIndexStrategy
+	}
+	return collections.VectorIndexStrategyNativeRuntime
+}
+
+func resultSearchPath(res result) string {
+	if res.VectorIndexSearchPath != "" {
+		return string(res.VectorIndexSearchPath)
+	}
+	return "native_runtime_snapshot"
 }
 
 func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
