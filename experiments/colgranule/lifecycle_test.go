@@ -1,6 +1,10 @@
 package colgranule
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
 
 func TestColumnAssetReachabilityDeletesClosedSupersededSegment(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
@@ -240,6 +244,104 @@ func TestColumnAssetReachabilityDeterministicChurnReclaimsAfterSnapshotDrain(t *
 	}
 }
 
+func TestColumnAssetReachabilityFromBinaryViewsMatchesMaterializedPlan(t *testing.T) {
+	active := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2,
+		lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16),
+		lifecycleAssetRef(t, 1, int64(tcs1HeaderBytes+16), tcs1HeaderBytes+24),
+	)
+	superseded := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1,
+		lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+32),
+	)
+	materialized, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest:      &active,
+		SupersededManifests: []ColumnCollectionManifest{superseded},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	activeView := mustColumnCollectionManifestView(t, active)
+	supersededView := mustColumnCollectionManifestView(t, superseded)
+	fromViews, err := PlanColumnAssetReachabilityFromViews(ColumnAssetReachabilityViewInput{
+		ActiveManifest:      &activeView,
+		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilityFromViews: %v", err)
+	}
+	if !reflect.DeepEqual(fromViews, materialized) {
+		t.Fatalf("view plan mismatch\nview=%+v\nmaterialized=%+v", fromViews, materialized)
+	}
+	summary, err := PlanColumnAssetReachabilitySummaryFromViews(ColumnAssetReachabilityViewInput{
+		ActiveManifest:      &activeView,
+		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
+	}
+	if want := lifecycleSummaryFromPlan(materialized); !reflect.DeepEqual(summary, want) {
+		t.Fatalf("summary mismatch\nsummary=%+v\nmaterialized=%+v", summary, want)
+	}
+}
+
+func TestColumnCollectionManifestViewRejectsSemanticallyInvalidBinaryManifest(t *testing.T) {
+	ref := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	manifest := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, ref)
+	manifest.PartSet.BaseParts[0].Coverage.Checksums[0]++
+	manifest.ByteAccounting = columnManifestByteAccounting(manifest)
+	payload := encodeColumnCollectionManifestBinaryEnvelopeUnchecked(t, manifest)
+
+	_, err := DecodeColumnCollectionManifestView(payload)
+	if err == nil || !strings.Contains(err.Error(), "coverage invalid") {
+		t.Fatalf("DecodeColumnCollectionManifestView err=%v want coverage validation failure", err)
+	}
+}
+
+func TestColumnAssetReachabilitySummaryScansPreparedRegistryView(t *testing.T) {
+	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	preparedRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
+	quarantinedRef := lifecycleAssetRef(t, 3, 0, tcs1HeaderBytes+32)
+	active := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, activeRef)
+	prepared := ColumnPreparedAsset{
+		Ref:          preparedRef,
+		GenerationID: 3,
+		Reason:       "publish staged",
+	}
+	quarantined := ColumnPreparedAsset{
+		Ref:    quarantinedRef,
+		Bytes:  int(quarantinedRef.Length),
+		Reason: "checksum mismatch",
+	}
+	materialized, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest:    &active,
+		PreparedAssets:    []ColumnPreparedAsset{prepared},
+		QuarantinedAssets: []ColumnPreparedAsset{quarantined},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	activeView := mustColumnCollectionManifestView(t, active)
+	registryView := mustColumnPreparedAssetRegistryView(t, ColumnPreparedAssetRegistry{
+		Magic:        columnWorkspacePreparedMagic,
+		Version:      columnWorkspacePreparedVersion,
+		Collection:   "jsonbench",
+		PublishID:    3,
+		GenerationID: 3,
+		UpdatedUnix:  1,
+		Assets:       []ColumnPreparedAsset{prepared},
+	})
+	summary, err := PlanColumnAssetReachabilitySummaryFromViews(ColumnAssetReachabilityViewInput{
+		ActiveManifest:    &activeView,
+		PreparedRegistry:  &registryView,
+		QuarantinedAssets: []ColumnPreparedAsset{quarantined},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
+	}
+	if want := lifecycleSummaryFromPlan(materialized); !reflect.DeepEqual(summary, want) {
+		t.Fatalf("summary mismatch\nsummary=%+v\nmaterialized=%+v", summary, want)
+	}
+}
+
 func BenchmarkColumnAssetReachability10K(b *testing.B) {
 	active := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 1, 1, 0)
 	superseded := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 10_001, 2, 0)
@@ -264,6 +366,94 @@ func BenchmarkColumnAssetReachability10K(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchSink += int64(plan.RetainedBytes + plan.ReclaimableBytes + plan.RewriteDebtBytes)
+	}
+}
+
+func BenchmarkColumnAssetReachabilityView10K(b *testing.B) {
+	active := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 1, 1, 0)
+	superseded := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 10_001, 2, 0)
+	activeView := mustColumnCollectionManifestView(b, active)
+	supersededView := mustColumnCollectionManifestView(b, superseded)
+	input := ColumnAssetReachabilityViewInput{
+		ActiveManifest:      &activeView,
+		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+	}
+	plan, err := PlanColumnAssetReachabilityFromViews(input)
+	if err != nil {
+		b.Fatalf("PlanColumnAssetReachabilityFromViews: %v", err)
+	}
+	b.ReportMetric(float64(plan.Stats.Manifests), "manifests")
+	b.ReportMetric(float64(plan.Stats.AssetRefs), "asset_refs")
+	b.ReportMetric(float64(plan.Stats.SegmentRefs), "segments")
+	b.ReportMetric(float64(plan.Stats.TCS1PayloadBytesDecoded), "payload_bytes_decoded")
+	b.ReportMetric(float64(plan.Stats.RowsScanned), "rows_scanned")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		plan, err := PlanColumnAssetReachabilityFromViews(input)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(plan.RetainedBytes + plan.ReclaimableBytes + plan.RewriteDebtBytes)
+	}
+}
+
+func BenchmarkColumnAssetReachabilitySummaryView10K(b *testing.B) {
+	active := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 1, 1, 0)
+	superseded := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 10_001, 2, 0)
+	activeView := mustColumnCollectionManifestView(b, active)
+	supersededView := mustColumnCollectionManifestView(b, superseded)
+	input := ColumnAssetReachabilityViewInput{
+		ActiveManifest:      &activeView,
+		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+	}
+	summary, err := PlanColumnAssetReachabilitySummaryFromViews(input)
+	if err != nil {
+		b.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
+	}
+	b.ReportMetric(float64(summary.Stats.Manifests), "manifests")
+	b.ReportMetric(float64(summary.Stats.AssetRefs), "asset_refs")
+	b.ReportMetric(float64(summary.Stats.SegmentRefs), "segments")
+	b.ReportMetric(float64(summary.Stats.TCS1PayloadBytesDecoded), "payload_bytes_decoded")
+	b.ReportMetric(float64(summary.Stats.RowsScanned), "rows_scanned")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		summary, err := PlanColumnAssetReachabilitySummaryFromViews(input)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(summary.RetainedBytes + summary.ReclaimableBytes + summary.RewriteDebtBytes)
+	}
+}
+
+func BenchmarkColumnAssetReachabilitySummaryView10KReuse(b *testing.B) {
+	active := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 1, 1, 0)
+	superseded := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 10_001, 2, 0)
+	activeView := mustColumnCollectionManifestView(b, active)
+	supersededView := mustColumnCollectionManifestView(b, superseded)
+	input := ColumnAssetReachabilityViewInput{
+		ActiveManifest:      &activeView,
+		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+	}
+	scratch := &ColumnAssetReachabilitySummaryScratch{}
+	summary, err := PlanColumnAssetReachabilitySummaryFromViewsWithScratch(input, scratch)
+	if err != nil {
+		b.Fatalf("PlanColumnAssetReachabilitySummaryFromViewsWithScratch: %v", err)
+	}
+	b.ReportMetric(float64(summary.Stats.Manifests), "manifests")
+	b.ReportMetric(float64(summary.Stats.AssetRefs), "asset_refs")
+	b.ReportMetric(float64(summary.Stats.SegmentRefs), "segments")
+	b.ReportMetric(float64(summary.Stats.TCS1PayloadBytesDecoded), "payload_bytes_decoded")
+	b.ReportMetric(float64(summary.Stats.RowsScanned), "rows_scanned")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		summary, err := PlanColumnAssetReachabilitySummaryFromViewsWithScratch(input, scratch)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchSink += int64(summary.RetainedBytes + summary.ReclaimableBytes + summary.RewriteDebtBytes)
 	}
 }
 
@@ -420,6 +610,19 @@ func lifecycleFindEntry(t *testing.T, plan ColumnAssetReachabilityPlan, ref Colu
 	return ColumnAssetReachabilityEntry{}
 }
 
+func lifecycleSummaryFromPlan(plan ColumnAssetReachabilityPlan) ColumnAssetReachabilitySummary {
+	return ColumnAssetReachabilitySummary{
+		Stats:                  plan.Stats,
+		RetainedBytes:          plan.RetainedBytes,
+		PreparedBytes:          plan.PreparedBytes,
+		QuarantinedBytes:       plan.QuarantinedBytes,
+		SupersededBytes:        plan.SupersededBytes,
+		SnapshotProtectedBytes: plan.SnapshotProtectedBytes,
+		RewriteDebtBytes:       plan.RewriteDebtBytes,
+		ReclaimableBytes:       plan.ReclaimableBytes,
+	}
+}
+
 func lifecycleSyntheticManifestForBenchmark(b *testing.B, collection string, parts int, firstPartID uint64, fileID uint32, baseOffset int64) ColumnCollectionManifest {
 	b.Helper()
 	partRefs := lifecycleSyntheticPartRefsForBenchmark(parts, firstPartID, fileID, baseOffset)
@@ -428,4 +631,44 @@ func lifecycleSyntheticManifestForBenchmark(b *testing.B, collection string, par
 		b.Fatalf("NewColumnCollectionManifest: %v", err)
 	}
 	return manifest
+}
+
+func mustColumnCollectionManifestView(t testing.TB, manifest ColumnCollectionManifest) ColumnCollectionManifestView {
+	t.Helper()
+	payload, err := EncodeColumnCollectionManifest(manifest)
+	if err != nil {
+		t.Fatalf("EncodeColumnCollectionManifest: %v", err)
+	}
+	view, err := DecodeColumnCollectionManifestView(payload)
+	if err != nil {
+		t.Fatalf("DecodeColumnCollectionManifestView: %v", err)
+	}
+	return view
+}
+
+func encodeColumnCollectionManifestBinaryEnvelopeUnchecked(t testing.TB, manifest ColumnCollectionManifest) []byte {
+	t.Helper()
+	w := columnBinaryWriter{}
+	writeColumnCollectionManifestBinary(&w, manifest)
+	if w.err != nil {
+		t.Fatalf("writeColumnCollectionManifestBinary: %v", w.err)
+	}
+	payload, err := encodeColumnControlPlaneEnvelope(columnCollectionManifestBinaryMagic, columnCollectionManifestBinaryVersion, w.buf)
+	if err != nil {
+		t.Fatalf("encodeColumnControlPlaneEnvelope: %v", err)
+	}
+	return payload
+}
+
+func mustColumnPreparedAssetRegistryView(t testing.TB, registry ColumnPreparedAssetRegistry) ColumnPreparedAssetRegistryView {
+	t.Helper()
+	payload, err := encodeColumnPreparedAssetRegistryEnvelope(registry)
+	if err != nil {
+		t.Fatalf("encodeColumnPreparedAssetRegistryEnvelope: %v", err)
+	}
+	view, err := DecodeColumnPreparedAssetRegistryView(payload)
+	if err != nil {
+		t.Fatalf("DecodeColumnPreparedAssetRegistryView: %v", err)
+	}
+	return view
 }

@@ -225,6 +225,32 @@ func BenchmarkColumnCollectionManifestDecode10K(b *testing.B) {
 	}
 }
 
+func BenchmarkColumnCollectionManifestViewDecode10K(b *testing.B) {
+	manifest := syntheticColumnCollectionManifestForBenchmark(10_000)
+	payload, err := EncodeColumnCollectionManifest(manifest)
+	if err != nil {
+		b.Fatalf("EncodeColumnCollectionManifest: %v", err)
+	}
+	view, err := DecodeColumnCollectionManifestView(payload)
+	if err != nil {
+		b.Fatalf("DecodeColumnCollectionManifestView: %v", err)
+	}
+	if view.BodyBytes() == 0 {
+		b.Fatalf("empty manifest view")
+	}
+	b.ReportMetric(float64(len(payload)), "manifest_bytes")
+	b.ReportMetric(float64(len(manifest.PartSet.BaseParts)), "parts")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		view, err := DecodeColumnCollectionManifestView(payload)
+		if err != nil {
+			b.Fatalf("DecodeColumnCollectionManifestView: %v", err)
+		}
+		benchSink += int64(view.BodyBytes())
+	}
+}
+
 func publishJSONBenchPartRows(t testing.TB, workspace *ColumnWorkspace, opts ColumnStoreOptions, ds JSONBenchDataset, partID uint64, start int, end int) ColumnWorkspacePartManifest {
 	t.Helper()
 	part, err := BuildColumnPart(partID, opts, ColumnBatch{Rows: end - start, Columns: sliceJSONBenchColumns(ds, start, end)})
