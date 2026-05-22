@@ -3,13 +3,27 @@ package collections
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestPrecountColumnAssetReachabilityRangesSkipsMissingSegmentsM15C(t *testing.T) {
+	if precountColumnAssetReachabilityRanges(8, 0) {
+		t.Fatal("precount=true for refs with no segment files; missing-segment plans should skip the extra pass")
+	}
+	if precountColumnAssetReachabilityRanges(0, 0) {
+		t.Fatal("precount=true for empty refs")
+	}
+	if !precountColumnAssetReachabilityRanges(10, 2) {
+		t.Fatal("precount=false for dense refs with existing segment files")
+	}
+}
 
 func TestColumnAssetReachabilityPlanProtectsActiveManifestRefsM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
@@ -182,7 +196,7 @@ func TestColumnAssetReachabilityPlanCountsUniqueSourceRefsM15A(t *testing.T) {
 	}
 }
 
-func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
+func TestColumnAssetReachabilityPlanClassifiesUnreferencedCanonicalSegmentReclaimableM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -196,22 +210,33 @@ func TestColumnAssetReachabilityPlanRetainsUnknownSegmentsM15A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), []byte("untracked-column-asset-bytes"), 0o600); err != nil {
-		t.Fatalf("WriteFile unknown segment: %v", err)
+	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99))
+	if err := os.WriteFile(segmentPath, []byte("untracked-column-asset-bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile unreferenced segment: %v", err)
 	}
 
 	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability: %v", err)
 	}
-	if plan.Complete {
-		t.Fatalf("plan marked complete despite untracked segment: %+v", plan.Segments)
+	if !plan.Complete {
+		t.Fatalf("plan marked incomplete despite unreferenced canonical segment: %+v", plan.Segments)
 	}
-	if plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown == 0 {
-		t.Fatalf("segment stats=%+v want one retained unknown segment with bytes", plan.Segments)
+	if plan.Segments.Reclaimable != 1 || plan.Segments.BytesReclaimable == 0 || plan.Segments.Unknown != 0 {
+		t.Fatalf("segment stats=%+v want one reclaimable unreferenced canonical segment", plan.Segments)
 	}
-	if plan.Segments.Reclaimable != 0 {
-		t.Fatalf("unknown segment was treated as reclaimable: %+v", plan.Segments)
+	found := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path != segmentPath {
+			continue
+		}
+		found = true
+		if entry.FileID != 99 || entry.Status != ColumnAssetReachabilitySegmentReclaimable || entry.ReclaimableBytes == 0 || entry.UnknownBytes != 0 {
+			t.Fatalf("unreferenced canonical entry=%+v want reclaimable bytes and no unknown bytes", entry)
+		}
+	}
+	if !found {
+		t.Fatalf("missing unreferenced segment entry for %s in %+v", segmentPath, plan.SegmentEntries)
 	}
 }
 
@@ -271,6 +296,100 @@ func TestColumnAssetReachabilityPlanRetainsNonCanonicalSegmentFileM15A(t *testin
 	}
 }
 
+func TestColumnAssetReachabilityPlanRetainsCanonicalSymlinkAsUnknownM15A(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	targetPath := filepath.Join(root, "outside-target")
+	if err := os.WriteFile(targetPath, []byte("not-a-column-segment"), 0o600); err != nil {
+		t.Fatalf("WriteFile symlink target: %v", err)
+	}
+	linkPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(7))
+	if err := os.Symlink(targetPath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	input := columnAssetReachabilityInput{
+		rootDir:    root,
+		collection: "events",
+		namespace:  namespaceName,
+		detailed:   true,
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.Reclaimable != 0 {
+		t.Fatalf("segments=%+v complete=%t want symlink retained as unknown", plan.Segments, plan.Complete)
+	}
+	if plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("segments=%+v want non-regular symlink bytes omitted from unknown byte totals", plan.Segments)
+	}
+	foundSymlink := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path == linkPath {
+			foundSymlink = true
+			if entry.FileID != 7 || entry.Status != ColumnAssetReachabilitySegmentUnknown || entry.Bytes != 0 || entry.UnknownBytes != 0 {
+				t.Fatalf("symlink entry=%+v want canonical fileID with zero-byte unknown diagnostics", entry)
+			}
+		}
+	}
+	if !foundSymlink {
+		t.Fatalf("missing symlink entry for %s in %+v", linkPath, plan.SegmentEntries)
+	}
+}
+
+func TestColumnAssetReachabilityPlanRetainsCanonicalDirectoryAsUnknownM15A(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	dirPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(9))
+	if err := os.Mkdir(dirPath, 0o700); err != nil {
+		t.Fatalf("Mkdir canonical segment directory: %v", err)
+	}
+
+	input := columnAssetReachabilityInput{
+		rootDir:    root,
+		collection: "events",
+		namespace:  namespaceName,
+		detailed:   true,
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.Reclaimable != 0 {
+		t.Fatalf("segments=%+v complete=%t want directory retained as unknown", plan.Segments, plan.Complete)
+	}
+	if plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("segments=%+v want directory bytes omitted from unknown byte totals", plan.Segments)
+	}
+	foundDir := false
+	for _, entry := range plan.SegmentEntries {
+		if entry.Path == dirPath {
+			foundDir = true
+			if entry.FileID != 9 || entry.Status != ColumnAssetReachabilitySegmentUnknown || entry.Bytes != 0 || entry.UnknownBytes != 0 {
+				t.Fatalf("directory entry=%+v want canonical fileID with zero-byte unknown diagnostics", entry)
+			}
+		}
+	}
+	if !foundDir {
+		t.Fatalf("missing directory entry for %s in %+v", dirPath, plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -299,7 +418,7 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 	if plan.Complete {
 		t.Fatalf("plan marked complete despite missing live segment: %+v", plan.Segments)
 	}
-	if plan.Segments.Missing == 0 || plan.Segments.Reclaimable != 0 {
+	if plan.Segments.Total == 0 || plan.Segments.Missing == 0 || plan.Segments.Reclaimable != 0 {
 		t.Fatalf("segment stats=%+v want missing retained and no reclaimable segment", plan.Segments)
 	}
 	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentMissing {
@@ -308,11 +427,16 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 }
 
 func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T) {
-	const namespace = "events/column-assets"
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
 	input := columnAssetReachabilityInput{
-		rootDir:     t.TempDir(),
+		rootDir:     root,
 		collection:  "events",
-		namespace:   namespace,
+		namespace:   namespaceName,
 		detailed:    true,
 		activeGen:   1,
 		recoveryGen: 1,
@@ -320,7 +444,7 @@ func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T
 	for _, fileID := range []uint32{3, 1, 2} {
 		input.addRef(ColumnAssetRef{
 			Kind:       ColumnAssetKindTCS1PartImage,
-			Namespace:  namespace,
+			Namespace:  namespaceName,
 			Generation: 1,
 			PartID:     uint64(fileID),
 			FileID:     fileID,
@@ -341,6 +465,9 @@ func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T
 	for i, want := range []uint32{1, 2, 3} {
 		if got := plan.SegmentEntries[i].FileID; got != want {
 			t.Fatalf("segment entry %d fileID=%d want %d; entries=%+v", i, got, want, plan.SegmentEntries)
+		}
+		if got, wantPath := plan.SegmentEntries[i].Path, columnAssetReachabilitySegmentPath(namespace.SegmentDir, columnAssetSegmentFileName(want)); got != wantPath {
+			t.Fatalf("segment entry %d path=%q want %q; entries=%+v", i, got, wantPath, plan.SegmentEntries)
 		}
 		if got := plan.SegmentEntries[i].Status; got != ColumnAssetReachabilitySegmentMissing {
 			t.Fatalf("segment entry %d status=%q want missing; entries=%+v", i, got, plan.SegmentEntries)
@@ -374,14 +501,46 @@ func TestColumnAssetReachabilityPlanCountsMissingSegmentsOnceM15A(t *testing.T) 
 	if err != nil {
 		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
 	}
-	if plan.Complete || plan.Segments.Missing != 1 || plan.Segments.OutOfBoundsRefs != 0 {
-		t.Fatalf("segments=%+v complete=%t want one missing segment and no out-of-bounds refs", plan.Segments, plan.Complete)
+	if plan.Complete || plan.Segments.Total != 1 || plan.Segments.Missing != 1 || plan.Segments.OutOfBoundsRefs != 0 {
+		t.Fatalf("segments=%+v complete=%t want one total missing segment and no out-of-bounds refs", plan.Segments, plan.Complete)
 	}
 	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].FileID != 7 || plan.SegmentEntries[0].RefCount != 2 {
 		t.Fatalf("segment entries=%+v want one missing segment entry with two refs", plan.SegmentEntries)
 	}
 	if plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentMissing {
 		t.Fatalf("segment entry status=%q want missing", plan.SegmentEntries[0].Status)
+	}
+}
+
+func TestColumnAssetReachabilityInvalidRefDoesNotContributeSegmentRangeM15A(t *testing.T) {
+	const namespace = "events/column-assets"
+	input := columnAssetReachabilityInput{
+		rootDir:     t.TempDir(),
+		collection:  "events",
+		namespace:   namespace,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     7,
+		Offset:     -1,
+		Length:     64,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Refs.Uncertain != 1 {
+		t.Fatalf("plan complete=%t refs=%+v want one uncertain invalid ref", plan.Complete, plan.Refs)
+	}
+	if plan.Segments.Missing != 0 || plan.Segments.OutOfBoundsRefs != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("invalid ref contributed segment work: segments=%+v entries=%+v", plan.Segments, plan.SegmentEntries)
 	}
 }
 
@@ -430,6 +589,67 @@ func TestColumnAssetReachabilityPlanSeparatesOutOfBoundsRefsFromMissingSegmentsM
 	}
 }
 
+func TestColumnAssetReachabilityUnknownSegmentCountsKnownRewriteDebtM15A(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), make([]byte, 64), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:     root,
+		collection:  "events",
+		namespace:   namespaceName,
+		detailed:    true,
+		activeGen:   1,
+		recoveryGen: 1,
+	}
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     16,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     2,
+		FileID:     1,
+		Offset:     16,
+		Length:     16,
+	}, ColumnAssetReachabilitySourceCandidate)
+	input.addRef(ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     3,
+		FileID:     1,
+		Offset:     60,
+		Length:     8,
+	}, ColumnAssetReachabilitySourceActiveManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.OutOfBoundsRefs != 1 {
+		t.Fatalf("segments=%+v complete=%t want one unknown out-of-bounds segment", plan.Segments, plan.Complete)
+	}
+	if plan.RewriteDebtBytes != 16 {
+		t.Fatalf("rewrite debt=%d want known reclaimable bytes preserved", plan.RewriteDebtBytes)
+	}
+}
+
 func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.T) {
 	fileID, ok := columnAssetReachabilitySegmentFileID(columnAssetSegmentFileName(1))
 	if !ok || fileID != 1 {
@@ -453,22 +673,95 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 }
 
 func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
-	for _, source := range []ColumnAssetReachabilitySource{
-		ColumnAssetReachabilitySourceActiveManifest,
-		ColumnAssetReachabilitySourceRecoveryManifest,
-		ColumnAssetReachabilitySourceCandidate,
-		ColumnAssetReachabilitySourcePinnedSnapshot,
-		ColumnAssetReachabilitySourcePendingPublish,
-		ColumnAssetReachabilitySourcePreparedAsset,
-	} {
-		mask, ok := columnAssetReachabilitySourceBit(source)
-		if !ok || mask == 0 || mask == columnAssetReachabilitySourceUnknownMask {
-			t.Fatalf("source %q mask=%b ok=%t, want non-zero known mask", source, mask, ok)
+	if len(columnAssetReachabilitySourceBits) > 64 {
+		t.Fatalf("source mask table has %d entries; uint64 mask needs an explicit overflow strategy", len(columnAssetReachabilitySourceBits))
+	}
+	seen := make(map[columnAssetReachabilitySourceMask]ColumnAssetReachabilitySource, len(columnAssetReachabilitySourceBits))
+	for _, entry := range columnAssetReachabilitySourceBits {
+		mask, ok := columnAssetReachabilitySourceBit(entry.source)
+		if entry.source == columnAssetReachabilitySourceUnknown {
+			if ok || mask != columnAssetReachabilitySourceUnknownMask {
+				t.Fatalf("unknown table source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+			}
+			continue
+		}
+		if prev, dup := seen[entry.mask]; dup {
+			t.Fatalf("source %q duplicates mask %b already used by %q", entry.source, entry.mask, prev)
+		}
+		seen[entry.mask] = entry.source
+		if !ok || mask == 0 || entry.mask == 0 || mask != entry.mask || mask == columnAssetReachabilitySourceUnknownMask {
+			t.Fatalf("source %q mask=%b ok=%t, want table mask %b", entry.source, mask, ok, entry.mask)
 		}
 	}
 	mask, ok := columnAssetReachabilitySourceBit(ColumnAssetReachabilitySource("future_source"))
 	if ok || mask != columnAssetReachabilitySourceUnknownMask {
 		t.Fatalf("unknown source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+	}
+	knownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(knownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate}) {
+		t.Fatalf("known source list=%v want candidate only without stray unknown sources", knownSources)
+	}
+	unknownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask|columnAssetReachabilitySourceUnknownMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(unknownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate, "future_source"}) {
+		t.Fatalf("unknown source list=%v want candidate plus original unknown source", unknownSources)
+	}
+}
+
+func TestColumnAssetReachabilityCanElideDiagnosticSourcesForRewriteM15C(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	payload := []byte("rewrite-source-elision-column-asset")
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), payload, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:      root,
+		collection:   "events",
+		namespace:    namespaceName,
+		detailed:     true,
+		omitSources:  true,
+		omitSort:     true,
+		activeGen:    1,
+		recoveryGen:  1,
+		manifestRecs: 1,
+	}
+	input.addRef(ref, ColumnAssetReachabilitySourceActiveManifest)
+	input.addRef(ref, ColumnAssetReachabilitySourceRecoveryManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || len(plan.Entries) != 1 {
+		t.Fatalf("plan complete=%t entries=%d want one complete entry", plan.Complete, len(plan.Entries))
+	}
+	if len(plan.Entries[0].Sources) != 0 {
+		t.Fatalf("diagnostic sources=%v want elided", plan.Entries[0].Sources)
+	}
+	if !columnAssetRewriteSourceMaskIncludesManifest(input.refs[plan.Entries[0].Ref]) {
+		t.Fatalf("entry source mask did not preserve manifest-source classification: %+v", plan.Entries[0])
 	}
 }
 
@@ -507,6 +800,9 @@ func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
 		t.Fatal("unknown source ref was dropped, want fail-closed retention")
 	}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source_2")) {
+		t.Fatal("second unknown source ref was dropped, want diagnostics to retain distinct sources")
+	}
 
 	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
 	if err != nil {
@@ -521,14 +817,40 @@ func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	if len(plan.Entries) != 1 || plan.Entries[0].Status != ColumnAssetReachabilityUncertain {
 		t.Fatalf("entries=%+v want one uncertain ref entry", plan.Entries)
 	}
-	if len(plan.Entries[0].Sources) != 1 || plan.Entries[0].Sources[0] != columnAssetReachabilitySourceUnknown {
-		t.Fatalf("entry sources=%v want unknown source marker", plan.Entries[0].Sources)
+	if len(plan.Entries[0].Sources) != 2 ||
+		plan.Entries[0].Sources[0] != ColumnAssetReachabilitySource("future_source") ||
+		plan.Entries[0].Sources[1] != ColumnAssetReachabilitySource("future_source_2") {
+		t.Fatalf("entry sources=%v want original unknown source values", plan.Entries[0].Sources)
 	}
 	if plan.Segments.Unknown != 1 || plan.Segments.Protected != 0 || plan.Segments.Reclaimable != 0 {
 		t.Fatalf("segment stats=%+v want existing unknown-source segment retained as unknown", plan.Segments)
 	}
 	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown {
 		t.Fatalf("segment entries=%+v want unknown segment entry", plan.SegmentEntries)
+	}
+}
+
+func TestColumnAssetReachabilityInputSkipsUnknownSourceDetailsWhenNotDetailedM15B(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		FileID:    1,
+		Offset:    8,
+		Length:    64,
+		Checksum:  99,
+		Namespace: "events/column-assets",
+	}
+	input := columnAssetReachabilityInput{segmentDetails: true}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
+		t.Fatal("first unknown source ref was dropped")
+	}
+	if input.addRef(ref, ColumnAssetReachabilitySource("future_source_2")) {
+		t.Fatal("second unknown source ref should be collapsed when detailed diagnostics are disabled")
+	}
+	if input.unknownSources != nil {
+		t.Fatalf("unknownSources allocated in non-detailed mode: %+v", input.unknownSources)
+	}
+	if got := input.refs[ref]; got&columnAssetReachabilitySourceUnknownMask == 0 {
+		t.Fatalf("ref source mask=%b want unknown bit", got)
 	}
 }
 
@@ -603,6 +925,76 @@ func TestColumnAssetReachabilityCancelledBuildReturnsIdentityOnlyM15A(t *testing
 	}
 }
 
+func TestColumnAssetReachabilityPlanCancellationBeforeSnapshotM15A(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	col := &Collection{}
+	plan, err := col.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{Detailed: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+	if !plan.ProtectOnly || plan.Complete || plan.Collection != "" || plan.Namespace != "" {
+		t.Fatalf("canceled plan=%+v want protect-only identity", plan)
+	}
+	if plan.Sources.ManifestRecords != 0 || plan.Refs.Total != 0 || plan.Segments.Total != 0 || len(plan.Entries) != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("canceled plan should not expose partial stats: %+v", plan)
+	}
+}
+
+func TestColumnAssetReachabilityPlanPreservesIdentityOnSnapshotViewErrorM15A(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	active := ColumnManifestIdentity{
+		Generation: 7,
+		Format:     columnManifestFormatTCS1,
+		Version:    columnManifestIdentityVersion,
+		Checksum:   0xabcddcbe,
+	}
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(&active)}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column store metadata: %+v", cfg)
+	}
+	publishColumnStoreCatalogForTest(t, d, meta, active)
+
+	col := &Collection{db: d, meta: CollectionMeta{Name: "events"}}
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err == nil {
+		t.Fatal("PlanColumnAssetReachability err=nil, want fail-closed incomplete manifest error")
+	}
+	if !plan.ProtectOnly || plan.Complete {
+		t.Fatalf("plan=%+v want protect-only incomplete identity", plan)
+	}
+	if plan.Collection != "events" || plan.Namespace != cfg.AssetManager.Namespace ||
+		plan.ActiveManifestGeneration != active.Generation || plan.RecoveryManifestGeneration != active.Generation {
+		t.Fatalf("plan identity=%+v want collection/namespace/generation preserved", plan)
+	}
+	if plan.Sources.ManifestRecords != 0 || plan.Refs.Total != 0 || plan.Segments.Total != 0 || len(plan.Entries) != 0 || len(plan.SegmentEntries) != 0 {
+		t.Fatalf("failed plan should not expose partial stats: %+v", plan)
+	}
+}
+
+func TestColumnAssetReachabilityListSegmentsCancellationM15A(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	segments, err := listColumnAssetReachabilitySegments(ctx, t.TempDir())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v want context.Canceled", err)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("segments=%+v want none after cancellation", segments)
+	}
+}
+
 func TestColumnAssetReachabilityAddRefsCancellationDoesNotPartiallyCountM15A(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -634,15 +1026,18 @@ func TestColumnAssetReachabilityAddRefsCancellationKeepsPartialCountsConsistentM
 		FileID:     1,
 		Length:     64,
 	}
-	ref2 := ref1
-	ref2.PartID = 2
+	refs := make([]ColumnAssetRef, columnAssetReachabilityContextCheckInterval+1)
+	for i := range refs {
+		refs[i] = ref1
+		refs[i].PartID = uint64(i + 1)
+	}
 	input := columnAssetReachabilityInput{}
 
-	err := input.addRefs(ctx, []ColumnAssetRef{ref1, ref2}, ColumnAssetReachabilitySourceCandidate)
+	err := input.addRefs(ctx, refs, ColumnAssetReachabilitySourceCandidate)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v want context.Canceled", err)
 	}
-	if len(input.refs) != 1 || input.sourceCounts.CandidateRefs != 1 {
+	if len(input.refs) != columnAssetReachabilityContextCheckInterval || input.sourceCounts.CandidateRefs != columnAssetReachabilityContextCheckInterval {
 		t.Fatalf("partial input inconsistent: refs=%d sources=%+v", len(input.refs), input.sourceCounts)
 	}
 	sourceMask := input.refs[ref1]
@@ -688,6 +1083,93 @@ func TestColumnAssetReachabilitySegmentAccountingPreservesKnownBytesWhenUnknownM
 		reclaimable.reclaimableBytes != 40 ||
 		reclaimable.unknownBytes != 60 {
 		t.Fatalf("reclaimable unknown segment plan=%+v want reclaimable=40 unknown=60", reclaimable)
+	}
+}
+
+func TestColumnAssetReachabilityPlanClassifiesFullCandidateSegmentReclaimableM15A(t *testing.T) {
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, "events/column-assets")
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(22)), make([]byte, 100), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Namespace:  "events/column-assets",
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Generation: 1,
+		PartID:     1,
+		FileID:     22,
+		Offset:     0,
+		Length:     100,
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:    root,
+		collection: "events",
+		namespace:  "events/column-assets",
+		detailed:   true,
+	}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{ref}, ColumnAssetReachabilitySourceCandidate); err != nil {
+		t.Fatalf("addRefs: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || plan.Segments.Reclaimable != 1 || plan.Segments.Unknown != 0 || plan.Segments.Mixed != 0 {
+		t.Fatalf("segment stats=%+v complete=%t want one fully reclaimable segment", plan.Segments, plan.Complete)
+	}
+	if plan.RewriteDebtBytes != 0 {
+		t.Fatalf("rewrite debt=%d want 0 for fully reclaimable segment", plan.RewriteDebtBytes)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentReclaimable {
+		t.Fatalf("segment entries=%+v want reclaimable", plan.SegmentEntries)
+	}
+}
+
+func TestColumnAssetReachabilityByteAccountingSaturatesM15A(t *testing.T) {
+	if got := addColumnAssetReachabilityBytes(math.MaxInt64-3, 2); got != math.MaxInt64-1 {
+		t.Fatalf("non-overflow add=%d want %d", got, int64(math.MaxInt64-1))
+	}
+	if got := addColumnAssetReachabilityBytes(math.MaxInt64-3, 4); got != math.MaxInt64 {
+		t.Fatalf("overflow add=%d want MaxInt64", got)
+	}
+	if got := addColumnAssetReachabilityBytes(7, -1); got != 7 {
+		t.Fatalf("negative add=%d want unchanged", got)
+	}
+	if got := columnAssetReachabilityIntervalsLength([]columnAssetReachabilityInterval{
+		{start: 0, end: math.MaxInt64},
+		{start: 0, end: 1},
+	}); got != math.MaxInt64 {
+		t.Fatalf("interval length=%d want saturated MaxInt64", got)
+	}
+}
+
+func TestColumnAssetReachabilitySubtractIntervalsInterleavedM15A(t *testing.T) {
+	got := subtractColumnAssetReachabilityIntervals(
+		[]columnAssetReachabilityInterval{
+			{start: 0, end: 10},
+			{start: 20, end: 30},
+			{start: 40, end: 50},
+		},
+		[]columnAssetReachabilityInterval{
+			{start: 2, end: 4},
+			{start: 6, end: 22},
+			{start: 25, end: 45},
+		},
+	)
+	want := []columnAssetReachabilityInterval{
+		{start: 0, end: 2},
+		{start: 4, end: 6},
+		{start: 22, end: 25},
+		{start: 45, end: 50},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("subtract intervals=%+v want %+v", got, want)
 	}
 }
 

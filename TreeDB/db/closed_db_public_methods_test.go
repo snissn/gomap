@@ -355,11 +355,11 @@ func TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDelt
 		table := mustFrozenSystemMemtable(t, "root/k", "v")
 		iter := table.NewIterator(nil, nil)
 		defer iter.Close()
-		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewritePlan(), []OrderedRootDeltaPublishInput{{
-			Iter:                      iter,
-			StorageMaintenanceRewrite: true,
+		_, _, err := d.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(storagemaintenance.ColumnAssetRewritePlan(), []StorageMaintenanceRootDeltaPublishInput{{
+			Iter: iter,
 		}}, nil, func([]uint64) (iterator.UnsafeIterator, error) {
-			return mustFrozenSystemMemtable(t, "sys/k", "v").NewIterator(nil, nil), nil
+			t.Fatalf("maintenance system builder should not run on a closed DB")
+			return nil, nil
 		})
 		if !errors.Is(err, ErrClosed) {
 			t.Fatalf("PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder err=%v want %v", err, ErrClosed)

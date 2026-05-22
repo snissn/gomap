@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -38,8 +39,10 @@ type columnPhysicalScanDiagnostics struct {
 	DeletedRows      int
 	ProjectedColumns int
 	// Counts full-document row materialization; M13A emits declared-column row views only.
-	RowMaterializations  int
-	PhysicalBytesScanned int64
+	RowMaterializations    int
+	PhysicalBytesScanned   int64
+	SegmentFileCacheHits   uint64
+	SegmentFileCacheMisses uint64
 }
 
 type columnPhysicalScanRowView struct {
@@ -109,6 +112,16 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 }
 
 func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScanSnapshotView, func(), error) {
+	return c.prepareColumnPhysicalScanSnapshotViewWithContext(context.Background())
+}
+
+func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContext(ctx context.Context) (columnPhysicalScanSnapshotView, func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return columnPhysicalScanSnapshotView{}, nil, err
+	}
 	if c == nil {
 		return columnPhysicalScanSnapshotView{}, nil, errCollectionNil
 	}
@@ -120,9 +133,17 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScan
 		return columnPhysicalScanSnapshotView{}, nil, errCollectionDBNil
 	}
 	closeView := func() { _ = snap.Close() }
+	if err := ctx.Err(); err != nil {
+		closeView()
+		return columnPhysicalScanSnapshotView{}, nil, err
+	}
 
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
+		closeView()
+		return columnPhysicalScanSnapshotView{}, nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		closeView()
 		return columnPhysicalScanSnapshotView{}, nil, err
 	}
@@ -133,13 +154,19 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScan
 	columnStoreEnabled := cfgPtr != nil
 	var cfg ColumnStoreConfig
 	if cfgPtr != nil {
-		cfg = cfgPtr.copy()
+		// Collection catalogs are immutable after publication; snapshot views
+		// only read the config, so a shallow copy avoids per-scan slice clones.
+		cfg = *cfgPtr
 	}
 
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled)
 	if err != nil {
 		closeView()
 		return view, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		closeView()
+		return columnPhysicalScanSnapshotView{}, nil, err
 	}
 	return view, closeView, nil
 }
@@ -277,6 +304,9 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	if req.RefOrdinalModulo < 0 {
 		return diag, errors.New("collections: physical column scan ref ordinal modulo cannot be negative")
 	}
+	if req.RefOrdinalModulo == 0 && req.RefOrdinalRemainder != 0 {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d requires non-zero modulo", req.RefOrdinalRemainder)
+	}
 	if req.RefOrdinalModulo > 0 && (req.RefOrdinalRemainder < 0 || req.RefOrdinalRemainder >= req.RefOrdinalModulo) {
 		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", req.RefOrdinalRemainder, req.RefOrdinalModulo)
 	}
@@ -286,16 +316,17 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	}
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
-	for ordinal, assetRef := range view.AssetRefs {
+	start, step := columnPhysicalScanRefOrdinalPartition(req)
+	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {
+		assetRef := view.AssetRefs[ordinal]
 		if req.ShouldCancel != nil && req.ShouldCancel() {
 			return diag, errColumnPhysicalScanCancelled
-		}
-		if !columnPhysicalScanIncludesRefOrdinal(req, ordinal) {
-			continue
 		}
 		diag.ScheduledGranules++
 		ref := assetRef.Ref
 		raw, err := readCache.read(ref, rawScratch)
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
 		if err != nil {
 			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
@@ -312,14 +343,16 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 		diag.RowsScanned += summary.rows
 		diag.DeletedRows += summary.deleted
 	}
+	diag.SegmentFileCacheHits = readCache.hits
+	diag.SegmentFileCacheMisses = readCache.misses
 	return diag, nil
 }
 
-func columnPhysicalScanIncludesRefOrdinal(req columnPhysicalScanRequest, ordinal int) bool {
+func columnPhysicalScanRefOrdinalPartition(req columnPhysicalScanRequest) (start int, step int) {
 	if req.RefOrdinalModulo <= 1 {
-		return true
+		return 0, 1
 	}
-	return ordinal%req.RefOrdinalModulo == req.RefOrdinalRemainder
+	return req.RefOrdinalRemainder, req.RefOrdinalModulo
 }
 
 func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) (columnPhysicalScanProjection, error) {
@@ -494,6 +527,9 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if sawHeader {
 				return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: duplicate column manifest binary header record")
 			}
+			// The decoded byte slices alias the inline manifest record; the
+			// planner scan validates and hashes them before advancing the
+			// iterator and never retains them.
 			header, err = decodeColumnManifestHeaderRecordForScan(value)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
@@ -514,7 +550,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				iter.Next()
 				continue
 			}
-			keyGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(key)
+			keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(key)
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
@@ -528,6 +564,9 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if ref.Generation != keyGeneration {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
 			}
+			if ref.PartID != keyPartID {
+				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
+			}
 			operation, ok := columnPhysicalScanOperationFromBytes(reason)
 			if !ok {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
@@ -536,8 +575,14 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			// all reachable lineage through the active generation. The header
 			// expected-parts check below is generation-local and intentionally
 			// only counts current-generation records.
+			if caps.PhysicalAssetCount == maxCollectionInt {
+				return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest physical asset count overflows int")
+			}
 			caps.PhysicalAssetCount++
 			if operation != ColumnPublishOperationInsert {
+				if caps.MutationParts == maxCollectionInt {
+					return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest mutation part count overflows int")
+				}
 				caps.MutationParts++
 			}
 			writeHashBytes(&d, key)
@@ -590,8 +635,6 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 	if err := cur.err; err != nil {
 		return columnManifestHeaderRecordForScan{}, err
 	}
-	header.collection = bytes.Clone(header.collection)
-	header.operation = bytes.Clone(header.operation)
 	if header.rowCount > uint64(maxCollectionInt) {
 		return columnManifestHeaderRecordForScan{}, errors.New("collections: column manifest row count overflows int")
 	}
@@ -607,6 +650,9 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 func validateColumnManifestHeaderRecordForScan(header columnManifestHeaderRecordForScan, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string) error {
 	if !columnPhysicalBytesEqualString(header.collection, collection) {
 		return fmt.Errorf("collections: physical column planner manifest collection=%q want %q", string(header.collection), collection)
+	}
+	if _, ok := columnPhysicalScanOperationFromBytes(header.operation); !ok {
+		return fmt.Errorf("collections: unsupported column manifest header operation %q", string(header.operation))
 	}
 	if header.generation != identity.Generation {
 		return fmt.Errorf("collections: physical column planner manifest generation=%d want %d", header.generation, identity.Generation)

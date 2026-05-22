@@ -130,6 +130,92 @@ func TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations(t *testing
 	}
 }
 
+func TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire(t *testing.T) {
+	db := &DB{snapPool: NewSnapshotPool()}
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq without snapshots=%d, want MaxUint64", got)
+	}
+
+	db.snapshotAcquireRO[0].Store(1)
+	if got := db.MinPinnedSnapshotCommitSeq(); got != 0 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq with in-flight acquire=%d, want 0", got)
+	}
+
+	db.snapshotAcquireRO[0].Store(0)
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq after acquire drain=%d, want MaxUint64", got)
+	}
+}
+
+func TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.id = 1
+	idx.refs.Store(1)
+	state := &DBState{CommitSeq: 313, RootPageID: 11}
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.idx.Store(idx)
+	db.trackIndex(idx)
+	db.publishSnapshotView(idx, state, nil)
+
+	var snap *Snapshot
+	hookCalls := 0
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
+	prevHook := minPinnedSnapshotCommitSeqAfterScanForTesting
+	minPinnedSnapshotCommitSeqAfterScanForTesting = func() {
+		hookCalls++
+		if hookCalls != 1 {
+			return
+		}
+		snap = db.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("AcquireSnapshot during min-pinned scan returned nil")
+		}
+	}
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
+	defer func() {
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
+		minPinnedSnapshotCommitSeqAfterScanForTesting = prevHook
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
+		if snap != nil {
+			_ = snap.Close()
+		}
+	}()
+
+	if got := db.MinPinnedSnapshotCommitSeq(); got != state.CommitSeq {
+		t.Fatalf("MinPinnedSnapshotCommitSeq=%d want snapshot commit seq %d", got, state.CommitSeq)
+	}
+	if hookCalls < 2 {
+		t.Fatalf("min-pinned scan hook calls=%d want rescan after acquire epoch changed", hookCalls)
+	}
+}
+
+func TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn(t *testing.T) {
+	db := &DB{snapPool: NewSnapshotPool()}
+	churnScans := minPinnedSnapshotCommitSeqMaxAttempts / 2
+	hookCalls := 0
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
+	prevHook := minPinnedSnapshotCommitSeqAfterScanForTesting
+	minPinnedSnapshotCommitSeqAfterScanForTesting = func() {
+		hookCalls++
+		if hookCalls <= churnScans {
+			db.snapshotAcquireEpoch.Add(1)
+		}
+	}
+	minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
+	defer func() {
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Lock()
+		minPinnedSnapshotCommitSeqAfterScanForTesting = prevHook
+		minPinnedSnapshotCommitSeqAfterScanForTestingMu.Unlock()
+	}()
+
+	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
+		t.Fatalf("MinPinnedSnapshotCommitSeq after short acquire churn=%d, want MaxUint64", got)
+	}
+	if hookCalls <= churnScans {
+		t.Fatalf("min-pinned scan hook calls=%d want rescan past churn=%d", hookCalls, churnScans)
+	}
+}
+
 func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 	idx := &indexGen{}
 	idx.refs.Store(1)

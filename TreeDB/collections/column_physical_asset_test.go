@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1051,6 +1052,182 @@ func TestColumnAssetManagerAllocatesDistinctNewSegmentsConcurrentlyM15C(t *testi
 		if !bytes.Equal(raw, payloads[i]) {
 			t.Fatalf("payload[%d]=%q want %q", i, raw, payloads[i])
 		}
+	}
+}
+
+func TestColumnAssetSegmentAppenderAbortRemovesSegmentM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	assetPath := appender.assetPath
+	if _, err := os.Stat(assetPath); err != nil {
+		t.Fatalf("segment before abort stat: %v", err)
+	}
+	if err := appender.abort(); err != nil {
+		t.Fatalf("abort: %v", err)
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("segment after abort stat=%v want not exist", err)
+	}
+}
+
+func TestColumnAssetSegmentAllocationCacheRescansOnConflictM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	first, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("first newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	firstFileID := first.fileID
+	if err := first.close(); err != nil {
+		t.Fatalf("first close: %v", err)
+	}
+	conflictFileID := firstFileID + 1
+	conflictPath, err := columnAssetSegmentPath(root, ColumnAssetRef{
+		Namespace: normalized.AssetManager.Namespace,
+		FileID:    conflictFileID,
+	})
+	if err != nil {
+		t.Fatalf("conflict segment path: %v", err)
+	}
+	if err := os.WriteFile(conflictPath, []byte("reserved"), 0o600); err != nil {
+		t.Fatalf("write conflict segment: %v", err)
+	}
+	second, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("second newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	defer func() { _ = second.abort() }()
+	if second.fileID <= conflictFileID {
+		t.Fatalf("second file_id=%d want > conflict file_id %d", second.fileID, conflictFileID)
+	}
+}
+
+func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	assetPath := appender.assetPath
+	appender.failed = true
+	if err := appender.close(); err == nil || !strings.Contains(err.Error(), "appender is failed") {
+		t.Fatalf("failed close err=%v want appender failed", err)
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("segment after failed close stat=%v want not exist", err)
+	}
+}
+
+func TestColumnAssetSegmentAppenderRejectsUnsupportedConfigBeforeNamespaceM15C(t *testing.T) {
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	tests := []struct {
+		name string
+		cfg  ColumnStoreConfig
+	}{
+		{
+			name: "unsupported_kind",
+			cfg: ColumnStoreConfig{
+				AssetManager: &ColumnAssetManagerConfig{
+					Kind:              ColumnAssetManagerKind("unsupported"),
+					IsolatedNamespace: true,
+					Namespace:         "events/column-assets",
+				},
+			},
+		},
+		{
+			name: "non_isolated",
+			cfg: ColumnStoreConfig{
+				AssetManager: &ColumnAssetManagerConfig{
+					Kind:              ColumnAssetManagerValueLogShaped,
+					IsolatedNamespace: false,
+					Namespace:         "events/column-assets",
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if appender, err := newNextColumnPhysicalAssetSegmentAppender(root, tt.cfg); err == nil {
+				_ = appender.abort()
+				t.Fatalf("newNextColumnPhysicalAssetSegmentAppender succeeded; want unsupported config error")
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("column asset root stat=%v want not created for invalid config", err)
+			}
+			if appender, err := newColumnPhysicalAssetSegmentAppender(root, tt.cfg, columnAssetM12ASegmentFileID); err == nil {
+				_ = appender.abort()
+				t.Fatalf("newColumnPhysicalAssetSegmentAppender succeeded; want unsupported config error")
+			}
+			if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("column asset root stat=%v want not created for invalid config", err)
+			}
+		})
+	}
+}
+
+func TestColumnAssetSegmentAppenderRemoveOnCloseErrorsM15C(t *testing.T) {
+	ioErr := errors.New("close-time io")
+	tests := []struct {
+		name         string
+		failed       bool
+		fileSyncErr  error
+		fileCloseErr error
+		dirSyncErr   error
+		want         bool
+	}{
+		{name: "clean", want: false},
+		{name: "failed", failed: true, want: true},
+		{name: "sync_error", fileSyncErr: ioErr, want: true},
+		{name: "close_error", fileCloseErr: ioErr, want: true},
+		{name: "dir_sync_error", dirSyncErr: ioErr, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := columnPhysicalAssetSegmentAppenderRemoveOnClose(tt.failed, tt.fileSyncErr, tt.fileCloseErr, tt.dirSyncErr)
+			if got != tt.want {
+				t.Fatalf("columnPhysicalAssetSegmentAppenderRemoveOnClose=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestColumnAssetSegmentAppenderDirSyncErrorRemovesSegmentM15C(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory fsync is intentionally a no-op on windows")
+	}
+	root := t.TempDir()
+	assetPath := filepath.Join(root, "segment-1.tca")
+	if err := os.WriteFile(assetPath, []byte("unpublished"), 0o600); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+	appender := &columnPhysicalAssetSegmentAppender{
+		namespace: columnAssetManagerNamespace{
+			SegmentDir: filepath.Join(root, "missing-segment-dir"),
+		},
+		assetPath: assetPath,
+	}
+	if err := appender.close(); err == nil {
+		t.Fatalf("close err=nil want dir sync error")
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("segment after dir sync failed close stat=%v want not exist", err)
 	}
 }
 

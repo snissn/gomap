@@ -2982,14 +2982,18 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 }
 
 func rejectCreateIndexOnRetainedColumnField(meta CollectionMeta, def IndexDefinition) error {
-	if !columnStoreNeedsRetainedPayloadTransform(meta) || meta.Options.ColumnStore == nil {
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled || cfg.RetainedPayload == ColumnRetainedPayloadFull {
 		return nil
 	}
 	field := strings.TrimSpace(def.Field)
 	if field == "" {
 		return nil
 	}
-	for _, col := range meta.Options.ColumnStore.Columns {
+	if cfg.RetainedPayload == ColumnRetainedPayloadNone {
+		return fmt.Errorf("collections: CreateIndex on retained-payload-none collection field %q is unsupported because primary rows retain no JSON payload for index maintenance", field)
+	}
+	for _, col := range cfg.Columns {
 		if field == strings.TrimSpace(col.Path) {
 			return fmt.Errorf("collections: CreateIndex on retained-payload column field %q is unsupported because primary rows omit declared column payloads", field)
 		}

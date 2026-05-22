@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,184 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 )
+
+func TestColumnAssetRewriteEligibleRefsAreDeterministicM15C(t *testing.T) {
+	older := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "ns",
+		FileID:     2,
+		Offset:     4,
+		Length:     8,
+		Generation: 1,
+		PartID:     1,
+	}
+	newer := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "ns",
+		FileID:     7,
+		Offset:     4,
+		Length:     8,
+		Generation: 1,
+		PartID:     1,
+	}
+	refs := columnAssetRewriteEligibleRefs(
+		ColumnAssetReachabilityPlan{Namespace: "ns"},
+		map[ColumnAssetRef]columnAssetReachabilitySourceMask{
+			newer: columnAssetReachabilitySourceActiveManifestMask,
+			older: columnAssetReachabilitySourceActiveManifestMask,
+		},
+		map[uint32]ColumnAssetReachabilitySegmentEntry{
+			newer.FileID: {},
+			older.FileID: {},
+		},
+	)
+	if len(refs) != 2 {
+		t.Fatalf("eligible refs len=%d want 2", len(refs))
+	}
+	if compareColumnAssetRefs(refs[0], older) != 0 || compareColumnAssetRefs(refs[1], newer) != 0 {
+		t.Fatalf("eligible refs order=%+v want [%+v %+v]", refs, older, newer)
+	}
+}
+
+func TestPatchColumnAssetRewriteManifestRecordsRemapsOnlyRefFieldsM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	originalRecords := cloneColumnManifestRecords(state.records)
+	var oldPart columnManifestPartSnapshot
+	var oldRecordIdx int
+	found := false
+	for i, record := range state.records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			t.Fatalf("decodeColumnManifestPartRecord: %v", err)
+		}
+		oldPart = part
+		oldRecordIdx = i
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("no manifest part record found")
+	}
+	newRef := oldPart.AssetRef
+	newRef.FileID += 17
+	newRef.Offset += oldPart.AssetRef.Length + 11
+
+	patched, count, err := patchColumnAssetRewriteManifestRecords(
+		state.records,
+		map[ColumnAssetRef]ColumnAssetRef{oldPart.AssetRef: newRef},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecords: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("patch count=%d want 1", count)
+	}
+	if len(patched) != len(state.records) {
+		t.Fatalf("patched records=%d want %d", len(patched), len(state.records))
+	}
+	for i := range patched {
+		if !bytes.Equal(patched[i].key, state.records[i].key) {
+			t.Fatalf("patched key[%d]=%x want %x", i, patched[i].key, state.records[i].key)
+		}
+		if !bytes.Equal(state.records[i].key, originalRecords[i].key) || !bytes.Equal(state.records[i].value, originalRecords[i].value) {
+			t.Fatalf("input record[%d] mutated", i)
+		}
+	}
+
+	patchedPart, err := decodeColumnManifestPartRecord(patched[oldRecordIdx].value)
+	if err != nil {
+		t.Fatalf("decode patched part: %v", err)
+	}
+	if patchedPart.AssetRef != newRef {
+		t.Fatalf("patched ref=%+v want %+v", patchedPart.AssetRef, newRef)
+	}
+	if patchedPart.Bytes != oldPart.Bytes || patchedPart.PublishID != oldPart.PublishID ||
+		patchedPart.GenerationID != oldPart.GenerationID || patchedPart.Reason != oldPart.Reason {
+		t.Fatalf("patched metadata=%+v want original metadata=%+v", patchedPart, oldPart)
+	}
+}
+
+func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	var oldPart columnManifestPartSnapshot
+	oldRecordIdx := -1
+	for i, record := range state.records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			t.Fatalf("decodeColumnManifestPartRecord: %v", err)
+		}
+		oldPart = part
+		oldRecordIdx = i
+		break
+	}
+	if oldRecordIdx < 0 {
+		t.Fatal("no manifest part record found")
+	}
+	newRef := oldPart.AssetRef
+	newRef.FileID += 23
+	newRef.Offset += oldPart.AssetRef.Length + 7
+
+	patched, count, err := patchColumnAssetRewriteManifestRecordsInPlace(
+		state.records,
+		map[ColumnAssetRef]ColumnAssetRef{oldPart.AssetRef: newRef},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecordsInPlace: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("patch count=%d want 1", count)
+	}
+	if len(patched) != len(state.records) {
+		t.Fatalf("patched records=%d want %d", len(patched), len(state.records))
+	}
+	if len(patched) != 0 && &patched[0] != &state.records[0] {
+		t.Fatal("in-place patch returned a copied record slice")
+	}
+	patchedPart, err := decodeColumnManifestPartRecord(state.records[oldRecordIdx].value)
+	if err != nil {
+		t.Fatalf("decode patched part: %v", err)
+	}
+	if patchedPart.AssetRef != newRef {
+		t.Fatalf("patched ref=%+v want %+v", patchedPart.AssetRef, newRef)
+	}
+	if patchedPart.Bytes != oldPart.Bytes || patchedPart.PublishID != oldPart.PublishID ||
+		patchedPart.GenerationID != oldPart.GenerationID || patchedPart.Reason != oldPart.Reason {
+		t.Fatalf("patched metadata=%+v want original metadata=%+v", patchedPart, oldPart)
+	}
+}
 
 func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
@@ -58,6 +237,17 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	}
 	if dry.Plan.Segments.Mixed != 1 || dry.Plan.RewriteDebtBytes != candidate.Length {
 		t.Fatalf("dry-run plan segments=%+v debt=%d want one mixed segment with candidate debt %d", dry.Plan.Segments, dry.Plan.RewriteDebtBytes, candidate.Length)
+	}
+	if len(dry.Plan.Entries) == 0 {
+		t.Fatal("detailed dry-run rewrite plan omitted ref entries")
+	}
+	for i, entry := range dry.Plan.Entries {
+		if len(entry.Sources) == 0 {
+			t.Fatalf("detailed dry-run entry[%d] ref=%+v omitted sources", i, entry.Ref)
+		}
+		if i > 0 && compareColumnAssetRefs(dry.Plan.Entries[i-1].Ref, entry.Ref) > 0 {
+			t.Fatalf("detailed dry-run entries are not sorted at %d: prev=%+v current=%+v", i, dry.Plan.Entries[i-1].Ref, entry.Ref)
+		}
 	}
 
 	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
@@ -124,6 +314,47 @@ func TestColumnAssetRewriteRemapsManifestRefsOutOfMixedSegmentM15C(t *testing.T)
 	}
 }
 
+func TestColumnAssetRewriteSkipsSegmentWhenManifestRefAlsoProtectedByPinnedSourceM15C(t *testing.T) {
+	namespace := "collections/events/column-assets"
+	segmentDir := t.TempDir()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespace,
+		Generation: 7,
+		PartID:     3,
+		FileID:     2,
+		Offset:     0,
+		Length:     10,
+		Checksum:   99,
+	}
+	plan := ColumnAssetReachabilityPlan{
+		Namespace: namespace,
+		Segments:  ColumnAssetReachabilitySegmentStats{Mixed: 1},
+		SegmentEntries: []ColumnAssetReachabilitySegmentEntry{{
+			Namespace:        namespace,
+			FileID:           ref.FileID,
+			Path:             filepath.Join(segmentDir, columnAssetSegmentFileName(ref.FileID)),
+			Bytes:            20,
+			Status:           ColumnAssetReachabilitySegmentMixed,
+			ProtectedBytes:   ref.Length,
+			ReclaimableBytes: 10,
+			RefCount:         2,
+		}},
+	}
+	sourceMasks := map[ColumnAssetRef]columnAssetReachabilitySourceMask{
+		ref: columnAssetReachabilitySourceActiveManifestMask | columnAssetReachabilitySourcePinnedSnapshotMask,
+	}
+
+	segments := columnAssetRewriteEligibleSegments(segmentDir, plan, sourceMasks)
+	if len(segments) != 0 {
+		t.Fatalf("eligible segments=%v want none when manifest ref is also pinned", segments)
+	}
+	refs := columnAssetRewriteEligibleRefs(plan, sourceMasks, segments)
+	if len(refs) != 0 {
+		t.Fatalf("eligible refs=%v want none when manifest ref is also pinned", refs)
+	}
+}
+
 func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -185,22 +416,46 @@ func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	result, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
-		Kind:        ColumnPhysicalQueryGroupCount,
-		GroupColumn: "kind",
-	})
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery after reopen: %v", err)
+	liveEvents := []columnPhysicalQueryEventM13B{{
+		ID:     "e1",
+		TimeUS: 3,
+		Kind:   "share",
+		Did:    "d1",
+	}}
+	assertLifecycleQueries := func(label string) {
+		t.Helper()
+		tests := []struct {
+			name     string
+			hashName string
+			req      ColumnPhysicalQueryRequest
+		}{
+			{name: "q1", hashName: "q1", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}},
+			{name: "q2", hashName: "q2", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}},
+			{name: "q3", hashName: "q3", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
+			{name: "q4a", hashName: "q4a", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q4b", hashName: "q4b", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5", hashName: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5_metadata", hashName: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+		}
+		for _, tc := range tests {
+			result, err := reopened.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("%s RunColumnPhysicalQuery(%s): %v", label, tc.name, err)
+			}
+			got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B(tc.name, result.Groups))
+			want := columnPhysicalQueryReferenceHashM13B(tc.hashName, liveEvents)
+			if got != want {
+				t.Fatalf("%s %s hash=%016x want %016x lines=%v diagnostics=%+v", label, tc.name, got, want, columnPhysicalQueryLinesM13B(tc.name, result.Groups), result.Diagnostics)
+			}
+			if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
+				t.Fatalf("%s %s diagnostics materialized/reconstructed rows: %+v", label, tc.name, result.Diagnostics)
+			}
+			if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
+				t.Fatalf("%s %s visibility diagnostics=%+v want one reduced live row and one tombstone", label, tc.name, result.Diagnostics)
+			}
+		}
 	}
-	if got, want := columnPhysicalQueryLinesM13B("q1", result.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
-		t.Fatalf("query lines=%v want %v diagnostics=%+v", got, want, result.Diagnostics)
-	}
-	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReconstructionRows != 0 {
-		t.Fatalf("aggregate diagnostics materialized/reconstructed rows: %+v", result.Diagnostics)
-	}
-	if result.Diagnostics.ReduceRows != 1 || result.Diagnostics.DeletedRows != 1 {
-		t.Fatalf("visibility diagnostics=%+v want one reduced live row and one tombstone", result.Diagnostics)
-	}
+	assertLifecycleQueries("after reopen")
 
 	gcStats, err := reopened.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
 		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
@@ -214,16 +469,7 @@ func TestColumnAssetRewriteLifecycleSmokeWithMutationsM15C(t *testing.T) {
 	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("old segment still exists or unexpected stat error: %v", err)
 	}
-	afterGC, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{
-		Kind:        ColumnPhysicalQueryGroupCount,
-		GroupColumn: "kind",
-	})
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery after GC: %v", err)
-	}
-	if got, want := columnPhysicalQueryLinesM13B("q1", afterGC.Groups), []string{"q1:share=1"}; !equalStringSets(got, want) {
-		t.Fatalf("post-GC query lines=%v want %v diagnostics=%+v", got, want, afterGC.Diagnostics)
-	}
+	assertLifecycleQueries("after GC")
 }
 
 func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
@@ -240,7 +486,7 @@ func TestColumnAssetRewriteFailClosedOnIncompletePlanM15C(t *testing.T) {
 	if err != nil {
 		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(99)), []byte("unknown-bytes"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, "segment-unknown.tca"), []byte("unknown-bytes"), 0o600); err != nil {
 		t.Fatalf("WriteFile unknown segment: %v", err)
 	}
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
@@ -287,8 +533,10 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnStalePublishPreflightM15C(t *tes
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
 
-	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
-		CandidateRefs: []ColumnAssetRef{candidate},
+	stats, err := col.columnAssetRewriteWithOptions(context.Background(), columnAssetRewriteOptions{
+		ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{
+			CandidateRefs: []ColumnAssetRef{candidate},
+		},
 		afterCopyHookForTest: func() error {
 			return staleColumnAssetRewriteManifestRootM15C(d)
 		},
@@ -318,8 +566,10 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *test
 	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 3, 99)
 	beforeSegments := columnAssetSegmentNamesM15C(t, d, col)
 
-	stats, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
-		CandidateRefs: []ColumnAssetRef{candidate},
+	stats, err := col.columnAssetRewriteWithOptions(context.Background(), columnAssetRewriteOptions{
+		ColumnAssetRewriteOptions: ColumnAssetRewriteOptions{
+			CandidateRefs: []ColumnAssetRef{candidate},
+		},
 		afterPrePublishHookForTest: func() error {
 			return staleColumnAssetRewriteManifestRootM15C(d)
 		},
@@ -334,6 +584,41 @@ func TestColumnAssetRewriteCleansCopiedSegmentOnPublishPreflightRaceM15C(t *test
 		t.Fatalf("stale publish reported copied bytes stats=%+v", stats)
 	}
 	assertStringSlicesEqualM15C(t, beforeSegments, columnAssetSegmentNamesM15C(t, d, col))
+}
+
+func TestColumnAssetRewriteRecognizesBackendPreApplyFailureM15C(t *testing.T) {
+	err := errors.Join(backenddb.ErrStorageMaintenancePublishPreApplyFailed, backenddb.ErrRecoveryRequired)
+	if !columnAssetRewritePublishFailedBeforeApply(err) {
+		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=false, want true", err)
+	}
+	ambiguousErr := backenddb.ErrRecoveryRequired
+	if columnAssetRewritePublishFailedBeforeApply(ambiguousErr) {
+		t.Fatalf("columnAssetRewritePublishFailedBeforeApply(%v)=true, want false", ambiguousErr)
+	}
+}
+
+func TestColumnAssetRewriteManifestRootStoragePolicyM15C(t *testing.T) {
+	if _, err := columnAssetRewriteManifestRootStoragePolicy(columnAssetRewriteManifestState{}); err == nil {
+		t.Fatal("columnAssetRewriteManifestRootStoragePolicy missing manifest root err=nil, want error")
+	}
+	if _, err := columnAssetRewriteManifestRootStoragePolicy(columnAssetRewriteManifestState{
+		cfg: ColumnStoreConfig{
+			ManifestRoot: &ColumnManifestRootDescriptor{StoragePolicy: RootStoragePolicy("unsupported")},
+		},
+	}); err == nil {
+		t.Fatal("columnAssetRewriteManifestRootStoragePolicy unsupported storage policy err=nil, want error")
+	}
+	policy, err := columnAssetRewriteManifestRootStoragePolicy(columnAssetRewriteManifestState{
+		cfg: ColumnStoreConfig{
+			ManifestRoot: &ColumnManifestRootDescriptor{StoragePolicy: RootStorageCompressed},
+		},
+	})
+	if err != nil {
+		t.Fatalf("columnAssetRewriteManifestRootStoragePolicy compressed: %v", err)
+	}
+	if policy != backenddb.OrderedRootStorageValueLogLeaves {
+		t.Fatalf("policy=%v want OrderedRootStorageValueLogLeaves", policy)
+	}
 }
 
 func staleColumnAssetRewriteManifestRootM15C(d *backenddb.DB) error {

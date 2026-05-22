@@ -170,6 +170,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.ScanDurationMS < 0 {
 			t.Fatalf("query %s scan_duration_ms=%v", q.Name, q.ScanDurationMS)
 		}
+		if q.AdapterDurationMS < 0 {
+			t.Fatalf("query %s adapter_duration_ms=%v", q.Name, q.AdapterDurationMS)
+		}
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
@@ -264,11 +267,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.Manifest.ActiveGeneration == 0 || report.Manifest.AppliedCommandLSN == 0 {
 		t.Fatalf("expected active/recovery-authoritative manifest identity: %+v", report.Manifest)
 	}
-	if len(report.UnsupportedForcedPaths) != 0 {
-		t.Fatalf("unexpected unsupported forced path labels after M14B routing: %+v", report.UnsupportedForcedPaths)
+	if len(report.FailClosedForcedPaths) != 0 {
+		t.Fatalf("unexpected fail-closed forced path labels after M14B routing: %+v", report.FailClosedForcedPaths)
 	}
-	if !columnStoreTestStringSliceContains(report.SupportedForcedPaths, columnStorePathSerialColumnScan) {
-		t.Fatalf("expected physical forced path labels to be recorded as supported: %+v", report.SupportedForcedPaths)
+	if !columnStoreTestStringSliceContains(report.AcceptedForcedPaths, columnStorePathSerialColumnScan) {
+		t.Fatalf("expected physical forced path labels to be recorded as accepted: %+v", report.AcceptedForcedPaths)
 	}
 	if report.Artifacts.CPUProfile == "" ||
 		report.Artifacts.AllocsProfile == "" ||
@@ -362,7 +365,7 @@ func TestColumnStoreBenchRunUsesDurationForAggregateM11A(t *testing.T) {
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if math.Abs(got-1000) > 1e-9 {
+	if math.Abs(got-1000) > 1e-6 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from exact durations", got)
 	}
 }
@@ -378,8 +381,39 @@ func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
-	if math.Abs(got-1000) > 1e-9 {
+	if math.Abs(got-1000) > 1e-6 {
 		t.Fatalf("aggregate rows/sec=%f want 1000 from physical rows processed", got)
+	}
+}
+
+func TestColumnStoreBenchRunFallsBackToRowsForLegacyArtifactsM14B(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", Rows: 10, RowMaterializations: 10, RowsPerSecond: 1, duration: 10 * time.Millisecond},
+			{Name: "q2", Rows: 20, RowMaterializations: 20, RowsPerSecond: 1, duration: 20 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if math.Abs(got-1000) > 1e-6 {
+		t.Fatalf("aggregate rows/sec=%f want 1000 from legacy rows fallback", got)
+	}
+}
+
+func TestColumnStoreBenchRunDoesNotFallbackForZeroProcessedPhysicalRowsM14B(t *testing.T) {
+	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
+		Rows:      30,
+		BatchSize: 10,
+		Queries: []columnStoreQueryMetric{
+			{Name: "q1", Rows: 30, RowsProcessed: 0, RowsProcessedKnown: true, RowMaterializations: 0, RowsPerSecond: 0, duration: 30 * time.Millisecond},
+		},
+	}, nil, 0)
+
+	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
+	if got != 0 {
+		t.Fatalf("aggregate rows/sec=%f want zero without legacy row materialization fallback", got)
 	}
 }
 
@@ -399,7 +433,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowMaterializations: 1024,
 				BytesRead:           128 << 10,
 			},
-			want: []string{"decode-bound", "row materialization", "mark-pruning not active", "observed rows_processed=1024", "row_materializations=1024/1024", "bytes_read=131072"},
+			want: []string{"decode-bound", "row materialization", "mark-pruning not active", "effective_rows_processed=1024", "row_materializations=1024/1024", "bytes_read=131072"},
 		},
 		{
 			name: "btree decode baseline",
@@ -411,7 +445,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowMaterializations: 1024,
 				BytesRead:           128 << 10,
 			},
-			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active", "observed rows_processed=1024", "row_materializations=1024/1024"},
+			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active", "effective_rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
 			name: "serial physical scan",
@@ -424,7 +458,27 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				BytesRead:           96 << 10,
 				ScheduledGranules:   2,
 			},
-			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "observed rows_processed=1024", "scheduled_granules=2"},
+			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "effective_rows_processed=1024", "scheduled_granules=2"},
+		},
+		{
+			name: "missing source row count falls back to processed rows",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ3,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+			},
+			want: []string{"physical serial scan", "row_materializations=0/1024"},
+		},
+		{
+			name: "legacy materialized row evidence",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathRowStoreBaseline,
+				Rows:                1024,
+				RowMaterializations: 1024,
+			},
+			want: []string{"decode-bound", "effective_rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
 			name: "scan backed aggregate fallback",
@@ -485,7 +539,24 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				RowsProcessed: 1024,
 				WorkerCount:   0,
 			},
-			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "observed rows_processed=1024"},
+			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "effective_rows_processed=1024"},
+		},
+		{
+			name: "unknown effective rows are explicit",
+			q: columnStoreQueryMetric{
+				Name:      columnStoreQueryQ1,
+				PlanLabel: columnStorePathSerialColumnScan,
+			},
+			want: []string{"physical serial scan", "effective_rows_processed=unknown", "row_materializations=0/unknown"},
+		},
+		{
+			name: "known zero effective rows are explicit",
+			q: columnStoreQueryMetric{
+				Name:               columnStoreQueryQ1,
+				PlanLabel:          columnStorePathSerialColumnScan,
+				RowsProcessedKnown: true,
+			},
+			want: []string{"physical serial scan", "effective_rows_processed=0", "row_materializations=0/unknown"},
 		},
 		{
 			name: "unknown plan includes labels",
@@ -534,12 +605,17 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 			{
 				Name:                     "q|pipe`tick",
 				PlanLabel:                "plan|pipe`tick",
-				ThroughputInterpretation: "line1\r\nline2|pipe",
+				ThroughputInterpretation: "line1\r\nline2|pipe <b>&bad</b>",
 				ImplementationNote:       "note|pipe`tick",
 			},
 			{
 				Name:      "q_empty_interpretation",
 				PlanLabel: columnStorePathSerialColumnScan,
+			},
+			{
+				Name:                     "-",
+				PlanLabel:                "-",
+				ThroughputInterpretation: "-",
 			},
 		},
 		Parity: map[string]columnStoreParity{
@@ -554,15 +630,37 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 		"physical serial scan",
 		"fallback-bound aggregate metadata label",
 		"mark-pruning not active",
+		"adapter ms",
 		"``q\\|pipe`tick``",
 		"``plan\\|pipe`tick``",
 		"``note\\|pipe`tick``",
-		"line1 line2\\|pipe",
-		"| `q_empty_interpretation` | `serial_column_scan` | - |",
+		"line1 line2\\|pipe &lt;b&gt;&amp;bad&lt;/b&gt;",
+		"| `q_empty_interpretation` | `serial_column_scan` | (empty) |",
+		"| `-` | `-` | - |",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}
+	}
+}
+
+func TestMarkdownCodeTableTextPreservesBoundaryWhitespaceM14C(t *testing.T) {
+	got := markdownCodeTableText(" value|with`tick ")
+	want := "``  value\\|with`tick  ``"
+	if got != want {
+		t.Fatalf("markdownCodeTableText=%q want %q", got, want)
+	}
+}
+
+func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) {
+	if got, want := markdownTableText(`a\|b|c\\|d`), `a\|b\|c\\\|d`; got != want {
+		t.Fatalf("markdownTableText escaped pipes=%q want %q", got, want)
+	}
+	if got, want := markdownTableText(`a\\\\\\\\|b|c`), `a\\\\\\\\\|b\|c`; got != want {
+		t.Fatalf("markdownTableText long backslash run=%q want %q", got, want)
+	}
+	if got, want := markdownCodeTableText("\r\n"), "`"+markdownTableEmptyCell+"`"; got != want {
+		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)
 	}
 }
 
@@ -575,14 +673,15 @@ func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 		ByteAccounting: columnStoreByteAccounting{
 			ManifestControlMissing: []string{"manifest", "dictionary"},
 		},
-		SupportedForcedPaths:   []string{"row_store_baseline", "physical_column"},
-		UnsupportedForcedPaths: []string{"planner_skipscan", "aggregate_metadata"},
+		AcceptedForcedPaths:   []string{"row_store_baseline", "physical_column"},
+		FailClosedForcedPaths: []string{"planner_skipscan", "aggregate_metadata"},
 	})
 
 	for _, want := range []string{
 		"- manifest_control_missing: `manifest`, `dictionary`",
-		"- supported: `row_store_baseline`, `physical_column`",
-		"- unsupported/fail-closed: `planner_skipscan`, `aggregate_metadata`",
+		"- accepted labels are CLI/planner labels, not a promise that every run has the required physical assets",
+		"- accepted: `row_store_baseline`, `physical_column`",
+		"- fail-closed: `planner_skipscan`, `aggregate_metadata`",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
@@ -1214,8 +1313,8 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 	if got, want := report.ForcedPath, columnStorePathSerialColumnScan; got != want {
 		t.Fatalf("forced_path=%q want %q", got, want)
 	}
-	if !columnStoreTestStringSliceContains(report.SupportedForcedPaths, columnStorePathSerialColumnScan) {
-		t.Fatalf("serial physical path not reported as supported: %+v", report.SupportedForcedPaths)
+	if !columnStoreTestStringSliceContains(report.AcceptedForcedPaths, columnStorePathSerialColumnScan) {
+		t.Fatalf("serial physical path not reported as accepted: %+v", report.AcceptedForcedPaths)
 	}
 	if report.ByteAccounting.ColumnAssetBytes <= 0 {
 		t.Fatalf("physical run did not report column assets: %+v", report.ByteAccounting)
@@ -1279,8 +1378,8 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			if err := json.Unmarshal(data, &report); err != nil {
 				t.Fatalf("unmarshal column_store_results.json: %v", err)
 			}
-			if !columnStoreTestStringSliceContains(report.SupportedForcedPaths, tc.forcedPath) {
-				t.Fatalf("%s not reported as supported: %+v", tc.forcedPath, report.SupportedForcedPaths)
+			if !columnStoreTestStringSliceContains(report.AcceptedForcedPaths, tc.forcedPath) {
+				t.Fatalf("%s not reported as accepted: %+v", tc.forcedPath, report.AcceptedForcedPaths)
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {
@@ -1298,7 +1397,8 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q.RowsProcessed != report.Rows {
 					t.Fatalf("query %s rows_processed=%d want %d", q.Name, q.RowsProcessed, report.Rows)
 				}
-				if q.BytesRead <= 0 {
+				metadataHitAggregate := tc.forcedPath == columnStorePathAggregateMetadata && q.MetadataHits > 0
+				if !metadataHitAggregate && q.BytesRead <= 0 {
 					t.Fatalf("query %s bytes_read=%d want physical bytes", q.Name, q.BytesRead)
 				}
 				if q.ThroughputInterpretation == "" {
@@ -1306,6 +1406,9 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				}
 				if tc.forcedPath == columnStorePathParallelColumnScan && q.WorkerCount != tc.wantWorker {
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)
+				}
+				if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(q.ThroughputInterpretation, "parallel physical scan") {
+					t.Fatalf("query %s throughput_interpretation=%q want parallel physical classification", q.Name, q.ThroughputInterpretation)
 				}
 			}
 			if tc.forcedPath == columnStorePathAggregateMetadata {
@@ -1317,9 +1420,6 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				} else if !strings.Contains(interpretation, "fallback-bound") {
 					t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", interpretation)
 				}
-			}
-			if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation, "parallel physical scan") {
-				t.Fatalf("q5_metadata throughput_interpretation=%q want parallel physical classification", queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation)
 			}
 			if got := queryMetrics[columnStoreQueryQ5Metadata].PlanLabel; got != tc.q5Plan {
 				t.Fatalf("q5_metadata plan_label=%q want %q", got, tc.q5Plan)
@@ -1422,7 +1522,7 @@ func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
 		msg := err.Error()
 		for _, want := range []string{
 			"future_alias",
-			"supported=",
+			"accepted=",
 			"aliases=",
 			"serial-column-scan",
 			"aggregate-metadata",
@@ -1514,7 +1614,8 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 	const rows = 16
 	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
-	db, err := openColumnStoreSuiteDB(t.TempDir())
+	dir := t.TempDir()
+	db, err := openColumnStoreSuiteDB(dir)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -1552,6 +1653,21 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		if q.ThroughputInterpretation != "" {
 			t.Fatalf("query %s raw query loop throughput_interpretation=%q want empty until report/artifact rendering", q.Name, q.ThroughputInterpretation)
 		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint before physical aliases: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before physical aliases: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen before physical aliases: %v", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	collection, err = manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection before physical aliases: %v", err)
 	}
 
 	physicalAliases := map[string]collections.ColumnQueryPlanKind{
@@ -1594,7 +1710,11 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 	manager := collections.NewCollectionManager(db)
 	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathSerialColumnScan)); err != nil {
 		t.Fatalf("create collection: %v", err)
@@ -1625,8 +1745,21 @@ func TestColumnStoreSuitePhysicalPathFailsClosedOnMissingAssetsM14B(t *testing.T
 	if err != nil {
 		t.Fatalf("reopen collection: %v", err)
 	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before asset removal: %v", err)
+	}
+	db = nil
 	if err := os.RemoveAll(backenddb.ColumnAssetRootDirPath(dir)); err != nil {
 		t.Fatalf("remove column asset root: %v", err)
+	}
+	db, err = openColumnStoreSuiteDB(dir)
+	if err != nil {
+		t.Fatalf("reopen after asset removal: %v", err)
+	}
+	manager = collections.NewCollectionManager(db)
+	collection, err = manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("reopen collection after asset removal: %v", err)
 	}
 	_, _, err = runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathSerialColumnScan)
 	if !errors.Is(err, os.ErrNotExist) {

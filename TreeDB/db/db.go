@@ -64,6 +64,7 @@ type DB struct {
 	valueLogManager                *valuelog.Manager
 	snapshotViewRO                 atomic.Pointer[snapshotView]
 	snapshotAcquireRO              [snapshotAcquireShardCount]atomic.Int32
+	snapshotAcquireEpoch           atomic.Uint64
 	valueLogRefTracker             *valueLogRefTracker
 	valueLogAppender               atomic.Pointer[valueLogAppenderHolder]
 	leafPageLog                    LeafPageLog
@@ -992,7 +993,13 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	acqShard := snapshotAcquireShard()
 	db.snapshotAcquireRO[acqShard].Add(1)
-	defer db.snapshotAcquireRO[acqShard].Add(-1)
+	db.snapshotAcquireEpoch.Add(1)
+	defer func() {
+		// Publish the completion epoch before dropping the in-flight count so
+		// MinPinnedSnapshotCommitSeq cannot miss a just-registered snapshot.
+		db.snapshotAcquireEpoch.Add(1)
+		db.snapshotAcquireRO[acqShard].Add(-1)
+	}()
 	if db.closing.Load() {
 		db.snapPool.Put(snap)
 		return nil

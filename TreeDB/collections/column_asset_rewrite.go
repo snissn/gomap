@@ -3,10 +3,13 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -24,7 +27,10 @@ type ColumnAssetRewriteOptions struct {
 	PendingRefs   []ColumnAssetRef
 	PreparedRefs  []ColumnAssetRef
 	PinnedRefs    []ColumnAssetRef
+}
 
+type columnAssetRewriteOptions struct {
+	ColumnAssetRewriteOptions
 	afterCopyHookForTest       func() error
 	afterPrePublishHookForTest func() error
 }
@@ -44,9 +50,13 @@ type ColumnAssetRewriteStats struct {
 	BytesEligible     int64
 	// BytesCopied is committed copied bytes for destructive rewrites. Dry-run
 	// reports the bytes that would be copied.
-	BytesCopied        int64
-	BytesReclaimable   int64
-	BytesRetained      int64
+	BytesCopied      int64
+	BytesReclaimable int64
+	// BytesRetained is the pre-GC physical bytes in segments observed by the
+	// reachability plan. Successful rewrite remaps protected refs, but the old
+	// mixed segment remains on disk until ColumnAssetGC reclaims SupersededRefs.
+	BytesRetained int64
+
 	SupersededRefs     []ColumnAssetRef
 	RemappedRefs       []ColumnAssetRef
 	RemapManifestRoot  uint64
@@ -59,6 +69,12 @@ type ColumnAssetRewriteStats struct {
 // logical rows and never deletes the old mixed segment; M15B GC can reclaim the
 // old segment once callers present the superseded refs as reclaimable candidates.
 func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
+	return c.columnAssetRewriteWithOptions(ctx, columnAssetRewriteOptions{
+		ColumnAssetRewriteOptions: opts,
+	})
+}
+
+func (c *Collection) columnAssetRewriteWithOptions(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
 	var stats ColumnAssetRewriteStats
 	if c == nil {
 		return stats, errCollectionNil
@@ -82,14 +98,18 @@ func (c *Collection) ColumnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	return c.columnAssetRewrite(ctx, opts)
 }
 
-func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
-	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
-		Detailed:       true,
-		SegmentDetails: true,
-		CandidateRefs:  opts.CandidateRefs,
-		PendingRefs:    opts.PendingRefs,
-		PreparedRefs:   opts.PreparedRefs,
-		PinnedRefs:     opts.PinnedRefs,
+func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRewriteOptions) (ColumnAssetRewriteStats, error) {
+	plan, sourceMasks, err := c.planColumnAssetReachability(ctx, columnAssetReachabilityOptionsInternal{
+		ColumnAssetReachabilityOptions: ColumnAssetReachabilityOptions{
+			Detailed:       opts.Detailed,
+			SegmentDetails: true,
+			CandidateRefs:  opts.CandidateRefs,
+			PendingRefs:    opts.PendingRefs,
+			PreparedRefs:   opts.PreparedRefs,
+			PinnedRefs:     opts.PinnedRefs,
+		},
+		omitDetailedEntrySources: !opts.Detailed,
+		omitDetailedEntrySort:    !opts.Detailed,
 	})
 	stats := ColumnAssetRewriteStats{
 		DryRun:           opts.DryRun,
@@ -122,8 +142,8 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
-	segments := columnAssetRewriteEligibleSegments(namespace.SegmentDir, plan)
-	refs := columnAssetRewriteEligibleRefs(plan, segments)
+	segments := columnAssetRewriteEligibleSegments(namespace.SegmentDir, plan, sourceMasks)
+	refs := columnAssetRewriteEligibleRefs(plan, sourceMasks, segments)
 	for _, entry := range segments {
 		stats.SegmentsEligible++
 		stats.BytesEligible += entry.ProtectedBytes
@@ -157,6 +177,12 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		return stats, err
 	}
 	if err := c.columnAssetRewriteRootDescriptorPreflight(state)(); err != nil {
+		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
+		return stats, err
+	}
+	// Validate publish-only manifest root state before copying assets so local
+	// descriptor corruption cannot leave behind an otherwise avoidable segment.
+	if _, err := columnAssetRewriteManifestRootStoragePolicy(state); err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, err
 	}
@@ -198,7 +224,7 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 		}
 	}
 
-	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecords(state.records, remap.byOldRef)
+	patchedRecords, patched, err := patchColumnAssetRewriteManifestRecordsInPlace(state.records, remap.byOldRef, state.cfg.AssetManager.Namespace)
 	if err != nil {
 		stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 		return stats, cleanupRemap(err)
@@ -219,7 +245,7 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	}
 	newSystemRoot, rootIDs, err := c.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, patchedRecords)
 	if err != nil {
-		if errors.Is(err, errColumnAssetRewritePublishPreflightFailed) {
+		if columnAssetRewritePublishFailedBeforeApply(err) {
 			stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 			return stats, cleanupRemap(err)
 		}
@@ -238,8 +264,8 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	for _, ref := range remap.newRefs {
 		stats.BytesCopied += ref.Length
 	}
-	stats.SupersededRefs = append(stats.SupersededRefs, remap.oldRefs...)
-	stats.RemappedRefs = append(stats.RemappedRefs, remap.newRefs...)
+	stats.SupersededRefs = remap.oldRefs
+	stats.RemappedRefs = remap.newRefs
 	stats.RemapManifestRoot = rootIDs[0]
 	stats.RemapSystemRoot = newSystemRoot
 	stats.RemapSegmentFileID = remap.segmentFileID
@@ -249,6 +275,11 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts ColumnAssetRew
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	stats.Plan = columnAssetRewritePlanForDetail(stats.Plan, opts.Detailed)
 	return stats, nil
+}
+
+func columnAssetRewritePublishFailedBeforeApply(err error) bool {
+	return errors.Is(err, errColumnAssetRewritePublishPreflightFailed) ||
+		errors.Is(err, backenddb.ErrStorageMaintenancePublishPreApplyFailed)
 }
 
 type columnAssetRewriteManifestState struct {
@@ -328,7 +359,7 @@ func (c *Collection) loadColumnAssetRewriteManifestState() (columnAssetRewriteMa
 		baseCommitSeq:  snapshotCommitSeq(snap),
 		baseSystemRoot: snapshotSystemRoot(snap),
 		manifest:       manifest,
-		records:        cloneColumnManifestRecords(records),
+		records:        records,
 	}, nil
 }
 
@@ -392,13 +423,7 @@ func cleanupColumnAssetRewriteOpenAppender(appender *columnPhysicalAssetSegmentA
 	}
 	// Abandoned partial copies are removed immediately; syncing the file before
 	// deletion would add write amplification without strengthening recovery.
-	closeErr := appender.abort()
-	removeErr := os.Remove(appender.assetPath)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	syncErr := syncColumnAssetDir(appender.namespace.SegmentDir)
-	return errors.Join(closeErr, removeErr, syncErr)
+	return appender.abort()
 }
 
 func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRewriteCopyResult) error {
@@ -426,36 +451,136 @@ func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	return nil
 }
 
-func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef) ([]columnManifestRecord, int, error) {
-	patched := cloneColumnManifestRecords(records)
+func patchColumnAssetRewriteManifestRecords(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string) ([]columnManifestRecord, int, error) {
+	return patchColumnAssetRewriteManifestRecordsWithMode(records, byOldRef, expectedNamespace, false)
+}
+
+func patchColumnAssetRewriteManifestRecordsInPlace(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string) ([]columnManifestRecord, int, error) {
+	return patchColumnAssetRewriteManifestRecordsWithMode(records, byOldRef, expectedNamespace, true)
+}
+
+// patchColumnAssetRewriteManifestRecordsWithMode mutates part values only when
+// the caller owns records, as loadColumnAssetRewriteManifestState does.
+func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestRecord, byOldRef map[ColumnAssetRef]ColumnAssetRef, expectedNamespace string, inPlace bool) ([]columnManifestRecord, int, error) {
+	if len(records) == 0 {
+		return nil, 0, nil
+	}
+	patched := records
+	if !inPlace {
+		patched = make([]columnManifestRecord, len(records))
+	}
 	count := 0
-	for i := range patched {
-		if !bytes.HasPrefix(patched[i].key, columnManifestPartRecordPrefixBytes) {
+	for i, record := range records {
+		if !inPlace {
+			patched[i] = record
+		}
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
-		part, err := decodeColumnManifestPartRecord(patched[i].value)
+		oldRef, offsets, err := columnAssetRewriteManifestPartRefForPatch(record.value, expectedNamespace)
 		if err != nil {
 			return nil, 0, err
 		}
-		newRef, ok := byOldRef[part.AssetRef]
+		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
+		if err != nil {
+			return nil, 0, err
+		}
+		if oldRef.Generation != keyGeneration {
+			return nil, 0, fmt.Errorf("collections: column asset rewrite part key generation=%d does not match ref generation=%d", keyGeneration, oldRef.Generation)
+		}
+		if oldRef.PartID != keyPartID {
+			return nil, 0, fmt.Errorf("collections: column asset rewrite part key part_id=%d does not match ref part_id=%d", keyPartID, oldRef.PartID)
+		}
+		newRef, ok := byOldRef[oldRef]
 		if !ok {
 			continue
 		}
-		value, err := encodeColumnManifestPartRecord(ColumnPreparedAsset{
-			Ref:          newRef,
-			Bytes:        part.Bytes,
-			PublishID:    part.PublishID,
-			GenerationID: part.GenerationID,
-			Reason:       part.Reason,
-		})
-		if err != nil {
+		if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
+			return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent manifest ref %+v to %+v", oldRef, newRef)
+		}
+		if err := validateColumnAssetRefForPlan(newRef); err != nil {
 			return nil, 0, err
 		}
+		value := record.value
+		if !inPlace {
+			value = bytes.Clone(record.value)
+		}
+		binary.BigEndian.PutUint64(value[offsets.fileID:], uint64(newRef.FileID))
+		binary.BigEndian.PutUint64(value[offsets.offset:], uint64(newRef.Offset))
+		binary.BigEndian.PutUint64(value[offsets.length:], uint64(newRef.Length))
+		binary.BigEndian.PutUint64(value[offsets.checksum:], uint64(newRef.Checksum))
 		patched[i].value = value
 		count++
 	}
-	sortColumnManifestRecords(patched)
 	return patched, count, nil
+}
+
+type columnAssetRewriteManifestPartPatchOffsets struct {
+	fileID   int
+	offset   int
+	length   int
+	checksum int
+}
+
+func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace string) (ColumnAssetRef, columnAssetRewriteManifestPartPatchOffsets, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestPartMagic {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
+	}
+	if version := cur.u16(); version != columnManifestRecordVersion {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
+	}
+	kindBytes := cur.stringBytes()
+	namespaceBytes := cur.stringBytes()
+	generation := cur.u64()
+	partID := cur.u64()
+	offsets := columnAssetRewriteManifestPartPatchOffsets{fileID: cur.pos}
+	fileID64 := cur.u64()
+	offsets.offset = cur.pos
+	offset64 := cur.u64()
+	offsets.length = cur.pos
+	length64 := cur.u64()
+	offsets.checksum = cur.pos
+	checksum64 := cur.u64()
+	bytes64 := cur.u64()
+	_ = cur.u64() // publish_id; rewrite preserves the original field bytes.
+	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
+	_ = cur.stringBytes()
+	if err := cur.err; err != nil {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
+	}
+	if cur.pos != len(raw) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: trailing bytes in column manifest part record")
+	}
+	if !columnPhysicalBytesEqualString(kindBytes, string(ColumnAssetKindTCS1PartImage)) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+	}
+	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: column manifest part namespace=%q want %q", string(namespaceBytes), expectedNamespace)
+	}
+	if fileID64 > uint64(math.MaxUint32) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part file_id overflows uint32")
+	}
+	if checksum64 > uint64(math.MaxUint32) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part checksum overflows uint32")
+	}
+	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || bytes64 > uint64(math.MaxInt64) {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part offsets or byte counts overflow int64")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  expectedNamespace,
+		Generation: generation,
+		PartID:     partID,
+		FileID:     uint32(fileID64),
+		Offset:     int64(offset64),
+		Length:     int64(length64),
+		Checksum:   uint32(checksum64),
+	}
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Bytes: int64(bytes64)}); err != nil {
+		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
+	}
+	return ref, offsets, nil
 }
 
 func columnAssetRewriteUpdatedIdentity(state columnAssetRewriteManifestState, records []columnManifestRecord) (ColumnManifestIdentity, error) {
@@ -492,20 +617,23 @@ func columnAssetRewriteUpdatedMeta(base CollectionMeta, identity ColumnManifestI
 	return normalizeCollectionMeta(updated)
 }
 
-func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRewriteManifestState, updatedMeta CollectionMeta, updatedIdentity ColumnManifestIdentity, records []columnManifestRecord) (uint64, []uint64, error) {
+func columnAssetRewriteManifestRootStoragePolicy(state columnAssetRewriteManifestState) (backenddb.OrderedRootStoragePolicy, error) {
 	if state.cfg.ManifestRoot == nil {
-		return 0, nil, errors.New("collections: column asset rewrite requires manifest root descriptor")
+		return backenddb.OrderedRootStorageDefault, errors.New("collections: column asset rewrite requires manifest root descriptor")
 	}
-	policy, err := backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
+	return backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
+}
+
+func (c *Collection) publishColumnAssetRewriteManifestState(state columnAssetRewriteManifestState, updatedMeta CollectionMeta, updatedIdentity ColumnManifestIdentity, records []columnManifestRecord) (uint64, []uint64, error) {
+	policy, err := columnAssetRewriteManifestRootStoragePolicy(state)
 	if err != nil {
 		return 0, nil, err
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(updatedIdentity)
-	ordered := []backenddb.OrderedRootDeltaPublishInput{{
-		BaseRoot:                  state.baseRoot,
-		Iter:                      columnManifestRootRecordIterator(identityRecord, records),
-		StoragePolicy:             policy,
-		StorageMaintenanceRewrite: true,
+	ordered := []backenddb.StorageMaintenanceRootDeltaPublishInput{{
+		BaseRoot:      state.baseRoot,
+		Iter:          columnManifestRootRecordIteratorOwned(identityRecord, records),
+		StoragePolicy: policy,
 	}}
 	return c.db.PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(
 		storagemaintenance.ColumnAssetRewritePlan(),
@@ -524,7 +652,7 @@ func (c *Collection) columnAssetRewriteRootDescriptorPreflight(state columnAsset
 	baseRootIDs := map[string]uint64{state.rootName: state.baseRoot}
 	return func() error {
 		if err := c.validateRootDescriptorSystemDeltaForMeta(state.meta, state.baseCommitSeq, state.baseSystemRoot, rootNames, baseRootIDs); err != nil {
-			return fmt.Errorf("%w: %w", errColumnAssetRewritePublishPreflightFailed, err)
+			return errors.Join(errColumnAssetRewritePublishPreflightFailed, err)
 		}
 		return nil
 	}
@@ -552,42 +680,43 @@ func (c *Collection) buildColumnAssetRewriteSystemDeltaIteratorForMeta(baseMeta,
 	return buildSystemDeltaIterator(updates)
 }
 
-func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReachabilityPlan) map[uint32]ColumnAssetReachabilitySegmentEntry {
+func columnAssetRewriteEligibleSegments(segmentDir string, plan ColumnAssetReachabilityPlan, sourceMasks map[ColumnAssetRef]columnAssetReachabilitySourceMask) map[uint32]ColumnAssetReachabilitySegmentEntry {
 	eligible := make(map[uint32]ColumnAssetReachabilitySegmentEntry, plan.Segments.Mixed)
 	for _, entry := range plan.SegmentEntries {
 		if columnAssetRewriteSegmentEligible(segmentDir, entry) {
 			eligible[entry.FileID] = entry
 		}
 	}
-	for _, entry := range plan.Entries {
-		if entry.Status != ColumnAssetReachabilityProtected {
+	for ref, sourceMask := range sourceMasks {
+		if !columnAssetRewriteSourceMaskIsProtectedNonManifest(sourceMask) {
 			continue
 		}
-		if _, ok := eligible[entry.Ref.FileID]; !ok {
+		if _, ok := eligible[ref.FileID]; !ok {
 			continue
 		}
-		if columnAssetRewriteSourcesIncludeManifest(entry.Sources) {
+		if !columnAssetReachabilityRefCanContributeRange(ref, plan.Namespace) {
 			continue
 		}
-		delete(eligible, entry.Ref.FileID)
+		delete(eligible, ref.FileID)
 	}
 	return eligible
 }
 
-func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, segments map[uint32]ColumnAssetReachabilitySegmentEntry) []ColumnAssetRef {
-	refs := make([]ColumnAssetRef, 0, len(plan.Entries))
-	for _, entry := range plan.Entries {
-		if entry.Status != ColumnAssetReachabilityProtected {
+func columnAssetRewriteEligibleRefs(plan ColumnAssetReachabilityPlan, sourceMasks map[ColumnAssetRef]columnAssetReachabilitySourceMask, segments map[uint32]ColumnAssetReachabilitySegmentEntry) []ColumnAssetRef {
+	refs := make([]ColumnAssetRef, 0, len(sourceMasks))
+	for ref, sourceMask := range sourceMasks {
+		if !columnAssetRewriteSourceMaskIncludesManifest(sourceMask) {
 			continue
 		}
-		if _, ok := segments[entry.Ref.FileID]; !ok {
+		if _, ok := segments[ref.FileID]; !ok {
 			continue
 		}
-		if !columnAssetRewriteSourcesIncludeManifest(entry.Sources) {
+		if !columnAssetReachabilityRefCanContributeRange(ref, plan.Namespace) {
 			continue
 		}
-		refs = append(refs, entry.Ref)
+		refs = append(refs, ref)
 	}
+	slices.SortFunc(refs, compareColumnAssetRefs)
 	return refs
 }
 
@@ -608,13 +737,20 @@ func columnAssetRewriteSegmentEligible(segmentDir string, entry ColumnAssetReach
 	return cleanPath == expected
 }
 
-func columnAssetRewriteSourcesIncludeManifest(sources []ColumnAssetReachabilitySource) bool {
-	for _, source := range sources {
-		if source == ColumnAssetReachabilitySourceActiveManifest || source == ColumnAssetReachabilitySourceRecoveryManifest {
-			return true
-		}
-	}
-	return false
+func columnAssetRewriteSourceMaskIncludesManifest(sourceMask columnAssetReachabilitySourceMask) bool {
+	return sourceMask&columnAssetRewriteManifestSourceMask() != 0
+}
+
+func columnAssetRewriteSourceMaskIsProtectedNonManifest(sourceMask columnAssetReachabilitySourceMask) bool {
+	return sourceMask&columnAssetRewriteProtectedNonManifestSourceMask() != 0
+}
+
+func columnAssetRewriteManifestSourceMask() columnAssetReachabilitySourceMask {
+	return columnAssetReachabilitySourceActiveManifestMask | columnAssetReachabilitySourceRecoveryManifestMask
+}
+
+func columnAssetRewriteProtectedNonManifestSourceMask() columnAssetReachabilitySourceMask {
+	return columnAssetReachabilityProtectedSourceMask &^ columnAssetRewriteManifestSourceMask()
 }
 
 func columnAssetRewriteSameLogicalRef(left, right ColumnAssetRef) bool {
