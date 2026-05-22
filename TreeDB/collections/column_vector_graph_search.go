@@ -373,7 +373,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(plan *columnVe
 			return err
 		}
 		stats.CandidateFetches++
-		score, err := columnVectorGraphNativeCosineScore(query, queryInvNorm, columnVectorGraphPhysicalRow{Ordinal: ordinal, Vector: vector, InvNorm: invNorm})
+		score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
 		if err != nil {
 			return err
 		}
@@ -497,15 +497,19 @@ func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchC
 }
 
 func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, row columnVectorGraphPhysicalRow) (float64, error) {
-	if len(row.Vector) != len(query) {
-		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", row.Ordinal, len(row.Vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
+	return columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, row.Ordinal, row.Vector, row.InvNorm)
+}
+
+func columnVectorGraphNativeCosineScoreVector(query []float32, queryInvNorm float32, ordinal int, vector []float32, invNorm float32) (float64, error) {
+	if len(vector) != len(query) {
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, len(vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	dot := float64(vectorDotProductFloat32(query, row.Vector))
+	dot := float64(vectorDotProductFloat32(query, vector))
 	if dot != 0 && !math.IsInf(dot, 0) && !math.IsNaN(dot) {
-		return dot * float64(queryInvNorm) * float64(row.InvNorm), nil
+		return dot * float64(queryInvNorm) * float64(invNorm), nil
 	}
-	dot = columnVectorGraphNativeDotProductFloat64(query, row.Vector)
-	return dot * float64(queryInvNorm) * float64(row.InvNorm), nil
+	dot = columnVectorGraphNativeDotProductFloat64(query, vector)
+	return dot * float64(queryInvNorm) * float64(invNorm), nil
 }
 
 func columnVectorGraphNativeDotProductFloat64(left, right []float32) float64 {
