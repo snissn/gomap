@@ -365,7 +365,7 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 }
 
 func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() {
 		if d != nil {
@@ -446,7 +446,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 }
 
 func TestColumnStoreCommandWALReplayPublishesManifestM10B(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 
 	mgr := NewCollectionManager(d)
@@ -512,7 +512,7 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := prepareColumnStoreCommandWALDirM10B(t)
+			dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 			d := openCollectionCommandWALDB(t, dir)
 			defer func() { _ = d.Close() }()
 
@@ -577,8 +577,296 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 	}
 }
 
+func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifestM10C(t *testing.T) {
+	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
+
+	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
+		{ID: []byte("e2"), Document: []byte(`{"time_us":2,"kind":"post","did":"d2"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
+
+	updatePayload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":3,"kind":"like","did":"d1"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, baseLSN+2, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, updatePayload)
+
+	deletePayload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e2")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, baseLSN+3, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, deletePayload)
+
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
+	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
+		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
+	}
+	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3)
+	if got := reopen.State().AppliedCommandLSN; got != baseLSN+3 {
+		t.Fatalf("AppliedCommandLSN after replay=%d, want %d", got, baseLSN+3)
+	}
+}
+
+func TestColumnStoreReplayIntentBypassesRelaxedDurabilityGateM10C(t *testing.T) {
+	dir, baseLSN := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	reopen, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
+	assertColumnManifestStateM10B(t, reopened, 1, baseLSN+1)
+	if got := reopen.State().AppliedCommandLSN; got != baseLSN+1 {
+		t.Fatalf("AppliedCommandLSN after relaxed replay=%d, want %d", got, baseLSN+1)
+	}
+
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+	_, err = reopened.InsertBatch([][]byte{[]byte("e2")}, [][]byte{[]byte(`{"time_us":2,"kind":"post","did":"d2"}`)})
+	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("foreground relaxed InsertBatch error=%v, want ErrCommandWALRejected", err)
+	}
+	if framesAfter := countCollectionCommandWALFrames(t, dir); framesAfter != framesBefore {
+		t.Fatalf("command WAL frames after rejected foreground write=%d, want %d", framesAfter, framesBefore)
+	}
+	if err := reopen.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after rejected foreground write: %v", err)
+	}
+}
+
+func TestColumnStoreAssignedForegroundIntentDoesNotBypassRelaxedDurabilityGateM10C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirWithProfileM10C(t, ColumnStoreProfileBenchmarkRelaxed)
+	d, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		Durability:             backenddb.DurabilityWALOnRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open relaxed command WAL DB: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	docs := []commitlog.CollectionDocument{{
+		ID:       []byte("e1"),
+		Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+	}}
+	intent, err := col.newCollectionInsertCommandWALIntent(docs, nil)
+	if err != nil {
+		t.Fatalf("newCollectionInsertCommandWALIntent: %v", err)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	replayLSN, replay := intent.ReplayAssignedLSN()
+	if lsn == 0 || intent.AssignedLSN() != lsn || replay || replayLSN != 0 {
+		t.Fatalf("assigned foreground intent lsn=%d assigned=%d replay=(%d,%t)", lsn, intent.AssignedLSN(), replayLSN, replay)
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, intent); !errors.Is(err, backenddb.ErrCommandWALRejected) ||
+		!strings.Contains(err.Error(), "relaxed durability modes are unsupported") ||
+		!strings.Contains(err.Error(), "command_wal=true") {
+		t.Fatalf("assigned foreground relaxed intent error=%v, want ErrCommandWALRejected with relaxed durability diagnostics", err)
+	}
+	if err := col.requireColumnStoreCommandWAL(col.meta, nil); !errors.Is(err, backenddb.ErrCommandWALRejected) ||
+		!strings.Contains(err.Error(), "relaxed durability modes are unsupported") ||
+		!strings.Contains(err.Error(), "command_wal=true") {
+		t.Fatalf("nil relaxed intent error=%v, want ErrCommandWALRejected with relaxed durability diagnostics", err)
+	}
+}
+
+func TestColumnStoreReadOnlyOpenWithUnappliedCollectionFrameFailsM10C(t *testing.T) {
+	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
+	payload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
+		{ID: []byte("e1"), Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, payload)
+
+	ro, err := backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
+	if err == nil {
+		_ = ro.Close()
+		t.Fatalf("Open read-only with unapplied column collection frame succeeded, want ErrRecoveryRequired")
+	}
+	if !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("Open read-only error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       backenddb.Options
+		commandWAL bool
+	}{
+		{
+			name: "wal_on_fast_command_wal",
+			opts: backenddb.Options{
+				CommandWAL:             true,
+				Durability:             backenddb.DurabilityWALOnRelaxed,
+				DisableBackgroundPrune: true,
+			},
+			commandWAL: true,
+		},
+		{
+			name: "fast_no_command_wal",
+			opts: backenddb.Options{
+				Durability:             backenddb.DurabilityWALOffRelaxed,
+				DisableBackgroundPrune: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.opts.Dir = t.TempDir()
+			d, err := backenddb.Open(tt.opts)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+
+			cfg := testColumnStoreConfig(nil)
+			cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{
+				Name:    "events",
+				Options: CollectionOptions{ColumnStore: cfg},
+			}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := mgr.OpenCollection("events")
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			framesBefore := countCollectionCommandWALFrames(t, tt.opts.Dir)
+
+			_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)})
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("InsertBatch error=%v, want ErrCommandWALRejected", err)
+			}
+			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesBefore {
+				t.Fatalf("command WAL frames after rejected write=%d, want %d", framesAfter, framesBefore)
+			}
+			deleted, err := col.DeleteDocument([]byte("missing"))
+			if err != nil {
+				t.Fatalf("DeleteDocument missing: %v", err)
+			}
+			if deleted {
+				t.Fatalf("DeleteDocument missing deleted=true, want false")
+			}
+			framesAfterDelete := countCollectionCommandWALFrames(t, tt.opts.Dir)
+			wantFramesAfterDelete := framesBefore
+			if tt.commandWAL {
+				wantFramesAfterDelete++
+			}
+			if framesAfterDelete != wantFramesAfterDelete {
+				t.Fatalf("command WAL frames after no-op delete=%d, want %d", framesAfterDelete, wantFramesAfterDelete)
+			}
+			matched, modified, err := col.Update([]byte("missing"), func([]byte) ([]byte, bool, error) {
+				return nil, false, nil
+			})
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("Update missing error=%v, want ErrCommandWALRejected", err)
+			}
+			if matched || modified {
+				t.Fatalf("Update missing matched=%v modified=%v, want false/false", matched, modified)
+			}
+			if framesAfter := countCollectionCommandWALFrames(t, tt.opts.Dir); framesAfter != framesAfterDelete {
+				t.Fatalf("command WAL frames after rejected no-op update=%d, want %d", framesAfter, framesAfterDelete)
+			}
+			if tt.commandWAL {
+				if err := d.CheckCommandWALPublishReady(); err != nil {
+					t.Fatalf("CheckCommandWALPublishReady after rejected write: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestColumnStoreDeleteMissesDoNotRequireCommandWALM10C(t *testing.T) {
+	d, col := openBufferedBSONColumnStoreSeedM10B(t, false, ColumnStoreProfileBenchmarkRelaxed)
+	defer func() { _ = d.Close() }()
+
+	deleted, err := col.DeleteDocument([]byte("missing"))
+	if err != nil {
+		t.Fatalf("DeleteDocument missing: %v", err)
+	}
+	if deleted {
+		t.Fatal("DeleteDocument missing deleted=true, want false")
+	}
+	deletedBatch, err := col.DeleteBatch([][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch missing: %v", err)
+	}
+	if deletedBatch != 0 {
+		t.Fatalf("DeleteBatch missing deleted=%d, want 0", deletedBatch)
+	}
+	if got, err := col.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get existing after missing deletes: %v", err)
+	} else if len(got) == 0 {
+		t.Fatal("Get existing after missing deletes returned empty document")
+	}
+}
+
+func TestColumnStoreBenchmarkRelaxedAllowsDurableCommandWALWritesM10C(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	cfg := testColumnStoreConfig(nil)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: cfg},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	baseLSN := d.State().AppliedCommandLSN
+	if baseLSN == 0 {
+		t.Fatal("create AppliedCommandLSN=0, want command WAL create LSN")
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1"}`)}); err != nil {
+		t.Fatalf("InsertBatch durable benchmark-relaxed: %v", err)
+	}
+	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
+	assertColumnManifestStateM10B(t, col, 1, baseLSN+1)
+}
+
 func TestColumnStorePublishRejectsMissingCommandWALIntentM10B(t *testing.T) {
-	dir := prepareColumnStoreCommandWALDirM10B(t)
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 
@@ -864,17 +1152,26 @@ func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t
 	}
 }
 
-func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
+func prepareColumnStoreCommandWALDirM10B(t *testing.T) (string, uint64) {
+	t.Helper()
+	return prepareColumnStoreCommandWALDirWithProfileM10C(t, "")
+}
+
+func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport ColumnStoreProfileSupport) (string, uint64) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	d := openCollectionCommandWALDB(t, dir)
+	cfg := testColumnStoreConfig(nil)
+	if profileSupport != "" {
+		cfg.ProfileSupport = profileSupport
+	}
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{
 		Name:    "events",
-		Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)},
+		Options: CollectionOptions{ColumnStore: cfg},
 	}); err != nil {
 		_ = d.Close()
 		t.Fatalf("CreateCollection: %v", err)
@@ -883,10 +1180,15 @@ func prepareColumnStoreCommandWALDirM10B(t *testing.T) string {
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	baseLSN := d.State().AppliedCommandLSN
+	if baseLSN == 0 {
+		_ = d.Close()
+		t.Fatal("setup AppliedCommandLSN=0, want command WAL create LSN")
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close setup DB: %v", err)
 	}
-	return dir
+	return dir, baseLSN
 }
 
 func openBufferedBSONColumnStoreSeedM10B(t *testing.T, indexed bool, profile ColumnStoreProfileSupport) (*backenddb.DB, *Collection) {

@@ -202,9 +202,16 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		return err
 	}
 	if len(payload.Documents) == 0 {
-		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		return db.PublishCommandWALNoop(intent, false)
 	}
-	intent := backenddb.NewCommandWALReplayIntent(env)
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
 	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
@@ -225,7 +232,10 @@ func replayCollectionDeleteBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 	if err != nil {
 		return err
 	}
-	intent := backenddb.NewCommandWALReplayIntent(env)
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
 	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
@@ -241,9 +251,16 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		return err
 	}
 	if len(payload.Documents) == 0 {
-		return db.PublishCommandWALNoop(backenddb.NewCommandWALReplayIntent(env), false)
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		return db.PublishCommandWALNoop(intent, false)
 	}
-	intent := backenddb.NewCommandWALReplayIntent(env)
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
 	manager := newCommandWALReplayCollectionManager(db)
 	collection, err := manager.openCollectionWithCommandWALIntent(payload.Collection, intent)
 	if err != nil {
@@ -280,7 +297,11 @@ func replayCatalogCreateCollectionCommandWAL(db *backenddb.DB, env commitlog.Com
 	if meta.Name != payload.Collection {
 		return fmt.Errorf("collections: catalog create payload collection %q does not match metadata name %q", payload.Collection, meta.Name)
 	}
-	_, err = newCommandWALReplayCollectionManager(db).createCollectionWithCommandWALIntent(meta, backenddb.NewCommandWALReplayIntent(env))
+	intent, err := db.NewCommandWALReplayIntent(env)
+	if err != nil {
+		return err
+	}
+	_, err = newCommandWALReplayCollectionManager(db).createCollectionWithCommandWALIntent(meta, intent)
 	return err
 }
 

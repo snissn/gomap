@@ -31,6 +31,24 @@ func newColumnManifestIdentityRecordKey() []byte {
 	return []byte(columnManifestIdentityRecordKey)
 }
 
+var (
+	// ErrColumnManifestIdentityMissing is returned when a published column manifest
+	// root is missing its required identity record.
+	ErrColumnManifestIdentityMissing = errors.New("collections: column manifest missing identity record")
+	// ErrColumnManifestIdentityMalformed is returned when a column manifest
+	// identity record has the wrong binary shape.
+	ErrColumnManifestIdentityMalformed = errors.New("collections: malformed column manifest identity record")
+	// ErrColumnManifestIdentityBadMagic is returned when a column manifest
+	// identity record has an unexpected magic value.
+	ErrColumnManifestIdentityBadMagic = errors.New("collections: bad column manifest identity magic")
+	// ErrColumnManifestIdentityUnsupportedVersion is returned when a column
+	// manifest identity record uses an unsupported encoding version.
+	ErrColumnManifestIdentityUnsupportedVersion = errors.New("collections: unsupported column manifest identity version")
+	// ErrColumnManifestIdentityNonZeroReserved is returned when a column manifest
+	// identity record has non-zero reserved trailer bytes.
+	ErrColumnManifestIdentityNonZeroReserved = errors.New("collections: non-zero column manifest identity reserved trailer")
+)
+
 type ColumnStoreValueType string
 
 const (
@@ -566,7 +584,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	}
 	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return fmt.Errorf("collections: active column manifest root %d for %q is missing identity record", rootID, catalog.meta.Name)
+		return fmt.Errorf("%w: active column manifest root %d for %q", ErrColumnManifestIdentityMissing, rootID, catalog.meta.Name)
 	}
 	if err != nil {
 		return fmt.Errorf("collections: active column manifest root %d for %q is unreadable: %w", rootID, catalog.meta.Name, err)
@@ -602,16 +620,16 @@ func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [c
 
 func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecord, error) {
 	if len(raw) != columnManifestIdentityRecordSize {
-		return columnManifestIdentityRecord{}, fmt.Errorf("malformed identity record length %d", len(raw))
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: length=%d", ErrColumnManifestIdentityMalformed, len(raw))
 	}
 	if magic := binary.BigEndian.Uint32(raw[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOffset]); magic != columnManifestIdentityMagic {
-		return columnManifestIdentityRecord{}, fmt.Errorf("bad identity magic 0x%x", magic)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: magic=0x%08x", ErrColumnManifestIdentityBadMagic, magic)
 	}
 	if version := binary.BigEndian.Uint16(raw[columnManifestIdentityEncodingVersionOffset:columnManifestIdentityManifestVersionOffset]); version != columnManifestIdentityVersion {
-		return columnManifestIdentityRecord{}, fmt.Errorf("unsupported identity version %d", version)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: version=%d", ErrColumnManifestIdentityUnsupportedVersion, version)
 	}
 	if reserved := binary.BigEndian.Uint32(raw[columnManifestIdentityReservedOffset:columnManifestIdentityRecordSize]); reserved != 0 {
-		return columnManifestIdentityRecord{}, fmt.Errorf("non-zero identity reserved trailer field 0x%08x", reserved)
+		return columnManifestIdentityRecord{}, fmt.Errorf("%w: reserved=0x%08x", ErrColumnManifestIdentityNonZeroReserved, reserved)
 	}
 	return columnManifestIdentityRecord{
 		Version:    binary.BigEndian.Uint16(raw[columnManifestIdentityManifestVersionOffset:columnManifestIdentityGenerationOffset]),

@@ -20,7 +20,9 @@ type commandWALBatchIntent struct {
 	payload            []byte
 	externalRefs       bool
 	externalRefFileIDs []uint32
+	fromReplay         bool
 	lsn                uint64
+	replayToken        uint64
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
 }
@@ -41,6 +43,16 @@ func (intent *CommandWALIntent) AssignedLSN() uint64 {
 		return 0
 	}
 	return intent.inner.lsn
+}
+
+// ReplayAssignedLSN returns the assigned non-zero LSN and true only for
+// replay-originated intents. The boolean keeps callers from treating LSN 0 as a
+// replay sentinel.
+func (intent *CommandWALIntent) ReplayAssignedLSN() (uint64, bool) {
+	if intent == nil || !intent.inner.fromReplay || intent.inner.lsn == 0 {
+		return 0, false
+	}
+	return intent.inner.lsn, true
 }
 
 func (db *DB) CommandWALEnabled() bool {
@@ -112,16 +124,68 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	}}, nil
 }
 
-func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent {
+func newCommandWALReplayIntent(env commitlog.CommandEnvelope, replayToken uint64) *CommandWALIntent {
 	return &CommandWALIntent{inner: commandWALBatchIntent{
 		kind:          env.Kind,
 		scope:         env.Scope,
 		payloadFormat: env.PayloadFormat,
 		payload:       env.Payload,
+		fromReplay:    true,
 		lsn:           env.LSN,
+		replayToken:   replayToken,
 		coveredRange:  [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
 		syncOnPublish: true,
 	}}
+}
+
+func (db *DB) NewCommandWALReplayIntent(env commitlog.CommandEnvelope) (*CommandWALIntent, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	activeLSN := db.commandWALReplayLSN.Load()
+	activeToken := db.commandWALReplayToken.Load()
+	if err := checkCommandWALReplayFrameActive(env.LSN, activeLSN, activeToken); err != nil {
+		return nil, err
+	}
+	return newCommandWALReplayIntent(env, activeToken), nil
+}
+
+func (db *DB) checkCommandWALReplayIntentActive(intent *commandWALBatchIntent) error {
+	if intent == nil || !intent.fromReplay {
+		return nil
+	}
+	active := uint64(0)
+	activeToken := uint64(0)
+	if db != nil {
+		active = db.commandWALReplayLSN.Load()
+		activeToken = db.commandWALReplayToken.Load()
+	}
+	if err := checkCommandWALReplayFrameActive(intent.lsn, active, activeToken); err != nil {
+		return err
+	}
+	if intent.replayToken == 0 {
+		return fmt.Errorf("%w: replay intent missing recovery token for lsn %d", ErrCommandWALRejected, intent.lsn)
+	}
+	if activeToken != intent.replayToken {
+		return fmt.Errorf("%w: replay intent recovery token mismatch for lsn %d", ErrCommandWALRejected, intent.lsn)
+	}
+	return nil
+}
+
+func checkCommandWALReplayFrameActive(intentLSN, activeLSN, activeToken uint64) error {
+	if intentLSN == 0 {
+		return fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
+	if activeLSN == 0 {
+		return fmt.Errorf("%w: replay intent lsn %d has no active recovery frame", ErrCommandWALRejected, intentLSN)
+	}
+	if activeLSN != intentLSN {
+		return fmt.Errorf("%w: replay intent lsn %d does not match active recovery frame lsn %d", ErrCommandWALRejected, intentLSN, activeLSN)
+	}
+	if activeToken == 0 {
+		return fmt.Errorf("%w: replay intent lsn %d has no active recovery token", ErrCommandWALRejected, intentLSN)
+	}
+	return nil
 }
 
 // NewCommandWALCoverageIntent returns an intent for publishing roots that
@@ -320,6 +384,12 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
 	if intent == nil {
 		return 0, nil
+	}
+	if intent.inner.fromReplay && intent.inner.lsn == 0 {
+		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
+	if err := db.checkCommandWALReplayIntentActive(&intent.inner); err != nil {
+		return 0, err
 	}
 	if intent.inner.lsn != 0 {
 		// Replay intents already refer to a durable frame; recovery must only
@@ -546,6 +616,12 @@ func commandWALIntentPublishSync(intent *CommandWALIntent, sync bool) bool {
 func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (uint64, error) {
 	if intent == nil {
 		return 0, nil
+	}
+	if intent.fromReplay && intent.lsn == 0 {
+		return 0, fmt.Errorf("%w: replay intent missing assigned lsn", ErrCommandWALRejected)
+	}
+	if err := db.checkCommandWALReplayIntentActive(intent); err != nil {
+		return 0, err
 	}
 	if intent.lsn != 0 {
 		// The frame was already durably appended. Fail closed if poison was set

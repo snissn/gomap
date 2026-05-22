@@ -29,14 +29,47 @@ func columnStoreWriteEnabled(meta CollectionMeta) bool {
 	return meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled
 }
 
+// requireColumnStoreCommandWAL is an internal write-path guard. It requires a
+// live collection handle because durability mode and command-WAL state are DB
+// properties, not catalog metadata.
 func (c *Collection) requireColumnStoreCommandWAL(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) error {
-	if !columnStoreWriteEnabled(meta) {
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || !cfg.Enabled {
 		return nil
 	}
-	if c != nil && c.commandWALActive(commandWALIntent) {
+	profileSupport := cfg.ProfileSupport
+	if profileSupport == "" {
+		profileSupport = ColumnStoreProfileDurableOnly
+	}
+	if c == nil || c.db == nil {
+		return errCollectionDBNil
+	}
+	if _, replay := commandWALIntent.ReplayAssignedLSN(); replay {
+		return nil
+	}
+	durabilityMode := c.db.DurabilityMode()
+	if !columnStoreProfileAllowsForegroundCommandWAL(profileSupport, durabilityMode) {
+		return fmt.Errorf("%w: column-store writes require durable DB durability mode with command WAL enabled; relaxed durability modes are unsupported for column-store writes (collection=%q durability=%s command_wal=%t profile=%s)",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			columnStoreDurabilityModeName(durabilityMode),
+			c.db.CommandWALEnabled(),
+			profileSupport,
+		)
+	}
+	if c.commandWALActive(commandWALIntent) {
 		return nil
 	}
 	return fmt.Errorf("%w: column-store writes require command WAL collection=%q", backenddb.ErrCommandWALRejected, meta.Name)
+}
+
+func columnStoreProfileAllowsForegroundCommandWAL(profileSupport ColumnStoreProfileSupport, durabilityMode backenddb.DurabilityMode) bool {
+	switch profileSupport {
+	case ColumnStoreProfileDurableOnly, ColumnStoreProfileBenchmarkRelaxed:
+		return durabilityMode == backenddb.DurabilityDurable
+	default:
+		return false
+	}
 }
 
 func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {

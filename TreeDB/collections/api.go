@@ -9681,6 +9681,10 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 		return 0, nil
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return 0, err
+	}
 
 	deleteIDs := make([][]byte, len(existing))
 	for i := range existing {
@@ -9894,6 +9898,10 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			}
 		}
 		return false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return false, err
 	}
 
 	runtimes, err := (insertBatchPlanner{
@@ -13539,6 +13547,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return err
 			}
 			if err := c.validateUpdateBatchPlanRootDescriptors(plan); err != nil {
+				return err
+			}
+			if err := c.requireColumnStoreCommandWAL(plan.meta, commandWALIntent); err != nil {
 				return err
 			}
 			c.meta = plan.meta

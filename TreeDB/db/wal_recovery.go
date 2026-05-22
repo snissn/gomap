@@ -485,11 +485,45 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 					return err
 				}
 			}
-			db.ensureCommandWALRecoverySnapshotView()
-			return registration.handler(db, env)
+			return db.applyRegisteredCommandWALFrame(env, registration)
 		}
 		return commitlog.ErrCommandWALUnsupportedKind
 	}
+}
+
+func (db *DB) applyRegisteredCommandWALFrame(env commitlog.CommandEnvelope, registration commandWALReplayHandlerRegistration) error {
+	db.ensureCommandWALRecoverySnapshotView()
+	previousReplayLSN := db.commandWALReplayLSN.Swap(env.LSN)
+	replayToken := db.nextCommandWALReplayToken()
+	previousReplayToken := db.commandWALReplayToken.Swap(replayToken)
+	// Keep the DB handle usable if an external replay handler panics and the
+	// caller recovers above the replay loop.
+	restored := false
+	defer func() {
+		if r := recover(); r != nil {
+			if !restored {
+				db.restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken)
+			}
+			panic(r)
+		}
+	}()
+	err := registration.handler(db, env)
+	db.restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken)
+	restored = true
+	return err
+}
+
+func (db *DB) restoreCommandWALReplayFrame(previousReplayLSN, previousReplayToken uint64) {
+	db.commandWALReplayToken.Store(previousReplayToken)
+	db.commandWALReplayLSN.Store(previousReplayLSN)
+}
+
+func (db *DB) nextCommandWALReplayToken() uint64 {
+	token := db.commandWALReplayTokenSeq.Add(1)
+	if token == 0 {
+		token = db.commandWALReplayTokenSeq.Add(1)
+	}
+	return token
 }
 
 func (db *DB) ensureCommandWALRecoverySnapshotView() {

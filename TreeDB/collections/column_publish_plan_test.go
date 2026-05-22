@@ -1634,7 +1634,10 @@ func TestColumnManifestPublishSystemDeltaDefersMalformedPublishedRootIdentityToO
 		t.Fatalf("PublishOrderedRootGroupWithSystemBuilder: %v", err)
 	}
 	_, err = NewCollectionManager(d).OpenCollection("events")
-	if err == nil || !strings.Contains(err.Error(), "invalid identity record") || !strings.Contains(err.Error(), "malformed identity record length") {
+	if err == nil ||
+		!errors.Is(err, ErrColumnManifestIdentityMalformed) ||
+		!strings.Contains(err.Error(), "invalid identity record") ||
+		!strings.Contains(err.Error(), "length=") {
 		t.Fatalf("OpenCollection err=%v want malformed committed root identity", err)
 	}
 }
