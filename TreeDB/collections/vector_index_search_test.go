@@ -314,11 +314,11 @@ func TestOpenVectorIndexSearcherReusesNativeReaderV4(t *testing.T) {
 	if second.Stats.OpenGranulesRead != first.Stats.OpenGranulesRead || second.Stats.OpenPhysicalBytesRead != first.Stats.OpenPhysicalBytesRead {
 		t.Fatalf("open stats changed first=(%d,%d) second=(%d,%d); want stable bound-reader setup telemetry", first.Stats.OpenGranulesRead, first.Stats.OpenPhysicalBytesRead, second.Stats.OpenGranulesRead, second.Stats.OpenPhysicalBytesRead)
 	}
-	// Physical read/cache counters may be zero when the segment cache is warm;
-	// logical fetch/search counters prove the bound reader is reused without
-	// depending on cold-cache telemetry.
-	if first.Stats.RowFetches == 0 || second.Stats.RowFetches == 0 {
-		t.Fatalf("row fetch stats first=%d second=%d want non-zero per-search deltas", first.Stats.RowFetches, second.Stats.RowFetches)
+	// Physical read/cache counters and generic row fetches may be zero when the
+	// planner-backed segment/block cache is warm; logical candidate counters prove
+	// the bound reader is reused without depending on cold-cache telemetry.
+	if first.Stats.CandidateFetches == 0 || second.Stats.CandidateFetches == 0 {
+		t.Fatalf("candidate fetch stats first=%d second=%d want non-zero per-search deltas", first.Stats.CandidateFetches, second.Stats.CandidateFetches)
 	}
 	if first.Stats.Candidates == 0 || second.Stats.Candidates == 0 {
 		t.Fatalf("candidate stats first=%d second=%d want non-zero searches", first.Stats.Candidates, second.Stats.Candidates)

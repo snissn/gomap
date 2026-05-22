@@ -79,15 +79,15 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	if stats.Candidates != uint64(len(rows)) {
 		t.Fatalf("Candidates=%d want %d", stats.Candidates, len(rows))
 	}
-	if stats.Edges == 0 || stats.CandidateFetches != uint64(len(rows)) || stats.ExpansionFetches != 0 || stats.ResultFetches != uint64(len(got)) {
+	if stats.Edges == 0 || stats.CandidateFetches != uint64(len(rows)) || stats.ScoreBatches != uint64(len(rows)) || stats.ExpansionFetches != 0 || stats.ResultFetches != uint64(len(got)) {
 		t.Fatalf("stats=%+v want candidate/result fetches without duplicate expansion row fetches", stats)
 	}
 	readerStats := reader.Stats()
 	if readerStats.BatchFetches == 0 {
 		t.Fatalf("reader stats=%+v want batched top-k result fetch", readerStats)
 	}
-	if gotRows, wantRows := readerStats.RowsFetched, stats.CandidateFetches+stats.ResultFetches; gotRows != wantRows {
-		t.Fatalf("reader rows_fetched=%d want candidate+result fetches=%d stats=%+v", gotRows, wantRows, stats)
+	if gotRows, wantRows := readerStats.RowsFetched, stats.ResultFetches; gotRows != wantRows {
+		t.Fatalf("reader rows_fetched=%d want top-k result fetches=%d stats=%+v", gotRows, wantRows, stats)
 	}
 }
 
@@ -115,11 +115,11 @@ func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
 	if len(got) != 1 || got[0].Ordinal != 4 || string(got[0].ID) != "doc-best" {
 		t.Fatalf("results=%+v want best-first traversal to reach doc-best before lower-score branch", got)
 	}
-	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ExpansionFetches != 0 {
+	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ScoreBatches != 4 || stats.ExpansionFetches != 0 {
 		t.Fatalf("stats=%+v want four scored candidates without duplicate expansion row fetches", stats)
 	}
-	if readerStats := reader.Stats(); readerStats.RowsFetched != stats.CandidateFetches+stats.ResultFetches {
-		t.Fatalf("reader rows_fetched=%d want candidate+result fetches stats=%+v", readerStats.RowsFetched, stats)
+	if readerStats := reader.Stats(); readerStats.RowsFetched != stats.ResultFetches {
+		t.Fatalf("reader rows_fetched=%d want top-k result fetches stats=%+v", readerStats.RowsFetched, stats)
 	}
 }
 
@@ -694,6 +694,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.CandidateFetches += stats.CandidateFetches
 		searchStats.ExpansionFetches += stats.ExpansionFetches
 		searchStats.ResultFetches += stats.ResultFetches
+		searchStats.ScoreBatches += stats.ScoreBatches
+		searchStats.OrdinalsGrouped += stats.OrdinalsGrouped
+		searchStats.BlockViewHits += stats.BlockViewHits
+		searchStats.BlockViewMisses += stats.BlockViewMisses
+		searchStats.BlockViewBuilds += stats.BlockViewBuilds
 	}
 	b.StopTimer()
 	stats := reader.Stats()
@@ -755,6 +760,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalCandidateFetches atomic.Uint64
 	var totalExpansionFetches atomic.Uint64
 	var totalResultFetches atomic.Uint64
+	var totalScoreBatches atomic.Uint64
+	var totalOrdinalsGrouped atomic.Uint64
+	var totalBlockViewHits atomic.Uint64
+	var totalBlockViewMisses atomic.Uint64
+	var totalBlockViewBuilds atomic.Uint64
 	var nextWorker atomic.Uint64
 	b.SetParallelism(1) // Keep one prewarmed reader/scratch per RunParallel worker.
 	b.ReportAllocs()
@@ -789,6 +799,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.CandidateFetches += stats.CandidateFetches
 			localStats.ExpansionFetches += stats.ExpansionFetches
 			localStats.ResultFetches += stats.ResultFetches
+			localStats.ScoreBatches += stats.ScoreBatches
+			localStats.OrdinalsGrouped += stats.OrdinalsGrouped
+			localStats.BlockViewHits += stats.BlockViewHits
+			localStats.BlockViewMisses += stats.BlockViewMisses
+			localStats.BlockViewBuilds += stats.BlockViewBuilds
 		}
 		sink.Add(localSink)
 		totalCandidates.Add(localStats.Candidates)
@@ -796,6 +811,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalCandidateFetches.Add(localStats.CandidateFetches)
 		totalExpansionFetches.Add(localStats.ExpansionFetches)
 		totalResultFetches.Add(localStats.ResultFetches)
+		totalScoreBatches.Add(localStats.ScoreBatches)
+		totalOrdinalsGrouped.Add(localStats.OrdinalsGrouped)
+		totalBlockViewHits.Add(localStats.BlockViewHits)
+		totalBlockViewMisses.Add(localStats.BlockViewMisses)
+		totalBlockViewBuilds.Add(localStats.BlockViewBuilds)
 	})
 	b.StopTimer()
 	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
@@ -814,6 +834,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		CandidateFetches: totalCandidateFetches.Load(),
 		ExpansionFetches: totalExpansionFetches.Load(),
 		ResultFetches:    totalResultFetches.Load(),
+		ScoreBatches:     totalScoreBatches.Load(),
+		OrdinalsGrouped:  totalOrdinalsGrouped.Load(),
+		BlockViewHits:    totalBlockViewHits.Load(),
+		BlockViewMisses:  totalBlockViewMisses.Load(),
+		BlockViewBuilds:  totalBlockViewBuilds.Load(),
 	})
 }
 
@@ -980,6 +1005,11 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 		b.ReportMetric(float64(searchStats.Edges)/float64(searchStats.Candidates), "edges/node")
 	}
 	b.ReportMetric(float64(searchStats.CandidateFetches)/float64(n), "candidate_fetches/search")
+	b.ReportMetric(float64(searchStats.ScoreBatches)/float64(n), "score_batches/search")
+	b.ReportMetric(float64(searchStats.OrdinalsGrouped)/float64(n), "ordinals_grouped/search")
+	b.ReportMetric(float64(searchStats.BlockViewHits)/float64(n), "block_view_hits/search")
+	b.ReportMetric(float64(searchStats.BlockViewMisses)/float64(n), "block_view_misses/search")
+	b.ReportMetric(float64(searchStats.BlockViewBuilds)/float64(n), "block_view_builds/search")
 	b.ReportMetric(float64(searchStats.ExpansionFetches)/float64(n), "expansion_fetches/search")
 	b.ReportMetric(float64(searchStats.ResultFetches)/float64(n), "result_fetches/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.CacheHits, baseStats.CacheHits))/float64(n), "cache_hits/search")
