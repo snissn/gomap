@@ -1,0 +1,361 @@
+package collections
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"unsafe"
+)
+
+var errColumnVectorGraphBlockViewRowOutOfBounds = errors.New("column_graph block view row outside block")
+
+type columnVectorGraphOrdinalRef struct {
+	assetOrdinal int
+	rowIndex     int
+}
+
+type columnVectorGraphByteSpan struct {
+	start int
+	end   int
+}
+
+type columnVectorGraphVectorSpan struct {
+	start int
+	end   int
+	dims  int
+}
+
+type columnVectorGraphAdjacencySpan struct {
+	start int
+	end   int
+	count int
+}
+
+type columnVectorGraphSearchPlan struct {
+	reader *columnVectorGraphPhysicalRowReader
+}
+
+type columnVectorGraphBlockView struct {
+	reader       *columnVectorGraphPhysicalRowReader
+	block        *columnPhysicalRowReaderBlock
+	idSpans      []columnVectorGraphByteSpan
+	vectorSpans  []columnVectorGraphVectorSpan
+	invNorms     []float32
+	adjSpans     []columnVectorGraphAdjacencySpan
+	rowValidated []bool
+}
+
+func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
+	if reader == nil {
+		return nil, errNilColumnVectorGraphPhysicalRowReader
+	}
+	if _, err := reader.rowReader(); err != nil {
+		return nil, err
+	}
+	return &columnVectorGraphSearchPlan{reader: reader}, nil
+}
+
+func (p *columnVectorGraphSearchPlan) ordinalRef(ordinal int) (columnVectorGraphOrdinalRef, error) {
+	if p == nil || p.reader == nil {
+		return columnVectorGraphOrdinalRef{}, errNilColumnVectorGraphPhysicalRowReader
+	}
+	reader, err := p.reader.rowReader()
+	if err != nil {
+		return columnVectorGraphOrdinalRef{}, err
+	}
+	rangeIdx := reader.rangeIndexForOrdinal(ordinal)
+	if rangeIdx < 0 {
+		return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
+	}
+	rowRange := reader.ranges[rangeIdx]
+	return columnVectorGraphOrdinalRef{
+		assetOrdinal: rowRange.assetOrdinal,
+		rowIndex:     ordinal - rowRange.startOrdinal,
+	}, nil
+}
+
+func (p *columnVectorGraphSearchPlan) blockViewForOrdinal(ordinal int) (*columnVectorGraphBlockView, columnVectorGraphOrdinalRef, error) {
+	ref, err := p.ordinalRef(ordinal)
+	if err != nil {
+		return nil, columnVectorGraphOrdinalRef{}, err
+	}
+	view, err := p.blockViewForAssetOrdinal(ref.assetOrdinal)
+	if err != nil {
+		return nil, columnVectorGraphOrdinalRef{}, err
+	}
+	return view, ref, nil
+}
+
+func (p *columnVectorGraphSearchPlan) blockViewForAssetOrdinal(assetOrdinal int) (*columnVectorGraphBlockView, error) {
+	if p == nil || p.reader == nil {
+		return nil, errNilColumnVectorGraphPhysicalRowReader
+	}
+	reader, err := p.reader.rowReader()
+	if err != nil {
+		return nil, err
+	}
+	if assetOrdinal < 0 || assetOrdinal >= len(reader.ranges) {
+		return nil, fmt.Errorf("collections: column_graph block view asset ordinal=%d outside ranges=%d", assetOrdinal, len(reader.ranges))
+	}
+	block, err := reader.loadBlock(reader.ranges[assetOrdinal])
+	if err != nil {
+		return nil, err
+	}
+	return newColumnVectorGraphBlockView(p.reader, block)
+}
+
+func newColumnVectorGraphBlockView(reader *columnVectorGraphPhysicalRowReader, block *columnPhysicalRowReaderBlock) (*columnVectorGraphBlockView, error) {
+	if reader == nil {
+		return nil, errNilColumnVectorGraphPhysicalRowReader
+	}
+	if block == nil {
+		return nil, errors.New("collections: column_graph block view requires block")
+	}
+	rows := len(block.rowOffsets)
+	view := &columnVectorGraphBlockView{
+		reader:       reader,
+		block:        block,
+		idSpans:      make([]columnVectorGraphByteSpan, rows),
+		vectorSpans:  make([]columnVectorGraphVectorSpan, rows),
+		invNorms:     make([]float32, rows),
+		adjSpans:     make([]columnVectorGraphAdjacencySpan, rows),
+		rowValidated: make([]bool, rows),
+	}
+	for rowIndex := 0; rowIndex < rows; rowIndex++ {
+		if err := view.indexRow(rowIndex); err != nil {
+			return nil, err
+		}
+	}
+	return view, nil
+}
+
+func (v *columnVectorGraphBlockView) indexRow(rowIndex int) error {
+	cur := manifestCursor{raw: v.block.raw, pos: v.block.rowOffsets[rowIndex]}
+	idStart, idEnd, err := columnVectorGraphReadBytesSpan(&cur)
+	if err != nil {
+		return err
+	}
+	deleted := false
+	if v.block.version >= columnPhysicalAssetVersionV2 {
+		deleted = cur.bool()
+	}
+	if cur.err != nil {
+		return cur.err
+	}
+	ordinal := v.ordinalForRowIndex(rowIndex)
+	if len(v.block.raw[idStart:idEnd]) == 0 {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d missing document id", v.reader.def.Name, ordinal)
+	}
+	if deleted {
+		if v.block.header.Operation != ColumnPublishOperationDelete {
+			return fmt.Errorf("column physical asset %s row[%d] is marked deleted", v.block.header.Operation, rowIndex)
+		}
+		return fmt.Errorf("collections: column_graph %q ordinal=%d row is deleted", v.reader.def.Name, ordinal)
+	}
+	if v.block.header.Operation == ColumnPublishOperationDelete {
+		return fmt.Errorf("column physical asset delete row[%d] is not marked deleted", rowIndex)
+	}
+	v.idSpans[rowIndex] = columnVectorGraphByteSpan{start: idStart, end: idEnd}
+
+	vectorSpan, err := v.indexVector(&cur, ordinal)
+	if err != nil {
+		return fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	invNorm, err := v.indexInvNorm(&cur, ordinal)
+	if err != nil {
+		return fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	adjSpan, err := v.indexAdjacency(&cur, ordinal)
+	if err != nil {
+		return fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	if cur.err != nil {
+		return cur.err
+	}
+	v.vectorSpans[rowIndex] = vectorSpan
+	v.invNorms[rowIndex] = invNorm
+	v.adjSpans[rowIndex] = adjSpan
+	v.rowValidated[rowIndex] = true
+	return nil
+}
+
+func (v *columnVectorGraphBlockView) ordinalForRowIndex(rowIndex int) int {
+	if v == nil || v.reader == nil || v.reader.reader == nil || v.block == nil {
+		return rowIndex
+	}
+	assetOrdinal := v.block.assetOrdinal
+	if assetOrdinal < 0 || assetOrdinal >= len(v.reader.reader.ranges) {
+		return rowIndex
+	}
+	return v.reader.reader.ranges[assetOrdinal].startOrdinal + rowIndex
+}
+
+func (v *columnVectorGraphBlockView) indexVector(cur *manifestCursor, ordinal int) (columnVectorGraphVectorSpan, error) {
+	if err := v.readGraphHeader(cur, v.block.version, ordinal, 0, ColumnStoreValueFloat32Vector); err != nil {
+		return columnVectorGraphVectorSpan{}, err
+	}
+	n := cur.u64()
+	if cur.err != nil {
+		return columnVectorGraphVectorSpan{}, cur.err
+	}
+	if n != uint64(v.reader.def.Dimensions) {
+		return columnVectorGraphVectorSpan{}, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", v.reader.def.Name, ordinal, n, v.reader.def.Dimensions)
+	}
+	byteLen, ok := cur.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
+		return columnVectorGraphVectorSpan{}, cur.err
+	}
+	start := cur.pos
+	cur.pos += int(byteLen)
+	return columnVectorGraphVectorSpan{start: start, end: cur.pos, dims: int(n)}, nil
+}
+
+func (v *columnVectorGraphBlockView) indexInvNorm(cur *manifestCursor, ordinal int) (float32, error) {
+	if err := v.readGraphHeader(cur, v.block.version, ordinal, 1, ColumnStoreValueFloat32); err != nil {
+		return 0, err
+	}
+	invNorm := math.Float32frombits(cur.u32())
+	if cur.err != nil {
+		return 0, cur.err
+	}
+	if invNorm <= 0 || math.IsNaN(float64(invNorm)) || math.IsInf(float64(invNorm), 0) {
+		return 0, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", v.reader.def.Name, ordinal, invNorm)
+	}
+	return invNorm, nil
+}
+
+func (v *columnVectorGraphBlockView) indexAdjacency(cur *manifestCursor, ordinal int) (columnVectorGraphAdjacencySpan, error) {
+	if err := v.readGraphHeader(cur, v.block.version, ordinal, 2, ColumnStoreValueAdjacencyList); err != nil {
+		return columnVectorGraphAdjacencySpan{}, err
+	}
+	n := cur.u64()
+	if cur.err != nil {
+		return columnVectorGraphAdjacencySpan{}, cur.err
+	}
+	byteLen, ok := cur.fixedWidthSliceByteLen(n, 4, "uint32 slice")
+	if !ok {
+		return columnVectorGraphAdjacencySpan{}, cur.err
+	}
+	start := cur.pos
+	cur.pos += int(byteLen)
+	return columnVectorGraphAdjacencySpan{start: start, end: cur.pos, count: int(n)}, nil
+}
+
+func (v *columnVectorGraphBlockView) readGraphHeader(cur *manifestCursor, version uint16, ordinal, colIdx int, want ColumnStoreValueType) error {
+	typeBytes := cur.stringBytes()
+	if cur.err != nil {
+		return cur.err
+	}
+	if !columnPhysicalBytesEqualString(typeBytes, string(want)) {
+		return fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), want)
+	}
+	null := cur.bool()
+	if cur.err != nil {
+		return cur.err
+	}
+	present := true
+	if version >= columnPhysicalAssetVersionV3 {
+		present = cur.bool()
+		if cur.err != nil {
+			return cur.err
+		}
+	}
+	if !present {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", v.reader.def.Name, ordinal)
+	}
+	if null {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", v.reader.def.Name, ordinal)
+	}
+	return nil
+}
+
+func (v *columnVectorGraphBlockView) checkRowIndex(rowIndex int) error {
+	if v == nil || v.block == nil || rowIndex < 0 || rowIndex >= len(v.rowValidated) || !v.rowValidated[rowIndex] {
+		return errColumnVectorGraphBlockViewRowOutOfBounds
+	}
+	return nil
+}
+
+func (v *columnVectorGraphBlockView) id(rowIndex int) ([]byte, error) {
+	if err := v.checkRowIndex(rowIndex); err != nil {
+		return nil, err
+	}
+	span := v.idSpans[rowIndex]
+	return v.block.raw[span.start:span.end], nil
+}
+
+func (v *columnVectorGraphBlockView) vector(rowIndex int, scratch []float32) ([]float32, []float32, error) {
+	if err := v.checkRowIndex(rowIndex); err != nil {
+		return nil, scratch, err
+	}
+	span := v.vectorSpans[rowIndex]
+	if span.dims == 0 {
+		return nil, scratch, nil
+	}
+	if columnPhysicalNativeLittleEndian {
+		raw := v.block.raw[span.start:span.end]
+		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(raw))), span.dims)
+		return vector, scratch, nil
+	}
+	base := len(scratch)
+	need := base + span.dims
+	if cap(scratch) < need {
+		next := make([]float32, need)
+		copy(next, scratch)
+		scratch = next
+	} else {
+		scratch = scratch[:need]
+	}
+	pos := span.start
+	for i := base; i < need; i++ {
+		scratch[i] = math.Float32frombits(uint32(v.block.raw[pos]) | uint32(v.block.raw[pos+1])<<8 | uint32(v.block.raw[pos+2])<<16 | uint32(v.block.raw[pos+3])<<24)
+		pos += 4
+	}
+	return scratch[base:], scratch, nil
+}
+
+func (v *columnVectorGraphBlockView) invNorm(rowIndex int) (float32, error) {
+	if err := v.checkRowIndex(rowIndex); err != nil {
+		return 0, err
+	}
+	return v.invNorms[rowIndex], nil
+}
+
+func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) ([]uint32, []uint32, error) {
+	if err := v.checkRowIndex(rowIndex); err != nil {
+		return nil, scratch, err
+	}
+	span := v.adjSpans[rowIndex]
+	base := len(scratch)
+	need := base + span.count
+	if cap(scratch) < need {
+		next := make([]uint32, need)
+		copy(next, scratch)
+		scratch = next
+	} else {
+		scratch = scratch[:need]
+	}
+	pos := span.start
+	for i := base; i < need; i++ {
+		scratch[i] = uint32(v.block.raw[pos])<<24 | uint32(v.block.raw[pos+1])<<16 | uint32(v.block.raw[pos+2])<<8 | uint32(v.block.raw[pos+3])
+		pos += 4
+	}
+	return scratch[base:], scratch, nil
+}
+
+func columnVectorGraphReadBytesSpan(cur *manifestCursor) (int, int, error) {
+	if cur.err != nil {
+		return 0, 0, cur.err
+	}
+	n := cur.u64()
+	if cur.err != nil {
+		return 0, 0, cur.err
+	}
+	if n > uint64(len(cur.raw)-cur.pos) {
+		cur.err = errors.New("collections: short column binary bytes")
+		return 0, 0, cur.err
+	}
+	start := cur.pos
+	cur.pos += int(n)
+	return start, cur.pos, nil
+}
