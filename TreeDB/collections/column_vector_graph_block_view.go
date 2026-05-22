@@ -152,14 +152,14 @@ func (p *columnVectorGraphSearchPlan) blockViewForAssetOrdinal(assetOrdinal int)
 		}
 		p.physicalReader = reader
 	}
+	if reader.closed {
+		return nil, errors.New("collections: physical column row reader is closed")
+	}
 	if len(reader.ranges) == 1 && assetOrdinal == 0 {
 		if p.singleBlockView != nil {
 			p.hits++
 			return p.singleBlockView, nil
 		}
-	}
-	if reader.closed {
-		return nil, errors.New("collections: physical column row reader is closed")
 	}
 	if assetOrdinal < 0 || assetOrdinal >= len(reader.ranges) {
 		return nil, fmt.Errorf("collections: column_graph block view asset ordinal=%d outside ranges=%d", assetOrdinal, len(reader.ranges))
