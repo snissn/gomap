@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -840,6 +841,11 @@ type columnPhysicalAssetReadCache struct {
 	lastView       bool
 	hits           uint64
 	misses         uint64
+
+	resourceManager *mappedresource.Manager
+	resourceScope   mappedresource.Scope
+	resourceReason  string
+	resourceHandles []*mappedresource.Handle
 }
 
 type columnPhysicalAssetSegmentReader struct {
@@ -873,8 +879,81 @@ func newColumnPhysicalAssetReadCacheWithIntegrity(rootDir string, namespace stri
 	}, nil
 }
 
+func (c *columnPhysicalAssetReadCache) useMappedResourceManager(manager *mappedresource.Manager, scope mappedresource.Scope, reason string) error {
+	if c == nil {
+		return errors.New("collections: nil column physical asset read cache")
+	}
+	if manager != nil {
+		if scope.Namespace == "" {
+			scope.Namespace = c.namespace
+		}
+		if err := scope.Validate(); err != nil {
+			return err
+		}
+	}
+	c.resourceManager = manager
+	c.resourceScope = scope
+	c.resourceReason = reason
+	return nil
+}
+
+func (c *columnPhysicalAssetReadCache) mappedResourceStats() mappedresource.Stats {
+	if c == nil || c.resourceManager == nil {
+		return mappedresource.Stats{}
+	}
+	return c.resourceManager.Stats()
+}
+
+func (c *columnPhysicalAssetReadCache) mappedResourcePins() []mappedresource.Pin {
+	if c == nil || c.resourceManager == nil {
+		return nil
+	}
+	return c.resourceManager.PinSummary()
+}
+
+func (c *columnPhysicalAssetReadCache) releaseResourceHandles() error {
+	if c == nil || len(c.resourceHandles) == 0 {
+		return nil
+	}
+	var releaseErr error
+	for _, handle := range c.resourceHandles {
+		if err := handle.Release(); err != nil && releaseErr == nil {
+			releaseErr = err
+		}
+	}
+	clear(c.resourceHandles)
+	c.resourceHandles = c.resourceHandles[:0]
+	return releaseErr
+}
+
+func (c *columnPhysicalAssetReadCache) releaseResourceHandlesBySource(source mappedresource.Source) error {
+	if c == nil || len(c.resourceHandles) == 0 {
+		return nil
+	}
+	var releaseErr error
+	kept := c.resourceHandles[:0]
+	for _, handle := range c.resourceHandles {
+		if handle == nil {
+			continue
+		}
+		if handle.Source() == source {
+			if err := handle.Release(); err != nil && releaseErr == nil {
+				releaseErr = err
+			}
+			continue
+		}
+		kept = append(kept, handle)
+	}
+	clear(c.resourceHandles[len(kept):])
+	c.resourceHandles = kept
+	return releaseErr
+}
+
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
+	if err := c.releaseResourceHandles(); err != nil {
+		closeErr = err
+	}
 	if c.scratch != nil {
 		putColumnPhysicalAssetReadScratch(c.scratch)
 		c.scratch = nil
@@ -919,6 +998,9 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 				return nil, err
 			}
+			if err := c.trackResourceRead(ref, raw, mappedresource.SourceMapped, ""); err != nil {
+				return nil, err
+			}
 			c.lastView = true
 			return raw, nil
 		}
@@ -939,6 +1021,13 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 		return nil, err
 	}
+	var fallback mappedresource.FallbackReason
+	if c.returnViews {
+		fallback = mappedresource.FallbackReadAt
+	}
+	if err := c.trackResourceRead(ref, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
+		return nil, err
+	}
 	return raw, nil
 }
 
@@ -955,6 +1044,86 @@ func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref Column
 		}
 	}
 	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
+}
+
+func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw []byte, source mappedresource.Source, fallback mappedresource.FallbackReason) error {
+	if c == nil || c.resourceManager == nil {
+		return nil
+	}
+	key := mappedResourceKeyForColumnAssetRef(ref)
+	if key.Length != int64(len(raw)) {
+		return fmt.Errorf("collections: column asset mapped-resource key length=%d raw bytes=%d", key.Length, len(raw))
+	}
+	scope := c.resourceScope
+	if scope.Kind == "" {
+		scope = mappedresource.Scope{Kind: mappedresource.ScopeTypedRowReader, ID: "column-physical-asset-read-cache", Namespace: c.namespace}
+	}
+	if scope.Namespace == "" {
+		scope.Namespace = c.namespace
+	}
+	reason := c.resourceReason
+	if reason == "" {
+		reason = "column_physical_asset_read"
+	}
+	if source == mappedresource.SourceMapped {
+		for _, handle := range c.resourceHandles {
+			if handle != nil && !handle.Released() && handle.Source() == source && handle.Key().Equal(key) {
+				return nil
+			}
+		}
+	}
+	handleBytes := raw
+	if source == mappedresource.SourceHeapCopy {
+		// Heap-copy reads use the cache scratch path, so their implicit lifetime
+		// ends when the next heap read may reuse scratch. Keep at most the current
+		// heap handle active. Mapped view handles remain pinned until cache close,
+		// with duplicate keys deduplicated above.
+		if err := c.releaseResourceHandlesBySource(mappedresource.SourceHeapCopy); err != nil {
+			return err
+		}
+		if len(raw) != 0 {
+			// AcquireBytes requires immutable bytes for the handle lifetime. Syscall
+			// reads may return c.scratch, which is reused on later reads, so the
+			// accounting/pin handle owns a stable copy while it is active. The caller
+			// still receives the original raw bytes.
+			handleBytes = append([]byte(nil), raw...)
+		}
+	}
+	handle, err := c.resourceManager.AcquireBytes(key, scope, source, handleBytes, mappedresource.AcquireOptions{
+		Reason:         reason,
+		ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity),
+		FallbackReason: fallback,
+	})
+	if err != nil {
+		return err
+	}
+	c.resourceHandles = append(c.resourceHandles, handle)
+	return nil
+}
+
+func mappedResourceKeyForColumnAssetRef(ref ColumnAssetRef) mappedresource.Key {
+	return mappedresource.Key{
+		Class:      mappedresource.ClassTypedRowAsset,
+		Namespace:  ref.Namespace,
+		Kind:       string(ref.Kind),
+		Generation: ref.Generation,
+		PartID:     ref.PartID,
+		FileID:     ref.FileID,
+		Offset:     ref.Offset,
+		Length:     ref.Length,
+		Checksum:   uint64(ref.Checksum),
+	}
+}
+
+func mappedResourceValidationModeForColumnAssetIntegrity(integrity ColumnAssetReadIntegrity) mappedresource.ValidationMode {
+	switch integrity {
+	case ColumnAssetReadIntegrityCachedVerify:
+		return mappedresource.ValidationCachedVerify
+	case ColumnAssetReadIntegritySkipChecksums:
+		return mappedresource.ValidationSkipChecksum
+	default:
+		return mappedresource.ValidationVerify
+	}
 }
 
 func getColumnPhysicalAssetReadScratch(minLen int) []byte {
@@ -982,15 +1151,24 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPh
 	}
 	if c.file != nil && c.fileID == ref.FileID {
 		c.hits++
+		if c.resourceManager != nil {
+			c.resourceManager.RecordHit()
+		}
 		return c.file, nil
 	}
 	if c.files != nil {
 		if reader := c.files[ref.FileID]; reader != nil {
 			c.hits++
+			if c.resourceManager != nil {
+				c.resourceManager.RecordHit()
+			}
 			return reader, nil
 		}
 	}
 	c.misses++
+	if c.resourceManager != nil {
+		c.resourceManager.RecordMiss()
+	}
 	file, err := os.Open(filepath.Join(c.segmentDir, columnAssetSegmentFileName(ref.FileID)))
 	if err != nil {
 		return nil, err
