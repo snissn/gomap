@@ -244,9 +244,16 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			snapshot = header
 			sawHeader = true
 		case bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)):
+			keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(record.key)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
 			part, err := decodeColumnManifestPartRecord(record.value)
 			if err != nil {
 				return columnManifestSnapshot{}, err
+			}
+			if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
 			}
 			parts = append(parts, part)
 		case bytes.HasPrefix(record.key, []byte(columnManifestAggregateMetadataRecordPrefix)):
@@ -422,14 +429,35 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	}, nil
 }
 
+func decodeColumnManifestPartRecordKey(key []byte) (uint64, uint64, error) {
+	if !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+		return 0, 0, fmt.Errorf("collections: invalid column manifest part key prefix %q", string(key))
+	}
+	if len(key) != len(columnManifestPartRecordPrefix)+16 {
+		return 0, 0, fmt.Errorf("collections: invalid column manifest part key length=%d", len(key))
+	}
+	keySuffix := key[len(columnManifestPartRecordPrefix):]
+	return binary.BigEndian.Uint64(keySuffix[:8]), binary.BigEndian.Uint64(keySuffix[8:]), nil
+}
+
 func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAssetRef, error) {
 	if iter == nil {
 		return nil, nil
 	}
 	var refs []ColumnAssetRef
 	partRefs, err := enumerateColumnManifestAssetRefsForPrefix(iter, columnManifestPartRecordPrefixBytes, func(key, value []byte) (ColumnAssetRef, error) {
+		keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(key)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
 		part, err := decodeColumnManifestPartRecord(value)
-		return part.AssetRef, err
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+			return ColumnAssetRef{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
+		}
+		return part.AssetRef, nil
 	})
 	if err != nil {
 		return nil, err
