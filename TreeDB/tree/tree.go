@@ -392,7 +392,7 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 	if err != nil {
 		return err
 	}
-	node.InitFreshNodeView(dst, data) // VerifyChecksum is fast (CRC32C hardware accelerated).
+	node.InitFreshNodeView(dst, data) // VerifyChecksum is fast (CRC-32/IEEE hardware accelerated).
 	// We use Verified Cache to skip it if already checked.
 	if verifyAlways || !t.pager.IsVerified(pageID) {
 		if !dst.VerifyChecksum() {

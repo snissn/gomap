@@ -3,7 +3,7 @@ package template
 import (
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
+	crc32 "github.com/snissn/go-crc32-asm"
 
 	"github.com/zeebo/xxh3"
 )
@@ -18,7 +18,7 @@ var (
 	ErrCorruptTemplateDef = errors.New("template: corrupt template def")
 )
 
-var crcTable = crc32.MakeTable(crc32.Castagnoli)
+var crcTable = crc32.MakeTable(crc32.IEEE)
 
 // EncodeTemplateDef serializes anchors into the TemplateDefBytes format.
 func EncodeTemplateDef(def TemplateDef, cfg Config) ([]byte, error) {

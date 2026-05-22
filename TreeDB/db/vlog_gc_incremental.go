@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
+	crc32 "github.com/snissn/go-crc32-asm"
 	"os"
 	"path/filepath"
 	"sort"

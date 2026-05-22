@@ -139,7 +139,7 @@ u8       Version          // 1=single KV, 2=multi-KV, 3=typed entries
 u8       Codec            // 0=raw, 1=snappy, 2=lz4
 u16      RestartInterval  // restart interval for prefix-compressed keys
 u16/u32  Version-specific metadata
-u32      Checksum         // CRC32C(header-with-zero-checksum || encoded-payload)
+u32      Checksum         // CRC-32/IEEE(header-with-zero-checksum || encoded-payload)
 bytes    EncodedPayload
 ```
 
@@ -326,7 +326,7 @@ exclusive; an empty `high` means unbounded (e.g. root upper bound).
 Value-log segments are append-only. Each record is:
 
 ```text
-[ u32 CRC32C ]  little-endian; CRC32C(Castagnoli) of (header_without_crc || payload)
+[ u32 CRC32 ]  little-endian; CRC-32/IEEE of (header_without_crc || payload)
 [ u8  Version ]
 [ u8  Flags   ]  bit0: grouped record
 [ u16 Reserved ]
@@ -425,7 +425,7 @@ Constraints:
 
 ## Read integrity controls
 
-Value-log records are checksummed (CRC32C). Reads can be configured via:
+Value-log records are checksummed (CRC-32/IEEE). Reads can be configured via:
 
 - `Options.ValueLog.ReadIntegrity` (see `docs/TREEDB_WRITE_PATHS.md` for migration mapping)
 

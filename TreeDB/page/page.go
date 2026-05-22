@@ -3,7 +3,7 @@ package page
 import (
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
+	crc32 "github.com/snissn/go-crc32-asm"
 	"unsafe"
 )
 
@@ -66,12 +66,12 @@ type ValuePtr struct {
 	FileID uint32
 }
 
-// CRC32C Table using Castagnoli polynomial.
-var crcTable = crc32.MakeTable(crc32.Castagnoli)
+// CRC-32/IEEE table.
+var crcTable = crc32.MakeTable(crc32.IEEE)
 var checksumZeroField = [4]byte{}
 var checksumZeroBlock = [1024]byte{}
 
-// Checksum returns the CRC32C checksum of data.
+// Checksum returns the CRC-32/IEEE checksum of data.
 func Checksum(data []byte) uint32 {
 	return crc32.Checksum(data, crcTable)
 }
@@ -121,7 +121,7 @@ func updateChecksumZeroes(sum uint32, count int) uint32 {
 	return sum
 }
 
-// UpdateChecksum computes CRC32C for the page while treating checksum bytes
+// UpdateChecksum computes CRC-32/IEEE for the page while treating checksum bytes
 // 8-11 (data[8:12]) as zero, then writes the computed checksum back into the
 // page header.
 // It mutates data in-place and returns the computed checksum.

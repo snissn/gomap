@@ -2,7 +2,7 @@ package colgranule
 
 import (
 	"encoding/binary"
-	"hash/crc32"
+	crc32 "github.com/snissn/go-crc32-asm"
 	"strings"
 	"testing"
 	"time"
