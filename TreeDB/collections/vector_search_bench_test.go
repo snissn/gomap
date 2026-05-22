@@ -248,6 +248,166 @@ func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearch(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionVectorIndexNativeRootBackedGraphOnlySearch(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	indexName := "embedding_graph_root_backed"
+	d, col, status, setupStats := openNativeVectorBenchmarkIndexRoot(b, docs, dims, indexName)
+	defer func() { _ = d.Close() }()
+
+	reader := newVectorIndexNativeRootBackedGraphReader(b, d, col, indexName, setupStats.Nodes)
+	defer func() { _ = reader.Close() }()
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	warm, err := reader.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+	if err != nil {
+		b.Fatalf("warm native root-backed graph-only search: %v", err)
+	}
+	if len(warm) == 0 {
+		b.Fatal("warm native root-backed graph-only search returned no results")
+	}
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(status.BytesDisk), "native_root_bytes")
+	b.ReportMetric(float64(setupStats.BytesMemory), "loaded_index_bytes")
+	b.ReportAllocs()
+	reader.resetCounters()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, err := reader.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+		if err != nil {
+			b.Fatalf("native root-backed graph-only vector search: %v", err)
+		}
+		if len(results) == 0 {
+			b.Fatal("native root-backed graph-only vector search returned no results")
+		}
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(reader.nodeGets)/float64(b.N), "node_gets/op")
+		b.ReportMetric(float64(reader.edgeGets)/float64(b.N), "edge_gets/op")
+		b.ReportMetric(float64(reader.docGets)/float64(b.N), "doc_gets/op")
+	}
+}
+
+func BenchmarkCollectionVectorIndexNativeRootTemplateV1GraphOnlySearch(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	indexName := "embedding_graph_template_v1"
+	d, col, status, setupStats := openTemplateV1NativeVectorBenchmarkIndexRoot(b, docs, dims, indexName)
+	defer func() { _ = d.Close() }()
+
+	reader := newVectorIndexNativeRootTemplateV1GraphReader(b, d, col, indexName, setupStats.Nodes, status.Meta)
+	defer func() { _ = reader.Close() }()
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	warm, err := reader.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+	if err != nil {
+		b.Fatalf("warm template-v1 native root-backed graph-only search: %v", err)
+	}
+	if len(warm) == 0 {
+		b.Fatal("warm template-v1 native root-backed graph-only search returned no results")
+	}
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(status.BytesDisk), "native_root_bytes")
+	b.ReportMetric(float64(setupStats.BytesMemory), "loaded_index_bytes")
+	b.ReportAllocs()
+	reader.resetCounters()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, err := reader.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+		if err != nil {
+			b.Fatalf("template-v1 native root-backed graph-only vector search: %v", err)
+		}
+		if len(results) == 0 {
+			b.Fatal("template-v1 native root-backed graph-only vector search returned no results")
+		}
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(reader.nodeGets)/float64(b.N), "node_gets/op")
+		b.ReportMetric(float64(reader.edgeGets)/float64(b.N), "edge_gets/op")
+		b.ReportMetric(float64(reader.docGets)/float64(b.N), "doc_gets/op")
+	}
+}
+
+func BenchmarkCollectionVectorIndexNativeRootTemplateV1GraphOnlySearchParallel(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	indexName := "embedding_graph_template_v1_parallel"
+	d, col, status, setupStats := openTemplateV1NativeVectorBenchmarkIndexRoot(b, docs, dims, indexName)
+	defer func() { _ = d.Close() }()
+
+	query := vectorBenchmarkEmbedding(docs/3, dims)
+	var readersMu sync.Mutex
+	var readers []*vectorIndexNativeRootBackedGraphReader
+	newReader := func() *vectorIndexNativeRootBackedGraphReader {
+		reader := newVectorIndexNativeRootTemplateV1GraphReader(b, d, col, indexName, setupStats.Nodes, status.Meta)
+		readersMu.Lock()
+		readers = append(readers, reader)
+		readersMu.Unlock()
+		return reader
+	}
+	readerPool := sync.Pool{New: func() any { return newReader() }}
+	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+		reader := newReader()
+		warm, err := reader.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+		if err != nil {
+			b.Fatalf("warm template-v1 native root-backed parallel graph-only search: %v", err)
+		}
+		if len(warm) == 0 {
+			b.Fatal("warm template-v1 native root-backed parallel graph-only search returned no results")
+		}
+		readerPool.Put(reader)
+	}
+	b.Cleanup(func() {
+		readersMu.Lock()
+		defer readersMu.Unlock()
+		for _, reader := range readers {
+			_ = reader.Close()
+		}
+	})
+
+	b.ReportMetric(float64(docs), "docs/index")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportMetric(float64(status.BytesDisk), "native_root_bytes")
+	b.ReportMetric(float64(setupStats.BytesMemory), "loaded_index_bytes")
+	b.ReportAllocs()
+	for _, reader := range readers {
+		reader.resetCounters()
+	}
+	b.ResetTimer()
+	runParallelVectorSearchBenchmark(b, func() error {
+		reader := readerPool.Get().(*vectorIndexNativeRootBackedGraphReader)
+		results, err := reader.searchGraphOnly(query, vectorBenchmarkTopK, 128)
+		if err != nil {
+			readerPool.Put(reader)
+			return fmt.Errorf("template-v1 native root-backed graph-only vector search: %w", err)
+		}
+		if len(results) == 0 {
+			readerPool.Put(reader)
+			return errors.New("template-v1 native root-backed graph-only vector search returned no results")
+		}
+		readerPool.Put(reader)
+		return nil
+	})
+	b.StopTimer()
+	var nodeGets, edgeGets, docGets int64
+	readersMu.Lock()
+	for _, reader := range readers {
+		nodeGets += reader.nodeGets
+		edgeGets += reader.edgeGets
+		docGets += reader.docGets
+	}
+	readersMu.Unlock()
+	if b.N > 0 {
+		b.ReportMetric(float64(nodeGets)/float64(b.N), "node_gets/op")
+		b.ReportMetric(float64(edgeGets)/float64(b.N), "edge_gets/op")
+		b.ReportMetric(float64(docGets)/float64(b.N), "doc_gets/op")
+	}
+}
+
 func BenchmarkCollectionVectorIndexNativeRootGraphOnlySearchParallel(b *testing.B) {
 	docs := vectorBenchmarkDocs(b)
 	dims := vectorBenchmarkDims(b)
