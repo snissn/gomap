@@ -1472,6 +1472,85 @@ func TestColumnPhysicalAssetScanRejectsWrongNamespaceM13C(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalDirectQueryValidatesUnselectedTypeTags(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+
+	var raw bytes.Buffer
+	writeManifestUint32(&raw, columnPhysicalAssetMagic)
+	writeManifestUint16(&raw, columnPhysicalAssetVersion)
+	writeManifestString(&raw, "events")
+	writeManifestString(&raw, normalized.AssetManager.Namespace)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 1)
+	writeManifestUint64(&raw, 1)
+	writeManifestString(&raw, string(ColumnPublishOperationInsert))
+	writeManifestUint64(&raw, normalized.SchemaHash)
+	writeManifestUint64(&raw, uint64(len(normalized.Columns)))
+	writeManifestUint64(&raw, 1)
+	for _, col := range normalized.Columns {
+		writeManifestString(&raw, col.Name)
+		writeManifestString(&raw, col.Path)
+		writeManifestString(&raw, string(col.ValueType))
+		writeManifestBool(&raw, col.Nullable)
+		writeManifestBool(&raw, col.Dictionary)
+	}
+	writeManifestBytes(&raw, []byte("e1"))
+	writeManifestBool(&raw, false)
+	writeManifestString(&raw, string(ColumnStoreValueString))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestUint64(&raw, 7)
+	writeManifestString(&raw, string(ColumnStoreValueString))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestString(&raw, "share")
+	writeManifestString(&raw, string(ColumnStoreValueString))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestString(&raw, "did:1")
+	encoded := raw.Bytes()
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+
+	verifyExec, err := newColumnPhysicalQueryExecutor(*normalized, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalQueryExecutor verify: %v", err)
+	}
+	if _, err := reduceColumnPhysicalAssetDirect(encoded, ref, "events", normalized, ColumnPublishOperationInsert, verifyExec); err == nil || !strings.Contains(err.Error(), `column[0] type="string" want "int64"`) {
+		t.Fatalf("reduce verify err=%v want unselected type-tag failure", err)
+	}
+
+	relaxedExec, err := newColumnPhysicalQueryExecutor(*normalized, ColumnPhysicalQueryRequest{
+		Kind:                     ColumnPhysicalQueryGroupCount,
+		GroupColumn:              "kind",
+		ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalQueryExecutor relaxed: %v", err)
+	}
+	summary, err := reduceColumnPhysicalAssetDirect(encoded, ref, "events", normalized, ColumnPublishOperationInsert, relaxedExec)
+	if err != nil {
+		t.Fatalf("reduce relaxed: %v", err)
+	}
+	if summary.rows != 1 || relaxedExec.reduceRows != 1 {
+		t.Fatalf("reduce relaxed summary rows=%d reduceRows=%d want 1", summary.rows, relaxedExec.reduceRows)
+	}
+	if got, want := columnPhysicalQueryLinesM13B("q1", relaxedExec.groups()), []string{"q1:share=1"}; !equalStringSets(got, want) {
+		t.Fatalf("reduce relaxed groups=%v want %v", got, want)
+	}
+}
+
 func equalStringSets(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

@@ -924,12 +924,24 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 	var value int64
 	var valueOK bool
 	for colIdx, col := range cfg.Columns {
-		typeBytes := cur.stringBytes()
-		if cur.err != nil {
-			return nil, false, nil, false, 0, false, cur.err
-		}
-		if !columnPhysicalBytesEqualString(typeBytes, string(col.ValueType)) {
-			return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), col.ValueType)
+		selectedGroup := colIdx == exec.groupColumnIdx
+		selectedValue := colIdx == exec.valueColumnIdx
+		selectedDistinct := colIdx == exec.distinctColumnIdx
+		if exec.readIntegrity != ColumnAssetReadIntegritySkipChecksums {
+			typeBytes := cur.stringBytes()
+			if cur.err != nil {
+				return nil, false, nil, false, 0, false, cur.err
+			}
+			if !columnPhysicalBytesEqualString(typeBytes, string(col.ValueType)) {
+				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), col.ValueType)
+			}
+		} else {
+			// Unsafe checksum-skipping reads also skip redundant per-value type
+			// tags and rely on the already-validated asset header/schema.
+			cur.skipStringBytes()
+			if cur.err != nil {
+				return nil, false, nil, false, 0, false, cur.err
+			}
 		}
 		null := cur.bool()
 		if cur.err != nil {
@@ -942,9 +954,6 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 				return nil, false, nil, false, 0, false, cur.err
 			}
 		}
-		selectedGroup := colIdx == exec.groupColumnIdx
-		selectedValue := colIdx == exec.valueColumnIdx
-		selectedDistinct := colIdx == exec.distinctColumnIdx
 		if !present {
 			if !null {
 				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] absent value is not null", colIdx)
@@ -968,24 +977,31 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 		}
 		switch col.ValueType {
 		case ColumnStoreValueBool:
+			// Bool is not a supported direct query group/value/distinct type.
 			_ = cur.bool()
 		case ColumnStoreValueInt64:
-			v := int64(cur.u64())
 			if selectedValue {
+				v := int64(cur.u64())
 				value = v
 				valueOK = true
+			} else {
+				cur.skip(8)
 			}
 		case ColumnStoreValueDouble:
-			_ = cur.u64()
+			cur.skip(8)
 		case ColumnStoreValueString:
-			v := cur.stringBytes()
-			if selectedGroup {
-				group = v
-				groupOK = true
-			}
-			if selectedDistinct {
-				distinct = v
-				distinctOK = true
+			if selectedGroup || selectedDistinct {
+				v := cur.stringBytes()
+				if selectedGroup {
+					group = v
+					groupOK = true
+				}
+				if selectedDistinct {
+					distinct = v
+					distinctOK = true
+				}
+			} else {
+				cur.skipStringBytes()
 			}
 		default:
 			return nil, false, nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
