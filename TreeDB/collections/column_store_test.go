@@ -332,6 +332,82 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "unknown column",
 		},
 		{
+			name: "vector column requires dims",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector}},
+			},
+			want: "vector_dims",
+		},
+		{
+			name: "adjacency column rejects dims",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, VectorDims: 16}},
+			},
+			want: "only float32_vector columns may set vector_dims",
+		},
+		{
+			name: "float32 column rejects dims",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, VectorDims: 1}},
+			},
+			want: "only float32_vector columns may set vector_dims",
+		},
+		{
+			name: "vector sort key rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128}},
+				SortKey: []ColumnSortKey{{Column: "embedding"}},
+			},
+			want: "not orderable",
+		},
+		{
+			name: "vector aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_embedding", Column: "embedding", Kind: ColumnAggregateMin}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "string sum aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "sum_kind", Column: "kind", Kind: ColumnAggregateSum}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "adjacency count distinct aggregate rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled:           true,
+				Columns:           []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList}},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "distinct_neighbors", Column: "neighbors", Kind: ColumnAggregateCountDistinct}},
+			},
+			want: "does not support",
+		},
+		{
+			name: "vector dictionary rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128, Dictionary: true}},
+			},
+			want: "dictionary",
+		},
+		{
+			name: "float32 dictionary rejected",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, Dictionary: true}},
+			},
+			want: "dictionary",
+		},
+		{
 			name: "unsupported locator",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
@@ -414,6 +490,41 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "column manifest root descriptor",
 		},
 		{
+			name: "aggregate min missing group column",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", Kind: ColumnAggregateMin}},
+			},
+			want: "requires a group column",
+		},
+		{
+			name: "aggregate min group column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin}},
+			},
+			want: "group column",
+		},
+		{
+			name: "aggregate min value column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueString},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin}},
+			},
+			want: "value column",
+		},
+		{
 			name: "invalid asset namespace traversal",
 			cfg: &ColumnStoreConfig{
 				Enabled:      true,
@@ -457,6 +568,65 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 				t.Fatalf("normalizeCollectionMeta err=%v want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = append(cfg.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128},
+		ColumnStoreColumn{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	cfg.SortKey = append(cfg.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
+	cfg.AggregateMetadata = append(cfg.AggregateMetadata,
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
+	)
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	if meta.Options.ColumnStore.SchemaHash == 0 {
+		t.Fatal("schema hash was not populated")
+	}
+
+	changed := testColumnStoreConfig(nil)
+	changed.Columns = append(changed.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 256},
+		ColumnStoreColumn{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	changed.SortKey = append(changed.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
+	changed.AggregateMetadata = append(changed.AggregateMetadata,
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
+	)
+	changedMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: changed}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta changed: %v", err)
+	}
+	if changedMeta.Options.ColumnStore.SchemaHash == meta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash did not include vector dims: %x", meta.Options.ColumnStore.SchemaHash)
+	}
+
+	changed = testColumnStoreConfig(nil)
+	changed.Columns = append(changed.Columns,
+		ColumnStoreColumn{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 128},
+		ColumnStoreColumn{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueDouble},
+		ColumnStoreColumn{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList},
+	)
+	changed.SortKey = append(changed.SortKey, ColumnSortKey{Column: "embedding_inv_norm"})
+	changed.AggregateMetadata = append(changed.AggregateMetadata,
+		ColumnAggregateMetadata{Name: "min_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		ColumnAggregateMetadata{Name: "max_embedding_inv_norm", Column: "embedding_inv_norm", GroupColumn: "kind", Kind: ColumnAggregateMax},
+	)
+	changedMeta, err = normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: changed}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta changed scalar type: %v", err)
+	}
+	if changedMeta.Options.ColumnStore.SchemaHash == meta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash did not include scalar value type: %x", meta.Options.ColumnStore.SchemaHash)
 	}
 }
 

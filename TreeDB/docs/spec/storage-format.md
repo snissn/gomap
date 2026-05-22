@@ -595,6 +595,7 @@ Current command kinds:
 | 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
 | 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
 | 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
+| 103 | `CollectionRebuildVectorIndex` | collection | `CollectionRebuildVectorIndexV1` | deterministic collection vector-index rebuild command |
 | 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
 
 Current payload format IDs:
@@ -607,6 +608,7 @@ Current payload format IDs:
 | 4 | `CollectionDeleteBatchByIDV1` |
 | 5 | `CollectionUpdateBatchByIDV1` |
 | 6 | `CatalogCreateCollectionV1` |
+| 7 | `CollectionRebuildVectorIndexV1` |
 
 `RawKVBatchV1` payload:
 
@@ -753,6 +755,28 @@ bytes ID[IDLen]
 Collection batch payloads require a non-empty collection name and non-empty
 document IDs. Encoders canonicalize entries by strictly increasing document ID
 before writing the payload, and decoders reject duplicate or out-of-order IDs.
+
+`CollectionRebuildVectorIndexV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 IndexNameLen
+bytes Collection[CollectionLen]
+bytes IndexName[IndexNameLen]
+```
+
+The collection and index names must be non-empty. The command payload names the
+logical rebuild request only; it does not carry vector graph bytes, physical root
+deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
+collection vector-index rebuild path for the named index. For explicit
+`column_graph` indexes, that path rebuilds vector, inverse-norm, and adjacency
+data into physical column assets and publishes the graph manifest through the
+normal collection column manifest/root lifecycle. Replay outcomes that are
+defined no-ops, such as a strategy/config drift status that no longer requires a
+physical rebuild, must still publish a no-op command-WAL boundary and advance
+`AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and
+undefined replay outcomes fail closed before advancing `AppliedCommandLSN`.
 
 `ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
 sections so PR1 can harden framing before replay uses them. The PR1 external-ref

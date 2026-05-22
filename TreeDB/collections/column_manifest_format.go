@@ -157,7 +157,7 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
-	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation)
+	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
@@ -216,12 +216,29 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 	}, nil
 }
 
-func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
+func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			if !retainColumnManifestVectorGraphRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				continue
+			}
+			retain, err := validateRetainedColumnManifestVectorGraphRecordForWrite(record, generation)
+			if err != nil {
+				return nil, err
+			}
+			if !retain {
+				continue
+			}
+			retained = append(retained, columnManifestRecord{
+				key:   bytes.Clone(record.key),
+				value: bytes.Clone(record.value),
+			})
+			continue
+		}
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) &&
 			!bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes) &&
 			!bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes) &&
@@ -241,6 +258,55 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 		})
 	}
 	return retained, nil
+}
+
+func validateRetainedColumnManifestVectorGraphRecordForWrite(record columnManifestRecord, generation uint64) (bool, error) {
+	graph, err := decodeColumnVectorGraphManifestRecord(record.value)
+	if err != nil {
+		return false, err
+	}
+	keyIndexName := string(record.key[len(columnManifestVectorGraphRecordPrefixBytes):])
+	if graph.IndexName != keyIndexName {
+		return false, fmt.Errorf("collections: column vector graph manifest key index=%q does not match record index=%q", keyIndexName, graph.IndexName)
+	}
+	if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
+		return false, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
+	}
+	if graph.BaseManifestGeneration != graph.AssetRef.Generation {
+		return false, fmt.Errorf("collections: column vector graph base manifest generation=%d does not match asset generation=%d", graph.BaseManifestGeneration, graph.AssetRef.Generation)
+	}
+	if graph.AssetRef.Generation >= generation {
+		return false, nil
+	}
+	return true, nil
+}
+
+func retainColumnManifestVectorGraphRecordForWrite(key []byte, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) bool {
+	if !activeVectorIndexesKnown {
+		return true
+	}
+	if !bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) {
+		return false
+	}
+	indexName := key[len(columnManifestVectorGraphRecordPrefixBytes):]
+	for _, def := range activeVectorIndexes {
+		if def.Strategy == VectorIndexStrategyColumnGraph && columnManifestBytesEqualString(indexName, def.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func columnManifestBytesEqualString(left []byte, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i, b := range left {
+		if b != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, generation uint64) ([]byte, error) {
@@ -348,9 +414,16 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
+		keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(record.key)
+		if err != nil {
+			return columnManifestSnapshot{}, err
+		}
 		part, err := decodeColumnManifestPartRecord(record.value)
 		if err != nil {
 			return columnManifestSnapshot{}, err
+		}
+		if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
 		}
 		if part.AssetRef.Generation > snapshot.Generation {
 			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part generation=%d is newer than header generation=%d", part.AssetRef.Generation, snapshot.Generation)
@@ -619,14 +692,35 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	}, nil
 }
 
+func decodeColumnManifestPartRecordKey(key []byte) (uint64, uint64, error) {
+	if !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+		return 0, 0, fmt.Errorf("collections: invalid column manifest part key prefix %q", string(key))
+	}
+	if len(key) != len(columnManifestPartRecordPrefix)+16 {
+		return 0, 0, fmt.Errorf("collections: invalid column manifest part key length=%d", len(key))
+	}
+	keySuffix := key[len(columnManifestPartRecordPrefix):]
+	return binary.BigEndian.Uint64(keySuffix[:8]), binary.BigEndian.Uint64(keySuffix[8:]), nil
+}
+
 func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAssetRef, error) {
 	if iter == nil {
 		return nil, nil
 	}
 	var refs []ColumnAssetRef
 	partRefs, err := enumerateColumnManifestAssetRefsForPrefix(iter, columnManifestPartRecordPrefixBytes, func(key, value []byte) (ColumnAssetRef, error) {
+		keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(key)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
 		part, err := decodeColumnManifestPartRecord(value)
-		return part.AssetRef, err
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+			return ColumnAssetRef{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
+		}
+		return part.AssetRef, nil
 	})
 	if err != nil {
 		return nil, err

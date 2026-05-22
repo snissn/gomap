@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -269,6 +270,38 @@ func TestCommandWALRecoveryRejectsNonIncreasingLSNInSegment(t *testing.T) {
 	}
 }
 
+func TestCommandWALSetRIDReplayDoesNotNeedInlineAppenderWithoutOuterLeafLog(t *testing.T) {
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSetRID, Key: []byte("ptr-key"), RID: 7},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	frames := []commandWALReplayFrame{{
+		env: commitlog.CommandEnvelope{
+			LSN:           1,
+			Kind:          commitlog.CommandKindRawKVBatch,
+			Scope:         commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+			Payload:       payload,
+		},
+	}}
+	needs, err := commandWALReplayFramesNeedLogSupport(&DB{}, frames, 0)
+	if err != nil {
+		t.Fatalf("commandWALReplayFramesNeedLogSupport: %v", err)
+	}
+	if needs {
+		t.Fatalf("SetRID-only replay should need only the RID map when outer-leaf log is disabled")
+	}
+	needs, err = commandWALReplayFramesNeedLogSupport(&DB{indexOuterLeavesInValueLog: true}, frames, 0)
+	if err != nil {
+		t.Fatalf("commandWALReplayFramesNeedLogSupport outer-leaf: %v", err)
+	}
+	if !needs {
+		t.Fatalf("outer-leaf replay still needs leaf-page log support")
+	}
+}
+
 func TestCommandWALRawSetReplayRePointersWhenThresholdDrops(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -387,7 +420,7 @@ func TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts(t *testing
 		Scope:         commitlog.CommandScopeRawKV,
 		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
 		Payload:       payload,
-	}, nil, nil, ensure)
+	}, nil, nil, nil, ensure)
 	if err != nil {
 		t.Fatalf("applyRawKVCommandWALFrame: %v", err)
 	}
@@ -457,7 +490,7 @@ func TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender(t *testing.T)
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormat(60000 + kindOffset),
 		Payload:       []byte{1},
-	}, nil, nil, ensure)
+	}, nil, nil, nil, ensure)
 	if err != nil {
 		t.Fatalf("applyCommandWALFrame: %v", err)
 	}
@@ -558,7 +591,7 @@ func TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport(t *testing
 		Kind:          kind,
 		Scope:         commitlog.CommandScopeCollection,
 		PayloadFormat: commitlog.PayloadFormatNativeWireDeterministic,
-	}, nil, nil, ensure); err != nil {
+	}, nil, nil, nil, ensure); err != nil {
 		t.Fatalf("applyCommandWALFrame: %v", err)
 	}
 	if !handlerCalled.Load() {
@@ -789,6 +822,209 @@ func TestCommandWALPublishReadyReportsPoisonedHandle(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("k"), []byte("v"), false)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+	db.testFailCommandWALFlush.Store(false)
+
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return nil
+	})
+	defer unregister()
+	_, err = db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("after"), []byte("poison"), false)
+	if !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted after poison error=%v, want ErrRecoveryRequired", err)
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("raw publish barrier ran after command WAL handle was poisoned")
+	}
+}
+
+func TestAppendCommandWALPayloadDoesNotRunRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	defer unregister()
+
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"city":"sea"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	lsn, err := db.AppendCommandWALPayload(
+		commitlog.CommandKindCollectionUpdateBatchByID,
+		commitlog.CommandScopeCollection,
+		commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		payload,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("AppendCommandWALPayload error=%v", err)
+	}
+	if lsn == 0 {
+		t.Fatalf("AppendCommandWALPayload lsn=0, want assigned LSN")
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("higher-level command WAL payload append ran raw publish barrier")
+	}
+}
+
+func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
+	db := &DB{commandWAL: true}
+	var calls []int
+	unregisterFirst := db.RegisterCommandWALRawPublishBarrier(func() error {
+		calls = append(calls, 1)
+		return nil
+	})
+	unregisterSecond := db.RegisterCommandWALRawPublishBarrier(func() error {
+		calls = append(calls, 2)
+		return nil
+	})
+
+	unregisterFirst()
+	unregisterFirst()
+	if got := len(db.commandWALRawBarriers); got != 1 {
+		t.Fatalf("barrier count after unregister=%d, want 1", got)
+	}
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != 2 {
+		t.Fatalf("barrier calls=%v, want only second barrier", calls)
+	}
+
+	unregisterSecond()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after unregister second=%d, want 0", got)
+	}
+}
+
+func TestCommandWALRawPublishBarrierUnregisterWaitsForInFlight(t *testing.T) {
+	db := &DB{commandWAL: true}
+	barrierEntered := make(chan struct{})
+	releaseBarrier := make(chan struct{})
+	unregisterStarted := make(chan struct{})
+	unregisterReturned := make(chan struct{})
+	runDone := make(chan error, 1)
+
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		close(barrierEntered)
+		<-releaseBarrier
+		return nil
+	})
+	go func() {
+		runDone <- db.runCommandWALRawPublishBarriers()
+	}()
+	select {
+	case <-barrierEntered:
+	case <-time.After(time.Second):
+		t.Fatalf("raw publish barrier did not start")
+	}
+	go func() {
+		close(unregisterStarted)
+		unregister()
+		close(unregisterReturned)
+	}()
+	select {
+	case <-unregisterStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("unregister goroutine did not start")
+	}
+	select {
+	case <-unregisterReturned:
+		t.Fatalf("unregister returned before in-flight barrier completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseBarrier)
+	select {
+	case <-unregisterReturned:
+	case <-time.After(time.Second):
+		t.Fatalf("unregister did not return after in-flight barrier completed")
+	}
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("runCommandWALRawPublishBarriers did not finish")
+	}
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after unregister=%d, want 0", got)
+	}
+}
+
+func TestCommandWALRawPublishBarrierNoopWhenDisabled(t *testing.T) {
+	db := &DB{}
+	var called atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		called.Store(true)
+		return nil
+	})
+	unregister()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count with command WAL disabled=%d, want 0", got)
+	}
+	db.commandWAL = true
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if called.Load() {
+		t.Fatalf("disabled command WAL raw publish barrier was registered")
+	}
+}
+
+func TestCommandWALRawPublishBarrierRejectsCloseHookDrainedDB(t *testing.T) {
+	db := &DB{commandWAL: true}
+	if err := db.RunCloseHooks(); err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	var called atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		called.Store(true)
+		return nil
+	})
+	unregister()
+	if got := len(db.commandWALRawBarriers); got != 0 {
+		t.Fatalf("barrier count after late register=%d, want 0", got)
+	}
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		t.Fatalf("runCommandWALRawPublishBarriers: %v", err)
+	}
+	if called.Load() {
+		t.Fatalf("late raw publish barrier ran after close hooks drained")
+	}
+}
+
+func TestMarkCommandWALIntentRecoveryRequiredNilNoop(t *testing.T) {
+	db := &DB{}
+	db.MarkCommandWALIntentRecoveryRequired(nil)
+	(*DB)(nil).MarkCommandWALIntentRecoveryRequired(nil)
+}
+
 func TestCommandWALFinalizeFailurePoisonsOpenHandle(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -848,7 +1084,7 @@ func TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN(t *testing.T) 
 		t.Fatalf("Close bootstrap db: %v", err)
 	}
 	writeCommandWALRawKVFrame(t, dir, 1, 1, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")}})
-	writeCommandWALRawKVFrame(t, dir, 1, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
+	writeCommandWALRawKVFrame(t, dir, 2, 2, []commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")}})
 
 	_, err := Open(Options{Dir: dir, testCommandWALRecoveryFailAfterLSN: 1})
 	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
@@ -1042,6 +1278,9 @@ func TestCommandWALExistingRawReplayTestsMappedToRawKVBatch(t *testing.T) {
 		{Op: commitlog.RawKVOpSet, Key: []byte("a"), Value: []byte("1")},
 		{Op: commitlog.RawKVOpSet, Key: []byte("b"), Value: []byte("2")},
 		{Op: commitlog.RawKVOpDelete, Key: []byte("a")},
+		{Op: commitlog.RawKVOpSet, Key: []byte("same"), Value: []byte("old")},
+		{Op: commitlog.RawKVOpDelete, Key: []byte("same")},
+		{Op: commitlog.RawKVOpSet, Key: []byte("same"), Value: []byte("final")},
 	})
 
 	reopen := openCommandWALDB(t, dir)
@@ -1050,6 +1289,7 @@ func TestCommandWALExistingRawReplayTestsMappedToRawKVBatch(t *testing.T) {
 		t.Fatalf("Get(a)=%q err=%v, want missing after typed RawKVBatch delete replay", got, err)
 	}
 	assertDBValue(t, reopen, "b", "2")
+	assertDBValue(t, reopen, "same", "final")
 }
 
 func TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence(t *testing.T) {

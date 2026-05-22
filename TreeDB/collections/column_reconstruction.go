@@ -283,6 +283,8 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 		return value.Bool, nil
 	case ColumnStoreValueInt64:
 		return value.Int64, nil
+	case ColumnStoreValueFloat32:
+		return value.Float32, nil
 	case ColumnStoreValueDouble:
 		return value.Double, nil
 	case ColumnStoreValueString:
@@ -290,6 +292,10 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 			return string(value.StringBytes), nil
 		}
 		return value.String, nil
+	case ColumnStoreValueFloat32Vector:
+		return value.Float32Vector, nil
+	case ColumnStoreValueAdjacencyList:
+		return value.AdjacencyList, nil
 	default:
 		return nil, fmt.Errorf("unsupported declared value type %q", value.Type)
 	}
