@@ -4,6 +4,7 @@ go 1.23.0
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
+	github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/buger/jsonparser v1.1.2
 	github.com/cespare/xxhash/v2 v2.3.0
@@ -28,7 +29,6 @@ require (
 	go.etcd.io/bbolt v1.4.3
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 	golang.org/x/sys v0.35.0
-	gonum.org/v1/gonum v0.16.0
 	gonum.org/v1/plot v0.16.0
 )
 

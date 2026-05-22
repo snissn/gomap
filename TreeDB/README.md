@@ -170,6 +170,10 @@ TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
   -benchtime=1x -count=1
 ```
 
+Optional NumKong dot-product kernel: build with `-tags numkong` on hosts where
+cgo and NumKong are available. Default builds, including cgo-enabled builds,
+use the pure-Go kernel.
+
 External comparison benchmark with local USearch bootstrap:
 
 ```sh
@@ -193,6 +197,9 @@ Optional external engine baseline: build with `-tags usearch_bench` after
 installing the USearch C library and headers for the host. This runs the same
 synthetic vectors against USearch's Go bindings with cosine/f32 HNSW and matching
 `M`, `efConstruction`, and `efSearch` knobs:
+
+The Go binding is intentionally kept as an indirect module dependency because it
+is only imported by the optional `usearch_bench` build tag.
 
 ```sh
 TREEDB_VECTOR_BENCH_DOCS=1000 TREEDB_VECTOR_BENCH_DIMS=32 \
