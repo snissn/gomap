@@ -266,6 +266,59 @@ func TestColumnPhysicalRowReaderRejectsNegativeMaxDecodedBlocksV1(t *testing.T) 
 	}
 }
 
+func TestColumnPhysicalRowReaderClonesRangeHeaderBytesV1(t *testing.T) {
+	original := columnPhysicalAssetScanHeader{
+		Collection: []byte("events"),
+		Namespace:  []byte("events/column-assets"),
+	}
+	cloned := cloneColumnPhysicalAssetScanHeader(original)
+	original.Collection[0] = 'x'
+	original.Namespace[0] = 'x'
+
+	if got := string(cloned.Collection); got != "events" {
+		t.Fatalf("cloned collection=%q aliases original", got)
+	}
+	if got := string(cloned.Namespace); got != "events/column-assets" {
+		t.Fatalf("cloned namespace=%q aliases original", got)
+	}
+}
+
+func TestColumnPhysicalRowReaderRejectsCorruptLRUV1(t *testing.T) {
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			2: {assetOrdinal: 2, residentBytes: 128},
+		},
+		lru: []int{1},
+	}
+	err := reader.evictBlocksForInsert()
+	if err == nil || !strings.Contains(err.Error(), "LRU references missing cached asset ordinal=1") {
+		t.Fatalf("evictBlocksForInsert err=%v want corrupt LRU failure", err)
+	}
+	if _, ok := reader.blocks[2]; !ok {
+		t.Fatal("evictBlocksForInsert deleted unrelated cached block after corrupt LRU")
+	}
+	if got := fmt.Sprint(reader.lru); got != "[1]" {
+		t.Fatalf("evictBlocksForInsert lru=%s want unchanged [1]", got)
+	}
+}
+
+func TestColumnPhysicalRowReaderRejectsEmptyLRUV1(t *testing.T) {
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			2: {assetOrdinal: 2, residentBytes: 128},
+		},
+	}
+	err := reader.evictBlocksForInsert()
+	if err == nil || !strings.Contains(err.Error(), "LRU empty with 1 cached blocks and max=1") {
+		t.Fatalf("evictBlocksForInsert err=%v want empty LRU failure", err)
+	}
+	if _, ok := reader.blocks[2]; !ok {
+		t.Fatal("evictBlocksForInsert deleted cached block after empty LRU")
+	}
+}
+
 func TestColumnPhysicalRowReaderOwnsSnapshotCloseV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
