@@ -72,8 +72,8 @@ func TestColumnVectorGraphBlockViewAccessorsV1(t *testing.T) {
 	if !slices.Equal(vector, []float32{0, 1, 0}) {
 		t.Fatalf("vector=%v want [0 1 0]", vector)
 	}
-	if columnPhysicalNativeLittleEndian && len(vector) > 0 && len(vectorScratch) != 0 {
-		t.Fatalf("little-endian vector used scratch len=%d; want direct typed view", len(vectorScratch))
+	if columnPhysicalNativeLittleEndian && len(vector) > 0 && len(vectorScratch) == 0 {
+		t.Fatalf("little-endian vector used no scratch; want aligned scratch copy")
 	}
 	invNorm, err := view.invNorm(ref.rowIndex)
 	if err != nil {
