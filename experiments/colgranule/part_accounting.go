@@ -17,25 +17,28 @@ const (
 )
 
 type ColumnPartByteAccounting struct {
-	Rows                      int                                   `json:"rows"`
-	Columns                   int                                   `json:"columns"`
-	Granules                  int                                   `json:"granules"`
-	CodecBlocks               int                                   `json:"codec_blocks"`
-	PhysicalFiles             int                                   `json:"physical_files"`
-	LogicalValueBytes         int                                   `json:"logical_value_bytes"`
-	EncodedRawBytes           int                                   `json:"encoded_raw_bytes"`
-	DeclaredColumnStoredBytes int                                   `json:"declared_column_stored_bytes"`
-	DictionaryBytes           int                                   `json:"dictionary_bytes"`
-	MarkBytes                 int                                   `json:"mark_bytes"`
-	SortKeyMetadataBytes      int                                   `json:"sort_key_metadata_bytes"`
-	AggregateMetadataBytes    int                                   `json:"aggregate_metadata_bytes"`
-	DescriptorBytes           int                                   `json:"descriptor_bytes"`
-	LocatorBytes              int                                   `json:"locator_bytes"`
-	TotalStoredBytes          int                                   `json:"total_stored_bytes"`
-	BytesPerRow               float64                               `json:"bytes_per_row"`
-	RetainedJSONPayload       string                                `json:"retained_json_payload"`
-	ColumnsDetail             []ColumnPartColumnByteAccounting      `json:"columns_detail"`
-	CompressionDetail         []ColumnPartCompressionByteAccounting `json:"compression_detail"`
+	Rows                      int                                    `json:"rows"`
+	Columns                   int                                    `json:"columns"`
+	Granules                  int                                    `json:"granules"`
+	CodecBlocks               int                                    `json:"codec_blocks"`
+	PhysicalFiles             int                                    `json:"physical_files"`
+	SerializedImageBytes      int                                    `json:"serialized_image_bytes,omitempty"`
+	SerializedManifestBytes   int                                    `json:"serialized_manifest_bytes,omitempty"`
+	LogicalValueBytes         int                                    `json:"logical_value_bytes"`
+	EncodedRawBytes           int                                    `json:"encoded_raw_bytes"`
+	DeclaredColumnStoredBytes int                                    `json:"declared_column_stored_bytes"`
+	DictionaryBytes           int                                    `json:"dictionary_bytes"`
+	MarkBytes                 int                                    `json:"mark_bytes"`
+	SortKeyMetadataBytes      int                                    `json:"sort_key_metadata_bytes"`
+	AggregateMetadataBytes    int                                    `json:"aggregate_metadata_bytes"`
+	DescriptorBytes           int                                    `json:"descriptor_bytes"`
+	LocatorBytes              int                                    `json:"locator_bytes"`
+	TotalStoredBytes          int                                    `json:"total_stored_bytes"`
+	BytesPerRow               float64                                `json:"bytes_per_row"`
+	RetainedJSONPayload       string                                 `json:"retained_json_payload"`
+	ColumnsDetail             []ColumnPartColumnByteAccounting       `json:"columns_detail"`
+	CompressionDetail         []ColumnPartCompressionByteAccounting  `json:"compression_detail"`
+	SerializedSections        []ColumnPartImageSectionByteAccounting `json:"serialized_sections,omitempty"`
 }
 
 type ColumnPartColumnByteAccounting struct {
@@ -199,6 +202,26 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 	return out
 }
 
+func (p *ColumnPart) ByteAccountingFromImage(image ColumnPartImage) ColumnPartByteAccounting {
+	out := p.ByteAccounting()
+	if image.TotalBytes() == 0 {
+		return out
+	}
+	out.PhysicalFiles = 0
+	out.SerializedImageBytes = image.TotalBytes()
+	out.SerializedManifestBytes = image.ManifestBytes
+	out.DeclaredColumnStoredBytes = image.CategoryBytes(ColumnPartImageCategoryDeclaredColumns)
+	out.DictionaryBytes = image.CategoryBytes(ColumnPartImageCategoryDictionaries)
+	out.MarkBytes = image.CategoryBytes(ColumnPartImageCategoryMarks)
+	out.SortKeyMetadataBytes = image.CategoryBytes(ColumnPartImageCategorySortKeyMetadata)
+	out.AggregateMetadataBytes = image.CategoryBytes(ColumnPartImageCategoryAggregateMetadata)
+	out.DescriptorBytes = image.CategoryBytes(ColumnPartImageCategoryDescriptor)
+	out.LocatorBytes = image.CategoryBytes(ColumnPartImageCategoryLocators)
+	out.SerializedSections = image.SectionByteAccounting()
+	out.RecomputeTotals()
+	return out
+}
+
 func (a *ColumnPartByteAccounting) RecomputeTotals() {
 	a.TotalStoredBytes = a.CategoryBytes()
 	if a.Rows > 0 {
@@ -209,7 +232,8 @@ func (a *ColumnPartByteAccounting) RecomputeTotals() {
 }
 
 func (a ColumnPartByteAccounting) CategoryBytes() int {
-	return a.DeclaredColumnStoredBytes +
+	return a.SerializedManifestBytes +
+		a.DeclaredColumnStoredBytes +
 		a.DictionaryBytes +
 		a.MarkBytes +
 		a.SortKeyMetadataBytes +

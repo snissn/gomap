@@ -1011,8 +1011,8 @@ func writeMarkdown(path string, raw comparisonRaw) {
 		}
 	}
 	if len(raw.EncodedPartBuildReports) > 0 {
-		fmt.Fprintf(&b, "\n## M1C Build and Size Accounting\n\n")
-		fmt.Fprintf(&b, "These reports build the actual encoded JSONBench column part layouts with aggregate metadata enabled. The current experiment stores declared columns, marks, descriptors, locators, aggregate metadata, and loader dictionary estimates; retained/original JSON payload is labeled separately and is absent from the encoded-part total. Physical file count is `0` because M1C is still an in-memory part experiment; file-backed `TCS1` work should replace this with real file/container counts.\n\n")
+		fmt.Fprintf(&b, "\n## M1D Serialized Image Build and Size Accounting\n\n")
+		fmt.Fprintf(&b, "These reports build the actual encoded JSONBench column part layouts with aggregate metadata enabled, then serialize the part into an exact in-memory image. The image contains a manifest, descriptors, declared column payload sections, sort-key metadata, marks, row locators, aggregate metadata, and part-local dictionaries when available. Retained/original JSON payload is labeled separately and is absent from the encoded-part total. Physical file count is `0` because the image is still in memory; file-backed `TCS1` work should replace this with real file/container counts.\n\n")
 		fmt.Fprintf(&b, "| Layout | Files | Granules | Codec blocks | Best build | ns/row | Rows/s | Encoded MiB/s | Stored MiB/s | Alloc B/op | Allocs/op | Temp B/op | Output B/row |\n")
 		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 		for _, report := range raw.EncodedPartBuildReports {
@@ -1031,13 +1031,15 @@ func writeMarkdown(path string, raw comparisonRaw) {
 				report.TemporaryBytes,
 				report.Accounting.BytesPerRow)
 		}
-		fmt.Fprintf(&b, "\n| Layout | Total bytes | vs raw JSON | vs source gzip | vs ClickHouse total | Declared columns | Dictionaries | Marks | Sort key | Aggregate metadata | Descriptors | Locators | Retained JSON |\n")
-		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+		fmt.Fprintf(&b, "\n| Layout | Total bytes | Serialized image | Manifest | vs raw JSON | vs source gzip | vs ClickHouse total | Declared columns | Dictionaries | Marks | Sort key | Aggregate metadata | Descriptors | Locators | Retained JSON |\n")
+		fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
 		for _, report := range raw.EncodedPartBuildReports {
 			accounting := report.Accounting
-			fmt.Fprintf(&b, "| `%s` | %d | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | `%s` |\n",
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | `%s` |\n",
 				report.Layout,
 				accounting.TotalStoredBytes,
+				accounting.SerializedImageBytes,
+				accounting.SerializedManifestBytes,
 				formatPercent(float64(accounting.TotalStoredBytes), float64(report.RawJSONBytes)),
 				formatSourceGzipPercent(raw, int64(accounting.TotalStoredBytes)),
 				formatPercent(float64(accounting.TotalStoredBytes), float64(raw.ClickHouseLocal.TotalSize)),
@@ -1052,7 +1054,7 @@ func writeMarkdown(path string, raw comparisonRaw) {
 		}
 		retainedPayloads := retainedPayloadOptions(raw)
 		if len(retainedPayloads) > 0 {
-			fmt.Fprintf(&b, "\nFull-dataset retained-payload estimates add the current M1C encoded part total to a measured TreeDB payload collection containing the original JSON row with ClickHouse typed paths removed. This is the closest M1C-era comparison to ClickHouse `total_size`: the column part is still in memory, while the retained payload is an actual compacted TreeDB directory measurement.\n\n")
+			fmt.Fprintf(&b, "\nFull-dataset retained-payload estimates add the current serialized column-part image total to a measured TreeDB payload collection containing the original JSON row with ClickHouse typed paths removed. This is the closest pre-M2 comparison to ClickHouse `total_size`: the column part is serialized but still in memory, while the retained payload is an actual compacted TreeDB directory measurement.\n\n")
 			fmt.Fprintf(&b, "| Layout | Retained payload | Part bytes | Payload bytes | Total bytes | MiB | B/row | TreeDB / ClickHouse | Delta vs ClickHouse | Granules | Codec blocks | Part files | Payload files |\n")
 			fmt.Fprintf(&b, "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 			for _, report := range raw.EncodedPartBuildReports {
@@ -1127,16 +1129,16 @@ func writeMarkdown(path string, raw comparisonRaw) {
 	fmt.Fprintf(&b, "| ClickHouse local data | %d | %.2f | `data_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.DataSize, mib(raw.ClickHouseLocal.DataSize))
 	fmt.Fprintf(&b, "| ClickHouse local index | %d | %.2f | `index_size` from local ClickHouse JSONBench result. |\n", raw.ClickHouseLocal.IndexSize, mib(raw.ClickHouseLocal.IndexSize))
 	for _, report := range raw.EncodedPartBuildReports {
-		fmt.Fprintf(&b, "| Encoded column part `%s` total | %d | %.2f | M1C actual part estimate including declared columns, loader dictionaries, marks, descriptors, locators, and admitted aggregate metadata; retained JSON is `%s`. |\n", report.Layout, report.Accounting.TotalStoredBytes, mib(int64(report.Accounting.TotalStoredBytes)), report.Accounting.RetainedJSONPayload)
+		fmt.Fprintf(&b, "| Serialized column part `%s` total | %d | %.2f | Exact serialized in-memory image including declared columns, dictionaries, marks, descriptors, locators, and admitted aggregate metadata; retained JSON is `%s`. |\n", report.Layout, report.Accounting.TotalStoredBytes, mib(int64(report.Accounting.TotalStoredBytes)), report.Accounting.RetainedJSONPayload)
 	}
 	for _, report := range raw.EncodedPartBuildReports {
 		for _, payload := range retainedPayloadOptions(raw) {
 			total := int64(report.Accounting.TotalStoredBytes) + payload.Result.AfterCompactBytes
-			fmt.Fprintf(&b, "| M1C encoded part `%s` + `%s` retained payload | %d | %.2f | Full-dataset estimate: %.2f%% of ClickHouse local total, delta %s; part files `%d`, payload files `%d`, granules `%d`. |\n", report.Layout, payload.Label, total, mib(total), ratio(float64(total)*100, float64(raw.ClickHouseLocal.TotalSize)), formatSignedMiB(total-raw.ClickHouseLocal.TotalSize), report.Accounting.PhysicalFiles, payload.Result.AfterCompactFiles, report.Accounting.Granules)
+			fmt.Fprintf(&b, "| M1D serialized image `%s` + `%s` retained payload | %d | %.2f | Full-dataset estimate: %.2f%% of ClickHouse local total, delta %s; part files `%d`, payload files `%d`, granules `%d`. |\n", report.Layout, payload.Label, total, mib(total), ratio(float64(total)*100, float64(raw.ClickHouseLocal.TotalSize)), formatSignedMiB(total-raw.ClickHouseLocal.TotalSize), report.Accounting.PhysicalFiles, payload.Result.AfterCompactFiles, report.Accounting.Granules)
 		}
 	}
-	fmt.Fprintf(&b, "| Granule best-codec all derived columns | %d | %.2f | %.2f%% of ClickHouse local total. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
-	fmt.Fprintf(&b, "| Granule best-codec query/index paths | %d | %.2f | %.2f%% of ClickHouse local total. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	fmt.Fprintf(&b, "| Legacy one-column best-codec lower bound, all derived columns | %d | %.2f | %.2f%% of ClickHouse local total; excludes manifest, locators, dictionaries, marks, aggregate metadata, and retained JSON. |\n", allBest, mib(int64(allBest)), ratio(float64(allBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
+	fmt.Fprintf(&b, "| Legacy one-column best-codec lower bound, query/index paths | %d | %.2f | %.2f%% of ClickHouse local total; excludes manifest, locators, dictionaries, marks, aggregate metadata, and retained JSON. |\n", queryBest, mib(int64(queryBest)), ratio(float64(queryBest)*100, float64(raw.ClickHouseLocal.TotalSize)))
 	if raw.RemainingTreeDB.Enabled {
 		fmt.Fprintf(&b, "| TreeDB BSON remaining fields after compaction + value-log rewrite | %d | %.2f | Stores original JSON minus ClickHouse typed paths as BSON in a compressed no-index collection. |\n", raw.RemainingTreeDB.AfterCompactBytes, mib(raw.RemainingTreeDB.AfterCompactBytes))
 		fmt.Fprintf(&b, "| Granules all derived columns + TreeDB BSON remaining fields | %d | %.2f | %.2f%% of ClickHouse local total. |\n", combinedAllBSON, mib(combinedAllBSON), ratio(float64(combinedAllBSON)*100, float64(raw.ClickHouseLocal.TotalSize)))
