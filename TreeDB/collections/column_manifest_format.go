@@ -295,14 +295,14 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 
 func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifestSnapshot, error) {
 	var snapshot columnManifestSnapshot
-	var parts []columnManifestPartSnapshot
-	var metadata []columnManifestAggregateMetadataSnapshot
-	var dictionaries []columnManifestDictionaryCodesSnapshot
-	var int64Values []columnManifestInt64ValuesSnapshot
 	sawHeader := false
+	partRecords := 0
+	metadataRecords := 0
+	dictionaryRecords := 0
+	int64ValueRecords := 0
 	for _, record := range records {
 		switch {
-		case bytes.Equal(record.key, []byte(columnManifestHeaderRecordKey)):
+		case bytes.Equal(record.key, columnManifestHeaderRecordKeyBytes):
 			if sawHeader {
 				return columnManifestSnapshot{}, errors.New("collections: duplicate column manifest binary header record")
 			}
@@ -312,101 +312,120 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			}
 			snapshot = header
 			sawHeader = true
-		case bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)):
-			keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(record.key)
-			if err != nil {
-				return columnManifestSnapshot{}, err
-			}
-			part, err := decodeColumnManifestPartRecord(record.value)
-			if err != nil {
-				return columnManifestSnapshot{}, err
-			}
-			if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
-				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
-			}
-			parts = append(parts, part)
-		case bytes.HasPrefix(record.key, []byte(columnManifestAggregateMetadataRecordPrefix)):
-			aggregate, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
-			if err != nil {
-				return columnManifestSnapshot{}, err
-			}
-			metadata = append(metadata, aggregate)
-		case bytes.HasPrefix(record.key, []byte(columnManifestDictionaryCodesRecordPrefix)):
-			dictionary, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
-			if err != nil {
-				return columnManifestSnapshot{}, err
-			}
-			dictionaries = append(dictionaries, dictionary)
-		case bytes.HasPrefix(record.key, []byte(columnManifestInt64ValuesRecordPrefix)):
-			values, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
-			if err != nil {
-				return columnManifestSnapshot{}, err
-			}
-			int64Values = append(int64Values, values)
+		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
+			partRecords++
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			metadataRecords++
+		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+			dictionaryRecords++
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			int64ValueRecords++
 		}
 	}
 	if !sawHeader {
 		return columnManifestSnapshot{}, errors.New("collections: column manifest missing binary header record")
 	}
-	for _, part := range parts {
+
+	partCap := partRecords
+	if snapshot.ExpectedParts < uint64(partCap) {
+		partCap = int(snapshot.ExpectedParts)
+	}
+	if partCap > 0 {
+		snapshot.Parts = make([]columnManifestPartSnapshot, 0, partCap)
+	}
+	if metadataRecords > 0 {
+		snapshot.AggregateMetadata = make([]columnManifestAggregateMetadataSnapshot, 0, metadataRecords)
+	}
+	if dictionaryRecords > 0 {
+		snapshot.DictionaryCodes = make([]columnManifestDictionaryCodesSnapshot, 0, dictionaryRecords)
+	}
+	if int64ValueRecords > 0 {
+		snapshot.Int64Values = make([]columnManifestInt64ValuesSnapshot, 0, int64ValueRecords)
+	}
+	livePartNamespaces := make(map[[2]uint64]string, partRecords)
+	livePartRows := make(map[[2]uint64]int, partRecords)
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(record.key)
+		if err != nil {
+			return columnManifestSnapshot{}, err
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			return columnManifestSnapshot{}, err
+		}
+		if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
+		}
 		if part.AssetRef.Generation > snapshot.Generation {
 			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part generation=%d is newer than header generation=%d", part.AssetRef.Generation, snapshot.Generation)
+		}
+		if part.AssetRef.Generation <= snapshot.Generation {
+			livePartNamespaces[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.AssetRef.Namespace
+			livePartRows[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.Rows
 		}
 		if part.AssetRef.Generation == snapshot.Generation {
 			snapshot.Parts = append(snapshot.Parts, part)
 		}
 	}
-	livePartNamespaces := make(map[[2]uint64]string, len(parts))
-	livePartRows := make(map[[2]uint64]int, len(parts))
-	for _, part := range parts {
-		if part.AssetRef.Generation <= snapshot.Generation {
-			livePartNamespaces[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.AssetRef.Namespace
-			livePartRows[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.Rows
+	for _, record := range records {
+		switch {
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			aggregate, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			if aggregate.AssetRef.Generation > snapshot.Generation {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", aggregate.AssetRef.Generation, snapshot.Generation)
+			}
+			partNamespace, ok := livePartNamespaces[[2]uint64{aggregate.AssetRef.Generation, aggregate.AssetRef.PartID}]
+			if !ok {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", aggregate.AssetRef.Generation, aggregate.AssetRef.PartID)
+			}
+			if aggregate.AssetRef.Namespace != partNamespace {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q does not match part namespace=%q", aggregate.AssetRef.Namespace, partNamespace)
+			}
+			snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
+		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+			dictionary, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			if dictionary.AssetRef.Generation > snapshot.Generation {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", dictionary.AssetRef.Generation, snapshot.Generation)
+			}
+			partNamespace, ok := livePartNamespaces[[2]uint64{dictionary.AssetRef.Generation, dictionary.AssetRef.PartID}]
+			if !ok {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", dictionary.AssetRef.Generation, dictionary.AssetRef.PartID)
+			}
+			if dictionary.AssetRef.Namespace != partNamespace {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes namespace=%q does not match part namespace=%q", dictionary.AssetRef.Namespace, partNamespace)
+			}
+			snapshot.DictionaryCodes = append(snapshot.DictionaryCodes, dictionary)
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			values, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			if values.AssetRef.Generation > snapshot.Generation {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", values.AssetRef.Generation, snapshot.Generation)
+			}
+			partKey := [2]uint64{values.AssetRef.Generation, values.AssetRef.PartID}
+			partNamespace, ok := livePartNamespaces[partKey]
+			if !ok {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", values.AssetRef.Generation, values.AssetRef.PartID)
+			}
+			if values.AssetRef.Namespace != partNamespace {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values namespace=%q does not match part namespace=%q", values.AssetRef.Namespace, partNamespace)
+			}
+			partRows := livePartRows[partKey]
+			if values.Rows != partRows {
+				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values rows=%d does not match part rows=%d", values.Rows, partRows)
+			}
+			snapshot.Int64Values = append(snapshot.Int64Values, values)
 		}
-	}
-	for _, aggregate := range metadata {
-		if aggregate.AssetRef.Generation > snapshot.Generation {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", aggregate.AssetRef.Generation, snapshot.Generation)
-		}
-		partNamespace, ok := livePartNamespaces[[2]uint64{aggregate.AssetRef.Generation, aggregate.AssetRef.PartID}]
-		if !ok {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", aggregate.AssetRef.Generation, aggregate.AssetRef.PartID)
-		}
-		if aggregate.AssetRef.Namespace != partNamespace {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q does not match part namespace=%q", aggregate.AssetRef.Namespace, partNamespace)
-		}
-		snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
-	}
-	for _, dictionary := range dictionaries {
-		if dictionary.AssetRef.Generation > snapshot.Generation {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", dictionary.AssetRef.Generation, snapshot.Generation)
-		}
-		partNamespace, ok := livePartNamespaces[[2]uint64{dictionary.AssetRef.Generation, dictionary.AssetRef.PartID}]
-		if !ok {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", dictionary.AssetRef.Generation, dictionary.AssetRef.PartID)
-		}
-		if dictionary.AssetRef.Namespace != partNamespace {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes namespace=%q does not match part namespace=%q", dictionary.AssetRef.Namespace, partNamespace)
-		}
-		snapshot.DictionaryCodes = append(snapshot.DictionaryCodes, dictionary)
-	}
-	for _, values := range int64Values {
-		if values.AssetRef.Generation > snapshot.Generation {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", values.AssetRef.Generation, snapshot.Generation)
-		}
-		partKey := [2]uint64{values.AssetRef.Generation, values.AssetRef.PartID}
-		partNamespace, ok := livePartNamespaces[partKey]
-		if !ok {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", values.AssetRef.Generation, values.AssetRef.PartID)
-		}
-		if values.AssetRef.Namespace != partNamespace {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values namespace=%q does not match part namespace=%q", values.AssetRef.Namespace, partNamespace)
-		}
-		partRows := livePartRows[partKey]
-		if values.Rows != partRows {
-			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values rows=%d does not match part rows=%d", values.Rows, partRows)
-		}
-		snapshot.Int64Values = append(snapshot.Int64Values, values)
 	}
 	if uint64(len(snapshot.Parts)) != snapshot.ExpectedParts {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: invalid column manifest part count=%d want %d", len(snapshot.Parts), snapshot.ExpectedParts)
