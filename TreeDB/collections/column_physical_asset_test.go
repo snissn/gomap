@@ -599,6 +599,52 @@ func TestColumnAssetReadIntegrityCachedVerifyReusesVerifiedRefM1634(t *testing.T
 	}
 }
 
+func TestColumnAssetReadCacheCachedVerifyRefreshesOpenFileIdentityM1634(t *testing.T) {
+	resetColumnAssetVerifiedChecksumCacheForTest(t)
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("cached-verify-open-reader-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegrityCachedVerify)
+	if err != nil {
+		t.Fatalf("new cached read cache: %v", err)
+	}
+	defer func() {
+		if err := readCache.close(); err != nil {
+			t.Fatalf("read cache close: %v", err)
+		}
+	}()
+	raw, err := readCache.read(ref, nil)
+	if err != nil {
+		t.Fatalf("cached first read: %v", err)
+	}
+	if !bytes.Equal(raw, payload) {
+		t.Fatalf("cached first read raw=%q want %q", raw, payload)
+	}
+
+	corruptColumnAssetPayloadByte(t, root, ref)
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	changedModTime := time.Now().Add(2 * time.Hour).Round(0)
+	if err := os.Chtimes(assetPath, changedModTime, changedModTime); err != nil {
+		t.Fatalf("Chtimes corrupt asset: %v", err)
+	}
+
+	if _, err := readCache.read(ref, nil); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("cached same-reader read after corruption err=%v want checksum failure", err)
+	}
+}
+
 func TestColumnAssetReadIntegrityCachedVerifyRejectsRecreatedSegmentM1634(t *testing.T) {
 	resetColumnAssetVerifiedChecksumCacheForTest(t)
 	cfg := testColumnStoreConfig(nil)

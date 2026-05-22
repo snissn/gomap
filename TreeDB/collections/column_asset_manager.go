@@ -916,7 +916,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 		if raw, ok, err := reader.readView(ref); err != nil {
 			return nil, err
 		} else if ok {
-			if err := c.verifyReadChecksum(raw, ref, reader.identity); err != nil {
+			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 				return nil, err
 			}
 			c.lastView = true
@@ -936,15 +936,23 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if err != nil {
 		return nil, err
 	}
-	if err := c.verifyReadChecksum(raw, ref, reader.identity); err != nil {
+	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 		return nil, err
 	}
 	return raw, nil
 }
 
-func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) error {
+func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) error {
 	if c == nil {
 		return errors.New("collections: nil column physical asset read cache")
+	}
+	var fileIdentity columnAssetVerifiedChecksumFileIdentity
+	if reader != nil {
+		fileIdentity = reader.identity
+		if c.readIntegrity == ColumnAssetReadIntegrityCachedVerify {
+			fileIdentity = columnAssetVerifiedChecksumFileIdentityFromFile(reader.file)
+			reader.identity = fileIdentity
+		}
 	}
 	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
 }

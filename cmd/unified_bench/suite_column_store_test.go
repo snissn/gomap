@@ -2285,6 +2285,10 @@ func columnStoreTestStringSliceContains(values []string, want string) bool {
 
 func columnStoreTestCommaListContains(values string, want string) bool {
 	for _, value := range strings.Split(values, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
 		if value == want {
 			return true
 		}
