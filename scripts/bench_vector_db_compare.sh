@@ -17,6 +17,8 @@ M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
+NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
+VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
 
 mkdir -p "$RUN_DIR"
 
@@ -33,6 +35,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
+- Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
 
@@ -48,7 +51,7 @@ echo "run dir: $RUN_DIR"
 echo "creating Python environment: $VENV"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install -q --upgrade pip
-"$VENV/bin/python" -m pip install -q --only-binary=:all: numpy vectorlite-py
+"$VENV/bin/python" -m pip install -q --only-binary=:all: "$NUMPY_PACKAGE" "$VECTORLITE_PACKAGE"
 
 echo "exporting TreeDB dataset"
 GOWORK=off go run ./cmd/treedb_vector_dataset_export \

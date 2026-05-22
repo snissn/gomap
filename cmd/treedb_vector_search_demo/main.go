@@ -921,6 +921,9 @@ func insertDocuments(col *collections.Collection, cfg config, work workload) err
 }
 
 func insertDatasetDocuments(col *collections.Collection, cfg config, work workload) error {
+	if err := validateDatasetDocuments(cfg, work); err != nil {
+		return err
+	}
 	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
 	if err != nil {
 		return err
@@ -973,6 +976,41 @@ func insertDatasetDocuments(col *collections.Collection, cfg config, work worklo
 	}
 	if err := flush(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateDatasetDocuments(cfg config, work workload) error {
+	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	rows := 0
+	for i := 0; scanner.Scan(); i++ {
+		if i >= cfg.docs {
+			return fmt.Errorf("dataset documents file has more than %d rows", cfg.docs)
+		}
+		var header datasetDocumentHeader
+		if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+			return fmt.Errorf("decode dataset document %d: %w", i, err)
+		}
+		if header.Index != i {
+			return fmt.Errorf("dataset document index=%d at row %d", header.Index, i)
+		}
+		if header.ID == "" {
+			return fmt.Errorf("dataset document %d has empty id", i)
+		}
+		rows++
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if rows != cfg.docs {
+		return fmt.Errorf("dataset documents rows=%d, want %d", rows, cfg.docs)
 	}
 	return nil
 }
