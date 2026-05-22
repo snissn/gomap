@@ -9107,6 +9107,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	var journalOwner *commitlog.JournalOwner
 	journalOwnerTransferred := false
 	if !disableJournal {
+		// Cached read-write opens take a process-wide journal owner so split WAL
+		// writers cannot race command-WAL LSN ownership in the same directory.
+		// TreeDB read-only opens use the db.openReadOnly path, which never enters
+		// caching.Open and therefore never acquires this exclusive owner.
 		var err error
 		journalOwner, err = commitlog.AcquireJournalOwner(walDir)
 		if err != nil {

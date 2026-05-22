@@ -115,6 +115,50 @@ func TestMetadataCommandsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	meta, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:           "embedding",
+			Field:          "embedding",
+			Metric:         collections.VectorMetricL2,
+			Dimensions:     64,
+			M:              12,
+			EfConstruction: 96,
+			EfSearch:       48,
+			Encoding:       collections.VectorIndexEncodingInt8,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if len(meta.VectorIndexes) != 1 {
+		t.Fatalf("created vector indexes=%+v", meta.VectorIndexes)
+	}
+	got := meta.VectorIndexes[0]
+	if got.Name != "embedding" || got.Field != "embedding" || got.Metric != collections.VectorMetricL2 || got.Dimensions != 64 || got.Encoding != collections.VectorIndexEncodingInt8 {
+		t.Fatalf("created vector index=%+v", got)
+	}
+
+	metas, err := client.ListCollections(ctx)
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(metas) != 1 || len(metas[0].VectorIndexes) != 1 {
+		t.Fatalf("listed collections=%+v", metas)
+	}
+	if metas[0].VectorIndexes[0] != got {
+		t.Fatalf("listed vector index=%+v want %+v", metas[0].VectorIndexes[0], got)
+	}
+}
+
 func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

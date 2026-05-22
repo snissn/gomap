@@ -296,7 +296,7 @@ func TestColumnVectorGraphNativeCosineScoreRejectsMalformedRowV3(t *testing.T) {
 	}
 }
 
-func TestColumnVectorGraphNativeCosineScoreFallsBackWhenFloat32DotUnderflowsV3(t *testing.T) {
+func TestColumnVectorGraphNativeCosineScoreKeepsFiniteFloat32ZeroV3(t *testing.T) {
 	tiny := float32(math.SmallestNonzeroFloat32)
 	got, err := columnVectorGraphNativeCosineScore([]float32{tiny}, 1, columnVectorGraphPhysicalRow{
 		Ordinal: 7,
@@ -306,8 +306,8 @@ func TestColumnVectorGraphNativeCosineScoreFallsBackWhenFloat32DotUnderflowsV3(t
 	if err != nil {
 		t.Fatalf("columnVectorGraphNativeCosineScore: %v", err)
 	}
-	if got <= 0 {
-		t.Fatalf("columnVectorGraphNativeCosineScore=%g want positive float64 fallback score", got)
+	if got != 0 {
+		t.Fatalf("columnVectorGraphNativeCosineScore=%g want finite float32 zero without float64 fallback", got)
 	}
 }
 

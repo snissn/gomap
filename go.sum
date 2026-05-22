@@ -25,6 +25,8 @@ github.com/antlabs/stl v0.0.2 h1:sna1AXR5yIkNE9lWhCcKbheFJSVfCa3vugnGyakI79s=
 github.com/antlabs/stl v0.0.2/go.mod h1:kKrO4xrn9cfS1mJVo+/BqePZjAYMXqD0amGF2Ouq7ac=
 github.com/antlabs/timer v0.1.4 h1:MHdE00MDnNfhJCmqSOdLXs35uGNwfkMwfbynxrGmQ1c=
 github.com/antlabs/timer v0.1.4/go.mod h1:mpw4zlD5KVjstEyUDp43DGLWsY076Mdo4bS78NTseRE=
+github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c h1:g2tkK3X0S0VmY45zQBl7mbvi9yhWoqpPvNm1VDRJ+ZU=
+github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c/go.mod h1:L/omoL1LFCg25bGEa2U3rMbzievEEDzdjs5l+H0dIVg=
 github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09 h1:EUeZQEHBAROz3OL4eu6QQa3xfbn4vBiMNJlRbZ2ukMk=
 github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09/go.mod h1:+R+n1WwZSFNWdcizTHorLkOwe2s+1L4VkyAXF4i6ahM=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
@@ -183,6 +185,8 @@ github.com/tidwall/tinyqueue v0.1.1 h1:SpNEvEggbpyN5DIReaJ2/1ndroY8iyEGxPYxoSaym
 github.com/tidwall/tinyqueue v0.1.1/go.mod h1:O/QNHwrnjqr6IHItYrzoHAKYhBkLI67Q096fQP5zMYw=
 github.com/tphakala/simd v1.0.22 h1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=
 github.com/tphakala/simd v1.0.22/go.mod h1:8xsPUbOTnNI4WUdPlXVlWXt85Y8RCm3xqGAo8PLxYyA=
+github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 h1:IloOsa7abfb6f3i6TQvSh3ayA3LmN0GQNPk+aVwUIrQ=
+github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957/go.mod h1:UbKHPUIhYNwtzXpfbC5fgg/oPffBPRvk92TWK6swg6U=
 github.com/xdg-go/pbkdf2 v1.0.0 h1:Su7DPu48wXMwC3bs7MCNG+z4FhcyEuz5dlvchbq0B0c=
 github.com/xdg-go/pbkdf2 v1.0.0/go.mod h1:jrpuAogTd400dnrH08LKmI/xc1MbPOebTwRqcT5RDeI=
 github.com/xdg-go/scram v1.2.0 h1:bYKF2AEwG5rqd1BumT4gAnvwU/M9nBp2pTSxeZw7Wvs=

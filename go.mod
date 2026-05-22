@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
+	github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c
 	github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/buger/jsonparser v1.1.2
@@ -78,6 +79,7 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
+	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

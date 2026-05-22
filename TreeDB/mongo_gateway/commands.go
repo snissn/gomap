@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,14 @@ const (
 	commandCodeCursorNotFound      int32 = 43
 	commandCodeDuplicateKey        int32 = 11000
 	maxWireMessageLengthInt32Limit       = int64(1<<31 - 1)
+
+	treeDBIndexTypeField     = "treedbIndexType"
+	treeDBIndexTypeVector    = "vector"
+	treeDBVectorOptionsField = "treedbVector"
+
+	mongoDefaultVectorIndexM              = 16
+	mongoDefaultVectorIndexEfConstruction = 128
+	mongoDefaultVectorIndexEfSearch       = 64
 )
 
 const primaryKeyPrefixBSONValue byte = 1
@@ -1428,13 +1437,26 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	if len(indexDocs) == 0 {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway createIndexes requires at least one index")
 	}
-	defs := make([]collections.IndexDefinition, 0, len(indexDocs))
+	scalarDefs := make([]collections.IndexDefinition, 0, len(indexDocs))
+	var vectorDefs []collections.VectorIndexDefinition
 	for i, indexDoc := range indexDocs {
 		def, err := parseCreateIndexDefinition(indexDoc)
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("indexes[%d]: %v", i, err))
 		}
-		defs = append(defs, s.applyDefaultIndexOptions(def))
+		if def.vector {
+			vectorDefs = append(vectorDefs, def.vectorDef)
+			continue
+		}
+		scalarDefs = append(scalarDefs, s.applyDefaultIndexOptions(def.scalarDef))
+	}
+	if err := validateCreateIndexesRequestDuplicates(scalarDefs, vectorDefs); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	scalarDefs = dedupeIdenticalIndexDefinitions(scalarDefs)
+	vectorDefs = dedupeIdenticalVectorIndexDefinitions(vectorDefs)
+	if err := validateCreateIndexesCrossKindNames(collections.CollectionMeta{}, scalarDefs, vectorDefs); err != nil {
+		return commandError(commandCodeDuplicateKey, "DuplicateKey", err.Error())
 	}
 
 	createdAutomatically := false
@@ -1444,7 +1466,8 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		meta := s.defaultCollectionMeta(name)
-		meta.Indexes = dedupeIdenticalIndexDefinitions(defs)
+		meta.Indexes = scalarDefs
+		meta.VectorIndexes = vectorDefs
 		created, err := s.Collections.CreateCollection(meta)
 		if err != nil {
 			// If another request created the collection after our miss, fall
@@ -1459,13 +1482,19 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 				{Key: "ok", Value: 1.0},
 				{Key: "createdCollectionAutomatically", Value: true},
 				{Key: "numIndexesBefore", Value: int32(1)},
-				{Key: "numIndexesAfter", Value: int32(1 + len(created.Indexes))},
+				{Key: "numIndexesAfter", Value: int32(1 + len(created.Indexes) + len(created.VectorIndexes))},
 			})
 		}
 	}
-	numBefore := int32(1 + len(col.Meta().Indexes))
+	numBefore := int32(1 + len(col.Meta().Indexes) + len(col.Meta().VectorIndexes))
 	meta := col.Meta()
-	for _, def := range defs {
+	if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
+		return commandError(commandCodeDuplicateKey, "DuplicateKey", err.Error())
+	}
+	if err := validateCreateIndexesExistingVectorDefinitions(meta, vectorDefs); err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	for _, def := range scalarDefs {
 		if existing, ok := findIndexDefinition(meta.Indexes, def.Name); ok && sameIndexDefinition(existing, def) {
 			continue
 		}
@@ -1479,11 +1508,21 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 		}
 		meta = *next
 	}
+	for _, def := range vectorDefs {
+		if existing, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name); ok && sameVectorIndexDefinition(existing, def) {
+			continue
+		}
+		next, err := col.CreateVectorIndex(def)
+		if err != nil {
+			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		meta = *next
+	}
 	return marshalDocument(bson.D{
 		{Key: "ok", Value: 1.0},
 		{Key: "createdCollectionAutomatically", Value: createdAutomatically},
 		{Key: "numIndexesBefore", Value: numBefore},
-		{Key: "numIndexesAfter", Value: int32(1 + len(meta.Indexes))},
+		{Key: "numIndexesAfter", Value: int32(1 + len(meta.Indexes) + len(meta.VectorIndexes))},
 	})
 }
 
@@ -1539,7 +1578,8 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	before := int32(1 + len(col.Meta().Indexes))
+	metaBefore := col.Meta()
+	before := int32(1 + len(metaBefore.Indexes) + len(metaBefore.VectorIndexes))
 	names, all, err := dropIndexNames(command)
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
@@ -1548,17 +1588,34 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 		if _, err := col.DropAllIndexes(); err != nil {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
-	} else {
-		for _, indexName := range names {
-			if indexName == "_id_" {
-				return commandError(commandCodeBadValue, "BadValue", "cannot drop _id index")
+		for _, index := range metaBefore.VectorIndexes {
+			if _, err := col.DropVectorIndex(index.Name); err != nil {
+				return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("dropIndexes partially applied before vector index %q failed: %v", index.Name, err))
 			}
 		}
-		if _, err := col.DropIndexes(names); err != nil {
+	} else {
+		scalarNames, vectorNames, err := classifyDropIndexNames(metaBefore, names)
+		if err != nil {
 			if errors.Is(err, collections.ErrIndexNotFound) {
 				return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
 			}
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
+		}
+		if len(scalarNames) > 0 {
+			if _, err := col.DropIndexes(scalarNames); err != nil {
+				if errors.Is(err, collections.ErrIndexNotFound) {
+					return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
+				}
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		}
+		for _, indexName := range vectorNames {
+			if _, err := col.DropVectorIndex(indexName); err != nil {
+				if errors.Is(err, collections.ErrIndexNotFound) {
+					return commandError(commandCodeIndexNotFound, "IndexNotFound", "index not found")
+				}
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
 		}
 	}
 	return marshalDocument(bson.D{
@@ -2759,61 +2816,163 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 	return wire.Document(raw), changed, nil
 }
 
-func parseCreateIndexDefinition(doc wire.Document) (collections.IndexDefinition, error) {
+type createIndexDefinition struct {
+	scalarDef collections.IndexDefinition
+	vectorDef collections.VectorIndexDefinition
+	vector    bool
+}
+
+func parseCreateIndexDefinition(doc wire.Document) (createIndexDefinition, error) {
 	keyDoc, err := requiredDocumentField(doc, "key")
 	if err != nil {
-		return collections.IndexDefinition{}, err
+		return createIndexDefinition{}, err
 	}
 	elements, err := bson.Raw(keyDoc).Elements()
 	if err != nil {
-		return collections.IndexDefinition{}, err
+		return createIndexDefinition{}, err
 	}
 	if len(elements) != 1 {
-		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports single-field indexes only")
+		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports single-field indexes only")
 	}
 	field, err := elements[0].KeyErr()
 	if err != nil {
-		return collections.IndexDefinition{}, err
+		return createIndexDefinition{}, err
 	}
 	if field == "_id" {
-		return collections.IndexDefinition{}, errors.New("Mongo gateway cannot create the built-in _id index")
-	}
-	if !isAscendingIndexKey(elements[0].Value()) {
-		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports ascending indexes only")
+		return createIndexDefinition{}, errors.New("Mongo gateway cannot create the built-in _id index")
 	}
 	name, namePresent, err := optionalStringFieldWithPresence(doc, "name")
 	if err != nil {
-		return collections.IndexDefinition{}, err
+		return createIndexDefinition{}, err
 	}
 	if namePresent && name == "" {
-		return collections.IndexDefinition{}, errors.New("Mongo gateway createIndexes index name cannot be empty")
+		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes index name cannot be empty")
+	}
+	indexType, indexTypePresent, err := optionalStringFieldWithPresence(doc, treeDBIndexTypeField)
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	if indexTypePresent {
+		if indexType != treeDBIndexTypeVector {
+			return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q has unsupported %s %q", indexNameOrDefault(name, namePresent, field, ""), field, treeDBIndexTypeField, indexType)
+		}
+		return parseCreateVectorIndexDefinition(doc, field, name, namePresent, elements[0].Value())
+	}
+
+	if isVectorIndexKey(elements[0].Value()) || !bson.Raw(doc).Lookup(treeDBVectorOptionsField).IsZero() {
+		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector index on field %q requires %s %q", field, treeDBIndexTypeField, treeDBIndexTypeVector)
+	}
+	if !isAscendingIndexKey(elements[0].Value()) {
+		return createIndexDefinition{}, errors.New("Mongo gateway createIndexes currently supports ascending indexes only")
 	}
 	if !namePresent {
 		name = field + "_1"
 	}
 	unique, err := optionalBoolField(doc, "unique")
 	if err != nil {
-		return collections.IndexDefinition{}, err
+		return createIndexDefinition{}, err
 	}
 	valueTypeRaw, valueTypePresent, err := optionalStringFieldWithPresence(doc, "treedbValueType")
 	if err != nil {
-		return collections.IndexDefinition{}, err
+		return createIndexDefinition{}, err
 	}
 	if !valueTypePresent {
-		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q requires treedbValueType", name, field)
+		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q requires treedbValueType", name, field)
 	}
 	valueType := collections.IndexValueType(valueTypeRaw)
 	switch valueType {
 	case collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble:
 	default:
-		return collections.IndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q has unsupported treedbValueType %q; supported values are string, bool, int64, double", name, field, valueTypeRaw)
+		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes index %q on field %q has unsupported treedbValueType %q; supported values are string, bool, int64, double", name, field, valueTypeRaw)
 	}
-	return collections.IndexDefinition{
+	return createIndexDefinition{scalarDef: collections.IndexDefinition{
 		Name:      name,
 		Field:     field,
 		ValueType: valueType,
 		Unique:    unique,
+	}}, nil
+}
+
+func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, namePresent bool, keyValue bson.RawValue) (createIndexDefinition, error) {
+	if !isVectorIndexKey(keyValue) {
+		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector index on field %q requires key value %q", field, treeDBIndexTypeVector)
+	}
+	if !namePresent {
+		name = field + "_vector"
+	}
+	if unique, err := optionalBoolField(doc, "unique"); err != nil {
+		return createIndexDefinition{}, err
+	} else if unique {
+		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector index %q on field %q does not support unique", name, field)
+	}
+	if _, present, err := optionalStringFieldWithPresence(doc, "treedbValueType"); err != nil {
+		return createIndexDefinition{}, err
+	} else if present {
+		return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector index %q on field %q does not support treedbValueType", name, field)
+	}
+	options, err := requiredDocumentField(doc, treeDBVectorOptionsField)
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	dimensions, err := requiredPositiveIntField(options, "dimensions")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	metric, err := optionalVectorMetricField(options, "metric")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	m, err := optionalPositiveIntField(options, "m")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	efConstruction, efConstructionPresent, err := optionalPositiveIntFieldWithPresence(options, "efConstruction")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	efSearch, err := optionalPositiveIntField(options, "efSearch")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	encoding, err := optionalVectorEncodingField(options, "encoding")
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	if m == 0 {
+		m = mongoDefaultVectorIndexM
+	}
+	if efConstruction == 0 {
+		efConstruction = mongoDefaultVectorIndexEfConstruction
+	}
+	if efConstruction < m {
+		if efConstructionPresent {
+			return createIndexDefinition{}, errors.New("Mongo command field \"efConstruction\" must be >= \"m\"")
+		}
+		efConstruction = m
+	}
+	if efSearch == 0 {
+		efSearch = mongoDefaultVectorIndexEfSearch
+	}
+	return createIndexDefinition{
+		vector: true,
+		vectorDef: collections.VectorIndexDefinition{
+			Name:           name,
+			Field:          field,
+			Metric:         metric,
+			Dimensions:     dimensions,
+			M:              m,
+			EfConstruction: efConstruction,
+			EfSearch:       efSearch,
+			Encoding:       encoding,
+		},
 	}, nil
+}
+
+func indexNameOrDefault(name string, present bool, field string, suffix string) string {
+	if present {
+		return name
+	}
+	return field + suffix
 }
 
 func optionalStringField(doc wire.Document, key string) (string, error) {
@@ -2844,6 +3003,95 @@ func isAscendingIndexKey(value bson.RawValue) bool {
 		return v == 1
 	}
 	return false
+}
+
+func isVectorIndexKey(value bson.RawValue) bool {
+	key, ok := value.StringValueOK()
+	return ok && key == treeDBIndexTypeVector
+}
+
+func requiredPositiveIntField(doc wire.Document, key string) (int, error) {
+	value, present, err := optionalPositiveIntFieldWithPresence(doc, key)
+	if err != nil {
+		return 0, err
+	}
+	if !present {
+		return 0, fmt.Errorf("Mongo command missing %q", key)
+	}
+	return value, nil
+}
+
+func optionalPositiveIntField(doc wire.Document, key string) (int, error) {
+	value, _, err := optionalPositiveIntFieldWithPresence(doc, key)
+	return value, err
+}
+
+func optionalPositiveIntFieldWithPresence(doc wire.Document, key string) (int, bool, error) {
+	value := bson.Raw(doc).Lookup(key)
+	if value.IsZero() {
+		return 0, false, nil
+	}
+	var out int64
+	if v, ok := value.Int32OK(); ok {
+		out = int64(v)
+	} else if v, ok := value.Int64OK(); ok {
+		out = v
+	} else if v, ok := value.DoubleOK(); ok {
+		var integral bool
+		out, integral = exactInt64FromFloat64(v)
+		if !integral {
+			return 0, true, fmt.Errorf("Mongo command field %q must be an integer", key)
+		}
+	} else {
+		return 0, true, fmt.Errorf("Mongo command field %q must be an integer", key)
+	}
+	if out <= 0 {
+		return 0, true, fmt.Errorf("Mongo command field %q must be positive", key)
+	}
+	if out > math.MaxInt32 {
+		return 0, true, fmt.Errorf("Mongo command field %q is out of int32 range", key)
+	}
+	return int(out), true, nil
+}
+
+func optionalVectorMetricField(doc wire.Document, key string) (collections.VectorMetric, error) {
+	value, present, err := optionalStringFieldWithPresence(doc, key)
+	if err != nil {
+		return 0, err
+	}
+	if !present || value == collections.VectorMetricCosine.String() {
+		return collections.VectorMetricCosine, nil
+	}
+	if value == "" {
+		return 0, fmt.Errorf("Mongo command field %q cannot be empty", key)
+	}
+	switch value {
+	case collections.VectorMetricL2.String():
+		return collections.VectorMetricL2, nil
+	case collections.VectorMetricInnerProduct.String():
+		return collections.VectorMetricInnerProduct, nil
+	default:
+		return 0, fmt.Errorf("Mongo command field %q has unsupported vector metric %q; supported values are cosine, l2, inner_product", key, value)
+	}
+}
+
+func optionalVectorEncodingField(doc wire.Document, key string) (collections.VectorIndexEncoding, error) {
+	value, present, err := optionalStringFieldWithPresence(doc, key)
+	if err != nil {
+		return 0, err
+	}
+	if !present || value == collections.VectorIndexEncodingFloat32.String() {
+		return collections.VectorIndexEncodingFloat32, nil
+	}
+	if value == "" {
+		return 0, fmt.Errorf("Mongo command field %q cannot be empty", key)
+	}
+	switch value {
+	case collections.VectorIndexEncodingInt8.String():
+		return collections.VectorIndexEncodingInt8, nil
+	default:
+		return 0, fmt.Errorf("Mongo command field %q has unsupported vector encoding %q; supported values are float32, int8", key, value)
+	}
 }
 
 func mongoCollectionDocument(name string, nameOnly bool) bson.D {
@@ -2883,6 +3131,23 @@ func mongoIndexDocuments(meta collections.CollectionMeta) bson.A {
 		}
 		out = append(out, doc)
 	}
+	for _, idx := range meta.VectorIndexes {
+		doc := bson.D{
+			{Key: "v", Value: int32(2)},
+			{Key: "key", Value: bson.D{{Key: idx.Field, Value: treeDBIndexTypeVector}}},
+			{Key: "name", Value: idx.Name},
+			{Key: treeDBIndexTypeField, Value: treeDBIndexTypeVector},
+			{Key: treeDBVectorOptionsField, Value: bson.D{
+				{Key: "dimensions", Value: int32(idx.Dimensions)},
+				{Key: "metric", Value: idx.Metric.String()},
+				{Key: "m", Value: int32(idx.M)},
+				{Key: "efConstruction", Value: int32(idx.EfConstruction)},
+				{Key: "efSearch", Value: int32(idx.EfSearch)},
+				{Key: "encoding", Value: idx.Encoding.String()},
+			}},
+		}
+		out = append(out, doc)
+	}
 	return out
 }
 
@@ -2906,6 +3171,26 @@ func dedupeIdenticalIndexDefinitions(defs []collections.IndexDefinition) []colle
 	return out
 }
 
+func findVectorIndexDefinition(indexes []collections.VectorIndexDefinition, name string) (collections.VectorIndexDefinition, bool) {
+	for _, index := range indexes {
+		if index.Name == name {
+			return index, true
+		}
+	}
+	return collections.VectorIndexDefinition{}, false
+}
+
+func dedupeIdenticalVectorIndexDefinitions(defs []collections.VectorIndexDefinition) []collections.VectorIndexDefinition {
+	out := make([]collections.VectorIndexDefinition, 0, len(defs))
+	for _, def := range defs {
+		if existing, ok := findVectorIndexDefinition(out, def.Name); ok && sameVectorIndexDefinition(existing, def) {
+			continue
+		}
+		out = append(out, def)
+	}
+	return out
+}
+
 func sameIndexDefinition(left, right collections.IndexDefinition) bool {
 	return left.Name == right.Name &&
 		left.Field == right.Field &&
@@ -2913,6 +3198,92 @@ func sameIndexDefinition(left, right collections.IndexDefinition) bool {
 		left.Unique == right.Unique &&
 		left.MultiKey == right.MultiKey &&
 		left.StoragePolicy == right.StoragePolicy
+}
+
+func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bool {
+	return left.Name == right.Name &&
+		left.Field == right.Field &&
+		left.Metric == right.Metric &&
+		left.Dimensions == right.Dimensions &&
+		left.M == right.M &&
+		left.EfConstruction == right.EfConstruction &&
+		left.EfSearch == right.EfSearch &&
+		left.Encoding == right.Encoding
+}
+
+func validateCreateIndexesRequestDuplicates(scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {
+	scalarSeen := make(map[string]collections.IndexDefinition, len(scalarDefs))
+	for _, def := range scalarDefs {
+		if existing, ok := scalarSeen[def.Name]; ok {
+			if !sameIndexDefinition(existing, def) {
+				return fmt.Errorf("duplicate index %q has conflicting definitions", def.Name)
+			}
+			continue
+		}
+		scalarSeen[def.Name] = def
+	}
+	vectorSeen := make(map[string]collections.VectorIndexDefinition, len(vectorDefs))
+	for _, def := range vectorDefs {
+		if existing, ok := vectorSeen[def.Name]; ok {
+			if !sameVectorIndexDefinition(existing, def) {
+				return fmt.Errorf("duplicate vector index %q has conflicting definitions", def.Name)
+			}
+			continue
+		}
+		vectorSeen[def.Name] = def
+	}
+	return nil
+}
+
+func validateCreateIndexesCrossKindNames(meta collections.CollectionMeta, scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {
+	scalarNames := make(map[string]struct{}, len(meta.Indexes)+len(scalarDefs))
+	for _, def := range meta.Indexes {
+		scalarNames[def.Name] = struct{}{}
+	}
+	for _, def := range scalarDefs {
+		scalarNames[def.Name] = struct{}{}
+	}
+	for _, def := range meta.VectorIndexes {
+		if _, ok := scalarNames[def.Name]; ok {
+			return fmt.Errorf("index name %q conflicts between scalar and vector indexes", def.Name)
+		}
+	}
+	for _, def := range vectorDefs {
+		if _, ok := scalarNames[def.Name]; ok {
+			return fmt.Errorf("index name %q conflicts between scalar and vector indexes", def.Name)
+		}
+	}
+	return nil
+}
+
+func validateCreateIndexesExistingVectorDefinitions(meta collections.CollectionMeta, vectorDefs []collections.VectorIndexDefinition) error {
+	for _, def := range vectorDefs {
+		existing, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name)
+		if ok && !sameVectorIndexDefinition(existing, def) {
+			return fmt.Errorf("vector index %q already exists with a different definition", def.Name)
+		}
+	}
+	return nil
+}
+
+func classifyDropIndexNames(meta collections.CollectionMeta, names []string) ([]string, []string, error) {
+	scalarNames := make([]string, 0, len(names))
+	vectorNames := make([]string, 0, len(names))
+	for _, indexName := range names {
+		if indexName == "_id_" {
+			return nil, nil, errors.New("cannot drop _id index")
+		}
+		if _, ok := findIndexDefinition(meta.Indexes, indexName); ok {
+			scalarNames = append(scalarNames, indexName)
+			continue
+		}
+		if _, ok := findVectorIndexDefinition(meta.VectorIndexes, indexName); ok {
+			vectorNames = append(vectorNames, indexName)
+			continue
+		}
+		return nil, nil, collections.ErrIndexNotFound
+	}
+	return scalarNames, vectorNames, nil
 }
 
 func dropIndexNames(command wire.Document) ([]string, bool, error) {
@@ -2938,6 +3309,7 @@ func dropIndexNames(command wire.Document) ([]string, bool, error) {
 		return nil, false, errors.New("Mongo command field \"index\" must not be empty")
 	}
 	names := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
 	for i, value := range values {
 		name, ok := value.StringValueOK()
 		if !ok {
@@ -2946,6 +3318,10 @@ func dropIndexNames(command wire.Document) ([]string, bool, error) {
 		if name == "*" {
 			return nil, true, nil
 		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
 		names = append(names, name)
 	}
 	return names, false, nil
