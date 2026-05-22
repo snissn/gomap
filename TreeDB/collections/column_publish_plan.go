@@ -411,6 +411,66 @@ func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.Ordere
 	}, nil
 }
 
+func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.OrderedRootDeltaPublishInput, error) {
+	if delta.RootName == "" {
+		return backenddb.OrderedRootDeltaPublishInput{}, errors.New("collections: column manifest root delta missing root name")
+	}
+	identity := delta.Identity
+	normalizeColumnManifestIdentityDefaults(&identity)
+	if err := validateColumnManifestIdentity(identity); err != nil {
+		return backenddb.OrderedRootDeltaPublishInput{}, err
+	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return backenddb.OrderedRootDeltaPublishInput{}, errors.New("collections: column manifest root delta identity record does not match identity")
+	}
+	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
+	if err != nil {
+		return backenddb.OrderedRootDeltaPublishInput{}, err
+	}
+	return backenddb.OrderedRootDeltaPublishInput{
+		BaseRoot:      delta.BaseRootID,
+		Iter:          columnManifestIdentityRecordIterator(delta.IdentityRecord),
+		StoragePolicy: policy,
+	}, nil
+}
+
+func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
+	if delta.RootName == "" {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, errors.New("collections: column manifest root delta missing root name")
+	}
+	identity := delta.Identity
+	normalizeColumnManifestIdentityDefaults(&identity)
+	if err := validateColumnManifestIdentity(identity); err != nil {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
+	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, errors.New("collections: column manifest root delta identity record does not match identity")
+	}
+	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
+	if err != nil {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
+	}
+	iter := columnManifestIdentityRecordIterator(delta.IdentityRecord)
+	defer func() { _ = iter.Close() }()
+	deltaBatch, err := backenddb.OrderedRootDeltaBatchFromIterator(iter)
+	if err != nil {
+		if deltaBatch != nil {
+			_ = deltaBatch.Close()
+		}
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
+	}
+	cleanup := func() {
+		if deltaBatch != nil {
+			_ = deltaBatch.Close()
+		}
+	}
+	return backenddb.OrderedRootDeltaBatchPublishInput{
+		BaseRoot:      delta.BaseRootID,
+		Delta:         deltaBatch,
+		StoragePolicy: policy,
+	}, cleanup, nil
+}
+
 func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnManifestPublishSystemDeltaInput, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 	if c == nil || c.db == nil {
 		return nil, backenddb.ErrClosed

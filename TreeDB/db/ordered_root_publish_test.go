@@ -6,12 +6,14 @@ import (
 	"errors"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -48,6 +50,461 @@ func (it *closeCountingUnsafeIterator) Close() error {
 	return nil
 }
 func (it *closeCountingUnsafeIterator) Domain() ([]byte, []byte) { return nil, nil }
+
+func mustRawKVCommandWALIntent(tb testing.TB, db *DB, key, value string) *CommandWALIntent {
+	tb.Helper()
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte(key),
+		Value: []byte(value),
+	}})
+	if err != nil {
+		tb.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		tb.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	if intent == nil {
+		tb.Fatal("expected command WAL intent")
+	}
+	return intent
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextPassesAssignedLSN(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	rootDelta := mustFrozenSystemMemtable(t, "root/a", "value-a")
+	var seenCtx CommandWALPublishContext
+	newSystemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     rootDelta.NewIterator(nil, nil),
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/a", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			seenCtx = ctx
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in context")
+			}
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				t.Fatalf("rootIDs=%v, want one non-zero root", rootIDs)
+			}
+			sys := mustFrozenSystemMemtable(t, "system/root", strconv.FormatUint(rootIDs[0], 10))
+			return sys.NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder: %v", err)
+	}
+	if newSystemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("newSystemRoot=%d rootIDs=%v, want non-zero roots", newSystemRoot, rootIDs)
+	}
+	if seenCtx.AppliedCommandLSN == 0 {
+		t.Fatalf("builder AppliedCommandLSN=0, want assigned LSN")
+	}
+	if got := db.State().AppliedCommandLSN; got != seenCtx.AppliedCommandLSN {
+		t.Fatalf("state AppliedCommandLSN=%d, want builder LSN %d", got, seenCtx.AppliedCommandLSN)
+	}
+}
+
+func TestErrOrderedRootCommandWALContextConcurrentModificationWrapsSentinel(t *testing.T) {
+	err := errOrderedRootCommandWALContextConcurrentModification(1, 2, 3, 4)
+	if !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("err=%v want ErrConcurrentModification", err)
+	}
+	for _, want := range []string{"user_root want=1 got=2", "system_root want=3 got=4"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err=%q missing %q", err, want)
+		}
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderPreflightRunsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	wantErr := errors.New("preflight rejected")
+	var contextBuilderCalled bool
+	var systemBuilderCalled bool
+	_, _, err := db.PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		func() error {
+			return wantErr
+		},
+		mustRawKVCommandWALIntent(t, db, "cmd/preflight", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error) {
+			contextBuilderCalled = true
+			return nil, nil
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			systemBuilderCalled = true
+			return mustFrozenSystemMemtable(t, "system/preflight", "unexpected").NewIterator(nil, nil), nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("err=%v, want %v", err, wantErr)
+	}
+	if contextBuilderCalled || systemBuilderCalled {
+		t.Fatalf("builders called after preflight failure: context=%v system=%v", contextBuilderCalled, systemBuilderCalled)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 because preflight rejected before command WAL append", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/b"), []byte("value-b")); err != nil {
+		t.Fatalf("delta set: %v", err)
+	}
+	defer delta.Close()
+
+	var seenLSN uint64
+	beforeLSN := db.State().AppliedCommandLSN
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: 0,
+			Delta:    delta,
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/b", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			seenLSN = ctx.AppliedCommandLSN
+			sys := mustFrozenSystemMemtable(t, "system/root-b", strconv.FormatUint(rootIDs[0], 10))
+			return sys.NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: %v", err)
+	}
+	if seenLSN == 0 || seenLSN <= beforeLSN {
+		t.Fatalf("builder AppliedCommandLSN=%d, want non-zero LSN greater than previous %d", seenLSN, beforeLSN)
+	}
+	if got := db.State().AppliedCommandLSN; got != seenLSN {
+		t.Fatalf("state AppliedCommandLSN=%d, want builder LSN %d", got, seenLSN)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		nil,
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run without a command frame")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publish error=%v, want ErrCommandWALContextMissingFrame", err)
+	}
+	if errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("publish error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after missing frame rejection", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after missing frame rejection: %v", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		nil,
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run without a command frame")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, ErrCommandWALContextMissingFrame) {
+		t.Fatalf("publish error=%v, want ErrCommandWALContextMissingFrame", err)
+	}
+	if errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("publish error=%v must not look like ErrCommandWALUnsupported", err)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after missing frame rejection", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after missing frame rejection: %v", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextNilSystemBuilderNamesBatch(t *testing.T) {
+	var db *DB
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(nil, nil, nil)
+	if !errors.Is(err, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder) {
+		t.Fatalf("err=%v want %v", err, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextNilSystemBuilderIsExported(t *testing.T) {
+	var db *DB
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(nil, nil, nil)
+	if !errors.Is(err, ErrOrderedRootGroupCommandWALContextNilSystemBuilder) {
+		t.Fatalf("err=%v want %v", err, ErrOrderedRootGroupCommandWALContextNilSystemBuilder)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPreflightFailureDoesNotPoison(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/preflight"), []byte("value")); err != nil {
+		t.Fatalf("delta set: %v", err)
+	}
+	defer delta.Close()
+
+	wantErr := errors.New("preflight rejected")
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{Delta: delta}},
+		func() error { return wantErr },
+		mustRawKVCommandWALIntent(t, db, "cmd/preflight", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run after preflight failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after preflight rejection", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); err != nil {
+		t.Fatalf("CheckCommandWALPublishReady after preflight rejection: %v", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextBuilderFailurePoisonsAfterAppend(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	rootDelta := mustFrozenSystemMemtable(t, "root/fail", "value")
+	wantErr := errors.New("builder failure after command append")
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter:     rootDelta.NewIterator(nil, nil),
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/fail", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in builder")
+			}
+			return nil, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want 0 after failed publish", got)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextSystemBuilderErrorClosesReturnedIterator(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	iter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("system builder returned iterator with error")
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/system-iter-fail", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in system builder")
+			}
+			if len(rootIDs) != 0 {
+				t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+			}
+			return iter, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("system iterator closes=%d, want 1", iter.closes)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderFailureClosesReturnedIterators(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	iter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("context root builder failure after command append")
+	_, _, err := db.PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/context-fail", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaPublishInput, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in context builder")
+			}
+			return []OrderedRootDeltaPublishInput{{Iter: iter}}, wantErr
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run after context root builder failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("context iterator closes=%d, want 1", iter.closes)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderFailureClosesReturnedDeltas(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/context-batch-fail"), []byte("value")); err != nil {
+		t.Fatalf("delta set: %v", err)
+	}
+	wantErr := errors.New("context batch root builder failure after command append")
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/context-batch-fail", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in context builder")
+			}
+			return []OrderedRootDeltaBatchPublishInput{{Delta: delta}}, wantErr
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			t.Fatalf("system builder should not run after context batch root builder failure")
+			return nil, nil
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if err := delta.Set([]byte("after-close"), []byte("value")); !errors.Is(err, batch.ErrBatchClosed) {
+		t.Fatalf("delta Set after failed context builder error=%v, want ErrBatchClosed", err)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextSystemBuilderErrorClosesReturnedIterator(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	iter := &closeCountingUnsafeIterator{}
+	wantErr := errors.New("batch system builder returned iterator with error")
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/batch-system-iter-fail", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in system builder")
+			}
+			if len(rootIDs) != 0 {
+				t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+			}
+			return iter, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if iter.closes != 1 {
+		t.Fatalf("system iterator closes=%d, want 1", iter.closes)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALSystemBuilderFailureClosesContextDeltas(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Set([]byte("root/context-batch-system-fail"), []byte("value")); err != nil {
+		t.Fatalf("delta set: %v", err)
+	}
+	wantErr := errors.New("system builder failure after context batch delta")
+	_, _, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder(
+		nil,
+		mustRawKVCommandWALIntent(t, db, "cmd/context-batch-system-fail", "1"),
+		func(ctx CommandWALPublishContext) ([]OrderedRootDeltaBatchPublishInput, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in context builder")
+			}
+			return []OrderedRootDeltaBatchPublishInput{{Delta: delta}}, nil
+		},
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			if ctx.AppliedCommandLSN == 0 {
+				t.Fatalf("AppliedCommandLSN=0 in system builder")
+			}
+			if len(rootIDs) != 1 || rootIDs[0] == 0 {
+				t.Fatalf("rootIDs=%v, want one published context root", rootIDs)
+			}
+			return nil, wantErr
+		},
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("publish error=%v, want %v", err, wantErr)
+	}
+	if err := delta.Set([]byte("after-close"), []byte("value")); !errors.Is(err, batch.ErrBatchClosed) {
+		t.Fatalf("delta Set after failed system builder error=%v, want ErrBatchClosed", err)
+	}
+	if err := db.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("CheckCommandWALPublishReady error=%v, want ErrRecoveryRequired", err)
+	}
+}
 
 func TestPublishOrderedRootIterator_WarmSparseDelta_PreservesPages(t *testing.T) {
 	dir := t.TempDir()

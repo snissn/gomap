@@ -3416,6 +3416,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err := c.ensureWriteDomainOpen(); err != nil {
 		return nil, err
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return nil, err
+	}
 	if len(c.meta.Indexes) == 0 && len(c.meta.VectorIndexes) == 0 && !c.db.CommandWALEnabled() {
 		if c.hasBufferedNoIndexBSONRootRuns() {
 			if err := c.withMutationLock(func() error {
@@ -3583,6 +3586,9 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return nil, err
+	}
 	domain := c.writeDomain
 	if domain == nil {
 		return c.insertOneNoIndex(id, document)
@@ -3594,15 +3600,19 @@ func (c *Collection) insertOneNoIndexBuffered(id, document []byte) ([]byte, erro
 		domain.mu.Unlock()
 		return nil, err
 	}
-	if indexed || len(catalog.meta.VectorIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
-		domain.mu.Unlock()
-		return c.insertOneViaBatch(id, document)
-	}
 	if catalog == nil {
 		domain.mu.Unlock()
 		return nil, errCollectionNotFound
 	}
 	c.meta = catalog.meta
+	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		domain.mu.Unlock()
+		return nil, err
+	}
+	if indexed || len(catalog.meta.VectorIndexes) > 0 || plannerOptions.documentFormat != DocumentFormatJSON {
+		domain.mu.Unlock()
+		return c.insertOneViaBatch(id, document)
+	}
 	if domain.table == nil {
 		domain.table = newCollectionRunTable(0)
 	}
@@ -3682,6 +3692,9 @@ func (c *Collection) bufferNoIndexInsertBatch(
 ) ([][]byte, bool, error) {
 	if domain == nil || catalog == nil || snap == nil || len(catalog.meta.Indexes) > 0 {
 		return nil, false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		return nil, true, err
 	}
 	switch normalizedDocumentFormat(plannerOptions.documentFormat) {
 	case DocumentFormatJSON, DocumentFormatBSON:
@@ -3886,6 +3899,9 @@ func (c *Collection) revalidateBufferedWriteDomainLocked(domain *collectionWrite
 	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
 		return nil, err
 	}
+	if err := c.requireColumnStoreCommandWAL(catalog.meta, nil); err != nil {
+		return nil, err
+	}
 	if !sameCollectionMeta(catalog.meta, domain.meta) {
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", domain.meta.Name)
 	}
@@ -4013,6 +4029,9 @@ func (c *Collection) flushBufferedNoIndexLocked(domain *collectionWriteDomain) e
 		return err
 	}
 	meta := catalog.meta
+	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
+		return err
+	}
 	if len(meta.Indexes) > 0 {
 		return errors.New("collections: buffered no-index writes cannot be flushed into indexed schema")
 	}
@@ -8647,6 +8666,10 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	meta := catalog.meta
 	c.meta = meta
+	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
+		closePlanningSnapshot()
+		return nil, err
+	}
 	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
 	if err != nil {
 		closePlanningSnapshot()
@@ -8897,7 +8920,26 @@ func (c *Collection) insertBatchOnceWithLockState(
 	publishStart := time.Now()
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	if commandWALIntent != nil {
+	var publishMeta CollectionMeta
+	var publishRootNames []string
+	if columnStoreWriteEnabled(meta) {
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
+				meta:             meta,
+				catalog:          currentCatalog,
+				baseCommitSeq:    baseCommitSeq,
+				baseSystemRoot:   baseSystemRoot,
+				rootNames:        cloneColumnPublishRootNames(rootNames),
+				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+				commandWALIntent: commandWALIntent,
+				operation:        ColumnPublishOperationInsert,
+				rows:             len(plan.resultIDs),
+			})
+			return err
+		})
+	} else if commandWALIntent != nil {
+		publishMeta = meta
+		publishRootNames = rootNames
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
@@ -8905,6 +8947,8 @@ func (c *Collection) insertBatchOnceWithLockState(
 			return err
 		})
 	} else {
+		publishMeta = meta
+		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		})
@@ -8913,10 +8957,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	if err != nil {
 		return nil, err
 	}
-	if len(rootIDs) != len(plan.runs) {
-		return nil, unexpectedOrderedRootCountError(meta.Name, len(plan.runs), len(rootIDs))
+	if len(rootIDs) != len(publishRootNames) {
+		return nil, unexpectedOrderedRootCountError(meta.Name, len(publishRootNames), len(rootIDs))
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, meta, rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(currentCatalog, publishMeta, publishRootNames, rootIDs)
+	c.meta = publishMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
@@ -9330,7 +9375,6 @@ func (c *Collection) insertBatchNoIndex(
 		resetCollectionRunTable(table)
 	}()
 
-	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	publishStart := time.Now()
 	ordered := []backenddb.OrderedRootDeltaPublishInput{{
 		BaseRoot:      baseRoot,
@@ -9339,6 +9383,41 @@ func (c *Collection) insertBatchNoIndex(
 	}}
 	var newSystemRoot uint64
 	var rootIDs []uint64
+	if columnStoreWriteEnabled(c.meta) {
+		var publishMeta CollectionMeta
+		var publishRootNames []string
+		columnBaseRootIDs := map[string]uint64{rootName: baseRoot}
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
+				meta:             c.meta,
+				catalog:          catalog,
+				baseCommitSeq:    baseCommitSeq,
+				baseSystemRoot:   baseSystemRoot,
+				rootNames:        []string{rootName},
+				baseRootIDs:      columnBaseRootIDs,
+				commandWALIntent: commandWALIntent,
+				operation:        ColumnPublishOperationInsert,
+				rows:             len(entries),
+			})
+			return err
+		})
+		stats.Publish = time.Since(publishStart)
+		if err != nil {
+			return nil, err
+		}
+		if len(rootIDs) != len(publishRootNames) {
+			return nil, unexpectedOrderedRootCountError(c.meta.Name, len(publishRootNames), len(rootIDs))
+		}
+		stats.Runs = 1
+		nextCatalog := cloneCatalogWithRootUpdates(catalog, publishMeta, publishRootNames, rootIDs)
+		c.meta = publishMeta
+		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.setLastInsertStats(stats)
+		return resultIDs, nil
+	}
+
+	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	if commandWALIntent != nil {
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -9680,7 +9759,40 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	if commandWALIntent != nil {
+	if columnStoreWriteEnabled(c.meta) {
+		var publishMeta CollectionMeta
+		var publishRootNames []string
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
+				meta:             c.meta,
+				catalog:          catalog,
+				baseCommitSeq:    baseCommitSeq,
+				baseSystemRoot:   baseSystemRoot,
+				rootNames:        cloneColumnPublishRootNames(rootNames),
+				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+				commandWALIntent: commandWALIntent,
+				operation:        ColumnPublishOperationDelete,
+				rows:             len(existing),
+			})
+			return err
+		})
+		cleanupDeltas()
+		if err != nil {
+			return 0, err
+		}
+		if len(rootIDs) != len(publishRootNames) {
+			return 0, unexpectedOrderedRootCountError(c.meta.Name, len(publishRootNames), len(rootIDs))
+		}
+		nextCatalog := cloneCatalogWithRootUpdates(catalog, publishMeta, publishRootNames, rootIDs)
+		c.meta = publishMeta
+		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		c.clearWriteDomainPrimaryDocumentCache()
+		if c.writeDomain != nil {
+			c.writeDomain.observeRootDeltaPlan(deltaStats)
+		}
+		return len(existing), nil
+	} else if commandWALIntent != nil {
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
@@ -9869,7 +9981,26 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	if commandWALIntent != nil {
+	var publishMeta CollectionMeta
+	var publishRootNames []string
+	if columnStoreWriteEnabled(c.meta) {
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
+				meta:             c.meta,
+				catalog:          catalog,
+				baseCommitSeq:    baseCommitSeq,
+				baseSystemRoot:   baseSystemRoot,
+				rootNames:        cloneColumnPublishRootNames(rootNames),
+				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+				commandWALIntent: commandWALIntent,
+				operation:        ColumnPublishOperationDelete,
+				rows:             1,
+			})
+			return err
+		})
+	} else if commandWALIntent != nil {
+		publishMeta = c.meta
+		publishRootNames = rootNames
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
@@ -9877,6 +10008,8 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 			return err
 		})
 	} else {
+		publishMeta = c.meta
+		publishRootNames = rootNames
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 		})
@@ -9885,10 +10018,11 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	if err != nil {
 		return false, err
 	}
-	if len(rootIDs) != len(rootNames) {
-		return false, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
+	if len(rootIDs) != len(publishRootNames) {
+		return false, unexpectedOrderedRootCountError(c.meta.Name, len(publishRootNames), len(rootIDs))
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, publishMeta, publishRootNames, rootIDs)
+	c.meta = publishMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.clearWriteDomainPrimaryDocumentCache()
@@ -9936,6 +10070,9 @@ func (c *Collection) Replace(documentID, document []byte) (bool, error) {
 // key.
 func (c *Collection) Update(documentID []byte, update func(current []byte) (replacement []byte, changed bool, err error)) (bool, bool, error) {
 	if err := validateCollectionUpdateInput(c, documentID, update); err != nil {
+		return false, false, err
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return false, false, err
 	}
 	if c.commandWALActive(nil) {
@@ -10101,6 +10238,9 @@ func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) 
 	}
 	ownedItems, err := prepareUpdateBatchItems(items)
 	if err != nil {
+		return nil, false, err
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
 		return nil, false, err
 	}
 	return c.updateBatchOwnedItems(ownedItems, mode)
@@ -11070,7 +11210,7 @@ func (combiner *collectionUpdateCombiner) prepareBatchWithScratch(batch []collec
 			hasBSONSet: req.hasBSONSet,
 		}
 	}
-	plan, err := ownedBatch[0].collection.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, combiner.hasShardWorkers())
+	plan, err := ownedBatch[0].collection.buildUpdateBatchPlan(items, updateBatchModeNoSecondaryUniqueIndexChanges, combiner.hasShardWorkers(), nil)
 	clear(items)
 	*itemsScratch = items[:0]
 	if errors.Is(err, errUpdateBatchHasSecondaryUniqueIndex) ||
@@ -12187,6 +12327,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		_ = snap.Close()
 		return false, false, err
 	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		_ = snap.Close()
+		return false, false, err
+	}
 	stats := CollectionUpdateStats{
 		Items:   1,
 		Indexes: len(c.meta.Indexes),
@@ -12270,6 +12414,10 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		_ = snap.Close()
 		return false, false, err
 	}
+	var commandWALDocument []byte
+	if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+		commandWALDocument = bytes.Clone(document)
+	}
 	phaseStart = updateBatchStatsNow(detailedStats)
 	preparedDocuments, templateRecords, _, templateResolver, err := prepareInsertDocuments([][]byte{document}, plannerOptions)
 	stats.PrepareDocuments += updateBatchStatsSince(detailedStats, phaseStart)
@@ -12282,6 +12430,9 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 		return false, false, errors.New("collections: update prepared unexpected document count")
 	}
 	document = preparedDocuments[0]
+	if commandWALDocument == nil {
+		commandWALDocument = document
+	}
 	if templateResolver != nil {
 		plannerOptions.templateResolver = templateResolver
 	}
@@ -12481,19 +12632,53 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	preflight := func() error {
 		return c.validateMutationRootDescriptors(baseUserRoot, baseSystemRoot, baseCommitSeq)
 	}
+	var commandWALIntent *backenddb.CommandWALIntent
+	if columnStoreWriteEnabled(c.meta) && c.commandWALActive(nil) {
+		commandWALIntent, err = c.newCollectionUpdateCommandWALIntent([]commitlog.CollectionDocument{{
+			ID:       bytes.Clone(documentID),
+			Document: bytes.Clone(commandWALDocument),
+		}}, nil)
+		if err != nil {
+			return false, false, err
+		}
+	}
 	phaseStart = updateBatchStatsNow(detailedStats)
-	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
-		return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
-	})
+	var newSystemRoot uint64
+	var rootIDs []uint64
+	var publishMeta CollectionMeta
+	var publishRootNames []string
+	if columnStoreWriteEnabled(c.meta) {
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
+				meta:             c.meta,
+				catalog:          catalog,
+				baseCommitSeq:    baseCommitSeq,
+				baseSystemRoot:   baseSystemRoot,
+				rootNames:        cloneColumnPublishRootNames(rootNames),
+				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
+				commandWALIntent: commandWALIntent,
+				operation:        ColumnPublishOperationUpdate,
+				rows:             1,
+			})
+			return err
+		})
+	} else {
+		publishMeta = c.meta
+		publishRootNames = rootNames
+		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilder(ordered, preflight, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
+		})
+	}
 	stats.Publish += updateBatchStatsSince(detailedStats, phaseStart)
 	cleanupDeltas()
 	if err != nil {
 		return false, false, err
 	}
-	if len(rootIDs) != len(rootNames) {
-		return false, false, unexpectedOrderedRootCountError(c.meta.Name, len(rootNames), len(rootIDs))
+	if len(rootIDs) != len(publishRootNames) {
+		return false, false, unexpectedOrderedRootCountError(c.meta.Name, len(publishRootNames), len(rootIDs))
 	}
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, c.meta, rootNames, rootIDs)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, publishMeta, publishRootNames, rootIDs)
+	c.meta = publishMeta
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if c.writeDomain != nil {
@@ -13170,7 +13355,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		useBufferedRead := true
 		bufferedReadReplans := 0
 		for {
-			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead)
+			plan, err := c.buildUpdateBatchPlan(items, mode, useBufferedRead, commandWALIntent)
 			if err != nil {
 				return nil, err
 			}
@@ -13340,7 +13525,7 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 		return nil, err
 	}
 
-	plan, err := c.buildUpdateBatchPlan(items, mode, false)
+	plan, err := c.buildUpdateBatchPlan(items, mode, false, commandWALIntent)
 	if err != nil {
 		return nil, err
 	}
@@ -13382,6 +13567,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 	var results []UpdateBatchResult
 	err = c.withMutationLock(func() error {
 		if !c.commandWALActive(commandWALIntent) {
+			if err := c.requireColumnStoreCommandWAL(plan.meta, commandWALIntent); err != nil {
+				return err
+			}
 			buffered, bufferErr := c.bufferUpdateBatchPlanLocked(plan)
 			if bufferErr != nil {
 				return bufferErr
@@ -13890,7 +14078,7 @@ func collectionWriteDomainSnapshotStale(domain *collectionWriteDomain, baseCommi
 	return updateBatchBufferedSnapshotStaleLocked(domain, baseCommitSeq, baseSystemRoot)
 }
 
-func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool) (*updateBatchPlan, error) {
+func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBatchMode, useBufferedRead bool, commandWALIntent *backenddb.CommandWALIntent) (*updateBatchPlan, error) {
 	results := make([]UpdateBatchResult, len(items))
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
@@ -13910,6 +14098,10 @@ func (c *Collection) buildUpdateBatchPlan(items []updateBatchItem, mode updateBa
 		return nil, err
 	}
 	meta := catalog.meta
+	if err := c.requireColumnStoreCommandWAL(meta, commandWALIntent); err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
 	stats := CollectionUpdateStats{
 		Items:   len(items),
 		Indexes: len(meta.Indexes),
@@ -14598,7 +14790,43 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	publishStart := updateBatchStatsNow(detailedStats)
 	var newSystemRoot uint64
 	var rootIDs []uint64
-	if commandWALIntent != nil {
+	if columnStoreWriteEnabled(plan.meta) {
+		var publishMeta CollectionMeta
+		var publishRootNames []string
+		err = c.withCommandWALPublishCoordinator(func() error {
+			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
+				meta:             plan.meta,
+				catalog:          plan.catalog,
+				baseCommitSeq:    plan.baseCommitSeq,
+				baseSystemRoot:   plan.baseSystemRoot,
+				rootNames:        cloneColumnPublishRootNames(plan.rootNames),
+				baseRootIDs:      cloneColumnPublishBaseRootIDs(plan.baseRootIDs),
+				commandWALIntent: commandWALIntent,
+				operation:        ColumnPublishOperationUpdate,
+				rows:             plan.stats.Modified,
+			})
+			return err
+		})
+		cleanupDeltas()
+		plan.stats.Publish += updateBatchStatsSince(detailedStats, publishStart)
+		if err != nil {
+			return nil, err
+		}
+		if len(rootIDs) != len(publishRootNames) {
+			return nil, unexpectedOrderedRootCountError(plan.meta.Name, len(publishRootNames), len(rootIDs))
+		}
+		nextCatalog := cloneCatalogWithRootUpdates(plan.catalog, publishMeta, publishRootNames, rootIDs)
+		c.meta = publishMeta
+		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+		if c.writeDomain != nil {
+			c.writeDomain.observeRootDeltaPlan(deltaStats)
+			if len(plan.meta.Indexes) == 0 {
+				c.writeDomain.observePrimaryOnlyUpdateBatch(plan.stats.Items, plan.stats.Matched, plan.stats.Modified, true, deltaStats)
+			}
+		}
+		return plan.results, nil
+	} else if commandWALIntent != nil {
 		err = c.withCommandWALPublishCoordinator(func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, plan.rootNames, plan.baseRootIDs, rootIDs)
@@ -14771,6 +14999,10 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 	if modifiedCount == 0 {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(plan.meta, nil); err != nil {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, err
 	}
 	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 
@@ -15123,6 +15355,10 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	if !hasDeltaTable {
 		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 		return false, fmt.Errorf("collections: UpdateBatch collection %q modified rows without delta tables modified=%d roots=%d deltas=%d policies=%d", plan.meta.Name, modifiedCount, len(plan.rootNames), len(plan.deltaTables), len(plan.policies))
+	}
+	if err := c.requireColumnStoreCommandWAL(plan.meta, nil); err != nil {
+		plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
+		return false, err
 	}
 	plan.stats.BufferStagePrecheck += updateBatchStatsSince(detailedStats, precheckStart)
 	domain := c.writeDomain
@@ -16035,6 +16271,9 @@ func (c *Collection) bufferIndexedDeleteTablesLocked(
 	meta := catalog.meta
 	if !c.shouldBufferIndexedDeletes(meta) {
 		return false, nil
+	}
+	if err := c.requireColumnStoreCommandWAL(meta, nil); err != nil {
+		return false, err
 	}
 	if len(rootNames) != len(deltaTables) || len(rootNames) != len(policies) {
 		return false, fmt.Errorf("collections: Delete collection %q invalid plan lengths roots=%d deltas=%d policies=%d", meta.Name, len(rootNames), len(deltaTables), len(policies))
@@ -18509,12 +18748,18 @@ func encodeCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return encodeNormalizedCollectionMeta(normalized)
+}
+
+// encodeNormalizedCollectionMeta requires meta to already be normalized by
+// normalizeCollectionMeta so disk metadata preserves canonical defaults/order.
+func encodeNormalizedCollectionMeta(meta CollectionMeta) ([]byte, error) {
 	return json.Marshal(collectionMetaDisk{
 		Version:       collectionMetaVersion,
-		Name:          normalized.Name,
-		Options:       normalized.Options,
-		Indexes:       normalized.Indexes,
-		VectorIndexes: normalized.VectorIndexes,
+		Name:          meta.Name,
+		Options:       meta.Options,
+		Indexes:       meta.Indexes,
+		VectorIndexes: meta.VectorIndexes,
 	})
 }
 
