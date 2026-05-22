@@ -56,7 +56,9 @@ func AcquireJournalOwnerWithOptions(dir string, opts JournalOwnerOptions) (*Jour
 }
 
 // reserveLSN reserves one LSN from this owner. Only CommandJournal should call
-// this directly because failed appends rely on tail-only rollback.
+// this directly because failed appends rely on tail-only rollback. Reserving
+// MaxUint64 is legal exactly once; rollbackReservedLSN reopens that final LSN
+// for one retry if the append fails after the reservation.
 func (o *JournalOwner) reserveLSN() (uint64, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -162,7 +164,8 @@ type CommandJournalOptions struct {
 	Lane int
 	// SegmentSeq selects the segment sequence to append to. Zero means append to
 	// the latest existing segment for Lane, or segment 1 when the lane is empty.
-	// Callers that want rotation must choose the next sequence explicitly.
+	// Explicitly naming the current latest segment appends to its tail. Callers
+	// that want rotation must choose the next sequence explicitly.
 	// Explicit sequences behind the current lane tail are rejected because they
 	// would place newer LSNs before older segments in segment-ordered replay.
 	SegmentSeq uint64
@@ -263,6 +266,8 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 	seenLSNs := make(map[uint64]struct{})
 	for _, seg := range segments {
 		if seg.size == 0 {
+			// Empty command segments contain no recoverable LSN and no torn typed
+			// frame tail. NewWriterWithOptions opens them in append mode at offset 0.
 			continue
 		}
 		maxLSN, typed, completeEnd, err := scanCommandSegmentSummary(seg.path, Options{MaxSegmentSize: opts.MaxSegmentSize}, func(lsn uint64) error {
@@ -467,6 +472,10 @@ func (j *CommandJournal) AppendCommand(env CommandEnvelope) (uint64, error) {
 	if env.LSN != 0 {
 		return 0, errors.New("commitlog: command journal owns lsn assignment")
 	}
+	// Validate shape and payload before reserving, using a synthetic non-zero
+	// LSN. Writer.AppendCommand repeats encode validation with the actual
+	// reserved LSN before it writes bytes, so late LSN-sensitive validation
+	// still rolls the reservation back through the error path below.
 	probe := env
 	probe.LSN = 1
 	if probe.Kind == CommandKindRawKVBatch && probe.Payload == nil {

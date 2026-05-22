@@ -218,6 +218,11 @@ func (b *Batch) write(sync bool) error {
 	}
 	intent := b.commandWALPublishIntent
 	if !b.physicalOnly && b.db.commandWAL {
+		unlockRawPublish := b.db.lockCommandWALRawPublish()
+		defer unlockRawPublish()
+		if err := b.db.runCommandWALRawPublishBarriers(); err != nil {
+			return err
+		}
 		var err error
 		intent, err = b.db.prepareRawKVCommandWALIntent(b)
 		if err != nil {
