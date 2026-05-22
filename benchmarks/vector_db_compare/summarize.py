@@ -34,6 +34,10 @@ def bytes_human(value: float) -> str:
 def storage_record(result: dict[str, Any]) -> dict[str, Any]:
     if "storage_after_build" in result:
         return result["storage_after_build"]
+    if "storage_after_index_vacuum" in result:
+        return result["storage_after_index_vacuum"]
+    if "storage_after_close" in result:
+        return result["storage_after_close"]
     if "storage_after_compact" in result:
         return result["storage_after_compact"]
     if "storage" in result:
@@ -169,7 +173,7 @@ def render(results: list[dict[str, Any]]) -> str:
     lines.append("- PostgreSQL+pgvector storage uses the benchmark table's `pg_total_relation_size`, including its HNSW index.")
     lines.append("- MongoDB is included only when run against a MongoDB Vector Search deployment, such as Atlas or local Atlas with `mongot`; plain `mongod` is not a vector-search comparator.")
     lines.append("- MongoDB storage marked with `*` uses `collStats` collection storage and ordinary index bytes; MongoDB Vector Search index bytes are not exposed by this harness.")
-    lines.append("- TreeDB storage is the reopened benchmark datastore reported by `treedb_vector_search_demo`.")
+    lines.append("- TreeDB storage uses the post-close, post-index-vacuum retained datastore when reported by `treedb_vector_search_demo`; raw pre-close and pre-vacuum storage fields remain in the JSON.")
     lines.append("- Memory columns are intentionally separated: TreeDB reports native vector-index memory when available, while Python-backed comparator harnesses report whole benchmark process max RSS.")
     lines.append("")
     return "\n".join(lines)

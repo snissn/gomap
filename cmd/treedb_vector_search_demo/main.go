@@ -63,6 +63,7 @@ type config struct {
 	minRecall             float64
 	compact               bool
 	compactSyncEachPhase  bool
+	vacuumIndex           bool
 	disableExactFallback  bool
 	requireValueLogBytes  bool
 	requireLeafVLogBytes  bool
@@ -100,12 +101,15 @@ type result struct {
 	Insert                phaseResult                       `json:"insert"`
 	Rebuild               phaseResult                       `json:"rebuild"`
 	CompactPhase          phaseResult                       `json:"compact_phase"`
+	IndexVacuum           phaseResult                       `json:"index_vacuum"`
 	ReopenLoad            phaseResult                       `json:"reopen_load"`
 	Validation            validationResult                  `json:"validation"`
 	Search                searchBenchmarkResult             `json:"search"`
 	SearchBenchmarks      []searchBenchmarkResult           `json:"search_benchmarks"`
 	StorageBeforeCompact  storageReport                     `json:"storage_before_compact"`
 	StorageAfterCompact   storageReport                     `json:"storage_after_compact"`
+	StorageAfterClose     storageReport                     `json:"storage_after_close"`
+	StorageAfterVacuum    storageReport                     `json:"storage_after_index_vacuum"`
 	IndexStatsBefore      collections.VectorIndexStats      `json:"index_stats_before_compact"`
 	IndexStatsLoaded      collections.VectorIndexStats      `json:"index_stats_loaded"`
 	NativeRootBytes       int64                             `json:"native_root_bytes"`
@@ -273,6 +277,7 @@ func parseConfig(args []string) (config, error) {
 		minRecall:             0.95,
 		matrix:                true,
 		compact:               false,
+		vacuumIndex:           true,
 		disableExactFallback:  true,
 		profile:               treedb.ProfileBench,
 		vectorIndexStrategy:   collections.VectorIndexStrategyNativeRuntime,
@@ -304,6 +309,7 @@ func parseConfig(args []string) (config, error) {
 	fs.Float64Var(&cfg.minRecall, "min-recall", cfg.minRecall, "Minimum validation recall@topK")
 	fs.BoolVar(&cfg.compact, "compact", cfg.compact, "Run CompactStorageFull after insert/index build and before reopen/validation/search")
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
+	fs.BoolVar(&cfg.vacuumIndex, "vacuum-index", cfg.vacuumIndex, "Run offline index.db vacuum after close before final storage/reopen")
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
 	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
@@ -735,6 +741,23 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	cleanupBackend = nil
 	d = nil
+	res.StorageAfterClose, err = storageUsage(dir, cfg.docs)
+	if err != nil {
+		return result{}, err
+	}
+	if cfg.vacuumIndex {
+		vacuumStart := time.Now()
+		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir, KeepRecent: 1}); err != nil {
+			return result{}, fmt.Errorf("index vacuum: %w", err)
+		}
+		res.IndexVacuum = phaseSince(vacuumStart)
+		res.StorageAfterVacuum, err = storageUsage(dir, cfg.docs)
+		if err != nil {
+			return result{}, err
+		}
+	} else {
+		res.StorageAfterVacuum = res.StorageAfterClose
+	}
 	runtime.GC()
 
 	reopenStart := time.Now()
@@ -1932,6 +1955,11 @@ func printText(w io.Writer, res result) {
 	} else {
 		fmt.Fprintf(w, "compact_storage_full: skipped\n")
 	}
+	if res.IndexVacuum.DurationNanos > 0 {
+		fmt.Fprintf(w, "index_vacuum: %.3fs\n", res.IndexVacuum.Seconds)
+	} else {
+		fmt.Fprintf(w, "index_vacuum: skipped\n")
+	}
 	fmt.Fprintf(w, "reopen_and_load_native_index: %.3fs\n", res.ReopenLoad.Seconds)
 	fmt.Fprintf(w, "\nValidation\n")
 	fmt.Fprintf(w, "documents_checked=%d queries_checked=%d recall_at_%d=%.4f overlap=%d/%d\n",
@@ -1950,6 +1978,12 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "\nStorage\n")
 	fmt.Fprintf(w, "before_compact_total=%d bytes (%.1f/doc)\n", res.StorageBeforeCompact.TotalBytes, res.StorageBeforeCompact.BytesPerDoc)
 	fmt.Fprintf(w, "after_compact_total=%d bytes (%.1f/doc)\n", res.StorageAfterCompact.TotalBytes, res.StorageAfterCompact.BytesPerDoc)
+	if res.StorageAfterClose.TotalBytes > 0 {
+		fmt.Fprintf(w, "after_close_total=%d bytes (%.1f/doc)\n", res.StorageAfterClose.TotalBytes, res.StorageAfterClose.BytesPerDoc)
+	}
+	if res.StorageAfterVacuum.TotalBytes > 0 {
+		fmt.Fprintf(w, "after_index_vacuum_total=%d bytes (%.1f/doc)\n", res.StorageAfterVacuum.TotalBytes, res.StorageAfterVacuum.BytesPerDoc)
+	}
 	if res.FormatConfig != nil {
 		fmt.Fprintf(w, "format index_outer_leaves_in_vlog=%t leaf_prefix_compression=%t vlog_compression=%s\n",
 			res.FormatConfig.IndexOuterLeavesInValueLog,
@@ -1976,6 +2010,11 @@ func printMatrixText(w io.Writer, res matrixResult) {
 		fmt.Fprintf(w, "storage_after_compact_total=%d bytes (%.1f/doc)\n",
 			testCase.Result.StorageAfterCompact.TotalBytes,
 			testCase.Result.StorageAfterCompact.BytesPerDoc)
+		if testCase.Result.StorageAfterVacuum.TotalBytes > 0 {
+			fmt.Fprintf(w, "storage_after_index_vacuum_total=%d bytes (%.1f/doc)\n",
+				testCase.Result.StorageAfterVacuum.TotalBytes,
+				testCase.Result.StorageAfterVacuum.BytesPerDoc)
+		}
 		fmt.Fprintf(w, "storage_domains index_db=%d value_vlog=%d leaf_vlog=%d\n",
 			testCase.Result.StorageExpectation.IndexBytes,
 			testCase.Result.StorageExpectation.ValueLogBytes,
