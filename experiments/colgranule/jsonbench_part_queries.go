@@ -49,7 +49,7 @@ type jsonBenchPartQueryScratch struct {
 	q2Counts    []uint64
 	q2Seen      []uint64
 	q3Counts    []uint64
-	q4Seen      []uint64
+	q4Seen      touchedBitset
 	q5Seen      []uint64
 	q5Min       []int64
 	q5Max       []int64
@@ -546,7 +546,7 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 			if user >= didHeader.cardinality || user >= didCardinality {
 				return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: did code %d outside cardinality %d", user, didCardinality)
 			}
-			if bitsetTestAndSet(seen, user) {
+			if bitsetTestAndSetTouched(seen, &scratch.q4Seen.touched, user) {
 				continue
 			}
 			top = insertQ4Top(top, jsonBenchPartTimePair{user: int64(user), t: timestamp})
@@ -755,14 +755,9 @@ func (s *jsonBenchPartQueryScratch) resetQ4Seen(didCardinality uint32) ([]uint64
 	if words <= 0 || words > maxAggregateCells {
 		return nil, fmt.Errorf("colgranule: q4 seen words=%d exceeds cap %d", words, maxAggregateCells)
 	}
-	if cap(s.q4Seen) < words {
-		s.q4Seen = make([]uint64, words)
-	} else {
-		s.q4Seen = s.q4Seen[:words]
-	}
-	clear(s.q4Seen)
+	seen := s.q4Seen.reset(words)
 	s.q4Pairs = s.q4Pairs[:0]
-	return s.q4Seen, nil
+	return seen, nil
 }
 
 func (s *jsonBenchPartQueryScratch) resetQ5Dense(didCardinality uint32) ([]uint64, []int64, []int64, []uint32, error) {
@@ -837,6 +832,37 @@ func (s *jsonBenchPartQueryScratch) resetQ3Dense(eventCardinality uint32) ([]uin
 	}
 	clear(s.q3Counts)
 	return s.q3Counts, nil
+}
+
+type touchedBitset struct {
+	words   []uint64
+	touched []int
+}
+
+func (b *touchedBitset) reset(words int) []uint64 {
+	for _, word := range b.touched {
+		b.words[word] = 0
+	}
+	b.touched = b.touched[:0]
+	if cap(b.words) < words {
+		b.words = make([]uint64, words)
+	} else {
+		b.words = b.words[:words]
+	}
+	return b.words
+}
+
+func bitsetTestAndSetTouched(words []uint64, touched *[]int, code uint32) bool {
+	word := int(code / 64)
+	bit := uint(code % 64)
+	mask := uint64(1) << bit
+	existing := words[word]
+	if existing == 0 {
+		*touched = append(*touched, word)
+	}
+	seen := existing&mask != 0
+	words[word] = existing | mask
+	return seen
 }
 
 func bitsetTestAndSet(words []uint64, code uint32) bool {
