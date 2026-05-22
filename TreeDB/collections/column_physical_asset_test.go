@@ -615,7 +615,12 @@ func TestColumnPhysicalAssetScannerRejectsMismatchedVectorLength(t *testing.T) {
 	}
 }
 
-func TestColumnPhysicalAssetScannerUnprojectedVectorTruncationNamesVectorType(t *testing.T) {
+// TestColumnPhysicalAssetScannerUnprojectedVectorMismatchReportsColumnIndexV1
+// verifies that the new error format produced by scanColumnPhysicalRowValues
+// includes the column index ("column[N]") in the error message when an
+// unprojected float32 vector has a length mismatch. This is a regression test
+// for the change from skipFloat32SliceWithExpectedLength to skipUint32Slice.
+func TestColumnPhysicalAssetScannerUnprojectedVectorMismatchReportsColumnIndexV1(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
@@ -648,13 +653,17 @@ func TestColumnPhysicalAssetScannerUnprojectedVectorTruncationNamesVectorType(t 
 		writeManifestBool(&raw, col.Dictionary)
 		writeManifestUint64(&raw, uint64(col.VectorDims))
 	}
+	// Write a row with a float32 vector of length 2 instead of the expected 3.
 	writeManifestBytes(&raw, []byte("v1"))
 	writeManifestBool(&raw, false)
 	writeManifestString(&raw, string(ColumnStoreValueFloat32Vector))
 	writeManifestBool(&raw, false)
 	writeManifestBool(&raw, true)
-	writeManifestUint64(&raw, 3)
-	writeManifestUint32(&raw, math.Float32bits(1))
+	writeManifestFloat32Slice(&raw, []float32{1, 2}) // length 2, schema expects 3
+	writeManifestString(&raw, string(ColumnStoreValueFloat32))
+	writeManifestBool(&raw, false)
+	writeManifestBool(&raw, true)
+	writeManifestUint32(&raw, math.Float32bits(0.5))
 
 	encoded := raw.Bytes()
 	ref := ColumnAssetRef{
@@ -666,16 +675,22 @@ func TestColumnPhysicalAssetScannerUnprojectedVectorTruncationNamesVectorType(t 
 		Length:     int64(len(encoded)),
 		Checksum:   page.Checksum(encoded),
 	}
+	// Project only "score" so that "embedding" is unprojected and goes through
+	// the skipUint32Slice path.
 	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"score"})
 	if err != nil {
 		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
 	}
 	_, err = scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
-		t.Fatalf("visitor should not run for truncated vector: %+v", row)
+		t.Fatalf("visitor should not run for mismatched vector length: %+v", row)
 		return nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "short column binary float32_vector") {
-		t.Fatalf("scanColumnPhysicalAssetRows err=%v want float32_vector truncation label", err)
+	// The new error format from column_physical_scan.go includes "column[N]".
+	if err == nil || !strings.Contains(err.Error(), "column[") {
+		t.Fatalf("scanColumnPhysicalAssetRows err=%v want error containing column index (column[N])", err)
+	}
+	if !strings.Contains(err.Error(), "float32_vector length=2 want vector_dims=3") {
+		t.Fatalf("scanColumnPhysicalAssetRows err=%v want float32_vector length mismatch details", err)
 	}
 }
 
@@ -2228,10 +2243,9 @@ func BenchmarkColumnPhysicalAssetVectorScanV1(b *testing.B) {
 		cases := []struct {
 			name      string
 			projected []string
-			vector    bool
 		}{
 			{name: "score_only_skip_vector_adj", projected: []string{"embedding_inv_norm"}},
-			{name: "vector_and_adjacency", projected: []string{"embedding", "embedding_neighbors"}, vector: true},
+			{name: "vector_and_adjacency", projected: []string{"embedding", "embedding_neighbors"}},
 		}
 		for _, tc := range cases {
 			b.Run(fmt.Sprintf("rows_%d/%s", rows, tc.name), func(b *testing.B) {
@@ -2241,22 +2255,20 @@ func BenchmarkColumnPhysicalAssetVectorScanV1(b *testing.B) {
 				}
 				var scanned int64
 				var sum int64
-				consumeRow := func(row columnPhysicalScanRowView) error {
-					sum += int64(row.Values[0].Float32 * 1000)
-					return nil
-				}
-				if tc.vector {
-					consumeRow = func(row columnPhysicalScanRowView) error {
-						sum += int64(len(row.Values[0].Float32Vector) + len(row.Values[1].AdjacencyList))
-						return nil
-					}
-				}
 				b.ReportAllocs()
 				b.SetBytes(int64(len(encoded)))
 				b.ReportMetric(float64(rows), "rows/op")
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					summary, err := scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, consumeRow)
+					summary, err := scanColumnPhysicalAssetRows(encoded, ref, "vectors", normalized, projection, func(row columnPhysicalScanRowView) error {
+						switch tc.name {
+						case "score_only_skip_vector_adj":
+							sum += int64(row.Values[0].Float32 * 1000)
+						case "vector_and_adjacency":
+							sum += int64(len(row.Values[0].Float32Vector) + len(row.Values[1].AdjacencyList))
+						}
+						return nil
+					})
 					if err != nil {
 						b.Fatal(err)
 					}

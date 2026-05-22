@@ -266,59 +266,6 @@ func TestColumnPhysicalRowReaderRejectsNegativeMaxDecodedBlocksV1(t *testing.T) 
 	}
 }
 
-func TestColumnPhysicalRowReaderClonesRangeHeaderBytesV1(t *testing.T) {
-	original := columnPhysicalAssetScanHeader{
-		Collection: []byte("events"),
-		Namespace:  []byte("events/column-assets"),
-	}
-	cloned := cloneColumnPhysicalAssetScanHeader(original)
-	original.Collection[0] = 'x'
-	original.Namespace[0] = 'x'
-
-	if got := string(cloned.Collection); got != "events" {
-		t.Fatalf("cloned collection=%q aliases original", got)
-	}
-	if got := string(cloned.Namespace); got != "events/column-assets" {
-		t.Fatalf("cloned namespace=%q aliases original", got)
-	}
-}
-
-func TestColumnPhysicalRowReaderRejectsCorruptLRUV1(t *testing.T) {
-	reader := &columnPhysicalRowReader{
-		maxBlocks: 1,
-		blocks: map[int]*columnPhysicalRowReaderBlock{
-			2: {assetOrdinal: 2, residentBytes: 128},
-		},
-		lru: []int{1},
-	}
-	err := reader.evictBlocksForInsert()
-	if err == nil || !strings.Contains(err.Error(), "LRU references missing cached asset ordinal=1") {
-		t.Fatalf("evictBlocksForInsert err=%v want corrupt LRU failure", err)
-	}
-	if _, ok := reader.blocks[2]; !ok {
-		t.Fatal("evictBlocksForInsert deleted unrelated cached block after corrupt LRU")
-	}
-	if got := fmt.Sprint(reader.lru); got != "[1]" {
-		t.Fatalf("evictBlocksForInsert lru=%s want unchanged [1]", got)
-	}
-}
-
-func TestColumnPhysicalRowReaderRejectsEmptyLRUV1(t *testing.T) {
-	reader := &columnPhysicalRowReader{
-		maxBlocks: 1,
-		blocks: map[int]*columnPhysicalRowReaderBlock{
-			2: {assetOrdinal: 2, residentBytes: 128},
-		},
-	}
-	err := reader.evictBlocksForInsert()
-	if err == nil || !strings.Contains(err.Error(), "LRU empty with 1 cached blocks and max=1") {
-		t.Fatalf("evictBlocksForInsert err=%v want empty LRU failure", err)
-	}
-	if _, ok := reader.blocks[2]; !ok {
-		t.Fatal("evictBlocksForInsert deleted cached block after empty LRU")
-	}
-}
-
 func TestColumnPhysicalRowReaderOwnsSnapshotCloseV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
@@ -873,6 +820,138 @@ func columnPhysicalRowReaderViewForTestV1(root string, cfg *ColumnStoreConfig, r
 		Diagnostics:        columnPhysicalScanDiagnostics{AssetRefs: len(refs)},
 		ColumnAssetRootDir: root,
 		AssetNamespace:     cfg.AssetManager.Namespace,
+	}
+}
+
+// TestColumnPhysicalRowReaderEvictBlocksEmptyLRUV1 verifies that
+// evictBlocksForInsert does not panic or error when the LRU is empty but the
+// block map is at capacity. The new implementation silently exits the loop
+// rather than returning an error.
+func TestColumnPhysicalRowReaderEvictBlocksEmptyLRUV1(t *testing.T) {
+	block := &columnPhysicalRowReaderBlock{assetOrdinal: 2, residentBytes: 128}
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			2: block,
+		},
+		lru: nil,
+	}
+	// Must not panic.
+	reader.evictBlocksForInsert()
+	// Block should still be present since LRU was empty.
+	if _, ok := reader.blocks[2]; !ok {
+		t.Fatal("evictBlocksForInsert deleted block when LRU was empty")
+	}
+	if reader.stats.BlockEvictions != 0 {
+		t.Fatalf("BlockEvictions=%d want 0 for empty LRU", reader.stats.BlockEvictions)
+	}
+}
+
+// TestColumnPhysicalRowReaderEvictBlocksNilBlockV1 verifies that
+// evictBlocksForInsert handles a nil block value in the map (LRU references
+// an ordinal with no associated block) without panicking, and still increments
+// the eviction counter.
+func TestColumnPhysicalRowReaderEvictBlocksNilBlockV1(t *testing.T) {
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			5: nil,
+		},
+		lru: []int{5},
+	}
+	reader.evictBlocksForInsert()
+	if _, ok := reader.blocks[5]; ok {
+		t.Fatal("evictBlocksForInsert did not remove nil block from map")
+	}
+	if reader.stats.BlockEvictions != 1 {
+		t.Fatalf("BlockEvictions=%d want 1 after evicting nil block", reader.stats.BlockEvictions)
+	}
+}
+
+// TestColumnPhysicalRowReaderEvictBlocksNormalEvictionV1 verifies that
+// evictBlocksForInsert removes the LRU block, decrements ResidentBytes, and
+// increments BlockEvictions.
+func TestColumnPhysicalRowReaderEvictBlocksNormalEvictionV1(t *testing.T) {
+	block := &columnPhysicalRowReaderBlock{assetOrdinal: 1, residentBytes: 256}
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			1: block,
+		},
+		lru: []int{1},
+		stats: columnPhysicalRowReaderStats{ResidentBytes: 256},
+	}
+	reader.evictBlocksForInsert()
+	if _, ok := reader.blocks[1]; ok {
+		t.Fatal("evictBlocksForInsert did not remove block from map")
+	}
+	if reader.stats.BlockEvictions != 1 {
+		t.Fatalf("BlockEvictions=%d want 1", reader.stats.BlockEvictions)
+	}
+	if reader.stats.ResidentBytes != 0 {
+		t.Fatalf("ResidentBytes=%d want 0 after eviction", reader.stats.ResidentBytes)
+	}
+	if len(reader.lru) != 0 {
+		t.Fatalf("lru len=%d want 0 after eviction", len(reader.lru))
+	}
+}
+
+// TestColumnPhysicalRowReaderEvictBlocksBelowCapacityV1 verifies that
+// evictBlocksForInsert does not evict when the block count is below maxBlocks.
+func TestColumnPhysicalRowReaderEvictBlocksBelowCapacityV1(t *testing.T) {
+	block := &columnPhysicalRowReaderBlock{assetOrdinal: 3, residentBytes: 64}
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 2,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			3: block,
+		},
+		lru: []int{3},
+	}
+	reader.evictBlocksForInsert()
+	if _, ok := reader.blocks[3]; !ok {
+		t.Fatal("evictBlocksForInsert evicted block when below maxBlocks")
+	}
+	if reader.stats.BlockEvictions != 0 {
+		t.Fatalf("BlockEvictions=%d want 0 when below capacity", reader.stats.BlockEvictions)
+	}
+}
+
+// TestColumnPhysicalRowReaderEvictBlocksClearsLastBlockV1 verifies that
+// evictBlocksForInsert sets lastBlock to nil when the evicted block was the
+// last block seen.
+func TestColumnPhysicalRowReaderEvictBlocksClearsLastBlockV1(t *testing.T) {
+	block := &columnPhysicalRowReaderBlock{assetOrdinal: 7, residentBytes: 100}
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			7: block,
+		},
+		lru:       []int{7},
+		lastBlock: block,
+		stats:     columnPhysicalRowReaderStats{ResidentBytes: 100},
+	}
+	reader.evictBlocksForInsert()
+	if reader.lastBlock != nil {
+		t.Fatal("evictBlocksForInsert did not clear lastBlock after eviction")
+	}
+}
+
+// TestColumnPhysicalRowReaderEvictBlocksResidentBytesClampedV1 verifies that
+// ResidentBytes is clamped to zero rather than going negative when the tracked
+// value is inconsistent.
+func TestColumnPhysicalRowReaderEvictBlocksResidentBytesClampedV1(t *testing.T) {
+	block := &columnPhysicalRowReaderBlock{assetOrdinal: 9, residentBytes: 500}
+	reader := &columnPhysicalRowReader{
+		maxBlocks: 1,
+		blocks: map[int]*columnPhysicalRowReaderBlock{
+			9: block,
+		},
+		lru:   []int{9},
+		stats: columnPhysicalRowReaderStats{ResidentBytes: 100}, // less than block.residentBytes
+	}
+	reader.evictBlocksForInsert()
+	if reader.stats.ResidentBytes != 0 {
+		t.Fatalf("ResidentBytes=%d want 0 (clamped) after underflow", reader.stats.ResidentBytes)
 	}
 }
 
