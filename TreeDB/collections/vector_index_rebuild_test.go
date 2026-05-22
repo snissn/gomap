@@ -69,14 +69,14 @@ func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T)
 	if len(scanned) != len(rows) {
 		t.Fatalf("scanned graph rows=%d want %d", len(scanned), len(rows))
 	}
-	if got := strings.Join(columnGraphRebuildScannedIDsV2A(scanned), ","); got != "doc-a,doc-b,doc-c,doc-d" {
-		t.Fatalf("scanned graph ids=%s", got)
+	wantGraph := columnGraphRebuildNativeGraphLayoutV2A(t, def, rows)
+	if got := strings.Join(columnGraphRebuildScannedIDsV2A(scanned), ","); got != strings.Join(wantGraph.ids, ",") {
+		t.Fatalf("scanned graph ids=%s, want native locality order %s", got, strings.Join(wantGraph.ids, ","))
 	}
-	if got := scanned[0].adjacency; len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
-		t.Fatalf("doc-a adjacency=%v, want [1 2 3]", got)
-	}
-	if got := scanned[1].adjacency; len(got) != 3 || got[0] != 0 || got[1] != 2 || got[2] != 3 {
-		t.Fatalf("doc-b adjacency=%v, want [0 2 3]", got)
+	for i := range wantGraph.ids {
+		if got := scanned[i].adjacency; !uint32SlicesEqual(got, wantGraph.adjacency[i]) {
+			t.Fatalf("%s adjacency=%v, want native layered adjacency %v", wantGraph.ids[i], got, wantGraph.adjacency[i])
+		}
 	}
 
 	if err := d.Checkpoint(); err != nil {
@@ -342,7 +342,7 @@ func TestColumnGraphRebuildVectorIndexExpectedPartsUsesActiveGenerationV2A(t *te
 	}
 }
 
-func TestColumnGraphRebuildVectorIndexAdjacencyUsesBoundedTopKV2A(t *testing.T) {
+func TestColumnGraphRebuildVectorIndexAdjacencyUsesFlattenedNativeGraphV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0}},
 		{id: "doc-b", vector: []float32{0.99, 0.01}},
@@ -358,8 +358,14 @@ func TestColumnGraphRebuildVectorIndexAdjacencyUsesBoundedTopKV2A(t *testing.T) 
 	if graph.AssetRef.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace {
 		t.Fatalf("graph namespace=%q want base namespace=%q", graph.AssetRef.Namespace, col.Meta().Options.ColumnStore.AssetManager.Namespace)
 	}
-	if got := scanned[0].adjacency; len(got) != 2 || got[0] != 1 || got[1] != 2 {
-		t.Fatalf("doc-a adjacency=%v, want bounded top-k [1 2]", got)
+	wantGraph := columnGraphRebuildNativeGraphLayoutV2A(t, def, rows)
+	for i := range rows {
+		if gotID := string(scanned[i].id); gotID != wantGraph.ids[i] {
+			t.Fatalf("scanned[%d] id=%q, want native locality order %q", i, gotID, wantGraph.ids[i])
+		}
+		if got := scanned[i].adjacency; !uint32SlicesEqual(got, wantGraph.adjacency[i]) {
+			t.Fatalf("%s adjacency=%v, want native layered adjacency %v", wantGraph.ids[i], got, wantGraph.adjacency[i])
+		}
 	}
 }
 
@@ -1016,6 +1022,71 @@ func columnGraphRebuildVectorIndexDefinitionV2A(dims, m int) VectorIndexDefiniti
 		panic(err)
 	}
 	return def
+}
+
+type columnGraphRebuildNativeGraphLayoutResultV2A struct {
+	ids       []string
+	adjacency [][]uint32
+}
+
+func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefinition, rows []columnGraphRebuildInputRowV2A) columnGraphRebuildNativeGraphLayoutResultV2A {
+	tb.Helper()
+	index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		tb.Fatalf("newVectorIndex: %v", err)
+	}
+	index.mu.Lock()
+	defer index.mu.Unlock()
+	for i := range rows {
+		if err := index.insertVectorLocked([]byte(rows[i].id), rows[i].vector); err != nil {
+			tb.Fatalf("insertVectorLocked row %d: %v", i, err)
+		}
+	}
+	inputOrdinalByNode := make([]int, len(index.nodes))
+	for i := range inputOrdinalByNode {
+		inputOrdinalByNode[i] = -1
+	}
+	for i := range rows {
+		nodeID, ok := index.currentNode[rows[i].id]
+		if !ok {
+			tb.Fatalf("native graph missing row %q", rows[i].id)
+		}
+		inputOrdinalByNode[nodeID] = i
+	}
+	order := columnVectorGraphNativeLocalityOrder(index)
+	nodeOrdinal := make([]int, len(index.nodes))
+	for i := range nodeOrdinal {
+		nodeOrdinal[i] = -1
+	}
+	ids := make([]string, len(order))
+	for ordinal, nodeID := range order {
+		if nodeID < 0 || nodeID >= len(inputOrdinalByNode) || inputOrdinalByNode[nodeID] < 0 {
+			tb.Fatalf("native graph locality node %d missing input row", nodeID)
+		}
+		nodeOrdinal[nodeID] = ordinal
+		ids[ordinal] = rows[inputOrdinalByNode[nodeID]].id
+	}
+	adjacency := make([][]uint32, len(rows))
+	for ordinal, nodeID := range order {
+		encoded, err := columnVectorGraphLayeredAdjacencyFromNativeNode(&index.nodes[nodeID], nodeOrdinal)
+		if err != nil {
+			tb.Fatalf("columnVectorGraphLayeredAdjacencyFromNativeNode ordinal %d: %v", ordinal, err)
+		}
+		adjacency[ordinal] = encoded
+	}
+	return columnGraphRebuildNativeGraphLayoutResultV2A{ids: ids, adjacency: adjacency}
+}
+
+func uint32SlicesEqual(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func insertColumnGraphRebuildRowsV2A(tb testing.TB, col *Collection, rows []columnGraphRebuildInputRowV2A) {
