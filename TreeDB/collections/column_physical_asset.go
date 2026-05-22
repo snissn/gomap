@@ -462,6 +462,14 @@ func (c *manifestCursor) bool() bool {
 }
 
 func (c *manifestCursor) bytes() []byte {
+	value := c.bytesView()
+	if c.err != nil {
+		return nil
+	}
+	return bytes.Clone(value)
+}
+
+func (c *manifestCursor) bytesView() []byte {
 	if c.err != nil {
 		return nil
 	}
@@ -473,7 +481,7 @@ func (c *manifestCursor) bytes() []byte {
 		c.err = errors.New("collections: short column binary bytes")
 		return nil
 	}
-	value := bytes.Clone(c.raw[c.pos : c.pos+int(n)])
+	value := c.raw[c.pos : c.pos+int(n)]
 	c.pos += int(n)
 	return value
 }

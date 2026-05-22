@@ -78,7 +78,7 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		}
 	}
 
-	records := make([]columnManifestRecord, 0, 1+len(input.Prepared.Assets))
+	records := make([]columnManifestRecord, 0, 1+len(input.CurrentManifestRecords)+len(input.Prepared.Assets))
 	header, err := encodeColumnManifestHeaderRecord(input, generation)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
@@ -87,6 +87,11 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
+	retained, err := retainedColumnManifestPartRecordsForWrite(input.CurrentManifestRecords, generation)
+	if err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
+	records = append(records, retained...)
 	for _, asset := range input.Prepared.Assets {
 		partValue, err := encodeColumnManifestPartRecord(asset)
 		if err != nil {
@@ -110,6 +115,30 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		ManifestBytes: columnManifestRecordsBytes(records),
 		Records:       cloneColumnManifestRecords(records),
 	}, nil
+}
+
+func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	retained := make([]columnManifestRecord, 0, len(records))
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			return nil, err
+		}
+		if part.AssetRef.Generation >= generation {
+			continue
+		}
+		retained = append(retained, columnManifestRecord{
+			key:   bytes.Clone(record.key),
+			value: bytes.Clone(record.value),
+		})
+	}
+	return retained, nil
 }
 
 func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, generation uint64) ([]byte, error) {
@@ -483,18 +512,26 @@ func (c *manifestCursor) u64() uint64 {
 }
 
 func (c *manifestCursor) string() string {
-	if c.err != nil {
+	value := c.stringBytes()
+	if value == nil {
 		return ""
+	}
+	return string(value)
+}
+
+func (c *manifestCursor) stringBytes() []byte {
+	if c.err != nil {
+		return nil
 	}
 	n := c.u64()
 	if c.err != nil {
-		return ""
+		return nil
 	}
 	if n > uint64(len(c.raw)-c.pos) {
 		c.err = errors.New("collections: short column manifest string")
-		return ""
+		return nil
 	}
-	value := string(c.raw[c.pos : c.pos+int(n)])
+	value := c.raw[c.pos : c.pos+int(n)]
 	c.pos += int(n)
 	return value
 }
