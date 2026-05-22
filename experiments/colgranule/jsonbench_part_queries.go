@@ -28,25 +28,33 @@ type JSONBenchPartQueryAttempt struct {
 }
 
 type JSONBenchPartQueryDiagnostics struct {
-	RowsScanned                    int           `json:"rows_scanned"`
-	GranulesConsidered             int           `json:"granules_considered"`
-	GranulesSkipped                int           `json:"granules_skipped"`
-	GranulesDecoded                int           `json:"granules_decoded"`
-	BlocksDecoded                  int           `json:"blocks_decoded"`
-	BytesDecoded                   int           `json:"bytes_decoded"`
-	ColumnsProjected               []string      `json:"columns_projected"`
-	AggregateKernel                string        `json:"aggregate_kernel"`
-	CacheState                     string        `json:"cache_state"`
-	SortKey                        []string      `json:"sort_key"`
-	EarlyStopAvailable             bool          `json:"early_stop_available"`
-	AggregateMetadataUsed          bool          `json:"aggregate_metadata_used"`
-	AggregateMetadataName          string        `json:"aggregate_metadata_name,omitempty"`
-	AggregateMetadataRows          int           `json:"aggregate_metadata_rows,omitempty"`
-	AggregateMetadataEntries       int           `json:"aggregate_metadata_entries,omitempty"`
-	AggregateMetadataBytes         int           `json:"aggregate_metadata_estimated_bytes,omitempty"`
-	AggregateMetadataBuildDuration time.Duration `json:"aggregate_metadata_build_duration,omitempty"`
-	AggregateMetadataBytesPerRow   float64       `json:"aggregate_metadata_estimated_bytes_per_row,omitempty"`
-	AggregateMetadataCompression   string        `json:"aggregate_metadata_compression,omitempty"`
+	RowsScanned                    int                       `json:"rows_scanned"`
+	RowsReturned                   int                       `json:"rows_returned,omitempty"`
+	RowsSuperseded                 int                       `json:"rows_superseded,omitempty"`
+	RowsDeleted                    int                       `json:"rows_deleted,omitempty"`
+	PartsConsidered                int                       `json:"parts_considered,omitempty"`
+	BaseParts                      int                       `json:"base_parts,omitempty"`
+	DeltaParts                     int                       `json:"delta_parts,omitempty"`
+	Tombstones                     int                       `json:"tombstones,omitempty"`
+	GranulesConsidered             int                       `json:"granules_considered"`
+	GranulesSkipped                int                       `json:"granules_skipped"`
+	GranulesDecoded                int                       `json:"granules_decoded"`
+	BlocksDecoded                  int                       `json:"blocks_decoded"`
+	BytesDecoded                   int                       `json:"bytes_decoded"`
+	ColumnsProjected               []string                  `json:"columns_projected"`
+	AggregateKernel                string                    `json:"aggregate_kernel"`
+	CacheState                     string                    `json:"cache_state"`
+	SortKey                        []string                  `json:"sort_key"`
+	EarlyStopAvailable             bool                      `json:"early_stop_available"`
+	AggregateMetadataUsed          bool                      `json:"aggregate_metadata_used"`
+	AggregateMetadataName          string                    `json:"aggregate_metadata_name,omitempty"`
+	AggregateMetadataRows          int                       `json:"aggregate_metadata_rows,omitempty"`
+	AggregateMetadataEntries       int                       `json:"aggregate_metadata_entries,omitempty"`
+	AggregateMetadataBytes         int                       `json:"aggregate_metadata_bytes,omitempty"`
+	AggregateMetadataBuildDuration time.Duration             `json:"aggregate_metadata_build_duration,omitempty"`
+	AggregateMetadataBytesPerRow   float64                   `json:"aggregate_metadata_bytes_per_row,omitempty"`
+	AggregateMetadataCompression   string                    `json:"aggregate_metadata_compression,omitempty"`
+	PartSetCacheStats              ColumnWorkspaceCacheStats `json:"part_set_cache_stats,omitempty"`
 }
 
 type jsonBenchPartQueryScratch struct {
@@ -57,6 +65,7 @@ type jsonBenchPartQueryScratch struct {
 	codeReaders [4]GranuleReader
 	timeReader  GranuleReader
 	q2Counts    []uint64
+	q1Counts    []uint64
 	q2Seen      []uint64
 	q3Counts    []uint64
 	q4Seen      touchedBitset
