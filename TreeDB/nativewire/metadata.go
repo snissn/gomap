@@ -13,10 +13,11 @@ import (
 type CollectionHandle uint64
 
 const (
-	maxCollectionMetaIndexDefinitions = 1 << 16
-	minEncodedIndexDefinitionLen      = 6
-	collectionRefTagName              = 1
-	collectionRefTagHandle            = 2
+	maxCollectionMetaIndexDefinitions  = 1 << 16
+	minEncodedIndexDefinitionLen       = 6
+	minEncodedVectorIndexDefinitionLen = 7
+	collectionRefTagName               = 1
+	collectionRefTagHandle             = 2
 )
 
 type metadataIdempotencyEntry struct {
@@ -48,7 +49,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 1)
+	dst := binary.AppendUvarint(nil, 2)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -66,6 +67,10 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	for _, def := range meta.Indexes {
 		dst = appendIndexDefinition(dst, def, false)
 	}
+	dst = binary.AppendUvarint(dst, uint64(len(meta.VectorIndexes)))
+	for _, def := range meta.VectorIndexes {
+		dst = appendVectorIndexDefinition(dst, def, false)
+	}
 	return dst
 }
 
@@ -74,7 +79,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 {
+	if version != 1 && version != 2 {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -192,6 +197,30 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 		meta.Indexes = append(meta.Indexes, def)
 		off = next
 	}
+	if version >= 2 {
+		vectorIndexCount, err := readUvarintField(src, &off, "vector_index_count")
+		if err != nil {
+			return collections.CollectionMeta{}, err
+		}
+		if vectorIndexCount > uint64(maxInt) {
+			return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "vector index count exceeds int capacity")
+		}
+		if vectorIndexCount > maxCollectionMetaIndexDefinitions {
+			return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxCollectionMetaIndexDefinitions)
+		}
+		if vectorIndexCount > uint64((len(src)-off)/minEncodedVectorIndexDefinitionLen) {
+			return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
+		}
+		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))
+		for i := uint64(0); i < vectorIndexCount; i++ {
+			def, next, err := decodeVectorIndexDefinitionAt(src, off, false)
+			if err != nil {
+				return collections.CollectionMeta{}, err
+			}
+			meta.VectorIndexes = append(meta.VectorIndexes, def)
+			off = next
+		}
+	}
 	if off != len(src) {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "collection_meta has %d trailing bytes", len(src)-off)
 	}
@@ -276,6 +305,96 @@ func decodeIndexDefinitionAt(src []byte, off int, withVersion bool) (collections
 		Unique:        unique,
 		MultiKey:      multiKey,
 		StoragePolicy: decodedStoragePolicy,
+	}, off, nil
+}
+
+func appendVectorIndexDefinition(dst []byte, def collections.VectorIndexDefinition, withVersion bool) []byte {
+	if withVersion && len(dst) == 0 {
+		dst = binary.AppendUvarint(dst, 1)
+	}
+	dst = appendString(dst, def.Name)
+	dst = appendString(dst, def.Field)
+	dst = binary.AppendUvarint(dst, encodeVectorMetric(def.Metric))
+	dst = binary.AppendVarint(dst, int64(def.Dimensions))
+	dst = binary.AppendVarint(dst, int64(def.M))
+	dst = binary.AppendVarint(dst, int64(def.EfConstruction))
+	dst = binary.AppendVarint(dst, int64(def.EfSearch))
+	dst = binary.AppendUvarint(dst, encodeVectorIndexEncoding(def.Encoding))
+	return dst
+}
+
+func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (collections.VectorIndexDefinition, int, error) {
+	if withVersion {
+		version, n, err := readUvarint(src[off:])
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
+		if version != 1 {
+			return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrUnsupportedVersion, "vector_index_definition version %d", version)
+		}
+		off += n
+	}
+	name, err := readString(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	field, err := readString(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	metric, err := readEnum(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	dimensions, err := readVarint(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	m, err := readVarint(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	efConstruction, err := readVarint(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	efSearch, err := readVarint(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	encoding, err := readEnum(src, &off)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	if err := ensureNonNegativeIntCapacity("vector_index dimensions", dimensions); err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	if err := ensureNonNegativeIntCapacity("vector_index m", m); err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	if err := ensureNonNegativeIntCapacity("vector_index ef_construction", efConstruction); err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	if err := ensureNonNegativeIntCapacity("vector_index ef_search", efSearch); err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	decodedMetric, err := decodeVectorMetricStrict(metric)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	decodedEncoding, err := decodeVectorIndexEncodingStrict(encoding)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, 0, err
+	}
+	return collections.VectorIndexDefinition{
+		Name:           name,
+		Field:          field,
+		Metric:         decodedMetric,
+		Dimensions:     int(dimensions),
+		M:              int(m),
+		EfConstruction: int(efConstruction),
+		EfSearch:       int(efSearch),
+		Encoding:       decodedEncoding,
 	}, off, nil
 }
 
@@ -500,6 +619,54 @@ func decodeIndexValueTypeStrict(valueType uint64) (collections.IndexValueType, e
 		return collections.IndexValueDouble, nil
 	default:
 		return "", protocolError(iwire.ErrInvalidCommand, "unsupported index_value_type enum %d", valueType)
+	}
+}
+
+func encodeVectorMetric(metric collections.VectorMetric) uint64 {
+	switch metric {
+	case collections.VectorMetricCosine:
+		return 1
+	case collections.VectorMetricL2:
+		return 2
+	case collections.VectorMetricInnerProduct:
+		return 3
+	default:
+		return 0
+	}
+}
+
+func decodeVectorMetricStrict(metric uint64) (collections.VectorMetric, error) {
+	switch metric {
+	case 1:
+		return collections.VectorMetricCosine, nil
+	case 2:
+		return collections.VectorMetricL2, nil
+	case 3:
+		return collections.VectorMetricInnerProduct, nil
+	default:
+		return 0, protocolError(iwire.ErrInvalidCommand, "unsupported vector_metric enum %d", metric)
+	}
+}
+
+func encodeVectorIndexEncoding(encoding collections.VectorIndexEncoding) uint64 {
+	switch encoding {
+	case collections.VectorIndexEncodingFloat32:
+		return 1
+	case collections.VectorIndexEncodingInt8:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func decodeVectorIndexEncodingStrict(encoding uint64) (collections.VectorIndexEncoding, error) {
+	switch encoding {
+	case 1:
+		return collections.VectorIndexEncodingFloat32, nil
+	case 2:
+		return collections.VectorIndexEncodingInt8, nil
+	default:
+		return collections.VectorIndexEncodingFloat32, protocolError(iwire.ErrInvalidCommand, "unsupported vector_index_encoding enum %d", encoding)
 	}
 }
 
