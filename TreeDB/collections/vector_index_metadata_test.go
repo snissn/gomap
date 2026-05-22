@@ -29,7 +29,10 @@ func TestCollectionMetaVersionMatchesCurrent(t *testing.T) {
 // TestCollectionMetaDecodeRejectsWrongVersion verifies that decodeCollectionMeta
 // returns an error when the on-disk version does not match collectionMetaVersion.
 func TestCollectionMetaDecodeRejectsWrongVersion(t *testing.T) {
-	for _, version := range []int{1, 2, 99} {
+	for _, version := range []int{collectionMetaVersion - 1, collectionMetaVersion + 1, 99} {
+		if version == collectionMetaVersion {
+			continue
+		}
 		wrong, err := json.Marshal(collectionMetaDisk{Version: version, Name: "docs"})
 		if err != nil {
 			t.Fatalf("marshal wrong version: %v", err)
