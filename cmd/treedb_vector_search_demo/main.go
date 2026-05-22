@@ -820,19 +820,22 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	runtime.GC()
 	runtime.ReadMemStats(&beforeLoad)
 	var loaded *collections.VectorIndex
+	var columnGraphSearcher *collections.VectorIndexSearcher
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
-		searcher, err := col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: def.Name})
+		columnGraphSearcher, err = col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: def.Name})
 		if err != nil {
 			return result{}, err
 		}
-		response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+		defer func() {
+			if columnGraphSearcher != nil {
+				_ = columnGraphSearcher.Close()
+			}
+		}()
+		response, err := columnGraphSearcher.Search(collections.VectorIndexSearcherSearchOptions{
 			Query:    embedding(0, cfg.dimensions),
 			TopK:     cfg.topK,
 			EfSearch: cfg.efSearch,
 		})
-		if closeErr := searcher.Close(); err == nil && closeErr != nil {
-			err = closeErr
-		}
 		if err != nil {
 			return result{}, err
 		}
@@ -873,6 +876,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		AllocAfterLoadBytes:  afterLoad.Alloc,
 		LoadAllocDeltaBytes:  allocDeltaBytes(afterLoad.Alloc, beforeLoad.Alloc),
 		IndexBytesMemory:     res.IndexStatsLoaded.BytesMemory,
+	}
+	if columnGraphSearcher != nil {
+		if closeErr := columnGraphSearcher.Close(); closeErr != nil {
+			return result{}, closeErr
+		}
+		columnGraphSearcher = nil
 	}
 
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
