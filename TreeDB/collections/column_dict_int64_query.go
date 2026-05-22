@@ -194,10 +194,11 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 			groupCur := manifestCursor{raw: groupRaw, pos: groupPayload.offset}
 			for i := 0; i < groupPayload.rowCount; i++ {
 				localCode := groupCur.u32()
-				if int(localCode) >= len(localToGlobal) {
+				localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
+				if !ok {
 					return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
 				}
-				reducer.reduceValue(localToGlobal[localCode], int64(valueCur.u64()))
+				reducer.reduceValue(localToGlobal[localIdx], int64(valueCur.u64()))
 				rows++
 			}
 			if groupCur.err != nil {

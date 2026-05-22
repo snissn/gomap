@@ -86,6 +86,7 @@ type columnPhysicalAssetScanHeader struct {
 type columnManifestAssetRefForScan struct {
 	Ref    ColumnAssetRef
 	Reason ColumnPublishOperation
+	Rows   int
 }
 
 type columnManifestScanSidecarFilter struct {
@@ -696,7 +697,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				return columnManifestSnapshot{}, nil, 0, manifestRecords, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
 			livePartRows.add(ref.Generation, ref.PartID, rows)
-			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
 			if ref.Generation == snapshot.Generation {
 				activeParts++
 			}
@@ -1276,7 +1277,7 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
 		livePartRows.add(ref.Generation, ref.PartID, rows)
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
 		if ref.Generation == snapshot.Generation {
 			activeParts++
 		}
@@ -1586,9 +1587,12 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if keyGeneration > activeGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part generation=%d is newer than active manifest generation=%d", keyGeneration, activeGeneration)
 		}
-		ref, reason, err := decodeColumnManifestPartRefForScan(record.value, expectedNamespace)
+		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, expectedNamespace)
 		if err != nil {
 			return nil, 0, err
+		}
+		if ref.Kind != ColumnAssetKindTCS1PartImage {
+			return nil, 0, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 		}
 		if ref.Generation != keyGeneration {
 			return nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
@@ -1600,7 +1604,7 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if !ok {
 			return nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
 		if operation != ColumnPublishOperationInsert {
 			mutationParts++
 		}

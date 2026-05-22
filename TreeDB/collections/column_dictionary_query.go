@@ -105,11 +105,21 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 	if len(byPart) == 0 {
 		return nil, nil
 	}
+	if !columnDictionaryCodeSnapshotsCoverParts(view, byPart) {
+		return nil, nil
+	}
+	codeArenaRows, ok := columnDictionaryCodeSnapshotRows(view, byPart)
+	if !ok || codeArenaRows == 0 {
+		return nil, nil
+	}
 	globalByValue := make(map[string]uint32)
 	runner := &columnDictionaryCodeGroupCountRunner{
 		column: req.GroupColumn,
 		assets: make([]columnDictionaryCodeGroupCountAsset, 0, len(view.AssetRefs)),
 	}
+	codeArena := make([]uint32, codeArenaRows)
+	codeArenaOffset := 0
+	var localToGlobal []uint32
 	var scratch []byte
 	for _, part := range view.AssetRefs {
 		if part.Reason != ColumnPublishOperationInsert {
@@ -128,7 +138,13 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 		if err != nil {
 			return nil, err
 		}
-		localToGlobal := make([]uint32, cardinality)
+		if rowCount != part.Rows {
+			return nil, fmt.Errorf("collections: dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", rowCount, part.Rows, snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn)
+		}
+		if cap(localToGlobal) < cardinality {
+			localToGlobal = make([]uint32, cardinality)
+		}
+		localToGlobal = localToGlobal[:cardinality]
 		for localCode := 0; localCode < cardinality; localCode++ {
 			value := dictCur.stringBytes()
 			globalCode, ok := globalByValue[unsafeStringFromBytes(value)]
@@ -150,7 +166,11 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 			return nil, dictCur.err
 		}
 		cur := manifestCursor{raw: raw, pos: dictCur.pos}
-		translated := make([]uint32, rowCount)
+		if rowCount > len(codeArena)-codeArenaOffset {
+			return nil, fmt.Errorf("collections: dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn)
+		}
+		translated := codeArena[codeArenaOffset : codeArenaOffset+rowCount]
+		codeArenaOffset += rowCount
 		for codeIdx := range translated {
 			localCode := cur.u32()
 			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
@@ -277,10 +297,11 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		cur := manifestCursor{raw: raw, pos: dictCur.pos}
 		for i := 0; i < rowCount; i++ {
 			localCode := cur.u32()
-			if int(localCode) >= len(localToGlobal) {
+			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
+			if !ok {
 				return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
 			}
-			reducer.counts[localToGlobal[localCode]]++
+			reducer.counts[localToGlobal[localIdx]]++
 			rows++
 		}
 		if cur.err != nil {
@@ -335,6 +356,13 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	if len(groupByPart) == 0 || len(distinctByPart) == 0 {
 		return nil, nil
 	}
+	if !columnDictionaryCodeSnapshotsCoverParts(view, groupByPart) || !columnDictionaryCodeSnapshotsCoverParts(view, distinctByPart) {
+		return nil, nil
+	}
+	codeArenaRows, ok := columnDictionaryCodeSnapshotRows(view, groupByPart)
+	if !ok || codeArenaRows == 0 {
+		return nil, nil
+	}
 	runner := &columnDictionaryCodeGroupCountDistinctRunner{
 		groupColumn:    req.GroupColumn,
 		distinctColumn: req.DistinctColumn,
@@ -342,6 +370,12 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	}
 	groupByValue := make(map[string]uint32)
 	distinctByValue := make(map[string]uint32)
+	groupCodeArena := make([]uint32, codeArenaRows)
+	distinctCodeArena := make([]uint32, codeArenaRows)
+	groupCodeArenaOffset := 0
+	distinctCodeArenaOffset := 0
+	var groupLocal []uint32
+	var distinctLocal []uint32
 	var scratch []byte
 	for _, part := range view.AssetRefs {
 		if part.Reason != ColumnPublishOperationInsert {
@@ -365,7 +399,13 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		if err != nil {
 			return nil, err
 		}
-		groupLocal := make([]uint32, groupCardinality)
+		if groupRows != part.Rows {
+			return nil, fmt.Errorf("collections: group dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", groupRows, part.Rows, groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
+		}
+		if cap(groupLocal) < groupCardinality {
+			groupLocal = make([]uint32, groupCardinality)
+		}
+		groupLocal = groupLocal[:groupCardinality]
 		for localCode := 0; localCode < groupCardinality; localCode++ {
 			value := groupCur.stringBytes()
 			valueKey := unsafeStringFromBytes(value)
@@ -388,7 +428,11 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 			return nil, groupCur.err
 		}
 		groupCodeCur := manifestCursor{raw: groupRaw, pos: groupCur.pos}
-		groupCodes := make([]uint32, groupRows)
+		if groupRows > len(groupCodeArena)-groupCodeArenaOffset {
+			return nil, fmt.Errorf("collections: group dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
+		}
+		groupCodes := groupCodeArena[groupCodeArenaOffset : groupCodeArenaOffset+groupRows]
+		groupCodeArenaOffset += groupRows
 		for codeIdx := range groupCodes {
 			groupCode := groupCodeCur.u32()
 			groupIdx, ok := columnDictionaryCodeIndex(groupCode, len(groupLocal))
@@ -413,10 +457,16 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		if err != nil {
 			return nil, err
 		}
+		if distinctRows != part.Rows {
+			return nil, fmt.Errorf("collections: distinct dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", distinctRows, part.Rows, distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
+		}
 		if groupRows != distinctRows {
 			return nil, fmt.Errorf("collections: dictionary code distinct row count mismatch group=%d distinct=%d", groupRows, distinctRows)
 		}
-		distinctLocal := make([]uint32, distinctCardinality)
+		if cap(distinctLocal) < distinctCardinality {
+			distinctLocal = make([]uint32, distinctCardinality)
+		}
+		distinctLocal = distinctLocal[:distinctCardinality]
 		for localCode := 0; localCode < distinctCardinality; localCode++ {
 			value := distinctCur.stringBytes()
 			valueKey := unsafeStringFromBytes(value)
@@ -444,7 +494,11 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 			return nil, nil
 		}
 		distinctCodeCur := manifestCursor{raw: distinctRaw, pos: distinctCur.pos}
-		distinctCodes := make([]uint32, distinctRows)
+		if distinctRows > len(distinctCodeArena)-distinctCodeArenaOffset {
+			return nil, fmt.Errorf("collections: distinct dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
+		}
+		distinctCodes := distinctCodeArena[distinctCodeArenaOffset : distinctCodeArenaOffset+distinctRows]
+		distinctCodeArenaOffset += distinctRows
 		for codeIdx := range distinctCodes {
 			distinctCode := distinctCodeCur.u32()
 			distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, len(distinctLocal))
@@ -506,6 +560,21 @@ func columnDictionaryCodeSnapshotsByPart(view columnPhysicalScanSnapshotView, co
 		byPart[[2]uint64{snapshot.AssetRef.Generation, snapshot.AssetRef.PartID}] = snapshot
 	}
 	return byPart
+}
+
+func columnDictionaryCodeSnapshotRows(view columnPhysicalScanSnapshotView, byPart map[[2]uint64]columnManifestDictionaryCodesSnapshot) (int, bool) {
+	rows := 0
+	for _, part := range view.AssetRefs {
+		_, ok := byPart[[2]uint64{part.Ref.Generation, part.Ref.PartID}]
+		if !ok {
+			return 0, false
+		}
+		if part.Rows > maxCollectionInt-rows {
+			return 0, false
+		}
+		rows += part.Rows
+	}
+	return rows, true
 }
 
 func columnDictionaryCodeSnapshotsCoverParts(view columnPhysicalScanSnapshotView, byPart map[[2]uint64]columnManifestDictionaryCodesSnapshot) bool {
