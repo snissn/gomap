@@ -770,6 +770,83 @@ func TestCollectionVectorIndexNativeRootAdHocRuntimeBecomesDeclaredFullSnapshot(
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeRootStaleAdHocRuntimeBecomesDeclaredFullSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	staleCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	if _, err := staleCol.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0]}`),
+			[]byte(`{"embedding":[0,1]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert before vector index metadata: %v", err)
+	}
+	if _, err := staleCol.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+		t.Fatalf("build stale ad hoc vector index: %v", err)
+	}
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := freshCol.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index metadata: %v", err)
+	}
+	if _, err := staleCol.InsertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"embedding":[1,1]}`)},
+	); err != nil {
+		t.Fatalf("insert through stale ad hoc runtime after declaration: %v", err)
+	}
+	if err := staleCol.Flush(); err != nil {
+		t.Fatalf("flush promoted stale ad hoc vector index: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	loaded, status, err := reopenedCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("load promoted stale ad hoc vector index: %v", err)
+	}
+	if loaded == nil || !status.Loaded {
+		t.Fatalf("promoted stale ad hoc vector index did not persist loaded=%v status=%+v", loaded != nil, status)
+	}
+	results, _, err := loaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search promoted stale ad hoc vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c", "b")
+}
+
 func TestCollectionVectorIndexNativeRootInsertMaintenanceErrorIsCommitAmbiguous(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -847,6 +924,51 @@ func TestCollectionVectorIndexNativeRootInsertReturnsIDOnCommitAmbiguousMaintena
 	}
 	if len(doc) == 0 {
 		t.Fatalf("committed document %x missing after ambiguous insert", id)
+	}
+}
+
+func TestCollectionVectorIndexNativeRootStaleInsertReturnsIDOnCommitAmbiguousMaintenanceError(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	def := VectorIndexDefinition{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	staleCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open stale collection: %v", err)
+	}
+	freshCol, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open fresh collection: %v", err)
+	}
+	if _, err := freshCol.CreateVectorIndex(def); err != nil {
+		t.Fatalf("create vector index: %v", err)
+	}
+
+	id, err := staleCol.Insert([]byte("bad"), []byte(`{"embedding":[1,0,0]}`))
+	if !errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("stale insert err=%v want ErrCommitAmbiguous", err)
+	}
+	if string(id) != "bad" {
+		t.Fatalf("stale insert id=%q want bad for committed ambiguous insert", id)
+	}
+	doc, getErr := staleCol.Get(id)
+	if getErr != nil {
+		t.Fatalf("get committed document: %v", getErr)
+	}
+	if len(doc) == 0 {
+		t.Fatalf("committed document %x missing after stale ambiguous insert", id)
 	}
 }
 

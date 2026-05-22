@@ -460,7 +460,10 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	var rebuilt map[string]struct{}
 	for _, def := range c.meta.VectorIndexes {
 		if index := c.registeredVectorIndex(def.Name); index != nil {
-			continue
+			if index.validateNativeSnapshotDefinition(def) == "" {
+				index.setNativePersistent(true)
+				continue
+			}
 		}
 		index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 		if err != nil {
@@ -509,7 +512,7 @@ func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
 	for _, def := range defs {
 		declared[def.Name] = struct{}{}
 		index := c.registeredVectorIndex(def.Name)
-		if index == nil || index.validateNativeSnapshotDefinition(def) != "" {
+		if index == nil || !index.isNativePersistent() || index.validateNativeSnapshotDefinition(def) != "" {
 			return false
 		}
 	}

@@ -8451,6 +8451,9 @@ func (c *Collection) insertOneNoIndex(id, document []byte) ([]byte, error) {
 func (c *Collection) insertOneViaBatch(id, document []byte) ([]byte, error) {
 	ids, err := c.InsertBatch([][]byte{id}, [][]byte{document})
 	if err != nil {
+		if errors.Is(err, ErrCommitAmbiguous) && len(ids) == 1 {
+			return ids[0], err
+		}
 		return nil, err
 	}
 	if len(ids) != 1 {
