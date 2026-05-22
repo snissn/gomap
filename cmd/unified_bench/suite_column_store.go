@@ -168,6 +168,7 @@ type columnStoreQueryMetric struct {
 	RawHash                  uint64  `json:"raw_hash"`
 	ProductionHash           uint64  `json:"production_hash"`
 	MetadataHits             int     `json:"metadata_hits"`
+	DictionaryCodeHits       int     `json:"dictionary_code_hits"`
 	SkippedGranules          int     `json:"skipped_granules"`
 	ScheduledGranules        int     `json:"scheduled_granules"`
 	WorkerCount              int     `json:"worker_count"`
@@ -201,6 +202,7 @@ type columnStoreQueryExecution struct {
 	RowMaterializations    int
 	ResultCount            int
 	MetadataHits           int
+	DictionaryCodeHits     int
 	SkippedGranules        int
 	ScheduledGranules      int
 	WorkerCount            int
@@ -1141,6 +1143,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			RawHash:                rawHash,
 			ProductionHash:         hash,
 			MetadataHits:           exec.MetadataHits,
+			DictionaryCodeHits:     exec.DictionaryCodeHits,
 			SkippedGranules:        exec.SkippedGranules,
 			ScheduledGranules:      exec.ScheduledGranules,
 			WorkerCount:            exec.WorkerCount,
@@ -1344,6 +1347,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		RowMaterializations:    diag.RowMaterializations,
 		ResultCount:            resultCount,
 		MetadataHits:           diag.MetadataHits,
+		DictionaryCodeHits:     diag.DictionaryCodeHits,
 		SkippedGranules:        diag.SkippedGranules,
 		ScheduledGranules:      diag.ScheduledGranules,
 		WorkerCount:            workers,
@@ -1686,6 +1690,9 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 	case columnStorePathBTreeIndexBaseline:
 		return "decode-bound B-tree baseline: full unbounded secondary-index walk plus JSON row materialization before reduction; " + markPruning + evidence
 	case columnStorePathSerialColumnScan:
+		if q.DictionaryCodeHits > 0 {
+			return fmt.Sprintf("dictionary-code sidecar serial path: %d sidecar hits avoid full TCPA row-record scan for declared dictionary columns; setup/read/decode still occurs in this routed measurement; %s%s", q.DictionaryCodeHits, markPruning, evidence)
+		}
 		return "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes when cache-warm; " + markPruning + evidence
 	case columnStorePathAggregateMetadata:
 		if q.MetadataHits > 0 {
@@ -1716,7 +1723,7 @@ func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
 	if rowsProcessedOK {
 		rowsProcessedText = strconv.Itoa(rowsProcessed)
 	}
-	return fmt.Sprintf("; effective_rows_processed=%s row_materializations=%s bytes_read=%d metadata_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessedText, rowMaterializations, q.BytesRead, q.MetadataHits, q.ScheduledGranules, q.SkippedGranules)
+	return fmt.Sprintf("; effective_rows_processed=%s row_materializations=%s bytes_read=%d metadata_hits=%d dictionary_code_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessedText, rowMaterializations, q.BytesRead, q.MetadataHits, q.DictionaryCodeHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -2020,8 +2027,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
@@ -2035,8 +2042,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if note != "" {
 			noteCell = markdownCodeTableText(note)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 

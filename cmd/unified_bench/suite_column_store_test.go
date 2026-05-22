@@ -1507,6 +1507,15 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		if q.BytesRead <= 0 || q.RowsPerSecond <= 0 || q.NsPerRow <= 0 {
 			t.Fatalf("query %s missing physical throughput metrics: %+v", q.Name, q)
 		}
+		if q.Name == columnStoreQueryQ1 || q.Name == columnStoreQueryQ2 {
+			if q.DictionaryCodeHits == 0 {
+				t.Fatalf("query %s dictionary_code_hits=%d want sidecar hits", q.Name, q.DictionaryCodeHits)
+			}
+			if !strings.Contains(q.ThroughputInterpretation, "dictionary-code sidecar serial path") {
+				t.Fatalf("query %s throughput_interpretation=%q want dictionary sidecar classification", q.Name, q.ThroughputInterpretation)
+			}
+			continue
+		}
 		if !strings.Contains(q.ThroughputInterpretation, "physical serial scan") {
 			t.Fatalf("query %s throughput_interpretation=%q want serial physical classification", q.Name, q.ThroughputInterpretation)
 		}

@@ -364,7 +364,11 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			if got, want := parallel.Diagnostics.ScheduledGranules, serial.Diagnostics.ScheduledGranules; got != want {
 				t.Fatalf("parallel scheduled granules=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
 			}
-			if parallel.Diagnostics.PhysicalBytesScanned != serial.Diagnostics.PhysicalBytesScanned {
+			if tc.req.Kind == ColumnPhysicalQueryGroupCount || tc.req.Kind == ColumnPhysicalQueryGroupCountDistinct {
+				if serial.Diagnostics.PhysicalBytesScanned <= 0 || serial.Diagnostics.PhysicalBytesScanned >= parallel.Diagnostics.PhysicalBytesScanned {
+					t.Fatalf("serial dictionary-sidecar bytes=%d want below parallel TCPA bytes=%d serial=%+v parallel=%+v", serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics, parallel.Diagnostics)
+				}
+			} else if parallel.Diagnostics.PhysicalBytesScanned != serial.Diagnostics.PhysicalBytesScanned {
 				t.Fatalf("parallel bytes=%d want serial %d diagnostics=%+v", parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics)
 			}
 			overPartitioned, err := reopened.RunColumnPhysicalQueryParallel(tc.req, 128)
@@ -1404,7 +1408,7 @@ func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); err == nil || !strings.Contains(err.Error(), "checksum") {
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("RunColumnPhysicalQuery corrupt asset err=%v want checksum failure", err)
 	}
 	if got, err := reopened.Get([]byte("e1")); err == nil || !strings.Contains(err.Error(), "checksum") || got != nil {
@@ -1425,7 +1429,7 @@ func TestColumnStoreQueryAndReconstructionFailClosedTruncatedAssetM13C(t *testin
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); !errors.Is(err, io.ErrUnexpectedEOF) {
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("RunColumnPhysicalQuery truncated asset err=%v want io.ErrUnexpectedEOF", err)
 	}
 	if got, err := reopened.Get([]byte("e1")); !errors.Is(err, io.ErrUnexpectedEOF) || got != nil {
@@ -1879,10 +1883,7 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 	defer closeFn()
 	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
 	wantHash := columnPhysicalQueryReferenceHashM13B("q1", events)
-	tcpResult, err := collection.RunColumnPhysicalQuery(req)
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery TCPA baseline: %v", err)
-	}
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
 
 	runner, err := collection.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -1904,8 +1905,8 @@ func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
 		if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
 			t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
 		}
-		if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpResult.Diagnostics.PhysicalBytesScanned {
-			t.Fatalf("runner physical bytes=%d want dictionary-code sidecar below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpResult.Diagnostics.PhysicalBytesScanned)
+		if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+			t.Fatalf("runner physical bytes=%d want dictionary-code sidecar below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
 		}
 		if result.Diagnostics.SegmentFileCacheMisses != 0 {
 			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared dictionary-code setup", result.Diagnostics)
@@ -1932,10 +1933,7 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarParityAndAllocationM1634(t *tes
 	defer closeFn()
 	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}
 	wantHash := columnPhysicalQueryReferenceHashM13B("q2", events)
-	tcpResult, err := collection.RunColumnPhysicalQuery(req)
-	if err != nil {
-		t.Fatalf("RunColumnPhysicalQuery TCPA baseline: %v", err)
-	}
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
 
 	runner, err := collection.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -1960,8 +1958,8 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarParityAndAllocationM1634(t *tes
 		if result.Diagnostics.ProjectedColumns != 2 {
 			t.Fatalf("runner projected columns=%d want kind+did sidecars", result.Diagnostics.ProjectedColumns)
 		}
-		if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpResult.Diagnostics.PhysicalBytesScanned {
-			t.Fatalf("runner physical bytes=%d want dictionary-code sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpResult.Diagnostics.PhysicalBytesScanned)
+		if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+			t.Fatalf("runner physical bytes=%d want dictionary-code sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
 		}
 		if result.Diagnostics.SegmentFileCacheMisses != 0 {
 			t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared dictionary-code setup", result.Diagnostics)
@@ -1979,6 +1977,59 @@ func TestColumnPhysicalQueryRunnerDistinctSidecarParityAndAllocationM1634(t *tes
 	})
 	if allocs != 0 {
 		t.Fatalf("runner q2 warmed allocs/run=%.2f want 0", allocs)
+	}
+}
+
+func TestColumnPhysicalQuerySerialDictionarySidecarParityM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
+	tests := []struct {
+		name             string
+		hashName         string
+		req              ColumnPhysicalQueryRequest
+		projectedColumns int
+	}{
+		{
+			name:             "q1",
+			hashName:         "q1",
+			req:              ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
+			projectedColumns: 1,
+		},
+		{
+			name:             "q2",
+			hashName:         "q2",
+			req:              ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
+			projectedColumns: 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wantHash := columnPhysicalQueryReferenceHashM13B(tc.hashName, events)
+			result, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery: %v", err)
+			}
+			if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B(tc.hashName, result.Groups)); got != wantHash {
+				t.Fatalf("serial sidecar %s hash=%d want %d groups=%+v", tc.name, got, wantHash, result.Groups)
+			}
+			if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+				t.Fatalf("serial sidecar diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+			}
+			if result.Diagnostics.ProjectedColumns != tc.projectedColumns {
+				t.Fatalf("serial sidecar projected columns=%d want %d", result.Diagnostics.ProjectedColumns, tc.projectedColumns)
+			}
+			if result.Diagnostics.DictionaryCodeHits == 0 || result.Diagnostics.DictionaryCodeHits != result.Diagnostics.ScheduledGranules {
+				t.Fatalf("serial sidecar dictionary hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.DictionaryCodeHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+			}
+			if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+				t.Fatalf("serial sidecar physical bytes=%d want dictionary-code sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
+			}
+			if result.Diagnostics.SegmentFileCacheMisses == 0 {
+				t.Fatalf("serial sidecar diagnostics=%+v want one-shot sidecar read misses accounted", result.Diagnostics)
+			}
+		})
 	}
 }
 
@@ -2234,6 +2285,25 @@ func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T)
 	if _, _, ok, err := columnDictionaryCodeDistinctSeenWords(columnDictionaryCodeDistinctMaxSeenWords+1, 1); err != nil || ok {
 		t.Fatalf("oversized bitset ok=%v err=%v want clean fallback", ok, err)
 	}
+}
+
+func columnPhysicalQueryTCPAAssetBytesM1634(tb testing.TB, collection *Collection) int64 {
+	tb.Helper()
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		tb.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	var bytes int64
+	for _, ref := range view.AssetRefs {
+		bytes += ref.Ref.Length
+	}
+	if bytes <= 0 {
+		tb.Fatalf("TCPA asset bytes=%d want positive", bytes)
+	}
+	return bytes
 }
 
 func TestColumnPhysicalQueryRunnerFailsClosedForUnsupportedShapeM1634(t *testing.T) {

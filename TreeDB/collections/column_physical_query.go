@@ -58,6 +58,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	DecodedBlocks              int
 	DirectReduceBlocks         int
 	MetadataHits               int
+	DictionaryCodeHits         int
 	ScheduledGranules          int
 	SkippedGranules            int
 	RowsScanned                int
@@ -554,6 +555,9 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 }
 
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if result, ok, err := c.runColumnPhysicalQueryDictionaryCodesInSnapshotView(view, req); ok {
+		return result, err
+	}
 	if result, ok, err := c.runColumnPhysicalQueryDirectInSnapshotView(view, req, 0, 0, nil); ok {
 		if err != nil {
 			if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
@@ -588,6 +592,41 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	result.Groups = exec.groups()
 	result.Diagnostics.ResultGroups = len(result.Groups)
 	return result, nil
+}
+
+func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
+	if req.AggregateMetadataName != "" || view.MutationParts != 0 {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	readCache.returnViews = true
+	defer func() { _ = readCache.close() }()
+
+	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	dictDistinct, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, req, &readCache)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	if dictCount == nil && dictDistinct == nil {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
+
+	var result ColumnPhysicalQueryResult
+	if dictCount != nil {
+		result = dictCount.run(view, req)
+	} else {
+		result = dictDistinct.run(view, req)
+	}
+	result.Diagnostics.SegmentFileCacheHits = readCache.hits
+	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	result.Diagnostics.DictionaryCodeHits = result.Diagnostics.DecodedBlocks
+	return result, true, nil
 }
 
 var errColumnPhysicalQueryNeedsVisibility = errors.New("collections: physical column query requires mutation visibility overlay")
@@ -710,6 +749,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.DecodedBlocks += right.DecodedBlocks
 	left.DirectReduceBlocks += right.DirectReduceBlocks
 	left.MetadataHits += right.MetadataHits
+	left.DictionaryCodeHits += right.DictionaryCodeHits
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
 	left.RowsScanned += right.RowsScanned
