@@ -1,12 +1,14 @@
 package colgranule
 
 import (
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -41,6 +43,14 @@ type ColumnAssetRangeReader interface {
 
 type columnAssetOwnedStore interface {
 	PutOwned(kind ColumnAssetKind, payload []byte) (ColumnAssetRef, error)
+}
+
+type columnAssetVerifier interface {
+	Verify(ref ColumnAssetRef) error
+}
+
+type columnAssetSyncer interface {
+	Sync() error
 }
 
 type MemoryColumnAssetStore struct {
@@ -159,13 +169,42 @@ func (s *MemoryColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, len
 	return out, nil
 }
 
+func (s *MemoryColumnAssetStore) Verify(ref ColumnAssetRef) error {
+	if s == nil {
+		return fmt.Errorf("colgranule: nil memory asset store")
+	}
+	if err := validateColumnAssetRef(ref); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	asset, ok := s.assets[ref.key()]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("colgranule: missing asset ref file=%d offset=%d", ref.FileID, ref.Offset)
+	}
+	if asset.kind != ref.Kind {
+		return fmt.Errorf("colgranule: asset kind=%s want %s", asset.kind, ref.Kind)
+	}
+	if asset.length != ref.Length {
+		return fmt.Errorf("colgranule: asset length=%d want %d", asset.length, ref.Length)
+	}
+	if checksum := crc32.ChecksumIEEE(asset.payload); checksum != ref.Checksum {
+		return fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
+	}
+	return nil
+}
+
 type SegmentColumnAssetStore struct {
-	mu     sync.Mutex
-	dir    string
-	path   string
-	file   *os.File
-	fileID uint32
-	size   int64
+	mu              sync.Mutex
+	dir             string
+	path            string
+	file            *os.File
+	fileID          uint32
+	size            int64
+	dirSyncRequired bool
+	closing         bool
+	activeFileIO    int
+	fileIOCond      *sync.Cond
 }
 
 func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
@@ -176,7 +215,7 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		return nil, err
 	}
 	path := filepath.Join(dir, "column-assets-000001.seg")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	file, err := openOrCreateColumnAssetSegment(path)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +230,26 @@ func OpenSegmentColumnAssetStore(dir string) (*SegmentColumnAssetStore, error) {
 		file:   file,
 		fileID: 1,
 		size:   info.Size(),
+		// Reopen deliberately treats the directory entry as unsealed: the store
+		// cannot prove a prior process synced it before publishing refs, so the
+		// next publish Sync seals the file and its directory entry together.
+		dirSyncRequired: true,
 	}, nil
+}
+
+func openOrCreateColumnAssetSegment(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
+	if err == nil {
+		return file, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, err
+	}
+	file, err = os.OpenFile(path, os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
 func (s *SegmentColumnAssetStore) Close() error {
@@ -203,9 +261,58 @@ func (s *SegmentColumnAssetStore) Close() error {
 	if s.file == nil {
 		return nil
 	}
+	s.closing = true
+	cond := s.ensureFileIOCondLocked()
+	for s.activeFileIO > 0 {
+		cond.Wait()
+	}
 	err := s.file.Close()
 	s.file = nil
 	return err
+}
+
+func (s *SegmentColumnAssetStore) Sync() error {
+	if s == nil {
+		return fmt.Errorf("colgranule: nil segment asset store")
+	}
+	file, dir, dirSyncRequired, err := s.beginFileSync()
+	if err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		if endErr := s.endFileIO(); endErr != nil {
+			return errors.Join(err, endErr)
+		}
+		return err
+	}
+	clearDirSync := false
+	if dirSyncRequired {
+		if err := syncColumnAssetDirectory(dir); err != nil {
+			if endErr := s.endFileIO(); endErr != nil {
+				return errors.Join(err, endErr)
+			}
+			return err
+		}
+		clearDirSync = true
+	}
+	return s.finishFileIO(clearDirSync)
+}
+
+func syncColumnAssetDirectory(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("colgranule: empty segment asset dir")
+	}
+	if runtime.GOOS == "windows" {
+		// Go does not expose portable directory fsync on Windows. File Sync is
+		// still required; POSIX directory-entry durability is best-effort here.
+		return nil
+	}
+	file, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
 }
 
 func (s *SegmentColumnAssetStore) Path() string {
@@ -221,7 +328,7 @@ func (s *SegmentColumnAssetStore) Put(kind ColumnAssetKind, payload []byte) (Col
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.file == nil {
+	if s.closing || s.file == nil {
 		return ColumnAssetRef{}, fmt.Errorf("colgranule: closed segment asset store")
 	}
 	ref, err := newColumnAssetRef(kind, s.fileID, s.size, len(payload), payload)
@@ -252,7 +359,7 @@ func (s *SegmentColumnAssetStore) ReadTo(ref ColumnAssetRef, dst []byte) ([]byte
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.file == nil {
+	if s.closing || s.file == nil {
 		return nil, fmt.Errorf("colgranule: closed segment asset store")
 	}
 	if ref.FileID != s.fileID {
@@ -301,7 +408,7 @@ func (s *SegmentColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, le
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.file == nil {
+	if s.closing || s.file == nil {
 		return nil, fmt.Errorf("colgranule: closed segment asset store")
 	}
 	if ref.FileID != s.fileID {
@@ -317,6 +424,91 @@ func (s *SegmentColumnAssetStore) ReadRange(ref ColumnAssetRef, offset int64, le
 		return nil, err
 	}
 	return out, nil
+}
+
+func (s *SegmentColumnAssetStore) Verify(ref ColumnAssetRef) (err error) {
+	if s == nil {
+		return fmt.Errorf("colgranule: nil segment asset store")
+	}
+	if err := validateColumnAssetRef(ref); err != nil {
+		return err
+	}
+	file, fileID, size, err := s.beginFileIO()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if endErr := s.endFileIO(); err == nil && endErr != nil {
+			err = endErr
+		}
+	}()
+	if ref.FileID != fileID {
+		return fmt.Errorf("colgranule: asset file id=%d want %d", ref.FileID, fileID)
+	}
+	if ref.Offset > size || ref.Length > size-ref.Offset {
+		return fmt.Errorf("colgranule: asset range offset=%d length=%d outside segment bytes=%d", ref.Offset, ref.Length, size)
+	}
+	h := crc32.NewIEEE()
+	reader := io.NewSectionReader(file, ref.Offset, ref.Length)
+	var buf [32 << 10]byte
+	if _, err := io.CopyBuffer(h, reader, buf[:]); err != nil {
+		return err
+	}
+	if checksum := h.Sum32(); checksum != ref.Checksum {
+		return fmt.Errorf("colgranule: asset ref checksum=%08x want %08x", checksum, ref.Checksum)
+	}
+	return nil
+}
+
+func (s *SegmentColumnAssetStore) beginFileIO() (*os.File, uint32, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing || s.file == nil {
+		return nil, 0, 0, fmt.Errorf("colgranule: closed segment asset store")
+	}
+	s.activeFileIO++
+	return s.file, s.fileID, s.size, nil
+}
+
+func (s *SegmentColumnAssetStore) beginFileSync() (*os.File, string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing || s.file == nil {
+		return nil, "", false, fmt.Errorf("colgranule: closed segment asset store")
+	}
+	// Snapshot the file after all prior Put calls have released the mutex, then
+	// drop the mutex during fsync so reads are not blocked by slow storage.
+	s.activeFileIO++
+	return s.file, s.dir, s.dirSyncRequired, nil
+}
+
+func (s *SegmentColumnAssetStore) endFileIO() error {
+	return s.finishFileIO(false)
+}
+
+func (s *SegmentColumnAssetStore) finishFileIO(clearDirSync bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeFileIO <= 0 {
+		return fmt.Errorf("colgranule: segment asset store file IO ended without matching begin")
+	}
+	if clearDirSync {
+		// On Windows this records the strongest platform-supported sync attempt;
+		// reopen still conservatively requires another directory sync attempt.
+		s.dirSyncRequired = false
+	}
+	s.activeFileIO--
+	if s.activeFileIO == 0 && s.fileIOCond != nil {
+		s.fileIOCond.Broadcast()
+	}
+	return nil
+}
+
+func (s *SegmentColumnAssetStore) ensureFileIOCondLocked() *sync.Cond {
+	if s.fileIOCond == nil {
+		s.fileIOCond = sync.NewCond(&s.mu)
+	}
+	return s.fileIOCond
 }
 
 func newColumnAssetRef(kind ColumnAssetKind, fileID uint32, offset int64, length int, payload []byte) (ColumnAssetRef, error) {

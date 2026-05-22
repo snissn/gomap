@@ -6,6 +6,133 @@ import (
 	"testing"
 )
 
+func TestColumnAssetReasonSentinelsAreAppendSafe(t *testing.T) {
+	reasons := map[string][]string{
+		string(ColumnAssetStatePrepared):              columnAssetReasonPrepared,
+		string(ColumnAssetStateProcessVisible):        columnAssetReasonProcessVisible,
+		string(ColumnAssetStatePendingPublish):        columnAssetReasonPendingPublish,
+		string(ColumnAssetStateRootPublished):         columnAssetReasonRootPublished,
+		string(ColumnAssetStateRecoveryAuthoritative): columnAssetReasonRecoveryAuthoritative,
+		string(ColumnAssetStateActive):                columnAssetReasonActive,
+		string(ColumnAssetStateSuperseded):            columnAssetReasonSuperseded,
+		string(ColumnAssetStateCleanupSafe):           columnAssetReasonCleanupSafe,
+		string(ColumnAssetStateSnapshotPinned):        columnAssetReasonSnapshotPinned,
+		string(ColumnAssetStateReclaimable):           columnAssetReasonReclaimable,
+		string(ColumnAssetStateDeleting):              columnAssetReasonDeleting,
+		string(ColumnAssetStateQuarantined):           columnAssetReasonQuarantined,
+	}
+	for name, reason := range reasons {
+		if len(reason) != 1 || cap(reason) != len(reason) || reason[0] != name {
+			t.Fatalf("reason sentinel %q=%v len=%d cap=%d, want one append-safe reason", name, reason, len(reason), cap(reason))
+		}
+		mutated := append(reason, "caller append")
+		mutated[0] = "corrupted"
+		if got := reasons[name]; !reflect.DeepEqual(got, []string{name}) {
+			t.Fatalf("reason sentinel %q after append mutation=%v want [%q]", name, got, name)
+		}
+	}
+}
+
+func TestColumnAssetReasonSentinelsAreDetachedThroughMergedEntriesM9B(t *testing.T) {
+	ref := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	records := make(map[ColumnAssetRef]columnAssetReachabilityRecord)
+	segments := make(map[uint32]*columnAssetSegmentState)
+	if err := addReachabilityEntry(records, segments, ColumnAssetReachabilityEntry{
+		Ref:     ref,
+		State:   ColumnAssetStatePrepared,
+		Bytes:   int(ref.Length),
+		Reasons: columnAssetReachabilityDefaultReasons(ColumnAssetStatePrepared),
+	}, true, false, false); err != nil {
+		t.Fatalf("add prepared reachability: %v", err)
+	}
+	if err := addReachabilityEntry(records, segments, ColumnAssetReachabilityEntry{
+		Ref:     ref,
+		State:   ColumnAssetStateActive,
+		Bytes:   int(ref.Length),
+		Reasons: columnAssetReachabilityDefaultReasons(ColumnAssetStateActive),
+	}, true, false, false); err != nil {
+		t.Fatalf("add active reachability: %v", err)
+	}
+	record := records[ref]
+	record.entry.Reasons[0] = "corrupted"
+	record.entry.Reasons = append(record.entry.Reasons, "caller append")
+	if got := columnAssetReasonPrepared; !reflect.DeepEqual(got, []string{string(ColumnAssetStatePrepared)}) {
+		t.Fatalf("prepared sentinel mutated to %v", got)
+	}
+	if got := columnAssetReasonActive; !reflect.DeepEqual(got, []string{string(ColumnAssetStateActive)}) {
+		t.Fatalf("active sentinel mutated to %v", got)
+	}
+}
+
+func TestColumnAssetReachabilitySummaryRecordIsPointerFree(t *testing.T) {
+	typ := reflect.TypeOf(columnAssetReachabilitySummaryRecord{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if typeContainsPointers(field.Type) {
+			t.Fatalf("columnAssetReachabilitySummaryRecord.%s has pointer-bearing type %s", field.Name, field.Type)
+		}
+	}
+}
+
+func typeContainsPointers(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice, reflect.String, reflect.UnsafePointer:
+		return true
+	case reflect.Array:
+		return typeContainsPointers(typ.Elem())
+	case reflect.Struct:
+		for i := 0; i < typ.NumField(); i++ {
+			if typeContainsPointers(typ.Field(i).Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestColumnAssetReachabilityReasonsAreDetached(t *testing.T) {
+	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	preparedRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
+	active := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, activeRef)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest: &active,
+		PreparedAssets: []ColumnPreparedAsset{{Ref: preparedRef}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	lifecycleFindEntry(t, plan, activeRef).Reasons[0] = "corrupted active reason"
+	lifecycleFindEntry(t, plan, preparedRef).Reasons[0] = "corrupted prepared reason"
+
+	plan, err = PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest: &active,
+		PreparedAssets: []ColumnPreparedAsset{{Ref: preparedRef}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability after mutation: %v", err)
+	}
+	if got := lifecycleFindEntry(t, plan, activeRef).Reasons[0]; got != string(ColumnAssetStateActive) {
+		t.Fatalf("active reason after caller mutation=%q want %q", got, ColumnAssetStateActive)
+	}
+	if got := lifecycleFindEntry(t, plan, preparedRef).Reasons[0]; got != string(ColumnAssetStatePrepared) {
+		t.Fatalf("prepared reason after caller mutation=%q want %q", got, ColumnAssetStatePrepared)
+	}
+
+	entries, err := ColumnCollectionManifestAssetRefs(active)
+	if err != nil {
+		t.Fatalf("ColumnCollectionManifestAssetRefs: %v", err)
+	}
+	entries[0].Reasons[0] = "corrupted manifest reason"
+	entries, err = ColumnCollectionManifestAssetRefs(active)
+	if err != nil {
+		t.Fatalf("ColumnCollectionManifestAssetRefs after mutation: %v", err)
+	}
+	if got := entries[0].Reasons[0]; got != string(ColumnAssetStateActive) {
+		t.Fatalf("manifest reason after caller mutation=%q want %q", got, ColumnAssetStateActive)
+	}
+}
+
 func TestColumnAssetReachabilityDeletesClosedSupersededSegment(t *testing.T) {
 	activeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
 	oldRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
@@ -13,8 +140,8 @@ func TestColumnAssetReachabilityDeletesClosedSupersededSegment(t *testing.T) {
 	old := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1, oldRef)
 
 	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
-		ActiveManifest:      &active,
-		SupersededManifests: []ColumnCollectionManifest{old},
+		ActiveManifest:       &active,
+		CleanupSafeManifests: []ColumnCollectionManifest{old},
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability: %v", err)
@@ -22,8 +149,8 @@ func TestColumnAssetReachabilityDeletesClosedSupersededSegment(t *testing.T) {
 	if plan.RetainedBytes != int(activeRef.Length) {
 		t.Fatalf("retained bytes=%d want %d", plan.RetainedBytes, activeRef.Length)
 	}
-	if plan.SupersededBytes != int(oldRef.Length) || plan.ReclaimableBytes != int(oldRef.Length) || plan.RewriteDebtBytes != 0 {
-		t.Fatalf("superseded/reclaimable/rewrite=(%d,%d,%d) want (%d,%d,0)", plan.SupersededBytes, plan.ReclaimableBytes, plan.RewriteDebtBytes, oldRef.Length, oldRef.Length)
+	if plan.CleanupSafeBytes != int(oldRef.Length) || plan.ReclaimableBytes != int(oldRef.Length) || plan.RewriteDebtBytes != 0 {
+		t.Fatalf("cleanup-safe/reclaimable/rewrite=(%d,%d,%d) want (%d,%d,0)", plan.CleanupSafeBytes, plan.ReclaimableBytes, plan.RewriteDebtBytes, oldRef.Length, oldRef.Length)
 	}
 	if plan.Stats.DirectlyDeletableSegments != 1 || plan.Stats.MixedLiveDeadSegments != 0 {
 		t.Fatalf("deletable/mixed segments=(%d,%d) want (1,0)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
@@ -44,8 +171,8 @@ func TestColumnAssetReachabilityTracksRewriteDebtForMixedSegments(t *testing.T) 
 	old := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1, oldRef)
 
 	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
-		ActiveManifest:      &active,
-		SupersededManifests: []ColumnCollectionManifest{old},
+		ActiveManifest:       &active,
+		CleanupSafeManifests: []ColumnCollectionManifest{old},
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability: %v", err)
@@ -57,8 +184,140 @@ func TestColumnAssetReachabilityTracksRewriteDebtForMixedSegments(t *testing.T) 
 		t.Fatalf("deletable/mixed segments=(%d,%d) want (0,1)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
 	}
 	oldEntry := lifecycleFindEntry(t, plan, oldRef)
+	if oldEntry.State != ColumnAssetStateCleanupSafe || oldEntry.DeleteEligible {
+		t.Fatalf("old entry state/delete=(%s,%v) want cleanup_safe,false", oldEntry.State, oldEntry.DeleteEligible)
+	}
+}
+
+func TestColumnAssetReachabilityProtectedSupersededBlocksSegmentDeletion(t *testing.T) {
+	cleanupSafeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	protectedRef := lifecycleAssetRef(t, 1, cleanupSafeRef.Length, tcs1HeaderBytes+24)
+	cleanupSafe := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, cleanupSafeRef)
+	protected := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1, protectedRef)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		CleanupSafeManifests: []ColumnCollectionManifest{cleanupSafe},
+		SupersededManifests:  []ColumnCollectionManifest{protected},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.ReclaimableBytes != 0 || plan.RewriteDebtBytes != int(cleanupSafeRef.Length) {
+		t.Fatalf("reclaimable/rewrite=(%d,%d) want (0,%d)", plan.ReclaimableBytes, plan.RewriteDebtBytes, cleanupSafeRef.Length)
+	}
+	if plan.CleanupSafeBytes != int(cleanupSafeRef.Length) || plan.SupersededBytes != int(protectedRef.Length) {
+		t.Fatalf("cleanup-safe/superseded=(%d,%d) want (%d,%d)", plan.CleanupSafeBytes, plan.SupersededBytes, cleanupSafeRef.Length, protectedRef.Length)
+	}
+	if plan.Stats.DirectlyDeletableSegments != 0 || plan.Stats.MixedLiveDeadSegments != 1 {
+		t.Fatalf("deletable/mixed segments=(%d,%d) want (0,1)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
+	}
+	cleanupEntry := lifecycleFindEntry(t, plan, cleanupSafeRef)
+	if cleanupEntry.State != ColumnAssetStateCleanupSafe || cleanupEntry.DeleteEligible {
+		t.Fatalf("cleanup entry state/delete=(%s,%v) want cleanup_safe,false", cleanupEntry.State, cleanupEntry.DeleteEligible)
+	}
+	protectedEntry := lifecycleFindEntry(t, plan, protectedRef)
+	if protectedEntry.State != ColumnAssetStateSuperseded || protectedEntry.DeleteEligible {
+		t.Fatalf("protected entry state/delete=(%s,%v) want superseded,false", protectedEntry.State, protectedEntry.DeleteEligible)
+	}
+
+	cleanupView := mustColumnCollectionManifestView(t, cleanupSafe)
+	protectedView := mustColumnCollectionManifestView(t, protected)
+	viewInput := ColumnAssetReachabilityViewInput{
+		CleanupSafeManifests: []ColumnCollectionManifestView{cleanupView},
+		SupersededManifests:  []ColumnCollectionManifestView{protectedView},
+	}
+	fromViews, err := PlanColumnAssetReachabilityFromViews(viewInput)
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilityFromViews: %v", err)
+	}
+	if got, want := lifecycleSummaryFromPlan(fromViews), lifecycleSummaryFromPlan(plan); !reflect.DeepEqual(got, want) {
+		t.Fatalf("view summary=%+v want %+v", got, want)
+	}
+	summary, err := PlanColumnAssetReachabilitySummaryFromViews(viewInput)
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
+	}
+	if want := lifecycleSummaryFromPlan(plan); !reflect.DeepEqual(summary, want) {
+		t.Fatalf("summary=%+v want %+v", summary, want)
+	}
+}
+
+func TestColumnAssetReachabilitySameRefCleanupSafeAndSupersededIsProtected(t *testing.T) {
+	ref := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	cleanupSafe := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, ref)
+	protected := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1, ref)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		CleanupSafeManifests: []ColumnCollectionManifest{cleanupSafe},
+		SupersededManifests:  []ColumnCollectionManifest{protected},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.CleanupSafeBytes != int(ref.Length) || plan.ReclaimableBytes != 0 || plan.RewriteDebtBytes != int(ref.Length) {
+		t.Fatalf("cleanup-safe/reclaimable/rewrite=(%d,%d,%d) want (%d,0,%d)",
+			plan.CleanupSafeBytes, plan.ReclaimableBytes, plan.RewriteDebtBytes, ref.Length, ref.Length)
+	}
+	if plan.Stats.DirectlyDeletableSegments != 0 || plan.Stats.MixedLiveDeadSegments != 1 {
+		t.Fatalf("deletable/mixed segments=(%d,%d) want (0,1)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
+	}
+	entry := lifecycleFindEntry(t, plan, ref)
+	if entry.State != ColumnAssetStateCleanupSafe || entry.DeleteEligible {
+		t.Fatalf("entry state/delete=(%s,%v) want cleanup_safe,false", entry.State, entry.DeleteEligible)
+	}
+
+	cleanupView := mustColumnCollectionManifestView(t, cleanupSafe)
+	protectedView := mustColumnCollectionManifestView(t, protected)
+	viewInput := ColumnAssetReachabilityViewInput{
+		CleanupSafeManifests: []ColumnCollectionManifestView{cleanupView},
+		SupersededManifests:  []ColumnCollectionManifestView{protectedView},
+	}
+	fromViews, err := PlanColumnAssetReachabilityFromViews(viewInput)
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilityFromViews: %v", err)
+	}
+	if got, want := lifecycleSummaryFromPlan(fromViews), lifecycleSummaryFromPlan(plan); !reflect.DeepEqual(got, want) {
+		t.Fatalf("view summary=%+v want %+v", got, want)
+	}
+	summary, err := PlanColumnAssetReachabilitySummaryFromViews(viewInput)
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
+	}
+	if want := lifecycleSummaryFromPlan(plan); !reflect.DeepEqual(summary, want) {
+		t.Fatalf("summary=%+v want %+v", summary, want)
+	}
+}
+
+func TestColumnAssetReachabilityProtectsSupersededUntilCleanupSafe(t *testing.T) {
+	rootPublishedRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	oldRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
+	rootPublished := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, rootPublishedRef)
+	old := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1, oldRef)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		RootPublishedManifests: []ColumnCollectionManifest{rootPublished},
+		SupersededManifests:    []ColumnCollectionManifest{old},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.RootPublishedBytes != int(rootPublishedRef.Length) {
+		t.Fatalf("root published bytes=%d want %d", plan.RootPublishedBytes, rootPublishedRef.Length)
+	}
+	if plan.SupersededBytes != int(oldRef.Length) || plan.CleanupSafeBytes != 0 || plan.ReclaimableBytes != 0 || plan.RewriteDebtBytes != 0 {
+		t.Fatalf("superseded/cleanup-safe/reclaimable/rewrite=(%d,%d,%d,%d) want (%d,0,0,0)",
+			plan.SupersededBytes, plan.CleanupSafeBytes, plan.ReclaimableBytes, plan.RewriteDebtBytes, oldRef.Length)
+	}
+	if plan.Stats.DirectlyDeletableSegments != 0 || plan.Stats.MixedLiveDeadSegments != 0 {
+		t.Fatalf("deletable/mixed segments=(%d,%d) want (0,0)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
+	}
+	oldEntry := lifecycleFindEntry(t, plan, oldRef)
 	if oldEntry.State != ColumnAssetStateSuperseded || oldEntry.DeleteEligible {
 		t.Fatalf("old entry state/delete=(%s,%v) want superseded,false", oldEntry.State, oldEntry.DeleteEligible)
+	}
+	rootEntry := lifecycleFindEntry(t, plan, rootPublishedRef)
+	if rootEntry.State != ColumnAssetStateRootPublished || rootEntry.DeleteEligible {
+		t.Fatalf("root entry state/delete=(%s,%v) want root_published,false", rootEntry.State, rootEntry.DeleteEligible)
 	}
 }
 
@@ -113,9 +372,11 @@ func TestColumnAssetReachabilityProtectsPendingAndPreparedAssets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability: %v", err)
 	}
-	wantPrepared := int(pendingRef.Length + preparedRef.Length)
-	if plan.PreparedBytes != wantPrepared {
-		t.Fatalf("prepared bytes=%d want %d", plan.PreparedBytes, wantPrepared)
+	if plan.PendingBytes != int(pendingRef.Length) {
+		t.Fatalf("pending bytes=%d want %d", plan.PendingBytes, pendingRef.Length)
+	}
+	if plan.PreparedBytes != int(preparedRef.Length) {
+		t.Fatalf("prepared bytes=%d want %d", plan.PreparedBytes, preparedRef.Length)
 	}
 	if plan.QuarantinedBytes != int(quarantinedRef.Length) {
 		t.Fatalf("quarantined bytes=%d want %d", plan.QuarantinedBytes, quarantinedRef.Length)
@@ -131,6 +392,83 @@ func TestColumnAssetReachabilityProtectsPendingAndPreparedAssets(t *testing.T) {
 	}
 	if got := lifecycleFindEntry(t, plan, quarantinedRef); got.State != ColumnAssetStateQuarantined {
 		t.Fatalf("quarantined entry state=%s want quarantined", got.State)
+	}
+}
+
+func TestColumnAssetReachabilityQuarantineDominatesLiveEntryStateM9B(t *testing.T) {
+	ref := lifecycleAssetRef(t, 5, 0, tcs1HeaderBytes+32)
+	active := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, ref)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest: &active,
+		QuarantinedAssets: []ColumnPreparedAsset{{
+			Ref:    ref,
+			Bytes:  int(ref.Length),
+			Reason: "checksum mismatch",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	entry := lifecycleFindEntry(t, plan, ref)
+	if entry.State != ColumnAssetStateQuarantined {
+		t.Fatalf("entry state=%s want quarantined", entry.State)
+	}
+	if plan.QuarantinedBytes != int(ref.Length) || plan.RetainedBytes != 0 {
+		t.Fatalf("quarantined/retained bytes=(%d,%d) want (%d,0)", plan.QuarantinedBytes, plan.RetainedBytes, ref.Length)
+	}
+}
+
+func TestColumnAssetReachabilityProcessVisibleIsLive(t *testing.T) {
+	processVisibleRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	processVisible := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, processVisibleRef)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ProcessVisibleManifests: []ColumnCollectionManifest{processVisible},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.ProcessVisibleBytes != int(processVisibleRef.Length) {
+		t.Fatalf("process-visible bytes=%d want %d", plan.ProcessVisibleBytes, processVisibleRef.Length)
+	}
+	if plan.CleanupSafeBytes != 0 || plan.ReclaimableBytes != 0 || plan.RewriteDebtBytes != 0 {
+		t.Fatalf("cleanup-safe/reclaimable/rewrite=(%d,%d,%d) want all zero", plan.CleanupSafeBytes, plan.ReclaimableBytes, plan.RewriteDebtBytes)
+	}
+	if plan.Stats.DirectlyDeletableSegments != 0 || plan.Stats.MixedLiveDeadSegments != 0 {
+		t.Fatalf("deletable/mixed segments=(%d,%d) want (0,0)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
+	}
+	entry := lifecycleFindEntry(t, plan, processVisibleRef)
+	if entry.State != ColumnAssetStateProcessVisible || entry.DeleteEligible {
+		t.Fatalf("entry state/delete=(%s,%v) want process_visible,false", entry.State, entry.DeleteEligible)
+	}
+}
+
+func TestColumnAssetReachabilityQuarantineBlocksSharedSegmentDeletion(t *testing.T) {
+	cleanupSafeRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	quarantinedRef := lifecycleAssetRef(t, 1, cleanupSafeRef.Length, tcs1HeaderBytes+24)
+	cleanupSafe := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, cleanupSafeRef)
+
+	plan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		CleanupSafeManifests: []ColumnCollectionManifest{cleanupSafe},
+		QuarantinedAssets: []ColumnPreparedAsset{{
+			Ref:    quarantinedRef,
+			Bytes:  int(quarantinedRef.Length),
+			Reason: "checksum mismatch",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.ReclaimableBytes != 0 || plan.RewriteDebtBytes != int(cleanupSafeRef.Length) {
+		t.Fatalf("reclaimable/rewrite=(%d,%d) want (0,%d)", plan.ReclaimableBytes, plan.RewriteDebtBytes, cleanupSafeRef.Length)
+	}
+	if plan.QuarantinedBytes != int(quarantinedRef.Length) || plan.CleanupSafeBytes != int(cleanupSafeRef.Length) {
+		t.Fatalf("quarantined/cleanup-safe=(%d,%d) want (%d,%d)",
+			plan.QuarantinedBytes, plan.CleanupSafeBytes, quarantinedRef.Length, cleanupSafeRef.Length)
+	}
+	if plan.Stats.DirectlyDeletableSegments != 0 || plan.Stats.MixedLiveDeadSegments != 1 {
+		t.Fatalf("deletable/mixed segments=(%d,%d) want (0,1)", plan.Stats.DirectlyDeletableSegments, plan.Stats.MixedLiveDeadSegments)
 	}
 }
 
@@ -215,8 +553,8 @@ func TestColumnAssetReachabilityDeterministicChurnReclaimsAfterSnapshotDrain(t *
 	}
 
 	drained, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
-		ActiveManifest:      &active,
-		SupersededManifests: []ColumnCollectionManifest{old},
+		ActiveManifest:       &active,
+		CleanupSafeManifests: []ColumnCollectionManifest{old},
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability drained: %v", err)
@@ -253,8 +591,8 @@ func TestColumnAssetReachabilityFromBinaryViewsMatchesMaterializedPlan(t *testin
 		lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+32),
 	)
 	materialized, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
-		ActiveManifest:      &active,
-		SupersededManifests: []ColumnCollectionManifest{superseded},
+		ActiveManifest:       &active,
+		CleanupSafeManifests: []ColumnCollectionManifest{superseded},
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachability: %v", err)
@@ -262,8 +600,8 @@ func TestColumnAssetReachabilityFromBinaryViewsMatchesMaterializedPlan(t *testin
 	activeView := mustColumnCollectionManifestView(t, active)
 	supersededView := mustColumnCollectionManifestView(t, superseded)
 	fromViews, err := PlanColumnAssetReachabilityFromViews(ColumnAssetReachabilityViewInput{
-		ActiveManifest:      &activeView,
-		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+		ActiveManifest:       &activeView,
+		CleanupSafeManifests: []ColumnCollectionManifestView{supersededView},
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachabilityFromViews: %v", err)
@@ -272,8 +610,41 @@ func TestColumnAssetReachabilityFromBinaryViewsMatchesMaterializedPlan(t *testin
 		t.Fatalf("view plan mismatch\nview=%+v\nmaterialized=%+v", fromViews, materialized)
 	}
 	summary, err := PlanColumnAssetReachabilitySummaryFromViews(ColumnAssetReachabilityViewInput{
-		ActiveManifest:      &activeView,
-		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+		ActiveManifest:       &activeView,
+		CleanupSafeManifests: []ColumnCollectionManifestView{supersededView},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
+	}
+	if want := lifecycleSummaryFromPlan(materialized); !reflect.DeepEqual(summary, want) {
+		t.Fatalf("summary mismatch\nsummary=%+v\nmaterialized=%+v", summary, want)
+	}
+}
+
+func TestColumnAssetReachabilitySummaryTracksDurabilityStates(t *testing.T) {
+	recoveryRef := lifecycleAssetRef(t, 1, 0, tcs1HeaderBytes+16)
+	rootPublishedRef := lifecycleAssetRef(t, 2, 0, tcs1HeaderBytes+24)
+	cleanupSafeRef := lifecycleAssetRef(t, 3, 0, tcs1HeaderBytes+32)
+	recovery := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 3, recoveryRef)
+	rootPublished := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 2, rootPublishedRef)
+	cleanupSafe := lifecycleManifest(t, "jsonbench", ColumnPartRoleBase, 1, cleanupSafeRef)
+
+	materialized, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		RecoveryAuthoritativeManifests: []ColumnCollectionManifest{recovery},
+		RootPublishedManifests:         []ColumnCollectionManifest{rootPublished},
+		CleanupSafeManifests:           []ColumnCollectionManifest{cleanupSafe},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if materialized.RetainedBytes != int(recoveryRef.Length) || materialized.RootPublishedBytes != int(rootPublishedRef.Length) || materialized.CleanupSafeBytes != int(cleanupSafeRef.Length) {
+		t.Fatalf("durability bytes retained/root-published/cleanup-safe=(%d,%d,%d)",
+			materialized.RetainedBytes, materialized.RootPublishedBytes, materialized.CleanupSafeBytes)
+	}
+	summary, err := PlanColumnAssetReachabilitySummaryFromViews(ColumnAssetReachabilityViewInput{
+		RecoveryAuthoritativeManifests: []ColumnCollectionManifestView{mustColumnCollectionManifestView(t, recovery)},
+		RootPublishedManifests:         []ColumnCollectionManifestView{mustColumnCollectionManifestView(t, rootPublished)},
+		CleanupSafeManifests:           []ColumnCollectionManifestView{mustColumnCollectionManifestView(t, cleanupSafe)},
 	})
 	if err != nil {
 		t.Fatalf("PlanColumnAssetReachabilitySummaryFromViews: %v", err)
@@ -346,8 +717,8 @@ func BenchmarkColumnAssetReachability10K(b *testing.B) {
 	active := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 1, 1, 0)
 	superseded := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 10_001, 2, 0)
 	input := ColumnAssetReachabilityInput{
-		ActiveManifest:      &active,
-		SupersededManifests: []ColumnCollectionManifest{superseded},
+		ActiveManifest:       &active,
+		CleanupSafeManifests: []ColumnCollectionManifest{superseded},
 	}
 	plan, err := PlanColumnAssetReachability(input)
 	if err != nil {
@@ -375,8 +746,8 @@ func BenchmarkColumnAssetReachabilityView10K(b *testing.B) {
 	activeView := mustColumnCollectionManifestView(b, active)
 	supersededView := mustColumnCollectionManifestView(b, superseded)
 	input := ColumnAssetReachabilityViewInput{
-		ActiveManifest:      &activeView,
-		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+		ActiveManifest:       &activeView,
+		CleanupSafeManifests: []ColumnCollectionManifestView{supersededView},
 	}
 	plan, err := PlanColumnAssetReachabilityFromViews(input)
 	if err != nil {
@@ -404,8 +775,8 @@ func BenchmarkColumnAssetReachabilitySummaryView10K(b *testing.B) {
 	activeView := mustColumnCollectionManifestView(b, active)
 	supersededView := mustColumnCollectionManifestView(b, superseded)
 	input := ColumnAssetReachabilityViewInput{
-		ActiveManifest:      &activeView,
-		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+		ActiveManifest:       &activeView,
+		CleanupSafeManifests: []ColumnCollectionManifestView{supersededView},
 	}
 	summary, err := PlanColumnAssetReachabilitySummaryFromViews(input)
 	if err != nil {
@@ -433,8 +804,8 @@ func BenchmarkColumnAssetReachabilitySummaryView10KReuse(b *testing.B) {
 	activeView := mustColumnCollectionManifestView(b, active)
 	supersededView := mustColumnCollectionManifestView(b, superseded)
 	input := ColumnAssetReachabilityViewInput{
-		ActiveManifest:      &activeView,
-		SupersededManifests: []ColumnCollectionManifestView{supersededView},
+		ActiveManifest:       &activeView,
+		CleanupSafeManifests: []ColumnCollectionManifestView{supersededView},
 	}
 	scratch := &ColumnAssetReachabilitySummaryScratch{}
 	summary, err := PlanColumnAssetReachabilitySummaryFromViewsWithScratch(input, scratch)
@@ -486,8 +857,8 @@ func BenchmarkColumnAssetManagerReclamation10K(b *testing.B) {
 	active := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 1, 1, 0)
 	superseded := lifecycleSyntheticManifestForBenchmark(b, "active", 10_000, 10_001, 2, 0)
 	reachability, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
-		ActiveManifest:      &active,
-		SupersededManifests: []ColumnCollectionManifest{superseded},
+		ActiveManifest:       &active,
+		CleanupSafeManifests: []ColumnCollectionManifest{superseded},
 	})
 	if err != nil {
 		b.Fatalf("PlanColumnAssetReachability: %v", err)
@@ -615,8 +986,12 @@ func lifecycleSummaryFromPlan(plan ColumnAssetReachabilityPlan) ColumnAssetReach
 		Stats:                  plan.Stats,
 		RetainedBytes:          plan.RetainedBytes,
 		PreparedBytes:          plan.PreparedBytes,
+		ProcessVisibleBytes:    plan.ProcessVisibleBytes,
 		QuarantinedBytes:       plan.QuarantinedBytes,
 		SupersededBytes:        plan.SupersededBytes,
+		PendingBytes:           plan.PendingBytes,
+		RootPublishedBytes:     plan.RootPublishedBytes,
+		CleanupSafeBytes:       plan.CleanupSafeBytes,
 		SnapshotProtectedBytes: plan.SnapshotProtectedBytes,
 		RewriteDebtBytes:       plan.RewriteDebtBytes,
 		ReclaimableBytes:       plan.ReclaimableBytes,

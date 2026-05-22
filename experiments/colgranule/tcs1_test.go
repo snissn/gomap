@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTCS1ColumnPartAssetRoundTripsThroughMemoryStore(t *testing.T) {
@@ -47,6 +48,19 @@ func TestMemoryColumnAssetStoreValidatesChecksumAfterLookup(t *testing.T) {
 	ref.Checksum++
 	if _, err := store.Read(ref); err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("Read err=%v want checksum mismatch", err)
+	}
+}
+
+func TestMemoryColumnAssetStoreVerifyRecomputesChecksum(t *testing.T) {
+	store := NewMemoryColumnAssetStore()
+	payload := []byte("payload")
+	ref, err := store.PutOwned(ColumnAssetKindTCS1PartImage, payload)
+	if err != nil {
+		t.Fatalf("PutOwned: %v", err)
+	}
+	payload[0] = 'P'
+	if err := store.Verify(ref); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("Verify err=%v want checksum mismatch", err)
 	}
 }
 
@@ -128,6 +142,114 @@ func TestTCS1ColumnPartAssetRoundTripsThroughSegmentStoreAfterReopen(t *testing.
 	if value != 400 {
 		t.Fatalf("value at reopened asset row=%d want 400", value)
 	}
+}
+
+func TestSegmentColumnAssetStoreSyncsNewSegmentDirectoryEntry(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenSegmentColumnAssetStore(dir)
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	if !store.dirSyncRequired {
+		t.Fatal("new segment store did not require directory sync")
+	}
+	if _, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := store.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if store.dirSyncRequired {
+		t.Fatal("segment store still requires directory sync after Sync")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := OpenSegmentColumnAssetStore(dir)
+	if err != nil {
+		t.Fatalf("reopen segment store: %v", err)
+	}
+	defer reopened.Close()
+	if !reopened.dirSyncRequired {
+		t.Fatal("reopened segment store did not conservatively require directory sync")
+	}
+	if err := reopened.Sync(); err != nil {
+		t.Fatalf("reopened Sync: %v", err)
+	}
+	if reopened.dirSyncRequired {
+		t.Fatal("reopened segment store still requires directory sync after Sync")
+	}
+}
+
+func TestSegmentColumnAssetStoreCloseWaitsForActiveVerifyIO(t *testing.T) {
+	store, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	ref, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("payload"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if _, _, _, err := store.beginFileIO(); err != nil {
+		t.Fatalf("beginFileIO: %v", err)
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- store.Close()
+	}()
+	waitForSegmentStoreClosing(t, store)
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before active file IO drained: %v", err)
+	default:
+	}
+	if _, err := store.Put(ColumnAssetKindTCS1PartImage, []byte("late payload")); err == nil || !strings.Contains(err.Error(), "closed segment asset store") {
+		t.Fatalf("Put during pending Close err=%v want closed segment asset store", err)
+	}
+	if err := store.endFileIO(); err != nil {
+		t.Fatalf("endFileIO: %v", err)
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after active file IO drained")
+	}
+	if err := store.Verify(ref); err == nil || !strings.Contains(err.Error(), "closed segment asset store") {
+		t.Fatalf("Verify after Close err=%v want closed segment asset store", err)
+	}
+}
+
+func TestSegmentColumnAssetStoreEndFileIORejectsWithoutBegin(t *testing.T) {
+	store, err := OpenSegmentColumnAssetStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenSegmentColumnAssetStore: %v", err)
+	}
+	defer store.Close()
+	if err := store.endFileIO(); err == nil || !strings.Contains(err.Error(), "without matching begin") {
+		t.Fatalf("endFileIO without beginFileIO err=%v want without matching begin", err)
+	}
+}
+
+func waitForSegmentStoreClosing(t *testing.T, store *SegmentColumnAssetStore) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if segmentStoreClosing(store) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("segment store Close did not enter closing state")
+}
+
+func segmentStoreClosing(store *SegmentColumnAssetStore) bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.closing
 }
 
 func TestSegmentColumnAssetStoreRejectsOutOfRangeRefBeforeAllocation(t *testing.T) {
