@@ -68,14 +68,15 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 }
 
 type columnVectorGraphBlockView struct {
-	reader              *columnVectorGraphPhysicalRowReader
-	block               *columnPhysicalRowReaderBlock
-	idSpans             []columnVectorGraphByteSpan
-	vectorSpans         []columnVectorGraphVectorSpan
-	invNorms            []float32
-	adjSpans            []columnVectorGraphAdjacencySpan
-	rowValidated        []bool
-	adjacencyDirectView bool
+	reader               *columnVectorGraphPhysicalRowReader
+	block                *columnPhysicalRowReaderBlock
+	idSpans              []columnVectorGraphByteSpan
+	vectorSpans          []columnVectorGraphVectorSpan
+	invNorms             []float32
+	adjSpans             []columnVectorGraphAdjacencySpan
+	rowValidated         []bool
+	adjacencyDirectView  bool
+	trustedFiniteScoring bool
 }
 
 func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
@@ -208,14 +209,15 @@ func newColumnVectorGraphBlockView(reader *columnVectorGraphPhysicalRowReader, b
 	}
 	rows := len(block.rowOffsets)
 	view := &columnVectorGraphBlockView{
-		reader:              reader,
-		block:               block,
-		idSpans:             make([]columnVectorGraphByteSpan, rows),
-		vectorSpans:         make([]columnVectorGraphVectorSpan, rows),
-		invNorms:            make([]float32, rows),
-		adjSpans:            make([]columnVectorGraphAdjacencySpan, rows),
-		rowValidated:        make([]bool, rows),
-		adjacencyDirectView: columnVectorGraphBlockViewAdjacencyDirectView(reader),
+		reader:               reader,
+		block:                block,
+		idSpans:              make([]columnVectorGraphByteSpan, rows),
+		vectorSpans:          make([]columnVectorGraphVectorSpan, rows),
+		invNorms:             make([]float32, rows),
+		adjSpans:             make([]columnVectorGraphAdjacencySpan, rows),
+		rowValidated:         make([]bool, rows),
+		adjacencyDirectView:  columnVectorGraphBlockViewAdjacencyDirectView(reader),
+		trustedFiniteScoring: true,
 	}
 	for rowIndex := 0; rowIndex < rows; rowIndex++ {
 		if err := view.indexRow(rowIndex); err != nil {
@@ -302,8 +304,39 @@ func (v *columnVectorGraphBlockView) indexVector(cur *manifestCursor, ordinal in
 		return columnVectorGraphVectorSpan{}, cur.err
 	}
 	start := cur.pos
-	cur.pos += int(byteLen)
+	end := cur.pos + int(byteLen)
+	if err := v.validateFiniteVectorPayload(start, end, int(n), ordinal); err != nil {
+		return columnVectorGraphVectorSpan{}, err
+	}
+	cur.pos = end
 	return columnVectorGraphVectorSpan{start: start, end: cur.pos, dims: int(n)}, nil
+}
+
+func (v *columnVectorGraphBlockView) validateFiniteVectorPayload(start, end, dims, ordinal int) error {
+	if dims == 0 {
+		return nil
+	}
+	raw := v.block.raw[start:end]
+	if columnPhysicalNativeLittleEndian {
+		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(raw))), dims)
+		for i, value := range vector {
+			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+				v.trustedFiniteScoring = false
+				return fmt.Errorf("collections: column_graph %q ordinal=%d vector[%d] is not finite", v.reader.def.Name, ordinal, i)
+			}
+		}
+		return nil
+	}
+	pos := start
+	for i := 0; i < dims; i++ {
+		value := math.Float32frombits(uint32(v.block.raw[pos]) | uint32(v.block.raw[pos+1])<<8 | uint32(v.block.raw[pos+2])<<16 | uint32(v.block.raw[pos+3])<<24)
+		if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+			v.trustedFiniteScoring = false
+			return fmt.Errorf("collections: column_graph %q ordinal=%d vector[%d] is not finite", v.reader.def.Name, ordinal, i)
+		}
+		pos += 4
+	}
+	return nil
 }
 
 func (v *columnVectorGraphBlockView) indexInvNorm(cur *manifestCursor, ordinal int) (float32, error) {

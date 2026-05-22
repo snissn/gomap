@@ -251,10 +251,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			return nil, stats, err
 		}
 	}
+	trustedFiniteScoring := singleBlockView != nil && singleBlockView.trustedFiniteScoring
 	visitMarks := scratch.visitMarks
 	visitEpoch := scratch.visitEpoch
 	visitMarks[0] = visitEpoch
-	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, 0, topK, scratch, &stats); err != nil {
+	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, trustedFiniteScoring, query, queryInvNorm, 0, topK, scratch, &stats); err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
@@ -268,7 +269,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				break
 			}
 			visitMarks[nextSeed] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, trustedFiniteScoring, query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 			continue
@@ -290,7 +291,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				continue
 			}
 			visitMarks[neighborOrdinal] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, trustedFiniteScoring, query, queryInvNorm, neighborOrdinal, topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 		}
@@ -373,7 +374,7 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 	})
 }
 
-func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, trustedFiniteScoring bool, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	view := singleBlockView
 	rowIndex := ordinal
 	if view == nil {
@@ -394,12 +395,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 	scratch.scoreScratch.Float32Values = vectorScratch
 	invNorm := view.invNormUnchecked(rowIndex)
 	stats.CandidateFetches++
-	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
+	score, err := columnVectorGraphNativeCosineScoreVectorTrusted(query, queryInvNorm, ordinal, vector, invNorm, trustedFiniteScoring)
 	if err != nil {
 		return err
-	}
-	if math.IsNaN(score) || math.IsInf(score, 0) {
-		return fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", r.def.Name, ordinal)
 	}
 	stats.Candidates++
 	candidate := columnVectorGraphSearchCandidate{
@@ -528,15 +526,27 @@ func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, r
 }
 
 func columnVectorGraphNativeCosineScoreVector(query []float32, queryInvNorm float32, ordinal int, vector []float32, invNorm float32) (float64, error) {
+	return columnVectorGraphNativeCosineScoreVectorTrusted(query, queryInvNorm, ordinal, vector, invNorm, false)
+}
+
+func columnVectorGraphNativeCosineScoreVectorTrusted(query []float32, queryInvNorm float32, ordinal int, vector []float32, invNorm float32, trustedFinite bool) (float64, error) {
 	if len(vector) != len(query) {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, len(vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
 	dot := float64(vectorDotProductFloat32SameLen(query, vector))
-	if !math.IsInf(dot, 0) && !math.IsNaN(dot) {
-		return dot * float64(queryInvNorm) * float64(invNorm), nil
+	score := dot * float64(queryInvNorm) * float64(invNorm)
+	if trustedFinite {
+		return score, nil
+	}
+	if !math.IsInf(score, 0) && !math.IsNaN(score) {
+		return score, nil
 	}
 	dot = columnVectorGraphNativeDotProductFloat64(query, vector)
-	return dot * float64(queryInvNorm) * float64(invNorm), nil
+	score = dot * float64(queryInvNorm) * float64(invNorm)
+	if math.IsInf(score, 0) || math.IsNaN(score) {
+		return 0, fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", "", ordinal)
+	}
+	return score, nil
 }
 
 func columnVectorGraphNativeDotProductFloat64(left, right []float32) float64 {
