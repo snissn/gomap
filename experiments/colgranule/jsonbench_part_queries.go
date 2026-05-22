@@ -496,7 +496,7 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
-		timeValues, err := scratch.timeReader.DecodeInt64(timeBlocks[blockIndex].Granule)
+		timeCursor, err := scratch.timeReader.int64Cursor(timeBlocks[blockIndex].Granule)
 		if err != nil {
 			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
 		}
@@ -505,19 +505,19 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 		bytesDecoded += operationBlocks[blockIndex].Granule.RawBytes
 		bytesDecoded += collectionBlocks[blockIndex].Granule.RawBytes
 		bytesDecoded += didBlocks[blockIndex].Granule.RawBytes
-		bytesDecoded += timeBlocks[blockIndex].Granule.RawBytes
 		if kindBlocks[blockIndex].Descriptor.LastGranule > lastGranule {
 			lastGranule = kindBlocks[blockIndex].Descriptor.LastGranule
 		}
 		rows := kindBlocks[blockIndex].Descriptor.RowCount
-		if len(timeValues) != rows {
-			return 0, 0, JSONBenchPartQueryDiagnostics{}, fmt.Errorf("colgranule: q4 time/code row mismatch time=%d codes=%d", len(timeValues), rows)
-		}
 		for row := 0; row < rows; row++ {
-			timestamp := timeValues[row]
+			timestamp, err := timeCursor.Next()
+			if err != nil {
+				return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+			}
 			rowsScanned++
 			if len(top) == 3 && timestamp > top[2].t {
 				scratch.q4Pairs = top
+				bytesDecoded += timeCursor.RawBytesRead()
 				diagnostics := queryDiagnosticsFromDecodedPrefix(jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)
 				return len(top), digestQ4Top(top), diagnostics, nil
 			}
@@ -551,6 +551,10 @@ func runJSONBenchPartQ4(part *ColumnPart, codes queryCodeSet, scratch *jsonBench
 			}
 			top = insertQ4Top(top, jsonBenchPartTimePair{user: int64(user), t: timestamp})
 		}
+		if err := timeCursor.Finish(); err != nil {
+			return 0, 0, JSONBenchPartQueryDiagnostics{}, err
+		}
+		bytesDecoded += timeCursor.RawBytesRead()
 	}
 	scratch.q4Pairs = top
 	diagnostics := queryDiagnosticsFromDecodedPrefix(jsonBenchPartQ4Columns, "sort_key_early_stop_min_by_user", rowsScanned, lastGranule, blocksDecoded, bytesDecoded)

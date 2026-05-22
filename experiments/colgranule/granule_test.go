@@ -419,6 +419,58 @@ func TestGranuleReaderReusesBuffersWithoutStaleValues(t *testing.T) {
 	}
 }
 
+func TestInt64CursorPrefixAndFinish(t *testing.T) {
+	values := []int64{1000, 1007, 1016, 1028, 1043, 1061}
+	for _, encoding := range []Encoding{EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint} {
+		t.Run(encoding.String(), func(t *testing.T) {
+			g, err := EncodeInt64(nil, values, Config{Encoding: encoding, Compression: CompressionNone})
+			if err != nil {
+				t.Fatalf("EncodeInt64: %v", err)
+			}
+			var reader GranuleReader
+			cursor, err := reader.int64Cursor(g)
+			if err != nil {
+				t.Fatalf("int64Cursor: %v", err)
+			}
+			for i, want := range values[:3] {
+				got, err := cursor.Next()
+				if err != nil {
+					t.Fatalf("prefix Next(%d): %v", i, err)
+				}
+				if got != want {
+					t.Fatalf("prefix Next(%d)=%d want %d", i, got, want)
+				}
+			}
+			if cursor.RawBytesRead() <= 0 || cursor.RawBytesRead() >= g.RawBytes {
+				t.Fatalf("prefix raw bytes read=%d want between 1 and %d", cursor.RawBytesRead(), g.RawBytes-1)
+			}
+			if err := cursor.Finish(); err == nil {
+				t.Fatal("prefix Finish succeeded, want short-read error")
+			}
+
+			cursor, err = reader.int64Cursor(g)
+			if err != nil {
+				t.Fatalf("int64Cursor(full): %v", err)
+			}
+			for i, want := range values {
+				got, err := cursor.Next()
+				if err != nil {
+					t.Fatalf("full Next(%d): %v", i, err)
+				}
+				if got != want {
+					t.Fatalf("full Next(%d)=%d want %d", i, got, want)
+				}
+			}
+			if err := cursor.Finish(); err != nil {
+				t.Fatalf("full Finish: %v", err)
+			}
+			if cursor.RawBytesRead() != g.RawBytes {
+				t.Fatalf("full raw bytes read=%d want %d", cursor.RawBytesRead(), g.RawBytes)
+			}
+		})
+	}
+}
+
 func FuzzDecodeTypedGranuleCorruptPayloads(f *testing.F) {
 	boolGranule, err := NewGranuleBuilder(Config{Compression: CompressionNone}).BuildBool([]bool{true, false, true, true, false})
 	if err != nil {
