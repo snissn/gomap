@@ -366,7 +366,7 @@ func TestColumnStoreUpdateCallbacksRequireCommandWALBeforeInvocationM10B(t *test
 	assertColumnStoreWriteDomainEmptyM10B(t, col)
 }
 
-func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
+func TestColumnStoreCommandWALInsertPublishesManifestM10B(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() {
@@ -399,37 +399,7 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	assertColumnManifestStateM10B(t, col, 1, insertLSN, mgr)
 	assertDBAppliedCommandLSNM10B(t, d, insertLSN)
 	assertCollectionDocument(t, col, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
-
-	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
-		return []byte(`{"time_us":3,"kind":"like","did":"d1"}`), true, nil
-	})
-	if err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if !matched || !modified {
-		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
-	}
-	updateLSN := d.State().AppliedCommandLSN
-	if updateLSN <= insertLSN {
-		t.Fatalf("update AppliedCommandLSN=%d, want greater than insert LSN %d", updateLSN, insertLSN)
-	}
-	assertColumnManifestStateM10B(t, col, 2, updateLSN, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, updateLSN)
-	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
-
-	deleted, err := col.DeleteDocument([]byte("e2"))
-	if err != nil {
-		t.Fatalf("DeleteDocument: %v", err)
-	}
-	if !deleted {
-		t.Fatalf("DeleteDocument deleted=false, want true")
-	}
-	deleteLSN := d.State().AppliedCommandLSN
-	if deleteLSN <= updateLSN {
-		t.Fatalf("delete AppliedCommandLSN=%d, want greater than update LSN %d", deleteLSN, updateLSN)
-	}
-	assertColumnManifestStateM10B(t, col, 3, deleteLSN, mgr)
-	assertDBAppliedCommandLSNM10B(t, d, deleteLSN)
+	assertCollectionDocument(t, col, "e2", `{"time_us":2,"kind":"post","did":"d2"}`)
 
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -439,11 +409,133 @@ func TestColumnStoreCommandWALMutationsPublishManifestM10B(t *testing.T) {
 	defer func() { _ = reopen.Close() }()
 	reopenMgr := NewCollectionManager(reopen)
 	reopened := openColumnStoreCollectionM10B(t, reopen, reopenMgr)
-	assertColumnManifestStateM10B(t, reopened, 3, deleteLSN, reopenMgr)
-	assertDBAppliedCommandLSNM10B(t, reopen, deleteLSN)
-	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
-	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
-		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
+	assertColumnManifestStateM10B(t, reopened, 1, insertLSN, reopenMgr)
+	assertDBAppliedCommandLSNM10B(t, reopen, insertLSN)
+	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
+	assertCollectionDocument(t, reopened, "e2", `{"time_us":2,"kind":"post","did":"d2"}`)
+}
+
+func TestColumnStoreSupportMatrixRejectsUpdateDeleteBeforeExecutionM12B(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch seed: %v", err)
+	}
+	insertLSN := d.State().AppliedCommandLSN
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+	refsBefore := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	before, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get before update: %v", err)
+	}
+
+	callbackCalled := false
+	matched, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		callbackCalled = true
+		return []byte(`{"time_us":3,"kind":"like","did":"d1"}`), true, nil
+	})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "Update")
+	if matched || modified {
+		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
+	}
+	if callbackCalled {
+		t.Fatal("Update callback ran before M12B column-store support-matrix rejection")
+	}
+
+	batchCallbackCalled := false
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("e1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			batchCallbackCalled = true
+			return []byte(`{"time_us":4,"kind":"like","did":"d1"}`), true, nil
+		},
+	}})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "UpdateBatch")
+	if len(results) != 0 {
+		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
+	}
+	if batchCallbackCalled {
+		t.Fatal("UpdateBatch callback ran before M12B column-store support-matrix rejection")
+	}
+
+	deleted, err := col.DeleteDocument([]byte("e2"))
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteDocument")
+	if deleted {
+		t.Fatal("DeleteDocument deleted=true, want rejected before delete")
+	}
+	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2")})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteBatch")
+	if deletedRows != 0 {
+		t.Fatalf("DeleteBatch deleted=%d, want rejected before delete", deletedRows)
+	}
+
+	after, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get after rejected update: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("document changed after rejected updates: before=%x after=%x", before, after)
+	}
+	assertCollectionDocument(t, col, "e2", `{"time_us":2,"kind":"post","did":"d2"}`)
+	if got := d.State().AppliedCommandLSN; got != insertLSN {
+		t.Fatalf("AppliedCommandLSN after rejected mutations=%d, want insert LSN %d", got, insertLSN)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
+		t.Fatalf("command WAL frames after rejected mutations=%d, want %d", got, framesBefore)
+	}
+	assertColumnManifestStateM10B(t, col, 1, insertLSN)
+	if refsAfter := columnManifestAssetRefsForCollectionM12A(t, d, col); !columnAssetRefsEqualM12B(refsAfter, refsBefore) {
+		t.Fatalf("manifest refs after rejected mutations=%+v, want unchanged %+v", refsAfter, refsBefore)
+	}
+}
+
+func TestColumnStoreSupportMatrixRejectsNonJSONInsertBeforeCommandAppendM12B(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+			ColumnStore:    testColumnStoreConfig(nil),
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+	appliedBefore := d.State().AppliedCommandLSN
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+
+	_, err = col.InsertBatchValidatedBSON([][]byte{[]byte("e1")}, [][]byte{doc})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "InsertBatchValidatedBSON")
+	assertColumnStoreDocumentMissingM10B(t, col, "e1")
+	if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
+		t.Fatalf("command WAL frames after rejected BSON insert=%d, want %d", got, framesBefore)
+	}
+	if got := d.State().AppliedCommandLSN; got != appliedBefore {
+		t.Fatalf("AppliedCommandLSN after rejected BSON insert=%d, want %d", got, appliedBefore)
 	}
 }
 
@@ -496,36 +588,6 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 		t.Fatalf("column asset path must be isolated from row value/leaf logs: %q", assetPath)
 	}
 
-	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) {
-		return []byte(`{"time_us":3,"kind":"like","did":"d1","commit":{"repo_id":12}}`), true, nil
-	})
-	if err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if !matched || !modified {
-		t.Fatalf("Update matched=%v modified=%v, want true true", matched, modified)
-	}
-	updateLSN := d.State().AppliedCommandLSN
-	assertColumnManifestStateM10B(t, col, 2, updateLSN, mgr)
-	updateRefs := columnManifestAssetRefsForCollectionM12A(t, d, col)
-	if len(updateRefs) != 2 {
-		t.Fatalf("update manifest refs=%+v, want accumulated insert+update asset refs", updateRefs)
-	}
-	if updateRefs[0].Generation != 1 || updateRefs[1].Generation != 2 {
-		t.Fatalf("update manifest refs=%+v, want generations 1 and 2", updateRefs)
-	}
-	updateSnapshot := columnManifestSnapshotForCollectionM12A(t, d, col)
-	if updateSnapshot.Generation != 2 || len(updateSnapshot.Parts) != 1 || updateSnapshot.Parts[0].AssetRef != updateRefs[1] {
-		t.Fatalf("update snapshot generation=%d parts=%+v, want only active generation ref %+v", updateSnapshot.Generation, updateSnapshot.Parts, updateRefs[1])
-	}
-	updateRaw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), updateRefs[1])
-	if err != nil {
-		t.Fatalf("update readColumnPhysicalAssetFromManager: %v", err)
-	}
-	if err := validateColumnPhysicalAssetForManifest(updateRaw, updateRefs[1], *col.Meta().Options.ColumnStore); err != nil {
-		t.Fatalf("update validateColumnPhysicalAssetForManifest: %v", err)
-	}
-
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -533,20 +595,20 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	assertColumnManifestStateM10B(t, reopened, 2, updateLSN)
+	assertColumnManifestStateM10B(t, reopened, 1, insertLSN)
 	reopenRefs := columnManifestAssetRefsForCollectionM12A(t, reopen, reopened)
-	if len(reopenRefs) != 2 || reopenRefs[0] != updateRefs[0] || reopenRefs[1] != updateRefs[1] {
-		t.Fatalf("reopen refs=%+v want %+v", reopenRefs, updateRefs)
+	if len(reopenRefs) != 1 || reopenRefs[0] != ref {
+		t.Fatalf("reopen refs=%+v want %+v", reopenRefs, []ColumnAssetRef{ref})
 	}
 	reopenSnapshot := columnManifestSnapshotForCollectionM12A(t, reopen, reopened)
-	if reopenSnapshot.Generation != 2 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenRefs[1] {
-		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenRefs[1])
+	if reopenSnapshot.Generation != 1 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenRefs[0] {
+		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenRefs[0])
 	}
-	reopenRaw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), reopenRefs[1])
+	reopenRaw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), reopenRefs[0])
 	if err != nil {
 		t.Fatalf("reopen readColumnPhysicalAssetFromManager: %v", err)
 	}
-	if err := validateColumnPhysicalAssetForManifest(reopenRaw, reopenRefs[1], *reopened.Meta().Options.ColumnStore); err != nil {
+	if err := validateColumnPhysicalAssetForManifest(reopenRaw, reopenRefs[0], *reopened.Meta().Options.ColumnStore); err != nil {
 		t.Fatalf("reopen validateColumnPhysicalAssetForManifest: %v", err)
 	}
 }
@@ -715,7 +777,7 @@ func TestColumnStoreStaleColumnRootPreflightDoesNotAppendCommandWALM10B(t *testi
 	}
 }
 
-func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifestM10C(t *testing.T) {
+func TestColumnStoreCommandWALReplayInsertPublishesEquivalentManifestM10C(t *testing.T) {
 	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
 
 	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{
@@ -727,30 +789,83 @@ func TestColumnStoreCommandWALReplayInsertUpdateDeletePublishesEquivalentManifes
 	}
 	writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
 
-	updatePayload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{
-		{ID: []byte("e1"), Document: []byte(`{"time_us":3,"kind":"like","did":"d1"}`)},
-	})
-	if err != nil {
-		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
-	}
-	writeCollectionCommandWALFrame(t, dir, baseLSN+2, commitlog.CommandKindCollectionUpdateBatchByID, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, updatePayload)
-
-	deletePayload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e2")})
-	if err != nil {
-		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
-	}
-	writeCollectionCommandWALFrame(t, dir, baseLSN+3, commitlog.CommandKindCollectionDeleteBatchByID, commitlog.PayloadFormatCollectionDeleteBatchByIDV1, deletePayload)
-
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
-	if got, err := reopened.Get([]byte("e2")); err != nil || got != nil {
-		t.Fatalf("Get deleted document=(%q, %v), want nil, nil", got, err)
+	assertCollectionDocument(t, reopened, "e1", `{"time_us":1,"kind":"like","did":"d1"}`)
+	assertCollectionDocument(t, reopened, "e2", `{"time_us":2,"kind":"post","did":"d2"}`)
+	assertColumnManifestStateM10B(t, reopened, 1, baseLSN+1)
+	if got := reopen.State().AppliedCommandLSN; got != baseLSN+1 {
+		t.Fatalf("AppliedCommandLSN after replay=%d, want %d", got, baseLSN+1)
 	}
-	assertColumnManifestStateM10B(t, reopened, 3, baseLSN+3)
-	if got := reopen.State().AppliedCommandLSN; got != baseLSN+3 {
-		t.Fatalf("AppliedCommandLSN after replay=%d, want %d", got, baseLSN+3)
+}
+
+func TestColumnStoreCommandWALReplayRejectsUnsupportedMutationsM12B(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kind    commitlog.CommandKind
+		format  commitlog.PayloadFormat
+		payload func(*testing.T) []byte
+	}{
+		{
+			name:   "update",
+			kind:   commitlog.CommandKindCollectionUpdateBatchByID,
+			format: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+			payload: func(t *testing.T) []byte {
+				t.Helper()
+				payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{{
+					ID:       []byte("e1"),
+					Document: []byte(`{"time_us":2,"kind":"like","did":"d1"}`),
+				}})
+				if err != nil {
+					t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+				}
+				return payload
+			},
+		},
+		{
+			name:   "delete",
+			kind:   commitlog.CommandKindCollectionDeleteBatchByID,
+			format: commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+			payload: func(t *testing.T) []byte {
+				t.Helper()
+				payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e1")})
+				if err != nil {
+					t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+				}
+				return payload
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
+			insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("events", []commitlog.CollectionDocument{{
+				ID:       []byte("e1"),
+				Document: []byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+			}})
+			if err != nil {
+				t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+			}
+			writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
+			writeCollectionCommandWALFrame(t, dir, baseLSN+2, tc.kind, tc.format, tc.payload(t))
+
+			reopen, err := backenddb.Open(backenddb.Options{
+				Dir:                    dir,
+				CommandWAL:             true,
+				Durability:             backenddb.DurabilityDurable,
+				DisableBackgroundPrune: true,
+			})
+			if err == nil {
+				_ = reopen.Close()
+				t.Fatalf("Open replay with unsupported %s succeeded, want ErrCommandWALRejected", tc.name)
+			}
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("Open replay with unsupported %s error=%v, want ErrCommandWALRejected", tc.name, err)
+			}
+			if !strings.Contains(err.Error(), "M12B") || !strings.Contains(err.Error(), string(tc.name)) {
+				t.Fatalf("Open replay with unsupported %s error=%v, want M12B operation diagnostics", tc.name, err)
+			}
+		})
 	}
 }
 
@@ -911,19 +1026,15 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 				t.Fatalf("command WAL frames after rejected write=%d, want %d", framesAfter, framesBefore)
 			}
 			deleted, err := col.DeleteDocument([]byte("missing"))
-			if err != nil {
-				t.Fatalf("DeleteDocument missing: %v", err)
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				t.Fatalf("DeleteDocument missing error=%v, want ErrCommandWALRejected", err)
 			}
 			if deleted {
-				t.Fatalf("DeleteDocument missing deleted=true, want false")
+				t.Fatalf("DeleteDocument missing deleted=true, want rejected before delete")
 			}
 			framesAfterDelete := countCollectionCommandWALFrames(t, tt.opts.Dir)
-			wantFramesAfterDelete := framesBefore
-			if tt.commandWAL {
-				wantFramesAfterDelete++
-			}
-			if framesAfterDelete != wantFramesAfterDelete {
-				t.Fatalf("command WAL frames after no-op delete=%d, want %d", framesAfterDelete, wantFramesAfterDelete)
+			if framesAfterDelete != framesBefore {
+				t.Fatalf("command WAL frames after rejected no-op delete=%d, want %d", framesAfterDelete, framesBefore)
 			}
 			matched, modified, err := col.Update([]byte("missing"), func([]byte) ([]byte, bool, error) {
 				return nil, false, nil
@@ -946,23 +1057,19 @@ func TestColumnStoreRelaxedProfileWritesRejectedBeforeCommandAppendM10C(t *testi
 	}
 }
 
-func TestColumnStoreDeleteMissesDoNotRequireCommandWALM10C(t *testing.T) {
+func TestColumnStoreDeleteMissesRejectedBeforeCommandWALM12B(t *testing.T) {
 	d, col := openBufferedBSONColumnStoreSeedM10B(t, false, ColumnStoreProfileBenchmarkRelaxed)
 	defer func() { _ = d.Close() }()
 
 	deleted, err := col.DeleteDocument([]byte("missing"))
-	if err != nil {
-		t.Fatalf("DeleteDocument missing: %v", err)
-	}
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteDocument missing")
 	if deleted {
-		t.Fatal("DeleteDocument missing deleted=true, want false")
+		t.Fatal("DeleteDocument missing deleted=true, want rejected before delete")
 	}
 	deletedBatch, err := col.DeleteBatch([][]byte{[]byte("missing")})
-	if err != nil {
-		t.Fatalf("DeleteBatch missing: %v", err)
-	}
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteBatch missing")
 	if deletedBatch != 0 {
-		t.Fatalf("DeleteBatch missing deleted=%d, want 0", deletedBatch)
+		t.Fatalf("DeleteBatch missing deleted=%d, want rejected before delete", deletedBatch)
 	}
 	if got, err := col.Get([]byte("e1")); err != nil {
 		t.Fatalf("Get existing after missing deletes: %v", err)
@@ -1601,6 +1708,18 @@ func columnManifestAssetRefsForCollectionM12A(t testing.TB, d *backenddb.DB, col
 		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
 	}
 	return refs
+}
+
+func columnAssetRefsEqualM12B(a, b []ColumnAssetRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func columnManifestSnapshotForCollectionM12A(t testing.TB, d *backenddb.DB, col *Collection) columnManifestSnapshot {

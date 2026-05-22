@@ -42,7 +42,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 		})
 	}
 
-	for _, columnStore := range []bool{false, true} {
+	for _, columnStore := range []bool{false} {
 		b.Run(fmt.Sprintf("update/column_store=%t", columnStore), func(b *testing.B) {
 			backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, columnStore)
 			seedColumnStoreCommandWALBenchBatches(b, collection, 0, b.N, commandWALBenchBatchSize)
@@ -71,7 +71,7 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 		})
 	}
 
-	for _, columnStore := range []bool{false, true} {
+	for _, columnStore := range []bool{false} {
 		b.Run(fmt.Sprintf("delete/column_store=%t", columnStore), func(b *testing.B) {
 			backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, columnStore)
 			seedColumnStoreCommandWALBenchBatches(b, collection, 0, b.N, commandWALBenchBatchSize)
@@ -99,6 +99,54 @@ func BenchmarkColumnStoreCommandWALRootPublicationM10B(b *testing.B) {
 			reportColumnStoreCommandWALBenchMetrics(b, totals)
 		})
 	}
+
+	b.Run("reject_update/column_store=true", func(b *testing.B) {
+		backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, true)
+		seedColumnStoreCommandWALBenchBatches(b, collection, 0, 1, commandWALBenchBatchSize)
+		batch := makeColumnStoreCommandWALBenchBatch(b, 0, commandWALBenchBatchSize, true)
+		lsnBefore := uint64(backend.State().AppliedCommandLSN)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			results, err := collection.UpdateBatch(batch.updates)
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				b.Fatalf("UpdateBatch error=%v, want ErrCommandWALRejected", err)
+			}
+			if len(results) != 0 {
+				b.Fatalf("UpdateBatch results=%d, want 0 on rejected write", len(results))
+			}
+		}
+		b.StopTimer()
+
+		if got := uint64(backend.State().AppliedCommandLSN); got != lsnBefore {
+			b.Fatalf("AppliedCommandLSN after rejected updates=%d, want %d", got, lsnBefore)
+		}
+	})
+
+	b.Run("reject_delete/column_store=true", func(b *testing.B) {
+		backend, collection := openColumnStoreCommandWALRootPublicationBenchmark(b, true)
+		seedColumnStoreCommandWALBenchBatches(b, collection, 0, 1, commandWALBenchBatchSize)
+		batch := makeColumnStoreCommandWALBenchBatch(b, 0, commandWALBenchBatchSize, false)
+		lsnBefore := uint64(backend.State().AppliedCommandLSN)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			deleted, err := collection.DeleteBatch(batch.ids)
+			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
+				b.Fatalf("DeleteBatch error=%v, want ErrCommandWALRejected", err)
+			}
+			if deleted != 0 {
+				b.Fatalf("DeleteBatch deleted=%d, want 0 on rejected write", deleted)
+			}
+		}
+		b.StopTimer()
+
+		if got := uint64(backend.State().AppliedCommandLSN); got != lsnBefore {
+			b.Fatalf("AppliedCommandLSN after rejected deletes=%d, want %d", got, lsnBefore)
+		}
+	})
 }
 
 func BenchmarkColumnStoreCommandWALReplayM10C(b *testing.B) {
