@@ -49,6 +49,35 @@ type ColumnPartSetVisibilityStats struct {
 	Tombstones     int `json:"tombstones"`
 }
 
+type ColumnPartSetCompactionPolicy struct {
+	MaxDeltaParts             int `json:"max_delta_parts,omitempty"`
+	MaxDeltaBytes             int `json:"max_delta_bytes,omitempty"`
+	MaxTombstones             int `json:"max_tombstones,omitempty"`
+	MaxReadAmplificationParts int `json:"max_read_amplification_parts,omitempty"`
+	MaxStaleBytes             int `json:"max_stale_bytes,omitempty"`
+	MinExpectedReclaimPPM     int `json:"min_expected_reclaim_ppm,omitempty"`
+	MinVisibleRowsPPM         int `json:"min_visible_rows_ppm,omitempty"`
+}
+
+type ColumnPartSetCompactionPlan struct {
+	ShouldCompact                bool     `json:"should_compact"`
+	Reasons                      []string `json:"reasons,omitempty"`
+	SelectedParts                int      `json:"selected_parts"`
+	SkippedParts                 int      `json:"skipped_parts"`
+	BaseParts                    int      `json:"base_parts"`
+	DeltaParts                   int      `json:"delta_parts"`
+	Tombstones                   int      `json:"tombstones"`
+	ReadAmplificationParts       int      `json:"read_amplification_parts"`
+	LiveBytes                    int      `json:"live_bytes"`
+	StaleBytes                   int      `json:"stale_bytes"`
+	TombstoneDebt                int      `json:"tombstone_debt"`
+	ExpectedReclaimPPM           int      `json:"expected_reclaim_ppm"`
+	VisibleRowsPPM               int      `json:"visible_rows_ppm"`
+	AggregateMetadataInvalid     bool     `json:"aggregate_metadata_invalid"`
+	AggregateMetadataRebuilds    bool     `json:"aggregate_metadata_rebuilds"`
+	ColumnAssetStaleBytePressure bool     `json:"column_asset_stale_byte_pressure"`
+}
+
 type ColumnPartSetScanResult struct {
 	Rows        int
 	Columns     map[string][]int64
@@ -72,18 +101,22 @@ type ColumnPartSetScanDiagnostics struct {
 }
 
 type ColumnPartSetCompactionResult struct {
-	Manifest         ColumnCollectionManifest    `json:"manifest"`
-	Part             ColumnWorkspacePartManifest `json:"part"`
-	InputRows        int                         `json:"input_rows"`
-	VisibleRows      int                         `json:"visible_rows"`
-	DroppedRows      int                         `json:"dropped_rows"`
-	SupersededRows   int                         `json:"superseded_rows"`
-	DeletedRows      int                         `json:"deleted_rows"`
-	OldAssetBytes    int                         `json:"old_asset_bytes"`
-	NewAssetBytes    int                         `json:"new_asset_bytes"`
-	ReclaimableBytes int                         `json:"reclaimable_bytes"`
-	NetBytesReduced  int                         `json:"net_bytes_reduced"`
-	CompactionUnix   int64                       `json:"compaction_unix_nano"`
+	Manifest                ColumnCollectionManifest    `json:"manifest"`
+	Part                    ColumnWorkspacePartManifest `json:"part"`
+	InputRows               int                         `json:"input_rows"`
+	VisibleRows             int                         `json:"visible_rows"`
+	DroppedRows             int                         `json:"dropped_rows"`
+	SupersededRows          int                         `json:"superseded_rows"`
+	DeletedRows             int                         `json:"deleted_rows"`
+	OldAssetBytes           int                         `json:"old_asset_bytes"`
+	NewAssetBytes           int                         `json:"new_asset_bytes"`
+	ReclaimableBytes        int                         `json:"reclaimable_bytes"`
+	RewriteDebtBytes        int                         `json:"rewrite_debt_bytes"`
+	NetBytesReduced         int                         `json:"net_bytes_reduced"`
+	SelectionPlan           ColumnPartSetCompactionPlan `json:"selection_plan"`
+	PrePublishReachability  ColumnAssetReachabilityPlan `json:"pre_publish_reachability"`
+	PostPublishReachability ColumnAssetReachabilityPlan `json:"post_publish_reachability"`
+	CompactionUnix          int64                       `json:"compaction_unix_nano"`
 }
 
 func OpenColumnPartSetReader(workspace *ColumnWorkspace, manifest ColumnCollectionManifest, opts ColumnPartImageReadOptions) (*ColumnPartSetReader, error) {
@@ -306,6 +339,73 @@ func BuildColumnDeltaPart(partID uint64, opts ColumnStoreOptions, replacements C
 	return BuildColumnPart(partID, opts, replacements)
 }
 
+func PlanColumnPartSetCompaction(manifest ColumnCollectionManifest, stats ColumnPartSetVisibilityStats, policy ColumnPartSetCompactionPolicy) (ColumnPartSetCompactionPlan, error) {
+	if err := validateColumnCollectionManifest(manifest); err != nil {
+		return ColumnPartSetCompactionPlan{}, err
+	}
+	totalParts := len(manifest.PartSet.BaseParts) + len(manifest.PartSet.DeltaParts)
+	if stats.Parts == 0 {
+		stats.Parts = totalParts
+		stats.BaseParts = len(manifest.PartSet.BaseParts)
+		stats.DeltaParts = len(manifest.PartSet.DeltaParts)
+		stats.InputRows = manifest.ByteAccounting.Rows
+		stats.VisibleRows = manifest.ByteAccounting.VisibleRows
+		stats.Tombstones = len(manifest.PartSet.Tombstones)
+	}
+	totalBytes := manifest.ByteAccounting.TotalAssetBytes
+	staleRows := stats.SupersededRows + stats.DeletedRows
+	staleBytes := proportionalBytes(totalBytes, staleRows, stats.InputRows)
+	if staleBytes > totalBytes {
+		staleBytes = totalBytes
+	}
+	deltaBytes := manifest.ByteAccounting.DeltaAssetBytes
+	plan := ColumnPartSetCompactionPlan{
+		BaseParts:                    len(manifest.PartSet.BaseParts),
+		DeltaParts:                   len(manifest.PartSet.DeltaParts),
+		Tombstones:                   len(manifest.PartSet.Tombstones),
+		ReadAmplificationParts:       totalParts,
+		LiveBytes:                    totalBytes - staleBytes,
+		StaleBytes:                   staleBytes,
+		TombstoneDebt:                len(manifest.PartSet.Tombstones),
+		ExpectedReclaimPPM:           ppm(staleBytes, totalBytes),
+		VisibleRowsPPM:               ppm(stats.VisibleRows, stats.InputRows),
+		AggregateMetadataInvalid:     stats.SupersededRows != 0 || stats.DeletedRows != 0 || len(manifest.PartSet.Tombstones) != 0,
+		AggregateMetadataRebuilds:    totalParts != 0,
+		ColumnAssetStaleBytePressure: policy.MaxStaleBytes > 0 && staleBytes >= policy.MaxStaleBytes,
+	}
+	if policy.MaxDeltaParts > 0 && len(manifest.PartSet.DeltaParts) >= policy.MaxDeltaParts {
+		plan.Reasons = append(plan.Reasons, "delta_part_count")
+	}
+	if policy.MaxDeltaBytes > 0 && deltaBytes >= policy.MaxDeltaBytes {
+		plan.Reasons = append(plan.Reasons, "delta_bytes")
+	}
+	if policy.MaxTombstones > 0 && len(manifest.PartSet.Tombstones) >= policy.MaxTombstones {
+		plan.Reasons = append(plan.Reasons, "tombstone_count")
+	}
+	if policy.MaxReadAmplificationParts > 0 && totalParts >= policy.MaxReadAmplificationParts {
+		plan.Reasons = append(plan.Reasons, "read_amplification")
+	}
+	if plan.ColumnAssetStaleBytePressure {
+		plan.Reasons = append(plan.Reasons, "column_asset_stale_bytes")
+	}
+	if policy.MinExpectedReclaimPPM > 0 && plan.ExpectedReclaimPPM >= policy.MinExpectedReclaimPPM {
+		plan.Reasons = append(plan.Reasons, "expected_reclaim_ratio")
+	}
+	if policy.MinVisibleRowsPPM > 0 && plan.VisibleRowsPPM <= policy.MinVisibleRowsPPM {
+		plan.Reasons = append(plan.Reasons, "sparse_visible_rows")
+	}
+	if plan.AggregateMetadataInvalid {
+		plan.Reasons = append(plan.Reasons, "aggregate_metadata_invalidation")
+	}
+	plan.ShouldCompact = len(plan.Reasons) != 0
+	if plan.ShouldCompact {
+		plan.SelectedParts = totalParts
+	} else {
+		plan.SkippedParts = totalParts
+	}
+	return plan, nil
+}
+
 func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReader, opts ColumnStoreOptions, dictionaries map[string]map[string]int64, newPartID uint64) (ColumnPartSetCompactionResult, error) {
 	if workspace == nil {
 		return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: nil column workspace")
@@ -314,6 +414,15 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 		return ColumnPartSetCompactionResult{}, fmt.Errorf("colgranule: nil part set reader")
 	}
 	normalized, err := normalizeColumnStoreOptions(opts)
+	if err != nil {
+		return ColumnPartSetCompactionResult{}, err
+	}
+	selectionPlan, err := PlanColumnPartSetCompaction(reader.manifest, reader.visibilityStat, ColumnPartSetCompactionPolicy{
+		MaxDeltaParts:             1,
+		MaxTombstones:             1,
+		MaxReadAmplificationParts: 2,
+		MinExpectedReclaimPPM:     1,
+	})
 	if err != nil {
 		return ColumnPartSetCompactionResult{}, err
 	}
@@ -341,7 +450,7 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 	manifest, err := NewColumnCollectionManifest(
 		reader.manifest.Collection,
 		normalized,
-		[]ColumnManifestPartRef{NewColumnManifestPartRef(ColumnPartRoleBase, newGeneration, entry)},
+		[]ColumnManifestPartRef{NewColumnManifestPartRefWithCoverage(ColumnPartRoleBase, newGeneration, entry, columnPartSetCompactionSourceParts(reader.manifest.PartSet), columnPartSetNextCompactionLevel(reader.manifest.PartSet))},
 		nil,
 		nil,
 	)
@@ -355,24 +464,97 @@ func CompactColumnPartSet(workspace *ColumnWorkspace, reader *ColumnPartSetReade
 	if err := validateColumnCollectionManifest(manifest); err != nil {
 		return ColumnPartSetCompactionResult{}, err
 	}
+	oldManifest := reader.manifest
+	prePublishPlan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest:   &oldManifest,
+		PendingManifests: []ColumnCollectionManifest{manifest},
+	})
+	if err != nil {
+		return ColumnPartSetCompactionResult{}, err
+	}
+	postPublishPlan, err := PlanColumnAssetReachability(ColumnAssetReachabilityInput{
+		ActiveManifest:      &manifest,
+		SupersededManifests: []ColumnCollectionManifest{oldManifest},
+	})
+	if err != nil {
+		return ColumnPartSetCompactionResult{}, err
+	}
 	netReduced := oldAssetBytes - entry.AssetBytes
 	if netReduced < 0 {
 		netReduced = 0
 	}
 	return ColumnPartSetCompactionResult{
-		Manifest:         manifest,
-		Part:             entry,
-		InputRows:        reader.visibilityStat.InputRows,
-		VisibleRows:      scan.Rows,
-		DroppedRows:      reader.visibilityStat.InputRows - scan.Rows,
-		SupersededRows:   reader.visibilityStat.SupersededRows,
-		DeletedRows:      reader.visibilityStat.DeletedRows,
-		OldAssetBytes:    oldAssetBytes,
-		NewAssetBytes:    entry.AssetBytes,
-		ReclaimableBytes: oldAssetBytes,
-		NetBytesReduced:  netReduced,
-		CompactionUnix:   time.Now().UnixNano(),
+		Manifest:                manifest,
+		Part:                    entry,
+		InputRows:               reader.visibilityStat.InputRows,
+		VisibleRows:             scan.Rows,
+		DroppedRows:             reader.visibilityStat.InputRows - scan.Rows,
+		SupersededRows:          reader.visibilityStat.SupersededRows,
+		DeletedRows:             reader.visibilityStat.DeletedRows,
+		OldAssetBytes:           oldAssetBytes,
+		NewAssetBytes:           entry.AssetBytes,
+		ReclaimableBytes:        postPublishPlan.ReclaimableBytes,
+		RewriteDebtBytes:        postPublishPlan.RewriteDebtBytes,
+		NetBytesReduced:         netReduced,
+		SelectionPlan:           selectionPlan,
+		PrePublishReachability:  prePublishPlan,
+		PostPublishReachability: postPublishPlan,
+		CompactionUnix:          time.Now().UnixNano(),
 	}, nil
+}
+
+func proportionalBytes(totalBytes int, rows int, totalRows int) int {
+	if totalBytes <= 0 || rows <= 0 || totalRows <= 0 {
+		return 0
+	}
+	if rows >= totalRows {
+		return totalBytes
+	}
+	return int((int64(totalBytes) * int64(rows)) / int64(totalRows))
+}
+
+func ppm(numerator int, denominator int) int {
+	if numerator <= 0 || denominator <= 0 {
+		return 0
+	}
+	if numerator >= denominator {
+		return 1_000_000
+	}
+	return int((int64(numerator) * 1_000_000) / int64(denominator))
+}
+
+func columnPartSetCompactionSourceParts(partSet ColumnPartSetManifest) []ColumnSourcePartGeneration {
+	refs := append([]ColumnManifestPartRef(nil), partSet.BaseParts...)
+	refs = append(refs, partSet.DeltaParts...)
+	out := make([]ColumnSourcePartGeneration, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, ColumnSourcePartGeneration{PartID: ref.Part.PartID, GenerationID: ref.GenerationID})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].GenerationID != out[j].GenerationID {
+			return out[i].GenerationID < out[j].GenerationID
+		}
+		return out[i].PartID < out[j].PartID
+	})
+	return out
+}
+
+func columnPartSetNextCompactionLevel(partSet ColumnPartSetManifest) uint8 {
+	var maxLevel uint8
+	for _, ref := range partSet.BaseParts {
+		if ref.Coverage.CompactionLevel > maxLevel {
+			maxLevel = ref.Coverage.CompactionLevel
+		}
+	}
+	for _, ref := range partSet.DeltaParts {
+		if ref.Coverage.CompactionLevel > maxLevel {
+			maxLevel = ref.Coverage.CompactionLevel
+		}
+	}
+	if maxLevel == ^uint8(0) {
+		return maxLevel
+	}
+	return maxLevel + 1
 }
 
 func RunJSONBenchColumnPartSetQueries(reader *ColumnPartSetReader, ds JSONBenchDataset, attempts int) ([]JSONBenchPartQueryTiming, error) {

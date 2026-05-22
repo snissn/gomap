@@ -66,6 +66,7 @@ type ColumnStoreOptions struct {
 type ColumnPartPolicy struct {
 	RowsPerGranule        int
 	DefaultCodecBlockRows int
+	AdaptiveMarkSizing    ColumnAdaptiveMarkSizing
 }
 
 type ColumnCompressionPolicy struct {
@@ -184,6 +185,17 @@ func (b *ColumnPartBuilder) Build(partID uint64, batch ColumnBatch) (*ColumnPart
 	rows, err := validateColumnBatch(batch, b.opts.Columns)
 	if err != nil {
 		return nil, err
+	}
+	if b.opts.PartPolicy.AdaptiveMarkSizing.Enabled {
+		rawBytes, err := EstimateColumnBatchUncompressedBytes(batch, b.opts.Columns)
+		if err != nil {
+			return nil, err
+		}
+		estimate, err := EstimateAdaptiveRowsPerMark(rows, rawBytes, b.opts.PartPolicy.AdaptiveMarkSizing)
+		if err != nil {
+			return nil, err
+		}
+		b.opts.PartPolicy.RowsPerGranule = estimate.RowsPerMark
 	}
 	pkColumn := b.opts.LogicalPrimaryKey.Columns[0]
 	order, err := b.sortedOrder(batch, rows, pkColumn)
@@ -528,11 +540,20 @@ func normalizeColumnStoreOptions(opts ColumnStoreOptions) (ColumnStoreOptions, e
 	if opts.SchemaMode != ColumnSchemaFixed {
 		return ColumnStoreOptions{}, fmt.Errorf("colgranule: unsupported schema mode %s", opts.SchemaMode)
 	}
-	if opts.PartPolicy.RowsPerGranule == 0 {
-		opts.PartPolicy.RowsPerGranule = DefaultRowsPerGranule
-	}
-	if opts.PartPolicy.RowsPerGranule <= 0 {
-		return ColumnStoreOptions{}, fmt.Errorf("colgranule: invalid rows per granule %d", opts.PartPolicy.RowsPerGranule)
+	var err error
+	if opts.PartPolicy.AdaptiveMarkSizing.Enabled {
+		opts.PartPolicy.AdaptiveMarkSizing, err = NormalizeColumnAdaptiveMarkSizing(opts.PartPolicy.AdaptiveMarkSizing, opts.PartPolicy.RowsPerGranule)
+		if err != nil {
+			return ColumnStoreOptions{}, err
+		}
+		opts.PartPolicy.RowsPerGranule = opts.PartPolicy.AdaptiveMarkSizing.MaxRows
+	} else {
+		if opts.PartPolicy.RowsPerGranule == 0 {
+			opts.PartPolicy.RowsPerGranule = DefaultRowsPerGranule
+		}
+		if opts.PartPolicy.RowsPerGranule <= 0 {
+			return ColumnStoreOptions{}, fmt.Errorf("colgranule: invalid rows per granule %d", opts.PartPolicy.RowsPerGranule)
+		}
 	}
 	if opts.PartPolicy.DefaultCodecBlockRows < 0 {
 		return ColumnStoreOptions{}, fmt.Errorf("colgranule: invalid default codec block rows %d", opts.PartPolicy.DefaultCodecBlockRows)
