@@ -102,6 +102,41 @@ func TestColumnPhysicalRowReaderBatchFetchReusesCachedBlockV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderCachedBlocksOwnRawBytesV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	left := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 1, testColumnPhysicalRowReaderRowsV1(0, 4, normalized))
+	right := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 2, testColumnPhysicalRowReaderRowsV1(4, 4, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, left, right), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"embedding", "neighbors"},
+		MaxDecodedBlocks:  2,
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	scratch := columnPhysicalRowReaderScratch{
+		Values:        make([]columnDeclaredValue, 0, 2),
+		Float32Values: make([]float32, 0, normalized.Columns[1].VectorDims),
+		Uint32Values:  make([]uint32, 0, 4),
+	}
+	if _, err := reader.FetchRow(0, &scratch); err != nil {
+		t.Fatalf("warm left block: %v", err)
+	}
+	if _, err := reader.FetchRow(4, &scratch); err != nil {
+		t.Fatalf("warm right block: %v", err)
+	}
+	row, err := reader.FetchRow(1, &scratch)
+	if err != nil {
+		t.Fatalf("refetch left block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-001", 1, []float32{1, 1.25, 1.5, 1.75}, []uint32{1, 2, 3})
+	if stats := reader.Stats(); stats.CacheMisses != 2 || stats.CacheHits != 1 || stats.BlockEvictions != 0 {
+		t.Fatalf("cache stats=%+v want cached left block to survive right-block load", stats)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsMutationPartsV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
@@ -313,6 +348,117 @@ func TestColumnPhysicalRowReaderWarmScratchHotFetchZeroAllocsV1(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("hot FetchRow allocs=%v want zero", allocs)
 	}
+}
+
+func TestColumnPhysicalRowReaderScratchAppendFixedWidthSlicesV1(t *testing.T) {
+	t.Run("float32_vector_empty", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestFloat32Slice(&b, nil)
+		cur := manifestCursor{raw: b.Bytes()}
+		dst := []float32{42}
+		got, err := cur.appendFloat32SliceWithExpectedLength(dst, 0)
+		if err != nil {
+			t.Fatalf("appendFloat32SliceWithExpectedLength: %v", err)
+		}
+		if len(got) != 1 || got[0] != 42 || cur.pos != len(cur.raw) {
+			t.Fatalf("got=%v pos=%d len=%d", got, cur.pos, len(cur.raw))
+		}
+	})
+
+	t.Run("float32_vector_exact", func(t *testing.T) {
+		values := []float32{1.25, -2.5, 0.75}
+		var b bytes.Buffer
+		writeManifestFloat32Slice(&b, values)
+		cur := manifestCursor{raw: b.Bytes()}
+		dst := []float32{99}
+		got, err := cur.appendFloat32SliceWithExpectedLength(dst, len(values))
+		if err != nil {
+			t.Fatalf("appendFloat32SliceWithExpectedLength: %v", err)
+		}
+		if len(got) != 1+len(values) || got[0] != 99 || cur.pos != len(cur.raw) {
+			t.Fatalf("got=%v pos=%d len=%d", got, cur.pos, len(cur.raw))
+		}
+		for i, want := range values {
+			if got[i+1] != want {
+				t.Fatalf("got[%d]=%v want %v", i+1, got[i+1], want)
+			}
+		}
+	})
+
+	t.Run("float32_vector_wrong_length", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestFloat32Slice(&b, []float32{1, 2})
+		cur := manifestCursor{raw: b.Bytes()}
+		got, err := cur.appendFloat32SliceWithExpectedLength([]float32{7}, 3)
+		if err == nil || !strings.Contains(err.Error(), "length=2 want vector_dims=3") {
+			t.Fatalf("appendFloat32SliceWithExpectedLength err=%v want length mismatch", err)
+		}
+		if fmt.Sprint(got) != "[7]" {
+			t.Fatalf("got=%v want original dst", got)
+		}
+	})
+
+	t.Run("float32_vector_truncated", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestUint64(&b, 2)
+		writeManifestUint32(&b, math.Float32bits(1.5))
+		cur := manifestCursor{raw: b.Bytes()}
+		got, err := cur.appendFloat32SliceWithExpectedLength([]float32{7}, 2)
+		if err == nil || !strings.Contains(err.Error(), "short column binary float32_vector") {
+			t.Fatalf("appendFloat32SliceWithExpectedLength err=%v want short binary", err)
+		}
+		if fmt.Sprint(got) != "[7]" {
+			t.Fatalf("got=%v want original dst", got)
+		}
+	})
+
+	t.Run("uint32_slice_empty", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestUint32Slice(&b, nil)
+		cur := manifestCursor{raw: b.Bytes()}
+		dst := []uint32{42}
+		got, err := cur.appendUint32Slice(dst)
+		if err != nil {
+			t.Fatalf("appendUint32Slice: %v", err)
+		}
+		if len(got) != 1 || got[0] != 42 || cur.pos != len(cur.raw) {
+			t.Fatalf("got=%v pos=%d len=%d", got, cur.pos, len(cur.raw))
+		}
+	})
+
+	t.Run("uint32_slice_exact", func(t *testing.T) {
+		values := []uint32{1, 17, 1024}
+		var b bytes.Buffer
+		writeManifestUint32Slice(&b, values)
+		cur := manifestCursor{raw: b.Bytes()}
+		dst := []uint32{99}
+		got, err := cur.appendUint32Slice(dst)
+		if err != nil {
+			t.Fatalf("appendUint32Slice: %v", err)
+		}
+		if len(got) != 1+len(values) || got[0] != 99 || cur.pos != len(cur.raw) {
+			t.Fatalf("got=%v pos=%d len=%d", got, cur.pos, len(cur.raw))
+		}
+		for i, want := range values {
+			if got[i+1] != want {
+				t.Fatalf("got[%d]=%v want %v", i+1, got[i+1], want)
+			}
+		}
+	})
+
+	t.Run("uint32_slice_truncated", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestUint64(&b, 2)
+		writeManifestUint32(&b, 1)
+		cur := manifestCursor{raw: b.Bytes()}
+		got, err := cur.appendUint32Slice([]uint32{7})
+		if err == nil || !strings.Contains(err.Error(), "short column binary uint32 slice") {
+			t.Fatalf("appendUint32Slice err=%v want short binary", err)
+		}
+		if fmt.Sprint(got) != "[7]" {
+			t.Fatalf("got=%v want original dst", got)
+		}
+	})
 }
 
 func TestColumnPhysicalRowReaderScratchAppendRejectsWrappedFixedWidthSliceLengthsV1(t *testing.T) {
