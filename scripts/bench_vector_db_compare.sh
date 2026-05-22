@@ -12,6 +12,7 @@ DOCS="${DOCS:-10000}"
 DIMS="${DIMS:-64}"
 QUERIES="${QUERIES:-10000}"
 VALIDATE_QUERIES="${VALIDATE_QUERIES:-64}"
+VALIDATE_DOCS="${VALIDATE_DOCS:-16}"
 TOP_K="${TOP_K:-10}"
 SEARCH_CONCURRENCY="${SEARCH_CONCURRENCY:-2,4,8,16,32,64,128}"
 M="${M:-16}"
@@ -19,6 +20,12 @@ EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 TREEDB_COLUMN_GRAPH_EF_SEARCH="${TREEDB_COLUMN_GRAPH_EF_SEARCH:-}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
+TREEDB_COMPACT="${TREEDB_COMPACT:-false}"
+TREEDB_COMPACT_SYNC_EACH_PHASE="${TREEDB_COMPACT_SYNC_EACH_PHASE:-false}"
+TREEDB_VALUE_POINTER_THRESHOLD="${TREEDB_VALUE_POINTER_THRESHOLD:-}"
+TREEDB_LEAF_GENERATION_SEGMENT_TARGET="${TREEDB_LEAF_GENERATION_SEGMENT_TARGET:-}"
+TREEDB_REQUIRE_VALUE_LOG_BYTES="${TREEDB_REQUIRE_VALUE_LOG_BYTES:-false}"
+TREEDB_REQUIRE_LEAF_VLOG_BYTES="${TREEDB_REQUIRE_LEAF_VLOG_BYTES:-false}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
 
@@ -155,10 +162,13 @@ cat >"$RUN_DIR/README.md" <<EOF
 - dims: \`$DIMS\`
 - queries: \`$QUERIES\`
 - validate queries: \`$VALIDATE_QUERIES\`
+- validate docs: \`$VALIDATE_DOCS\`
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
 - TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
+- TreeDB compact / compact sync: \`$TREEDB_COMPACT / $TREEDB_COMPACT_SYNC_EACH_PHASE\`
+- TreeDB value pointer threshold / leaf generation target: \`${TREEDB_VALUE_POINTER_THRESHOLD:-default} / ${TREEDB_LEAF_GENERATION_SEGMENT_TARGET:-default}\`
 - Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
@@ -208,24 +218,42 @@ GOWORK=off go run ./cmd/treedb_vector_dataset_export \
 
 result_args=()
 
+treedb_common_args=(
+	-matrix=false
+	-dataset-dir "$RUN_DIR/dataset"
+	-keep-dir
+	-docs "$DOCS"
+	-dims "$DIMS"
+	-queries "$QUERIES"
+	-search-concurrency "$SEARCH_CONCURRENCY"
+	-validate-queries "$VALIDATE_QUERIES"
+	-validate-docs "$VALIDATE_DOCS"
+	-top-k "$TOP_K"
+	-m "$M"
+	-ef-construction "$EF_CONSTRUCTION"
+	-min-recall "$MIN_RECALL"
+	-compact="$TREEDB_COMPACT"
+	-compact-sync-each-phase="$TREEDB_COMPACT_SYNC_EACH_PHASE"
+)
+if [[ -n "$TREEDB_VALUE_POINTER_THRESHOLD" ]]; then
+	treedb_common_args+=(-value-pointer-threshold "$TREEDB_VALUE_POINTER_THRESHOLD")
+fi
+if [[ -n "$TREEDB_LEAF_GENERATION_SEGMENT_TARGET" ]]; then
+	treedb_common_args+=(-leaf-generation-segment-target "$TREEDB_LEAF_GENERATION_SEGMENT_TARGET")
+fi
+if [[ "$TREEDB_REQUIRE_VALUE_LOG_BYTES" == "true" ]]; then
+	treedb_common_args+=(-require-value-log-bytes)
+fi
+if [[ "$TREEDB_REQUIRE_LEAF_VLOG_BYTES" == "true" ]]; then
+	treedb_common_args+=(-require-leaf-vlog-bytes)
+fi
+
 if contains_backend treedb; then
 	echo "running TreeDB benchmark"
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
-		-matrix=false \
-		-dataset-dir "$RUN_DIR/dataset" \
+		"${treedb_common_args[@]}" \
 		-dir "$RUN_DIR/treedb" \
-		-keep-dir \
-		-docs "$DOCS" \
-		-dims "$DIMS" \
-		-queries "$QUERIES" \
-		-search-concurrency "$SEARCH_CONCURRENCY" \
-		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
-		-top-k "$TOP_K" \
-		-m "$M" \
-		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$EF_SEARCH" \
-		-min-recall "$MIN_RECALL" \
 		-json >"$RUN_DIR/treedb.json"
 	result_args+=(--result "$RUN_DIR/treedb.json")
 fi
@@ -233,22 +261,10 @@ fi
 if contains_backend treedb_column_graph; then
 	echo "running TreeDB column-store graph benchmark"
 	GOWORK=off go run ./cmd/treedb_vector_search_demo \
-		-matrix=false \
+		"${treedb_common_args[@]}" \
 		-vector-index-strategy column_graph \
-		-dataset-dir "$RUN_DIR/dataset" \
 		-dir "$RUN_DIR/treedb_column_graph" \
-		-keep-dir \
-		-docs "$DOCS" \
-		-dims "$DIMS" \
-		-queries "$QUERIES" \
-		-search-concurrency "$SEARCH_CONCURRENCY" \
-		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
-		-top-k "$TOP_K" \
-		-m "$M" \
-		-ef-construction "$EF_CONSTRUCTION" \
 		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
-		-min-recall "$MIN_RECALL" \
 		-json >"$RUN_DIR/treedb_column_graph.json"
 	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
 fi
