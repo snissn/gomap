@@ -93,10 +93,59 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
+		return staleStatus, err
+	} else if stale {
+		return staleStatus, nil
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
+	return idx.saveNativeSnapshotPrepared()
+}
 
+func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool, error) {
+	status := VectorIndexLoadStatus{}
+	if c == nil || idx == nil {
+		return status, false, nil
+	}
+	if c.isRegisteredVectorIndex(idx) {
+		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(idx)
+		if err == nil && stale {
+			status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+			if idx.needsNativeAutoPersist() {
+				return status, false, fmt.Errorf("%w: index %q has dirty registered stale runtime", errVectorIndexStaleNativeRoot, idx.name)
+			}
+			return status, true, nil
+		}
+		return status, false, nil
+	}
+	if idx.isNativePersistent() || collectionMetaDeclaresVectorIndex(c.meta, idx.name) {
+		status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+		return status, true, nil
+	}
+	declared, err := c.refreshVectorIndexDeclaration(idx.name)
+	if err != nil || !declared {
+		return status, false, nil
+	}
+	status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
+	return status, true, nil
+}
+
+// saveNativeSnapshotPrepared publishes the current graph after the caller has
+// already acquired the collection mutation barrier and flushed buffered writes.
+func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	if idx == nil {
+		return status, errors.New("collections: vector index is nil")
+	}
+	c := idx.collection
+	if c == nil {
+		return status, errCollectionNil
+	}
+	if c.db == nil {
+		return status, errCollectionDBNil
+	}
 	pin := c.db.AcquireSnapshot()
 	if pin == nil {
 		return status, backenddb.ErrClosed
@@ -120,6 +169,9 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
 	status.RootName = rootName
 	baseRoot := catalog.rootID(rootName)
+	if baseEpoch := idx.nativeSnapshotBaseEpochForFullSave(); baseRoot != baseEpoch {
+		return status, fmt.Errorf("%w: index %q loaded epoch %d current root %d", errVectorIndexStaleNativeRoot, idx.name, baseEpoch, baseRoot)
+	}
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
 	baseSystemRoot := snapshotSystemRoot(pin)
 	baseCommitSeq := snapshotCommitSeq(pin)
@@ -172,6 +224,28 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	return status, nil
 }
 
+func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error) {
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return 0, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return 0, err
+	}
+	if catalog == nil {
+		return 0, errCollectionNotFound
+	}
+	return catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
+}
+
 // SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
 // index as a collection-root delta. It is used by live write maintenance; full
 // rebuild/shrink publication should continue to use SaveNativeSnapshot so
@@ -193,6 +267,11 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
+	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
+		return staleStatus, err
+	} else if stale {
+		return staleStatus, nil
+	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return status, err
 	}
@@ -406,7 +485,7 @@ func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIn
 	if err != nil {
 		return nil, status, err
 	}
-	if index != nil || status.Loaded || status.ExactFallbackReason != "missing_vector_index_metadata" {
+	if index != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackMissingVectorIndexMetadata {
 		return index, status, nil
 	}
 	return c.loadLegacyVectorIndexSnapshot(opts)
@@ -438,14 +517,14 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
 	if !ok {
-		status.ExactFallbackReason = "missing_vector_index_metadata"
+		status.ExactFallbackReason = vectorIndexFallbackMissingVectorIndexMetadata
 		return nil, status, nil
 	}
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
 	status.RootName = rootName
 	rootID := catalog.rootID(rootName)
 	if rootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
-		status.ExactFallbackReason = "missing_graph_root"
+		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
 		return nil, status, nil
 	}
 	snapshot, bytesDisk, reason, err := readVectorIndexNativeSnapshot(snap, catalog, rootName)
@@ -496,7 +575,7 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	manifestData, err := os.ReadFile(status.ManifestPath)
 	if errors.Is(err, os.ErrNotExist) {
-		status.ExactFallbackReason = "missing_manifest"
+		status.ExactFallbackReason = vectorIndexFallbackMissingManifest
 		return nil, status, nil
 	}
 	if err != nil {
@@ -504,7 +583,7 @@ func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 	}
 	var manifest vectorIndexManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		status.ExactFallbackReason = "invalid_manifest"
+		status.ExactFallbackReason = vectorIndexFallbackInvalidManifest
 		return nil, status, nil
 	}
 	if reason := validateVectorIndexManifest(manifest, c.meta.Name, index.name, index.metric, index.encoding, index.dimensions); reason != "" {
@@ -999,11 +1078,11 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		return snapshot, 0, "", err
 	}
 	if !ok {
-		return snapshot, 0, "missing_graph_root_entry", nil
+		return snapshot, 0, vectorIndexFallbackMissingGraphRootEntry, nil
 	}
 	bytesDisk += int64(len(rawMeta))
 	if err := json.Unmarshal(rawMeta, &snapshot.Meta); err != nil {
-		return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+		return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 	}
 
 	nodes := make(map[int]vectorIndexPersistNode)
@@ -1014,7 +1093,7 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		return snapshot, bytesDisk, "", err
 	}
 	if it == nil {
-		return snapshot, bytesDisk, "missing_graph_root", nil
+		return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRoot, nil
 	}
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
@@ -1032,11 +1111,11 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
 			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
 			if !ok {
-				return snapshot, bytesDisk, "invalid_graph_root_key", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
 			var node vectorIndexPersistNode
 			if err := json.Unmarshal(value, &node); err != nil {
-				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 			}
 			nodes[nodeID] = node
 			if nodeID > maxNodeID {
@@ -1045,36 +1124,38 @@ func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collection
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
 			var edge vectorIndexPersistEdges
 			if err := json.Unmarshal(value, &edge); err != nil {
-				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 			}
 			snapshot.Edges = append(snapshot.Edges, edge)
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixTomb)):
 			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixTomb):]))
 			if !ok {
-				return snapshot, bytesDisk, "invalid_graph_root_key", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 			}
 			snapshot.Tombstones.NodeIDs = append(snapshot.Tombstones.NodeIDs, nodeID)
 		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixDoc)):
 			var nodeID int
 			if err := json.Unmarshal(value, &nodeID); err != nil {
-				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+				return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootEntry, nil
 			}
 			snapshot.DocMap.Current[string(key[len(vectorIndexNativeKeyPrefixDoc):])] = nodeID
 		default:
-			return snapshot, bytesDisk, "invalid_graph_root_key", nil
+			return snapshot, bytesDisk, vectorIndexFallbackInvalidGraphRootKey, nil
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return snapshot, bytesDisk, "", err
 	}
-	snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
-	for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
-		node, ok := nodes[nodeID]
-		if !ok {
-			return snapshot, bytesDisk, "missing_graph_root_entry", nil
+	if maxNodeID >= 0 {
+		snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
+		for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
+			node, ok := nodes[nodeID]
+			if !ok {
+				return snapshot, bytesDisk, vectorIndexFallbackMissingGraphRootEntry, nil
+			}
+			snapshot.Nodes[nodeID] = node
 		}
-		snapshot.Nodes[nodeID] = node
 	}
 	sort.Ints(snapshot.Tombstones.NodeIDs)
 	return snapshot, bytesDisk, "", nil
@@ -1127,14 +1208,15 @@ func vectorIndexOptionName(opts VectorIndexOptions) string {
 
 func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOptions {
 	return VectorIndexOptions{
-		Name:           def.Name,
-		Field:          def.Field,
-		Metric:         def.Metric,
-		Dimensions:     def.Dimensions,
-		M:              def.M,
-		EfConstruction: def.EfConstruction,
-		EfSearch:       def.EfSearch,
-		Encoding:       def.Encoding,
+		Name:             def.Name,
+		Field:            def.Field,
+		Metric:           def.Metric,
+		Dimensions:       def.Dimensions,
+		M:                def.M,
+		EfConstruction:   def.EfConstruction,
+		EfSearch:         def.EfSearch,
+		Encoding:         def.Encoding,
+		schemaGeneration: def.SchemaGeneration,
 	}
 }
 
@@ -1151,6 +1233,9 @@ func (idx *VectorIndex) validateNativeSnapshotDefinition(def VectorIndexDefiniti
 	if def.Encoding != idx.encoding {
 		return "encoding_mismatch"
 	}
+	if def.SchemaGeneration != idx.schemaGeneration {
+		return "schema_generation_mismatch"
+	}
 	if def.Dimensions != idx.dimensions {
 		return "dimension_mismatch"
 	}
@@ -1164,10 +1249,10 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.persistedEpoch = epoch
+	idx.fullSnapshotBaseEpoch = 0
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = idx.mutationSeq != snapshotSeq
 	if !idx.persistedSnapshotDirty {
-		idx.nativeFullSnapshotDirty = false
 		idx.dirtyMeta = false
 		clear(idx.dirtyNodes)
 		clear(idx.dirtyDocs)
@@ -1178,9 +1263,9 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.persistedEpoch = epoch
+	idx.fullSnapshotBaseEpoch = 0
 	idx.persistedBytesDisk = bytesDisk
 	idx.persistedSnapshotDirty = false
-	idx.nativeFullSnapshotDirty = false
 	idx.mutationSeq = 0
 	idx.dirtyMeta = false
 	clear(idx.dirtyNodes)
@@ -1202,7 +1287,7 @@ func (idx *VectorIndex) needsNativeFullSnapshotAutoPersist() bool {
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return idx.nativeFullSnapshotDirty && idx.mutationSeq != 0
+	return idx.fullSnapshotBaseEpoch != 0 && idx.mutationSeq != 0
 }
 
 func validateVectorIndexManifest(manifest vectorIndexManifest, collection, indexName string, metric VectorMetric, encoding VectorIndexEncoding, dimensions int) string {
@@ -1288,7 +1373,7 @@ func validateVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorInde
 			}
 		}
 	default:
-		return "invalid_encoding"
+		return vectorIndexFallbackInvalidEncoding
 	}
 	return ""
 }
@@ -1341,25 +1426,59 @@ func readVectorIndexSnapshotFiles(epochDir string, entries []vectorIndexManifest
 
 func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot) string {
 	if snapshot.Meta.Field != idx.field || snapshot.Meta.Metric != idx.metric {
-		return "meta_mismatch"
+		return vectorIndexFallbackMetaMismatch
 	}
 	encoding, err := normalizeVectorIndexEncoding(snapshot.Meta.Encoding)
 	if err != nil {
-		return "invalid_encoding"
+		return vectorIndexFallbackInvalidEncoding
 	}
 	if encoding != idx.encoding {
-		return "meta_encoding_mismatch"
+		return vectorIndexFallbackMetaEncodingMismatch
 	}
 	if idx.dimensions != 0 && snapshot.Meta.Dimensions != idx.dimensions {
-		return "meta_dimension_mismatch"
+		return vectorIndexFallbackMetaDimensionMismatch
 	}
 	if snapshot.Meta.Dimensions <= 0 {
-		return "invalid_dimensions"
+		return vectorIndexFallbackInvalidDimensions
+	}
+	if len(snapshot.Nodes) == 0 {
+		if len(snapshot.Edges) != 0 {
+			return vectorIndexFallbackInvalidEdgeNode
+		}
+		if len(snapshot.Tombstones.NodeIDs) != 0 {
+			return vectorIndexFallbackInvalidTombstone
+		}
+		if len(snapshot.DocMap.Current) != 0 {
+			return vectorIndexFallbackInvalidDocMapNode
+		}
+		if snapshot.Meta.Entry >= 0 {
+			return vectorIndexFallbackInvalidEntry
+		}
+		idx.mu.Lock()
+		defer idx.mu.Unlock()
+		idx.name = snapshot.Meta.Name
+		idx.encoding = encoding
+		idx.dimensions = snapshot.Meta.Dimensions
+		idx.m = snapshot.Meta.M
+		idx.efConstruction = snapshot.Meta.EfConstruction
+		idx.efSearch = snapshot.Meta.EfSearch
+		idx.rebuildDeletedRatio = snapshot.Meta.RebuildDeletedRatio
+		idx.nodes = nil
+		idx.currentNode = make(map[string]int)
+		idx.entry = -1
+		idx.maxLevel = -1
+		idx.persistedEpoch = 0
+		idx.fullSnapshotBaseEpoch = 0
+		idx.persistedBytesDisk = 0
+		idx.persistedSnapshotDirty = false
+		idx.lastRebuildDuration = 0
+		idx.mutationSeq = 0
+		return ""
 	}
 	tombstoned := make(map[int]struct{}, len(snapshot.Tombstones.NodeIDs))
 	for _, nodeID := range snapshot.Tombstones.NodeIDs {
 		if nodeID < 0 || nodeID >= len(snapshot.Nodes) {
-			return "invalid_tombstone"
+			return vectorIndexFallbackInvalidTombstone
 		}
 		tombstoned[nodeID] = struct{}{}
 	}
@@ -1388,7 +1507,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	}
 	for _, edge := range snapshot.Edges {
 		if edge.NodeID < 0 || edge.NodeID >= len(nodes) {
-			return "invalid_edge_node"
+			return vectorIndexFallbackInvalidEdgeNode
 		}
 		if edge.Layer < 0 || edge.Layer > nodes[edge.NodeID].level {
 			return "invalid_edge_layer"
@@ -1434,7 +1553,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	current := make(map[string]int, len(snapshot.DocMap.Current))
 	for docID, nodeID := range snapshot.DocMap.Current {
 		if nodeID < 0 || nodeID >= len(nodes) {
-			return "invalid_docmap_node"
+			return vectorIndexFallbackInvalidDocMapNode
 		}
 		if nodes[nodeID].deleted {
 			return "docmap_points_to_deleted_node"
@@ -1468,6 +1587,7 @@ func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot)
 	idx.entry = entry
 	idx.maxLevel = idx.maxLiveLevelLocked()
 	idx.persistedEpoch = 0
+	idx.fullSnapshotBaseEpoch = 0
 	idx.persistedBytesDisk = 0
 	idx.persistedSnapshotDirty = false
 	idx.lastRebuildDuration = 0

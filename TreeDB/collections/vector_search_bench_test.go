@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -383,11 +384,85 @@ func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
 		if err := d.Close(); err != nil {
 			b.Fatalf("close db: %v", err)
 		}
-		if err := os.RemoveAll(dir); err != nil {
-			b.Fatalf("remove db dir: %v", err)
-		}
+		removeVectorBenchmarkDirAfterClose(b, dir)
 	}
 	b.ReportMetric(float64(indexBytes), "index_bytes")
+}
+
+func BenchmarkCollectionVectorIndexNativeRootRebuild(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	def := VectorIndexDefinition{
+		Name:           "embedding_rebuild",
+		Field:          "embedding",
+		Metric:         VectorMetricCosine,
+		Dimensions:     dims,
+		M:              16,
+		EfConstruction: defaultVectorIndexEfConstruction,
+		EfSearch:       defaultVectorIndexEfSearch,
+	}
+
+	b.ReportMetric(float64(docs), "docs/rebuild")
+	b.ReportMetric(float64(dims), "dims")
+	b.ReportAllocs()
+	baseDir := b.TempDir()
+	b.ResetTimer()
+	var lastNativeRootBytes int64
+	var lastIndexBytesMemory int64
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		dir := filepath.Join(baseDir, fmt.Sprintf("rebuild-%06d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create db dir: %v", err)
+		}
+		d, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			b.Fatalf("open db: %v", err)
+		}
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+			_ = d.Close()
+			b.Fatalf("create collection: %v", err)
+		}
+		col, err := mgr.OpenCollection("docs")
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("open collection: %v", err)
+		}
+		vectorBenchmarkInsertBatches(b, col, ids, documents, 512)
+		b.StartTimer()
+		status, err := col.RebuildVectorIndex(def.Name)
+		b.StopTimer()
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("rebuild native vector index: %v", err)
+		}
+		if !status.NativeRootLoaded || status.Stats.LiveDocs != docs || status.RootID == 0 {
+			_ = d.Close()
+			b.Fatalf("unexpected native rebuild status: %+v", status)
+		}
+		lastNativeRootBytes = status.NativeRootBytes
+		lastIndexBytesMemory = status.Stats.BytesMemory
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
+		removeVectorBenchmarkDirAfterClose(b, dir)
+	}
+	b.ReportMetric(float64(lastNativeRootBytes), "native_root_bytes")
+	b.ReportMetric(float64(lastIndexBytesMemory), "index_bytes_memory")
+	b.ReportMetric(float64(lastNativeRootBytes)/float64(docs), "native_root_bytes/doc")
+	b.ReportMetric(float64(lastIndexBytesMemory)/float64(docs), "index_bytes_memory/doc")
+}
+
+func removeVectorBenchmarkDirAfterClose(b *testing.B, dir string) {
+	b.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		if runtime.GOOS != "windows" {
+			b.Fatalf("remove db dir: %v", err)
+		}
+		b.Logf("best-effort remove db dir %q: %v", dir, err)
+	}
 }
 
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {

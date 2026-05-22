@@ -828,14 +828,15 @@ type IndexDefinition struct {
 // collection index. PRs after the metadata/API step persist and maintain the
 // HNSW graph through collection index roots.
 type VectorIndexDefinition struct {
-	Name           string              `json:"name"`
-	Field          string              `json:"field"`
-	Metric         VectorMetric        `json:"metric"`
-	Dimensions     int                 `json:"dimensions"`
-	M              int                 `json:"m,omitempty"`
-	EfConstruction int                 `json:"ef_construction,omitempty"`
-	EfSearch       int                 `json:"ef_search,omitempty"`
-	Encoding       VectorIndexEncoding `json:"encoding,omitempty"`
+	Name             string              `json:"name"`
+	Field            string              `json:"field"`
+	Metric           VectorMetric        `json:"metric"`
+	Dimensions       int                 `json:"dimensions"`
+	M                int                 `json:"m,omitempty"`
+	EfConstruction   int                 `json:"ef_construction,omitempty"`
+	EfSearch         int                 `json:"ef_search,omitempty"`
+	Encoding         VectorIndexEncoding `json:"encoding,omitempty"`
+	SchemaGeneration uint64              `json:"schema_generation,omitempty"`
 }
 
 type CollectionMeta struct {
@@ -3139,8 +3140,13 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.meta = baseMeta
 	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
 	registerEmptyRuntime := catalog.rootID(primaryRootName) == 0 && len(catalog.overlayRootIDs(primaryRootName)) == 0
+	schemaGeneration := snapshotCommitSeq(snap) + 1
+	if schemaGeneration == 0 {
+		schemaGeneration = 1
+	}
 	_ = snap.Close()
 
+	def.SchemaGeneration = schemaGeneration
 	newMeta, normalizedDef, err := addVectorIndexToCollectionMeta(baseMeta, def)
 	if err != nil {
 		return nil, err
