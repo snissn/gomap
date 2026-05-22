@@ -164,6 +164,14 @@ Report and compare:
 - open_granules/op and open_physical_B/op for setup/one-shot paths,
 - docs_fetched/search only for materializing public API benchmarks.
 
+## Block Planner Follow-On
+
+The next native search optimization is planned in
+[`column-graph-native-block-planner.md`](column-graph-native-block-planner.md).
+It aligns graph search with the column store by moving from per-candidate point
+fetches to bounded block views, batched scoring, lazy adjacency expansion, and
+final top-k-only ID/document materialization.
+
 ## Best Practices
 
 - Use `column_graph` explicitly. Existing native runtime vector indexes remain a

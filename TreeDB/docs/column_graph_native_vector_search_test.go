@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func TestDocs_ColumnGraphNativeBlockPlanner(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	planPath := filepath.Join(treeRoot, "docs", "spec", "column-graph-native-block-planner.md")
+	content, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatalf("read block planner: %v", err)
+	}
+	text := string(content)
+	required := []string{
+		"Granule/block-oriented typed reader",
+		"ordinal -> granule/block -> typed vector/invNorm/adjacency spans",
+		"ColumnGraphSearchPlan",
+		"ColumnGraphBlockView",
+		"Batched scoring loop",
+		"Lazy adjacency expansion",
+		"Final result materialization",
+		"must not become a hidden full graph decode",
+		"decoded_blocks/search == 0",
+		"physical_B/search == 0",
+		"docs_fetched/search == 0",
+	}
+	for _, needle := range required {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("block planner missing %q", needle)
+		}
+	}
+}
+
 func TestDocs_ColumnGraphNativeVectorSearchGuide(t *testing.T) {
 	treeRoot, repoRoot := repoRoots(t)
 	guidePath := filepath.Join(treeRoot, "docs", "spec", "column-graph-native-vector-search.md")
