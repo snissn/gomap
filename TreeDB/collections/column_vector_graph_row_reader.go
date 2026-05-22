@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -273,15 +274,27 @@ func (r *columnVectorGraphPhysicalRowReader) FetchRow(ordinal int, scratch *colu
 }
 
 func (r *columnVectorGraphPhysicalRowReader) fetchRowUnchecked(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
+	return r.fetchNativeRowUnchecked(ordinal, scratch)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) fetchNativeRowUnchecked(ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
 	reader, err := r.rowReader()
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	row, err := reader.FetchRow(ordinal, scratch)
+	if reader.closed {
+		return columnVectorGraphPhysicalRow{}, errors.New("collections: physical column row reader is closed")
+	}
+	if scratch == nil {
+		return columnVectorGraphPhysicalRow{}, errors.New("collections: physical column row reader requires caller-owned scratch")
+	}
+	reader.stats.RowFetches++
+	row, err := r.nativeRowFromReaderOrdinal(reader, ordinal, scratch)
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	return r.graphRowFromPhysicalRowUnchecked(row)
+	reader.stats.RowsFetched++
+	return row, nil
 }
 
 // FetchBatch returns graph rows in the underlying reader's batch order and
@@ -311,16 +324,192 @@ func (r *columnVectorGraphPhysicalRowReader) fetchBatchUnchecked(ordinals []int,
 	if err != nil {
 		return err
 	}
+	if reader.closed {
+		return errors.New("collections: physical column row reader is closed")
+	}
+	if scratch == nil {
+		return errors.New("collections: physical column row reader requires caller-owned scratch")
+	}
 	if visitor == nil {
 		return errColumnVectorGraphPhysicalRowReaderBatchVisitorNil
 	}
-	return reader.FetchBatch(ordinals, scratch, func(row columnPhysicalRowReaderRow) error {
-		graphRow, err := r.graphRowFromPhysicalRowUnchecked(row)
+	reader.stats.BatchFetches++
+	for _, ordinal := range ordinals {
+		graphRow, err := r.nativeRowFromReaderOrdinal(reader, ordinal, scratch)
 		if err != nil {
 			return err
 		}
-		return visitor(graphRow)
-	})
+		reader.stats.RowsFetched++
+		if err := visitor(graphRow); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) nativeRowFromReaderOrdinal(reader *columnPhysicalRowReader, ordinal int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
+	rangeIdx := reader.rangeIndexForOrdinal(ordinal)
+	if rangeIdx < 0 {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
+	}
+	rowRange := reader.ranges[rangeIdx]
+	block, err := reader.loadBlock(rowRange)
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, err
+	}
+	rowIndex := ordinal - rowRange.startOrdinal
+	if rowIndex < 0 || rowIndex >= len(block.rowOffsets) {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: physical column row index=%d outside block rows=%d", rowIndex, len(block.rowOffsets))
+	}
+	return r.nativeGraphRowFromBlock(block, ordinal, rowIndex, scratch)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) nativeGraphRowFromBlock(block *columnPhysicalRowReaderBlock, ordinal, rowIndex int, scratch *columnPhysicalRowReaderScratch) (columnVectorGraphPhysicalRow, error) {
+	cur := manifestCursor{raw: block.raw, pos: block.rowOffsets[rowIndex]}
+	id := cur.bytesView()
+	deleted := false
+	if block.version >= columnPhysicalAssetVersionV2 {
+		deleted = cur.bool()
+	}
+	if cur.err != nil {
+		return columnVectorGraphPhysicalRow{}, cur.err
+	}
+	if len(id) == 0 {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing document id", r.def.Name, ordinal)
+	}
+	if deleted {
+		if block.header.Operation != ColumnPublishOperationDelete {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("column physical asset %s row[%d] is marked deleted", block.header.Operation, rowIndex)
+		}
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d row is deleted", r.def.Name, ordinal)
+	}
+	if block.header.Operation == ColumnPublishOperationDelete {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("column physical asset delete row[%d] is not marked deleted", rowIndex)
+	}
+
+	scratch.Values = scratch.Values[:0]
+	scratch.Float32Values = scratch.Float32Values[:0]
+	scratch.Uint32Values = scratch.Uint32Values[:0]
+
+	vector, err := r.readNativeGraphVector(&cur, block.version, ordinal, scratch)
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	invNorm, err := r.readNativeGraphInvNorm(&cur, block.version, ordinal)
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	adjacency, err := r.readNativeGraphAdjacency(&cur, block.version, ordinal, scratch)
+	if err != nil {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	if cur.err != nil {
+		return columnVectorGraphPhysicalRow{}, cur.err
+	}
+	if invNorm <= 0 || math.IsNaN(float64(invNorm)) || math.IsInf(float64(invNorm), 0) {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", r.def.Name, ordinal, invNorm)
+	}
+	return columnVectorGraphPhysicalRow{
+		Ordinal:   ordinal,
+		RowIndex:  rowIndex,
+		ID:        id,
+		Vector:    vector,
+		InvNorm:   invNorm,
+		Adjacency: adjacency,
+	}, nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) readNativeGraphVector(cur *manifestCursor, version uint16, ordinal int, scratch *columnPhysicalRowReaderScratch) ([]float32, error) {
+	if err := r.readNativeGraphValueHeader(cur, version, ordinal, 0, ColumnStoreValueFloat32Vector); err != nil {
+		return nil, err
+	}
+	n := cur.u64()
+	if cur.err != nil {
+		return nil, cur.err
+	}
+	if n != uint64(r.def.Dimensions) {
+		return nil, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", r.def.Name, ordinal, n, r.def.Dimensions)
+	}
+	byteLen, ok := cur.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
+		return nil, cur.err
+	}
+	pos := cur.pos
+	end := pos + int(byteLen)
+	if int(byteLen) == 0 {
+		cur.pos = end
+		return nil, nil
+	}
+	_ = cur.raw[end-1]
+	if columnPhysicalNativeLittleEndian {
+		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(cur.raw[pos:end]))), int(n))
+		cur.pos = end
+		return vector, nil
+	}
+	base := len(scratch.Float32Values)
+	need := base + int(n)
+	if cap(scratch.Float32Values) < need {
+		next := make([]float32, need)
+		copy(next, scratch.Float32Values)
+		scratch.Float32Values = next
+	} else {
+		scratch.Float32Values = scratch.Float32Values[:need]
+	}
+	for i := base; i < need; i++ {
+		scratch.Float32Values[i] = math.Float32frombits(uint32(cur.raw[pos]) | uint32(cur.raw[pos+1])<<8 | uint32(cur.raw[pos+2])<<16 | uint32(cur.raw[pos+3])<<24)
+		pos += 4
+	}
+	cur.pos = end
+	return scratch.Float32Values[base:], nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) readNativeGraphInvNorm(cur *manifestCursor, version uint16, ordinal int) (float32, error) {
+	if err := r.readNativeGraphValueHeader(cur, version, ordinal, 1, ColumnStoreValueFloat32); err != nil {
+		return 0, err
+	}
+	value := math.Float32frombits(cur.u32())
+	return value, cur.err
+}
+
+func (r *columnVectorGraphPhysicalRowReader) readNativeGraphAdjacency(cur *manifestCursor, version uint16, ordinal int, scratch *columnPhysicalRowReaderScratch) ([]uint32, error) {
+	if err := r.readNativeGraphValueHeader(cur, version, ordinal, 2, ColumnStoreValueAdjacencyList); err != nil {
+		return nil, err
+	}
+	start := len(scratch.Uint32Values)
+	var err error
+	scratch.Uint32Values, err = cur.appendUint32Slice(scratch.Uint32Values)
+	if err != nil {
+		return nil, err
+	}
+	return scratch.Uint32Values[start:], nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) readNativeGraphValueHeader(cur *manifestCursor, version uint16, ordinal, colIdx int, want ColumnStoreValueType) error {
+	typeBytes := cur.stringBytes()
+	if cur.err != nil {
+		return cur.err
+	}
+	if !columnPhysicalBytesEqualString(typeBytes, string(want)) {
+		return fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), want)
+	}
+	null := cur.bool()
+	if cur.err != nil {
+		return cur.err
+	}
+	present := true
+	if version >= columnPhysicalAssetVersionV3 {
+		present = cur.bool()
+		if cur.err != nil {
+			return cur.err
+		}
+	}
+	if !present {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", r.def.Name, ordinal)
+	}
+	if null {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, ordinal)
+	}
+	return nil
 }
 
 func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnPhysicalRowReaderRow, rowCount int) (columnVectorGraphPhysicalRow, error) {

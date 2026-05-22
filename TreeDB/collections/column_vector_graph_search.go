@@ -370,7 +370,7 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 
 func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	if scratch.markVisited(ordinal) {
-		row, err := r.fetchRowUnchecked(ordinal, &scratch.scoreScratch)
+		row, err := r.fetchNativeRowUnchecked(ordinal, &scratch.scoreScratch)
 		if err != nil {
 			return err
 		}
