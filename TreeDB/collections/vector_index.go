@@ -2067,11 +2067,25 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 			rejected = append(rejected, candidate)
 		}
 	}
-	for i := 0; len(selected) < limit && i < len(rejected); i++ {
-		selected = append(selected, rejected[i])
-	}
 	out := candidates[:0]
-	out = append(out, selected...)
+	backfill := minInt(limit-len(selected), len(rejected))
+	if backfill == 0 {
+		out = append(out, selected...)
+		return out
+	}
+	selectedPos := 0
+	rejectedPos := 0
+	for selectedPos < len(selected) && rejectedPos < backfill {
+		if idx.compareVectorIndexCandidatesByDistanceLocked(selected[selectedPos], rejected[rejectedPos]) <= 0 {
+			out = append(out, selected[selectedPos])
+			selectedPos++
+			continue
+		}
+		out = append(out, rejected[rejectedPos])
+		rejectedPos++
+	}
+	out = append(out, selected[selectedPos:]...)
+	out = append(out, rejected[rejectedPos:backfill]...)
 	return out
 }
 
