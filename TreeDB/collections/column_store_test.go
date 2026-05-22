@@ -432,14 +432,6 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "fixed_width_encoding",
 		},
 		{
-			name: "adjacency fixed width encoding rejected",
-			cfg: &ColumnStoreConfig{
-				Enabled: true,
-				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
-			},
-			want: "fixed_width_encoding",
-		},
-		{
 			name: "unsupported locator",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
@@ -600,6 +592,20 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 				t.Fatalf("normalizeCollectionMeta err=%v want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnStoreAdjacencyFixedWidthEncodingNormalizes(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	if got := meta.Options.ColumnStore.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("adjacency fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
 	}
 }
 

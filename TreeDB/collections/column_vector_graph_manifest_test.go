@@ -90,8 +90,8 @@ func TestColumnVectorGraphPhysicalConfigUsesLittleEndianVectorOnlyM1C(t *testing
 		t.Fatalf("inv_norm fixed_width_encoding=%q want default", got)
 	}
 	adjacencyCol := columnVectorGraphPhysicalColumnForTestM1C(t, graphCfg.Columns, columnVectorGraphAdjacencyColumnName)
-	if got := adjacencyCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
-		t.Fatalf("adjacency fixed_width_encoding=%q want default", got)
+	if got := adjacencyCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("adjacency fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
 	}
 }
 
@@ -226,8 +226,8 @@ func TestColumnVectorGraphPhysicalAssetRoundTripV2A(t *testing.T) {
 		t.Fatalf("decoded inv_norm fixed_width_encoding=%q want default", got)
 	}
 	decodedAdjacencyCol := columnVectorGraphPhysicalColumnForTestM1C(t, decoded.Columns, columnVectorGraphAdjacencyColumnName)
-	if got := decodedAdjacencyCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingDefault {
-		t.Fatalf("decoded adjacency fixed_width_encoding=%q want default", got)
+	if got := decodedAdjacencyCol.FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("decoded adjacency fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
 	}
 	projection, err := newColumnPhysicalScanProjection(prepared.Config, []string{
 		columnVectorGraphVectorColumnName,

@@ -397,14 +397,18 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacency(plan *colu
 		return nil, err
 	}
 	scratch.expandScratch.Uint32Values = scratch.expandScratch.Uint32Values[:0]
-	adjacency, adjacencyScratch, err := view.adjacency(ref.rowIndex, scratch.expandScratch.Uint32Values)
+	adjacency, adjacencyScratch, direct, err := view.adjacency(ref.rowIndex, scratch.expandScratch.Uint32Values)
 	if err != nil {
 		return nil, err
 	}
 	scratch.expandScratch.Uint32Values = adjacencyScratch
 	stats.ExpansionFetches++
 	stats.AdjacencyExpansions++
-	stats.AdjacencyScratchDecodes++
+	if direct {
+		stats.AdjacencyDirectViews++
+	} else {
+		stats.AdjacencyScratchDecodes++
+	}
 	stats.BlockViewHits = plan.hits
 	stats.BlockViewMisses = plan.misses
 	stats.BlockViewBuilds = plan.builds

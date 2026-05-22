@@ -599,7 +599,7 @@ func columnFixedWidthEncodingIsLittleEndian(encoding ColumnFixedWidthEncoding) (
 
 func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
 	switch valueType {
-	case ColumnStoreValueFloat32Vector:
+	case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
 		return true
 	default:
 		return false
