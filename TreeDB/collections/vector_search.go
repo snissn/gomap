@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -21,6 +22,52 @@ const (
 	VectorMetricL2
 	VectorMetricInnerProduct
 )
+
+func (m VectorMetric) String() string {
+	switch m {
+	case VectorMetricCosine:
+		return "cosine"
+	case VectorMetricL2:
+		return "l2"
+	case VectorMetricInnerProduct:
+		return "inner_product"
+	default:
+		return fmt.Sprintf("unknown(%d)", m)
+	}
+}
+
+func (m VectorMetric) MarshalJSON() ([]byte, error) {
+	metric, err := normalizeVectorMetric(m)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(metric.String())
+}
+
+func (m *VectorMetric) UnmarshalJSON(raw []byte) error {
+	if m == nil {
+		return errors.New("collections: nil vector metric")
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		metric, err := parseVectorMetric(s)
+		if err != nil {
+			return err
+		}
+		*m = metric
+		return nil
+	}
+	var n uint8
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return err
+	}
+	metric, err := normalizeVectorMetric(VectorMetric(n))
+	if err != nil {
+		return err
+	}
+	*m = metric
+	return nil
+}
 
 // VectorSearchOptions configures exact vector search over collection primary
 // documents.
@@ -201,6 +248,19 @@ func normalizeVectorMetric(metric VectorMetric) (VectorMetric, error) {
 		return metric, nil
 	default:
 		return 0, fmt.Errorf("collections: unsupported vector metric %d", metric)
+	}
+}
+
+func parseVectorMetric(value string) (VectorMetric, error) {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "cosine":
+		return VectorMetricCosine, nil
+	case "l2":
+		return VectorMetricL2, nil
+	case "inner_product", "inner-product", "innerproduct":
+		return VectorMetricInnerProduct, nil
+	default:
+		return 0, fmt.Errorf("collections: unsupported vector metric %q", value)
 	}
 }
 
