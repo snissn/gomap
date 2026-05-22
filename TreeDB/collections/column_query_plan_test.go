@@ -1395,6 +1395,31 @@ func TestColumnQueryPlannerM14BRoutesSerialMutationVisibilityButNotParallel(t *t
 		t.Fatalf("granule count=%d want part-count fallback %d", got, want)
 	}
 
+	metadata, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:                  "m14b_mutation_metadata",
+		ProjectedColumns:      []string{"time_us", "did"},
+		AggregateMetadataName: "min_time_us",
+		ForceKind:             ColumnQueryPlanAggregateMetadata,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery aggregate metadata mutation: %v", err)
+	}
+	if metadata.Supported {
+		t.Fatalf("aggregate metadata mutation plan should fail closed until mutation-aware metadata execution lands: %+v", metadata)
+	}
+	if got, want := metadata.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedAggregateMetadataDisabledReason; got != want {
+		t.Fatalf("aggregate metadata unsupported reason=%q want %q diagnostics=%+v", got, want, metadata.Diagnostics)
+	}
+	if metadata.Diagnostics.MutationParts <= 0 || !metadata.Diagnostics.VisibilityMetadata {
+		t.Fatalf("aggregate metadata mutation diagnostics did not expose mutation visibility state: %+v", metadata.Diagnostics)
+	}
+
 	parallel, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
 		Name:             "m14b_parallel_mutation",
 		ProjectedColumns: []string{"time_us", "kind"},

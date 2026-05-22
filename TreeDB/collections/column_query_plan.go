@@ -238,7 +238,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
 	if columnQueryForcedPhysicalExecution(req.ForceKind) && caps.PhysicalAssetCount > 0 {
 		caps.SerialColumnScan = true
-		caps.AggregateMetadata = columnMaterializableAggregateMetadataCount(cfg) > 0
+		caps.AggregateMetadata = caps.MutationParts == 0 && columnMaterializableAggregateMetadataCount(cfg) > 0
 		caps.ParallelColumnScan = caps.MutationParts == 0 && columnQueryParallelWorkerCount(caps) > 1
 	}
 	return caps
