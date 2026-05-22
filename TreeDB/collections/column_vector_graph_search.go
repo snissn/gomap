@@ -500,17 +500,22 @@ func (s *columnVectorGraphNativeSearchScratch) insertTop(limit int, candidate co
 	if limit <= 0 {
 		return
 	}
-	pos := len(s.top)
+	topLen := len(s.top)
+	if topLen == limit && !columnVectorGraphSearchCandidateBetter(candidate, s.top[topLen-1]) {
+		return
+	}
+	pos := topLen
 	for pos > 0 && columnVectorGraphSearchCandidateBetter(candidate, s.top[pos-1]) {
 		pos--
 	}
 	if pos >= limit {
 		return
 	}
-	if len(s.top) < limit {
+	if topLen < limit {
 		s.top = append(s.top, columnVectorGraphSearchCandidate{})
+		topLen++
 	}
-	copy(s.top[pos+1:], s.top[pos:len(s.top)-1])
+	copy(s.top[pos+1:], s.top[pos:topLen-1])
 	s.top[pos] = candidate
 }
 
