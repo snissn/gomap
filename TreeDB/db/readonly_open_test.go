@@ -39,6 +39,44 @@ func TestReadOnlyRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestReadOnlyOpenDoesNotAcquireCommandJournalOwner(t *testing.T) {
+	dir := t.TempDir()
+
+	w, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetSync([]byte("k"), []byte("v")); err != nil {
+		_ = w.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	owner, err := commitlog.AcquireJournalOwner(filepath.Join(dir, "wal"))
+	if err != nil {
+		t.Fatalf("AcquireJournalOwner: %v", err)
+	}
+	defer owner.Close()
+
+	ro, err := Open(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("read-only Open while journal owner held: %v", err)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close read-only: %v", err)
+	}
+
+	noLock, err := openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("openReadOnlyNoLock while journal owner held: %v", err)
+	}
+	if err := noLock.Close(); err != nil {
+		t.Fatalf("Close no-lock read-only: %v", err)
+	}
+}
+
 func TestReadOnlyOpenConfiguresLeafPageReadCacheEntries(t *testing.T) {
 	dir := t.TempDir()
 
@@ -85,6 +123,31 @@ func TestReadOnlyOpenConfiguresLeafPageReadCacheEntries(t *testing.T) {
 				t.Fatalf("outer leaf cache capacity=%q want 7", got)
 			}
 		})
+	}
+}
+
+func TestReadOnlyNoLockDefaultsChunkSize(t *testing.T) {
+	dir := t.TempDir()
+
+	w, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetSync([]byte("k"), []byte("v")); err != nil {
+		_ = w.Close()
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ro, err := openReadOnlyNoLock(Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("openReadOnlyNoLock: %v", err)
+	}
+	defer ro.Close()
+	if ro.chunkSize != defaultChunkSize {
+		t.Fatalf("read-only chunkSize=%d want default %d", ro.chunkSize, defaultChunkSize)
 	}
 }
 

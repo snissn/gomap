@@ -371,7 +371,7 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 		hasPrimaryDocument: true,
 	}}
 	noColumnMeta := CollectionMeta{Name: "events"}
-	if !col.shouldUseDirectBufferedUpdatePlan(noColumnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
+	if !col.shouldUseDirectBufferedUpdatePlan(noColumnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, updateBatchSecondaryIndexChangeSummary{}, changed, true) {
 		t.Fatal("control metadata did not use direct buffered update plan")
 	}
 	columnMeta, err := normalizeCollectionMeta(CollectionMeta{
@@ -386,7 +386,7 @@ func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T
 	if !columnStoreNeedsRetainedPayloadTransform(columnMeta) {
 		t.Fatalf("column metadata does not require retained payload transform: %+v", columnMeta.Options.ColumnStore)
 	}
-	if col.shouldUseDirectBufferedUpdatePlan(columnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, nil, changed, true) {
+	if col.shouldUseDirectBufferedUpdatePlan(columnMeta, opts, true, updateBatchModeNoSecondaryUniqueIndexChanges, updateBatchSecondaryIndexChangeSummary{}, changed, true) {
 		t.Fatal("retained-payload column store used direct buffered update plan")
 	}
 }
