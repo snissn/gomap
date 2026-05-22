@@ -12,5 +12,12 @@ func vectorDotProductFloat32(left, right []float32) float32 {
 	if n == 0 {
 		return 0
 	}
-	return simdf32.DotProduct(left[:n], right[:n])
+	return vectorDotProductFloat32SameLen(left[:n], right[:n])
+}
+
+func vectorDotProductFloat32SameLen(left, right []float32) float32 {
+	if len(left) == 0 {
+		return 0
+	}
+	return simdf32.DotProduct(left, right)
 }

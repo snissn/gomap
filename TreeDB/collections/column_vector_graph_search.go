@@ -531,7 +531,7 @@ func columnVectorGraphNativeCosineScoreVector(query []float32, queryInvNorm floa
 	if len(vector) != len(query) {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, len(vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	dot := float64(vectorDotProductFloat32(query, vector))
+	dot := float64(vectorDotProductFloat32SameLen(query, vector))
 	if !math.IsInf(dot, 0) && !math.IsNaN(dot) {
 		return dot * float64(queryInvNorm) * float64(invNorm), nil
 	}

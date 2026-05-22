@@ -12,8 +12,16 @@ func vectorDotProductFloat32(left, right []float32) float32 {
 	if n == 0 {
 		return 0
 	}
+	return vectorDotProductFloat32SameLen(left[:n], right[:n])
+}
+
+func vectorDotProductFloat32SameLen(left, right []float32) float32 {
+	n := len(left)
+	if n == 0 {
+		return 0
+	}
 	return blas32.Dot(
-		blas32.Vector{N: n, Inc: 1, Data: left[:n]},
-		blas32.Vector{N: n, Inc: 1, Data: right[:n]},
+		blas32.Vector{N: n, Inc: 1, Data: left},
+		blas32.Vector{N: n, Inc: 1, Data: right},
 	)
 }
