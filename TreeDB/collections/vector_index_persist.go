@@ -262,6 +262,9 @@ func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error)
 	if c.db == nil {
 		return status, errCollectionDBNil
 	}
+	if idx.needsNativeFullSnapshotAutoPersist() {
+		return idx.SaveNativeSnapshot()
+	}
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if staleStatus, stale, err := staleNativeSnapshotSaveStatus(c, idx); err != nil {
@@ -1276,6 +1279,15 @@ func (idx *VectorIndex) needsNativeAutoPersist() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty)
+}
+
+func (idx *VectorIndex) needsNativeFullSnapshotAutoPersist() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.fullSnapshotBaseEpoch != 0 && idx.mutationSeq != 0
 }
 
 func validateVectorIndexManifest(manifest vectorIndexManifest, collection, indexName string, metric VectorMetric, encoding VectorIndexEncoding, dimensions int) string {
