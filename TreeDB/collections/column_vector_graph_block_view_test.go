@@ -90,8 +90,11 @@ func TestColumnVectorGraphBlockViewAccessorsV1(t *testing.T) {
 		t.Fatalf("adjacency=%v want [0]", adjacency)
 	}
 	if columnPhysicalNativeLittleEndian {
-		if !direct || len(adjacencyScratch) != 0 {
-			t.Fatalf("direct=%t scratch=%v want direct adjacency view with no scratch", direct, adjacencyScratch)
+		if direct && len(adjacencyScratch) != 0 {
+			t.Fatalf("direct adjacency view used scratch=%v", adjacencyScratch)
+		}
+		if !direct && !slices.Equal(adjacencyScratch, []uint32{0}) {
+			t.Fatalf("scratch adjacency=%v want [0] when direct view is unaligned", adjacencyScratch)
 		}
 	} else if direct || !slices.Equal(adjacencyScratch, []uint32{0}) {
 		t.Fatalf("direct=%t scratch=%v want scratch adjacency decode", direct, adjacencyScratch)
