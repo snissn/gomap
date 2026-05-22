@@ -22,8 +22,9 @@ import (
 func TestWriterFlushFlushesBufferedFileBackedWriter(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
+	fileID := page.ValueLogFileID(1)
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -97,8 +98,9 @@ func TestWriterRotateTo_FlushesSinkBufferBeforeSwitchingToFileBacked(t *testing.
 func TestValueLogAppendRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
+	fileID := page.ValueLogFileID(1)
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestValueLogAppendRead(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reader, err := NewReader(path, page.ValueLogFileID(1))
+	reader, err := NewReader(path, fileID)
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
 	}
@@ -205,8 +207,9 @@ func TestValueLogAppendRead(t *testing.T) {
 func TestValueLogReaderReadNextMeta(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
+	fileID := page.ValueLogFileID(1)
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, fileID)
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -227,7 +230,7 @@ func TestValueLogReaderReadNextMeta(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reader, err := NewReader(path, page.ValueLogFileID(1))
+	reader, err := NewReader(path, fileID)
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
 	}
@@ -275,7 +278,7 @@ func TestValueLogReaderReadNextMeta(t *testing.T) {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("open for ReadRIDAt: %v", err)
+		t.Fatalf("open for ReadRIDAtUnverified: %v", err)
 	}
 	defer f.Close()
 	for _, tc := range []struct {
@@ -286,18 +289,23 @@ func TestValueLogReaderReadNextMeta(t *testing.T) {
 		{ptr: ptrs[1], rid: 2},
 		{ptr: ptr3, rid: 3},
 	} {
-		gotRID, err := ReadRIDAt(f, tc.ptr)
+		gotRID, err := ReadRIDAtUnverified(f, fileID, tc.ptr)
 		if err != nil {
-			t.Fatalf("ReadRIDAt(%+v): %v", tc.ptr, err)
+			t.Fatalf("ReadRIDAtUnverified(%+v): %v", tc.ptr, err)
 		}
 		if gotRID != tc.rid {
-			t.Fatalf("ReadRIDAt(%+v)=%d, want %d", tc.ptr, gotRID, tc.rid)
+			t.Fatalf("ReadRIDAtUnverified(%+v)=%d, want %d", tc.ptr, gotRID, tc.rid)
 		}
 	}
 	badPtr := ptr3
 	badPtr.Offset = 3
-	if _, err := ReadRIDAt(f, badPtr); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("ReadRIDAt short offset error=%v, want ErrCorrupt", err)
+	if _, err := ReadRIDAtUnverified(f, fileID, badPtr); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("ReadRIDAtUnverified short offset error=%v, want ErrCorrupt", err)
+	}
+	badPtr = ptr3
+	badPtr.FileID++
+	if _, err := ReadRIDAtUnverified(f, fileID, badPtr); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("ReadRIDAtUnverified wrong fileID error=%v, want ErrCorrupt", err)
 	}
 }
 

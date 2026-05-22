@@ -228,7 +228,7 @@ func (c *Collection) columnAssetGCNormalizeMaintenanceRaceError(err error) error
 	}
 	maintenanceErr := c.db.CheckStorageMaintenanceReady()
 	if maintenanceErr != nil {
-		return maintenanceErr
+		return errors.Join(err, maintenanceErr)
 	}
 	return err
 }

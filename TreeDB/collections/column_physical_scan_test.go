@@ -736,6 +736,9 @@ func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.
 	if _, err := col.loadColumnManifestRecordsForPublish(rootID, "events", *cfg); err != nil {
 		t.Fatalf("load untampered manifest for publish: %v", err)
 	}
+	if _, err := col.loadColumnManifestRecordsForPublish(0, "events", *cfg); err == nil || !strings.Contains(err.Error(), "missing manifest root") {
+		t.Fatalf("load active manifest with missing root err=%v want missing root rejection", err)
+	}
 
 	tampered := cloneColumnManifestRecords(manifest.Records)
 	tamperedCount := 0
@@ -931,6 +934,56 @@ func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *t
 	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, tamperedIdentity, "events")
 	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 2") {
 		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want active part-count mismatch", err)
+	}
+}
+
+func TestColumnManifestScanRejectsHugeExpectedPartsWithoutPreallocM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, manifest, _ := columnManifestPlannerOnePartFixtureM14A(t)
+	tampered := cloneColumnManifestRecords(manifest.Records)
+	replaced := false
+	for i := range tampered {
+		if bytes.Equal(tampered[i].key, columnManifestHeaderRecordKeyBytes) {
+			header := bytes.Clone(tampered[i].value)
+			binary.BigEndian.PutUint64(header[len(header)-8:], ^uint64(0))
+			tampered[i].value = header
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		t.Fatal("manifest header record not found")
+	}
+	tamperedIdentity := manifest.Identity
+	tamperedIdentity.Checksum = checksumColumnManifestRecords(input, tamperedIdentity.Generation, tampered)
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, tamperedIdentity, tampered)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, err = loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, *cfg, tamperedIdentity, "events")
+	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
+		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want huge part-count mismatch", err)
+	}
+	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+		snap,
+		rootID,
+		*cfg,
+		tamperedIdentity,
+		"events",
+		columnManifestScanAllSidecars(),
+		false,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
+		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want huge active part-count mismatch", err)
 	}
 }
 

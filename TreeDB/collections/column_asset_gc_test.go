@@ -815,6 +815,24 @@ func TestColumnAssetGCClosedDuringPlanningReturnsErrClosedM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetGCNormalizeMaintenanceRaceErrorPreservesPlanningErrorM15B(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	planningErr := errors.New("planning failed")
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	err := col.columnAssetGCNormalizeMaintenanceRaceError(planningErr)
+	if !errors.Is(err, planningErr) {
+		t.Fatalf("normalized err=%v want planning error", err)
+	}
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("normalized err=%v want maintenance ErrClosed", err)
+	}
+}
+
 func writeColumnAssetGCCandidateSegmentM15B(t testing.TB, rootDir string, col *Collection, fileID uint32, payload []byte) ColumnAssetRef {
 	t.Helper()
 	cfg := col.Meta().Options.ColumnStore

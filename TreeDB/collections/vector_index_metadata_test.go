@@ -267,7 +267,7 @@ func TestVectorIndexMetadataValidationV2A(t *testing.T) {
 			meta: CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{{
 				Name:       "embedding",
 				Field:      "embedding",
-				Metric:     VectorMetric("l2"),
+				Metric:     VectorMetricL2,
 				Dimensions: 3,
 				Strategy:   VectorIndexStrategyColumnGraph,
 			}}},
@@ -278,7 +278,7 @@ func TestVectorIndexMetadataValidationV2A(t *testing.T) {
 				Name:       "embedding",
 				Field:      "embedding",
 				Dimensions: 3,
-				Encoding:   VectorIndexEncoding("int8"),
+				Encoding:   VectorIndexEncodingInt8,
 				Strategy:   VectorIndexStrategyColumnGraph,
 			}}},
 		},

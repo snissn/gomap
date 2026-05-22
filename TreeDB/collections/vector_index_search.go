@@ -23,25 +23,6 @@ const (
 	VectorIndexSearchPathColumnGraphNativeReader VectorIndexSearchPath = "column_graph_native_reader"
 )
 
-// VectorIndexSearchOptions configures a one-shot public collection vector-index
-// search. The column_graph path opens a bounded physical column reader, runs the
-// graph search, and closes the reader before returning.
-type VectorIndexSearchOptions struct {
-	// IndexName is the declared collection vector-index name.
-	IndexName string
-	// Query is the query vector. V4 column_graph search supports cosine indexes.
-	Query []float32
-	// TopK is the maximum number of nearest results to return.
-	TopK int
-	// EfSearch bounds graph exploration. Zero uses the persisted index default.
-	EfSearch int
-	// IncludeDocuments materializes full documents after top-k selection.
-	IncludeDocuments bool
-	// MaxDecodedBlocks bounds the generic physical column reader cache used by
-	// the column_graph path. Zero uses the reader default.
-	MaxDecodedBlocks int
-}
-
 // VectorIndexSearcherOptions configures a reusable snapshot-bound vector-index
 // searcher. Reuse this path for steady-state queries when setup/open cost should
 // not be paid on every search.

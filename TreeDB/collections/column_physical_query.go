@@ -24,7 +24,10 @@ const (
 	ColumnPhysicalQueryGroupInt64Span     ColumnPhysicalQueryKind = "group_int64_span"
 )
 
-const columnPhysicalQueryHourUS = int64(3_600_000_000)
+const (
+	columnPhysicalQueryHourUS             = int64(3_600_000_000)
+	columnPhysicalQueryMaxParallelWorkers = 256
+)
 
 // ColumnPhysicalQueryRequest describes one explicit physical column query. It
 // does not invoke planner routing; M14 owns forced/automatic route selection.
@@ -490,9 +493,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical column query requires more than one asset ref", ErrColumnQueryPlanUnsupported)
 	}
 	workers := maxWorkers
-	if refs := len(view.AssetRefs); workers > refs {
-		workers = refs
-	}
+	workers = columnPhysicalQueryParallelWorkerCount(workers, len(view.AssetRefs))
 	cfg := view.Config
 	merged, err := newColumnPhysicalQueryExecutor(cfg, req)
 	if err != nil {
@@ -573,6 +574,17 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	result.Diagnostics.ReduceRows = merged.reduceRows
 	result.Diagnostics.ResultGroups = len(result.Groups)
 	return result, nil
+}
+
+func columnPhysicalQueryParallelWorkerCount(maxWorkers, assetRefs int) int {
+	workers := maxWorkers
+	if workers > assetRefs {
+		workers = assetRefs
+	}
+	if workers > columnPhysicalQueryMaxParallelWorkers {
+		workers = columnPhysicalQueryMaxParallelWorkers
+	}
+	return workers
 }
 
 func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) columnManifestScanSidecarFilter {
