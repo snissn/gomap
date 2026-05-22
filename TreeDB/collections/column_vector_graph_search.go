@@ -535,16 +535,13 @@ func columnVectorGraphNativeCosineScoreVectorTrusted(query []float32, queryInvNo
 	}
 	dot := float64(vectorDotProductFloat32SameLen(query, vector))
 	score := dot * float64(queryInvNorm) * float64(invNorm)
-	if trustedFinite {
-		return score, nil
-	}
 	if !math.IsInf(score, 0) && !math.IsNaN(score) {
 		return score, nil
 	}
 	dot = columnVectorGraphNativeDotProductFloat64(query, vector)
 	score = dot * float64(queryInvNorm) * float64(invNorm)
 	if math.IsInf(score, 0) || math.IsNaN(score) {
-		return 0, fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", "", ordinal)
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)
 	}
 	return score, nil
 }
