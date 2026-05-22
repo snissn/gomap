@@ -124,13 +124,6 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	}}, nil
 }
 
-// NewCommandWALReplayIntent constructs an unauthenticated replay intent for
-// compatibility tests. Recovery handlers must use DB.NewCommandWALReplayIntent,
-// which binds the intent to the currently active recovery frame.
-func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent {
-	return newCommandWALReplayIntent(env, 0)
-}
-
 func newCommandWALReplayIntent(env commitlog.CommandEnvelope, replayToken uint64) *CommandWALIntent {
 	return &CommandWALIntent{inner: commandWALBatchIntent{
 		kind:          env.Kind,
