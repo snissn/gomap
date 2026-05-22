@@ -124,13 +124,6 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	}}, nil
 }
 
-// NewCommandWALReplayIntent constructs an unauthenticated replay intent for
-// compatibility tests. Recovery handlers must use DB.NewCommandWALReplayIntent,
-// which binds the intent to the currently active recovery frame.
-func NewCommandWALReplayIntent(env commitlog.CommandEnvelope) *CommandWALIntent {
-	return newCommandWALReplayIntent(env, 0)
-}
-
 func newCommandWALReplayIntent(env commitlog.CommandEnvelope, replayToken uint64) *CommandWALIntent {
 	return &CommandWALIntent{inner: commandWALBatchIntent{
 		kind:          env.Kind,
@@ -193,6 +186,22 @@ func checkCommandWALReplayFrameActive(intentLSN, activeLSN, activeToken uint64) 
 		return fmt.Errorf("%w: replay intent lsn %d has no active recovery token", ErrCommandWALRejected, intentLSN)
 	}
 	return nil
+}
+
+// NewCommandWALCoverageIntent returns an intent for publishing roots that
+// already reflect an appended contiguous command-WAL range. It does not append a
+// new command frame when used with the ordered-root command-WAL publish APIs.
+func NewCommandWALCoverageIntent(appliedLSN uint64, covered CommandWALLSNRange) (*CommandWALIntent, error) {
+	if appliedLSN == 0 {
+		return nil, fmt.Errorf("%w: applied lsn is zero", ErrCommandWALAppliedLSNNonContig)
+	}
+	if covered.First == 0 || covered.Last < covered.First || covered.Last != appliedLSN {
+		return nil, fmt.Errorf("%w: invalid coverage range [%d,%d] for applied %d", ErrCommandWALAppliedLSNNonContig, covered.First, covered.Last, appliedLSN)
+	}
+	return &CommandWALIntent{inner: commandWALBatchIntent{
+		lsn:          appliedLSN,
+		coveredRange: [1]CommandWALLSNRange{covered},
+	}}, nil
 }
 
 func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, error) {
@@ -314,11 +323,13 @@ func readCommandWALValueLogRIDAt(path string, ptr page.ValuePtr) (uint64, error)
 		return 0, err
 	}
 	defer func() { _ = f.Close() }()
-	return valuelog.ReadRIDAt(f, ptr)
+	return valuelog.ReadRIDAtUnverified(f, ptr.FileID, ptr)
 }
 
 func isCommandWALRIDLookupVisibilityError(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	// Missing segment files are real recovery blockers. Retry only short-read
+	// visibility cases where the current appender may not have flushed bytes yet.
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
@@ -427,6 +438,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
+	}
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
 	}
@@ -465,6 +481,11 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
@@ -511,6 +532,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	unlockRawPublish := db.lockCommandWALRawPublish()
+	defer unlockRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		return 0, err
 	}
 	if db.commandJournal == nil {
 		return 0, fmt.Errorf("treedb: command wal journal unavailable")
@@ -615,12 +641,11 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	}
 	if intent.externalRefs {
 		// SetRID frames reference value-log positions by offset. The
-		// value-log data MUST be durable before the command frame is
-		// written, otherwise a power loss could leave the command frame
-		// referencing a non-durable RID and cause a hard recovery failure
-		// ("missing value-log RID"). For external-ref batches only, always
-		// sync regardless of the caller's sync flag.
-		if err := db.flushCommandWALExternalRefs(true, intent.externalRefFileIDs); err != nil {
+		// value-log data must be visible before the command frame is written.
+		// WriteSync also fsyncs referenced value-log segments for power-loss
+		// durability. Non-sync Write only flushes process buffers, matching the
+		// command-journal Flush path's non-fsync durability contract.
+		if err := db.flushCommandWALExternalRefs(sync, intent.externalRefFileIDs); err != nil {
 			return 0, err
 		}
 	}
@@ -696,7 +721,19 @@ func (db *DB) poisonCommandWALAfterPublicPostAppendFailure(intent *CommandWALInt
 	db.poisonCommandWALAfterPostAppendFailure(&intent.inner)
 }
 
-func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
+// MarkCommandWALIntentRecoveryRequired marks this open handle as requiring
+// recovery after a command frame was appended but the caller could not make
+// the corresponding mutation visible in memory or durable roots. Reopen
+// recovery may apply the frame, so retrying on the same handle can create
+// command-WAL gaps.
+func (db *DB) MarkCommandWALIntentRecoveryRequired(intent *CommandWALIntent) {
+	if db == nil || intent == nil {
+		return
+	}
+	db.poisonCommandWALAfterPublicPostAppendFailure(intent)
+}
+
+func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) error {
 	if db == nil {
 		return fmt.Errorf("treedb: command wal recovery missing db")
 	}
@@ -763,15 +800,11 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			}
 		case commitlog.RawKVOpSetRID:
 			if ridMap == nil {
-				if ensureReplayLogSupport == nil {
-					return fmt.Errorf("treedb: command wal replay log support unavailable")
+				if ensureReplayRIDMap == nil {
+					return fmt.Errorf("treedb: command wal replay rid map unavailable")
 				}
 				var err error
-				// ensureReplayLogSupport is a closure that updates the outer
-				// ridMap and inlineAppender via capture as a side effect.
-				// Assigning to the local parameters here caches the handles
-				// for subsequent iterations within this frame.
-				ridMap, inlineAppender, err = ensureReplayLogSupport()
+				ridMap, err = ensureReplayRIDMap()
 				if err != nil {
 					return err
 				}

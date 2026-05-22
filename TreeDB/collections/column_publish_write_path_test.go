@@ -586,9 +586,9 @@ func TestColumnStoreMutationAssetsPublishAndReopenM12C(t *testing.T) {
 	if len(reopenParts) != 3 {
 		t.Fatalf("reopen manifest parts=%+v, want 3", reopenParts)
 	}
-	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[0], ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
-	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
-	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[2], ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, reopenParts, ColumnPublishOperationInsert), ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, reopenParts, ColumnPublishOperationUpdate), ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, reopenParts, ColumnPublishOperationDelete), ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
 }
 
 func TestColumnStoreUpdateBatchMutationAssetsPublishM12C(t *testing.T) {
@@ -625,7 +625,7 @@ func TestColumnStoreUpdateBatchMutationAssetsPublishM12C(t *testing.T) {
 	if len(parts) != 2 {
 		t.Fatalf("manifest parts=%+v, want insert and update parts", parts)
 	}
-	assertColumnPhysicalAssetRowsM12C(t, d, col, parts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationUpdate), ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
 }
 
 func TestColumnStoreSupportMatrixRejectsNonJSONInsertBeforeCommandAppendM12B(t *testing.T) {
@@ -1017,8 +1017,8 @@ func TestColumnStoreCommandWALReplayPublishesMutationAssetsM12C(t *testing.T) {
 			if len(parts) != 2 {
 				t.Fatalf("replay manifest parts=%+v, want insert and %s parts", parts, tc.name)
 			}
-			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, parts[0], ColumnPublishOperationInsert, []string{"e1"}, []bool{false})
-			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, parts[1], tc.wantOperation, tc.wantIDs, tc.wantDeleted)
+			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationInsert), ColumnPublishOperationInsert, []string{"e1"}, []bool{false})
+			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, columnManifestPartByReasonM12C(t, parts, tc.wantOperation), tc.wantOperation, tc.wantIDs, tc.wantDeleted)
 		})
 	}
 }

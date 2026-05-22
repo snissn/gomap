@@ -23,15 +23,6 @@ var (
 	errColumnVectorGraphInvNormOutOfRange     = errors.New("collections: column_graph vector inverse norm must be finite and fit float32")
 )
 
-// RebuildVectorIndex rebuilds the named vector index through the collection
-// product lifecycle. It flushes buffered writes, holds the collection mutation
-// lock, and scans a consistent collection snapshot while publishing new roots.
-// V2A only builds and publishes physical column graph assets; it does not load
-// or search a decoded in-memory graph.
-func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
-	return c.rebuildVectorIndexWithCommandWALIntent(name, nil)
-}
-
 func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay *backenddb.CommandWALIntent) (VectorIndexStatus, error) {
 	if err := ValidateIndexName(name); err != nil {
 		return VectorIndexStatus{}, err

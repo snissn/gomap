@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func TestSortKeyMarkPrefixSummaries(t *testing.T) {
 		t.Fatalf("BuildSortKeyMark: %v", err)
 	}
 	if mark.Rows != 5 || !slices.Equal(mark.Columns, []string{"collection", "time_us"}) {
-		t.Fatalf("mark rows/columns=(%d,%v)", mark.Rows, mark.Columns)
+		t.Fatalf("mark rows/columns=(%d,%v) want (5,[collection time_us])", mark.Rows, mark.Columns)
 	}
 	if !slices.Equal(mark.Prefixes[0].Lower.Values, []int64{1}) || !slices.Equal(mark.Prefixes[0].UpperExclusive.Values, []int64{3}) {
 		t.Fatalf("prefix 1 bounds=%v/%v want [1]/[3]", mark.Prefixes[0].Lower.Values, mark.Prefixes[0].UpperExclusive.Values)
@@ -35,6 +36,35 @@ func TestSortKeyMarkPrefixSummaries(t *testing.T) {
 	}
 	if !mayContain || constrained {
 		t.Fatalf("time-only mayContain/constrained=(%v,%v) want (true,false)", mayContain, constrained)
+	}
+}
+
+func TestSortKeyMarkRejectsDuplicateOrUnsortedColumns(t *testing.T) {
+	if _, err := BuildSortKeyMark([]SortKeyColumnValues{
+		{Name: "collection", Values: []int64{1, 1, 1}},
+		{Name: "collection", Values: []int64{10, 20, 30}},
+	}); err == nil {
+		t.Fatal("BuildSortKeyMark duplicate columns succeeded, want error")
+	}
+	if _, err := BuildSortKeyMark([]SortKeyColumnValues{
+		{Name: "collection", Values: []int64{1, 1, 1}},
+		{Name: "time_us", Values: []int64{10, 9, 11}},
+	}); err == nil {
+		t.Fatal("BuildSortKeyMark unsorted rows succeeded, want error")
+	}
+}
+
+func TestEmptySortKeyPredicateIsConstrainedEmpty(t *testing.T) {
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "collection", Values: []int64{1, 1, 1}}})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark: %v", err)
+	}
+	mayContain, constrained, err := mark.MayContainRanges([]Int64RangePredicate{{Column: "collection", Low: 2, High: 1}})
+	if err != nil {
+		t.Fatalf("MayContainRanges: %v", err)
+	}
+	if mayContain || !constrained {
+		t.Fatalf("empty predicate mayContain/constrained=(%v,%v), want (false,true)", mayContain, constrained)
 	}
 }
 
@@ -77,6 +107,67 @@ func TestCountInt64RangeDiagnostics(t *testing.T) {
 	}
 }
 
+func TestCountInt64RangeRejectsMismatchedMarkMetadata(t *testing.T) {
+	granules, err := buildInt64GranulesForTest([]int64{1, 2, 3}, 3)
+	if err != nil {
+		t.Fatalf("build granules: %v", err)
+	}
+	var reader GranuleReader
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, nil, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "collection", Low: 1, High: 1}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "sort key ranges require marks") {
+		t.Fatalf("missing marks err=%v want sort key ranges require marks", err)
+	}
+
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: []int64{1, 2}}})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark: %v", err)
+	}
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{mark}, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 1, High: 3}},
+	})
+	if err == nil {
+		t.Fatal("CountInt64RangeWithDiagnostics mismatched mark rows succeeded, want error")
+	}
+
+	matchingMark, err := BuildSortKeyMark([]SortKeyColumnValues{{Name: "time_us", Values: []int64{1, 2, 3}}})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark matching: %v", err)
+	}
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "other_column", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "other_column", Low: 1, High: 3}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not present in mark") {
+		t.Fatalf("unknown sort key range err=%v want not present in mark", err)
+	}
+
+	_, _, err = reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
+		Filter: Int64RangePredicate{Column: "time_us", Low: 1, High: 3},
+		SortKeyRanges: []Int64RangePredicate{
+			{Column: "time_us", Low: 1, High: 2},
+			{Column: "time_us", Low: 2, High: 3},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicate sort key range column") {
+		t.Fatalf("duplicate sort key range err=%v want duplicate sort key range column", err)
+	}
+
+	count, _, err := reader.CountInt64RangeWithDiagnostics(granules, []SortKeyMark{matchingMark}, PredicatePlan{
+		Filter:        Int64RangePredicate{Column: "value", Low: 2, High: 3},
+		SortKeyRanges: []Int64RangePredicate{{Column: "time_us", Low: 2, High: 3}},
+	})
+	if err != nil {
+		t.Fatalf("CountInt64RangeWithDiagnostics non-sort filter: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("non-sort filter count=%d want 2", count)
+	}
+}
+
 func TestSortKeyMarkPruningMatchesRawReference(t *testing.T) {
 	granules, marks, collections, times, err := buildCompositeSortFixtureForTest()
 	if err != nil {
@@ -100,6 +191,37 @@ func TestSortKeyMarkPruningMatchesRawReference(t *testing.T) {
 	}
 	if diagnostics.SkippedByMark != 3 || diagnostics.Decoded != 1 || diagnostics.Matched != want {
 		t.Fatalf("diagnostics=%+v want skipped_by_mark=3 decoded=1 matched=%d", diagnostics, want)
+	}
+}
+
+func TestSortKeyRangeIsAppliedWithinMixedGranule(t *testing.T) {
+	collections := []int64{1, 1, 2, 2}
+	times := []int64{110, 111, 110, 111}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingDeltaVarint, Compression: CompressionNone})
+	g, err := builder.BuildInt64(times)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	mark, err := BuildSortKeyMark([]SortKeyColumnValues{
+		{Name: "collection", Values: collections},
+		{Name: "time_us", Values: times},
+	})
+	if err != nil {
+		t.Fatalf("BuildSortKeyMark: %v", err)
+	}
+	var reader GranuleReader
+	count, diagnostics, err := reader.CountInt64RangeWithDiagnostics([]EncodedGranule{g}, []SortKeyMark{mark}, PredicatePlan{
+		Filter: Int64RangePredicate{Column: "time_us", Low: 110, High: 111},
+		SortKeyRanges: []Int64RangePredicate{
+			{Column: "collection", Low: 1, High: 1},
+			{Column: "time_us", Low: 110, High: 111},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CountInt64RangeWithDiagnostics: %v", err)
+	}
+	if count != 2 || diagnostics.Decoded != 1 || diagnostics.Matched != 2 {
+		t.Fatalf("count=%d diagnostics=%+v want count=2 decoded=1 matched=2", count, diagnostics)
 	}
 }
 

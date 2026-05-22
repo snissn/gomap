@@ -146,13 +146,13 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 // and int64 aggregate values. Rows counts the full input row set, including
 // deleted rows, while Entries reflects only non-deleted, type-validated rows.
 func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregate ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnAggregateMetadataAsset, bool, error) {
-	if aggregate.GroupColumn == "" || aggregate.Column == "" {
-		return columnAggregateMetadataAsset{}, false, nil
-	}
 	switch aggregate.Kind {
 	case ColumnAggregateMin, ColumnAggregateMax:
 	default:
 		return columnAggregateMetadataAsset{}, false, nil
+	}
+	if aggregate.GroupColumn == "" || aggregate.Column == "" {
+		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q requires group_column and column", aggregate.Name)
 	}
 	groupIdx, valueIdx := -1, -1
 	for i, col := range cfg.Columns {
@@ -170,7 +170,7 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 		}
 	}
 	if groupIdx < 0 || valueIdx < 0 {
-		return columnAggregateMetadataAsset{}, false, nil
+		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q references unknown column(s)", aggregate.Name)
 	}
 	entriesByGroup := make(map[string]columnAggregateMetadataEntry)
 	for _, row := range rows {

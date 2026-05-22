@@ -147,9 +147,9 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 	columnStoreEnabled := false
 	if catalog != nil {
 		collectionName = catalog.meta.Name
-		rootID = catalog.rootID(collectionColumnManifestRootName(collectionName))
 		if cfgPtr := catalog.meta.Options.ColumnStore; cfgPtr != nil {
 			cfg = *cfgPtr
+			rootID = catalog.rootID(collectionColumnManifestRootName(collectionName))
 			columnStoreEnabled = true
 		}
 	}
@@ -180,7 +180,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.GranuleCount = 0
 	caps.MutationParts = 0
 	caps.DeclaredColumnCount = len(cfg.Columns)
-	caps.AggregateMetadataCount = len(cfg.AggregateMetadata)
+	caps.AggregateMetadataCount = columnMaterializableAggregateMetadataCount(cfg)
 	caps.VisibilityMetadata = false
 	caps.ParallelWorkUnits = 0
 
@@ -238,7 +238,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
 	if columnQueryForcedPhysicalExecution(req.ForceKind) && caps.PhysicalAssetCount > 0 {
 		caps.SerialColumnScan = true
-		caps.AggregateMetadata = len(cfg.AggregateMetadata) > 0
+		caps.AggregateMetadata = caps.MutationParts == 0 && columnMaterializableAggregateMetadataCount(cfg) > 0
 		caps.ParallelColumnScan = caps.MutationParts == 0 && columnQueryParallelWorkerCount(caps) > 1
 	}
 	return caps
@@ -540,11 +540,41 @@ func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) 
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
 		// Metadata can be supplied by pre-alpha JSON fixtures, so trim at the
 		// planner boundary until catalog loading owns canonicalization.
-		if strings.TrimSpace(aggregate.Name) == name {
+		if strings.TrimSpace(aggregate.Name) == name &&
+			columnAggregateMetadataMaterializable(*catalog.meta.Options.ColumnStore, aggregate) {
 			return true
 		}
 	}
 	return false
+}
+
+func columnMaterializableAggregateMetadataCount(cfg ColumnStoreConfig) int {
+	count := 0
+	for _, aggregate := range cfg.AggregateMetadata {
+		if columnAggregateMetadataMaterializable(cfg, aggregate) {
+			count++
+		}
+	}
+	return count
+}
+
+func columnAggregateMetadataMaterializable(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
+	if aggregate.Kind != ColumnAggregateMin && aggregate.Kind != ColumnAggregateMax {
+		return false
+	}
+	if strings.TrimSpace(aggregate.Column) == "" || strings.TrimSpace(aggregate.GroupColumn) == "" {
+		return false
+	}
+	groupOK, valueOK := false, false
+	for _, col := range cfg.Columns {
+		switch strings.TrimSpace(col.Name) {
+		case strings.TrimSpace(aggregate.GroupColumn):
+			groupOK = col.ValueType == ColumnStoreValueString
+		case strings.TrimSpace(aggregate.Column):
+			valueOK = col.ValueType == ColumnStoreValueInt64
+		}
+	}
+	return groupOK && valueOK
 }
 
 func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQueryPlanRequest) (string, bool) {

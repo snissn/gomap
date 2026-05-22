@@ -7,7 +7,6 @@ import (
 
 type columnAggregateMetadataRunnerEntry struct {
 	groupCode int
-	count     int
 	min       int64
 	max       int64
 }
@@ -73,7 +72,6 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 			}
 			runner.entries = append(runner.entries, columnAggregateMetadataRunnerEntry{
 				groupCode: code,
-				count:     entry.Count,
 				min:       entry.Min,
 				max:       entry.Max,
 			})

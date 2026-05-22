@@ -414,6 +414,18 @@ PR 6: catalog mutation commands:
 - acceptance artifact:
   `artifacts/command-wal/pr6/acceptance.json`.
 
+PR 6.5: collection/catalog command-WAL performance polish:
+
+- consolidated benchmark evidence:
+  `artifacts/command-wal/pr6_5/collection-catalog-performance-summary.md`;
+- acceptance artifact:
+  `artifacts/command-wal/pr6_5/acceptance.json`;
+- default-ready collection throughput follow-up:
+  `https://github.com/snissn/gomap/issues/1584`;
+- PR9 raw KV default cutover evidence must not be used to claim collection
+  command-WAL default readiness until every supported collection lane clears
+  strict `>1.01x` command-WAL/WAL-off throughput.
+
 PR 7: matrix enforcement and drift tests:
 
 - `TestCommandWALSupportMatrixIsWellFormed`;
