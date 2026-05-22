@@ -440,7 +440,7 @@ func TestColumnPhysicalRowReaderScratchAppendFixedWidthSlicesV1(t *testing.T) {
 	})
 
 	t.Run("float32_vector_exact", func(t *testing.T) {
-		values := []float32{1.25, -2.5, 0.75}
+		values := []float32{1.25, -2.5, 0.75, 8.5, -16.25}
 		var b bytes.Buffer
 		writeManifestFloat32Slice(&b, values)
 		cur := manifestCursor{raw: b.Bytes()}
@@ -501,7 +501,7 @@ func TestColumnPhysicalRowReaderScratchAppendFixedWidthSlicesV1(t *testing.T) {
 	})
 
 	t.Run("uint32_slice_exact", func(t *testing.T) {
-		values := []uint32{1, 17, 1024}
+		values := []uint32{1, 17, 1024, math.MaxUint16 + 1, math.MaxUint32}
 		var b bytes.Buffer
 		writeManifestUint32Slice(&b, values)
 		cur := manifestCursor{raw: b.Bytes()}
