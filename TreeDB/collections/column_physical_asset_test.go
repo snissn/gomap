@@ -572,6 +572,17 @@ func TestColumnAssetReadIntegrityCachedVerifyReusesVerifiedRefM1634(t *testing.T
 	if err != nil {
 		t.Fatalf("columnAssetSegmentPath: %v", err)
 	}
+	verifiedFile, err := os.Open(assetPath)
+	if err != nil {
+		t.Fatalf("Open verified asset: %v", err)
+	}
+	identity := columnAssetVerifiedChecksumFileIdentityFromFile(verifiedFile)
+	if err := verifiedFile.Close(); err != nil {
+		t.Fatalf("Close verified asset: %v", err)
+	}
+	if !identity.valid {
+		t.Skip("cached verify reuse requires stable column asset file identity")
+	}
 	verifiedInfo, err := os.Stat(assetPath)
 	if err != nil {
 		t.Fatalf("Stat verified asset: %v", err)
