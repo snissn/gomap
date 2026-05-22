@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -1915,20 +1917,16 @@ func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
 }
 
 func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
-	origRunPprofDeltaCommandFn := runPprofDeltaCommandFn
-	runPprofDeltaCommandFn = func(basePath, afterPath string) ([]byte, string, error) {
+	runner := func(basePath, afterPath string) ([]byte, string, error) {
 		return nil, "", nil
 	}
-	defer func() {
-		runPprofDeltaCommandFn = origRunPprofDeltaCommandFn
-	}()
 
 	outPath := filepath.Join(t.TempDir(), "block_random_read_treedb.pprof")
 	if err := os.WriteFile(outPath, []byte("stale"), 0o644); err != nil {
 		t.Fatalf("seed stale output: %v", err)
 	}
 
-	wrote, err := writeRuntimeProfileDeltaProfile("base.pprof", "after.pprof", outPath)
+	wrote, err := writeRuntimeProfileDeltaProfileWithRunner("base.pprof", "after.pprof", outPath, runner)
 	if err != nil {
 		t.Fatalf("writeRuntimeProfileDeltaProfile: %v", err)
 	}
@@ -1941,19 +1939,6 @@ func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 }
 
 func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *testing.T) {
-	origStopCPUProfileFn := stopCPUProfileFn
-	origWriteAllocsSnapshotTempFn := writeAllocsSnapshotTempFn
-	origWriteAllocsDeltaProfileFn := writeAllocsDeltaProfileFn
-	origWriteRuntimeProfileSnapshotTempFn := writeRuntimeProfileSnapshotTempFn
-	origWriteRuntimeProfileDeltaProfileFn := writeRuntimeProfileDeltaProfileFn
-	defer func() {
-		stopCPUProfileFn = origStopCPUProfileFn
-		writeAllocsSnapshotTempFn = origWriteAllocsSnapshotTempFn
-		writeAllocsDeltaProfileFn = origWriteAllocsDeltaProfileFn
-		writeRuntimeProfileSnapshotTempFn = origWriteRuntimeProfileSnapshotTempFn
-		writeRuntimeProfileDeltaProfileFn = origWriteRuntimeProfileDeltaProfileFn
-	}()
-
 	var events []string
 	profileTmpDir := t.TempDir()
 	newProfilePath := func(prefix string) (string, error) {
@@ -1969,25 +1954,29 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		return path, nil
 	}
 
-	stopCPUProfileFn = func() {
-		events = append(events, "cpu_stop")
-		origStopCPUProfileFn()
-	}
-	writeAllocsSnapshotTempFn = func(prefix string) (string, error) {
-		events = append(events, prefix)
-		return newProfilePath(prefix)
-	}
-	writeRuntimeProfileSnapshotTempFn = func(prefix, profileName string) (string, error) {
-		events = append(events, prefix)
-		return newProfilePath(prefix)
-	}
-	writeAllocsDeltaProfileFn = func(basePath, afterPath, outPath string) error {
-		events = append(events, "alloc_delta")
-		return nil
-	}
-	writeRuntimeProfileDeltaProfileFn = func(basePath, afterPath, outPath string) (bool, error) {
-		events = append(events, filepath.Base(outPath))
-		return true, nil
+	profileHooks := &benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			return nil
+		},
+		stopCPUProfile: func() {
+			events = append(events, "cpu_stop")
+		},
+		writeAllocsSnapshotTemp: func(prefix string) (string, error) {
+			events = append(events, prefix)
+			return newProfilePath(prefix)
+		},
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			events = append(events, prefix)
+			return newProfilePath(prefix)
+		},
+		writeAllocsDeltaProfile: func(basePath, afterPath, outPath string) error {
+			events = append(events, "alloc_delta")
+			return nil
+		},
+		writeRuntimeProfileDeltaProfile: func(basePath, afterPath, outPath string) (bool, error) {
+			events = append(events, filepath.Base(outPath))
+			return false, nil
+		},
 	}
 
 	outDir := t.TempDir()
@@ -2007,6 +1996,7 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 		AllocsProfile: filepath.Join(outDir, "allocs"),
 		BlockProfile:  filepath.Join(outDir, "block.pprof"),
 		MutexProfile:  filepath.Join(outDir, "mutex.pprof"),
+		profileHooks:  profileHooks,
 	})
 	if err != nil {
 		t.Fatalf("runBenchmark: %v", err)
@@ -2040,6 +2030,291 @@ func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *test
 	}
 	if mutexAfterIdx > allocAfterIdx {
 		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
+	}
+}
+
+func TestInstallAllocsProfileRateIgnoresWhitespaceOnlyPrefixM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:     " \t ",
+		AllocsProfileRate: 1,
+	})
+	if got := runtime.MemProfileRate; got != 4096 {
+		restore()
+		t.Fatalf("MemProfileRate changed for whitespace-only allocs profile: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate restore changed whitespace-only allocs profile: got %d", got)
+	}
+}
+
+func TestBenchConfigHasAnyProfileOutputIncludesCheckpointCPUM11A(t *testing.T) {
+	if benchConfigHasAnyProfileOutput(BenchConfig{}) {
+		t.Fatal("empty config should not report profile output")
+	}
+	if !benchConfigHasAnyProfileOutput(BenchConfig{CheckpointCPUProfile: " checkpoint_cpu "}) {
+		t.Fatal("checkpoint CPU profile should count as profile output")
+	}
+}
+
+func TestInstallAllocsProfileRateIgnoresFilteredTestsM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:      filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate:  1,
+		TestsArg:           "sequential_write",
+		AllocsProfileTests: map[string]struct{}{"random_read": {}},
+	})
+	if got := runtime.MemProfileRate; got != 4096 {
+		restore()
+		t.Fatalf("MemProfileRate changed for filtered allocs profile: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate restore changed filtered allocs profile: got %d", got)
+	}
+}
+
+func TestInstallAllocsProfileRateTreatsEmptyTestsAsFullSelectionM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:      filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate:  1,
+		TestsArg:           " \t ",
+		AllocsProfileTests: map[string]struct{}{"random_read": {}},
+	})
+	if got := runtime.MemProfileRate; got != 1 {
+		restore()
+		t.Fatalf("MemProfileRate was not set for default full test selection: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate was not restored for default full test selection: got %d", got)
+	}
+}
+
+func TestInstallAllocsProfileRateAppliesMatchingTestFilterM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:      filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate:  1,
+		TestsArg:           "sequential_write",
+		AllocsProfileTests: map[string]struct{}{"sequential_write": {}},
+	})
+	if got := runtime.MemProfileRate; got != 1 {
+		restore()
+		t.Fatalf("MemProfileRate was not set for matching allocs profile filter: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate was not restored for matching allocs profile filter: got %d", got)
+	}
+}
+
+func TestInstallAllocsProfileRateRestoresEnabledPrefixM11A(t *testing.T) {
+	prevRate := runtime.MemProfileRate
+	t.Cleanup(func() {
+		runtime.MemProfileRate = prevRate
+	})
+	runtime.MemProfileRate = 4096
+
+	restore := installAllocsProfileRate(BenchConfig{
+		AllocsProfile:     filepath.Join(t.TempDir(), "allocs"),
+		AllocsProfileRate: 1,
+	})
+	if got := runtime.MemProfileRate; got != 1 {
+		restore()
+		t.Fatalf("MemProfileRate was not set for enabled allocs profile: got %d", got)
+	}
+	restore()
+	if got := runtime.MemProfileRate; got != 4096 {
+		t.Fatalf("MemProfileRate was not restored for enabled allocs profile: got %d", got)
+	}
+}
+
+func TestRunBenchmarkCPUProfileStartFailureRemovesArtifactM11A(t *testing.T) {
+	profileHooks := &benchmarkProfileHooks{
+		startCPUProfile: func(_ io.Writer) error {
+			return errors.New("start failed")
+		},
+		stopCPUProfile: func() {},
+	}
+	outDir := t.TempDir()
+	prefix := filepath.Join(outDir, "cpu")
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         8,
+		ValueSize:    16,
+		BatchSize:    4,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+		CPUProfile:   prefix,
+		profileHooks: profileHooks,
+	})
+	if err == nil {
+		t.Fatal("expected CPU profile start failure")
+	}
+	path := prefix + "_sequential_write_treedb.pprof"
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected failed CPU profile artifact to be removed, stat err=%v", statErr)
+	}
+}
+
+func TestRunBenchmark_EmptyContentionDeltaOmitsArtifactM11A(t *testing.T) {
+	var deltas []string
+	profileTmpDir := t.TempDir()
+	newProfilePath := func(prefix string) (string, error) {
+		f, err := os.CreateTemp(profileTmpDir, prefix+"_*.pprof")
+		if err != nil {
+			return "", err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+
+	profileHooks := &benchmarkProfileHooks{
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			return newProfilePath(prefix)
+		},
+		writeRuntimeProfileDeltaProfile: func(basePath, afterPath, outPath string) (bool, error) {
+			deltas = append(deltas, filepath.Base(outPath))
+			if err := os.WriteFile(outPath, []byte("stale"), 0o644); err != nil {
+				return false, err
+			}
+			return false, nil
+		},
+	}
+
+	outDir := t.TempDir()
+	_, err := runBenchmark(BenchConfig{
+		Keys:         64,
+		ValueSize:    16,
+		BatchSize:    16,
+		RangeQueries: 4,
+		RangeSpan:    4,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		BlockProfile: filepath.Join(outDir, "block.pprof"),
+		MutexProfile: filepath.Join(outDir, "mutex.pprof"),
+		profileHooks: profileHooks,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	for _, name := range []string{
+		"block_sequential_write_treedb.pprof",
+		"mutex_sequential_write_treedb.pprof",
+	} {
+		if _, statErr := os.Stat(filepath.Join(outDir, name)); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("expected omitted empty delta artifact %s, stat err=%v", name, statErr)
+		}
+	}
+	if got, want := strings.Join(deltas, ","), "block_sequential_write_treedb.pprof,mutex_sequential_write_treedb.pprof"; got != want {
+		t.Fatalf("contention deltas = %s, want %s", got, want)
+	}
+}
+
+func TestRunBenchmarkRestoresPreviousMutexProfileFractionM11A(t *testing.T) {
+	originalFraction := runtime.SetMutexProfileFraction(0)
+	t.Cleanup(func() {
+		runtime.SetMutexProfileFraction(originalFraction)
+	})
+	runtime.SetMutexProfileFraction(3)
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:                 16,
+		ValueSize:            16,
+		BatchSize:            8,
+		RangeQueries:         1,
+		RangeSpan:            4,
+		DBsArg:               "treedb",
+		TestsArg:             "sequential_write",
+		KeepDir:              false,
+		Progress:             false,
+		SeedUsed:             1,
+		MutexProfile:         filepath.Join(t.TempDir(), "mutex.pprof"),
+		MutexProfileFraction: 1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if gotPrev := runtime.SetMutexProfileFraction(0); gotPrev != 3 {
+		t.Fatalf("mutex profile fraction was not restored: previous=%d want 3", gotPrev)
+	}
+}
+
+func TestRunBenchmark_IgnoresWhitespaceOnlyRuntimeProfilesM11A(t *testing.T) {
+	whitespacePath := " \t "
+	_ = os.Remove(whitespacePath)
+	t.Cleanup(func() { _ = os.Remove(whitespacePath) })
+
+	var runtimeSnapshots int
+	profileHooks := &benchmarkProfileHooks{
+		writeRuntimeProfileSnapshotTemp: func(prefix, profileName string) (string, error) {
+			runtimeSnapshots++
+			return "", errors.New("runtime profile snapshot should be disabled for whitespace-only profile")
+		},
+	}
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         64,
+		ValueSize:    16,
+		BatchSize:    16,
+		RangeQueries: 4,
+		RangeSpan:    4,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		BlockProfile: whitespacePath,
+		MutexProfile: whitespacePath,
+		TraceProfile: whitespacePath,
+		profileHooks: profileHooks,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if runtimeSnapshots != 0 {
+		t.Fatalf("runtime profile snapshots = %d, want 0", runtimeSnapshots)
+	}
+	if _, statErr := os.Stat(whitespacePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("whitespace trace/profile path was created, stat err=%v", statErr)
 	}
 }
 

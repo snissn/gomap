@@ -184,6 +184,8 @@ type BenchConfig struct {
 	TreeDBCacheStatsBeforeReads bool
 	TreeDBCacheStatsAfterTests  bool
 	TreeDBVlogRewriteAfterRun   bool
+
+	profileHooks *benchmarkProfileHooks
 }
 
 type dirDiskUsage struct {
@@ -500,7 +502,7 @@ func main() {
 		TreeDBDisableReadChecksum:        *treedbDisableReadChecksum,
 		TreeDBDisablePiggybackCompaction: *treedbDisablePiggyback,
 	}
-	if baseCfg.CPUProfile != "" {
+	if strings.TrimSpace(baseCfg.CPUProfile) != "" {
 		tests := parseList(*cpuProfileTestsArg)
 		if len(tests) > 0 && tests[0] != "" {
 			baseCfg.CPUProfileTests = make(map[string]struct{}, len(tests))
@@ -512,7 +514,7 @@ func main() {
 			}
 		}
 	}
-	if baseCfg.AllocsProfile != "" {
+	if strings.TrimSpace(baseCfg.AllocsProfile) != "" {
 		tests := parseList(*allocsProfileTests)
 		if len(tests) > 0 && tests[0] != "" {
 			baseCfg.AllocsProfileTests = make(map[string]struct{}, len(tests))
@@ -524,7 +526,7 @@ func main() {
 			}
 		}
 	}
-	if baseCfg.CheckpointCPUProfile != "" {
+	if strings.TrimSpace(baseCfg.CheckpointCPUProfile) != "" {
 		tests := parseList(*checkpointCPUProfileTests)
 		if len(tests) > 0 && tests[0] != "" {
 			baseCfg.CheckpointCPUProfileTests = make(map[string]struct{}, len(tests))
@@ -672,6 +674,18 @@ func main() {
 				log.Fatalf("maintenance_budget suite: %v", err)
 			}
 			fmt.Print(out)
+		case "column_store", "column-store":
+			out, err := runColumnStoreSuite(baseCfg, columnStoreSuiteOptions{
+				ProfileDir:    strings.TrimSpace(*profileDir),
+				ExecutionPath: strings.TrimSpace(*pathLabel),
+				ForcedPath:    strings.TrimSpace(*columnStoreSuitePathArg),
+				Fixture:       strings.TrimSpace(*columnStoreSuiteFixtureArg),
+				RunBenchprof:  true,
+			})
+			if err != nil {
+				log.Fatalf("column_store suite: %v", err)
+			}
+			fmt.Print(out)
 		default:
 			log.Fatalf("unknown suite: %q", suite)
 		}
@@ -684,9 +698,8 @@ func main() {
 		log.Fatalf("keycounts: %v", err)
 	}
 
-	hasAnyProfiling := baseCfg.CPUProfile != "" || baseCfg.AllocsProfile != "" || baseCfg.BlockProfile != "" || baseCfg.MutexProfile != "" || baseCfg.TraceProfile != ""
-	if hasAnyProfiling && len(keyCounts) > 1 {
-		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-allocsprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
+	if benchConfigHasAnyProfileOutput(baseCfg) && len(keyCounts) > 1 {
+		log.Fatalf("profiling flags require a single key count (got %d): disable sweep keycounts or omit -cpuprofile/-allocsprofile/-checkpoint-cpuprofile/-blockprofile/-mutexprofile/-trace", len(keyCounts))
 	}
 
 	if len(keyCounts) == 1 {
@@ -826,7 +839,7 @@ func main() {
 }
 
 func shouldCPUProfile(cfg BenchConfig, testName string) bool {
-	if cfg.CPUProfile == "" {
+	if strings.TrimSpace(cfg.CPUProfile) == "" {
 		return false
 	}
 	if len(cfg.CPUProfileTests) == 0 {
@@ -837,7 +850,7 @@ func shouldCPUProfile(cfg BenchConfig, testName string) bool {
 }
 
 func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
-	if cfg.AllocsProfile == "" {
+	if strings.TrimSpace(cfg.AllocsProfile) == "" {
 		return false
 	}
 	if len(cfg.AllocsProfileTests) == 0 {
@@ -847,8 +860,57 @@ func shouldAllocsProfile(cfg BenchConfig, testName string) bool {
 	return ok
 }
 
+func benchConfigHasAnyProfileOutput(cfg BenchConfig) bool {
+	return strings.TrimSpace(cfg.CPUProfile) != "" ||
+		strings.TrimSpace(cfg.AllocsProfile) != "" ||
+		strings.TrimSpace(cfg.CheckpointCPUProfile) != "" ||
+		strings.TrimSpace(cfg.BlockProfile) != "" ||
+		strings.TrimSpace(cfg.MutexProfile) != "" ||
+		strings.TrimSpace(cfg.TraceProfile) != ""
+}
+
+func benchConfigUsesAllocsProfile(cfg BenchConfig) bool {
+	if strings.TrimSpace(cfg.AllocsProfile) == "" {
+		return false
+	}
+	if len(cfg.AllocsProfileTests) == 0 {
+		return true
+	}
+	tests := normalizeTests(parseList(cfg.TestsArg))
+	if len(tests) == 0 {
+		return true
+	}
+	if contains(tests, "all") {
+		return true
+	}
+	for _, testName := range tests {
+		if _, ok := cfg.AllocsProfileTests[strings.ToLower(testName)]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func installAllocsProfileRateForEnabled(enabled bool, rate int) func() {
+	if !enabled {
+		return func() {}
+	}
+	if rate <= 0 {
+		rate = 512 * 1024
+	}
+	prevRate := runtime.MemProfileRate
+	runtime.MemProfileRate = rate
+	return func() {
+		runtime.MemProfileRate = prevRate
+	}
+}
+
+func installAllocsProfileRate(cfg BenchConfig) func() {
+	return installAllocsProfileRateForEnabled(benchConfigUsesAllocsProfile(cfg), cfg.AllocsProfileRate)
+}
+
 func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
-	if cfg.CheckpointCPUProfile == "" {
+	if strings.TrimSpace(cfg.CheckpointCPUProfile) == "" {
 		return false
 	}
 	if len(cfg.CheckpointCPUProfileTests) == 0 {
@@ -858,29 +920,73 @@ func shouldCheckpointCPUProfile(cfg BenchConfig, testName string) bool {
 	return ok
 }
 
-func startCheckpointCPUProfile(cfg BenchConfig, testName, dbName string) (*os.File, error) {
-	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", cfg.CheckpointCPUProfile, sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
+func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHooks, testName, dbName string) (*os.File, error) {
+	path := fmt.Sprintf("%s_checkpoint_%s_%s.pprof", strings.TrimSpace(cfg.CheckpointCPUProfile), sanitizeProfileSegment(testName), sanitizeProfileSegment(dbName))
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s): %w", testName, dbName, err)
 	}
-	if err := pprof.StartCPUProfile(f); err != nil {
+	if profileHooks.startCPUProfile == nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("checkpoint cpu profile start: %w", err)
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s) start hook is nil: path=%s", testName, dbName, path)
+	}
+	if err := profileHooks.startCPUProfile(f); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("checkpoint cpu profile (%s/%s) start path=%s: %w", testName, dbName, path, err)
 	}
 	return f, nil
 }
 
-var (
-	stopCPUProfileFn                  = pprof.StopCPUProfile
-	writeAllocsSnapshotTempFn         = writeAllocsSnapshotTemp
-	writeAllocsDeltaProfileFn         = writeAllocsDeltaProfile
-	writeRuntimeProfileSnapshotTempFn = writeRuntimeProfileSnapshotTemp
-	writeRuntimeProfileDeltaProfileFn = writeRuntimeProfileDeltaProfile
-	runPprofDeltaCommandFn            = runPprofDeltaCommand
+type benchmarkProfileHooks struct {
+	startCPUProfile                 func(io.Writer) error
+	stopCPUProfile                  func()
+	writeAllocsSnapshotTemp         func(string) (string, error)
+	writeAllocsDeltaProfile         func(string, string, string) error
+	writeRuntimeProfileSnapshotTemp func(string, string) (string, error)
+	writeRuntimeProfileDeltaProfile func(string, string, string) (bool, error)
+}
 
-	errEmptyPprofDeltaOutput = errors.New("empty pprof delta output")
-)
+func defaultBenchmarkProfileHooks() benchmarkProfileHooks {
+	return benchmarkProfileHooks{
+		startCPUProfile:                 pprof.StartCPUProfile,
+		stopCPUProfile:                  pprof.StopCPUProfile,
+		writeAllocsSnapshotTemp:         writeAllocsSnapshotTemp,
+		writeAllocsDeltaProfile:         writeAllocsDeltaProfile,
+		writeRuntimeProfileSnapshotTemp: writeRuntimeProfileSnapshotTemp,
+		writeRuntimeProfileDeltaProfile: writeRuntimeProfileDeltaProfile,
+	}
+}
+
+func profileHooksFromConfig(cfg BenchConfig) benchmarkProfileHooks {
+	hooks := defaultBenchmarkProfileHooks()
+	if cfg.profileHooks == nil {
+		return hooks
+	}
+	override := *cfg.profileHooks
+	if override.startCPUProfile != nil {
+		hooks.startCPUProfile = override.startCPUProfile
+	}
+	if override.stopCPUProfile != nil {
+		hooks.stopCPUProfile = override.stopCPUProfile
+	}
+	if override.writeAllocsSnapshotTemp != nil {
+		hooks.writeAllocsSnapshotTemp = override.writeAllocsSnapshotTemp
+	}
+	if override.writeAllocsDeltaProfile != nil {
+		hooks.writeAllocsDeltaProfile = override.writeAllocsDeltaProfile
+	}
+	if override.writeRuntimeProfileSnapshotTemp != nil {
+		hooks.writeRuntimeProfileSnapshotTemp = override.writeRuntimeProfileSnapshotTemp
+	}
+	if override.writeRuntimeProfileDeltaProfile != nil {
+		hooks.writeRuntimeProfileDeltaProfile = override.writeRuntimeProfileDeltaProfile
+	}
+	return hooks
+}
+
+var errEmptyPprofDeltaOutput = errors.New("empty pprof delta output")
 
 func writeAllocsSnapshot(path string) error {
 	// MemProfile data can lag behind current allocations until GC updates the
@@ -960,7 +1066,11 @@ func writeRuntimeProfileSnapshotTemp(prefix, profileName string) (string, error)
 }
 
 func writeRuntimeProfileDeltaProfile(basePath, afterPath, outPath string) (bool, error) {
-	err := writePprofDeltaProfile(basePath, afterPath, outPath)
+	return writeRuntimeProfileDeltaProfileWithRunner(basePath, afterPath, outPath, runPprofDeltaCommand)
+}
+
+func writeRuntimeProfileDeltaProfileWithRunner(basePath, afterPath, outPath string, runner func(string, string) ([]byte, string, error)) (bool, error) {
+	err := writePprofDeltaProfileWithRunner(basePath, afterPath, outPath, runner)
 	if err == nil {
 		return true, nil
 	}
@@ -972,7 +1082,11 @@ func writeRuntimeProfileDeltaProfile(basePath, afterPath, outPath string) (bool,
 }
 
 func writePprofDeltaProfile(basePath, afterPath, outPath string) error {
-	stdout, stderrText, err := runPprofDeltaCommandFn(basePath, afterPath)
+	return writePprofDeltaProfileWithRunner(basePath, afterPath, outPath, runPprofDeltaCommand)
+}
+
+func writePprofDeltaProfileWithRunner(basePath, afterPath, outPath string, runner func(string, string) ([]byte, string, error)) error {
+	stdout, stderrText, err := runner(basePath, afterPath)
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(stderrText))
 	}
@@ -1055,9 +1169,37 @@ func runBenchprof(dir string) {
 	}
 }
 
+func runBenchprofStrict(dir string) error {
+	if err := benchprof.RunFromProfilesDir(dir); err != nil {
+		return fmt.Errorf("benchprof: %w", err)
+	}
+	for _, name := range []string{"insights.md", "insights.json", "insights.html"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("benchprof: expected %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+	return writeBenchprofArtifactsToPaths(filepath.Join(dir, "benchprof_results.json"), filepath.Join(dir, "benchprof_results.md"), executionPath, runs)
+}
+
+func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string, runs []BenchRun) error {
+	jsonPath = strings.TrimSpace(jsonPath)
+	markdownPath = strings.TrimSpace(markdownPath)
+	if jsonPath == "" || markdownPath == "" {
+		return errors.New("benchprof: json and markdown artifact paths are required")
+	}
+	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", filepath.Dir(jsonPath), err)
+	}
+	if err := os.MkdirAll(filepath.Dir(markdownPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir %q: %w", filepath.Dir(markdownPath), err)
 	}
 	if err := validateBenchprofExecutionPath(executionPath); err != nil {
 		return err
@@ -1082,7 +1224,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err != nil {
 		return fmt.Errorf("marshal benchprof_results.json: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
+	if err := os.WriteFile(jsonPath, js, 0o644); err != nil {
 		return fmt.Errorf("write benchprof_results.json: %w", err)
 	}
 
@@ -1095,7 +1237,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if executionPath != "" {
 		md = fmt.Sprintf("- execution path: `%s`\n\n%s", executionPath, md)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.md"), []byte(md), 0o644); err != nil {
+	if err := os.WriteFile(markdownPath, []byte(md), 0o644); err != nil {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
 	}
 	return nil
@@ -1896,18 +2038,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
 	cfg.ReadWorkers = resolveReadWorkers(cfg.ReadWorkers)
+	profileHooks := profileHooksFromConfig(cfg)
 
-	if cfg.AllocsProfile != "" {
-		rate := cfg.AllocsProfileRate
-		if rate <= 0 {
-			rate = 512 * 1024
-		}
-		prevRate := runtime.MemProfileRate
-		runtime.MemProfileRate = rate
-		defer func() {
-			runtime.MemProfileRate = prevRate
-		}()
-	}
+	defer installAllocsProfileRate(cfg)()
 	keyShapeName := strings.ToLower(strings.TrimSpace(cfg.KeyShape))
 	if keyShapeName == "" {
 		keyShapeName = "be8"
@@ -3744,45 +3877,51 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	settledBeforeScans := false
+	blockProfilePath := strings.TrimSpace(cfg.BlockProfile)
+	mutexProfilePath := strings.TrimSpace(cfg.MutexProfile)
+	traceProfilePath := strings.TrimSpace(cfg.TraceProfile)
 
-	if cfg.BlockProfile != "" {
+	if blockProfilePath != "" {
 		rate := cfg.BlockProfileRate
 		if rate <= 0 {
 			rate = 1
 		}
-		runtime.SetBlockProfileRate(rate)
-		defer runtime.SetBlockProfileRate(0)
-
-		f, err := os.Create(cfg.BlockProfile)
+		f, err := os.Create(blockProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("blockprofile: %w", err)
 		}
+		runtime.SetBlockProfileRate(rate)
 		defer func() {
-			_ = pprof.Lookup("block").WriteTo(f, 0)
+			runtime.SetBlockProfileRate(0)
+			if prof := pprof.Lookup("block"); prof != nil {
+				_ = prof.WriteTo(f, 0)
+			}
 			_ = f.Close()
 		}()
 	}
 
-	if cfg.MutexProfile != "" {
+	if mutexProfilePath != "" {
 		frac := cfg.MutexProfileFraction
 		if frac <= 0 {
 			frac = 1
 		}
-		runtime.SetMutexProfileFraction(frac)
-		defer runtime.SetMutexProfileFraction(0)
-
-		f, err := os.Create(cfg.MutexProfile)
+		f, err := os.Create(mutexProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("mutexprofile: %w", err)
 		}
+		prevFrac := runtime.SetMutexProfileFraction(frac)
 		defer func() {
-			_ = pprof.Lookup("mutex").WriteTo(f, 0)
+			runtime.SetMutexProfileFraction(0)
+			if prof := pprof.Lookup("mutex"); prof != nil {
+				_ = prof.WriteTo(f, 0)
+			}
 			_ = f.Close()
+			runtime.SetMutexProfileFraction(prevFrac)
 		}()
 	}
 
-	if cfg.TraceProfile != "" {
-		f, err := os.Create(cfg.TraceProfile)
+	if traceProfilePath != "" {
+		f, err := os.Create(traceProfilePath)
 		if err != nil {
 			return BenchRun{}, fmt.Errorf("trace: %w", err)
 		}
@@ -3842,7 +3981,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					err               error
 				)
 				if shouldCheckpointCPUProfile(cfg, testName) {
-					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, testName, inst.Wrapper.Name())
+					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, profileHooks, testName, inst.Wrapper.Name())
 					if err != nil {
 						return BenchRun{}, fmt.Errorf("checkpoint %s before %s profiling: %w", inst.Name, testName, err)
 					}
@@ -3852,7 +3991,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				checkpointErr := cp.Checkpoint()
 
 				if checkpointCPUFile != nil {
-					stopCPUProfileFn()
+					profileHooks.stopCPUProfile()
 					_ = checkpointCPUFile.Close()
 				}
 
@@ -3933,35 +4072,36 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			// CPU profile if enabled (only for single key count)
 			var cpuFile *os.File
 			if shouldCPUProfile(cfg, testName) {
-				path := cfg.CPUProfile + "_" + testName + "_" + inst.Name + ".pprof"
+				path := strings.TrimSpace(cfg.CPUProfile) + "_" + testName + "_" + inst.Name + ".pprof"
 				f, err := os.Create(path)
 				if err != nil {
 					return BenchRun{}, fmt.Errorf("cpuprofile %s: %w", path, err)
 				}
 				cpuFile = f
-				if err := pprof.StartCPUProfile(cpuFile); err != nil {
+				if err := profileHooks.startCPUProfile(cpuFile); err != nil {
 					_ = cpuFile.Close()
+					_ = os.Remove(path)
 					return BenchRun{}, fmt.Errorf("cpuprofile start %s: %w", path, err)
 				}
 			}
 
 			allocBasePath := ""
 			if shouldAllocsProfile(cfg, testName) {
-				allocBasePath, err = writeAllocsSnapshotTempFn("unified_bench_allocs_base")
+				allocBasePath, err = profileHooks.writeAllocsSnapshotTemp("unified_bench_allocs_base")
 				if err != nil {
 					if cpuFile != nil {
-						stopCPUProfileFn()
+						profileHooks.stopCPUProfile()
 						_ = cpuFile.Close()
 					}
 					return BenchRun{}, fmt.Errorf("allocsprofile baseline %s/%s: %w", testName, inst.Name, err)
 				}
 			}
 			blockBasePath := ""
-			if cfg.BlockProfile != "" {
-				blockBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_block_base", "block")
+			if blockProfilePath != "" {
+				blockBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_block_base", "block")
 				if err != nil {
 					if cpuFile != nil {
-						stopCPUProfileFn()
+						profileHooks.stopCPUProfile()
 						_ = cpuFile.Close()
 					}
 					_ = os.Remove(allocBasePath)
@@ -3969,11 +4109,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 			mutexBasePath := ""
-			if cfg.MutexProfile != "" {
-				mutexBasePath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_mutex_base", "mutex")
+			if mutexProfilePath != "" {
+				mutexBasePath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_mutex_base", "mutex")
 				if err != nil {
 					if cpuFile != nil {
-						stopCPUProfileFn()
+						profileHooks.stopCPUProfile()
 						_ = cpuFile.Close()
 					}
 					_ = os.Remove(allocBasePath)
@@ -3985,7 +4125,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			opsPerSec, runErr := fn(inst.Wrapper, rng)
 
 			if cpuFile != nil {
-				stopCPUProfileFn()
+				profileHooks.stopCPUProfile()
 				_ = cpuFile.Close()
 			}
 
@@ -3993,7 +4133,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			mutexAfterPath := ""
 			if runErr == nil {
 				if blockBasePath != "" {
-					blockAfterPath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_block_after", "block")
+					blockAfterPath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_block_after", "block")
 					if err != nil {
 						_ = os.Remove(allocBasePath)
 						_ = os.Remove(blockBasePath)
@@ -4002,7 +4142,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 				if mutexBasePath != "" {
-					mutexAfterPath, err = writeRuntimeProfileSnapshotTempFn("unified_bench_mutex_after", "mutex")
+					mutexAfterPath, err = profileHooks.writeRuntimeProfileSnapshotTemp("unified_bench_mutex_after", "mutex")
 					if err != nil {
 						_ = os.Remove(allocBasePath)
 						_ = os.Remove(blockBasePath)
@@ -4017,7 +4157,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if runErr != nil {
 					_ = os.Remove(allocBasePath)
 				} else {
-					allocAfterPath, snapErr := writeAllocsSnapshotTempFn("unified_bench_allocs_after")
+					allocAfterPath, snapErr := profileHooks.writeAllocsSnapshotTemp("unified_bench_allocs_after")
 					if snapErr != nil {
 						_ = os.Remove(allocBasePath)
 						_ = os.Remove(blockBasePath)
@@ -4026,8 +4166,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						_ = os.Remove(mutexAfterPath)
 						return BenchRun{}, fmt.Errorf("allocsprofile snapshot %s/%s: %w", testName, inst.Name, snapErr)
 					}
-					allocPath := cfg.AllocsProfile + "_" + testName + "_" + inst.Name + ".pprof"
-					deltaErr := writeAllocsDeltaProfileFn(allocBasePath, allocAfterPath, allocPath)
+					allocPath := strings.TrimSpace(cfg.AllocsProfile) + "_" + testName + "_" + inst.Name + ".pprof"
+					deltaErr := profileHooks.writeAllocsDeltaProfile(allocBasePath, allocAfterPath, allocPath)
 					_ = os.Remove(allocBasePath)
 					_ = os.Remove(allocAfterPath)
 					if deltaErr != nil {
@@ -4044,14 +4184,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					_ = os.Remove(blockBasePath)
 					_ = os.Remove(blockAfterPath)
 				} else {
-					blockPath := contentionProfilePath(cfg.BlockProfile, "block", testName, inst.Name)
-					_, deltaErr := writeRuntimeProfileDeltaProfileFn(blockBasePath, blockAfterPath, blockPath)
+					blockPath := contentionProfilePath(blockProfilePath, "block", testName, inst.Name)
+					wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(blockBasePath, blockAfterPath, blockPath)
 					_ = os.Remove(blockBasePath)
 					_ = os.Remove(blockAfterPath)
 					if deltaErr != nil {
 						_ = os.Remove(mutexBasePath)
 						_ = os.Remove(mutexAfterPath)
 						return BenchRun{}, fmt.Errorf("blockprofile %s/%s (%s): %w", testName, inst.Name, blockPath, deltaErr)
+					}
+					if !wrote {
+						_ = os.Remove(blockPath)
 					}
 				}
 			}
@@ -4060,12 +4203,15 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					_ = os.Remove(mutexBasePath)
 					_ = os.Remove(mutexAfterPath)
 				} else {
-					mutexPath := contentionProfilePath(cfg.MutexProfile, "mutex", testName, inst.Name)
-					_, deltaErr := writeRuntimeProfileDeltaProfileFn(mutexBasePath, mutexAfterPath, mutexPath)
+					mutexPath := contentionProfilePath(mutexProfilePath, "mutex", testName, inst.Name)
+					wrote, deltaErr := profileHooks.writeRuntimeProfileDeltaProfile(mutexBasePath, mutexAfterPath, mutexPath)
 					_ = os.Remove(mutexBasePath)
 					_ = os.Remove(mutexAfterPath)
 					if deltaErr != nil {
 						return BenchRun{}, fmt.Errorf("mutexprofile %s/%s (%s): %w", testName, inst.Name, mutexPath, deltaErr)
+					}
+					if !wrote {
+						_ = os.Remove(mutexPath)
 					}
 				}
 			}
@@ -4119,7 +4265,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				err               error
 			)
 			if shouldCheckpointCPUProfile(cfg, checkpointPostRunLabel) {
-				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, checkpointPostRunLabel, inst.Wrapper.Name())
+				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, profileHooks, checkpointPostRunLabel, inst.Wrapper.Name())
 				if err != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s after run profiling: %w", inst.Name, err)
 				}
@@ -4129,7 +4275,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			checkpointErr := cp.Checkpoint()
 
 			if checkpointCPUFile != nil {
-				stopCPUProfileFn()
+				profileHooks.stopCPUProfile()
 				_ = checkpointCPUFile.Close()
 			}
 

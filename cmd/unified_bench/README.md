@@ -172,6 +172,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
+  - `column_store` — native TreeDB column-store benchmark/artifact suite; writes stage-separated throughput, parity, byte-accounting, manifest/recovery, `column_store_results.{json,md,html}`, `benchprof_results.{json,md}`, and `insights.{md,json,html}` when `-profile-dir` is set
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 
 ## Standard Profile Workflow (`benchprof`)
@@ -207,6 +208,49 @@ This writes:
 For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
 under `runs[].treedb_stats`, including ordered-root/root-apply and cache
 counters used by raw-engine review gates.
+
+## Column Store Suite
+
+Use `column_store` as the canonical native TreeDB column-store benchmark entry
+point. M11A measures the production column-enabled collection manifest/control
+path with a durable command-WAL profile and a deterministic JSONBench-shaped
+fixture. `-profile balanced` is accepted as a `durable` alias for the column
+store suite so the unified-bench default still exercises the durable gate. The
+only runnable execution label in M11A is `row_store_baseline`; the
+physical column labels (`b_tree_index_baseline`, `serial_column_scan`,
+`aggregate_metadata`, `parallel_column_scan`) fail closed rather than silently
+falling back to row materialization.
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -suite column_store \
+  -dbs treedb \
+  -profile durable \
+  -keys 100000 \
+  -batchsize 1000 \
+  -profile-dir "$OUT" \
+  -path-label native-fastpath \
+  -column-store-path row_store_baseline \
+  -progress=false
+```
+
+The suite writes:
+
+- `column_store_results.json`, `column_store_results.md`, `column_store_results.html`
+- `benchprof_results.json`, `benchprof_results.md`
+- `insights.md`, `insights.json`, `insights.html`
+- configured runtime profiles, including `cpu_column_store_treedb_column_store.pprof`, `allocs_column_store_treedb_column_store.pprof`, `checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof`, `block.pprof`, `mutex.pprof`, `trace.out`, and the query-phase delta `block_column_store_treedb_column_store.pprof` / `mutex_column_store_treedb_column_store.pprof` when those profile classes produce non-empty deltas
+
+PR descriptions for column-store milestones should paste the command, row count,
+profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,
+materialized-row count, parity status, byte accounting, manifest/recovery
+identity, and the generated HTML artifact paths. If a forced physical column
+path is not implemented yet, the PR must call that out explicitly and include
+the fail-closed evidence. M11A reports `column_asset_bytes=0` with a note because
+physical column assets are not published yet; `retained_payload_bytes` equals the
+source JSONBench payload until compressed retained-payload accounting lands.
 
 ## Notes
 

@@ -16,6 +16,7 @@ var (
 )
 
 func RegisterDB(name string, factory DBFactory) {
+	name = normalizeDBNameForLookup(name)
 	if _, exists := dbFactories[name]; !exists {
 		dbOrder = append(dbOrder, name)
 	}
@@ -27,17 +28,43 @@ func RegisterDB(name string, factory DBFactory) {
 // listings. This is useful for benchmark variants that should not run by
 // default.
 func RegisterHiddenDB(name string, factory DBFactory) {
+	name = normalizeDBNameForLookup(name)
 	dbFactories[name] = factory
 }
 
 func RegisterAlias(alias, target string) {
+	alias = normalizeDBNameForLookup(alias)
+	target = normalizeDBNameForLookup(target)
 	dbAliases[alias] = target
 }
 
-func GetDBFactory(name string) (DBFactory, error) {
-	if target, isAlias := dbAliases[name]; isAlias {
-		name = target
+func normalizeDBNameForLookup(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func canonicalDBName(name string) string {
+	name = normalizeDBNameForLookup(name)
+	original := name
+	target, isAlias := dbAliases[name]
+	if !isAlias {
+		return name
 	}
+	seen := map[string]struct{}{name: {}}
+	for {
+		name = normalizeDBNameForLookup(target)
+		target, isAlias = dbAliases[name]
+		if !isAlias {
+			return name
+		}
+		if _, cycle := seen[name]; cycle {
+			return original
+		}
+		seen[name] = struct{}{}
+	}
+}
+
+func GetDBFactory(name string) (DBFactory, error) {
+	name = canonicalDBName(name)
 	f, ok := dbFactories[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown DB: %q", name)
@@ -62,6 +89,10 @@ func GetRegisteredDBsList() string {
 func resolveDBs(arg, excludeArg string) []string {
 	requested := parseList(arg)
 	excluded := parseList(excludeArg)
+	excludedSet := make(map[string]struct{}, len(excluded))
+	for _, name := range excluded {
+		excludedSet[canonicalDBName(name)] = struct{}{}
+	}
 
 	var candidates []string
 	if contains(requested, "all") {
@@ -71,18 +102,19 @@ func resolveDBs(arg, excludeArg string) []string {
 	}
 
 	out := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
 	for _, name := range candidates {
-		if contains(excluded, name) {
+		name = canonicalDBName(name)
+		if _, skip := excludedSet[name]; skip {
 			continue
 		}
 		if _, ok := dbFactories[name]; ok {
+			if _, duplicate := seen[name]; duplicate {
+				continue
+			}
+			seen[name] = struct{}{}
 			out = append(out, name)
 			continue
-		}
-		if target, isAlias := dbAliases[name]; isAlias {
-			if _, ok := dbFactories[target]; ok {
-				out = append(out, target)
-			}
 		}
 	}
 	return out
