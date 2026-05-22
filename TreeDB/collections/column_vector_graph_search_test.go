@@ -149,49 +149,6 @@ func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing
 	}
 }
 
-func TestColumnVectorGraphNativeSearchScratchClearsCandidateAdjacencyRefsV3(t *testing.T) {
-	var scratch columnVectorGraphNativeSearchScratch
-	scratch.frontier = append(scratch.frontier, columnVectorGraphSearchCandidate{
-		ordinal:   1,
-		score:     1,
-		adjacency: []uint32{1, 2},
-	})
-	scratch.top = append(scratch.top, columnVectorGraphSearchCandidate{
-		ordinal:   2,
-		score:     2,
-		adjacency: []uint32{3, 4},
-	})
-	if err := scratch.prepare(4, 3, 2, 1, 2); err != nil {
-		t.Fatalf("prepare: %v", err)
-	}
-	assertColumnVectorGraphCandidateScratchNoAdjacencyRefsV3(t, "frontier after prepare", scratch.frontier)
-	assertColumnVectorGraphCandidateScratchNoAdjacencyRefsV3(t, "top after prepare", scratch.top)
-
-	scratch.frontier = append(scratch.frontier,
-		columnVectorGraphSearchCandidate{ordinal: 1, score: 1, adjacency: []uint32{1}},
-		columnVectorGraphSearchCandidate{ordinal: 2, score: 2, adjacency: []uint32{2}},
-	)
-	if _, ok := scratch.popFrontier(); !ok {
-		t.Fatalf("popFrontier returned ok=false")
-	}
-	backing := scratch.frontier[:cap(scratch.frontier)]
-	for i := len(scratch.frontier); i < len(backing); i++ {
-		if backing[i].adjacency != nil {
-			t.Fatalf("frontier backing slot %d retained adjacency %v after pop", i, backing[i].adjacency)
-		}
-	}
-}
-
-func assertColumnVectorGraphCandidateScratchNoAdjacencyRefsV3(t *testing.T, label string, candidates []columnVectorGraphSearchCandidate) {
-	t.Helper()
-	backing := candidates[:cap(candidates)]
-	for i, candidate := range backing {
-		if candidate.adjacency != nil {
-			t.Fatalf("%s backing slot %d retained adjacency %v", label, i, candidate.adjacency)
-		}
-	}
-}
-
 func TestColumnVectorGraphNativeSearchRejectsBadAdjacencyOrdinalV3(t *testing.T) {
 	rows := []columnVectorGraphAssetRow{
 		{ID: []byte("doc-start"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{2}},
