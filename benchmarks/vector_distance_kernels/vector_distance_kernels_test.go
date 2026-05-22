@@ -556,7 +556,7 @@ func BenchmarkCosineDistanceQueryBatch32x128(b *testing.B) {
 func pureGoCosineDistanceF64Accum(query []float32, queryInvNorm float32, candidate []float32, candidateInvNorm float32) float32 {
 	var dot float64
 	for i, left := range query {
-		dot += float64(left * candidate[i])
+		dot += float64(left) * float64(candidate[i])
 	}
 	return float32(1 - dot*float64(queryInvNorm)*float64(candidateInvNorm))
 }

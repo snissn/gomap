@@ -1673,6 +1673,16 @@ func (idx *VectorIndex) filterAttachedCurrentNodeResults(results []VectorSearchR
 	return filtered
 }
 
+func (idx *VectorIndex) isCurrentVectorNodeResult(documentID []byte, nodeID int) bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	currentNodeID, ok := idx.currentNode[string(documentID)]
+	if !ok || currentNodeID != nodeID {
+		return false
+	}
+	return currentNodeID >= 0 && currentNodeID < len(idx.nodes) && !idx.nodes[currentNodeID].deleted
+}
+
 func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchResult, rankedNodeIDs []int, topK int) ([]VectorSearchResult, error) {
 	if idx == nil {
 		return nil, errors.New("collections: vector index is nil")
@@ -1718,6 +1728,9 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 			if !found {
 				continue
 			}
+			if !idx.isCurrentVectorNodeResult(result.DocumentID, rankedNodeIDs[i]) {
+				continue
+			}
 			result.Document = document
 			resultIDBytes += len(result.DocumentID)
 			results = append(results, result)
@@ -1730,6 +1743,9 @@ func (idx *VectorIndex) attachVectorSearchResultDocuments(ranked []VectorSearchR
 			return nil, err
 		}
 		if !found {
+			continue
+		}
+		if !idx.isCurrentVectorNodeResult(result.DocumentID, rankedNodeIDs[i]) {
 			continue
 		}
 		document = bytes.Clone(document)
