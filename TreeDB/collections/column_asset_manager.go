@@ -203,6 +203,10 @@ func writeColumnDictionaryCodesAssetToManager(rootDir string, cfg ColumnStoreCon
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1DictionaryCodes, generation, partID)
 }
 
+func writeColumnInt64ValuesAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1Int64Values, generation, partID)
+}
+
 func writeColumnAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
 	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
 }

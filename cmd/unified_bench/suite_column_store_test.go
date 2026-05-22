@@ -1516,6 +1516,15 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 			}
 			continue
 		}
+		if q.Name == columnStoreQueryQ3 {
+			if q.Int64ValueHits == 0 {
+				t.Fatalf("query %s int64_value_hits=%d want sidecar hits", q.Name, q.Int64ValueHits)
+			}
+			if !strings.Contains(q.ThroughputInterpretation, "int64-value sidecar serial path") {
+				t.Fatalf("query %s throughput_interpretation=%q want int64 sidecar classification", q.Name, q.ThroughputInterpretation)
+			}
+			continue
+		}
 		if !strings.Contains(q.ThroughputInterpretation, "physical serial scan") {
 			t.Fatalf("query %s throughput_interpretation=%q want serial physical classification", q.Name, q.ThroughputInterpretation)
 		}

@@ -169,6 +169,7 @@ type columnStoreQueryMetric struct {
 	ProductionHash           uint64  `json:"production_hash"`
 	MetadataHits             int     `json:"metadata_hits"`
 	DictionaryCodeHits       int     `json:"dictionary_code_hits"`
+	Int64ValueHits           int     `json:"int64_value_hits"`
 	SkippedGranules          int     `json:"skipped_granules"`
 	ScheduledGranules        int     `json:"scheduled_granules"`
 	WorkerCount              int     `json:"worker_count"`
@@ -203,6 +204,7 @@ type columnStoreQueryExecution struct {
 	ResultCount            int
 	MetadataHits           int
 	DictionaryCodeHits     int
+	Int64ValueHits         int
 	SkippedGranules        int
 	ScheduledGranules      int
 	WorkerCount            int
@@ -1144,6 +1146,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			ProductionHash:         hash,
 			MetadataHits:           exec.MetadataHits,
 			DictionaryCodeHits:     exec.DictionaryCodeHits,
+			Int64ValueHits:         exec.Int64ValueHits,
 			SkippedGranules:        exec.SkippedGranules,
 			ScheduledGranules:      exec.ScheduledGranules,
 			WorkerCount:            exec.WorkerCount,
@@ -1348,6 +1351,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		ResultCount:            resultCount,
 		MetadataHits:           diag.MetadataHits,
 		DictionaryCodeHits:     diag.DictionaryCodeHits,
+		Int64ValueHits:         diag.Int64ValueHits,
 		SkippedGranules:        diag.SkippedGranules,
 		ScheduledGranules:      diag.ScheduledGranules,
 		WorkerCount:            workers,
@@ -1690,8 +1694,14 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 	case columnStorePathBTreeIndexBaseline:
 		return "decode-bound B-tree baseline: full unbounded secondary-index walk plus JSON row materialization before reduction; " + markPruning + evidence
 	case columnStorePathSerialColumnScan:
+		if q.DictionaryCodeHits > 0 && q.Int64ValueHits > 0 {
+			return fmt.Sprintf("dictionary-code and int64-value sidecar serial path: dictionary_hits=%d int64_hits=%d avoid full TCPA row-record scan for covered declared columns; setup/read/decode still occurs in this routed measurement; %s%s", q.DictionaryCodeHits, q.Int64ValueHits, markPruning, evidence)
+		}
 		if q.DictionaryCodeHits > 0 {
 			return fmt.Sprintf("dictionary-code sidecar serial path: %d sidecar hits avoid full TCPA row-record scan for declared dictionary columns; setup/read/decode still occurs in this routed measurement; %s%s", q.DictionaryCodeHits, markPruning, evidence)
+		}
+		if q.Int64ValueHits > 0 {
+			return fmt.Sprintf("int64-value sidecar serial path: %d sidecar hits avoid full TCPA row-record scan for declared int64 columns; setup/read/decode still occurs in this routed measurement; %s%s", q.Int64ValueHits, markPruning, evidence)
 		}
 		return "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes when cache-warm; " + markPruning + evidence
 	case columnStorePathAggregateMetadata:
@@ -1723,7 +1733,7 @@ func columnStoreQueryInterpretationEvidence(q columnStoreQueryMetric) string {
 	if rowsProcessedOK {
 		rowsProcessedText = strconv.Itoa(rowsProcessed)
 	}
-	return fmt.Sprintf("; effective_rows_processed=%s row_materializations=%s bytes_read=%d metadata_hits=%d dictionary_code_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessedText, rowMaterializations, q.BytesRead, q.MetadataHits, q.DictionaryCodeHits, q.ScheduledGranules, q.SkippedGranules)
+	return fmt.Sprintf("; effective_rows_processed=%s row_materializations=%s bytes_read=%d metadata_hits=%d dictionary_code_hits=%d int64_value_hits=%d scheduled_granules=%d skipped_granules=%d", rowsProcessedText, rowMaterializations, q.BytesRead, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.ScheduledGranules, q.SkippedGranules)
 }
 
 func populateColumnStoreThroughputInterpretations(queries []columnStoreQueryMetric) {
@@ -2027,8 +2037,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
@@ -2042,8 +2052,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if note != "" {
 			noteCell = markdownCodeTableText(note)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 

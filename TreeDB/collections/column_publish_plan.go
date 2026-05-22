@@ -46,6 +46,9 @@ const (
 	// ColumnAssetKindTCS1DictionaryCodes references low-cardinality dictionary
 	// codes derived from one declared dictionary string column in a TCS1 part.
 	ColumnAssetKindTCS1DictionaryCodes ColumnAssetKind = "tcs1_dictionary_codes"
+	// ColumnAssetKindTCS1Int64Values references dense int64 values derived from
+	// one non-null declared int64 column in a TCS1 part.
+	ColumnAssetKindTCS1Int64Values ColumnAssetKind = "tcs1_int64_values"
 )
 
 // ColumnAssetRef is the durable typed address of a column-asset-manager-owned
@@ -65,6 +68,7 @@ type ColumnAssetRef struct {
 // ColumnPreparedAsset describes an immutable asset staged for manifest publish.
 type ColumnPreparedAsset struct {
 	Ref          ColumnAssetRef
+	Rows         int
 	Bytes        int64
 	PublishID    uint64
 	GenerationID uint64
@@ -872,6 +876,7 @@ func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedA
 
 type columnPreparedAssetMatchKey struct {
 	Ref          ColumnAssetRef
+	Rows         int
 	Bytes        int64
 	PublishID    uint64
 	GenerationID uint64
@@ -880,6 +885,7 @@ type columnPreparedAssetMatchKey struct {
 func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAssetMatchKey {
 	return columnPreparedAssetMatchKey{
 		Ref:          asset.Ref,
+		Rows:         asset.Rows,
 		Bytes:        asset.Bytes,
 		PublishID:    asset.PublishID,
 		GenerationID: asset.GenerationID,
@@ -889,6 +895,9 @@ func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAsse
 func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if err := validateColumnAssetRefForPlan(asset.Ref); err != nil {
 		return err
+	}
+	if asset.Rows < 0 {
+		return fmt.Errorf("collections: column prepared asset rows=%d cannot be negative", asset.Rows)
 	}
 	if asset.Bytes <= 0 {
 		return fmt.Errorf("collections: column prepared asset bytes=%d must be positive", asset.Bytes)
@@ -901,7 +910,7 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	switch ref.Kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes:
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
 	default:
 		if ref.Kind == "" {
 			return errors.New("collections: column asset ref kind is required")
