@@ -103,6 +103,7 @@ func syntheticJSONBenchDataset(rows int) JSONBenchDataset {
 	columns := map[string][]int64{
 		"row_index":              make([]int64, rows),
 		"time_us":                make([]int64, rows),
+		"hour_of_day":            make([]int64, rows),
 		"did_code":               make([]int64, rows),
 		"kind_code":              make([]int64, rows),
 		"commit_operation_code":  make([]int64, rows),
@@ -112,6 +113,7 @@ func syntheticJSONBenchDataset(rows int) JSONBenchDataset {
 	for i := 0; i < rows; i++ {
 		columns["row_index"][i] = int64(i)
 		columns["time_us"][i] = 1_700_000_000_000_000 + int64(i)*1_000_000
+		columns["hour_of_day"][i] = unixMicroHour(columns["time_us"][i])
 		columns["did_code"][i] = int64((i % didCardinality) + 1)
 		columns["kind_code"][i] = 1
 		columns["commit_operation_code"][i] = 1
