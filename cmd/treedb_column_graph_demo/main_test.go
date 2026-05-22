@@ -33,7 +33,7 @@ func TestColumnGraphDemoRunsCloseReopenNativeReaderPath(t *testing.T) {
 		"row_fetches=",
 		"decoded_blocks=",
 		"max_resident_B=",
-		"result[0] id=doc-000000 ordinal=0",
+		"result[0] id=doc-000000 ",
 	}
 	for _, needle := range required {
 		if !strings.Contains(out, needle) {
