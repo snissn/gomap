@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // ColumnPhysicalQueryKind names the small M13B physical aggregate/projection
@@ -47,6 +49,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	AppliedCommandLSN          uint64
 	ManifestRecords            int
 	AssetRefs                  int
+	MutationParts              int
 	DecodedBlocks              int
 	ScheduledGranules          int
 	SkippedGranules            int
@@ -56,7 +59,13 @@ type ColumnPhysicalQueryDiagnostics struct {
 	RowMaterializations        int
 	PhysicalBytesScanned       int64
 	ReduceRows                 int
+	VisibilityRows             int
+	ReconstructionRows         int
 	ResultGroups               int
+	ScanNanos                  int64
+	VisibilityNanos            int64
+	ReduceNanos                int64
+	ReconstructionNanos        int64
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -67,29 +76,75 @@ type ColumnPhysicalQueryResult struct {
 }
 
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
-// the recovery-authoritative manifest. It fails closed for update/delete rows
-// until the M13 visibility overlay lands.
+// the recovery-authoritative manifest. Insert-only manifests use the direct
+// scanner path; mutation-bearing manifests fall back to the M13C visibility
+// overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	cfg, err := c.columnPhysicalQueryColumnStoreConfig()
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
+	if cfg.PhysicalMutationParts > 0 {
+		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
+	}
 	exec, err := newColumnPhysicalQueryExecutor(cfg, req)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
+	scanStart := time.Now()
 	diag, err := c.scanColumnPhysicalRows(columnPhysicalScanRequest{
-		ProjectedColumns: exec.projected,
-		Visitor:          exec.visit,
+		ProjectedColumns:  exec.projected,
+		Visitor:           exec.visit,
+		RequireInsertOnly: true,
 	})
+	scanNanos := time.Since(scanStart).Nanoseconds()
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
 	if err != nil {
+		if errors.Is(err, errColumnPhysicalQueryNeedsVisibility) {
+			return c.runColumnPhysicalQueryWithVisibility(cfg, req)
+		}
 		return result, err
 	}
 	result.Groups = exec.groups()
+	result.Diagnostics.ResultGroups = len(result.Groups)
+	return result, nil
+}
+
+var errColumnPhysicalQueryNeedsVisibility = errors.New("collections: physical column query requires mutation visibility overlay")
+
+func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	exec, err := newColumnPhysicalQueryExecutor(cfg, req)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+	visibilityStart := time.Now()
+	visible, err := c.scanColumnPhysicalVisibleRows(exec.projected)
+	visibilityNanos := time.Since(visibilityStart).Nanoseconds()
+	result := ColumnPhysicalQueryResult{
+		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(visible.Diagnostics),
+	}
+	result.Diagnostics.VisibilityRows = len(visible.Rows)
+	result.Diagnostics.ScanNanos = visibilityNanos
+	result.Diagnostics.VisibilityNanos = visibilityNanos
+	if err != nil {
+		return result, err
+	}
+	reduceStart := time.Now()
+	for _, row := range visible.Rows {
+		if row.Deleted {
+			continue
+		}
+		if err := exec.visitValues(row.Values); err != nil {
+			return result, err
+		}
+	}
+	result.Diagnostics.ReduceNanos = time.Since(reduceStart).Nanoseconds()
+	result.Groups = exec.groups()
+	result.Diagnostics.ReduceRows = exec.reduceRows
 	result.Diagnostics.ResultGroups = len(result.Groups)
 	return result, nil
 }
@@ -118,6 +173,7 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		AppliedCommandLSN:          diag.AppliedCommandLSN,
 		ManifestRecords:            diag.ManifestRecords,
 		AssetRefs:                  diag.AssetRefs,
+		MutationParts:              diag.MutationParts,
 		DecodedBlocks:              diag.DecodedBlocks,
 		ScheduledGranules:          diag.ScheduledGranules,
 		SkippedGranules:            diag.SkippedGranules,
@@ -223,22 +279,26 @@ func columnPhysicalQueryDeclaredColumn(cfg ColumnStoreConfig, name string) (Colu
 
 func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error {
 	if row.Deleted || row.Operation != ColumnPublishOperationInsert {
-		return fmt.Errorf("%w: physical column query mutation visibility overlay is not implemented for operation=%s deleted=%v", ErrColumnQueryPlanUnsupported, row.Operation, row.Deleted)
+		return fmt.Errorf("%w: operation=%s deleted=%v", errColumnPhysicalQueryNeedsVisibility, row.Operation, row.Deleted)
 	}
+	return e.visitValues(row.Values)
+}
+
+func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) error {
 	e.reduceRows++
 	switch e.kind {
 	case ColumnPhysicalQueryGroupCount:
-		key, err := e.stringKey(row.Values[e.groupIdx])
+		key, err := e.stringKey(values[e.groupIdx])
 		if err != nil {
 			return err
 		}
 		e.counts[key]++
 	case ColumnPhysicalQueryGroupCountDistinct:
-		key, err := e.stringKey(row.Values[e.groupIdx])
+		key, err := e.stringKey(values[e.groupIdx])
 		if err != nil {
 			return err
 		}
-		distinct, err := e.stringKey(row.Values[e.distinctIdx])
+		distinct, err := e.stringKey(values[e.distinctIdx])
 		if err != nil {
 			return err
 		}
@@ -249,13 +309,13 @@ func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error
 		}
 		set[distinct] = struct{}{}
 	case ColumnPhysicalQueryHourCount:
-		value, err := columnPhysicalQueryInt64Value(row.Values[e.valueIdx])
+		value, err := columnPhysicalQueryInt64Value(values[e.valueIdx])
 		if err != nil {
 			return err
 		}
 		e.hourCounts[columnPhysicalQueryUTCHour(value)]++
 	case ColumnPhysicalQueryGroupMinInt64:
-		key, value, err := e.stringInt64(row)
+		key, value, err := e.stringInt64Values(values)
 		if err != nil {
 			return err
 		}
@@ -263,7 +323,7 @@ func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error
 			e.int64Values[key] = value
 		}
 	case ColumnPhysicalQueryGroupMaxInt64:
-		key, value, err := e.stringInt64(row)
+		key, value, err := e.stringInt64Values(values)
 		if err != nil {
 			return err
 		}
@@ -271,7 +331,7 @@ func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error
 			e.int64Values[key] = value
 		}
 	case ColumnPhysicalQueryGroupInt64Span:
-		key, value, err := e.stringInt64(row)
+		key, value, err := e.stringInt64Values(values)
 		if err != nil {
 			return err
 		}
@@ -291,12 +351,12 @@ func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error
 	return nil
 }
 
-func (e *columnPhysicalQueryExecutor) stringInt64(row columnPhysicalScanRowView) (string, int64, error) {
-	key, err := e.stringKey(row.Values[e.groupIdx])
+func (e *columnPhysicalQueryExecutor) stringInt64Values(values []columnDeclaredValue) (string, int64, error) {
+	key, err := e.stringKey(values[e.groupIdx])
 	if err != nil {
 		return "", 0, err
 	}
-	value, err := columnPhysicalQueryInt64Value(row.Values[e.valueIdx])
+	value, err := columnPhysicalQueryInt64Value(values[e.valueIdx])
 	if err != nil {
 		return "", 0, err
 	}

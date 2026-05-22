@@ -68,6 +68,14 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
+	if len(meta.Indexes) != 0 && columnStoreNeedsRetainedPayloadTransform(meta) {
+		return fmt.Errorf("%w: unsupported column-store write operation: M13C retained payload reconstruction is not wired to secondary indexes yet collection=%q operation=%s indexes=%d",
+			backenddb.ErrCommandWALRejected,
+			meta.Name,
+			operation,
+			len(meta.Indexes),
+		)
+	}
 	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
 		return fmt.Errorf("%w: M12C unsupported column-store write collection=%q operation=%s document_format=%q",
 			backenddb.ErrCommandWALRejected,
@@ -290,6 +298,7 @@ func clearColumnManifestProgress(meta CollectionMeta) CollectionMeta {
 	cfg.ActiveManifest = nil
 	cfg.RecoveryAuthoritativeManifest = nil
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = 0
+	cfg.PhysicalMutationParts = 0
 	copied.Options.ColumnStore = &cfg
 	return copied
 }
@@ -641,8 +650,28 @@ func columnPublishUpdatedMeta(base CollectionMeta, plan ColumnPublishPlan) (Coll
 	cfg.ActiveManifest = &active
 	cfg.RecoveryAuthoritativeManifest = &recovery
 	cfg.RecoveryAuthoritativeAppliedCommandLSN = plan.RecoveryAuthoritativeAppliedCommandLSN
+	mutationParts, err := columnPublishPhysicalMutationParts(base.Options.ColumnStore, plan)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	cfg.PhysicalMutationParts = mutationParts
 	updated.Options.ColumnStore = &cfg
 	return normalizeCollectionMeta(updated)
+}
+
+func columnPublishPhysicalMutationParts(base *ColumnStoreConfig, plan ColumnPublishPlan) (uint64, error) {
+	var parts uint64
+	if base != nil {
+		parts = base.PhysicalMutationParts
+	}
+	if plan.Operation != ColumnPublishOperationInsert {
+		add := uint64(len(plan.PreparedAssets))
+		if ^uint64(0)-parts < add {
+			return 0, errors.New("collections: physical mutation part count overflow")
+		}
+		parts += add
+	}
+	return parts, nil
 }
 
 func (c *Collection) buildRootDescriptorAndColumnManifestSystemDeltaIteratorForMeta(meta CollectionMeta, expectedCommitSeq, expectedSystemRoot uint64, rootNames []string, baseRootIDs map[string]uint64, rootIDs []uint64, plan ColumnPublishPlan) (iterator.UnsafeIterator, error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +18,35 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 )
+
+func TestColumnStoreSuiteRetainedPayloadPreservesJSONNumbersM13C(t *testing.T) {
+	cfg := columnStoreSuiteConfig()
+	retained, err := columnStoreSuiteRetainedPayloadFromDocument(
+		[]byte(`{"time_us":9223372036854775807,"kind":"like","did":"d1","payload_id":9223372036854775806}`),
+		cfg,
+	)
+	if err != nil {
+		t.Fatalf("columnStoreSuiteRetainedPayloadFromDocument: %v", err)
+	}
+	if bytes.Contains(retained, []byte("9.223")) {
+		t.Fatalf("retained payload used floating/scientific notation: %s", retained)
+	}
+	if !bytes.Contains(retained, []byte(`"payload_id":9223372036854775806`)) {
+		t.Fatalf("retained payload lost integer fidelity: %s", retained)
+	}
+	if bytes.Contains(retained, []byte("time_us")) || bytes.Contains(retained, []byte("kind")) || bytes.Contains(retained, []byte("did")) {
+		t.Fatalf("retained payload still contains declared columns: %s", retained)
+	}
+}
+
+func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
+	cfg := columnStoreSuiteConfig()
+	if _, err := columnStoreSuiteRetainedPayloadFromDocument([]byte(`{"payload":1} {"payload":2}`), cfg); err == nil {
+		t.Fatal("columnStoreSuiteRetainedPayloadFromDocument accepted trailing JSON value")
+	} else if !strings.Contains(err.Error(), "trailing JSON value") {
+		t.Fatalf("columnStoreSuiteRetainedPayloadFromDocument err=%v want trailing JSON value", err)
+	}
+}
 
 func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	dir := t.TempDir()

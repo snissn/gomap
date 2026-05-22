@@ -11,6 +11,85 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestColumnManifestAssetRefsFromRecordsRejectsFutureGenerationM13C(t *testing.T) {
+	oldAsset := columnManifestAssetRefFilterTestAssetM13C(1, 1, ColumnPublishOperationInsert)
+	activeAsset := columnManifestAssetRefFilterTestAssetM13C(2, 1, ColumnPublishOperationUpdate)
+	futureAsset := columnManifestAssetRefFilterTestAssetM13C(3, 1, ColumnPublishOperationDelete)
+	oldRecord, err := encodeColumnManifestPartRecord(oldAsset)
+	if err != nil {
+		t.Fatalf("encode old part: %v", err)
+	}
+	activeRecord, err := encodeColumnManifestPartRecord(activeAsset)
+	if err != nil {
+		t.Fatalf("encode active part: %v", err)
+	}
+	futureRecord, err := encodeColumnManifestPartRecord(futureAsset)
+	if err != nil {
+		t.Fatalf("encode future part: %v", err)
+	}
+	records := []columnManifestRecord{
+		{key: columnManifestPartRecordKey(oldAsset.Ref.Generation, oldAsset.Ref.PartID), value: oldRecord},
+		{key: columnManifestPartRecordKey(activeAsset.Ref.Generation, activeAsset.Ref.PartID), value: activeRecord},
+	}
+
+	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, activeAsset.Ref.Generation, activeAsset.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan reachable lineage: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("refs=%d want old base plus active delta", len(refs))
+	}
+	if refs[0].Ref.Generation != oldAsset.Ref.Generation || refs[0].Reason != ColumnPublishOperationInsert {
+		t.Fatalf("unexpected base ref: %+v", refs[0])
+	}
+	if refs[1].Ref.Generation != activeAsset.Ref.Generation || refs[1].Reason != ColumnPublishOperationUpdate {
+		t.Fatalf("unexpected active delta ref: %+v", refs[1])
+	}
+	if mutationParts != 1 {
+		t.Fatalf("mutation parts=%d want one active update part", mutationParts)
+	}
+
+	records = append(records, columnManifestRecord{key: columnManifestPartRecordKey(futureAsset.Ref.Generation, futureAsset.Ref.PartID), value: futureRecord})
+	if _, _, err := columnManifestAssetRefsFromRecordsForScan(records, activeAsset.Ref.Generation, activeAsset.Ref.Namespace); err == nil {
+		t.Fatal("columnManifestAssetRefsFromRecordsForScan accepted future-generation part")
+	}
+}
+
+func TestColumnManifestAssetRefsRejectPartIDKeyMismatchM13C(t *testing.T) {
+	asset := columnManifestAssetRefFilterTestAssetM13C(2, 7, ColumnPublishOperationInsert)
+	record, err := encodeColumnManifestPartRecord(asset)
+	if err != nil {
+		t.Fatalf("encode part: %v", err)
+	}
+	records := []columnManifestRecord{{
+		key:   columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID+1),
+		value: record,
+	}}
+	_, _, err = columnManifestAssetRefsFromRecordsForScan(records, asset.Ref.Generation, asset.Ref.Namespace)
+	if err == nil || !strings.Contains(err.Error(), "key part_id") {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan err=%v want key part_id mismatch", err)
+	}
+}
+
+func columnManifestAssetRefFilterTestAssetM13C(generation, partID uint64, reason ColumnPublishOperation) ColumnPreparedAsset {
+	return ColumnPreparedAsset{
+		Ref: ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  "events/column-assets",
+			Generation: generation,
+			PartID:     partID,
+			FileID:     1,
+			Offset:     int64((generation - 1) * 128),
+			Length:     64,
+			Checksum:   uint32(1000 + generation),
+		},
+		Bytes:        64,
+		PublishID:    generation,
+		GenerationID: generation,
+		Reason:       string(reason),
+	}
+}
+
 func TestColumnPhysicalSerialScannerReadsReopenedAssetsM13A(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -299,6 +378,48 @@ func TestColumnPhysicalAssetSerialScanRejectsWrongCollectionM13A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalSerialScannerRejectsManifestReasonOperationMismatchM13C(t *testing.T) {
+	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 4)
+	encoded, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationUpdate,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  normalized.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     1,
+		FileID:     columnAssetM12ASegmentFileID,
+		Length:     int64(len(encoded)),
+		Checksum:   page.Checksum(encoded),
+	}
+	projection, err := newColumnPhysicalScanProjection(*normalized, []string{"time_us"})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalScanProjection: %v", err)
+	}
+	visited := false
+	_, err = scanColumnPhysicalAssetRowsWithManifestOperation(encoded, ref, "events", normalized, projection, ColumnPublishOperationInsert, func(row columnPhysicalScanRowView) error {
+		visited = true
+		return nil
+	})
+	if !errors.Is(err, errColumnPhysicalAssetManifestOperationMismatch) {
+		t.Fatalf("scan mismatched manifest operation err=%v want mismatch", err)
+	}
+	if visited {
+		t.Fatal("scanner visited rows before rejecting manifest operation mismatch")
+	}
+}
+
 func TestColumnPhysicalAssetSerialScanRejectsV1DeleteOperationM13A(t *testing.T) {
 	normalized, rows := makeColumnPhysicalAssetBenchmarkRows(t, 1)
 	encoded := encodeColumnPhysicalAssetV1ForTest(t, columnPhysicalAssetEncodeInput{
@@ -336,6 +457,7 @@ func TestColumnManifestAssetRefsForScanRetainsChecksumCoveredGenerationsM13A(t *
 	stale.Ref.Generation = 2
 	stale.Ref.PartID = 1
 	stale.GenerationID = stale.Ref.Generation
+	stale.Reason = string(ColumnPublishOperationInsert)
 	staleValue, err := encodeColumnManifestPartRecord(stale)
 	if err != nil {
 		t.Fatalf("encode stale part: %v", err)
@@ -344,22 +466,26 @@ func TestColumnManifestAssetRefsForScanRetainsChecksumCoveredGenerationsM13A(t *
 	active.Ref.Generation = 3
 	active.Ref.PartID = 2
 	active.GenerationID = active.Ref.Generation
+	active.Reason = string(ColumnPublishOperationInsert)
 	activeValue, err := encodeColumnManifestPartRecord(active)
 	if err != nil {
 		t.Fatalf("encode active part: %v", err)
 	}
 
-	refs, err := columnManifestAssetRefsFromRecordsForScan([]columnManifestRecord{
+	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan([]columnManifestRecord{
 		{key: []byte(columnManifestHeaderRecordKey), value: []byte("header ignored by ref extraction")},
 		{key: columnManifestPartRecordKey(stale.Ref.Generation, stale.Ref.PartID), value: staleValue},
 		{key: columnManifestPartRecordKey(active.Ref.Generation, active.Ref.PartID), value: activeValue},
-	}, active.Ref.Generation)
+	}, active.Ref.Generation, active.Ref.Namespace)
 	if err != nil {
 		t.Fatalf("columnManifestAssetRefsFromRecordsForScan: %v", err)
 	}
+	if mutationParts != 0 {
+		t.Fatalf("mutation parts=%d want zero retained insert parts", mutationParts)
+	}
 	if len(refs) != 2 ||
-		refs[0].Generation != stale.Ref.Generation || refs[0].PartID != stale.Ref.PartID ||
-		refs[1].Generation != active.Ref.Generation || refs[1].PartID != active.Ref.PartID {
+		refs[0].Ref.Generation != stale.Ref.Generation || refs[0].Ref.PartID != stale.Ref.PartID ||
+		refs[1].Ref.Generation != active.Ref.Generation || refs[1].Ref.PartID != active.Ref.PartID {
 		t.Fatalf("refs=%+v want retained stale ref %+v and active ref %+v", refs, stale.Ref, active.Ref)
 	}
 }
@@ -373,6 +499,7 @@ func TestColumnManifestEncodeChecksumsRetainedPartRecordsM13A(t *testing.T) {
 	retained.Ref.Generation = 1
 	retained.Ref.PartID = 1
 	retained.GenerationID = retained.Ref.Generation
+	retained.Reason = string(ColumnPublishOperationInsert)
 	retainedValue, err := encodeColumnManifestPartRecord(retained)
 	if err != nil {
 		t.Fatalf("encode retained part: %v", err)
@@ -381,6 +508,7 @@ func TestColumnManifestEncodeChecksumsRetainedPartRecordsM13A(t *testing.T) {
 	next.Ref.Generation = 2
 	next.Ref.PartID = 2
 	next.GenerationID = next.Ref.Generation
+	next.Reason = string(ColumnPublishOperationUpdate)
 	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
 		Collection:        "events",
 		ColumnStore:       *cfg,

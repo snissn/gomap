@@ -427,7 +427,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if columnAssetBytes == 0 {
 		columnAssetBytesNote = "M12A expected isolated physical column assets; zero bytes means no column assets were published"
 	}
-	retainedPayloadBytes := sourceBytes
+	retainedPayloadBytes, retainedPayloadBytesNote, err := columnStoreSuiteRetainedPayloadAccounting(fixtureEvents, columnStoreSuiteConfigForPath(forcedPath), forcedPath)
+	if err != nil {
+		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
+	}
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
 	report := columnStoreSuiteReport{
 		GeneratedAt:            time.Now().UTC().Format(time.RFC3339),
@@ -448,7 +451,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            retainedPayloadBytes,
-			RetainedPayloadBytesNote:        "M12A retains the source JSONBench payload as the reconstructable row baseline; retained-payload stripping is a later milestone",
+			RetainedPayloadBytesNote:        retainedPayloadBytesNote,
 			ColumnAssetBytes:                columnAssetBytes,
 			ColumnAssetBytesNote:            columnAssetBytesNote,
 			ColumnAssetStoreBytes:           columnAssetBytes,
@@ -679,13 +682,25 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 	}
 }
 
+func columnStoreSuiteConfigForPath(path string) *collections.ColumnStoreConfig {
+	cfg := columnStoreSuiteConfig()
+	if path == columnStorePathBTreeIndexBaseline {
+		// Secondary-index write paths have not yet been wired to store only
+		// retained row payloads while building indexes from full documents.
+		// Keep this explicit comparison baseline full-retained until that
+		// production shape is supported.
+		cfg.RetainedPayload = collections.ColumnRetainedPayloadFull
+	}
+	return cfg
+}
+
 func columnStoreSuiteCollectionMeta(path string) *collections.CollectionMeta {
 	meta := &collections.CollectionMeta{
 		Name: "events",
 		Options: collections.CollectionOptions{
 			DocumentFormat:               collections.DocumentFormatJSON,
 			DisableIndexedWriteMemtables: true,
-			ColumnStore:                  columnStoreSuiteConfig(),
+			ColumnStore:                  columnStoreSuiteConfigForPath(path),
 		},
 	}
 	if path == columnStorePathBTreeIndexBaseline {
@@ -1222,6 +1237,42 @@ func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows 
 		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)
 	}
 	return events, materialized, bytesRead, nil
+}
+
+func columnStoreSuiteRetainedPayloadAccounting(events []columnStoreFixtureEvent, cfg *collections.ColumnStoreConfig, path string) (int64, string, error) {
+	if cfg == nil || !cfg.Enabled || cfg.RetainedPayload == collections.ColumnRetainedPayloadFull {
+		var bytesTotal int64
+		for _, event := range events {
+			bytesTotal += int64(len(event.Doc))
+		}
+		if path == columnStorePathBTreeIndexBaseline {
+			return bytesTotal, "M13C b_tree_index_baseline keeps full row payload because retained-payload indexed writes remain fail-closed until secondary-index reconstruction is wired", nil
+		}
+		return bytesTotal, "full row payload retained", nil
+	}
+	var bytesTotal int64
+	for _, event := range events {
+		retained, err := columnStoreSuiteRetainedPayloadFromDocument(event.Doc, cfg)
+		if err != nil {
+			return 0, "", err
+		}
+		bytesTotal += int64(len(retained))
+	}
+	switch cfg.RetainedPayload {
+	case collections.ColumnRetainedPayloadNonColumn:
+		return bytesTotal, "M13C stores only non-column retained payload in the row lane; declared columns are reconstructed from physical column assets", nil
+	case collections.ColumnRetainedPayloadNone:
+		return bytesTotal, "M13C stores no row payload beyond an empty JSON object; declared columns are reconstructed from physical column assets", nil
+	default:
+		return 0, "", fmt.Errorf("unsupported retained-payload policy %q", cfg.RetainedPayload)
+	}
+}
+
+func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collections.ColumnStoreConfig) ([]byte, error) {
+	if cfg == nil {
+		return nil, errors.New("column_store: retained-payload transform requires column-store config")
+	}
+	return collections.ColumnRetainedPayloadFromJSONDocument(*cfg, document)
 }
 
 var columnStoreQueryNameList = [...]string{

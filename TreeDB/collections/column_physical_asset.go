@@ -15,7 +15,8 @@ import (
 const (
 	columnPhysicalAssetMagic     = uint32(0x54435041) // TCPA
 	columnPhysicalAssetVersionV1 = uint16(1)
-	columnPhysicalAssetVersion   = uint16(2)
+	columnPhysicalAssetVersionV2 = uint16(2)
+	columnPhysicalAssetVersion   = uint16(3)
 )
 
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
@@ -26,12 +27,14 @@ type columnWriteDocument struct {
 }
 
 type columnDeclaredValue struct {
-	Type   ColumnStoreValueType
-	Null   bool
-	Bool   bool
-	Int64  int64
-	Double float64
-	String string
+	Type ColumnStoreValueType
+	// Present distinguishes an omitted nullable JSON path from an explicit null.
+	Present bool
+	Null    bool
+	Bool    bool
+	Int64   int64
+	Double  float64
+	String  string
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view; String remains the owned representation for full asset decoding.
 	StringBytes []byte
@@ -143,7 +146,7 @@ func lookupColumnJSONPath(obj map[string]any, path string) (any, bool) {
 }
 
 func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (columnDeclaredValue, error) {
-	value := columnDeclaredValue{Type: col.ValueType}
+	value := columnDeclaredValue{Type: col.ValueType, Present: exists}
 	if !exists || raw == nil {
 		if col.Nullable {
 			value.Null = true
@@ -206,6 +209,14 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 			if len(row.Values) != len(input.Columns) {
 				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
 			}
+			for colIdx, value := range row.Values {
+				if !value.Present && !value.Null {
+					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] absent value is not null", rowIdx, colIdx)
+				}
+				if !value.Present && !input.Columns[colIdx].Nullable {
+					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] column[%d] is absent but column is not nullable", rowIdx, colIdx)
+				}
+			}
 		case ColumnPublishOperationDelete:
 			if !row.Deleted {
 				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset delete row[%d] is not marked deleted", rowIdx)
@@ -245,6 +256,10 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 		for _, value := range row.Values {
 			writeManifestString(&b, string(value.Type))
 			writeManifestBool(&b, value.Null)
+			writeManifestBool(&b, columnDeclaredValuePresentForEncode(value))
+			if !columnDeclaredValuePresentForEncode(value) {
+				continue
+			}
 			if value.Null {
 				continue
 			}
@@ -276,7 +291,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 		return columnPhysicalAsset{}, fmt.Errorf("collections: bad column physical asset magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnPhysicalAssetVersionV1 && version != columnPhysicalAssetVersion {
+	if !isSupportedColumnPhysicalAssetVersion(version) {
 		return columnPhysicalAsset{}, fmt.Errorf("collections: unsupported column physical asset version=%d", version)
 	}
 	header := columnPhysicalAssetHeader{
@@ -316,7 +331,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 		row := columnDeclaredRow{
 			ID: cur.bytes(),
 		}
-		if version >= columnPhysicalAssetVersion {
+		if version >= columnPhysicalAssetVersionV2 {
 			row.Deleted = cur.bool()
 		}
 		if !row.Deleted {
@@ -325,6 +340,18 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 				value := columnDeclaredValue{
 					Type: ColumnStoreValueType(cur.string()),
 					Null: cur.bool(),
+				}
+				if version >= columnPhysicalAssetVersion {
+					value.Present = cur.bool()
+				} else {
+					value.Present = true
+				}
+				if !value.Present {
+					if !value.Null {
+						return columnPhysicalAsset{}, errors.New("collections: column physical asset absent value must be null")
+					}
+					row.Values[colIdx] = value
+					continue
 				}
 				if !value.Null {
 					switch value.Type {
@@ -421,12 +448,31 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 			if value.Type != cfg.Columns[colIdx].ValueType {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] type=%q want %q", rowIdx, colIdx, value.Type, cfg.Columns[colIdx].ValueType)
 			}
+			if !value.Present && !value.Null {
+				return fmt.Errorf("collections: column physical asset row[%d] column[%d] absent value is not null", rowIdx, colIdx)
+			}
+			if !value.Present && !cfg.Columns[colIdx].Nullable {
+				return fmt.Errorf("collections: column physical asset row[%d] column[%d] is absent but column is not nullable", rowIdx, colIdx)
+			}
 			if value.Null && !cfg.Columns[colIdx].Nullable {
 				return fmt.Errorf("collections: column physical asset row[%d] column[%d] is null but column is not nullable", rowIdx, colIdx)
 			}
 		}
 	}
 	return nil
+}
+
+func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
+	switch version {
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersion:
+		return true
+	default:
+		return false
+	}
+}
+
+func columnDeclaredValuePresentForEncode(value columnDeclaredValue) bool {
+	return value.Present
 }
 
 func isSupportedColumnPhysicalAssetOperation(operation ColumnPublishOperation) bool {

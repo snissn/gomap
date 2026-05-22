@@ -433,8 +433,8 @@ func checksumColumnManifestRecords(input ColumnPublishManifestEncodeInput, gener
 	writeHashUint64(&d, input.AppliedCommandLSN)
 	writeHashUint64(&d, input.ColumnStore.SchemaHash)
 	for _, record := range records {
-		writeHashString(&d, string(record.key))
-		writeHashString(&d, string(record.value))
+		writeHashBytes(&d, record.key)
+		writeHashBytes(&d, record.value)
 	}
 	sum := d.Sum64()
 	if sum == 0 {

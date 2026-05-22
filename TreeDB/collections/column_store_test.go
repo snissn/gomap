@@ -725,6 +725,21 @@ func testColumnStoreConfig(active *ColumnManifestIdentity) *ColumnStoreConfig {
 	return cfg
 }
 
+func TestColumnStoreConfigEmptyIncludesPhysicalMutationPartsM13C(t *testing.T) {
+	if columnStoreConfigEmpty(ColumnStoreConfig{PhysicalMutationParts: 1}) {
+		t.Fatal("columnStoreConfigEmpty ignored physical mutation parts")
+	}
+	if _, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{PhysicalMutationParts: 1}); err == nil || !strings.Contains(err.Error(), "enabled=true") {
+		t.Fatalf("normalize disabled physical mutation metadata err=%v want enabled=true rejection", err)
+	}
+	if parts, err := columnPublishPhysicalMutationParts(&ColumnStoreConfig{PhysicalMutationParts: ^uint64(0)}, ColumnPublishPlan{
+		Operation:      ColumnPublishOperationUpdate,
+		PreparedAssets: []ColumnPreparedAsset{{}},
+	}); err == nil || parts != 0 || !strings.Contains(err.Error(), "overflow") {
+		t.Fatalf("columnPublishPhysicalMutationParts parts=%d err=%v want overflow", parts, err)
+	}
+}
+
 func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
 	t.Helper()
 	cfg := meta.Options.ColumnStore

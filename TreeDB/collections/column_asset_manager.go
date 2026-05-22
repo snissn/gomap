@@ -246,6 +246,10 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 }
 
 func readColumnPhysicalAssetFromManager(rootDir string, ref ColumnAssetRef) ([]byte, error) {
+	return readColumnPhysicalAssetFromManagerInto(rootDir, ref, nil)
+}
+
+func readColumnPhysicalAssetFromManagerInto(rootDir string, ref ColumnAssetRef, dst []byte) ([]byte, error) {
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return nil, err
 	}
@@ -261,7 +265,123 @@ func readColumnPhysicalAssetFromManager(rootDir string, ref ColumnAssetRef) ([]b
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
-	raw := make([]byte, int(ref.Length))
+	if cap(dst) < int(ref.Length) {
+		dst = make([]byte, int(ref.Length))
+	}
+	raw := dst[:int(ref.Length)]
+	n, err := file.ReadAt(raw, ref.Offset)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	if n != len(raw) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	if checksum := page.Checksum(raw); checksum != ref.Checksum {
+		return nil, fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
+	}
+	return raw, nil
+}
+
+type columnPhysicalAssetReadCache struct {
+	namespace  string
+	segmentDir string
+	fileID     uint32
+	file       *os.File
+	files      map[uint32]*os.File
+}
+
+func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPhysicalAssetReadCache, error) {
+	if namespace == "" {
+		return columnPhysicalAssetReadCache{}, errors.New("collections: column asset read cache namespace is required")
+	}
+	managerNamespace, err := columnAssetManagerNamespaceForRoot(rootDir, namespace)
+	if err != nil {
+		return columnPhysicalAssetReadCache{}, err
+	}
+	return columnPhysicalAssetReadCache{
+		namespace:  namespace,
+		segmentDir: managerNamespace.SegmentDir,
+	}, nil
+}
+
+func (c *columnPhysicalAssetReadCache) close() error {
+	var closeErr error
+	if c.file != nil {
+		if err := c.file.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		c.file = nil
+	}
+	for fileID, file := range c.files {
+		if file == nil {
+			continue
+		}
+		if err := file.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		delete(c.files, fileID)
+	}
+	return closeErr
+}
+
+func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("collections: nil column physical asset read cache")
+	}
+	if ref.Namespace != c.namespace {
+		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
+	}
+	file, err := c.fileForRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	return readColumnPhysicalAssetFromFile(file, ref, dst)
+}
+
+func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*os.File, error) {
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return nil, err
+	}
+	if c.file != nil && c.fileID == ref.FileID {
+		return c.file, nil
+	}
+	if c.files != nil {
+		if file := c.files[ref.FileID]; file != nil {
+			return file, nil
+		}
+	}
+	file, err := os.Open(filepath.Join(c.segmentDir, columnAssetSegmentFileName(ref.FileID)))
+	if err != nil {
+		return nil, err
+	}
+	if c.file == nil && c.files == nil {
+		c.fileID = ref.FileID
+		c.file = file
+		return file, nil
+	}
+	if c.files == nil {
+		c.files = make(map[uint32]*os.File, 2)
+		if c.file != nil {
+			c.files[c.fileID] = c.file
+			c.file = nil
+			c.fileID = 0
+		}
+	}
+	c.files[ref.FileID] = file
+	return file, nil
+}
+
+func readColumnPhysicalAssetFromFile(file *os.File, ref ColumnAssetRef, dst []byte) ([]byte, error) {
+	if file == nil {
+		return nil, errors.New("collections: nil column physical asset segment file")
+	}
+	if ref.Length > int64(maxCollectionInt) {
+		return nil, fmt.Errorf("collections: column physical asset length=%d overflows int", ref.Length)
+	}
+	if cap(dst) < int(ref.Length) {
+		dst = make([]byte, int(ref.Length))
+	}
+	raw := dst[:int(ref.Length)]
 	n, err := file.ReadAt(raw, ref.Offset)
 	if err != nil && err != io.EOF {
 		return nil, err

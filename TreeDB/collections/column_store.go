@@ -128,6 +128,7 @@ type ColumnStoreConfig struct {
 	ActiveManifest                         *ColumnManifestIdentity       `json:"active_manifest,omitempty"`
 	RecoveryAuthoritativeManifest          *ColumnManifestIdentity       `json:"recovery_authoritative_manifest,omitempty"`
 	RecoveryAuthoritativeAppliedCommandLSN uint64                        `json:"recovery_authoritative_applied_command_lsn,omitempty"`
+	PhysicalMutationParts                  uint64                        `json:"physical_mutation_parts,omitempty"`
 	ProfileSupport                         ColumnStoreProfileSupport     `json:"profile_support,omitempty"`
 	Locator                                *ColumnLocatorConfig          `json:"locator,omitempty"`
 	ControlRootStoragePolicy               RootStoragePolicy             `json:"control_root_storage_policy,omitempty"`
@@ -665,6 +666,7 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		cfg.ActiveManifest == nil &&
 		cfg.RecoveryAuthoritativeManifest == nil &&
 		cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 &&
+		cfg.PhysicalMutationParts == 0 &&
 		cfg.ProfileSupport == "" &&
 		cfg.Locator == nil &&
 		cfg.ControlRootStoragePolicy == "" &&
@@ -735,6 +737,7 @@ func columnStoreConfigEqual(a, b *ColumnStoreConfig) bool {
 		a.Reconstruction != b.Reconstruction ||
 		a.ControlRootStoragePolicy != b.ControlRootStoragePolicy ||
 		a.RecoveryAuthoritativeAppliedCommandLSN != b.RecoveryAuthoritativeAppliedCommandLSN ||
+		a.PhysicalMutationParts != b.PhysicalMutationParts ||
 		a.ProfileSupport != b.ProfileSupport ||
 		a.SchemaHash != b.SchemaHash ||
 		!columnAssetManagerConfigEqual(a.AssetManager, b.AssetManager) ||
@@ -837,6 +840,13 @@ func writeHashString(d *xxhash.Digest, s string) {
 	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(s)))
 	_, _ = d.Write(lenBuf[:])
 	_, _ = d.WriteString(s)
+}
+
+func writeHashBytes(d *xxhash.Digest, b []byte) {
+	var lenBuf [8]byte
+	binary.LittleEndian.PutUint64(lenBuf[:], uint64(len(b)))
+	_, _ = d.Write(lenBuf[:])
+	_, _ = d.Write(b)
 }
 
 func writeHashUint64(d *xxhash.Digest, value uint64) {

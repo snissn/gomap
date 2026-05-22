@@ -13392,6 +13392,30 @@ func TestDirectBufferedRootEntriesOwnKeysAndRetainDocumentArena(t *testing.T) {
 	}
 }
 
+func TestAppendUpdateBatchPlanScratchDocumentPreservesEmptyRetainedPayloadM13C(t *testing.T) {
+	scratch := getUpdateBatchPlanScratch(1, 0)
+	defer putUpdateBatchPlanScratch(scratch)
+
+	document := appendUpdateBatchPlanScratchDocument(scratch, nil)
+	if document == nil {
+		t.Fatal("empty retained payload became nil tombstone")
+	}
+	if len(document) != 0 {
+		t.Fatalf("empty retained payload len=%d want 0", len(document))
+	}
+
+	entries := buildDirectBufferedPrimaryRootEntries([]preparedBatchUpdate{{
+		documentID: []byte("u1"),
+		document:   document,
+	}}, scratch)
+	if len(entries) != 1 {
+		t.Fatalf("primary entries=%d want 1", len(entries))
+	}
+	if entries[0].value == nil || len(entries[0].value) != 0 {
+		t.Fatalf("primary value=%v len=%d want non-nil zero-length value", entries[0].value, len(entries[0].value))
+	}
+}
+
 type bufferedUsersUpdateDoc struct {
 	id    string
 	email string

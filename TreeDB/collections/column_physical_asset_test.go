@@ -389,6 +389,42 @@ func TestColumnPhysicalAssetRejectsNonNullableNullM12A(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetRejectsInvalidAbsentValueM13C(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+		SortKey: []ColumnSortKey{{Column: "kind"}},
+	}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := []columnDeclaredRow{{
+		ID: []byte("e1"),
+		Values: []columnDeclaredValue{{
+			Type:    ColumnStoreValueString,
+			Present: false,
+			Null:    false,
+			String:  "invalid",
+		}},
+	}}
+	if _, _, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         normalized.AssetManager.Namespace,
+		Generation:        1,
+		PartID:            1,
+		AppliedCommandLSN: 1,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        normalized.SchemaHash,
+		Columns:           normalized.Columns,
+		Rows:              rows,
+	}); err == nil || !strings.Contains(err.Error(), "absent value is not null") {
+		t.Fatalf("encode invalid absent value err=%v want absent value failure", err)
+	}
+}
+
 func TestColumnAssetManagerWritesIsolatedSegmentAndValidatesM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
@@ -487,6 +523,24 @@ func TestColumnAssetManagerWriteAllowsZeroChecksumM12A(t *testing.T) {
 	}
 	if !bytes.Equal(raw, payload) {
 		t.Fatalf("raw payload mismatch: got %x want %x", raw, payload)
+	}
+}
+
+func TestColumnAssetManagerReadRejectsLengthOverflowM13C(t *testing.T) {
+	maxInt := int64(maxCollectionInt)
+	if maxInt == math.MaxInt64 {
+		t.Skip("int64 builds cannot represent a ColumnAssetRef length larger than max int")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  "events/column-assets",
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     maxInt + 1,
+	}
+	if _, err := readColumnPhysicalAssetFromManagerInto(t.TempDir(), ref, nil); err == nil || !strings.Contains(err.Error(), "overflows int") {
+		t.Fatalf("readColumnPhysicalAssetFromManagerInto err=%v want length overflow", err)
 	}
 }
 
