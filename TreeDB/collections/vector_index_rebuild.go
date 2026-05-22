@@ -506,10 +506,8 @@ func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
 		visited[index.entry] = true
 		queue = append(queue, index.entry)
 	}
-	for len(queue) > 0 {
-		nodeID := queue[0]
-		copy(queue, queue[1:])
-		queue = queue[:len(queue)-1]
+	for head := 0; head < len(queue); head++ {
+		nodeID := queue[head]
 		order = append(order, nodeID)
 		node := &index.nodes[nodeID]
 		for layer := len(node.neighbors) - 1; layer >= 0; layer-- {

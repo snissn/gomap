@@ -474,6 +474,14 @@ func normalizeDemoDir(dir string) (string, error) {
 }
 
 func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error) {
+	opts := demoBackendOptions(cfg, dir)
+	if opts.IndexOuterLeavesInValueLog {
+		return treedb.OpenBackendWithCachedLeafLog(opts)
+	}
+	return treedb.OpenBackend(opts)
+}
+
+func demoBackendOptions(cfg config, dir string) treedb.Options {
 	opts := treedb.OptionsFor(defaultProfile(cfg.profile), dir)
 	if cfg.vectorIndexStrategy == collections.VectorIndexStrategyColumnGraph {
 		opts.Durability = treedb.DurabilityDurable
@@ -491,10 +499,64 @@ func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error
 		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 		opts.ValueLog.Generational.LeafSegmentTargetBytes = cfg.leafGenerationTarget
 	}
-	if opts.IndexOuterLeavesInValueLog {
-		return treedb.OpenBackendWithCachedLeafLog(opts)
+	return opts
+}
+
+func demoCommandWALFormatConfig(opts treedb.Options) backenddb.FormatConfig {
+	return backenddb.FormatConfig{
+		RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+
+		IndexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
+
+		LeafPrefixCompression:     opts.LeafPrefixCompression,
+		IndexColumnarLeaves:       opts.IndexColumnarLeaves,
+		IndexPackedValuePtr:       opts.IndexPackedValuePtr,
+		IndexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		IndexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
+
+		ValueLogCompression: demoValueLogCompressionMode(opts.ValueLog.Compression),
+		ValueLogBlockCodec:  demoValueLogBlockCodec(opts.ValueLog.BlockCodec),
+		ValueLogAutoPolicy:  demoValueLogAutoPolicy(opts.ValueLog.AutoPolicy),
 	}
-	return treedb.OpenBackend(opts)
+}
+
+func demoValueLogCompressionMode(mode backenddb.ValueLogCompressionMode) string {
+	switch mode {
+	case backenddb.ValueLogCompressionOff:
+		return "off"
+	case backenddb.ValueLogCompressionBlock:
+		return "block"
+	case backenddb.ValueLogCompressionDict:
+		return "dict"
+	case backenddb.ValueLogCompressionAuto:
+		return "auto"
+	default:
+		return fmt.Sprintf("mode_%d", mode)
+	}
+}
+
+func demoValueLogBlockCodec(codec backenddb.ValueLogBlockCodec) string {
+	switch codec {
+	case backenddb.ValueLogBlockSnappy:
+		return "snappy"
+	case backenddb.ValueLogBlockLZ4:
+		return "lz4"
+	default:
+		return fmt.Sprintf("codec_%d", codec)
+	}
+}
+
+func demoValueLogAutoPolicy(policy backenddb.ValueLogAutoPolicy) string {
+	switch policy {
+	case backenddb.ValueLogAutoBalanced:
+		return "balanced"
+	case backenddb.ValueLogAutoThroughput:
+		return "throughput"
+	case backenddb.ValueLogAutoSize:
+		return "size"
+	default:
+		return fmt.Sprintf("policy_%d", policy)
+	}
 }
 
 func resultBackendForStrategy(strategy collections.VectorIndexStrategy) string {
@@ -617,9 +679,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		if err := os.MkdirAll(mainDir, 0o755); err != nil {
 			return result{}, err
 		}
-		if err := backenddb.SaveFormatConfig(mainDir, backenddb.FormatConfig{
-			RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
-		}); err != nil {
+		if err := backenddb.SaveFormatConfig(mainDir, demoCommandWALFormatConfig(demoBackendOptions(cfg, dir))); err != nil {
 			return result{}, fmt.Errorf("enable command WAL format for column_graph: %w", err)
 		}
 	}
