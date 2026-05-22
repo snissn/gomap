@@ -269,7 +269,9 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 			}
 			view := mapped[key.Offset:end]
 			release := func() error {
-				return errors.Join(munmapFile(mapped), file.Close())
+				err := errors.Join(munmapFile(mapped), file.Close())
+				m.recordClose()
+				return err
 			}
 			return m.acquireRegistered(key, scope, SourceMapped, view, release, opts), nil
 		}

@@ -70,18 +70,30 @@ func TestAcquireFileRangeMappedAndHeapReturnIdenticalBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireFileRange mapped: %v", err)
 	}
-	defer mapped.Release()
 	heap, err := mgr.AcquireFileRange(key, testScope(), path, AcquireOptions{Reason: "heap", AllowHeapCopy: true})
 	if err != nil {
+		_ = mapped.Release()
 		t.Fatalf("AcquireFileRange heap: %v", err)
 	}
-	defer heap.Release()
 	if !bytes.Equal(mapped.Bytes(), heap.Bytes()) {
 		t.Fatalf("mapped bytes %q != heap bytes %q", string(mapped.Bytes()), string(heap.Bytes()))
 	}
 	stats := mgr.Stats()
 	if stats.ActiveHandles != 2 || stats.ActiveMappedBytes != 16 || stats.ActiveHeapCopyBytes != 16 || stats.Opens != 2 || stats.Closes != 1 {
+		_ = mapped.Release()
+		_ = heap.Release()
 		t.Fatalf("unexpected stats with mapped+heap active: %+v", stats)
+	}
+	if err := mapped.Release(); err != nil {
+		_ = heap.Release()
+		t.Fatalf("mapped Release: %v", err)
+	}
+	if err := heap.Release(); err != nil {
+		t.Fatalf("heap Release: %v", err)
+	}
+	stats = mgr.Stats()
+	if stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 || stats.Opens != 2 || stats.Closes != 2 {
+		t.Fatalf("unexpected stats after releases: %+v", stats)
 	}
 }
 
