@@ -119,6 +119,24 @@ func TestAcquireFileRangeMmapFallbackCountsReason(t *testing.T) {
 	}
 }
 
+func TestAcquireFileRangeRejectsOutOfBoundsZeroLengthHeapRange(t *testing.T) {
+	mgr := NewManager()
+	key := testKey()
+	key.Offset = 1
+	key.Length = 0
+	path := t.TempDir() + "/empty.bin"
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := mgr.AcquireFileRange(key, testScope(), path, AcquireOptions{AllowHeapCopy: true}); err == nil {
+		t.Fatal("AcquireFileRange out-of-bounds zero-length heap range err=nil, want failure")
+	}
+	stats := mgr.Stats()
+	if stats.DeniedByReason[DenyOutOfBounds] != 1 || stats.ActiveHandles != 0 {
+		t.Fatalf("unexpected stats after out-of-bounds range: %+v", stats)
+	}
+}
+
 func TestFakeColumnPartSectionAcquireReleaseAndMaintenancePins(t *testing.T) {
 	mgr := NewManager()
 	key := Key{

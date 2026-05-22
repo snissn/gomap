@@ -290,6 +290,21 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 		m.recordDenied(DenyUnsupported)
 		return nil, errors.New("mappedresource: heap-copy fallback disabled")
 	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		m.recordClose()
+		m.recordDenied(DenyReadFailed)
+		m.recordError()
+		return nil, err
+	}
+	end := key.Offset + key.Length
+	if key.Offset < 0 || end < key.Offset || end > info.Size() {
+		_ = file.Close()
+		m.recordClose()
+		m.recordDenied(DenyOutOfBounds)
+		return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside file bytes=%d", key.Offset, key.Length, info.Size())
+	}
 	raw := make([]byte, int(key.Length))
 	n, err := file.ReadAt(raw, key.Offset)
 	closeErr := file.Close()
