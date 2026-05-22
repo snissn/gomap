@@ -70,10 +70,11 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata executes q4b and q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: %s; aggregate_metadata executes q4b and q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
+		columnStoreSuitePathList(columnStoreSuiteAcceptedForcedPaths),
 	)
 	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
@@ -2256,6 +2257,7 @@ func markdownCodeTableText(value string) string {
 func markdownNormalizeTableCell(value string, escapeHTML bool) string {
 	value = markdownEscapeTablePipes(value)
 	if escapeHTML {
+		value = strings.ReplaceAll(value, "`", "\\`")
 		value = html.EscapeString(value)
 	}
 	return value

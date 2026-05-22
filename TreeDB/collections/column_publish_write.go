@@ -88,7 +88,7 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate, ColumnPublishOperationDelete:
 		return nil
 	default:
-		return fmt.Errorf("%w: unsupported column-store write operation collection=%q operation=%q",
+		return fmt.Errorf("%w: M12C unsupported column-store write collection=%q operation=%s",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
 			operation,
@@ -386,16 +386,20 @@ func (c *Collection) publishRootDeltaBatchGroupWithoutColumn(ordered []backenddb
 }
 
 func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.CommandWALPublishContext, input columnWritePublishInput, baseManifestRootID uint64) (ColumnPublishPlan, error) {
-	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID, input.meta.Name, *input.meta.Options.ColumnStore)
+	cfg := input.meta.Options.ColumnStore
+	if cfg == nil {
+		return ColumnPublishPlan{}, errors.New("collections: column publish requires column store config")
+	}
+	currentRecords, err := c.loadColumnManifestRecordsForPublish(baseManifestRootID, input.meta.Name, *cfg)
 	if err != nil {
 		return ColumnPublishPlan{}, err
 	}
 	return BuildColumnPublishPlan(ColumnPublishPlanInput{
 		Collection:             input.meta.Name,
-		ColumnStore:            input.meta.Options.ColumnStore,
+		ColumnStore:            cfg,
 		ColumnStoreNormalized:  true,
 		Operation:              input.operation,
-		CurrentManifest:        input.meta.Options.ColumnStore.ActiveManifest,
+		CurrentManifest:        cfg.ActiveManifest,
 		CurrentManifestRecords: currentRecords,
 		AppliedCommandLSN:      ctx.AppliedCommandLSN,
 		BaseManifestRootID:     baseManifestRootID,
@@ -410,6 +414,9 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 
 func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collectionName string, cfg ColumnStoreConfig) ([]columnManifestRecord, error) {
 	if rootID == 0 {
+		if cfg.ActiveManifest != nil {
+			return nil, fmt.Errorf("collections: active column manifest generation %d for %q is missing manifest root", cfg.ActiveManifest.Generation, collectionName)
+		}
 		return nil, nil
 	}
 	if cfg.ActiveManifest == nil {

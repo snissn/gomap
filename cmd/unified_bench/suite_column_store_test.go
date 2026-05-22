@@ -599,7 +599,7 @@ func TestColumnStoreBenchRunUsesRowsProcessedForPhysicalAggregateM14B(t *testing
 	}
 }
 
-func TestColumnStoreBenchRunFallsBackToRowsForLegacyArtifactsM14B(t *testing.T) {
+func TestColumnStoreBenchRunFallsBackToRowMaterializationsForLegacyArtifactsM14B(t *testing.T) {
 	run := columnStoreBenchRun(BenchConfig{}, "durable", t.TempDir(), columnStoreSuiteReport{
 		Rows:      30,
 		BatchSize: 10,
@@ -924,6 +924,9 @@ func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) 
 	}
 	if got, want := markdownTableText(`a\\\\\\\\|b|c`), `a\\\\\\\\\|b\|c`; got != want {
 		t.Fatalf("markdownTableText long backslash run=%q want %q", got, want)
+	}
+	if got, want := markdownTableText("uses `prepared` runner"), "uses \\`prepared\\` runner"; got != want {
+		t.Fatalf("markdownTableText escaped backticks=%q want %q", got, want)
 	}
 	if got, want := markdownCodeTableText("\r\n"), "`"+markdownTableEmptyCell+"`"; got != want {
 		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)

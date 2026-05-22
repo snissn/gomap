@@ -736,6 +736,9 @@ func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.
 	if _, err := col.loadColumnManifestRecordsForPublish(rootID, "events", *cfg); err != nil {
 		t.Fatalf("load untampered manifest for publish: %v", err)
 	}
+	if _, err := col.loadColumnManifestRecordsForPublish(0, "events", *cfg); err == nil || !strings.Contains(err.Error(), "missing manifest root") {
+		t.Fatalf("load active manifest with missing root err=%v want missing root rejection", err)
+	}
 
 	tampered := cloneColumnManifestRecords(manifest.Records)
 	tamperedCount := 0

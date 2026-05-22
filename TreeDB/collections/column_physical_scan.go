@@ -551,6 +551,9 @@ func validateColumnManifestIdentityAtRoot(snap *backenddb.Snapshot, rootID uint6
 	if err != nil {
 		return fmt.Errorf("collections: column manifest root %d invalid identity: %w", rootID, err)
 	}
+	if err := validateColumnManifestIdentityFor("active", identity); err != nil {
+		return err
+	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
 		return fmt.Errorf("collections: column manifest identity mismatch root=%+v active=%+v", record, identity)
 	}

@@ -222,10 +222,10 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
-		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) &&
-			!bytes.HasPrefix(record.key, []byte(columnManifestAggregateMetadataRecordPrefix)) &&
-			!bytes.HasPrefix(record.key, []byte(columnManifestDictionaryCodesRecordPrefix)) &&
-			!bytes.HasPrefix(record.key, []byte(columnManifestInt64ValuesRecordPrefix)) {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) &&
+			!bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes) &&
+			!bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes) &&
+			!bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes) {
 			continue
 		}
 		part, err := decodeColumnManifestPartRecord(record.value)

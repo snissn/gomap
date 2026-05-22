@@ -1419,6 +1419,10 @@ func openColumnPhysicalInsertMultiGenerationFixtureM14B(t *testing.T, batches in
 			t.Fatalf("InsertBatch %d: %v", i, err)
 		}
 	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint before reopen: %v", err)
+	}
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close before reopen: %v", err)
 	}

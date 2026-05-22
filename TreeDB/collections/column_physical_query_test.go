@@ -436,6 +436,18 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQueryParallelWorkerCountCapsFanoutM14B(t *testing.T) {
+	if got, want := columnPhysicalQueryParallelWorkerCount(1024, 8192), columnPhysicalQueryMaxParallelWorkers; got != want {
+		t.Fatalf("worker count=%d want cap %d", got, want)
+	}
+	if got, want := columnPhysicalQueryParallelWorkerCount(1024, 8), 8; got != want {
+		t.Fatalf("worker count=%d want asset refs %d", got, want)
+	}
+	if got, want := columnPhysicalQueryParallelWorkerCount(4, 8192), 4; got != want {
+		t.Fatalf("worker count=%d want requested workers %d", got, want)
+	}
+}
+
 func equalColumnPhysicalQueryGroups(left, right []ColumnPhysicalQueryGroup) bool {
 	left = append([]ColumnPhysicalQueryGroup(nil), left...)
 	right = append([]ColumnPhysicalQueryGroup(nil), right...)
