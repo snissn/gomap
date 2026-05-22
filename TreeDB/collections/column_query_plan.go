@@ -17,7 +17,12 @@ const (
 	ColumnQueryPlanParallelColumnScan ColumnQueryPlanKind = "parallel_column_scan"
 )
 
-const columnQueryUnsupportedNoPhysicalAssetsReason = "physical column query has no physical assets available"
+const (
+	columnQueryUnsupportedNoPhysicalAssetsReason          = "physical column query has no physical assets available"
+	columnQueryUnsupportedSerialPhysicalDisabledReason    = "serial physical column scan capability is disabled"
+	columnQueryUnsupportedAggregateMetadataDisabledReason = "aggregate metadata capability is disabled"
+	columnQueryUnsupportedParallelPhysicalDisabledReason  = "parallel physical column scan capability is disabled"
+)
 
 var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
 
@@ -45,6 +50,11 @@ type ColumnQueryPlannerCapabilities struct {
 	SerialColumnScan   bool
 	AggregateMetadata  bool
 	ParallelColumnScan bool
+	// CapabilityError mirrors an internally derived physical capability
+	// discovery failure for diagnostics. Caller-supplied values are ignored for
+	// gating so public requests cannot forge a planner fail-closed reason.
+	CapabilityError    string
+	capabilityError    string
 	PhysicalAssetCount int
 	// PartCount is a fallback schedulable-unit estimate when GranuleCount is
 	// not populated by the column asset layer.
@@ -56,6 +66,13 @@ type ColumnQueryPlannerCapabilities struct {
 	DecodedBlockCacheHits   uint64
 	DecodedBlockCacheMisses uint64
 	PlannerCandidateBudget  int
+	// M14A manifest-derived diagnostics. These do not enable execution by
+	// themselves; M14B owns routing physical plans to physical scanners.
+	MutationParts          int
+	DeclaredColumnCount    int
+	AggregateMetadataCount int
+	VisibilityMetadata     bool
+	ParallelWorkUnits      int
 }
 
 // ColumnQueryPlanRequest describes one planner decision. Column, index, and
@@ -82,9 +99,15 @@ type ColumnQueryPlanDiagnostics struct {
 	ProjectedColumns        int
 	Predicates              int
 	RecoveryAuthoritative   bool
+	CapabilityError         string
 	PhysicalAssetCount      int
 	PartCount               int
 	GranuleCount            int
+	MutationParts           int
+	DeclaredColumnCount     int
+	AggregateMetadataCount  int
+	VisibilityMetadata      bool
+	ParallelWorkUnits       int
 	MaxParallelWorkers      int
 	WorkerCount             int
 	ScheduledGranules       int
@@ -117,12 +140,112 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 	catalog := c.catalog
 	systemRoot := c.catalogSystemRoot
 	commitSeq := c.catalogCommitSeq
+	var collectionName string
+	var rootID uint64
+	var cfg ColumnStoreConfig
+	columnStoreEnabled := false
+	if catalog != nil {
+		collectionName = catalog.meta.Name
+		rootID = catalog.rootID(collectionColumnManifestRootName(collectionName))
+		if cfgPtr := catalog.meta.Options.ColumnStore; cfgPtr != nil {
+			cfg = *cfgPtr
+			columnStoreEnabled = true
+		}
+	}
 	c.catalogMu.RUnlock()
 	if catalog == nil {
 		return ColumnQueryPlan{}, errCollectionNotFound
 	}
+	if columnStoreEnabled && columnQueryRequestNeedsPhysicalCapabilityDiscovery(req) {
+		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14A(collectionName, rootID, cfg, req.Capabilities)
+	}
 	identity, identityOK := columnStoreCacheIdentity(catalog, systemRoot, commitSeq)
 	return planColumnQueryForCatalog(catalog, identity, identityOK, req), nil
+}
+
+func columnQueryRequestNeedsPhysicalCapabilityDiscovery(req ColumnQueryPlanRequest) bool {
+	return req.ForceKind != ColumnQueryPlanRowStoreBaseline && req.ForceKind != ColumnQueryPlanBTreeIndexBaseline
+}
+
+func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14A(collectionName string, rootID uint64, cfg ColumnStoreConfig, requested ColumnQueryPlannerCapabilities) ColumnQueryPlannerCapabilities {
+	caps := requested
+	caps.SerialColumnScan = false
+	caps.AggregateMetadata = false
+	caps.ParallelColumnScan = false
+	caps.CapabilityError = ""
+	caps.capabilityError = ""
+	caps.PhysicalAssetCount = 0
+	caps.PartCount = 0
+	caps.GranuleCount = 0
+	caps.MutationParts = 0
+	caps.DeclaredColumnCount = len(cfg.Columns)
+	caps.AggregateMetadataCount = len(cfg.AggregateMetadata)
+	caps.VisibilityMetadata = false
+	caps.ParallelWorkUnits = 0
+
+	if !cfg.Enabled {
+		return caps
+	}
+	if c == nil || c.db == nil {
+		caps.setCapabilityError(errCollectionDBNil.Error())
+		return caps
+	}
+	if cfg.ActiveManifest == nil {
+		caps.setCapabilityError("collections: physical column query requires active column manifest")
+		return caps
+	}
+	if cfg.RecoveryAuthoritativeManifest == nil {
+		caps.setCapabilityError("collections: physical column query requires recovery-authoritative column manifest")
+		return caps
+	}
+	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
+		caps.setCapabilityError("collections: active column manifest is not recovery-authoritative")
+		return caps
+	}
+	if cfg.AssetManager == nil {
+		caps.setCapabilityError("collections: physical column query requires column asset manager metadata")
+		return caps
+	}
+	if rootID == 0 {
+		caps.setCapabilityError(fmt.Sprintf("collections: physical column query missing manifest root %q", collectionColumnManifestRootName(collectionName)))
+		return caps
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		caps.setCapabilityError(errCollectionDBNil.Error())
+		return caps
+	}
+	defer func() { _ = snap.Close() }()
+
+	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
+		caps.setCapabilityError(fmt.Sprintf("collections: physical column query planner capability discovery failed: %v", err))
+		return caps
+	}
+	manifestCaps, err := loadColumnManifestPlannerCapabilitiesForScan(snap, rootID, cfg, *cfg.ActiveManifest, collectionName)
+	if err != nil {
+		caps.setCapabilityError(fmt.Sprintf("collections: physical column query planner capability discovery failed: %v", err))
+		return caps
+	}
+	caps.PhysicalAssetCount = manifestCaps.PhysicalAssetCount
+	caps.PartCount = manifestCaps.PhysicalAssetCount
+	// M12/M13 assets expose one schedulable unit per part. Adaptive marks can
+	// replace this fallback with finer granule counts when they land.
+	caps.GranuleCount = manifestCaps.PhysicalAssetCount
+	caps.MutationParts = manifestCaps.MutationParts
+	caps.VisibilityMetadata = caps.MutationParts > 0
+	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
+	return caps
+}
+
+func (caps *ColumnQueryPlannerCapabilities) setCapabilityError(reason string) {
+	trimmed := strings.TrimSpace(reason)
+	caps.CapabilityError = trimmed
+	caps.capabilityError = trimmed
+}
+
+func (caps ColumnQueryPlannerCapabilities) effectiveCapabilityError() string {
+	return strings.TrimSpace(caps.capabilityError)
 }
 
 func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {
@@ -131,9 +254,15 @@ func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreC
 		ProjectedColumns:        len(req.ProjectedColumns),
 		Predicates:              len(req.Predicates),
 		RecoveryAuthoritative:   columnQueryManifestRecoveryAuthoritative(identity, identityOK),
+		CapabilityError:         req.Capabilities.effectiveCapabilityError(),
 		PhysicalAssetCount:      req.Capabilities.PhysicalAssetCount,
 		PartCount:               req.Capabilities.PartCount,
 		GranuleCount:            req.Capabilities.GranuleCount,
+		MutationParts:           req.Capabilities.MutationParts,
+		DeclaredColumnCount:     req.Capabilities.DeclaredColumnCount,
+		AggregateMetadataCount:  req.Capabilities.AggregateMetadataCount,
+		VisibilityMetadata:      req.Capabilities.VisibilityMetadata,
+		ParallelWorkUnits:       req.Capabilities.ParallelWorkUnits,
 		MaxParallelWorkers:      req.Capabilities.MaxParallelWorkers,
 		DecodedBlockCacheHits:   req.Capabilities.DecodedBlockCacheHits,
 		DecodedBlockCacheMisses: req.Capabilities.DecodedBlockCacheMisses,
@@ -266,6 +395,8 @@ func physicalColumnQuerySupported(catalog *collectionCatalog, identity ColumnSto
 
 func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest, kind ColumnQueryPlanKind) string {
 	switch {
+	case req.Capabilities.effectiveCapabilityError() != "":
+		return req.Capabilities.effectiveCapabilityError()
 	case req.Capabilities.PhysicalAssetCount <= 0:
 		return columnQueryUnsupportedNoPhysicalAssetsReason
 	case !columnQueryManifestRecoveryAuthoritative(identity, identityOK):
@@ -274,18 +405,18 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 	switch kind {
 	case ColumnQueryPlanSerialColumnScan:
 		if !req.Capabilities.SerialColumnScan {
-			return "serial physical column scan capability is disabled"
+			return columnQueryUnsupportedSerialPhysicalDisabledReason
 		}
 	case ColumnQueryPlanAggregateMetadata:
 		if !req.Capabilities.AggregateMetadata {
-			return "aggregate metadata capability is disabled"
+			return columnQueryUnsupportedAggregateMetadataDisabledReason
 		}
 		if strings.TrimSpace(req.AggregateMetadataName) == "" {
 			return "query did not request aggregate metadata"
 		}
 	case ColumnQueryPlanParallelColumnScan:
 		if !req.Capabilities.ParallelColumnScan {
-			return "parallel physical column scan capability is disabled"
+			return columnQueryUnsupportedParallelPhysicalDisabledReason
 		}
 		if reason := parallelColumnQueryShapeUnsupportedReason(req); reason != "" {
 			return reason
@@ -295,6 +426,9 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 }
 
 func physicalColumnQueryBaseSupported(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) bool {
+	if req.Capabilities.effectiveCapabilityError() != "" {
+		return false
+	}
 	if req.Capabilities.PhysicalAssetCount <= 0 {
 		return false
 	}

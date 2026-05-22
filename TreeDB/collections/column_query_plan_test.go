@@ -1214,6 +1214,294 @@ func TestColumnSkipScanIntoM11BReusesScratchWithoutAllocating(t *testing.T) {
 	}
 }
 
+func TestColumnQueryPlannerM14APopulatesManifestCapabilitiesButKeepsForcedPhysicalDisabled(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(32)
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	req := ColumnQueryPlanRequest{
+		Name:             "m14a_serial",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	}
+	plan, err := reopened.PlanColumnQuery(req)
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
+		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
+		t.Fatalf("physical asset count=%d want real manifest-derived count", got)
+	}
+	if got, want := plan.Diagnostics.PartCount, plan.Diagnostics.PhysicalAssetCount; got != want {
+		t.Fatalf("part count=%d want physical asset count %d", got, want)
+	}
+	if got, want := plan.Diagnostics.GranuleCount, plan.Diagnostics.PartCount; got != want {
+		t.Fatalf("granule count=%d want part-count fallback %d", got, want)
+	}
+	if got, want := plan.Diagnostics.ParallelWorkUnits, plan.Diagnostics.GranuleCount; got != want {
+		t.Fatalf("parallel work units=%d want granule count %d", got, want)
+	}
+	if got, want := plan.Diagnostics.DeclaredColumnCount, 3; got != want {
+		t.Fatalf("declared columns=%d want %d", got, want)
+	}
+	if got, want := plan.Diagnostics.AggregateMetadataCount, 3; got != want {
+		t.Fatalf("aggregate metadata count=%d want %d", got, want)
+	}
+	if plan.Diagnostics.MutationParts != 0 {
+		t.Fatalf("mutation parts=%d want zero for insert-only fixture", plan.Diagnostics.MutationParts)
+	}
+	if plan.Diagnostics.VisibilityMetadata {
+		t.Fatalf("visibility metadata unexpectedly set for insert-only fixture: %+v", plan.Diagnostics)
+	}
+	if !plan.Diagnostics.RecoveryAuthoritative || plan.Diagnostics.SelectedManifestRoot == 0 || plan.Diagnostics.SelectedManifestGen == 0 || plan.Diagnostics.AppliedCommandLSN == 0 {
+		t.Fatalf("manifest diagnostics were not populated from recovery-authoritative state: %+v", plan.Diagnostics)
+	}
+}
+
+func TestColumnQueryPlannerM14APopulatesMutationVisibilityCapabilities(t *testing.T) {
+	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
+	defer closeFn()
+
+	plan, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_mutation",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("forced physical mutation plan unexpectedly supported before M14B: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
+		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got <= 1 || got == 999 {
+		t.Fatalf("physical asset count=%d want real multi-part mutation manifest count", got)
+	}
+	if got := plan.Diagnostics.MutationParts; got <= 0 {
+		t.Fatalf("mutation parts=%d want mutation visibility metadata", got)
+	}
+	if !plan.Diagnostics.VisibilityMetadata {
+		t.Fatalf("visibility metadata not advertised for mutation-bearing manifest: %+v", plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.PartCount, plan.Diagnostics.PhysicalAssetCount; got != want {
+		t.Fatalf("part count=%d want physical asset count %d", got, want)
+	}
+	if got, want := plan.Diagnostics.GranuleCount, plan.Diagnostics.PartCount; got != want {
+		t.Fatalf("granule count=%d want part-count fallback %d", got, want)
+	}
+}
+
+func TestColumnQueryPlannerM14AFailsClosedWhenDBUnavailable(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	reopened.catalogMu.RLock()
+	catalog := reopened.catalog
+	systemRoot := reopened.catalogSystemRoot
+	commitSeq := reopened.catalogCommitSeq
+	reopened.catalogMu.RUnlock()
+
+	unavailable := &Collection{
+		catalog:           catalog,
+		catalogSystemRoot: systemRoot,
+		catalogCommitSeq:  commitSeq,
+	}
+	plan, err := unavailable.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_unavailable_db",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("forced physical plan unexpectedly used caller capabilities with unavailable DB: %+v", plan)
+	}
+	if got, want := plan.Diagnostics.UnsupportedPlanReason, errCollectionDBNil.Error(); got != want {
+		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	}
+	if got, want := plan.Diagnostics.CapabilityError, errCollectionDBNil.Error(); got != want {
+		t.Fatalf("capability error=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got != 0 {
+		t.Fatalf("physical asset count=%d want caller-supplied count cleared", got)
+	}
+	if got, want := plan.Diagnostics.DeclaredColumnCount, 3; got != want {
+		t.Fatalf("declared column count=%d want %d", got, want)
+	}
+}
+
+func TestColumnQueryPlannerM14AIgnoresCallerSuppliedCapabilityError(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	plan, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_ignore_forged_capability_error",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			CapabilityError:    "caller-forged failure",
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
+	}
+	if got := plan.Diagnostics.CapabilityError; got != "" {
+		t.Fatalf("capability error=%q want caller-supplied value ignored", got)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanReason; got == "caller-forged failure" || strings.Contains(got, "caller-forged") {
+		t.Fatalf("unsupported reason=%q used caller-supplied capability error", got)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
+		t.Fatalf("physical asset count=%d want manifest-derived count", got)
+	}
+}
+
+func TestColumnQueryPlannerM14AFailsClosedUnknownForceKindClearsCallerCapabilities(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	plan, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14a_unknown_force",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanKind("unknown_physical_force"),
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			PhysicalAssetCount: 999,
+			PartCount:          999,
+			GranuleCount:       999,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery: %v", err)
+	}
+	if plan.Supported {
+		t.Fatalf("unknown forced physical plan unexpectedly supported: %+v", plan)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanReason; !strings.Contains(got, "unknown column query plan kind") {
+		t.Fatalf("unsupported reason=%q want unknown force-kind rejection diagnostics=%+v", got, plan.Diagnostics)
+	}
+	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
+		t.Fatalf("physical asset count=%d want manifest-derived count, not caller-supplied capabilities", got)
+	}
+	if got := plan.Diagnostics.UnsupportedPlanKind; got != ColumnQueryPlanKind("unknown_physical_force") {
+		t.Fatalf("unsupported plan kind=%q want unknown forced kind diagnostics=%+v", got, plan.Diagnostics)
+	}
+	if plan.Diagnostics.ScheduledGranules != 0 || plan.Diagnostics.WorkerCount != 0 {
+		t.Fatalf("unknown forced kind should not schedule physical work: %+v", plan.Diagnostics)
+	}
+}
+
+func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
+	b.Run("insert_manifest_rows_1024", func(b *testing.B) {
+		reopened, closeFn := openColumnPhysicalQueryFixtureM13B(b, columnPhysicalQueryFixtureEventsM13B(1024))
+		defer closeFn()
+		req := ColumnQueryPlanRequest{
+			Name:             "m14a_insert",
+			ProjectedColumns: []string{"time_us", "kind", "did"},
+			ForceKind:        ColumnQueryPlanSerialColumnScan,
+			Capabilities: ColumnQueryPlannerCapabilities{
+				SerialColumnScan:   true,
+				AggregateMetadata:  true,
+				ParallelColumnScan: true,
+				MaxParallelWorkers: 4,
+			},
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		var assets int
+		for i := 0; i < b.N; i++ {
+			plan, err := reopened.PlanColumnQuery(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if plan.Supported || plan.Diagnostics.UnsupportedPlanReason != columnQueryUnsupportedSerialPhysicalDisabledReason {
+				b.Fatalf("unexpected plan: %+v", plan)
+			}
+			assets += plan.Diagnostics.PhysicalAssetCount
+		}
+		columnQueryPlannerBenchSinkM14A = assets
+	})
+	b.Run("mutation_manifest_rows_1024", func(b *testing.B) {
+		reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(b, 1024)
+		defer closeFn()
+		req := ColumnQueryPlanRequest{
+			Name:             "m14a_mutation",
+			ProjectedColumns: []string{"time_us", "kind", "did"},
+			ForceKind:        ColumnQueryPlanSerialColumnScan,
+			Capabilities: ColumnQueryPlannerCapabilities{
+				SerialColumnScan:   true,
+				AggregateMetadata:  true,
+				ParallelColumnScan: true,
+				MaxParallelWorkers: 4,
+			},
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		var mutationParts int
+		for i := 0; i < b.N; i++ {
+			plan, err := reopened.PlanColumnQuery(req)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if plan.Supported || !plan.Diagnostics.VisibilityMetadata {
+				b.Fatalf("unexpected mutation plan: %+v", plan)
+			}
+			mutationParts += plan.Diagnostics.MutationParts
+		}
+		columnQueryPlannerBenchSinkM14A = mutationParts
+	})
+}
+
+var columnQueryPlannerBenchSinkM14A int
+
 func equalInts(left, right []int) bool {
 	return slices.Equal(left, right)
 }
