@@ -761,6 +761,10 @@ const (
 type CollectionOptions struct {
 	AllowArrayValuesInIndex bool           `json:"allow_array_values_in_index,omitempty"`
 	DocumentFormat          DocumentFormat `json:"document_format,omitempty"`
+	// ColumnStore enables the production-facing column-lane control-plane
+	// metadata for this collection. The actual column assets, mutation adapter,
+	// and command-WAL publication path are staged by later milestones.
+	ColumnStore *ColumnStoreConfig `json:"column_store,omitempty"`
 	// DataRootStoragePolicy selects the requested collection data-root layout.
 	// Cached TreeDB backends with a persistent value-log appender promote
 	// default/fast data roots to value-log leaf roots at runtime so large
@@ -857,15 +861,16 @@ type collectionMetaDisk struct {
 type collectionCatalog struct {
 	// collectionCatalog is immutable once cached or published. Root updates must
 	// create a replacement catalog via cloneCatalogWithRootUpdates.
-	meta               CollectionMeta
-	roots              map[string]uint64
-	rootOverlays       map[string][]uint64
-	rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter
-	primaryRootName    string
-	templateRootName   string
-	indexStateRootName string
-	indexRuntimes      []indexRuntime
-	indexRuntimesErr   error
+	meta                   CollectionMeta
+	roots                  map[string]uint64
+	rootOverlays           map[string][]uint64
+	rootOverlayFilters     map[string]map[uint64]collectionRootOverlayFilter
+	primaryRootName        string
+	templateRootName       string
+	indexStateRootName     string
+	columnManifestRootName string
+	indexRuntimes          []indexRuntime
+	indexRuntimesErr       error
 }
 
 type collectionRootOverlayFilter struct {
@@ -15868,13 +15873,14 @@ func newCollectionCatalogWithOverlayMetadata(meta CollectionMeta, roots map[stri
 
 func newCollectionCatalogWithOverlayMetadataOwned(meta CollectionMeta, roots map[string]uint64, rootOverlays map[string][]uint64, rootOverlayFilters map[string]map[uint64]collectionRootOverlayFilter) *collectionCatalog {
 	catalog := &collectionCatalog{
-		meta:               meta,
-		roots:              roots,
-		rootOverlays:       rootOverlays,
-		rootOverlayFilters: rootOverlayFilters,
-		primaryRootName:    collectionPrimaryRootName(meta.Name),
-		templateRootName:   collectionTemplateRootName(meta.Name),
-		indexStateRootName: collectionIndexStateRootName(meta.Name),
+		meta:                   meta,
+		roots:                  roots,
+		rootOverlays:           rootOverlays,
+		rootOverlayFilters:     rootOverlayFilters,
+		primaryRootName:        collectionPrimaryRootName(meta.Name),
+		templateRootName:       collectionTemplateRootName(meta.Name),
+		indexStateRootName:     collectionIndexStateRootName(meta.Name),
+		columnManifestRootName: collectionColumnManifestRootName(meta.Name),
 	}
 	if len(meta.Indexes) > 0 {
 		catalog.indexRuntimes, catalog.indexRuntimesErr = (insertBatchPlanner{
@@ -17970,7 +17976,11 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	if err != nil {
 		return nil, err
 	}
-	return newCollectionCatalogWithOverlays(meta, roots, rootOverlays), nil
+	catalog := newCollectionCatalogWithOverlays(meta, roots, rootOverlays)
+	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
+		return nil, err
+	}
+	return catalog, nil
 }
 
 func loadCollectionCatalogRootOverlays(snap *backenddb.Snapshot, rootNames []string) (map[string][]uint64, error) {
@@ -18087,6 +18097,10 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 		return backendCollectionDataRootStoragePolicy(db, meta.Options.DataRootStoragePolicy)
 	case collectionIndexStateRootName(meta.Name):
 		return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
+	case collectionColumnManifestRootName(meta.Name):
+		if meta.Options.ColumnStore != nil {
+			return backendRootStoragePolicy(meta.Options.ColumnStore.ControlRootStoragePolicy)
+		}
 	}
 	for _, idx := range meta.Indexes {
 		if rootName == collectionSecondaryRootName(meta.Name, idx.Name) {
@@ -18509,6 +18523,11 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	if _, err := backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy); err != nil {
 		return CollectionMeta{}, err
 	}
+	columnStore, err := normalizeColumnStoreConfig(meta.Name, meta.Options.ColumnStore)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	meta.Options.ColumnStore = columnStore
 	if meta.Options.BufferedIndexedWriteMaxDocuments < 0 {
 		return CollectionMeta{}, errors.New("collections: buffered indexed write max documents cannot be negative")
 	}
@@ -18682,7 +18701,7 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 func (m CollectionMeta) copy() *CollectionMeta {
 	return &CollectionMeta{
 		Name:          m.Name,
-		Options:       m.Options,
+		Options:       copyCollectionOptions(m.Options),
 		Indexes:       append([]IndexDefinition(nil), m.Indexes...),
 		VectorIndexes: append([]VectorIndexDefinition(nil), m.VectorIndexes...),
 	}
@@ -18711,7 +18730,10 @@ func sameCollectionMeta(a, b CollectionMeta) bool {
 }
 
 func collectionMetaValuesEqual(a, b CollectionMeta) bool {
-	if a.Name != b.Name || a.Options != b.Options || len(a.Indexes) != len(b.Indexes) || len(a.VectorIndexes) != len(b.VectorIndexes) {
+	if a.Name != b.Name ||
+		!collectionOptionsEqual(a.Options, b.Options) ||
+		len(a.Indexes) != len(b.Indexes) ||
+		len(a.VectorIndexes) != len(b.VectorIndexes) {
 		return false
 	}
 	for i := range a.Indexes {
@@ -18877,6 +18899,9 @@ func collectionRootNames(meta CollectionMeta) []string {
 	if len(meta.Indexes) > 0 && persistIndexStateForDocumentFormat(meta.Options.DocumentFormat) {
 		out = append(out, collectionIndexStateRootName(meta.Name))
 	}
+	if meta.Options.ColumnStore != nil && meta.Options.ColumnStore.Enabled {
+		out = append(out, collectionColumnManifestRootName(meta.Name))
+	}
 	for _, idx := range meta.Indexes {
 		out = append(out, collectionSecondaryRootName(meta.Name, idx.Name))
 	}
@@ -18896,6 +18921,10 @@ func collectionTemplateRootName(collection string) string {
 
 func collectionIndexStateRootName(collection string) string {
 	return collection + "/index-state"
+}
+
+func collectionColumnManifestRootName(collection string) string {
+	return collection + "/column/manifest"
 }
 
 func collectionSecondaryRootName(collection, indexName string) string {
