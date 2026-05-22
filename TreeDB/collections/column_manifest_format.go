@@ -912,6 +912,18 @@ func (c *manifestCursor) stringBytes() []byte {
 	return value
 }
 
+func manifestBytesEqualString(value []byte, expected string) bool {
+	if len(value) != len(expected) {
+		return false
+	}
+	for i, b := range value {
+		if b != expected[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (c *manifestCursor) skip(n uint64) {
 	if c.err != nil {
 		return

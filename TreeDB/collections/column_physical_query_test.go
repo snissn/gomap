@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -2303,6 +2304,74 @@ func TestColumnPhysicalQuerySerialDictInt64SidecarParityM1634(t *testing.T) {
 			}
 			if result.Diagnostics.SegmentFileCacheMisses == 0 {
 				t.Fatalf("serial sidecar diagnostics=%+v want one-shot sidecar read misses accounted", result.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tests := []struct {
+		name      string
+		req       ColumnPhysicalQueryRequest
+		maxAllocs float64
+	}{
+		{
+			name:      "q3_int64_values",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
+			maxAllocs: 90,
+		},
+		{
+			name:      "q4a_dictionary_int64",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			maxAllocs: 124,
+		},
+		{
+			name:      "q4b_dictionary_int64",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			maxAllocs: 124,
+		},
+		{
+			name:      "q5_dictionary_int64",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+			maxAllocs: 129,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery preview: %v", err)
+			}
+			if result.Diagnostics.RowMaterializations != 0 {
+				t.Fatalf("preview diagnostics=%+v want sidecar path", result.Diagnostics)
+			}
+			allocs := testing.AllocsPerRun(20, func() {
+				result, err := collection.RunColumnPhysicalQuery(tc.req)
+				if err != nil {
+					panic(fmt.Sprintf("RunColumnPhysicalQuery: %v", err))
+				}
+				if len(result.Groups) == 0 || result.Diagnostics.RowMaterializations != 0 {
+					panic(fmt.Sprintf("bad sidecar result groups=%d diagnostics=%+v", len(result.Groups), result.Diagnostics))
+				}
+			})
+			maxAllocs := tc.maxAllocs
+			if runtime.GOOS == "windows" {
+				// Windows CI carries extra runtime/path allocation noise in this
+				// routed one-shot path; keep the stricter budget on Unix hosts
+				// where the #1634 performance evidence is collected.
+				maxAllocs += 32
+			}
+			if collectionsRaceEnabled {
+				// The race detector instruments this routed allocation-budget
+				// path and shifts AllocsPerRun upward. Keep the normal budget
+				// strict for the performance evidence builds.
+				maxAllocs += 32
+			}
+			if allocs > maxAllocs {
+				t.Fatalf("%s routed sidecar allocs/run=%.2f want <= %.2f", tc.name, allocs, maxAllocs)
 			}
 		})
 	}
