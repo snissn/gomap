@@ -182,15 +182,16 @@ type VectorIndex struct {
 	insertScratch vectorIndexSearchScratch
 	searchScratch sync.Pool
 
-	mutationSeq            uint64
-	persistedEpoch         uint64
-	persistedBytesDisk     int64
-	persistedSnapshotDirty bool
-	nativePersistent       bool
-	dirtyMeta              bool
-	dirtyNodes             map[int]struct{}
-	dirtyDocs              map[string]struct{}
-	lastRebuildDuration    time.Duration
+	mutationSeq             uint64
+	persistedEpoch          uint64
+	persistedBytesDisk      int64
+	persistedSnapshotDirty  bool
+	nativeFullSnapshotDirty bool
+	nativePersistent        bool
+	dirtyMeta               bool
+	dirtyNodes              map[int]struct{}
+	dirtyDocs               map[string]struct{}
+	lastRebuildDuration     time.Duration
 }
 
 type vectorIndexNode struct {
@@ -2036,6 +2037,9 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.dimensions = dimensions
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
+	if idx.nativePersistent {
+		idx.nativeFullSnapshotDirty = true
+	}
 	idx.mu.Unlock()
 	idx.collection.RegisterVectorIndex(idx)
 	return nil
