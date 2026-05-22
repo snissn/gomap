@@ -446,12 +446,12 @@ func (r *columnPhysicalRowReader) evictBlocksForInsert() error {
 			return fmt.Errorf("collections: physical column row reader LRU empty with %d cached blocks and max=%d", len(r.blocks), r.maxBlocks)
 		}
 		evict := r.lru[0]
-		copy(r.lru, r.lru[1:])
-		r.lru = r.lru[:len(r.lru)-1]
 		block := r.blocks[evict]
 		if block == nil {
 			return fmt.Errorf("collections: physical column row reader LRU references missing cached asset ordinal=%d", evict)
 		}
+		copy(r.lru, r.lru[1:])
+		r.lru = r.lru[:len(r.lru)-1]
 		delete(r.blocks, evict)
 		if r.lastBlock == block {
 			r.lastBlock = nil

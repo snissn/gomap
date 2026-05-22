@@ -298,6 +298,9 @@ func TestColumnPhysicalRowReaderRejectsCorruptLRUV1(t *testing.T) {
 	if _, ok := reader.blocks[2]; !ok {
 		t.Fatal("evictBlocksForInsert deleted unrelated cached block after corrupt LRU")
 	}
+	if got := fmt.Sprint(reader.lru); got != "[1]" {
+		t.Fatalf("evictBlocksForInsert lru=%s want unchanged [1]", got)
+	}
 }
 
 func TestColumnPhysicalRowReaderRejectsEmptyLRUV1(t *testing.T) {
