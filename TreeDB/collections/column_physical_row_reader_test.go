@@ -63,6 +63,40 @@ func TestColumnPhysicalRowReaderFetchesRowsWithBoundedCacheV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderFetchesLittleEndianFixedWidthRowsV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	normalized.Columns[1].FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	normalized.SchemaHash = hashColumnStoreSchema(normalized)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	ref := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 7, 1, testColumnPhysicalRowReaderRowsV1(0, 3, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, ref), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"embedding", "neighbors"},
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	var scratch columnPhysicalRowReaderScratch
+	row, err := reader.FetchRow(2, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(2): %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-002", 2, []float32{2, 2.25, 2.5, 2.75}, []uint32{2, 3, 4})
+
+	if _, err := reader.FetchRow(2, &scratch); err != nil {
+		t.Fatalf("warm FetchRow(2): %v", err)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := reader.FetchRow(2, &scratch); err != nil {
+			t.Fatalf("FetchRow(2): %v", err)
+		}
+	}); allocs != 0 {
+		t.Fatalf("little-endian hot FetchRow allocs=%v want zero", allocs)
+	}
+}
+
 func TestColumnPhysicalRowReaderBatchFetchReusesCachedBlockV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
@@ -456,6 +490,38 @@ func TestColumnPhysicalRowReaderScratchAppendFixedWidthSlicesV1(t *testing.T) {
 			if got[i+1] != want {
 				t.Fatalf("got[%d]=%v want %v", i+1, got[i+1], want)
 			}
+		}
+	})
+
+	t.Run("float32_vector_little_endian_exact", func(t *testing.T) {
+		values := []float32{math.Float32frombits(0x3f800000), math.Float32frombits(0x7fc12345), math.Float32frombits(0xc0200000)}
+		var b bytes.Buffer
+		writeManifestFloat32SliceWithEncoding(&b, values, ColumnFixedWidthEncodingLittleEndian)
+		cur := manifestCursor{raw: b.Bytes()}
+		got, err := cur.appendFloat32SliceWithExpectedLengthAndEncoding([]float32{99}, len(values), ColumnFixedWidthEncodingLittleEndian)
+		if err != nil {
+			t.Fatalf("appendFloat32SliceWithExpectedLengthAndEncoding: %v", err)
+		}
+		if len(got) != 1+len(values) || got[0] != 99 || cur.pos != len(cur.raw) {
+			t.Fatalf("got=%v pos=%d len=%d", got, cur.pos, len(cur.raw))
+		}
+		for i, want := range values {
+			if math.Float32bits(got[i+1]) != math.Float32bits(want) {
+				t.Fatalf("got[%d] bits=0x%08x want 0x%08x", i+1, math.Float32bits(got[i+1]), math.Float32bits(want))
+			}
+		}
+	})
+
+	t.Run("float32_vector_unsupported_encoding", func(t *testing.T) {
+		var b bytes.Buffer
+		writeManifestFloat32Slice(&b, []float32{1})
+		cur := manifestCursor{raw: b.Bytes()}
+		got, err := cur.appendFloat32SliceWithExpectedLengthAndEncoding([]float32{7}, 1, ColumnFixedWidthEncoding("future"))
+		if err == nil || !strings.Contains(err.Error(), "unsupported fixed_width_encoding") {
+			t.Fatalf("appendFloat32SliceWithExpectedLengthAndEncoding err=%v want unsupported fixed_width_encoding", err)
+		}
+		if fmt.Sprint(got) != "[7]" {
+			t.Fatalf("got=%v want original dst", got)
 		}
 	})
 
