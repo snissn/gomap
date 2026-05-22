@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unsafe"
 )
 
 const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
@@ -146,46 +147,10 @@ func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing
 	}
 }
 
-func TestColumnVectorGraphNativeSearchScratchClearsCandidateAdjacencyRefsV3(t *testing.T) {
-	var scratch columnVectorGraphNativeSearchScratch
-	scratch.frontier = append(scratch.frontier, columnVectorGraphSearchCandidate{
-		ordinal:   1,
-		score:     1,
-		adjacency: []uint32{1, 2},
-	})
-	scratch.top = append(scratch.top, columnVectorGraphSearchCandidate{
-		ordinal:   2,
-		score:     2,
-		adjacency: []uint32{3, 4},
-	})
-	if err := scratch.prepare(4, 3, 2, 1, 2); err != nil {
-		t.Fatalf("prepare: %v", err)
-	}
-	assertColumnVectorGraphCandidateScratchNoAdjacencyRefsV3(t, "frontier after prepare", scratch.frontier)
-	assertColumnVectorGraphCandidateScratchNoAdjacencyRefsV3(t, "top after prepare", scratch.top)
-
-	scratch.frontier = append(scratch.frontier,
-		columnVectorGraphSearchCandidate{ordinal: 1, score: 1, adjacency: []uint32{1}},
-		columnVectorGraphSearchCandidate{ordinal: 2, score: 2, adjacency: []uint32{2}},
-	)
-	if _, ok := scratch.popFrontier(); !ok {
-		t.Fatalf("popFrontier returned ok=false")
-	}
-	backing := scratch.frontier[:cap(scratch.frontier)]
-	for i := len(scratch.frontier); i < len(backing); i++ {
-		if backing[i].adjacency != nil {
-			t.Fatalf("frontier backing slot %d retained adjacency %v after pop", i, backing[i].adjacency)
-		}
-	}
-}
-
-func assertColumnVectorGraphCandidateScratchNoAdjacencyRefsV3(t *testing.T, label string, candidates []columnVectorGraphSearchCandidate) {
-	t.Helper()
-	backing := candidates[:cap(candidates)]
-	for i, candidate := range backing {
-		if candidate.adjacency != nil {
-			t.Fatalf("%s backing slot %d retained adjacency %v", label, i, candidate.adjacency)
-		}
+func TestColumnVectorGraphNativeSearchCandidateCarriesNoAdjacencyV3(t *testing.T) {
+	candidate := columnVectorGraphSearchCandidate{ordinal: 1, score: 1}
+	if got, want := unsafe.Sizeof(candidate), uintptr(16); got != want {
+		t.Fatalf("candidate size=%d want compact ordinal+score size=%d", got, want)
 	}
 }
 
