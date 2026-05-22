@@ -364,7 +364,12 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 			if got, want := parallel.Diagnostics.ScheduledGranules, serial.Diagnostics.ScheduledGranules; got != want {
 				t.Fatalf("parallel scheduled granules=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
 			}
-			if tc.req.Kind == ColumnPhysicalQueryGroupCount || tc.req.Kind == ColumnPhysicalQueryGroupCountDistinct || tc.req.Kind == ColumnPhysicalQueryHourCount {
+			if tc.req.Kind == ColumnPhysicalQueryGroupCount ||
+				tc.req.Kind == ColumnPhysicalQueryGroupCountDistinct ||
+				tc.req.Kind == ColumnPhysicalQueryHourCount ||
+				tc.req.Kind == ColumnPhysicalQueryGroupMinInt64 ||
+				tc.req.Kind == ColumnPhysicalQueryGroupMaxInt64 ||
+				tc.req.Kind == ColumnPhysicalQueryGroupInt64Span {
 				if serial.Diagnostics.PhysicalBytesScanned <= 0 || serial.Diagnostics.PhysicalBytesScanned >= parallel.Diagnostics.PhysicalBytesScanned {
 					t.Fatalf("serial sidecar bytes=%d want below parallel TCPA bytes=%d serial=%+v parallel=%+v", serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics, parallel.Diagnostics)
 				}
@@ -1389,9 +1394,14 @@ func TestColumnStoreQueryAndReconstructionFailClosedMissingAssetM13C(t *testing.
 
 func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
+	sidecarRef := columnPhysicalQueryInt64SidecarRefForCorruption(t, dir)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
 	if err != nil {
 		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	sidecarPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), sidecarRef)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath sidecar: %v", err)
 	}
 	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
 	if err != nil {
@@ -1403,6 +1413,17 @@ func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("Close corrupt asset: %v", err)
+	}
+	sidecarFile, err := os.OpenFile(sidecarPath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("OpenFile sidecar asset: %v", err)
+	}
+	if _, err := sidecarFile.WriteAt([]byte{0xff}, sidecarRef.Offset); err != nil {
+		_ = sidecarFile.Close()
+		t.Fatalf("corrupt sidecar asset: %v", err)
+	}
+	if err := sidecarFile.Close(); err != nil {
+		t.Fatalf("Close corrupt sidecar asset: %v", err)
 	}
 
 	reopen := openCollectionCommandWALDB(t, dir)
@@ -1418,23 +1439,52 @@ func TestColumnStoreQueryAndReconstructionFailClosedCorruptAssetM13C(t *testing.
 
 func TestColumnStoreQueryAndReconstructionFailClosedTruncatedAssetM13C(t *testing.T) {
 	dir, ref := prepareColumnPhysicalScannerCorruptionFixtureM13A(t)
+	sidecarRef := columnPhysicalQueryInt64SidecarRefForCorruption(t, dir)
 	assetPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), ref)
 	if err != nil {
 		t.Fatalf("columnAssetSegmentPath: %v", err)
 	}
+	sidecarPath, err := columnAssetSegmentPath(backenddb.ColumnAssetRootDirPath(dir), sidecarRef)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath sidecar: %v", err)
+	}
 	if err := os.Truncate(assetPath, ref.Offset+ref.Length-1); err != nil {
 		t.Fatalf("Truncate asset: %v", err)
+	}
+	if err := os.Truncate(sidecarPath, sidecarRef.Offset+sidecarRef.Length-1); err != nil {
+		t.Fatalf("Truncate sidecar asset: %v", err)
 	}
 
 	reopen := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopen.Close() }()
 	reopened := openColumnStoreCollectionM10B(t, reopen)
-	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("RunColumnPhysicalQuery truncated asset err=%v want io.ErrUnexpectedEOF", err)
+	if _, err := reopened.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}); err == nil || (!errors.Is(err, io.ErrUnexpectedEOF) && !strings.Contains(err.Error(), "checksum")) {
+		t.Fatalf("RunColumnPhysicalQuery truncated asset err=%v want fail-closed checksum/EOF failure", err)
 	}
-	if got, err := reopened.Get([]byte("e1")); !errors.Is(err, io.ErrUnexpectedEOF) || got != nil {
-		t.Fatalf("Get truncated asset got=%s err=%v want fail-closed io.ErrUnexpectedEOF", got, err)
+	if got, err := reopened.Get([]byte("e1")); got != nil || err == nil || (!errors.Is(err, io.ErrUnexpectedEOF) && !strings.Contains(err.Error(), "checksum")) {
+		t.Fatalf("Get truncated asset got=%s err=%v want fail-closed checksum/EOF failure", got, err)
 	}
+}
+
+func columnPhysicalQueryInt64SidecarRefForCorruption(t *testing.T, dir string) ColumnAssetRef {
+	t.Helper()
+	db := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = db.Close() }()
+	collection := openColumnStoreCollectionM10B(t, db)
+	view, closeView, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	for _, ref := range view.Int64Values {
+		if ref.ColumnName == "time_us" {
+			return ref.AssetRef
+		}
+	}
+	t.Fatalf("missing time_us int64 sidecar refs=%+v", view.Int64Values)
+	return ColumnAssetRef{}
 }
 
 func TestColumnPhysicalAssetScanRejectsWrongNamespaceM13C(t *testing.T) {
@@ -2038,6 +2088,85 @@ func TestColumnPhysicalQueryRunnerInt64ValueSidecarParityAndAllocationM1634(t *t
 	}
 }
 
+func TestColumnPhysicalQueryRunnerDictInt64SidecarParityAndAllocationM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
+	tests := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+	}{
+		{
+			name: "q4a",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+		{
+			name: "q4b",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+		{
+			name: "q5",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wantHash := columnPhysicalQueryReferenceHashM13B(tc.name, events)
+			runner, err := collection.PrepareColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+			}
+			defer func() {
+				if err := runner.Close(); err != nil {
+					t.Fatalf("runner Close: %v", err)
+				}
+			}()
+			wantGroups := 0
+			for i := 0; i < 3; i++ {
+				result, err := runner.Run()
+				if err != nil {
+					t.Fatalf("runner Run warmup %d: %v", i, err)
+				}
+				if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B(tc.name, result.Groups)); got != wantHash {
+					t.Fatalf("runner %s hash=%d want %d groups=%+v", tc.name, got, wantHash, result.Groups)
+				}
+				if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+					t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+				}
+				if result.Diagnostics.ProjectedColumns != 2 {
+					t.Fatalf("runner projected columns=%d want did+time_us sidecars", result.Diagnostics.ProjectedColumns)
+				}
+				if result.Diagnostics.DictionaryCodeHits == 0 || result.Diagnostics.DictionaryCodeHits != result.Diagnostics.ScheduledGranules {
+					t.Fatalf("runner dictionary hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.DictionaryCodeHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+				}
+				if result.Diagnostics.Int64ValueHits == 0 || result.Diagnostics.Int64ValueHits != result.Diagnostics.ScheduledGranules {
+					t.Fatalf("runner int64 hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.Int64ValueHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+				}
+				if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+					t.Fatalf("runner physical bytes=%d want sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
+				}
+				if result.Diagnostics.SegmentFileCacheMisses != 0 {
+					t.Fatalf("runner diagnostics=%+v want no per-run segment cache misses after prepared sidecar setup", result.Diagnostics)
+				}
+				wantGroups = len(result.Groups)
+			}
+			allocs := testing.AllocsPerRun(20, func() {
+				result, err := runner.Run()
+				if err != nil {
+					panic(fmt.Sprintf("runner Run: %v", err))
+				}
+				if len(result.Groups) != wantGroups {
+					panic(fmt.Sprintf("runner groups=%d want %d", len(result.Groups), wantGroups))
+				}
+			})
+			if allocs != 0 {
+				t.Fatalf("runner %s warmed allocs/run=%.2f want 0", tc.name, allocs)
+			}
+		})
+	}
+}
+
 func TestColumnPhysicalQuerySerialDictionarySidecarParityM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(2048)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
@@ -2122,6 +2251,60 @@ func TestColumnPhysicalQuerySerialInt64ValueSidecarParityM1634(t *testing.T) {
 	}
 	if result.Diagnostics.SegmentFileCacheMisses == 0 {
 		t.Fatalf("serial int64 sidecar diagnostics=%+v want one-shot sidecar read misses accounted", result.Diagnostics)
+	}
+}
+
+func TestColumnPhysicalQuerySerialDictInt64SidecarParityM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	tcpBytes := columnPhysicalQueryTCPAAssetBytesM1634(t, collection)
+	tests := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+	}{
+		{
+			name: "q4a",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+		{
+			name: "q4b",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+		{
+			name: "q5",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			wantHash := columnPhysicalQueryReferenceHashM13B(tc.name, events)
+			result, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery: %v", err)
+			}
+			if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B(tc.name, result.Groups)); got != wantHash {
+				t.Fatalf("serial sidecar %s hash=%d want %d groups=%+v", tc.name, got, wantHash, result.Groups)
+			}
+			if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+				t.Fatalf("serial sidecar diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+			}
+			if result.Diagnostics.ProjectedColumns != 2 {
+				t.Fatalf("serial sidecar projected columns=%d want did+time_us sidecars", result.Diagnostics.ProjectedColumns)
+			}
+			if result.Diagnostics.DictionaryCodeHits == 0 || result.Diagnostics.DictionaryCodeHits != result.Diagnostics.ScheduledGranules {
+				t.Fatalf("serial sidecar dictionary hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.DictionaryCodeHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+			}
+			if result.Diagnostics.Int64ValueHits == 0 || result.Diagnostics.Int64ValueHits != result.Diagnostics.ScheduledGranules {
+				t.Fatalf("serial sidecar int64 hits=%d scheduled=%d diagnostics=%+v", result.Diagnostics.Int64ValueHits, result.Diagnostics.ScheduledGranules, result.Diagnostics)
+			}
+			if result.Diagnostics.PhysicalBytesScanned <= 0 || result.Diagnostics.PhysicalBytesScanned >= tcpBytes {
+				t.Fatalf("serial sidecar physical bytes=%d want dictionary+int64 sidecars below TCPA bytes=%d", result.Diagnostics.PhysicalBytesScanned, tcpBytes)
+			}
+			if result.Diagnostics.SegmentFileCacheMisses == 0 {
+				t.Fatalf("serial sidecar diagnostics=%+v want one-shot sidecar read misses accounted", result.Diagnostics)
+			}
+		})
 	}
 }
 
