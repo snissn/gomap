@@ -273,6 +273,22 @@ func TestColumnVectorGraphNativeCosineScoreKeepsFiniteFloat32ZeroV3(t *testing.T
 	}
 }
 
+func TestColumnVectorGraphNativeCosineScoreTrustedFallbackOnFloat32OverflowV3(t *testing.T) {
+	got, err := columnVectorGraphNativeCosineScoreVectorTrusted(
+		[]float32{math.MaxFloat32}, 1,
+		7,
+		[]float32{math.MaxFloat32}, 1,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("columnVectorGraphNativeCosineScoreVectorTrusted: %v", err)
+	}
+	want := float64(math.MaxFloat32) * float64(math.MaxFloat32)
+	if math.IsInf(got, 0) || math.IsNaN(got) || got != want {
+		t.Fatalf("columnVectorGraphNativeCosineScoreVectorTrusted=%g want finite float64 fallback %g", got, want)
+	}
+}
+
 func TestColumnVectorGraphNativeSearchEmptyAndTopKClampV3(t *testing.T) {
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, nil)
 	defer func() { _ = d.Close() }()
