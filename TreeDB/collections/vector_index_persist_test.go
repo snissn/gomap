@@ -491,6 +491,13 @@ func TestCollectionVectorIndexNativeRootMissingGraphBuildsRuntimeOnWrite(t *test
 	); err != nil {
 		t.Fatalf("insert after missing graph root: %v", err)
 	}
+	indexes := reopenedCol.registeredVectorIndexes()
+	if got := len(indexes); got != 1 {
+		t.Fatalf("registered vector indexes after rebuild=%d want 1", got)
+	}
+	if stats := indexes[0].Stats(); stats.LiveDocs != 1 || stats.Nodes != 1 || stats.DeletedDocs != 0 {
+		t.Fatalf("missing-root rebuild replayed committed batch: %+v", stats)
+	}
 	if err := reopenedCol.Flush(); err != nil {
 		t.Fatalf("flush rebuilt missing graph root: %v", err)
 	}

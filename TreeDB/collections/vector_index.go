@@ -408,34 +408,34 @@ func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
 	return c.vectorIndexes[name]
 }
 
-func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
+func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struct{}, error) {
 	if c == nil {
-		return nil
+		return nil, nil
 	}
 	if c.db == nil {
-		return errCollectionDBNil
+		return nil, errCollectionDBNil
 	}
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
-		return nil
+		return nil, nil
 	}
 	c.vectorIndexLoadMu.Lock()
 	defer c.vectorIndexLoadMu.Unlock()
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
-		return nil
+		return nil, nil
 	}
 
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return backenddb.ErrClosed
+		return nil, backenddb.ErrClosed
 	}
 	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
 	if err != nil {
 		_ = snap.Close()
-		return err
+		return nil, err
 	}
 	if catalog == nil {
 		_ = snap.Close()
-		return errCollectionNotFound
+		return nil, errCollectionNotFound
 	}
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
@@ -457,24 +457,29 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() error {
 			c.UnregisterVectorIndex(index.name)
 		}
 	}
+	var rebuilt map[string]struct{}
 	for _, def := range c.meta.VectorIndexes {
 		if index := c.registeredVectorIndex(def.Name); index != nil {
 			continue
 		}
 		index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if index != nil {
 			continue
 		}
 		if status.ExactFallbackReason == "missing_graph_root" {
 			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
-				return err
+				return nil, err
 			}
+			if rebuilt == nil {
+				rebuilt = make(map[string]struct{}, 1)
+			}
+			rebuilt[def.Name] = struct{}{}
 		}
 	}
-	return nil
+	return rebuilt, nil
 }
 
 func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
@@ -523,7 +528,8 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
 	}
-	if err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
+	if err != nil {
 		return err
 	}
 	indexes := c.registeredVectorIndexes()
@@ -534,6 +540,9 @@ func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
+		if _, ok := rebuilt[index.name]; ok {
+			continue
+		}
 		for _, documentID := range documentIDs {
 			if len(documentID) == 0 {
 				continue
@@ -550,7 +559,8 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
 		return nil
 	}
-	if err := c.ensureDeclaredNativeVectorIndexesLoaded(); err != nil {
+	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
+	if err != nil {
 		return err
 	}
 	indexes := c.registeredVectorIndexes()
@@ -561,6 +571,9 @@ func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
+		if _, ok := rebuilt[index.name]; ok {
+			continue
+		}
 		for _, documentID := range documentIDs {
 			index.TombstoneDocumentID(documentID)
 		}
