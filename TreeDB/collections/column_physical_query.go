@@ -95,14 +95,15 @@ type ColumnPhysicalQueryResult struct {
 // synchronize Run and Close. Result groups returned by Run alias runner-owned
 // storage and are valid only until the next Run or Close.
 type ColumnPhysicalQueryRunner struct {
-	collection *Collection
-	view       columnPhysicalScanSnapshotView
-	closeView  func()
-	req        ColumnPhysicalQueryRequest
-	exec       *columnPhysicalQueryExecutor
-	readCache  columnPhysicalAssetReadCache
-	dictCount  *columnDictionaryCodeGroupCountRunner
-	closed     bool
+	collection   *Collection
+	view         columnPhysicalScanSnapshotView
+	closeView    func()
+	req          ColumnPhysicalQueryRequest
+	exec         *columnPhysicalQueryExecutor
+	readCache    columnPhysicalAssetReadCache
+	dictCount    *columnDictionaryCodeGroupCountRunner
+	dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
+	closed       bool
 }
 
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
@@ -186,15 +187,21 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		_ = readCache.close()
 		return nil, err
 	}
+	dictDistinct, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, req, &readCache)
+	if err != nil {
+		_ = readCache.close()
+		return nil, err
+	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
-		collection: c,
-		view:       view,
-		closeView:  closeView,
-		req:        req,
-		exec:       exec,
-		readCache:  readCache,
-		dictCount:  dictCount,
+		collection:   c,
+		view:         view,
+		closeView:    closeView,
+		req:          req,
+		exec:         exec,
+		readCache:    readCache,
+		dictCount:    dictCount,
+		dictDistinct: dictDistinct,
 	}, nil
 }
 
@@ -226,6 +233,9 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	}
 	if r.dictCount != nil {
 		return r.dictCount.run(r.view, r.req), nil
+	}
+	if r.dictDistinct != nil {
+		return r.dictDistinct.run(r.view, r.req), nil
 	}
 	r.exec.resetForRun()
 	beforeHits := r.readCache.hits
