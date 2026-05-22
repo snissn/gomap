@@ -481,14 +481,15 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 }
 
 type columnPhysicalQueryExecutor struct {
-	kind           ColumnPhysicalQueryKind
-	projected      []string
-	groupIdx       int
-	valueIdx       int
-	distinctIdx    int
-	groupColumnIdx int
-	valueColumnIdx int
-	interner       columnPhysicalQueryStringInterner
+	kind              ColumnPhysicalQueryKind
+	projected         []string
+	groupIdx          int
+	valueIdx          int
+	distinctIdx       int
+	groupColumnIdx    int
+	valueColumnIdx    int
+	distinctColumnIdx int
+	interner          columnPhysicalQueryStringInterner
 
 	counts       map[string]int
 	distinct     map[string]map[string]struct{}
@@ -506,12 +507,13 @@ type columnPhysicalQuerySpan struct {
 
 func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (*columnPhysicalQueryExecutor, error) {
 	exec := &columnPhysicalQueryExecutor{
-		kind:           req.Kind,
-		groupIdx:       -1,
-		valueIdx:       -1,
-		distinctIdx:    -1,
-		groupColumnIdx: -1,
-		valueColumnIdx: -1,
+		kind:              req.Kind,
+		groupIdx:          -1,
+		valueIdx:          -1,
+		distinctIdx:       -1,
+		groupColumnIdx:    -1,
+		valueColumnIdx:    -1,
+		distinctColumnIdx: -1,
 	}
 	addProjection := func(name string, wantType ColumnStoreValueType, role string) (int, int, error) {
 		if name == "" {
@@ -541,7 +543,7 @@ func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQue
 	case ColumnPhysicalQueryGroupCountDistinct:
 		exec.groupIdx, exec.groupColumnIdx, err = addProjection(req.GroupColumn, ColumnStoreValueString, "group")
 		if err == nil {
-			exec.distinctIdx, _, err = addProjection(req.DistinctColumn, ColumnStoreValueString, "distinct")
+			exec.distinctIdx, exec.distinctColumnIdx, err = addProjection(req.DistinctColumn, ColumnStoreValueString, "distinct")
 		}
 		exec.distinct = make(map[string]map[string]struct{})
 	case ColumnPhysicalQueryHourCount:
@@ -583,6 +585,10 @@ func (e *columnPhysicalQueryExecutor) supportsDirectAssetReduce() bool {
 	switch e.kind {
 	case ColumnPhysicalQueryGroupCount:
 		return e.groupColumnIdx >= 0
+	case ColumnPhysicalQueryGroupCountDistinct:
+		return e.groupColumnIdx >= 0 && e.distinctColumnIdx >= 0
+	case ColumnPhysicalQueryHourCount:
+		return e.valueColumnIdx >= 0
 	case ColumnPhysicalQueryGroupInt64Span:
 		return e.groupColumnIdx >= 0 && e.valueColumnIdx >= 0
 	default:
@@ -753,13 +759,21 @@ func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCol
 		if deleted {
 			return columnPhysicalAssetScanSummary{}, fmt.Errorf("%w: operation=%s deleted=%v", errColumnPhysicalQueryNeedsVisibility, header.Operation, deleted)
 		}
-		group, groupOK, value, valueOK, err := scanColumnPhysicalDirectQueryRowValues(&cur, version, cfg, exec)
+		group, groupOK, distinct, distinctOK, value, valueOK, err := scanColumnPhysicalDirectQueryRowValues(&cur, version, cfg, exec)
 		if err != nil {
 			return columnPhysicalAssetScanSummary{}, fmt.Errorf("row[%d]: %w", rowIdx, err)
 		}
 		switch exec.kind {
 		case ColumnPhysicalQueryGroupCount:
 			if err := exec.visitDirectGroupCount(group, groupOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		case ColumnPhysicalQueryGroupCountDistinct:
+			if err := exec.visitDirectGroupCountDistinct(group, groupOK, distinct, distinctOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		case ColumnPhysicalQueryHourCount:
+			if err := exec.visitDirectHourCount(value, valueOK); err != nil {
 				return columnPhysicalAssetScanSummary{}, err
 			}
 		case ColumnPhysicalQueryGroupInt64Span:
@@ -780,50 +794,53 @@ func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCol
 	return summary, nil
 }
 
-func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, exec *columnPhysicalQueryExecutor) ([]byte, bool, int64, bool, error) {
+func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, exec *columnPhysicalQueryExecutor) ([]byte, bool, []byte, bool, int64, bool, error) {
 	var group []byte
 	var groupOK bool
+	var distinct []byte
+	var distinctOK bool
 	var value int64
 	var valueOK bool
 	for colIdx, col := range cfg.Columns {
 		typeBytes := cur.stringBytes()
 		if cur.err != nil {
-			return nil, false, 0, false, cur.err
+			return nil, false, nil, false, 0, false, cur.err
 		}
 		if !columnPhysicalBytesEqualString(typeBytes, string(col.ValueType)) {
-			return nil, false, 0, false, fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), col.ValueType)
+			return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] type=%q want %q", colIdx, string(typeBytes), col.ValueType)
 		}
 		null := cur.bool()
 		if cur.err != nil {
-			return nil, false, 0, false, cur.err
+			return nil, false, nil, false, 0, false, cur.err
 		}
 		present := true
 		if version >= columnPhysicalAssetVersion {
 			present = cur.bool()
 			if cur.err != nil {
-				return nil, false, 0, false, cur.err
+				return nil, false, nil, false, 0, false, cur.err
 			}
 		}
 		selectedGroup := colIdx == exec.groupColumnIdx
 		selectedValue := colIdx == exec.valueColumnIdx
+		selectedDistinct := colIdx == exec.distinctColumnIdx
 		if !present {
 			if !null {
-				return nil, false, 0, false, fmt.Errorf("column[%d] absent value is not null", colIdx)
+				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] absent value is not null", colIdx)
 			}
 			if !col.Nullable {
-				return nil, false, 0, false, fmt.Errorf("column[%d] is absent but column is not nullable", colIdx)
+				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] is absent but column is not nullable", colIdx)
 			}
-			if selectedGroup || selectedValue {
-				return nil, false, 0, false, columnPhysicalQueryNullDirectError(col.ValueType)
+			if selectedGroup || selectedValue || selectedDistinct {
+				return nil, false, nil, false, 0, false, columnPhysicalQueryNullDirectError(col.ValueType)
 			}
 			continue
 		}
 		if null {
 			if !col.Nullable {
-				return nil, false, 0, false, fmt.Errorf("column[%d] is null but column is not nullable", colIdx)
+				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] is null but column is not nullable", colIdx)
 			}
-			if selectedGroup || selectedValue {
-				return nil, false, 0, false, columnPhysicalQueryNullDirectError(col.ValueType)
+			if selectedGroup || selectedValue || selectedDistinct {
+				return nil, false, nil, false, 0, false, columnPhysicalQueryNullDirectError(col.ValueType)
 			}
 			continue
 		}
@@ -844,20 +861,24 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 				group = v
 				groupOK = true
 			}
+			if selectedDistinct {
+				distinct = v
+				distinctOK = true
+			}
 		default:
-			return nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
+			return nil, false, nil, false, 0, false, fmt.Errorf("unsupported column physical value type %q", col.ValueType)
 		}
 		if cur.err != nil {
-			return nil, false, 0, false, cur.err
+			return nil, false, nil, false, 0, false, cur.err
 		}
 	}
-	return group, groupOK, value, valueOK, nil
+	return group, groupOK, distinct, distinctOK, value, valueOK, nil
 }
 
 func columnPhysicalQueryNullDirectError(valueType ColumnStoreValueType) error {
 	switch valueType {
 	case ColumnStoreValueString:
-		return fmt.Errorf("%w: physical column query does not support null string group values yet", ErrColumnQueryPlanUnsupported)
+		return fmt.Errorf("%w: physical column query does not support null string values yet", ErrColumnQueryPlanUnsupported)
 	case ColumnStoreValueInt64:
 		return fmt.Errorf("%w: physical column query does not support null int64 values yet", ErrColumnQueryPlanUnsupported)
 	default:
@@ -871,6 +892,34 @@ func (e *columnPhysicalQueryExecutor) visitDirectGroupCount(group []byte, groupO
 	}
 	key := e.interner.internBytes(group)
 	e.counts[key]++
+	e.reduceRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) visitDirectGroupCountDistinct(group []byte, groupOK bool, distinct []byte, distinctOK bool) error {
+	if !groupOK {
+		return fmt.Errorf("%w: physical column query missing string group value", ErrColumnQueryPlanUnsupported)
+	}
+	if !distinctOK {
+		return fmt.Errorf("%w: physical column query missing string distinct value", ErrColumnQueryPlanUnsupported)
+	}
+	key := e.interner.internBytes(group)
+	distinctKey := e.interner.internBytes(distinct)
+	set := e.distinct[key]
+	if set == nil {
+		set = make(map[string]struct{})
+		e.distinct[key] = set
+	}
+	set[distinctKey] = struct{}{}
+	e.reduceRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) visitDirectHourCount(value int64, valueOK bool) error {
+	if !valueOK {
+		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
+	}
+	e.hourCounts[columnPhysicalQueryUTCHour(value)]++
 	e.reduceRows++
 	return nil
 }
