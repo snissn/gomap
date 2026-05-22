@@ -794,6 +794,23 @@ func (c *manifestCursor) float32SliceWithExpectedLengthAndEncoding(expected int,
 	return c.float32SliceAfterLengthWithEncoding(n, encoding)
 }
 
+func (c *manifestCursor) skipFloat32SliceWithExpectedLength(expected int) uint64 {
+	n := c.u64()
+	if c.err != nil {
+		return 0
+	}
+	if expected < 0 || n != uint64(expected) {
+		c.err = fmt.Errorf("collections: float32_vector length=%d want vector_dims=%d", n, expected)
+		return 0
+	}
+	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
+		return 0
+	}
+	c.pos += int(byteLen)
+	return n
+}
+
 func (c *manifestCursor) float32SliceAfterLength(n uint64) []float32 {
 	return c.float32SliceAfterLengthWithEncoding(n, ColumnFixedWidthEncodingDefault)
 }
