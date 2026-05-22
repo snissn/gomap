@@ -243,6 +243,63 @@ func BenchmarkJSONBenchAggregateMetadataBuild(b *testing.B) {
 	}
 }
 
+func BenchmarkJSONBenchPartBuildM1C(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	benchmarkJSONBenchPartBuildM1C(b, ds)
+}
+
+func BenchmarkJSONBenchLocalPartBuildM1C(b *testing.B) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		path = DefaultJSONBenchDir
+	}
+	if _, err := os.Stat(path); err != nil {
+		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchDir)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1_000_000)
+	if err != nil {
+		b.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	benchmarkJSONBenchPartBuildM1C(b, ds)
+}
+
+func benchmarkJSONBenchPartBuildM1C(b *testing.B, ds JSONBenchDataset) {
+	for _, layout := range []JSONBenchColumnPartLayout{
+		JSONBenchColumnPartLayoutTimeUS,
+		JSONBenchColumnPartLayoutClickHouseFilterUserTime,
+	} {
+		b.Run(string(layout), func(b *testing.B) {
+			part, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, layout)
+			if err != nil {
+				b.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+			}
+			accounting := part.ByteAccounting()
+			accounting.DictionaryBytes = EstimateJSONBenchDictionaryBytes(ds)
+			accounting.RecomputeTotals()
+			b.ReportAllocs()
+			b.SetBytes(int64(accounting.EncodedRawBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				part, err = BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, layout)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(part.Descriptor.RowCount + len(part.Columns) + len(part.Descriptor.Granules))
+			}
+			seconds := b.Elapsed().Seconds()
+			if seconds > 0 {
+				b.ReportMetric(float64(ds.Rows*b.N)/seconds, "rows/s")
+				b.ReportMetric(float64(accounting.EncodedRawBytes*b.N)/seconds/(1024*1024), "encoded_MiB/s")
+				b.ReportMetric(float64(accounting.TotalStoredBytes*b.N)/seconds/(1024*1024), "stored_MiB/s")
+			}
+			if ds.Rows > 0 {
+				b.ReportMetric(float64(accounting.TotalStoredBytes)/float64(ds.Rows), "output_B/row")
+				b.ReportMetric(float64(accounting.EncodedRawBytes)/float64(ds.Rows), "encoded_B/row")
+			}
+		})
+	}
+}
+
 func syntheticJSONBenchDataset(rows int) JSONBenchDataset {
 	columns := map[string][]int64{
 		"row_index":              make([]int64, rows),
