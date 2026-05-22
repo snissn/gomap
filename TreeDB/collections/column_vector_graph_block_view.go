@@ -154,6 +154,9 @@ func (p *columnVectorGraphSearchPlan) blockViewForAssetOrdinal(assetOrdinal int)
 		}
 		p.physicalReader = reader
 	}
+	if reader.closed {
+		return nil, errors.New("collections: physical column row reader is closed")
+	}
 	if len(reader.ranges) == 1 && assetOrdinal == 0 {
 		if p.singleBlockView != nil {
 			p.hits++
@@ -390,11 +393,6 @@ func (v *columnVectorGraphBlockView) vectorUnchecked(rowIndex int, scratch []flo
 	if span.dims == 0 {
 		return nil, scratch
 	}
-	if columnPhysicalNativeLittleEndian {
-		raw := v.block.raw[span.start:span.end]
-		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(raw))), span.dims)
-		return vector, scratch
-	}
 	base := len(scratch)
 	need := base + span.dims
 	if cap(scratch) < need {
@@ -403,6 +401,10 @@ func (v *columnVectorGraphBlockView) vectorUnchecked(rowIndex int, scratch []flo
 		scratch = next
 	} else {
 		scratch = scratch[:need]
+	}
+	if columnPhysicalNativeLittleEndian {
+		columnPhysicalCopyLittleEndianFloat32Bytes(scratch[base:need], v.block.raw[span.start:span.end])
+		return scratch[base:need], scratch
 	}
 	pos := span.start
 	for i := base; i < need; i++ {
