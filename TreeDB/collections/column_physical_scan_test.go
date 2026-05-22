@@ -239,7 +239,7 @@ func TestColumnPhysicalSerialScannerDoesNotEnablePlannerRoutingM13A(t *testing.T
 	if plan.Supported {
 		t.Fatalf("forced serial plan supported before M14 routing: %+v", plan)
 	}
-	if got := plan.Diagnostics.UnsupportedPlanReason; got != "physical column scanner is not implemented yet" {
+	if got := plan.Diagnostics.UnsupportedPlanReason; got != columnQueryUnsupportedNoPhysicalAssetsReason {
 		t.Fatalf("unsupported reason=%q want physical scanner disabled", got)
 	}
 }
@@ -615,10 +615,20 @@ func assertColumnPhysicalScanRowM13A(t testing.TB, row columnPhysicalScanRowForT
 		if len(row.Values) < 2 {
 			t.Fatalf("kind projection missing from values=%+v", row.Values)
 		}
-		if row.Values[1].Type != ColumnStoreValueString || row.Values[1].Null || row.Values[1].String != kind {
+		if row.Values[1].Type != ColumnStoreValueString || row.Values[1].Null || columnPhysicalScanStringForTest(row.Values[1]) != kind {
 			t.Fatalf("kind value=%+v want %q", row.Values[1], kind)
 		}
+		if row.Values[1].StringBytes != nil && row.Values[1].String != "" {
+			t.Fatalf("kind value kept stale String=%q beside StringBytes=%q", row.Values[1].String, row.Values[1].StringBytes)
+		}
 	}
+}
+
+func columnPhysicalScanStringForTest(value columnDeclaredValue) string {
+	if value.StringBytes != nil {
+		return string(value.StringBytes)
+	}
+	return value.String
 }
 
 func prepareColumnPhysicalScannerCorruptionFixtureM13A(t *testing.T) (string, ColumnAssetRef) {

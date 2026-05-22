@@ -69,7 +69,7 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: row_store_baseline, b_tree_index_baseline; fail-closed until physical assets exist: serial_column_scan, aggregate_metadata, parallel_column_scan)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: row_store_baseline, b_tree_index_baseline; fail-closed until M14 planner routing is enabled: serial_column_scan, aggregate_metadata, parallel_column_scan)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 	)
@@ -468,8 +468,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			ManifestRoot:                    manifestIdentity.ManifestRoot,
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
-		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus M12A isolated physical column asset writer",
-		PhysicalColumnQuery:    "M12A publishes physical column assets but physical scanners are not implemented yet; serial/aggregate/parallel physical labels fail closed through the planner",
+		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M13B explicit serial query adapter",
+		PhysicalColumnQuery:    "M13B provides an explicit serial physical query adapter; unified-bench serial/aggregate/parallel physical labels intentionally remain fail-closed through the planner until M14 routing",
 		BenchmarkOnlyRelaxed:   false,
 		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, scan, reduce, and parity hash stages are timed separately for the forced execution label",
 	}
@@ -1097,9 +1097,9 @@ func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.Co
 		EstimatedRows:         rows,
 		ForceKind:             forceKind,
 		Capabilities: collections.ColumnQueryPlannerCapabilities{
-			// M12A publishes physical column assets but deliberately has no
-			// scanner yet; keep physical planner gates unreachable until a
-			// later scanner milestone wires real asset reads.
+			// M13B has an explicit physical scanner/query adapter, but
+			// unified-bench forced physical labels stay unreachable until M14
+			// wires planner capabilities to real manifest state.
 			SerialColumnScan:       true,
 			AggregateMetadata:      true,
 			ParallelColumnScan:     true,
@@ -1566,7 +1566,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 
 	sb.WriteString("## Forced Path Labels\n\n")
 	sb.WriteString(fmt.Sprintf("- supported: %s\n", markdownCodeList(report.SupportedForcedPaths)))
-	sb.WriteString(fmt.Sprintf("- fail-closed until physical planner paths exist: %s\n", markdownCodeList(report.UnsupportedForcedPaths)))
+	sb.WriteString(fmt.Sprintf("- fail-closed until M14 physical planner routing: %s\n", markdownCodeList(report.UnsupportedForcedPaths)))
 	if report.Artifacts.ColumnJSON != "" {
 		sb.WriteString("\n## Artifacts\n\n")
 		columnStoreWriteArtifactLine(&sb, "column JSON", report.Artifacts.ColumnJSON)

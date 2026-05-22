@@ -346,7 +346,7 @@ func TestRenderColumnStoreSuiteMarkdownCodeListsM11A(t *testing.T) {
 	for _, want := range []string{
 		"- manifest_control_missing: `manifest`, `dictionary`",
 		"- supported: `row_store_baseline`, `physical_column`",
-		"- fail-closed until physical planner paths exist: `planner_skipscan`, `aggregate_metadata`",
+		"- fail-closed until M14 physical planner routing: `planner_skipscan`, `aggregate_metadata`",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
@@ -970,7 +970,7 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	if !strings.Contains(msg, "serial_column_scan") ||
 		!strings.Contains(msg, "unsupported") ||
 		!strings.Contains(msg, "refusing to route through row store") ||
-		!strings.Contains(msg, "reason=physical column scanner is not implemented yet") {
+		!strings.Contains(msg, "reason=physical column query has no physical assets available") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
