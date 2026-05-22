@@ -18,6 +18,8 @@ M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
+NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
+VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
 
 PGVECTOR_DSN="${PGVECTOR_DSN:-}"
 PGVECTOR_DOCKER="${PGVECTOR_DOCKER:-auto}"
@@ -152,6 +154,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
+- Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
 
@@ -171,10 +174,10 @@ echo "creating Python environment: $VENV"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install -q --upgrade pip
 
-binary_pip_packages=(numpy)
+binary_pip_packages=("$NUMPY_PACKAGE")
 backend_pip_packages=()
 if contains_backend vectorlite; then
-	binary_pip_packages+=(vectorlite-py)
+	binary_pip_packages+=("$VECTORLITE_PACKAGE")
 fi
 if contains_backend pgvector; then
 	backend_pip_packages+=("psycopg[binary]")

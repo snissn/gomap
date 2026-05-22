@@ -82,8 +82,9 @@ def connect(db_path: Path):
     return db
 
 
-def configure_sqlite(db: sqlite3.Connection, page_size: int, cache_mb: int) -> None:
-    db.execute(f"pragma page_size={page_size}")
+def configure_sqlite(db: sqlite3.Connection, page_size: int, cache_mb: int, *, set_page_size: bool = False) -> None:
+    if set_page_size:
+        db.execute(f"pragma page_size={page_size}")
     db.execute("pragma journal_mode=wal")
     db.execute("pragma synchronous=normal")
     db.execute("pragma temp_store=memory")
@@ -108,7 +109,7 @@ def build_database(args: argparse.Namespace, dataset_dir: Path, manifest: dict[s
 
     start = time.perf_counter()
     db = connect(db_path)
-    configure_sqlite(db, args.page_size, args.cache_mb)
+    configure_sqlite(db, args.page_size, args.cache_mb, set_page_size=True)
     version = db.execute("select vectorlite_info()").fetchone()[0]
     db.execute("create table documents(id text primary key, document blob not null)")
     db.execute(
@@ -242,7 +243,7 @@ def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency:
     conns = [connect(db_path) for _ in range(concurrency)]
     for conn in conns:
         configure_sqlite(conn, args.page_size, args.cache_mb)
-        search_one(conn, queries[0], args.top_k, args.ef_search)
+        search_one(conn, queries[0], 1, args.ef_search)
 
     def worker(conn: sqlite3.Connection, indexes: range) -> None:
         for i in indexes:
@@ -302,7 +303,10 @@ def main() -> None:
     dataset_dir = Path(args.dataset_dir)
     manifest = load_manifest(dataset_dir)
     if manifest["metric"] != "cosine" or not manifest["normalized"]:
-        raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
+        raise RuntimeError(
+            "unsupported dataset metric/normalization: "
+            f"metric={manifest.get('metric')!r} normalized={manifest.get('normalized')!r}"
+        )
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
     concurrency = parse_ints(args.search_concurrency)

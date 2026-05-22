@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -167,10 +168,14 @@ func exportDataset(cfg config) (exportResult, error) {
 	if err := writeQueriesJSONL(filepath.Join(out, "queries.jsonl"), cfg, files); err != nil {
 		return exportResult{}, err
 	}
+	createdAt, err := manifestCreatedAt()
+	if err != nil {
+		return exportResult{}, err
+	}
 	m := manifest{
 		Version:             1,
 		Generator:           "treedb_vector_synthetic_v1",
-		CreatedAt:           time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:           createdAt,
 		Docs:                cfg.docs,
 		Dimensions:          cfg.dimensions,
 		Queries:             cfg.queries,
@@ -190,6 +195,17 @@ func exportDataset(cfg config) (exportResult, error) {
 		return exportResult{}, err
 	}
 	return exportResult{Dir: out, Manifest: m}, nil
+}
+
+func manifestCreatedAt() (string, error) {
+	if raw := os.Getenv("SOURCE_DATE_EPOCH"); raw != "" {
+		epoch, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("parse SOURCE_DATE_EPOCH: %w", err)
+		}
+		return time.Unix(epoch, 0).UTC().Format(time.RFC3339), nil
+	}
+	return time.Now().UTC().Format(time.RFC3339), nil
 }
 
 func prepareOutputDir(path string) error {

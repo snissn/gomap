@@ -64,6 +64,17 @@ func TestParseConfigRejectsMissingOut(t *testing.T) {
 	}
 }
 
+func TestManifestCreatedAtUsesSourceDateEpoch(t *testing.T) {
+	t.Setenv("SOURCE_DATE_EPOCH", "0")
+	got, err := manifestCreatedAt()
+	if err != nil {
+		t.Fatalf("manifestCreatedAt: %v", err)
+	}
+	if got != "1970-01-01T00:00:00Z" {
+		t.Fatalf("created_at=%q", got)
+	}
+}
+
 func TestExportDatasetRejectsNonEmptyOut(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "dataset")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

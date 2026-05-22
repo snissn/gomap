@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -567,6 +569,51 @@ func TestParseConfigDatasetDirAllowsValidateQueriesAboveDocs(t *testing.T) {
 	}
 	if cfg.datasetDir != filepath.Join("tmp", "dataset") {
 		t.Fatalf("datasetDir=%q", cfg.datasetDir)
+	}
+}
+
+func TestParseSearchConcurrencyAcceptsSerialAndPreservesOrder(t *testing.T) {
+	got, err := parseSearchConcurrency("4,1,2,4,8")
+	if err != nil {
+		t.Fatalf("parseSearchConcurrency: %v", err)
+	}
+	want := []int{4, 2, 8}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("concurrency=%v want %v", got, want)
+	}
+}
+
+func TestDemoDatasetJSONEmbeddingsMatchBinaryVectors(t *testing.T) {
+	const docs = 8
+	const dims = 4
+	dir := writeDemoDataset(t, docs, dims, 2, 2)
+	vectors, err := readFloat32Vectors(filepath.Join(dir, "documents.f32"), docs, dims)
+	if err != nil {
+		t.Fatalf("read documents.f32: %v", err)
+	}
+	f, err := os.Open(filepath.Join(dir, "documents.jsonl"))
+	if err != nil {
+		t.Fatalf("open documents.jsonl: %v", err)
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for i := 0; scanner.Scan(); i++ {
+		var doc struct {
+			Index     int       `json:"index"`
+			Embedding []float32 `json:"embedding"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &doc); err != nil {
+			t.Fatalf("decode document %d: %v", i, err)
+		}
+		if doc.Index != i {
+			t.Fatalf("document index=%d at row %d", doc.Index, i)
+		}
+		if !reflect.DeepEqual(doc.Embedding, vectors[i]) {
+			t.Fatalf("document %d embedding=%v binary=%v", i, doc.Embedding, vectors[i])
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan documents.jsonl: %v", err)
 	}
 }
 

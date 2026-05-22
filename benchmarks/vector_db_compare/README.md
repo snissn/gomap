@@ -91,6 +91,11 @@ files plus JSONL convenience files. TreeDB loads documents from the exported
 JSONL and query vectors from the exported binary query file; the Python
 benchmarks consume the exported binary vector files directly.
 
+Record the generated `README.md`, backend JSON results, and `comparison.md` with
+any published result. The script records the git commit and run shape; reruns
+can also override `PYTHON`, `VENV`, `NUMPY_PACKAGE`, and `VECTORLITE_PACKAGE`
+when exact dependency reproduction requires a different pinned package set.
+
 Example scale probe:
 
 ```sh
