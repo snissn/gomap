@@ -21,6 +21,8 @@ import (
 
 type orderedRootPublishPlan uint8
 
+type orderedRootDeltaGroupSystemPublishMode uint8
+
 // ErrCommandWALContextMissingFrame reports a command-WAL context publish that
 // was called without the command frame that defines the publish LSN.
 var ErrCommandWALContextMissingFrame = errors.New("treedb: command WAL context publish requires a command frame")
@@ -34,6 +36,34 @@ var ErrOrderedRootGroupCommandWALContextNilSystemBuilder = errors.New("treedb: P
 // publish API.
 var ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder = errors.New("treedb: PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder: nil system builder")
 
+// ErrStorageMaintenancePlanMissing reports a maintenance ordered-root publish
+// that was called without a recognized storage-maintenance plan token.
+var ErrStorageMaintenancePlanMissing = errors.New("treedb: storage-maintenance publish requires a recognized maintenance plan")
+
+// ErrStorageMaintenanceRootDeltaMissing reports a maintenance publish with no
+// root delta to rewrite. System-only logical changes must use command-WAL
+// covered publish APIs.
+var ErrStorageMaintenanceRootDeltaMissing = errors.New("treedb: storage-maintenance publish requires at least one maintenance root delta")
+
+// ErrStorageMaintenanceRootDeltaEmpty reports a maintenance publish whose
+// marked root delta did not actually rewrite its root.
+var ErrStorageMaintenanceRootDeltaEmpty = errors.New("treedb: storage-maintenance publish requires every maintenance root delta to rewrite its root")
+
+// ErrStorageMaintenanceRootDeltaIteratorMissing reports a maintenance publish
+// whose marked root delta has no iterator to apply.
+var ErrStorageMaintenanceRootDeltaIteratorMissing = errors.New("treedb: storage-maintenance publish requires every maintenance root delta to include an iterator")
+
+// ErrStorageMaintenanceSystemBuilderMissing reports a maintenance publish with
+// no system-root delta builder to atomically publish rewritten root IDs.
+var ErrStorageMaintenanceSystemBuilderMissing = errors.New("treedb: storage-maintenance publish requires a system-delta builder")
+
+// ErrStorageMaintenancePublishPreApplyFailed marks a storage-maintenance
+// publish failure that happened before any root or system-root delta was
+// applied. Maintenance callers may use this to clean newly copied physical
+// assets without risking removal of data that a partially-applied root can
+// reach.
+var ErrStorageMaintenancePublishPreApplyFailed = errors.New("treedb: storage-maintenance publish failed before root apply")
+
 var (
 	errCommandWALContextZeroLSN = errors.New("treedb: command WAL context publish appended zero LSN")
 
@@ -44,6 +74,11 @@ const (
 	orderedRootPublishPlanColdBuild orderedRootPublishPlan = iota
 	orderedRootPublishPlanWarmFallbackRebuild
 	orderedRootPublishPlanWarmNativeApply
+)
+
+const (
+	orderedRootDeltaGroupSystemPublishLogical orderedRootDeltaGroupSystemPublishMode = iota
+	orderedRootDeltaGroupSystemPublishStorageMaintenance
 )
 
 // orderedRootDeltaBatchInlineThreshold is intentionally not the page/value-log
@@ -113,6 +148,16 @@ type OrderedRootPublishInput struct {
 // Unlike OrderedRootPublishInput, Iter contains only keys changed by this
 // publish; omitted base-root keys are preserved.
 type OrderedRootDeltaPublishInput struct {
+	BaseRoot      uint64
+	Iter          iterator.UnsafeIterator
+	StoragePolicy OrderedRootStoragePolicy
+}
+
+// StorageMaintenanceRootDeltaPublishInput describes a root-local physical
+// storage-maintenance rewrite. It is intentionally separate from
+// OrderedRootDeltaPublishInput so ordinary logical root-delta callers do not
+// inherit maintenance-only fields or semantics.
+type StorageMaintenanceRootDeltaPublishInput struct {
 	BaseRoot      uint64
 	Iter          iterator.UnsafeIterator
 	StoragePolicy OrderedRootStoragePolicy
@@ -1258,6 +1303,9 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 	iter, err := buildSystemIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -1322,7 +1370,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemBuilder(ordered []OrderedRoo
 // stream to the system root. The system delta should contain only changed
 // system-root entries; omitted system entries are preserved.
 func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, nil, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishLogical)
 }
 
 // PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder applies the
@@ -1330,7 +1378,7 @@ func (db *DB) PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 // while commit serialization is held and before publishing the metadata root
 // tuple that advances AppliedCommandLSN.
 func (db *DB) PublishOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishLogical)
 }
 
 // PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder is
@@ -1373,7 +1421,102 @@ func (db *DB) PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuil
 // PublishOrderedRootDeltaGroupWithSystemDeltaBuilder, but runs preflight under
 // the DB write lock before applying root-local deltas.
 func (db *DB) PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
-	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishLogical)
+}
+
+// PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder is like
+// PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder, but permits
+// TreeDB-internal storage-maintenance root rewrites while command-WAL mode is
+// enabled. Callers must provide an internal maintenance plan and at least one
+// maintenance root-delta input. System-only logical changes must use
+// command-WAL-covered publish APIs. This path does not append or advance a
+// command-WAL frame.
+func (db *DB) PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput, preflight OrderedRootGroupPreflight, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	if buildSystemDeltaIter == nil {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(ErrStorageMaintenanceSystemBuilderMissing)
+	}
+	if db == nil {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(ErrClosed)
+	}
+	if db.closing.Load() {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(ErrClosed)
+	}
+	if db.readOnly {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(ErrReadOnly)
+	}
+	if err := validateStorageMaintenanceRootDeltaPublishInputs(plan, ordered); err != nil {
+		closeStorageMaintenanceRootDeltaPublishIterators(ordered)
+		return 0, nil, storageMaintenancePreApplyError(err)
+	}
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan, storageMaintenanceRootDeltaInputsToOrdered(ordered), preflight, nil, buildSystemDeltaIter, orderedRootDeltaGroupSystemPublishStorageMaintenance)
+}
+
+func validateStorageMaintenanceOrderedRootDeltaInputs(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput) error {
+	return validateStorageMaintenanceRootDeltaInputs(plan, len(ordered), func(idx int) bool {
+		return ordered[idx].Iter != nil
+	})
+}
+
+func validateStorageMaintenanceRootDeltaPublishInputs(plan StorageMaintenancePlan, ordered []StorageMaintenanceRootDeltaPublishInput) error {
+	return validateStorageMaintenanceRootDeltaInputs(plan, len(ordered), func(idx int) bool {
+		return ordered[idx].Iter != nil
+	})
+}
+
+func validateStorageMaintenanceRootDeltaInputs(plan StorageMaintenancePlan, rootDeltaCount int, hasIterator func(int) bool) error {
+	if err := validateStorageMaintenanceRootDeltaCount(plan, rootDeltaCount); err != nil {
+		return err
+	}
+	for idx := 0; idx < rootDeltaCount; idx++ {
+		if !hasIterator(idx) {
+			return fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaIteratorMissing, idx)
+		}
+	}
+	return nil
+}
+
+func validateStorageMaintenanceRootDeltaCount(plan StorageMaintenancePlan, rootDeltaCount int) error {
+	if !validStorageMaintenancePlan(plan) {
+		return ErrStorageMaintenancePlanMissing
+	}
+	if rootDeltaCount == 0 {
+		return ErrStorageMaintenanceRootDeltaMissing
+	}
+	return nil
+}
+
+func storageMaintenancePreApplyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return errors.Join(ErrStorageMaintenancePublishPreApplyFailed, err)
+}
+
+func closeStorageMaintenanceRootDeltaPublishIterators(ordered []StorageMaintenanceRootDeltaPublishInput) {
+	for idx := range ordered {
+		if ordered[idx].Iter != nil {
+			_ = ordered[idx].Iter.Close()
+		}
+	}
+}
+
+func storageMaintenanceRootDeltaInputsToOrdered(ordered []StorageMaintenanceRootDeltaPublishInput) []OrderedRootDeltaPublishInput {
+	if len(ordered) == 0 {
+		return nil
+	}
+	converted := make([]OrderedRootDeltaPublishInput, len(ordered))
+	for idx := range ordered {
+		converted[idx] = OrderedRootDeltaPublishInput{
+			BaseRoot:      ordered[idx].BaseRoot,
+			Iter:          ordered[idx].Iter,
+			StoragePolicy: ordered[idx].StoragePolicy,
+		}
+	}
+	return converted
 }
 
 // PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder is like
@@ -1441,22 +1584,33 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithPreflightAndSystemDeltaBuilde
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, preflight, nil, buildSystemDeltaIter)
 }
 
-func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	return db.publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(nil, ordered, preflight, commandWALIntent, buildSystemDeltaIter, mode)
+}
+
+func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenancePlan(plan StorageMaintenancePlan, ordered []OrderedRootDeltaPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, mode orderedRootDeltaGroupSystemPublishMode) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	storageMaintenance := mode == orderedRootDeltaGroupSystemPublishStorageMaintenance
+	rootsObserved := 0
+	preApplyErr := func(err error) error {
+		if err == nil || !storageMaintenance || rootsObserved != 0 {
+			return err
+		}
+		return errors.Join(ErrStorageMaintenancePublishPreApplyFailed, err)
+	}
 	if buildSystemDeltaIter == nil {
-		return 0, nil, errors.New("nil ordered root group system delta builder")
+		return 0, nil, preApplyErr(errors.New("nil ordered root group system delta builder"))
 	}
 	if db == nil {
-		return 0, nil, ErrClosed
+		return 0, nil, preApplyErr(ErrClosed)
 	}
 	if db.closing.Load() {
-		return 0, nil, ErrClosed
+		return 0, nil, preApplyErr(ErrClosed)
 	}
 
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
-	rootsObserved := 0
 	phaseStats := orderedRootDeltaGroupPublishPhaseStats{}
 	finished := false
 	finishPublish := func() {
@@ -1475,11 +1629,21 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 
 	if db.readOnly {
 		err = ErrReadOnly
-		return 0, nil, err
+		return 0, nil, preApplyErr(err)
+	}
+	if storageMaintenance {
+		if err = validateStorageMaintenanceOrderedRootDeltaInputs(plan, ordered); err != nil {
+			return 0, nil, preApplyErr(err)
+		}
 	}
 	if commandWALIntent == nil {
-		if err = db.rejectUnloggedCommandWALRootPublish(); err != nil {
-			return 0, nil, err
+		if storageMaintenance {
+			err = db.commandWALPoisonedError()
+		} else {
+			err = db.rejectUnloggedCommandWALRootPublish()
+		}
+		if err != nil {
+			return 0, nil, preApplyErr(err)
 		}
 	}
 
@@ -1491,7 +1655,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		phaseStart := time.Now()
 		if err = preflight(); err != nil {
 			phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
@@ -1502,7 +1666,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	for idx := range ordered {
 		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
 		}
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
@@ -1510,7 +1674,10 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.rootApplyCalls++
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, preApplyErr(err)
+		}
+		if storageMaintenance && rootID == ordered[idx].BaseRoot {
+			return 0, nil, preApplyErr(fmt.Errorf("%w: ordered input %d", ErrStorageMaintenanceRootDeltaEmpty, idx))
 		}
 		rootIDs[idx] = rootID
 		rootsObserved++
@@ -1523,6 +1690,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilder(ordered []Order
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -1932,6 +2102,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 		phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		if err != nil {
+			if iter != nil {
+				_ = iter.Close()
+			}
 			return 0, nil, false, err
 		}
 		if iter == nil {
@@ -2095,6 +2268,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
+		if iter != nil {
+			_ = iter.Close()
+		}
 		return 0, nil, err
 	}
 	if iter == nil {
@@ -2416,6 +2592,9 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		builtRootIDs := append([]uint64(nil), rootIDs...)
 		iter, err := buildSystemIter(builtRootIDs)
 		if err != nil {
+			if iter != nil {
+				_ = iter.Close()
+			}
 			return 0, nil, err
 		}
 		if iter == nil {

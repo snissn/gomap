@@ -403,6 +403,28 @@ func columnManifestRootRecordIterator(identityRecord [columnManifestIdentityReco
 	return &systemTargetIterator{entries: entries}
 }
 
+// columnManifestRootRecordIteratorOwned avoids cloning record key/value slices
+// when the caller owns the records for the whole synchronous publish.
+func columnManifestRootRecordIteratorOwned(identityRecord [columnManifestIdentityRecordSize]byte, records []columnManifestRecord) *systemTargetIterator {
+	entries := make([]systemTargetEntry, 0, 1+len(records))
+	identityValue := make([]byte, len(identityRecord))
+	copy(identityValue, identityRecord[:])
+	entries = append(entries, systemTargetEntry{
+		key:   newColumnManifestIdentityRecordKey(),
+		value: identityValue,
+	})
+	for _, record := range records {
+		entries = append(entries, systemTargetEntry{
+			key:   record.key,
+			value: record.value,
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].key, entries[j].key) < 0
+	})
+	return &systemTargetIterator{entries: entries}
+}
+
 func cloneColumnManifestRecords(records []columnManifestRecord) []columnManifestRecord {
 	if len(records) == 0 {
 		return nil

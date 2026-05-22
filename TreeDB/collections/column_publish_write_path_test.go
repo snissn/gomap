@@ -1550,12 +1550,12 @@ func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t
 	}
 }
 
-func prepareColumnStoreCommandWALDirM10B(t *testing.T) (string, uint64) {
+func prepareColumnStoreCommandWALDirM10B(t testing.TB) (string, uint64) {
 	t.Helper()
 	return prepareColumnStoreCommandWALDirWithProfileM10C(t, "")
 }
 
-func prepareColumnStoreCommandWALDirWithProfileM10C(t *testing.T, profileSupport ColumnStoreProfileSupport) (string, uint64) {
+func prepareColumnStoreCommandWALDirWithProfileM10C(t testing.TB, profileSupport ColumnStoreProfileSupport) (string, uint64) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -1701,7 +1701,7 @@ func enableColumnStoreForExistingCollectionM10B(t *testing.T, d *backenddb.DB, c
 	return col
 }
 
-func openColumnStoreCollectionM10B(t *testing.T, d *backenddb.DB, managers ...*CollectionManager) *Collection {
+func openColumnStoreCollectionM10B(t testing.TB, d *backenddb.DB, managers ...*CollectionManager) *Collection {
 	t.Helper()
 	var mgr *CollectionManager
 	if len(managers) != 0 && managers[0] != nil {

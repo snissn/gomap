@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,23 @@ const columnAssetSegmentWriteLockStripes = 64
 // segment path. Writers to the same segment share a process-local offset lock
 // without retaining one mutex per temp dir or segment path forever.
 var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
+
+// columnAssetSegmentAllocationLocks serialize same-process segment file-id
+// allocation by namespace without retaining one lock per temp dir forever.
+// O_EXCL still protects against external process races.
+var columnAssetSegmentAllocationLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
+
+// columnAssetSegmentAllocationCaches avoid repeated directory scans for hot
+// same-namespace segment allocation while keeping cache memory bounded by the
+// stripe count. Collisions only evict the cached hint; O_EXCL remains the source
+// of truth for file-id ownership.
+var columnAssetSegmentAllocationCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentAllocationCache
+
+type columnAssetSegmentAllocationCache struct {
+	segmentDir string
+	nextFileID uint32
+	valid      bool
+}
 
 type columnAssetManagerNamespace struct {
 	ManagerRootDir string
@@ -171,6 +189,10 @@ func columnAssetManagerNamespaceDirs(namespace columnAssetManagerNamespace) ([]s
 }
 
 func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnPhysicalAssetToManagerSegment(rootDir, cfg, payload, generation, partID, columnAssetM12ASegmentFileID)
+}
+
+func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
 	if cfg.AssetManager == nil {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires asset manager")
 	}
@@ -186,6 +208,9 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	if generation == 0 || partID == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires generation and part_id")
 	}
+	if fileID == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires file_id")
+	}
 	checksum := page.Checksum(payload)
 	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
 	if err != nil {
@@ -199,7 +224,7 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 		Namespace:  cfg.AssetManager.Namespace,
 		Generation: generation,
 		PartID:     partID,
-		FileID:     columnAssetM12ASegmentFileID,
+		FileID:     fileID,
 		Length:     int64(len(payload)),
 		Checksum:   checksum,
 	}
@@ -224,7 +249,7 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
-	written, err := file.Write(payload)
+	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
@@ -243,6 +268,290 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	}
 	ref.Offset = offset
 	return ref, nil
+}
+
+func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32, error) {
+	segments, err := listColumnAssetReachabilitySegments(context.Background(), namespace.SegmentDir)
+	if err != nil {
+		return 0, err
+	}
+	maxFileID := uint32(0)
+	for _, segment := range segments {
+		if segment.fileID > maxFileID {
+			maxFileID = segment.fileID
+		}
+	}
+	if maxFileID < columnAssetM12ASegmentFileID {
+		maxFileID = columnAssetM12ASegmentFileID
+	}
+	if maxFileID == ^uint32(0) {
+		return 0, errors.New("collections: column asset segment file_id exhausted")
+	}
+	return maxFileID + 1, nil
+}
+
+func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig) (*columnPhysicalAssetSegmentAppender, error) {
+	if cfg.AssetManager == nil {
+		return nil, errors.New("collections: column physical asset segment allocation requires asset manager")
+	}
+	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
+		return nil, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
+	}
+	if !cfg.AssetManager.IsolatedNamespace {
+		return nil, errors.New("collections: column physical asset segment allocation requires isolated namespace")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		return nil, err
+	}
+	cleanSegmentDir := filepath.Clean(namespace.SegmentDir)
+	allocatorIndex := columnAssetSegmentAllocationLockIndex(cleanSegmentDir)
+	allocatorLock := &columnAssetSegmentAllocationLocks[allocatorIndex]
+	allocatorCache := &columnAssetSegmentAllocationCaches[allocatorIndex]
+	allocatorLock.Lock()
+	defer allocatorLock.Unlock()
+	fileID, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, allocatorCache)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		appender, err := newColumnPhysicalAssetSegmentAppender(rootDir, cfg, fileID)
+		if err == nil {
+			advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, allocatorCache, fileID)
+			return appender, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		fileID, err = resetColumnAssetSegmentFileIDCache(namespace, cleanSegmentDir, allocatorCache)
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
+	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
+		if cache.nextFileID == 0 {
+			return 0, errors.New("collections: column asset segment file_id exhausted")
+		}
+		return cache.nextFileID, nil
+	}
+	return resetColumnAssetSegmentFileIDCache(namespace, cleanSegmentDir, cache)
+}
+
+func resetColumnAssetSegmentFileIDCache(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
+	fileID, err := nextColumnAssetSegmentFileID(namespace)
+	if err != nil {
+		if cache != nil && cache.segmentDir == cleanSegmentDir {
+			cache.valid = false
+			cache.nextFileID = 0
+		}
+		return 0, err
+	}
+	if cache != nil {
+		cache.segmentDir = cleanSegmentDir
+		cache.nextFileID = fileID
+		cache.valid = true
+	}
+	return fileID, nil
+}
+
+func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnAssetSegmentAllocationCache, allocatedFileID uint32) {
+	if cache == nil {
+		return
+	}
+	cache.segmentDir = cleanSegmentDir
+	cache.valid = true
+	if allocatedFileID == ^uint32(0) {
+		cache.nextFileID = 0
+		return
+	}
+	cache.nextFileID = allocatedFileID + 1
+}
+
+type columnPhysicalAssetSegmentAppender struct {
+	cfg        ColumnStoreConfig
+	namespace  columnAssetManagerNamespace
+	fileID     uint32
+	assetPath  string
+	file       *os.File
+	offset     int64
+	failed     bool
+	lock       *sync.Mutex
+	closeFile  bool
+	unlockLock bool
+}
+
+func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
+	if cfg.AssetManager == nil {
+		return nil, errors.New("collections: column physical asset append requires asset manager")
+	}
+	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
+		return nil, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
+	}
+	if !cfg.AssetManager.IsolatedNamespace {
+		return nil, errors.New("collections: column physical asset append requires isolated namespace")
+	}
+	if fileID == 0 {
+		return nil, errors.New("collections: column physical asset append requires file_id")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		return nil, err
+	}
+	ref := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    fileID,
+		Offset:    0,
+		Length:    1,
+	}
+	assetPath, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		return nil, err
+	}
+	segmentLock := columnAssetSegmentWriteLock(assetPath)
+	segmentLock.Lock()
+	appender := &columnPhysicalAssetSegmentAppender{
+		cfg:        cfg,
+		namespace:  namespace,
+		fileID:     fileID,
+		assetPath:  assetPath,
+		lock:       segmentLock,
+		unlockLock: true,
+	}
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		appender.releaseLock()
+		return nil, err
+	}
+	appender.file = file
+	appender.closeFile = true
+	return appender, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	if a == nil || a.file == nil {
+		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
+	}
+	if a.failed {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset appender is failed")
+	}
+	if len(payload) == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
+	}
+	if generation == 0 || partID == 0 {
+		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  a.cfg.AssetManager.Namespace,
+		Generation: generation,
+		PartID:     partID,
+		FileID:     a.fileID,
+		Offset:     a.offset,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	written, err := writeColumnAssetSegmentPayload(a.file, payload)
+	a.offset += int64(written)
+	if err != nil {
+		a.failed = true
+		return ColumnAssetRef{}, err
+	}
+	return ref, nil
+}
+
+func writeColumnAssetSegmentPayload(w io.Writer, payload []byte) (int, error) {
+	written := 0
+	for written < len(payload) {
+		n, err := w.Write(payload[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) close() error {
+	if a == nil {
+		return nil
+	}
+	var appenderErr error
+	var fileSyncErr error
+	var fileCloseErr error
+	if a.failed {
+		appenderErr = errors.New("collections: column physical asset appender is failed")
+	}
+	if a.file != nil && a.closeFile {
+		if !a.failed {
+			fileSyncErr = a.file.Sync()
+		}
+		fileCloseErr = a.file.Close()
+		a.closeFile = false
+		a.file = nil
+	}
+	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
+	var removeErr error
+	removeOnClose := columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
+	if removeOnClose && a.assetPath != "" {
+		removeErr = os.Remove(a.assetPath)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
+	var removeDirSyncErr error
+	if removeOnClose && removeErr == nil {
+		removeDirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
+	}
+	a.releaseLock()
+	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, removeErr, dirSyncErr, removeDirSyncErr)
+}
+
+func columnPhysicalAssetSegmentAppenderRemoveOnClose(failed bool, fileSyncErr, fileCloseErr, dirSyncErr error) bool {
+	return failed || fileSyncErr != nil || fileCloseErr != nil || dirSyncErr != nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) abort() error {
+	if a == nil {
+		return nil
+	}
+	var closeErr error
+	if a.file != nil && a.closeFile {
+		closeErr = a.file.Close()
+		a.closeFile = false
+		a.file = nil
+	}
+	var removeErr error
+	if a.assetPath != "" {
+		removeErr = os.Remove(a.assetPath)
+		if errors.Is(removeErr, os.ErrNotExist) {
+			removeErr = nil
+		}
+	}
+	syncErr := syncColumnAssetDir(a.namespace.SegmentDir)
+	a.releaseLock()
+	return errors.Join(closeErr, removeErr, syncErr)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) releaseLock() {
+	if a != nil && a.lock != nil && a.unlockLock {
+		a.lock.Unlock()
+		a.unlockLock = false
+	}
 }
 
 func readColumnPhysicalAssetFromManager(rootDir string, ref ColumnAssetRef) ([]byte, error) {
@@ -418,17 +727,29 @@ func columnAssetSegmentFileName(fileID uint32) string {
 	return fmt.Sprintf("%s%06d%s", columnAssetSegmentFilePrefix, fileID, columnAssetSegmentFileSuffix)
 }
 
+func columnAssetSegmentAllocationLock(segmentDir string) *sync.Mutex {
+	return &columnAssetSegmentAllocationLocks[columnAssetSegmentAllocationLockIndex(segmentDir)]
+}
+
+func columnAssetSegmentAllocationLockIndex(segmentDir string) uint64 {
+	return columnAssetSegmentLockIndex(filepath.Clean(segmentDir))
+}
+
 func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {
+	return &columnAssetSegmentWriteLocks[columnAssetSegmentLockIndex(filepath.Clean(assetPath))]
+}
+
+func columnAssetSegmentLockIndex(name string) uint64 {
 	const (
 		fnvOffset64 = 14695981039346656037
 		fnvPrime64  = 1099511628211
 	)
 	hash := uint64(fnvOffset64)
-	for i := 0; i < len(assetPath); i++ {
-		hash ^= uint64(assetPath[i])
+	for i := 0; i < len(name); i++ {
+		hash ^= uint64(name[i])
 		hash *= fnvPrime64
 	}
-	return &columnAssetSegmentWriteLocks[hash%uint64(len(columnAssetSegmentWriteLocks))]
+	return hash % uint64(len(columnAssetSegmentWriteLocks))
 }
 
 func syncColumnAssetDir(dir string) error {

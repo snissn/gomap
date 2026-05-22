@@ -90,6 +90,7 @@ type columnPhysicalScanSnapshotView struct {
 	CollectionName     string
 	Config             ColumnStoreConfig
 	ColumnStoreEnabled bool
+	CommitSeq          uint64
 	AssetRefs          []columnManifestAssetRefForScan
 	MutationParts      int
 	Diagnostics        columnPhysicalScanDiagnostics
@@ -153,7 +154,9 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContext(ctx contex
 	columnStoreEnabled := cfgPtr != nil
 	var cfg ColumnStoreConfig
 	if cfgPtr != nil {
-		cfg = cfgPtr.copy()
+		// Collection catalogs are immutable after publication; snapshot views
+		// only read the config, so a shallow copy avoids per-scan slice clones.
+		cfg = *cfgPtr
 	}
 
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled)
@@ -219,6 +222,10 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 	if rootID == 0 {
 		return columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: physical column scan missing manifest root %q", collectionColumnManifestRootName(collectionName))
 	}
+	snapshotState := snap.State()
+	if snapshotState == nil {
+		return columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
+	}
 
 	diag := columnPhysicalScanDiagnostics{
 		ManifestRoot:               rootID,
@@ -230,6 +237,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		CollectionName:     collectionName,
 		Config:             cfg,
 		ColumnStoreEnabled: columnStoreEnabled,
+		CommitSeq:          snapshotState.CommitSeq,
 		Diagnostics:        diag,
 		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
 		AssetNamespace:     cfg.AssetManager.Namespace,

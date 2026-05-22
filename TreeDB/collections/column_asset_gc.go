@@ -79,12 +79,13 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
-		Detailed:       opts.Detailed,
-		SegmentDetails: needSegmentEntries,
-		CandidateRefs:  opts.CandidateRefs,
-		PendingRefs:    opts.PendingRefs,
-		PreparedRefs:   opts.PreparedRefs,
-		PinnedRefs:     opts.PinnedRefs,
+		Detailed:                              opts.Detailed,
+		SegmentDetails:                        needSegmentEntries,
+		ProtectCandidateRefsForOlderSnapshots: true,
+		CandidateRefs:                         opts.CandidateRefs,
+		PendingRefs:                           opts.PendingRefs,
+		PreparedRefs:                          opts.PreparedRefs,
+		PinnedRefs:                            opts.PinnedRefs,
 	})
 	stats = ColumnAssetGCStats{
 		DryRun:           opts.DryRun,
@@ -111,7 +112,32 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	}
 	if opts.DryRun && !needSegmentEntries {
 		stats.SegmentsEligible = plan.Segments.Reclaimable
-		stats.BytesEligible = plan.Segments.BytesReclaimable
+		stats.BytesEligible = plan.Segments.BytesWholeReclaimable
+		return stats, nil
+	}
+
+	if opts.DryRun {
+		if len(plan.SegmentEntries) == 0 {
+			// Non-detailed dry-runs keep the allocation profile bounded by using
+			// the canonical segment summary instead of materializing entries.
+			stats.SegmentsEligible = plan.Segments.Reclaimable
+			stats.BytesEligible = plan.Segments.BytesWholeReclaimable
+			return stats, nil
+		}
+		namespace, err := columnAssetManagerNamespaceForRoot(c.db.ColumnAssetRootDir(), plan.Namespace)
+		if err != nil {
+			return stats, err
+		}
+		for _, entry := range plan.SegmentEntries {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			if !columnAssetGCSegmentEligibleForDelete(namespace.SegmentDir, entry) {
+				continue
+			}
+			stats.SegmentsEligible++
+			stats.BytesEligible += entry.Bytes
+		}
 		return stats, nil
 	}
 
@@ -130,9 +156,6 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.SegmentsEligible++
 		stats.BytesEligible = addColumnAssetReachabilityBytes(stats.BytesEligible, entry.ReclaimableBytes)
 		eligible = append(eligible, entry)
-	}
-	if opts.DryRun {
-		return stats, nil
 	}
 	// Re-check after planning while still under the mutation lock so destructive
 	// deletion cannot proceed if the handle became closed, read-only, or

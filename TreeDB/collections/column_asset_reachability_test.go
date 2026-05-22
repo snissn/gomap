@@ -13,6 +13,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestPrecountColumnAssetReachabilityRangesSkipsMissingSegmentsM15C(t *testing.T) {
+	if precountColumnAssetReachabilityRanges(8, 0) {
+		t.Fatal("precount=true for refs with no segment files; missing-segment plans should skip the extra pass")
+	}
+	if precountColumnAssetReachabilityRanges(0, 0) {
+		t.Fatal("precount=true for empty refs")
+	}
+	if !precountColumnAssetReachabilityRanges(10, 2) {
+		t.Fatal("precount=false for dense refs with existing segment files")
+	}
+}
+
 func TestColumnAssetReachabilityPlanProtectsActiveManifestRefsM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
@@ -701,6 +713,58 @@ func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilityCanElideDiagnosticSourcesForRewriteM15C(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	payload := []byte("rewrite-source-elision-column-asset")
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), payload, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:      root,
+		collection:   "events",
+		namespace:    namespaceName,
+		detailed:     true,
+		omitSources:  true,
+		omitSort:     true,
+		activeGen:    1,
+		recoveryGen:  1,
+		manifestRecs: 1,
+	}
+	input.addRef(ref, ColumnAssetReachabilitySourceActiveManifest)
+	input.addRef(ref, ColumnAssetReachabilitySourceRecoveryManifest)
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || len(plan.Entries) != 1 {
+		t.Fatalf("plan complete=%t entries=%d want one complete entry", plan.Complete, len(plan.Entries))
+	}
+	if len(plan.Entries[0].Sources) != 0 {
+		t.Fatalf("diagnostic sources=%v want elided", plan.Entries[0].Sources)
+	}
+	if !columnAssetRewriteSourceMaskIncludesManifest(input.refs[plan.Entries[0].Ref]) {
+		t.Fatalf("entry source mask did not preserve manifest-source classification: %+v", plan.Entries[0])
+	}
+}
+
 func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
 	const namespaceName = "events/column-assets"
 	root := t.TempDir()
@@ -1109,7 +1173,7 @@ func TestColumnAssetReachabilitySubtractIntervalsInterleavedM15A(t *testing.T) {
 	}
 }
 
-func prepareColumnAssetReachabilityCommandWALDirM15A(t *testing.T) string {
+func prepareColumnAssetReachabilityCommandWALDirM15A(t testing.TB) string {
 	t.Helper()
 	dir, baseLSN := prepareColumnStoreCommandWALDirM10B(t)
 	if baseLSN == 0 {
@@ -1118,7 +1182,7 @@ func prepareColumnAssetReachabilityCommandWALDirM15A(t *testing.T) string {
 	return dir
 }
 
-func writeColumnAssetReachabilityCandidateM15A(t *testing.T, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {
+func writeColumnAssetReachabilityCandidateM15A(t testing.TB, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {
 	t.Helper()
 	cfg := col.Meta().Options.ColumnStore
 	if cfg == nil || cfg.AssetManager == nil {
