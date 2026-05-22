@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -122,6 +123,14 @@ func TestColumnQueryPlannerM11BChoosesExpectedKindsForOneFixture(t *testing.T) {
 			}
 			if !plan.Diagnostics.RecoveryAuthoritative && plan.Kind != ColumnQueryPlanRowStoreBaseline && plan.Kind != ColumnQueryPlanBTreeIndexBaseline {
 				t.Fatalf("physical plan did not record recovery-authoritative manifest: %+v", plan.Diagnostics)
+			}
+			if tc.want == ColumnQueryPlanAggregateMetadata {
+				if plan.Diagnostics.ScheduledGranules != base.Capabilities.GranuleCount || plan.Diagnostics.WorkerCount != 1 {
+					t.Fatalf("aggregate metadata diagnostics=%+v want scan-backed granules=%d worker=1", plan.Diagnostics, base.Capabilities.GranuleCount)
+				}
+				if !strings.Contains(plan.Diagnostics.Reason, "scan-backed") {
+					t.Fatalf("aggregate metadata reason=%q want scan-backed disclosure", plan.Diagnostics.Reason)
+				}
 			}
 		})
 	}
@@ -1214,65 +1223,127 @@ func TestColumnSkipScanIntoM11BReusesScratchWithoutAllocating(t *testing.T) {
 	}
 }
 
-func TestColumnQueryPlannerM14APopulatesManifestCapabilitiesButKeepsForcedPhysicalDisabled(t *testing.T) {
+func TestColumnQueryPlannerM14BRoutesForcedPhysicalPlansFromManifestCapabilities(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(32)
 	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
 	defer closeFn()
 
-	req := ColumnQueryPlanRequest{
-		Name:             "m14a_serial",
-		ProjectedColumns: []string{"time_us", "kind"},
-		ForceKind:        ColumnQueryPlanSerialColumnScan,
-		Capabilities: ColumnQueryPlannerCapabilities{
-			SerialColumnScan:   true,
-			AggregateMetadata:  true,
-			ParallelColumnScan: true,
-			PhysicalAssetCount: 999,
-			PartCount:          999,
-			GranuleCount:       999,
-			MaxParallelWorkers: 4,
+	tests := []struct {
+		name     string
+		req      ColumnQueryPlanRequest
+		wantKind ColumnQueryPlanKind
+		workers  int
+	}{
+		{
+			name: "serial",
+			req: ColumnQueryPlanRequest{
+				Name:             "m14b_serial",
+				ProjectedColumns: []string{"time_us", "kind"},
+				ForceKind:        ColumnQueryPlanSerialColumnScan,
+			},
+			wantKind: ColumnQueryPlanSerialColumnScan,
+			workers:  1,
+		},
+		{
+			name: "aggregate metadata",
+			req: ColumnQueryPlanRequest{
+				Name:                  "m14b_aggregate",
+				ProjectedColumns:      []string{"time_us", "did"},
+				AggregateMetadataName: "min_time_us",
+				ForceKind:             ColumnQueryPlanAggregateMetadata,
+			},
+			wantKind: ColumnQueryPlanAggregateMetadata,
+			workers:  1,
 		},
 	}
-	plan, err := reopened.PlanColumnQuery(req)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := tc.req
+			req.Capabilities = ColumnQueryPlannerCapabilities{
+				SerialColumnScan:       true,
+				AggregateMetadata:      true,
+				ParallelColumnScan:     true,
+				PhysicalAssetCount:     999,
+				PartCount:              999,
+				GranuleCount:           999,
+				MaxParallelWorkers:     4,
+				PlannerCandidateBudget: 5,
+			}
+			plan, err := reopened.PlanColumnQuery(req)
+			if err != nil {
+				t.Fatalf("PlanColumnQuery: %v", err)
+			}
+			if !plan.Supported {
+				t.Fatalf("forced physical plan unsupported: %+v", plan)
+			}
+			if plan.Kind != tc.wantKind {
+				t.Fatalf("plan kind=%q want %q diagnostics=%+v", plan.Kind, tc.wantKind, plan.Diagnostics)
+			}
+			if tc.workers > 0 && plan.Diagnostics.WorkerCount != tc.workers {
+				t.Fatalf("worker count=%d want %d diagnostics=%+v", plan.Diagnostics.WorkerCount, tc.workers, plan.Diagnostics)
+			}
+			if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
+				t.Fatalf("physical asset count=%d want real manifest-derived count", got)
+			}
+			if got, want := plan.Diagnostics.PartCount, plan.Diagnostics.PhysicalAssetCount; got != want {
+				t.Fatalf("part count=%d want physical asset count %d", got, want)
+			}
+			if got, want := plan.Diagnostics.GranuleCount, plan.Diagnostics.PartCount; got != want {
+				t.Fatalf("granule count=%d want part-count fallback %d", got, want)
+			}
+			if got, want := plan.Diagnostics.ParallelWorkUnits, plan.Diagnostics.GranuleCount; got != want {
+				t.Fatalf("parallel work units=%d want granule count %d", got, want)
+			}
+			if got, want := plan.Diagnostics.DeclaredColumnCount, 3; got != want {
+				t.Fatalf("declared columns=%d want %d", got, want)
+			}
+			if got, want := plan.Diagnostics.AggregateMetadataCount, 3; got != want {
+				t.Fatalf("aggregate metadata count=%d want %d", got, want)
+			}
+			if plan.Diagnostics.MutationParts != 0 {
+				t.Fatalf("mutation parts=%d want zero for insert-only fixture", plan.Diagnostics.MutationParts)
+			}
+			if plan.Diagnostics.VisibilityMetadata {
+				t.Fatalf("visibility metadata unexpectedly set for insert-only fixture: %+v", plan.Diagnostics)
+			}
+			if !plan.Diagnostics.RecoveryAuthoritative || plan.Diagnostics.SelectedManifestRoot == 0 || plan.Diagnostics.SelectedManifestGen == 0 || plan.Diagnostics.AppliedCommandLSN == 0 {
+				t.Fatalf("manifest diagnostics were not populated from recovery-authoritative state: %+v", plan.Diagnostics)
+			}
+		})
+	}
+
+	parallelCollection, parallelClose := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer parallelClose()
+	parallel, err := parallelCollection.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14b_parallel",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanParallelColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:       true,
+			AggregateMetadata:      true,
+			ParallelColumnScan:     true,
+			PhysicalAssetCount:     999,
+			PartCount:              999,
+			GranuleCount:           999,
+			MaxParallelWorkers:     4,
+			PlannerCandidateBudget: 5,
+		},
+	})
 	if err != nil {
-		t.Fatalf("PlanColumnQuery: %v", err)
+		t.Fatalf("PlanColumnQuery parallel: %v", err)
 	}
-	if plan.Supported {
-		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
+	if !parallel.Supported || parallel.Kind != ColumnQueryPlanParallelColumnScan {
+		t.Fatalf("forced parallel plan unsupported: %+v", parallel)
 	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
-		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	if got, want := parallel.Diagnostics.WorkerCount, 4; got != want {
+		t.Fatalf("worker count=%d want %d diagnostics=%+v", got, want, parallel.Diagnostics)
 	}
-	if got := plan.Diagnostics.PhysicalAssetCount; got <= 0 || got == 999 {
-		t.Fatalf("physical asset count=%d want real manifest-derived count", got)
-	}
-	if got, want := plan.Diagnostics.PartCount, plan.Diagnostics.PhysicalAssetCount; got != want {
-		t.Fatalf("part count=%d want physical asset count %d", got, want)
-	}
-	if got, want := plan.Diagnostics.GranuleCount, plan.Diagnostics.PartCount; got != want {
-		t.Fatalf("granule count=%d want part-count fallback %d", got, want)
-	}
-	if got, want := plan.Diagnostics.ParallelWorkUnits, plan.Diagnostics.GranuleCount; got != want {
-		t.Fatalf("parallel work units=%d want granule count %d", got, want)
-	}
-	if got, want := plan.Diagnostics.DeclaredColumnCount, 3; got != want {
-		t.Fatalf("declared columns=%d want %d", got, want)
-	}
-	if got, want := plan.Diagnostics.AggregateMetadataCount, 3; got != want {
-		t.Fatalf("aggregate metadata count=%d want %d", got, want)
-	}
-	if plan.Diagnostics.MutationParts != 0 {
-		t.Fatalf("mutation parts=%d want zero for insert-only fixture", plan.Diagnostics.MutationParts)
-	}
-	if plan.Diagnostics.VisibilityMetadata {
-		t.Fatalf("visibility metadata unexpectedly set for insert-only fixture: %+v", plan.Diagnostics)
-	}
-	if !plan.Diagnostics.RecoveryAuthoritative || plan.Diagnostics.SelectedManifestRoot == 0 || plan.Diagnostics.SelectedManifestGen == 0 || plan.Diagnostics.AppliedCommandLSN == 0 {
-		t.Fatalf("manifest diagnostics were not populated from recovery-authoritative state: %+v", plan.Diagnostics)
+	if got := parallel.Diagnostics.PhysicalAssetCount; got < 4 || got == 999 {
+		t.Fatalf("physical asset count=%d want real multi-generation assets", got)
 	}
 }
 
-func TestColumnQueryPlannerM14APopulatesMutationVisibilityCapabilities(t *testing.T) {
+func TestColumnQueryPlannerM14BRoutesSerialMutationVisibilityButNotParallel(t *testing.T) {
 	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
 	defer closeFn()
 
@@ -1293,11 +1364,8 @@ func TestColumnQueryPlannerM14APopulatesMutationVisibilityCapabilities(t *testin
 	if err != nil {
 		t.Fatalf("PlanColumnQuery: %v", err)
 	}
-	if plan.Supported {
-		t.Fatalf("forced physical mutation plan unexpectedly supported before M14B: %+v", plan)
-	}
-	if got, want := plan.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedSerialPhysicalDisabledReason; got != want {
-		t.Fatalf("unsupported reason=%q want %q diagnostics=%+v", got, want, plan.Diagnostics)
+	if !plan.Supported || plan.Kind != ColumnQueryPlanSerialColumnScan {
+		t.Fatalf("forced serial mutation plan not routed through physical visibility path: %+v", plan)
 	}
 	if got := plan.Diagnostics.PhysicalAssetCount; got <= 1 || got == 999 {
 		t.Fatalf("physical asset count=%d want real multi-part mutation manifest count", got)
@@ -1314,6 +1382,47 @@ func TestColumnQueryPlannerM14APopulatesMutationVisibilityCapabilities(t *testin
 	if got, want := plan.Diagnostics.GranuleCount, plan.Diagnostics.PartCount; got != want {
 		t.Fatalf("granule count=%d want part-count fallback %d", got, want)
 	}
+
+	parallel, err := reopened.PlanColumnQuery(ColumnQueryPlanRequest{
+		Name:             "m14b_parallel_mutation",
+		ProjectedColumns: []string{"time_us", "kind"},
+		ForceKind:        ColumnQueryPlanParallelColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			MaxParallelWorkers: 4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnQuery parallel: %v", err)
+	}
+	if parallel.Supported {
+		t.Fatalf("parallel mutation plan should fail closed until partitioned visibility execution lands: %+v", parallel)
+	}
+	if got, want := parallel.Diagnostics.UnsupportedPlanReason, columnQueryUnsupportedParallelMutationPartsReason; got != want {
+		t.Fatalf("parallel unsupported reason=%q want %q diagnostics=%+v", got, want, parallel.Diagnostics)
+	}
+}
+
+func openColumnPhysicalInsertMultiGenerationFixtureM14B(t *testing.T, batches int) (*Collection, func()) {
+	t.Helper()
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	col := openColumnStoreCollectionM10B(t, d)
+	for i := 0; i < batches; i++ {
+		id := []byte(fmt.Sprintf("e%d", i))
+		doc := []byte(fmt.Sprintf(`{"time_us":%d,"kind":"kind_%02d","did":"did_%02d","payload":"p%d"}`, i+1, i%4, i%8, i))
+		if _, err := col.InsertBatch([][]byte{id}, [][]byte{doc}); err != nil {
+			_ = d.Close()
+			t.Fatalf("InsertBatch %d: %v", i, err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close before reopen: %v", err)
+	}
+	reopen := openCollectionCommandWALDB(t, dir)
+	return openColumnStoreCollectionM10B(t, reopen), func() { _ = reopen.Close() }
 }
 
 func TestColumnQueryPlannerM14AFailsClosedWhenDBUnavailable(t *testing.T) {
@@ -1387,9 +1496,6 @@ func TestColumnQueryPlannerM14AIgnoresCallerSuppliedCapabilityError(t *testing.T
 	if err != nil {
 		t.Fatalf("PlanColumnQuery: %v", err)
 	}
-	if plan.Supported {
-		t.Fatalf("forced physical plan unexpectedly supported: %+v", plan)
-	}
 	if got := plan.Diagnostics.CapabilityError; got != "" {
 		t.Fatalf("capability error=%q want caller-supplied value ignored", got)
 	}
@@ -1462,7 +1568,7 @@ func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if plan.Supported || plan.Diagnostics.UnsupportedPlanReason != columnQueryUnsupportedSerialPhysicalDisabledReason {
+			if !plan.Supported || plan.Kind != ColumnQueryPlanSerialColumnScan {
 				b.Fatalf("unexpected plan: %+v", plan)
 			}
 			assets += plan.Diagnostics.PhysicalAssetCount
@@ -1491,7 +1597,7 @@ func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if plan.Supported || !plan.Diagnostics.VisibilityMetadata {
+			if !plan.Supported || !plan.Diagnostics.VisibilityMetadata {
 				b.Fatalf("unexpected mutation plan: %+v", plan)
 			}
 			mutationParts += plan.Diagnostics.MutationParts

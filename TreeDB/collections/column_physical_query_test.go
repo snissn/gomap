@@ -252,6 +252,232 @@ func TestColumnPhysicalQueryKeepsInsertOnlyMultiGenerationOnDirectPathM13C(t *te
 	}
 }
 
+func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 8)
+	defer closeFn()
+
+	tests := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+	}{
+		{
+			name: "count",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
+		},
+		{
+			name: "span",
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			serial, err := reopened.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("serial RunColumnPhysicalQuery: %v", err)
+			}
+			parallel, err := reopened.RunColumnPhysicalQueryParallel(tc.req, 4)
+			if err != nil {
+				t.Fatalf("parallel RunColumnPhysicalQuery: %v", err)
+			}
+			if !equalColumnPhysicalQueryGroups(parallel.Groups, serial.Groups) {
+				t.Fatalf("parallel groups=%+v want serial %+v", parallel.Groups, serial.Groups)
+			}
+			if parallel.Diagnostics.RowMaterializations != 0 {
+				t.Fatalf("parallel row materializations=%d want zero diagnostics=%+v", parallel.Diagnostics.RowMaterializations, parallel.Diagnostics)
+			}
+			if got, want := parallel.Diagnostics.ReduceRows, serial.Diagnostics.ReduceRows; got != want {
+				t.Fatalf("parallel reduce rows=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
+			}
+			if got, want := parallel.Diagnostics.ScheduledGranules, serial.Diagnostics.ScheduledGranules; got != want {
+				t.Fatalf("parallel scheduled granules=%d want serial %d diagnostics=%+v", got, want, parallel.Diagnostics)
+			}
+			if parallel.Diagnostics.PhysicalBytesScanned != serial.Diagnostics.PhysicalBytesScanned {
+				t.Fatalf("parallel bytes=%d want serial %d diagnostics=%+v", parallel.Diagnostics.PhysicalBytesScanned, serial.Diagnostics.PhysicalBytesScanned, parallel.Diagnostics)
+			}
+			overPartitioned, err := reopened.RunColumnPhysicalQueryParallel(tc.req, 128)
+			if err != nil {
+				t.Fatalf("over-partitioned RunColumnPhysicalQueryParallel: %v", err)
+			}
+			if !equalColumnPhysicalQueryGroups(overPartitioned.Groups, serial.Groups) {
+				t.Fatalf("over-partitioned groups=%+v want serial %+v", overPartitioned.Groups, serial.Groups)
+			}
+		})
+	}
+}
+
+func equalColumnPhysicalQueryGroups(left, right []ColumnPhysicalQueryGroup) bool {
+	left = append([]ColumnPhysicalQueryGroup(nil), left...)
+	right = append([]ColumnPhysicalQueryGroup(nil), right...)
+	sort.Slice(left, func(i, j int) bool {
+		if left[i].Key != left[j].Key {
+			return left[i].Key < left[j].Key
+		}
+		if left[i].Count != left[j].Count {
+			return left[i].Count < left[j].Count
+		}
+		return left[i].Int64 < left[j].Int64
+	})
+	sort.Slice(right, func(i, j int) bool {
+		if right[i].Key != right[j].Key {
+			return right[i].Key < right[j].Key
+		}
+		if right[i].Count != right[j].Count {
+			return right[i].Count < right[j].Count
+		}
+		return right[i].Int64 < right[j].Int64
+	})
+	return reflect.DeepEqual(left, right)
+}
+
+func TestColumnPhysicalQuerySnapshotViewSingleRefUsesPinnedManifestM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	if got, want := len(view.AssetRefs), 1; got != want {
+		t.Fatalf("asset refs=%d want single-ref fixture", got)
+	}
+	if _, err := reopened.InsertBatch([][]byte{[]byte("e_published_after_pin")}, [][]byte{
+		[]byte(`{"time_us":1700000000000999,"kind":"after_pin","did":"did_after","payload":"ignored"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch after pinned view: %v", err)
+	}
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	pinned, err := reopened.runColumnPhysicalQueryInSnapshotView(view, req)
+	if err != nil {
+		t.Fatalf("runColumnPhysicalQueryInSnapshotView: %v", err)
+	}
+	latest, err := reopened.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("latest RunColumnPhysicalQuery: %v", err)
+	}
+	if got, want := pinned.Diagnostics.ReduceRows, 16; got != want {
+		t.Fatalf("pinned reduce rows=%d want %d diagnostics=%+v", got, want, pinned.Diagnostics)
+	}
+	if got, want := latest.Diagnostics.ReduceRows, 17; got != want {
+		t.Fatalf("latest reduce rows=%d want %d diagnostics=%+v", got, want, latest.Diagnostics)
+	}
+	if _, ok := columnPhysicalQueryGroupCountsM14B(pinned.Groups)["after_pin"]; ok {
+		t.Fatalf("pinned view included post-pin row: groups=%+v diagnostics=%+v", pinned.Groups, pinned.Diagnostics)
+	}
+	if got := columnPhysicalQueryGroupCountsM14B(latest.Groups)["after_pin"]; got != 1 {
+		t.Fatalf("latest view after_pin count=%d want 1 groups=%+v diagnostics=%+v", got, latest.Groups, latest.Diagnostics)
+	}
+}
+
+func TestColumnPhysicalQueryParallelFailsClosedForSerialShapesM14B(t *testing.T) {
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	multiRef, closeMulti := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeMulti()
+	if _, err := multiRef.RunColumnPhysicalQueryParallel(req, 1); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "at least two workers") {
+		t.Fatalf("RunColumnPhysicalQueryParallel one worker err=%v want fail-closed worker-count error", err)
+	}
+
+	singleRef, closeSingle := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeSingle()
+	if _, err := singleRef.RunColumnPhysicalQueryParallel(req, 4); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "more than one asset ref") {
+		t.Fatalf("RunColumnPhysicalQueryParallel one ref err=%v want fail-closed asset-ref error", err)
+	}
+}
+
+func TestColumnPhysicalQueryParallelFailsClosedForMutationVisibilityM14B(t *testing.T) {
+	reopened, closeFn, _ := openColumnPhysicalMutationFixtureM13C(t, 64)
+	defer closeFn()
+
+	for _, workers := range []int{1, 4} {
+		_, err := reopened.RunColumnPhysicalQueryParallel(ColumnPhysicalQueryRequest{
+			Kind:        ColumnPhysicalQueryGroupCount,
+			GroupColumn: "kind",
+		}, workers)
+		if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "partitioned visibility execution") {
+			t.Fatalf("RunColumnPhysicalQueryParallel workers=%d err=%v want fail-closed partitioned visibility error", workers, err)
+		}
+	}
+}
+
+func columnPhysicalQueryGroupCountsM14B(groups []ColumnPhysicalQueryGroup) map[string]int {
+	out := make(map[string]int, len(groups))
+	for _, group := range groups {
+		out[group.Key] = group.Count
+	}
+	return out
+}
+
+func TestColumnPhysicalScanHonorsCancellationBeforeSchedulingRefsM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	diag, err := reopened.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns: []string{"kind"},
+		Visitor: func(columnPhysicalScanRowView) error {
+			t.Fatal("visitor should not run after cancellation")
+			return nil
+		},
+		RequireInsertOnly: true,
+		ShouldCancel:      func() bool { return true },
+	})
+	if !errors.Is(err, errColumnPhysicalScanCancelled) {
+		t.Fatalf("scan err=%v want cancellation", err)
+	}
+	if diag.ScheduledGranules != 0 || diag.DecodedBlocks != 0 || diag.RowsScanned != 0 {
+		t.Fatalf("cancelled scan scheduled work: %+v", diag)
+	}
+}
+
+func TestColumnPhysicalScanRejectsRemainderWithoutModuloM14B(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeFn()
+
+	view, closeView, err := reopened.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	_, err = reopened.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns:    []string{"kind"},
+		Visitor:             func(columnPhysicalScanRowView) error { return nil },
+		RequireInsertOnly:   true,
+		RefOrdinalRemainder: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires non-zero modulo") {
+		t.Fatalf("scan err=%v want remainder without modulo rejection", err)
+	}
+}
+
+func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t *testing.T) {
+	left := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 1, SegmentFileCacheHits: 2, SegmentFileCacheMisses: 3}
+	right := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 3, SegmentFileCacheHits: 5, SegmentFileCacheMisses: 7}
+	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
+	if got, want := merged.MutationParts, 2; got != want {
+		t.Fatalf("mutation parts=%d want view-level max %d", got, want)
+	}
+	if got, want := merged.DecodedBlocks, 4; got != want {
+		t.Fatalf("decoded blocks=%d want summed work %d", got, want)
+	}
+	if got, want := merged.SegmentFileCacheHits, uint64(7); got != want {
+		t.Fatalf("cache hits=%d want summed %d", got, want)
+	}
+	if got, want := merged.SegmentFileCacheMisses, uint64(10); got != want {
+		t.Fatalf("cache misses=%d want summed %d", got, want)
+	}
+}
+
 func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

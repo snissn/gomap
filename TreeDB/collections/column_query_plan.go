@@ -22,6 +22,7 @@ const (
 	columnQueryUnsupportedSerialPhysicalDisabledReason    = "serial physical column scan capability is disabled"
 	columnQueryUnsupportedAggregateMetadataDisabledReason = "aggregate metadata capability is disabled"
 	columnQueryUnsupportedParallelPhysicalDisabledReason  = "parallel physical column scan capability is disabled"
+	columnQueryUnsupportedParallelMutationPartsReason     = "parallel physical column scan is disabled for mutation visibility metadata"
 )
 
 var ErrColumnQueryPlanUnsupported = errors.New("collections: column query plan unsupported")
@@ -61,11 +62,11 @@ type ColumnQueryPlannerCapabilities struct {
 	PartCount int
 	// GranuleCount is the authoritative schedulable-unit count for parallel
 	// planning when the column asset layer exposes adaptive marks/granules.
-	GranuleCount            int
-	MaxParallelWorkers      int
-	DecodedBlockCacheHits   uint64
-	DecodedBlockCacheMisses uint64
-	PlannerCandidateBudget  int
+	GranuleCount           int
+	MaxParallelWorkers     int
+	SegmentFileCacheHits   uint64
+	SegmentFileCacheMisses uint64
+	PlannerCandidateBudget int
 	// M14A manifest-derived diagnostics. These do not enable execution by
 	// themselves; M14B owns routing physical plans to physical scanners.
 	MutationParts          int
@@ -94,34 +95,34 @@ type ColumnQueryPlanRequest struct {
 }
 
 type ColumnQueryPlanDiagnostics struct {
-	Reason                  string
-	CandidatePlans          int
-	ProjectedColumns        int
-	Predicates              int
-	RecoveryAuthoritative   bool
-	CapabilityError         string
-	PhysicalAssetCount      int
-	PartCount               int
-	GranuleCount            int
-	MutationParts           int
-	DeclaredColumnCount     int
-	AggregateMetadataCount  int
-	VisibilityMetadata      bool
-	ParallelWorkUnits       int
-	MaxParallelWorkers      int
-	WorkerCount             int
-	ScheduledGranules       int
-	SkippedGranules         int
-	DecodedBlockCacheHits   uint64
-	DecodedBlockCacheMisses uint64
-	SelectedIndexName       string
-	SelectedIndexField      string
-	SelectedManifestRoot    uint64
-	SelectedManifestGen     uint64
-	RecoveryManifestGen     uint64
-	AppliedCommandLSN       uint64
-	UnsupportedPlanKind     ColumnQueryPlanKind
-	UnsupportedPlanReason   string
+	Reason                 string
+	CandidatePlans         int
+	ProjectedColumns       int
+	Predicates             int
+	RecoveryAuthoritative  bool
+	CapabilityError        string
+	PhysicalAssetCount     int
+	PartCount              int
+	GranuleCount           int
+	MutationParts          int
+	DeclaredColumnCount    int
+	AggregateMetadataCount int
+	VisibilityMetadata     bool
+	ParallelWorkUnits      int
+	MaxParallelWorkers     int
+	WorkerCount            int
+	ScheduledGranules      int
+	SkippedGranules        int
+	SegmentFileCacheHits   uint64
+	SegmentFileCacheMisses uint64
+	SelectedIndexName      string
+	SelectedIndexField     string
+	SelectedManifestRoot   uint64
+	SelectedManifestGen    uint64
+	RecoveryManifestGen    uint64
+	AppliedCommandLSN      uint64
+	UnsupportedPlanKind    ColumnQueryPlanKind
+	UnsupportedPlanReason  string
 }
 
 type ColumnQueryPlan struct {
@@ -157,7 +158,7 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 		return ColumnQueryPlan{}, errCollectionNotFound
 	}
 	if columnStoreEnabled && columnQueryRequestNeedsPhysicalCapabilityDiscovery(req) {
-		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14A(collectionName, rootID, cfg, req.Capabilities)
+		req.Capabilities = c.deriveColumnQueryPlannerCapabilitiesM14B(collectionName, rootID, cfg, req)
 	}
 	identity, identityOK := columnStoreCacheIdentity(catalog, systemRoot, commitSeq)
 	return planColumnQueryForCatalog(catalog, identity, identityOK, req), nil
@@ -167,8 +168,8 @@ func columnQueryRequestNeedsPhysicalCapabilityDiscovery(req ColumnQueryPlanReque
 	return req.ForceKind != ColumnQueryPlanRowStoreBaseline && req.ForceKind != ColumnQueryPlanBTreeIndexBaseline
 }
 
-func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14A(collectionName string, rootID uint64, cfg ColumnStoreConfig, requested ColumnQueryPlannerCapabilities) ColumnQueryPlannerCapabilities {
-	caps := requested
+func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName string, rootID uint64, cfg ColumnStoreConfig, req ColumnQueryPlanRequest) ColumnQueryPlannerCapabilities {
+	caps := req.Capabilities
 	caps.SerialColumnScan = false
 	caps.AggregateMetadata = false
 	caps.ParallelColumnScan = false
@@ -235,7 +236,21 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14A(collectionName str
 	caps.MutationParts = manifestCaps.MutationParts
 	caps.VisibilityMetadata = caps.MutationParts > 0
 	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
+	if columnQueryForcedPhysicalExecution(req.ForceKind) && caps.PhysicalAssetCount > 0 {
+		caps.SerialColumnScan = true
+		caps.AggregateMetadata = len(cfg.AggregateMetadata) > 0
+		caps.ParallelColumnScan = caps.MutationParts == 0 && columnQueryParallelWorkerCount(caps) > 1
+	}
 	return caps
+}
+
+func columnQueryForcedPhysicalExecution(kind ColumnQueryPlanKind) bool {
+	switch kind {
+	case ColumnQueryPlanSerialColumnScan, ColumnQueryPlanAggregateMetadata, ColumnQueryPlanParallelColumnScan:
+		return true
+	default:
+		return false
+	}
 }
 
 func (caps *ColumnQueryPlannerCapabilities) setCapabilityError(reason string) {
@@ -250,26 +265,26 @@ func (caps ColumnQueryPlannerCapabilities) effectiveCapabilityError() string {
 
 func planColumnQueryForCatalog(catalog *collectionCatalog, identity ColumnStoreCacheIdentity, identityOK bool, req ColumnQueryPlanRequest) ColumnQueryPlan {
 	diag := ColumnQueryPlanDiagnostics{
-		CandidatePlans:          columnQueryPlannerCandidateCount(catalog, identity, identityOK, req),
-		ProjectedColumns:        len(req.ProjectedColumns),
-		Predicates:              len(req.Predicates),
-		RecoveryAuthoritative:   columnQueryManifestRecoveryAuthoritative(identity, identityOK),
-		CapabilityError:         req.Capabilities.effectiveCapabilityError(),
-		PhysicalAssetCount:      req.Capabilities.PhysicalAssetCount,
-		PartCount:               req.Capabilities.PartCount,
-		GranuleCount:            req.Capabilities.GranuleCount,
-		MutationParts:           req.Capabilities.MutationParts,
-		DeclaredColumnCount:     req.Capabilities.DeclaredColumnCount,
-		AggregateMetadataCount:  req.Capabilities.AggregateMetadataCount,
-		VisibilityMetadata:      req.Capabilities.VisibilityMetadata,
-		ParallelWorkUnits:       req.Capabilities.ParallelWorkUnits,
-		MaxParallelWorkers:      req.Capabilities.MaxParallelWorkers,
-		DecodedBlockCacheHits:   req.Capabilities.DecodedBlockCacheHits,
-		DecodedBlockCacheMisses: req.Capabilities.DecodedBlockCacheMisses,
-		SelectedManifestRoot:    identity.ManifestRoot,
-		SelectedManifestGen:     identity.ManifestGeneration,
-		RecoveryManifestGen:     identity.RecoveryAuthoritativeGeneration,
-		AppliedCommandLSN:       identity.RecoveryAuthoritativeAppliedCommandLSN,
+		CandidatePlans:         columnQueryPlannerCandidateCount(catalog, identity, identityOK, req),
+		ProjectedColumns:       len(req.ProjectedColumns),
+		Predicates:             len(req.Predicates),
+		RecoveryAuthoritative:  columnQueryManifestRecoveryAuthoritative(identity, identityOK),
+		CapabilityError:        req.Capabilities.effectiveCapabilityError(),
+		PhysicalAssetCount:     req.Capabilities.PhysicalAssetCount,
+		PartCount:              req.Capabilities.PartCount,
+		GranuleCount:           req.Capabilities.GranuleCount,
+		MutationParts:          req.Capabilities.MutationParts,
+		DeclaredColumnCount:    req.Capabilities.DeclaredColumnCount,
+		AggregateMetadataCount: req.Capabilities.AggregateMetadataCount,
+		VisibilityMetadata:     req.Capabilities.VisibilityMetadata,
+		ParallelWorkUnits:      req.Capabilities.ParallelWorkUnits,
+		MaxParallelWorkers:     req.Capabilities.MaxParallelWorkers,
+		SegmentFileCacheHits:   req.Capabilities.SegmentFileCacheHits,
+		SegmentFileCacheMisses: req.Capabilities.SegmentFileCacheMisses,
+		SelectedManifestRoot:   identity.ManifestRoot,
+		SelectedManifestGen:    identity.ManifestGeneration,
+		RecoveryManifestGen:    identity.RecoveryAuthoritativeGeneration,
+		AppliedCommandLSN:      identity.RecoveryAuthoritativeAppliedCommandLSN,
 	}
 	if reason := physicalColumnQueryUnsupportedReasonForFallback(catalog, req); reason != "" {
 		diag.UnsupportedPlanReason = reason
@@ -323,7 +338,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
 		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
-			plan.Diagnostics.Reason = "forced aggregate metadata plan"
+			plan.Diagnostics.Reason = "forced scan-backed aggregate metadata plan"
 			return plan
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
@@ -358,8 +373,9 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		return false, ColumnQueryPlan{}
 	}
-	diag.Reason = "selected aggregate metadata"
-	diag.ScheduledGranules = 0
+	diag.Reason = "selected scan-backed aggregate metadata"
+	diag.ScheduledGranules = req.Capabilities.GranuleCount
+	diag.WorkerCount = 1
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}
 }
 
@@ -415,6 +431,9 @@ func physicalColumnQueryUnsupportedReason(identity ColumnStoreCacheIdentity, ide
 			return "query did not request aggregate metadata"
 		}
 	case ColumnQueryPlanParallelColumnScan:
+		if req.Capabilities.MutationParts > 0 {
+			return columnQueryUnsupportedParallelMutationPartsReason
+		}
 		if !req.Capabilities.ParallelColumnScan {
 			return columnQueryUnsupportedParallelPhysicalDisabledReason
 		}

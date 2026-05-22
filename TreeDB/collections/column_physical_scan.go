@@ -14,9 +14,12 @@ import (
 )
 
 type columnPhysicalScanRequest struct {
-	ProjectedColumns  []string
-	Visitor           func(columnPhysicalScanRowView) error
-	RequireInsertOnly bool
+	ProjectedColumns    []string
+	Visitor             func(columnPhysicalScanRowView) error
+	RequireInsertOnly   bool
+	RefOrdinalModulo    int
+	RefOrdinalRemainder int
+	ShouldCancel        func() bool
 }
 
 type columnPhysicalScanDiagnostics struct {
@@ -35,8 +38,10 @@ type columnPhysicalScanDiagnostics struct {
 	DeletedRows      int
 	ProjectedColumns int
 	// Counts full-document row materialization; M13A emits declared-column row views only.
-	RowMaterializations  int
-	PhysicalBytesScanned int64
+	RowMaterializations    int
+	PhysicalBytesScanned   int64
+	SegmentFileCacheHits   uint64
+	SegmentFileCacheMisses uint64
 }
 
 type columnPhysicalScanRowView struct {
@@ -80,24 +85,47 @@ type columnManifestAssetRefForScan struct {
 	Reason ColumnPublishOperation
 }
 
+type columnPhysicalScanSnapshotView struct {
+	CollectionName     string
+	Config             ColumnStoreConfig
+	ColumnStoreEnabled bool
+	AssetRefs          []columnManifestAssetRefForScan
+	MutationParts      int
+	Diagnostics        columnPhysicalScanDiagnostics
+	ColumnAssetRootDir string
+	AssetNamespace     string
+}
+
 var errColumnPhysicalAssetManifestOperationMismatch = errors.New("collections: column physical asset operation does not match manifest reason")
 
 func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (columnPhysicalScanDiagnostics, error) {
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotView()
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		return view.Diagnostics, err
+	}
+	return c.scanColumnPhysicalRowsInSnapshotView(view, req)
+}
+
+func (c *Collection) prepareColumnPhysicalScanSnapshotView() (columnPhysicalScanSnapshotView, func(), error) {
 	if c == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionNil
+		return columnPhysicalScanSnapshotView{}, nil, errCollectionNil
 	}
 	if c.db == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionDBNil
+		return columnPhysicalScanSnapshotView{}, nil, errCollectionDBNil
 	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionDBNil
+		return columnPhysicalScanSnapshotView{}, nil, errCollectionDBNil
 	}
-	defer func() { _ = snap.Close() }()
+	closeView := func() { _ = snap.Close() }
 
 	catalog, err := c.catalogForSnapshot(snap)
 	if err != nil {
-		return columnPhysicalScanDiagnostics{}, err
+		closeView()
+		return columnPhysicalScanSnapshotView{}, nil, err
 	}
 	collectionName := catalog.meta.Name
 	rootName := collectionColumnManifestRootName(collectionName)
@@ -109,7 +137,12 @@ func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (colu
 		cfg = cfgPtr.copy()
 	}
 
-	return c.scanColumnPhysicalRowsAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, req)
+	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled)
+	if err != nil {
+		closeView()
+		return view, nil, err
+	}
+	return view, closeView, nil
 }
 
 func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
@@ -121,36 +154,47 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 	columnStoreEnabled bool,
 	req columnPhysicalScanRequest,
 ) (columnPhysicalScanDiagnostics, error) {
+	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshot(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled)
+	if err != nil {
+		return view.Diagnostics, err
+	}
+	return c.scanColumnPhysicalRowsInSnapshotView(view, req)
+}
+
+func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
+	snap *backenddb.Snapshot,
+	catalog *collectionCatalog,
+	collectionName string,
+	rootID uint64,
+	cfg ColumnStoreConfig,
+	columnStoreEnabled bool,
+) (columnPhysicalScanSnapshotView, error) {
 	if c == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionNil
+		return columnPhysicalScanSnapshotView{}, errCollectionNil
 	}
 	if c.db == nil || snap == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionDBNil
+		return columnPhysicalScanSnapshotView{}, errCollectionDBNil
 	}
 	if catalog == nil {
-		return columnPhysicalScanDiagnostics{}, errCollectionNotFound
+		return columnPhysicalScanSnapshotView{}, errCollectionNotFound
 	}
 	if !columnStoreEnabled || !cfg.Enabled {
-		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires enabled column_store")
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: physical column scan requires enabled column_store")
 	}
 	if cfg.ActiveManifest == nil {
-		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires active column manifest")
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: physical column scan requires active column manifest")
 	}
 	if cfg.RecoveryAuthoritativeManifest == nil {
-		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires recovery-authoritative column manifest")
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: physical column scan requires recovery-authoritative column manifest")
 	}
 	if !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
-		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires active recovery-authoritative manifest")
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: physical column scan requires active recovery-authoritative manifest")
 	}
 	if cfg.AssetManager == nil {
-		return columnPhysicalScanDiagnostics{}, errors.New("collections: physical column scan requires column asset manager metadata")
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: physical column scan requires column asset manager metadata")
 	}
 	if rootID == 0 {
-		return columnPhysicalScanDiagnostics{}, fmt.Errorf("collections: physical column scan missing manifest root %q", collectionColumnManifestRootName(collectionName))
-	}
-	projection, err := newColumnPhysicalScanProjection(cfg, req.ProjectedColumns)
-	if err != nil {
-		return columnPhysicalScanDiagnostics{}, err
+		return columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: physical column scan missing manifest root %q", collectionColumnManifestRootName(collectionName))
 	}
 
 	diag := columnPhysicalScanDiagnostics{
@@ -158,50 +202,106 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 		ManifestGeneration:         cfg.ActiveManifest.Generation,
 		RecoveryManifestGeneration: cfg.RecoveryAuthoritativeManifest.Generation,
 		AppliedCommandLSN:          cfg.RecoveryAuthoritativeAppliedCommandLSN,
-		ProjectedColumns:           projection.count,
+	}
+	view := columnPhysicalScanSnapshotView{
+		CollectionName:     collectionName,
+		Config:             cfg,
+		ColumnStoreEnabled: columnStoreEnabled,
+		Diagnostics:        diag,
+		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
+		AssetNamespace:     cfg.AssetManager.Namespace,
 	}
 
 	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
-		return diag, err
+		view.Diagnostics = diag
+		return view, err
 	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
 	if err != nil {
-		return diag, err
+		view.Diagnostics = diag
+		return view, err
 	}
 	diag.ManifestRecords = len(records)
 	manifest, err := decodeColumnManifestSnapshotForScan(records)
 	if err != nil {
-		return diag, err
+		view.Diagnostics = diag
+		return view, err
 	}
 	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "physical column scan"); err != nil {
-		return diag, err
+		view.Diagnostics = diag
+		return view, err
 	}
 	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
 	if err != nil {
-		return diag, err
+		view.Diagnostics = diag
+		return view, err
 	}
 	diag.AssetRefs = len(refs)
 	diag.MutationParts = mutationParts
-	diag.ScheduledGranules = len(refs)
-	if req.RequireInsertOnly && mutationParts != 0 {
+	view.AssetRefs = refs
+	view.MutationParts = mutationParts
+	view.Diagnostics = diag
+	return view, nil
+}
+
+func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
+	view columnPhysicalScanSnapshotView,
+	req columnPhysicalScanRequest,
+) (columnPhysicalScanDiagnostics, error) {
+	cfg := view.Config
+	diag := view.Diagnostics
+	if c == nil {
+		return diag, errCollectionNil
+	}
+	if c.db == nil {
+		return diag, errCollectionDBNil
+	}
+	if !view.ColumnStoreEnabled || !cfg.Enabled {
+		return diag, errors.New("collections: physical column scan requires enabled column_store")
+	}
+	if cfg.ActiveManifest == nil {
+		return diag, errors.New("collections: physical column scan requires active column manifest")
+	}
+	projection, err := newColumnPhysicalScanProjection(cfg, req.ProjectedColumns)
+	if err != nil {
+		return diag, err
+	}
+	diag.ProjectedColumns = projection.count
+	if req.RequireInsertOnly && view.MutationParts != 0 {
 		return diag, errColumnPhysicalQueryNeedsVisibility
 	}
-	columnAssetRootDir := c.db.ColumnAssetRootDir()
-	readCache, err := newColumnPhysicalAssetReadCache(columnAssetRootDir, cfg.AssetManager.Namespace)
+	if req.RefOrdinalModulo < 0 {
+		return diag, errors.New("collections: physical column scan ref ordinal modulo cannot be negative")
+	}
+	if req.RefOrdinalModulo == 0 && req.RefOrdinalRemainder != 0 {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d requires non-zero modulo", req.RefOrdinalRemainder)
+	}
+	if req.RefOrdinalModulo > 0 && (req.RefOrdinalRemainder < 0 || req.RefOrdinalRemainder >= req.RefOrdinalModulo) {
+		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", req.RefOrdinalRemainder, req.RefOrdinalModulo)
+	}
+	readCache, err := newColumnPhysicalAssetReadCache(view.ColumnAssetRootDir, view.AssetNamespace)
 	if err != nil {
 		return diag, err
 	}
 	defer func() { _ = readCache.close() }()
 	var rawScratch []byte
-	for _, assetRef := range refs {
+	start, step := columnPhysicalScanRefOrdinalPartition(req)
+	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {
+		assetRef := view.AssetRefs[ordinal]
+		if req.ShouldCancel != nil && req.ShouldCancel() {
+			return diag, errColumnPhysicalScanCancelled
+		}
+		diag.ScheduledGranules++
 		ref := assetRef.Ref
 		raw, err := readCache.read(ref, rawScratch)
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
 		if err != nil {
 			return diag, fmt.Errorf("collections: column physical scan read generation=%d part_id=%d: %w", ref.Generation, ref.PartID, err)
 		}
 		rawScratch = raw
 		diag.PhysicalBytesScanned += int64(len(raw))
-		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collectionName, &cfg, projection, assetRef.Reason, req.Visitor)
+		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, view.CollectionName, &cfg, projection, assetRef.Reason, req.Visitor)
 		if err != nil {
 			if req.RequireInsertOnly && errors.Is(err, errColumnPhysicalAssetManifestOperationMismatch) {
 				return diag, errColumnPhysicalQueryNeedsVisibility
@@ -212,7 +312,16 @@ func (c *Collection) scanColumnPhysicalRowsAtSnapshot(
 		diag.RowsScanned += summary.rows
 		diag.DeletedRows += summary.deleted
 	}
+	diag.SegmentFileCacheHits = readCache.hits
+	diag.SegmentFileCacheMisses = readCache.misses
 	return diag, nil
+}
+
+func columnPhysicalScanRefOrdinalPartition(req columnPhysicalScanRequest) (start int, step int) {
+	if req.RefOrdinalModulo <= 1 {
+		return 0, 1
+	}
+	return req.RefOrdinalRemainder, req.RefOrdinalModulo
 }
 
 func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) (columnPhysicalScanProjection, error) {

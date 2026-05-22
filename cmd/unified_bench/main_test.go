@@ -1938,6 +1938,33 @@ func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 	}
 }
 
+func TestGoToolExecutableFallsBackToRuntimeGOROOTWhenPATHMissing(t *testing.T) {
+	goroot := runtime.GOROOT()
+	if goroot == "" {
+		t.Skip("runtime GOROOT unavailable")
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name = "go.exe"
+	}
+	candidate := filepath.Join(goroot, "bin", name)
+	if info, err := os.Stat(candidate); err != nil || info.IsDir() {
+		t.Skipf("runtime GOROOT go tool unavailable at %s: stat=(%v, %v)", candidate, info, err)
+	}
+	t.Setenv("PATH", "")
+
+	path := goToolExecutable()
+	if path == "go" || path == "" {
+		t.Fatalf("goToolExecutable()=%q, want runtime GOROOT fallback", path)
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("goToolExecutable()=%q, want absolute fallback path", path)
+	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		t.Fatalf("goToolExecutable()=%q stat=(%v, %v), want executable file", path, info, err)
+	}
+}
+
 func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *testing.T) {
 	var events []string
 	profileTmpDir := t.TempDir()
