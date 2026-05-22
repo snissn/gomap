@@ -1873,6 +1873,114 @@ func TestColumnPhysicalQueryAdapterAllocationSlopeM13B(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQueryRunnerParityAndAllocationM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(2048)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	wantHash := columnPhysicalQueryReferenceHashM13B("q1", events)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Fatalf("runner Close: %v", err)
+		}
+	}()
+	for i := 0; i < 3; i++ {
+		result, err := runner.Run()
+		if err != nil {
+			t.Fatalf("runner Run warmup %d: %v", i, err)
+		}
+		if got := columnPhysicalQueryHashLinesM13B(columnPhysicalQueryLinesM13B("q1", result.Groups)); got != wantHash {
+			t.Fatalf("runner q1 hash=%d want %d groups=%+v", got, wantHash, result.Groups)
+		}
+		if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.ReduceRows != len(events) {
+			t.Fatalf("runner diagnostics=%+v want direct reduce over %d rows", result.Diagnostics, len(events))
+		}
+		if i == 0 && result.Diagnostics.SegmentFileCacheMisses == 0 {
+			t.Fatalf("first runner diagnostics=%+v want initial segment cache miss", result.Diagnostics)
+		}
+		if i > 0 && result.Diagnostics.SegmentFileCacheMisses != 0 {
+			t.Fatalf("runner diagnostics=%+v want per-run cache misses reset after warmup", result.Diagnostics)
+		}
+	}
+
+	allocs := testing.AllocsPerRun(20, func() {
+		result, err := runner.Run()
+		if err != nil {
+			panic(fmt.Sprintf("runner Run: %v", err))
+		}
+		if len(result.Groups) != 4 {
+			panic(fmt.Sprintf("runner groups=%d want 4", len(result.Groups)))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("runner q1 warmed allocs/run=%.2f want 0", allocs)
+	}
+}
+
+func TestColumnPhysicalQueryRunnerFailsClosedForUnsupportedShapeM1634(t *testing.T) {
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(128))
+	defer closeFn()
+	if _, err := collection.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "payload",
+	}); !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("PrepareColumnPhysicalQuery unsupported err=%v want ErrColumnQueryPlanUnsupported", err)
+	}
+
+	mutated, closeMutated, _ := openColumnPhysicalMutationFixtureM13C(t, 128)
+	defer closeMutated()
+	if _, err := mutated.PrepareColumnPhysicalQuery(ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "kind",
+	}); !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("PrepareColumnPhysicalQuery mutation err=%v want ErrColumnQueryPlanUnsupported", err)
+	}
+}
+
+func TestColumnPhysicalQueryGroupSortHybridM1634(t *testing.T) {
+	groups := make([]ColumnPhysicalQueryGroup, 96)
+	for i := range groups {
+		groups[i] = ColumnPhysicalQueryGroup{Key: fmt.Sprintf("key_%03d", len(groups)-i)}
+	}
+	sortColumnPhysicalQueryGroupsByKey(groups)
+	for i := 1; i < len(groups); i++ {
+		if groups[i-1].Key > groups[i].Key {
+			t.Fatalf("groups not sorted at %d: %q > %q", i, groups[i-1].Key, groups[i].Key)
+		}
+	}
+}
+
+func TestColumnPhysicalQueryExecutorResetClearsDistinctGroupsM1634(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	exec, err := newColumnPhysicalQueryExecutor(*cfg, ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountDistinct,
+		GroupColumn:    "kind",
+		DistinctColumn: "did",
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalQueryExecutor: %v", err)
+	}
+	if err := exec.visitDirectGroupCountDistinct([]byte("kind_a"), true, []byte("did_a"), true); err != nil {
+		t.Fatalf("visit first distinct: %v", err)
+	}
+	if got := exec.groups(); len(got) != 1 || got[0].Key != "kind_a" || got[0].Count != 1 {
+		t.Fatalf("first groups=%+v want kind_a=1", got)
+	}
+	exec.resetForRun()
+	if err := exec.visitDirectGroupCountDistinct([]byte("kind_b"), true, []byte("did_b"), true); err != nil {
+		t.Fatalf("visit second distinct: %v", err)
+	}
+	got := exec.groups()
+	if len(got) != 1 || got[0].Key != "kind_b" || got[0].Count != 1 {
+		t.Fatalf("second groups=%+v want only kind_b=1", got)
+	}
+}
+
 func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 	for _, rows := range []int{1024, 8192} {
 		cases := []struct {
@@ -1902,6 +2010,56 @@ func BenchmarkColumnPhysicalQueryAdapterM13B(b *testing.B) {
 					result, err := collection.RunColumnPhysicalQuery(tc.req)
 					if err != nil {
 						b.Fatalf("RunColumnPhysicalQuery: %v", err)
+					}
+					if len(result.Groups) == 0 {
+						b.Fatal("empty result")
+					}
+					reducedRows += int64(result.Diagnostics.ReduceRows)
+				}
+				if reducedRows > 0 {
+					elapsed := b.Elapsed()
+					b.ReportMetric(float64(reducedRows)/elapsed.Seconds(), "rows/s")
+					b.ReportMetric(float64(elapsed.Nanoseconds())/float64(reducedRows), "ns/row")
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkColumnPhysicalQueryRunnerM1634(b *testing.B) {
+	for _, rows := range []int{1024, 8192} {
+		cases := []struct {
+			name string
+			req  ColumnPhysicalQueryRequest
+		}{
+			{name: "q1", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}},
+			{name: "q2", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}},
+			{name: "q3", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
+			{name: "q4a", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q4b", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}},
+			{name: "q5", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
+		}
+		for _, tc := range cases {
+			b.Run(fmt.Sprintf("%s_rows_%d", tc.name, rows), func(b *testing.B) {
+				collection, closeFn := openColumnPhysicalQueryFixtureM13B(b, columnPhysicalQueryFixtureEventsM13B(rows))
+				defer closeFn()
+				runner, err := collection.PrepareColumnPhysicalQuery(tc.req)
+				if err != nil {
+					b.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+				}
+				defer func() { _ = runner.Close() }()
+				preview, err := runner.Run()
+				if err != nil {
+					b.Fatalf("preview runner Run: %v", err)
+				}
+				b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+				b.ReportAllocs()
+				b.ResetTimer()
+				var reducedRows int64
+				for i := 0; i < b.N; i++ {
+					result, err := runner.Run()
+					if err != nil {
+						b.Fatalf("runner Run: %v", err)
 					}
 					if len(result.Groups) == 0 {
 						b.Fatal("empty result")
