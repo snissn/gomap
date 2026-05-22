@@ -179,6 +179,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
+		if !strings.Contains(q.ThroughputInterpretation, "decode-bound") {
+			t.Fatalf("query %s throughput_interpretation=%q want row-store decode-bound classification", q.Name, q.ThroughputInterpretation)
+		}
 	}
 	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || q.ImplementationNote == "" {
 		t.Fatalf("q5_metadata should be explicitly reported as a q5 alias placeholder: %+v", q)
@@ -404,13 +407,260 @@ func TestColumnStoreBenchRunDoesNotFallbackForZeroProcessedPhysicalRowsM14B(t *t
 		Rows:      30,
 		BatchSize: 10,
 		Queries: []columnStoreQueryMetric{
-			{Name: "q1", Rows: 30, RowsProcessed: 0, RowMaterializations: 0, RowsPerSecond: 0, duration: 30 * time.Millisecond},
+			{Name: "q1", Rows: 30, RowsProcessed: 0, RowsProcessedKnown: true, RowMaterializations: 0, RowsPerSecond: 0, duration: 30 * time.Millisecond},
 		},
 	}, nil, 0)
 
 	got := run.Results[columnStoreSuiteBenchTestName][columnStoreSuiteBenchDisplayName]
 	if got != 0 {
 		t.Fatalf("aggregate rows/sec=%f want zero without legacy row materialization fallback", got)
+	}
+}
+
+func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
+	tests := []struct {
+		name string
+		q    columnStoreQueryMetric
+		want []string
+	}{
+		{
+			name: "row store decode baseline",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathRowStoreBaseline,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 1024,
+				BytesRead:           128 << 10,
+			},
+			want: []string{"decode-bound", "row materialization", "mark-pruning not active", "effective_rows_processed=1024", "row_materializations=1024/1024", "bytes_read=131072"},
+		},
+		{
+			name: "btree decode baseline",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ2,
+				PlanLabel:           columnStorePathBTreeIndexBaseline,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 1024,
+				BytesRead:           128 << 10,
+			},
+			want: []string{"decode-bound", "B-tree baseline", "row materialization", "mark-pruning not active", "effective_rows_processed=1024", "row_materializations=1024/1024"},
+		},
+		{
+			name: "serial physical scan",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ3,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				BytesRead:           96 << 10,
+				ScheduledGranules:   2,
+			},
+			want: []string{"physical serial scan", "TCPA decode", "aggregation", "memory-bandwidth", "mark-pruning not active", "effective_rows_processed=1024", "scheduled_granules=2"},
+		},
+		{
+			name: "missing source row count falls back to processed rows",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ3,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+			},
+			want: []string{"physical serial scan", "row_materializations=0/1024"},
+		},
+		{
+			name: "legacy materialized row evidence",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathRowStoreBaseline,
+				Rows:                1024,
+				RowMaterializations: 1024,
+			},
+			want: []string{"decode-bound", "effective_rows_processed=1024", "row_materializations=1024/1024"},
+		},
+		{
+			name: "scan backed aggregate fallback",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ5Metadata,
+				PlanLabel:           columnStorePathAggregateMetadata,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				BytesRead:           96 << 10,
+				MetadataHits:        0,
+			},
+			want: []string{"fallback-bound", "scan-backed", "aggregate metadata", "mark-pruning not active", "metadata_hits=0"},
+		},
+		{
+			name: "metadata hit future path",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ5Metadata,
+				PlanLabel:           columnStorePathAggregateMetadata,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				MetadataHits:        4,
+			},
+			want: []string{"metadata-bound", "metadata hits", "mark-pruning not active", "metadata_hits=4"},
+		},
+		{
+			name: "granule pruning future path",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ1,
+				PlanLabel:           columnStorePathSerialColumnScan,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				SkippedGranules:     3,
+			},
+			want: []string{"physical serial scan", "mark-pruning active", "skipped_granules=3"},
+		},
+		{
+			name: "parallel physical scan",
+			q: columnStoreQueryMetric{
+				Name:                columnStoreQueryQ4A,
+				PlanLabel:           columnStorePathParallelColumnScan,
+				Rows:                1024,
+				RowsProcessed:       1024,
+				RowMaterializations: 0,
+				BytesRead:           96 << 10,
+				WorkerCount:         2,
+			},
+			want: []string{"parallel physical scan", "manifest-ref partition", "overhead-bound", "memory-bandwidth", "mark-pruning not active"},
+		},
+		{
+			name: "parallel invalid worker count",
+			q: columnStoreQueryMetric{
+				Name:          columnStoreQueryQ4A,
+				PlanLabel:     columnStorePathParallelColumnScan,
+				Rows:          1024,
+				RowsProcessed: 1024,
+				WorkerCount:   0,
+			},
+			want: []string{"parallel physical scan", "invalid reported worker_count=0", "mark-pruning not active", "effective_rows_processed=1024"},
+		},
+		{
+			name: "unknown effective rows are explicit",
+			q: columnStoreQueryMetric{
+				Name:      columnStoreQueryQ1,
+				PlanLabel: columnStorePathSerialColumnScan,
+			},
+			want: []string{"physical serial scan", "effective_rows_processed=unknown", "row_materializations=0/unknown"},
+		},
+		{
+			name: "known zero effective rows are explicit",
+			q: columnStoreQueryMetric{
+				Name:               columnStoreQueryQ1,
+				PlanLabel:          columnStorePathSerialColumnScan,
+				RowsProcessedKnown: true,
+			},
+			want: []string{"physical serial scan", "effective_rows_processed=0", "row_materializations=0/unknown"},
+		},
+		{
+			name: "unknown plan includes labels",
+			q: columnStoreQueryMetric{
+				Name:          "q_custom",
+				PlanLabel:     "unknown_plan",
+				Rows:          1024,
+				RowsProcessed: 1024,
+			},
+			want: []string{"fallback/error-bound", "unknown_plan", "q_custom", "mark-pruning not active"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := columnStoreQueryThroughputInterpretation(tc.q)
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("interpretation %q missing %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.T) {
+	report := columnStoreSuiteReport{
+		Suite:      "column_store",
+		Profile:    "durable",
+		Fixture:    "synthetic",
+		ForcedPath: columnStorePathSerialColumnScan,
+		Rows:       1024,
+		Queries: []columnStoreQueryMetric{
+			{
+				Name:                     columnStoreQueryQ1,
+				PlanLabel:                columnStorePathSerialColumnScan,
+				RowsProcessed:            1024,
+				ThroughputInterpretation: "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes; mark-pruning not active",
+			},
+			{
+				Name:                     columnStoreQueryQ5Metadata,
+				PlanLabel:                columnStorePathAggregateMetadata,
+				RowsProcessed:            1024,
+				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer; mark-pruning not active",
+			},
+			{
+				Name:                     "q|pipe`tick",
+				PlanLabel:                "plan|pipe`tick",
+				ThroughputInterpretation: "line1\r\nline2|pipe <b>&bad</b>",
+				ImplementationNote:       "note|pipe`tick",
+			},
+			{
+				Name:      "q_empty_interpretation",
+				PlanLabel: columnStorePathSerialColumnScan,
+			},
+			{
+				Name:                     "-",
+				PlanLabel:                "-",
+				ThroughputInterpretation: "-",
+			},
+		},
+		Parity: map[string]columnStoreParity{
+			columnStoreQueryQ1:         {Pass: true},
+			columnStoreQueryQ5Metadata: {Pass: true},
+		},
+	}
+
+	md := renderColumnStoreSuiteMarkdown(report)
+	for _, want := range []string{
+		"## Throughput Interpretation",
+		"physical serial scan",
+		"fallback-bound aggregate metadata label",
+		"mark-pruning not active",
+		"adapter ms",
+		"``q\\|pipe`tick``",
+		"``plan\\|pipe`tick``",
+		"``note\\|pipe`tick``",
+		"line1 line2\\|pipe &lt;b&gt;&amp;bad&lt;/b&gt;",
+		"| `q_empty_interpretation` | `serial_column_scan` | (empty) |",
+		"| `-` | `-` | - |",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestMarkdownCodeTableTextPreservesBoundaryWhitespaceM14C(t *testing.T) {
+	got := markdownCodeTableText(" value|with`tick ")
+	want := "``  value\\|with`tick  ``"
+	if got != want {
+		t.Fatalf("markdownCodeTableText=%q want %q", got, want)
+	}
+}
+
+func TestMarkdownTableTextHandlesEscapedPipesAndBlankNewlinesM14C(t *testing.T) {
+	if got, want := markdownTableText(`a\|b|c\\|d`), `a\|b\|c\\\|d`; got != want {
+		t.Fatalf("markdownTableText escaped pipes=%q want %q", got, want)
+	}
+	if got, want := markdownTableText(`a\\\\\\\\|b|c`), `a\\\\\\\\\|b\|c`; got != want {
+		t.Fatalf("markdownTableText long backslash run=%q want %q", got, want)
+	}
+	if got, want := markdownCodeTableText("\r\n"), "`"+markdownTableEmptyCell+"`"; got != want {
+		t.Fatalf("markdownCodeTableText blank newline=%q want empty marker", got)
 	}
 }
 
@@ -1083,6 +1333,9 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		if q.BytesRead <= 0 || q.RowsPerSecond <= 0 || q.NsPerRow <= 0 {
 			t.Fatalf("query %s missing physical throughput metrics: %+v", q.Name, q)
 		}
+		if !strings.Contains(q.ThroughputInterpretation, "physical serial scan") {
+			t.Fatalf("query %s throughput_interpretation=%q want serial physical classification", q.Name, q.ThroughputInterpretation)
+		}
 	}
 	if got, want := queryMetrics[columnStoreQueryQ5Metadata].ProductionHash, queryMetrics[columnStoreQueryQ5].ProductionHash; got != want {
 		t.Fatalf("q5_metadata production hash=%016x want q5 hash=%016x", got, want)
@@ -1144,11 +1397,28 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q.RowsProcessed != report.Rows {
 					t.Fatalf("query %s rows_processed=%d want %d", q.Name, q.RowsProcessed, report.Rows)
 				}
-				if q.BytesRead <= 0 {
+				metadataHitAggregate := tc.forcedPath == columnStorePathAggregateMetadata && q.MetadataHits > 0
+				if !metadataHitAggregate && q.BytesRead <= 0 {
 					t.Fatalf("query %s bytes_read=%d want physical bytes", q.Name, q.BytesRead)
+				}
+				if q.ThroughputInterpretation == "" {
+					t.Fatalf("query %s missing throughput_interpretation", q.Name)
 				}
 				if tc.forcedPath == columnStorePathParallelColumnScan && q.WorkerCount != tc.wantWorker {
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)
+				}
+				if tc.forcedPath == columnStorePathParallelColumnScan && !strings.Contains(q.ThroughputInterpretation, "parallel physical scan") {
+					t.Fatalf("query %s throughput_interpretation=%q want parallel physical classification", q.Name, q.ThroughputInterpretation)
+				}
+			}
+			if tc.forcedPath == columnStorePathAggregateMetadata {
+				interpretation := queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation
+				if queryMetrics[columnStoreQueryQ5Metadata].MetadataHits > 0 {
+					if !strings.Contains(interpretation, "metadata-bound") {
+						t.Fatalf("q5_metadata throughput_interpretation=%q want metadata-bound aggregate classification", interpretation)
+					}
+				} else if !strings.Contains(interpretation, "fallback-bound") {
+					t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", interpretation)
 				}
 			}
 			if got := queryMetrics[columnStoreQueryQ5Metadata].PlanLabel; got != tc.q5Plan {
@@ -1379,6 +1649,9 @@ func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
 		}
 		if q.WorkerCount != 1 {
 			t.Fatalf("query %s worker_count=%d want 1 for caller-thread row baseline", q.Name, q.WorkerCount)
+		}
+		if q.ThroughputInterpretation != "" {
+			t.Fatalf("query %s raw query loop throughput_interpretation=%q want empty until report/artifact rendering", q.Name, q.ThroughputInterpretation)
 		}
 	}
 	if err := db.Checkpoint(); err != nil {
@@ -1776,6 +2049,18 @@ func BenchmarkColumnStoreSuiteRowBaselineQueriesM11B(b *testing.B) {
 
 func BenchmarkColumnStoreSuiteBTreeIndexBaselineQueriesM11B(b *testing.B) {
 	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline)
+}
+
+func BenchmarkColumnStoreSuiteSerialPhysicalQueriesM14C(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathSerialColumnScan)
+}
+
+func BenchmarkColumnStoreSuiteAggregateMetadataQueriesM14C(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathAggregateMetadata)
+}
+
+func BenchmarkColumnStoreSuiteParallelPhysicalQueriesM14C(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathParallelColumnScan)
 }
 
 func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
