@@ -283,6 +283,26 @@ func BenchmarkJSONBenchLocalPartImageM1D(b *testing.B) {
 	benchmarkJSONBenchPartImageM1D(b, ds)
 }
 
+func BenchmarkJSONBenchPartAssetM2(b *testing.B) {
+	ds := syntheticJSONBenchDataset(DefaultRowsPerGranule * 100)
+	benchmarkJSONBenchPartAssetM2(b, ds)
+}
+
+func BenchmarkJSONBenchLocalPartAssetM2(b *testing.B) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		path = DefaultJSONBenchDir
+	}
+	if _, err := os.Stat(path); err != nil {
+		b.Skipf("JSONBench data not present; set JSONBENCH_DATA or install %s", DefaultJSONBenchDir)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1_000_000)
+	if err != nil {
+		b.Fatalf("LoadJSONBenchColumns: %v", err)
+	}
+	benchmarkJSONBenchPartAssetM2(b, ds)
+}
+
 func benchmarkJSONBenchPartBuildM1C(b *testing.B, ds JSONBenchDataset) {
 	for _, layout := range []JSONBenchColumnPartLayout{
 		JSONBenchColumnPartLayoutTimeUS,
@@ -402,6 +422,122 @@ func benchmarkJSONBenchPartImageM1D(b *testing.B, ds JSONBenchDataset) {
 	}
 }
 
+func benchmarkJSONBenchPartAssetM2(b *testing.B, ds JSONBenchDataset) {
+	for _, layout := range []JSONBenchColumnPartLayout{
+		JSONBenchColumnPartLayoutTimeUS,
+		JSONBenchColumnPartLayoutClickHouseFilterUserTime,
+	} {
+		b.Run(string(layout), func(b *testing.B) {
+			part, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, layout)
+			if err != nil {
+				b.Fatalf("BuildJSONBenchColumnPartWithAggregateMetadataForLayout: %v", err)
+			}
+			image, err := BuildColumnPartImage(part, ColumnPartImageOptions{Dictionaries: ds.Dictionaries})
+			if err != nil {
+				b.Fatalf("BuildColumnPartImage: %v", err)
+			}
+			assetBytes, record, err := EncodeTCS1ColumnPartImage(image)
+			if err != nil {
+				b.Fatalf("EncodeTCS1ColumnPartImage: %v", err)
+			}
+			reportTCS1AssetBenchmarkMetrics(b, ds, record)
+
+			b.Run("store_existing_image_asset", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					store.Reset()
+					ref, storedRecord, err := StoreTCS1ColumnPartImage(store, image)
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(ref.Length + int64(storedRecord.PayloadBytes))
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+
+			b.Run("load_parse_reconstruct", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				ref, err := store.Put(ColumnAssetKindTCS1PartImage, assetBytes)
+				if err != nil {
+					b.Fatalf("Put: %v", err)
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1AssetWithOptions(store, ref, ColumnPartImageReadOptions{})
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(reconstructed.Descriptor.RowCount + loadedRecord.PayloadBytes)
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+
+			b.Run("load_parse_reconstruct_metadata", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				ref, err := store.Put(ColumnAssetKindTCS1PartImage, assetBytes)
+				if err != nil {
+					b.Fatalf("Put: %v", err)
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1AssetWithOptions(store, ref, ColumnPartImageReadOptions{IncludeAggregateMetadata: true})
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(reconstructed.Descriptor.RowCount+len(reconstructed.AggregateMetadata)) + int64(loadedRecord.PayloadBytes)
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+
+			b.Run("load_parse_reconstruct_full_locators", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				ref, err := store.Put(ColumnAssetKindTCS1PartImage, assetBytes)
+				if err != nil {
+					b.Fatalf("Put: %v", err)
+				}
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					reconstructed, loadedRecord, err := ColumnPartFromTCS1Asset(store, ref)
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(reconstructed.Descriptor.RowCount+len(reconstructed.Locators)) + int64(loadedRecord.PayloadBytes)
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+
+			b.Run("build_serialize_store_load_parse_reconstruct", func(b *testing.B) {
+				store := NewMemoryColumnAssetStore()
+				b.ReportAllocs()
+				b.SetBytes(int64(record.TotalBytes))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					store.Reset()
+					part, err := BuildJSONBenchColumnPartWithAggregateMetadataForLayout(ds, DefaultRowsPerGranule, layout)
+					if err != nil {
+						b.Fatal(err)
+					}
+					reconstructed, ref, rebuiltRecord, err := ScanOnlyTCS1AssetBackedColumnPart(part, ds.Dictionaries, store)
+					if err != nil {
+						b.Fatal(err)
+					}
+					benchSink += int64(reconstructed.Descriptor.RowCount) + ref.Length + int64(rebuiltRecord.PayloadBytes)
+				}
+				reportTCS1AssetThroughput(b, ds, record)
+			})
+		})
+	}
+}
+
 func reportPartImageBenchmarkMetrics(b *testing.B, ds JSONBenchDataset, accounting ColumnPartByteAccounting) {
 	b.Helper()
 	if ds.Rows == 0 {
@@ -412,6 +548,29 @@ func reportPartImageBenchmarkMetrics(b *testing.B, ds JSONBenchDataset, accounti
 	b.ReportMetric(float64(accounting.DictionaryBytes)/float64(ds.Rows), "dict_B/row")
 	b.ReportMetric(float64(accounting.AggregateMetadataBytes)/float64(ds.Rows), "agg_B/row")
 	b.ReportMetric(float64(accounting.LocatorBytes)/float64(ds.Rows), "locator_B/row")
+}
+
+func reportTCS1AssetBenchmarkMetrics(b *testing.B, ds JSONBenchDataset, record TCS1PartRecord) {
+	b.Helper()
+	if ds.Rows == 0 {
+		return
+	}
+	b.ReportMetric(float64(record.TotalBytes)/float64(ds.Rows), "asset_B/row")
+	b.ReportMetric(float64(record.PayloadBytes)/float64(ds.Rows), "payload_B/row")
+	b.ReportMetric(float64(tcs1HeaderBytes), "wrapper_B/part")
+}
+
+func reportTCS1AssetThroughput(b *testing.B, ds JSONBenchDataset, record TCS1PartRecord) {
+	b.Helper()
+	seconds := b.Elapsed().Seconds()
+	if seconds <= 0 {
+		return
+	}
+	b.ReportMetric(float64(ds.Rows*b.N)/seconds, "rows/s")
+	b.ReportMetric(float64(record.TotalBytes*b.N)/seconds/(1024*1024), "asset_MiB/s")
+	if ds.Rows > 0 {
+		b.ReportMetric(float64(record.TotalBytes)/float64(ds.Rows), "asset_B/row")
+	}
 }
 
 func reportPartImageThroughput(b *testing.B, ds JSONBenchDataset, accounting ColumnPartByteAccounting) {
