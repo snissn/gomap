@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -440,12 +439,6 @@ func (r *columnVectorGraphPhysicalRowReader) readNativeGraphVector(cur *manifest
 		cur.pos = end
 		return nil, nil
 	}
-	_ = cur.raw[end-1]
-	if columnPhysicalNativeLittleEndian {
-		vector := unsafe.Slice((*float32)(unsafe.Pointer(unsafe.SliceData(cur.raw[pos:end]))), int(n))
-		cur.pos = end
-		return vector, nil
-	}
 	base := len(scratch.Float32Values)
 	need := base + int(n)
 	if cap(scratch.Float32Values) < need {
@@ -454,6 +447,12 @@ func (r *columnVectorGraphPhysicalRowReader) readNativeGraphVector(cur *manifest
 		scratch.Float32Values = next
 	} else {
 		scratch.Float32Values = scratch.Float32Values[:need]
+	}
+	_ = cur.raw[end-1]
+	if columnPhysicalNativeLittleEndian {
+		columnPhysicalCopyLittleEndianFloat32Bytes(scratch.Float32Values[base:need], cur.raw[pos:end])
+		cur.pos = end
+		return scratch.Float32Values[base:], nil
 	}
 	for i := base; i < need; i++ {
 		scratch.Float32Values[i] = math.Float32frombits(uint32(cur.raw[pos]) | uint32(cur.raw[pos+1])<<8 | uint32(cur.raw[pos+2])<<16 | uint32(cur.raw[pos+3])<<24)

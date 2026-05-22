@@ -70,13 +70,15 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata executes q4b and q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: %s; aggregate_metadata executes q4b and q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
+		columnStoreSuitePathList(columnStoreSuiteAcceptedForcedPaths),
 	)
 	columnStoreSuitePathArg               = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg            = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
+	columnStoreSuiteQueryArg              = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5/q5_metadata suite; duplicates are rejected)")
 	columnStoreSuiteAssetReadIntegrityArg = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
 
 	columnStoreSuiteAcceptedForcedPaths = []string{
@@ -107,6 +109,7 @@ type columnStoreSuiteOptions struct {
 	ExecutionPath            string
 	ForcedPath               string
 	Fixture                  string
+	QueryNames               []string
 	ColumnAssetReadIntegrity collections.ColumnAssetReadIntegrity
 	RunBenchprof             bool
 	CorruptReferenceForTest  string
@@ -120,6 +123,7 @@ type columnStoreSuiteReport struct {
 	DataDir                  string                       `json:"data_dir,omitempty"`
 	PathLabel                string                       `json:"path_label,omitempty"`
 	ForcedPath               string                       `json:"forced_path"`
+	QueryNames               []string                     `json:"query_names"`
 	Rows                     int                          `json:"rows"`
 	BatchSize                int                          `json:"batch_size"`
 	Seed                     int64                        `json:"seed"`
@@ -310,6 +314,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if _, err := columnStoreSuitePlanKind(forcedPath); err != nil {
 		return "", err
 	}
+	queryNames, err := columnStoreSuiteEffectiveQueryNames(opts.QueryNames, strings.TrimSpace(*columnStoreSuiteQueryArg))
+	if err != nil {
+		return "", err
+	}
 	assetReadIntegrity, err := columnStoreSuiteEffectiveAssetReadIntegrity(opts.ColumnAssetReadIntegrity)
 	if err != nil {
 		return "", err
@@ -440,9 +448,12 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		if !columnStoreQueryNameKnown(corrupt) {
 			return "", fmt.Errorf("column_store: unknown corrupt reference query %q", corrupt)
 		}
+		if !columnStoreQueryNameSelected(queryNames, corrupt) {
+			return "", fmt.Errorf("column_store: corrupt reference query %q is not selected", corrupt)
+		}
 		rawHashes[corrupt]++
 	}
-	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath, assetReadIntegrity)
+	queries, parity, parityErr, err := runColumnStoreSuiteQueriesProfiled(baseCfg, collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames)
 	if err != nil {
 		return "", err
 	}
@@ -485,6 +496,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		Fixture:               fixture,
 		PathLabel:             strings.TrimSpace(opts.ExecutionPath),
 		ForcedPath:            forcedPath,
+		QueryNames:            cloneStringSlice(queryNames),
 		Rows:                  rows,
 		BatchSize:             batchSize,
 		Seed:                  seed,
@@ -975,7 +987,7 @@ func startColumnStoreSuiteRuntimeProfiles(cfg BenchConfig) (func() error, error)
 	return finish, nil
 }
 
-func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
+func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error, error) {
 	profileHooks := profileHooksFromConfig(cfg)
 	cleanup := func(paths ...string) {
 		for _, path := range paths {
@@ -1029,7 +1041,7 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 		}
 	}
 
-	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, assetReadIntegrity)
+	queries, parity, runErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, assetReadIntegrity, queryNames)
 
 	if cpuFile != nil {
 		profileHooks.stopCPUProfile()
@@ -1091,16 +1103,20 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 	return queries, parity, runErr, nil
 }
 
-func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
 	path = normalizeColumnStoreSuitePath(path)
 	forceKind, err := columnStoreSuitePlanKind(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNameList))
-	parity := make(map[string]columnStoreParity, len(columnStoreQueryNameList))
+	queryNames, err = columnStoreSuiteEffectiveQueryNames(queryNames, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	queries := make([]columnStoreQueryMetric, 0, len(queryNames))
+	parity := make(map[string]columnStoreParity, len(queryNames))
 	var firstErr error
-	for _, name := range columnStoreQueryNameList {
+	for _, name := range queryNames {
 		queryForceKind := columnStoreSuitePlanKindForQuery(path, name, forceKind)
 		plannerStart := time.Now()
 		plan, err := collection.PlanColumnQuery(columnStoreSuitePlanRequest(name, rows, queryForceKind))
@@ -1655,9 +1671,62 @@ func columnStoreQueryNames() []string {
 	return append([]string(nil), columnStoreQueryNameList[:]...)
 }
 
+func columnStoreSuiteEffectiveQueryNames(explicit []string, flagValue string) ([]string, error) {
+	if len(explicit) > 0 {
+		return columnStoreSuiteNormalizeQueryNames(explicit)
+	}
+	return columnStoreSuiteParseQueryNames(flagValue)
+}
+
+func columnStoreSuiteParseQueryNames(value string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "all") {
+		return columnStoreQueryNames(), nil
+	}
+	return columnStoreSuiteNormalizeQueryNames(strings.Split(value, ","))
+}
+
+func columnStoreSuiteNormalizeQueryNames(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return columnStoreQueryNames(), nil
+	}
+	out := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, raw := range names {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			return nil, errors.New("column_store: empty query name")
+		}
+		if name == "all" {
+			if len(names) == 1 {
+				return columnStoreQueryNames(), nil
+			}
+			return nil, errors.New("column_store: all cannot be combined with explicit query names")
+		}
+		if !columnStoreQueryNameKnown(name) {
+			return nil, fmt.Errorf("column_store: unknown query name %q; accepted=%s", name, strings.Join(columnStoreQueryNames(), ","))
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("column_store: duplicate query name %q", name)
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 func columnStoreQueryNameKnown(name string) bool {
 	for _, candidate := range columnStoreQueryNameList {
 		if name == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func columnStoreQueryNameSelected(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
 			return true
 		}
 	}
@@ -2028,6 +2097,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString(fmt.Sprintf("- rows: %s\n", formatInt(report.Rows)))
 	sb.WriteString(fmt.Sprintf("- batchsize: %s\n", formatInt(report.BatchSize)))
 	sb.WriteString(fmt.Sprintf("- forced path: `%s`\n", report.ForcedPath))
+	sb.WriteString(fmt.Sprintf("- query names: %s\n", markdownCodeList(report.QueryNames)))
 	sb.WriteString(fmt.Sprintf("- column asset read integrity: `%s`\n", report.ColumnAssetReadIntegrity))
 	if report.DataDir != "" {
 		sb.WriteString(fmt.Sprintf("- data-dir: `%s`\n", report.DataDir))
@@ -2187,6 +2257,7 @@ func markdownCodeTableText(value string) string {
 func markdownNormalizeTableCell(value string, escapeHTML bool) string {
 	value = markdownEscapeTablePipes(value)
 	if escapeHTML {
+		value = strings.ReplaceAll(value, "`", "\\`")
 		value = html.EscapeString(value)
 	}
 	return value
@@ -2253,35 +2324,20 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	cfg.DBsArg = "treedb"
 	testOrder := []string{
 		columnStoreSuiteBenchTestName,
-		columnStoreSuiteAliasFullScanQ1,
-		columnStoreSuiteAliasPrefixQ4A,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5,
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata,
 	}
 	cfg.TestsArg = strings.Join(testOrder, ",")
 	results := make(map[string]map[string]float64)
 	displayNames := map[string]string{
-		columnStoreSuiteBenchTestName:                                  "Column store query phase",
-		columnStoreSuiteAliasFullScanQ1:                                "Alias full scan from q1",
-		columnStoreSuiteAliasPrefixQ4A:                                 "Alias prefix scan from q4a",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1:         "Column q1",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2:         "Column q2",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3:         "Column q3",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A:        "Column q4a",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B:        "Column q4b",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5:         "Column q5",
-		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata: "Column q5 metadata",
+		columnStoreSuiteBenchTestName: "Column store query phase",
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
 	var queryDuration time.Duration
 	var queryRowsProcessed int
 	for _, q := range report.Queries {
 		byName[q.Name] = q
+		metricName := columnStoreSuiteBenchMetricPrefix + q.Name
+		testOrder = append(testOrder, metricName)
+		displayNames[metricName] = columnStoreSuiteBenchDisplayNameForQuery(q.Name)
 		duration := q.duration
 		if duration == 0 && q.DurationMS > 0 {
 			duration = time.Duration(q.DurationMS * float64(time.Millisecond))
@@ -2296,11 +2352,16 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryRowsProcessed) / queryDuration.Seconds()}
 	}
 	if q, ok := byName[columnStoreQueryQ1]; ok {
+		testOrder = append(testOrder, columnStoreSuiteAliasFullScanQ1)
+		displayNames[columnStoreSuiteAliasFullScanQ1] = "Alias full scan from q1"
 		results[columnStoreSuiteAliasFullScanQ1] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if q, ok := byName[columnStoreQueryQ4A]; ok {
+		testOrder = append(testOrder, columnStoreSuiteAliasPrefixQ4A)
+		displayNames[columnStoreSuiteAliasPrefixQ4A] = "Alias prefix scan from q4a"
 		results[columnStoreSuiteAliasPrefixQ4A] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
+	cfg.TestsArg = strings.Join(testOrder, ",")
 	return BenchRun{
 		Config:       cfg,
 		Instances:    []*DBInstance{{Name: columnStoreSuiteBenchDBName, Wrapper: &columnStoreSuiteDBLabel{name: columnStoreSuiteBenchDisplayName}, Dir: dataDir}},
@@ -2312,6 +2373,27 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		},
 		TreeDBStats: map[string]map[string]string{columnStoreSuiteBenchDisplayName: stats},
 		DiskUsage:   map[string]dirDiskUsage{columnStoreSuiteBenchDisplayName: {TotalBytes: uint64(report.ByteAccounting.DBTotalBytes), TotalFiles: report.ByteAccounting.DBTotalFiles}},
+	}
+}
+
+func columnStoreSuiteBenchDisplayNameForQuery(name string) string {
+	switch name {
+	case columnStoreQueryQ1:
+		return "Column q1"
+	case columnStoreQueryQ2:
+		return "Column q2"
+	case columnStoreQueryQ3:
+		return "Column q3"
+	case columnStoreQueryQ4A:
+		return "Column q4a"
+	case columnStoreQueryQ4B:
+		return "Column q4b"
+	case columnStoreQueryQ5:
+		return "Column q5"
+	case columnStoreQueryQ5Metadata:
+		return "Column q5 metadata"
+	default:
+		return "Column " + name
 	}
 }
 
