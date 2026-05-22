@@ -81,7 +81,7 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 		t.Fatalf("Candidates=%d want %d", stats.Candidates, len(rows))
 	}
 	if stats.Edges == 0 || stats.CandidateFetches < uint64(len(rows)) || stats.ScoreBatches < uint64(len(rows)) || stats.ExpansionFetches != stats.AdjacencyExpansions || stats.ResultFetches != uint64(len(got)) {
-		t.Fatalf("stats=%+v want candidate/result fetches plus lazy adjacency expansion fetches", stats)
+		t.Fatalf("stats=%+v want at least %d candidate/score batches, exact result fetches, and matching lazy expansion fetches", stats, len(rows))
 	}
 	readerStats := reader.Stats()
 	if readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {

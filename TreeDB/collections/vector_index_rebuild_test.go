@@ -73,11 +73,10 @@ func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T)
 	if got := strings.Join(columnGraphRebuildScannedIDsV2A(scanned), ","); got != strings.Join(wantGraph.ids, ",") {
 		t.Fatalf("scanned graph ids=%s, want native locality order %s", got, strings.Join(wantGraph.ids, ","))
 	}
-	if got := scanned[0].adjacency; !uint32SlicesEqual(got, wantGraph.adjacency[0]) {
-		t.Fatalf("%s adjacency=%v, want native layered adjacency %v", wantGraph.ids[0], got, wantGraph.adjacency[0])
-	}
-	if got := scanned[1].adjacency; !uint32SlicesEqual(got, wantGraph.adjacency[1]) {
-		t.Fatalf("%s adjacency=%v, want native layered adjacency %v", wantGraph.ids[1], got, wantGraph.adjacency[1])
+	for i := range wantGraph.ids {
+		if got := scanned[i].adjacency; !uint32SlicesEqual(got, wantGraph.adjacency[i]) {
+			t.Fatalf("%s adjacency=%v, want native layered adjacency %v", wantGraph.ids[i], got, wantGraph.adjacency[i])
+		}
 	}
 
 	if err := d.Checkpoint(); err != nil {
