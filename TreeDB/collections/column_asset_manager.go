@@ -55,6 +55,8 @@ var columnAssetVerifiedChecksumCache = struct {
 	entries [columnAssetVerifiedChecksumCacheSlots]columnAssetVerifiedChecksumEntry
 }{}
 
+var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
+
 type columnAssetVerifiedChecksumEntry struct {
 	key   columnAssetVerifiedChecksumKey
 	valid bool
@@ -78,6 +80,14 @@ type columnAssetSegmentAllocationCache struct {
 	valid      bool
 }
 
+type columnAssetManagerNamespacePathCache struct {
+	sync.Mutex
+	rootDir   string
+	namespace string
+	value     columnAssetManagerNamespace
+	valid     bool
+}
+
 type columnAssetManagerNamespace struct {
 	ManagerRootDir string
 	RootDir        string
@@ -93,13 +103,21 @@ func columnAssetManagerNamespaceForRoot(rootDir, namespace string) (columnAssetM
 	if rootDir == "" {
 		return columnAssetManagerNamespace{}, errors.New("collections: column asset manager root dir is required")
 	}
+	cache := &columnAssetManagerNamespacePathCaches[columnAssetNamespacePathCacheIndex(rootDir, namespace)]
+	cache.Lock()
+	if cache.valid && cache.rootDir == rootDir && cache.namespace == namespace {
+		value := cache.value
+		cache.Unlock()
+		return value, nil
+	}
+	cache.Unlock()
 	cleanNamespace, err := cleanColumnAssetNamespace(namespace)
 	if err != nil {
 		return columnAssetManagerNamespace{}, err
 	}
 	namespaceRoot := filepath.Join(rootDir, filepath.FromSlash(cleanNamespace))
 	assetDir := filepath.Join(namespaceRoot, columnAssetManagerAssetsDirName)
-	return columnAssetManagerNamespace{
+	value := columnAssetManagerNamespace{
 		ManagerRootDir: rootDir,
 		RootDir:        namespaceRoot,
 		AssetDir:       assetDir,
@@ -108,7 +126,33 @@ func columnAssetManagerNamespaceForRoot(rootDir, namespace string) (columnAssetM
 		PreparedDir:    filepath.Join(namespaceRoot, columnAssetManagerPreparedDirName),
 		QuarantineDir:  filepath.Join(namespaceRoot, columnAssetManagerQuarantineDirName),
 		TempDir:        filepath.Join(namespaceRoot, columnAssetManagerTempDirName),
-	}, nil
+	}
+	cache.Lock()
+	cache.rootDir = rootDir
+	cache.namespace = namespace
+	cache.value = value
+	cache.valid = true
+	cache.Unlock()
+	return value, nil
+}
+
+func columnAssetNamespacePathCacheIndex(rootDir, namespace string) uint64 {
+	const (
+		fnvOffset64 = 14695981039346656037
+		fnvPrime64  = 1099511628211
+	)
+	hash := uint64(fnvOffset64)
+	for i := 0; i < len(rootDir); i++ {
+		hash ^= uint64(rootDir[i])
+		hash *= fnvPrime64
+	}
+	hash ^= '/'
+	hash *= fnvPrime64
+	for i := 0; i < len(namespace); i++ {
+		hash ^= uint64(namespace[i])
+		hash *= fnvPrime64
+	}
+	return hash % uint64(len(columnAssetManagerNamespacePathCaches))
 }
 
 func cleanColumnAssetNamespace(namespace string) (string, error) {
