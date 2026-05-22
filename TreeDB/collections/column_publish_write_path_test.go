@@ -415,7 +415,183 @@ func TestColumnStoreCommandWALInsertPublishesManifestM10B(t *testing.T) {
 	assertCollectionDocument(t, reopened, "e2", `{"time_us":2,"kind":"post","did":"d2"}`)
 }
 
-func TestColumnStoreSupportMatrixRejectsUpdateDeleteBeforeExecutionM12B(t *testing.T) {
+func TestColumnStoreSupportMatrixRejectsNonJSONMutationsBeforeExecutionM12C(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := bson.Marshal(bson.D{
+		{Key: "time_us", Value: int64(1)},
+		{Key: "kind", Value: "like"},
+		{Key: "did", Value: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("bson.Marshal: %v", err)
+	}
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{doc, doc}); err != nil {
+		t.Fatalf("InsertBatchValidatedBSON seed: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush seed: %v", err)
+	}
+	installSyntheticNonJSONColumnStoreCatalogM12C(t, d, col)
+	framesBefore := countCollectionCommandWALFrames(t, dir)
+	appliedBefore := d.State().AppliedCommandLSN
+
+	callbackCalled := false
+	matched, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		callbackCalled = true
+		return current, true, nil
+	})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "Update")
+	if matched || modified {
+		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
+	}
+	if callbackCalled {
+		t.Fatal("Update callback ran before M12C non-JSON support-matrix rejection")
+	}
+
+	batchCallbackCalled := false
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("e1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			batchCallbackCalled = true
+			return current, true, nil
+		},
+	}})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "UpdateBatch")
+	if len(results) != 0 {
+		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
+	}
+	if batchCallbackCalled {
+		t.Fatal("UpdateBatch callback ran before M12C non-JSON support-matrix rejection")
+	}
+
+	deleted, err := col.DeleteDocument([]byte("e2"))
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteDocument")
+	if deleted {
+		t.Fatal("DeleteDocument deleted=true, want rejected before delete")
+	}
+	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2"), []byte("missing")})
+	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteBatch")
+	if deletedRows != 0 {
+		t.Fatalf("DeleteBatch deleted=%d, want rejected before delete", deletedRows)
+	}
+
+	if got := d.State().AppliedCommandLSN; got != appliedBefore {
+		t.Fatalf("AppliedCommandLSN after rejected mutations=%d, want %d", got, appliedBefore)
+	}
+	if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
+		t.Fatalf("command WAL frames after rejected mutations=%d, want %d", got, framesBefore)
+	}
+}
+
+func TestColumnStoreMutationAssetsPublishAndReopenM12C(t *testing.T) {
+	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
+
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch seed: %v", err)
+	}
+	insertLSN := d.State().AppliedCommandLSN
+	assertColumnManifestStateM10B(t, col, 1, insertLSN)
+
+	matched, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":3,"kind":"like","did":"d1"}`), true, nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !matched || !modified {
+		t.Fatalf("Update matched=%v modified=%v, want true/true", matched, modified)
+	}
+	updateLSN := d.State().AppliedCommandLSN
+	if updateLSN <= insertLSN {
+		t.Fatalf("update AppliedCommandLSN=%d, want greater than insert LSN %d", updateLSN, insertLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 2, updateLSN)
+
+	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2"), []byte("missing")})
+	if err != nil {
+		t.Fatalf("DeleteBatch: %v", err)
+	}
+	if deletedRows != 1 {
+		t.Fatalf("DeleteBatch deleted=%d, want 1", deletedRows)
+	}
+	deleteLSN := d.State().AppliedCommandLSN
+	if deleteLSN <= updateLSN {
+		t.Fatalf("delete AppliedCommandLSN=%d, want greater than update LSN %d", deleteLSN, updateLSN)
+	}
+	assertColumnManifestStateM10B(t, col, 3, deleteLSN)
+	assertCollectionDocument(t, col, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
+	gotDeleted, err := col.Get([]byte("e2"))
+	if err != nil {
+		t.Fatalf("Get deleted e2: %v", err)
+	}
+	if gotDeleted != nil {
+		t.Fatalf("Get deleted e2=%q, want nil", gotDeleted)
+	}
+
+	parts := columnManifestAllPartsForCollectionM12C(t, d, col)
+	if len(parts) != 3 {
+		t.Fatalf("manifest parts=%+v, want insert/update/delete parts", parts)
+	}
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationInsert), ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationUpdate), ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, d, col, columnManifestPartByReasonM12C(t, parts, ColumnPublishOperationDelete), ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+	reopen := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	reopened := openColumnStoreCollectionM10B(t, reopen)
+	assertColumnManifestStateM10B(t, reopened, 3, deleteLSN)
+	assertDBAppliedCommandLSNM10B(t, reopen, deleteLSN)
+	assertCollectionDocument(t, reopened, "e1", `{"time_us":3,"kind":"like","did":"d1"}`)
+	reopenDeleted, err := reopened.Get([]byte("e2"))
+	if err != nil {
+		t.Fatalf("reopen Get deleted e2: %v", err)
+	}
+	if reopenDeleted != nil {
+		t.Fatalf("reopen Get deleted e2=%q, want nil", reopenDeleted)
+	}
+	reopenParts := columnManifestAllPartsForCollectionM12C(t, reopen, reopened)
+	if len(reopenParts) != 3 {
+		t.Fatalf("reopen manifest parts=%+v, want 3", reopenParts)
+	}
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[0], ColumnPublishOperationInsert, []string{"e1", "e2"}, []bool{false, false})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
+	assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, reopenParts[2], ColumnPublishOperationDelete, []string{"e2"}, []bool{true})
+}
+
+func TestColumnStoreUpdateBatchMutationAssetsPublishM12C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
@@ -428,71 +604,28 @@ func TestColumnStoreSupportMatrixRejectsUpdateDeleteBeforeExecutionM12B(t *testi
 		t.Fatalf("InsertBatch seed: %v", err)
 	}
 	insertLSN := d.State().AppliedCommandLSN
-	framesBefore := countCollectionCommandWALFrames(t, dir)
-	refsBefore := columnManifestAssetRefsForCollectionM12A(t, d, col)
-	before, err := col.Get([]byte("e1"))
-	if err != nil {
-		t.Fatalf("Get before update: %v", err)
-	}
-
-	callbackCalled := false
-	matched, modified, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
-		callbackCalled = true
-		return []byte(`{"time_us":3,"kind":"like","did":"d1"}`), true, nil
-	})
-	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "Update")
-	if matched || modified {
-		t.Fatalf("Update matched=%v modified=%v, want false/false on rejected write", matched, modified)
-	}
-	if callbackCalled {
-		t.Fatal("Update callback ran before M12B column-store support-matrix rejection")
-	}
-
-	batchCallbackCalled := false
 	results, err := col.UpdateBatch([]UpdateBatchItem{{
 		DocumentID: []byte("e1"),
 		Update: func(current []byte) ([]byte, bool, error) {
-			batchCallbackCalled = true
-			return []byte(`{"time_us":4,"kind":"like","did":"d1"}`), true, nil
+			return []byte(`{"time_us":4,"kind":"share","did":"d1"}`), true, nil
 		},
 	}})
-	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "UpdateBatch")
-	if len(results) != 0 {
-		t.Fatalf("UpdateBatch results len=%d, want 0 on rejected write", len(results))
-	}
-	if batchCallbackCalled {
-		t.Fatal("UpdateBatch callback ran before M12B column-store support-matrix rejection")
-	}
-
-	deleted, err := col.DeleteDocument([]byte("e2"))
-	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteDocument")
-	if deleted {
-		t.Fatal("DeleteDocument deleted=true, want rejected before delete")
-	}
-	deletedRows, err := col.DeleteBatch([][]byte{[]byte("e2")})
-	assertColumnStoreCommandWALWriteRejectedM10B(t, err, "DeleteBatch")
-	if deletedRows != 0 {
-		t.Fatalf("DeleteBatch deleted=%d, want rejected before delete", deletedRows)
-	}
-
-	after, err := col.Get([]byte("e1"))
 	if err != nil {
-		t.Fatalf("Get after rejected update: %v", err)
+		t.Fatalf("UpdateBatch: %v", err)
 	}
-	if !bytes.Equal(after, before) {
-		t.Fatalf("document changed after rejected updates: before=%x after=%x", before, after)
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v, want one matched modified", results)
 	}
-	assertCollectionDocument(t, col, "e2", `{"time_us":2,"kind":"post","did":"d2"}`)
-	if got := d.State().AppliedCommandLSN; got != insertLSN {
-		t.Fatalf("AppliedCommandLSN after rejected mutations=%d, want insert LSN %d", got, insertLSN)
+	updateLSN := d.State().AppliedCommandLSN
+	if updateLSN <= insertLSN {
+		t.Fatalf("update AppliedCommandLSN=%d, want greater than insert LSN %d", updateLSN, insertLSN)
 	}
-	if got := countCollectionCommandWALFrames(t, dir); got != framesBefore {
-		t.Fatalf("command WAL frames after rejected mutations=%d, want %d", got, framesBefore)
+	assertColumnManifestStateM10B(t, col, 2, updateLSN)
+	parts := columnManifestAllPartsForCollectionM12C(t, d, col)
+	if len(parts) != 2 {
+		t.Fatalf("manifest parts=%+v, want insert and update parts", parts)
 	}
-	assertColumnManifestStateM10B(t, col, 1, insertLSN)
-	if refsAfter := columnManifestAssetRefsForCollectionM12A(t, d, col); !columnAssetRefsEqualM12B(refsAfter, refsBefore) {
-		t.Fatalf("manifest refs after rejected mutations=%+v, want unchanged %+v", refsAfter, refsBefore)
-	}
+	assertColumnPhysicalAssetRowsM12C(t, d, col, parts[1], ColumnPublishOperationUpdate, []string{"e1"}, []bool{false})
 }
 
 func TestColumnStoreSupportMatrixRejectsNonJSONInsertBeforeCommandAppendM12B(t *testing.T) {
@@ -800,17 +933,24 @@ func TestColumnStoreCommandWALReplayInsertPublishesEquivalentManifestM10C(t *tes
 	}
 }
 
-func TestColumnStoreCommandWALReplayRejectsUnsupportedMutationsM12B(t *testing.T) {
+func TestColumnStoreCommandWALReplayPublishesMutationAssetsM12C(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		kind    commitlog.CommandKind
-		format  commitlog.PayloadFormat
-		payload func(*testing.T) []byte
+		name          string
+		kind          commitlog.CommandKind
+		format        commitlog.PayloadFormat
+		payload       func(*testing.T) []byte
+		wantOperation ColumnPublishOperation
+		wantIDs       []string
+		wantDeleted   []bool
+		verifyRows    func(*testing.T, *Collection)
 	}{
 		{
-			name:   "update",
-			kind:   commitlog.CommandKindCollectionUpdateBatchByID,
-			format: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+			name:          "update",
+			kind:          commitlog.CommandKindCollectionUpdateBatchByID,
+			format:        commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+			wantOperation: ColumnPublishOperationUpdate,
+			wantIDs:       []string{"e1"},
+			wantDeleted:   []bool{false},
 			payload: func(t *testing.T) []byte {
 				t.Helper()
 				payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{{
@@ -822,11 +962,18 @@ func TestColumnStoreCommandWALReplayRejectsUnsupportedMutationsM12B(t *testing.T
 				}
 				return payload
 			},
+			verifyRows: func(t *testing.T, col *Collection) {
+				t.Helper()
+				assertCollectionDocument(t, col, "e1", `{"time_us":2,"kind":"like","did":"d1"}`)
+			},
 		},
 		{
-			name:   "delete",
-			kind:   commitlog.CommandKindCollectionDeleteBatchByID,
-			format: commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+			name:          "delete",
+			kind:          commitlog.CommandKindCollectionDeleteBatchByID,
+			format:        commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+			wantOperation: ColumnPublishOperationDelete,
+			wantIDs:       []string{"e1"},
+			wantDeleted:   []bool{true},
 			payload: func(t *testing.T) []byte {
 				t.Helper()
 				payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e1")})
@@ -834,6 +981,16 @@ func TestColumnStoreCommandWALReplayRejectsUnsupportedMutationsM12B(t *testing.T
 					t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
 				}
 				return payload
+			},
+			verifyRows: func(t *testing.T, col *Collection) {
+				t.Helper()
+				got, err := col.Get([]byte("e1"))
+				if err != nil {
+					t.Fatalf("Get deleted e1: %v", err)
+				}
+				if got != nil {
+					t.Fatalf("Get deleted e1=%q, want nil", got)
+				}
 			},
 		},
 	} {
@@ -849,22 +1006,17 @@ func TestColumnStoreCommandWALReplayRejectsUnsupportedMutationsM12B(t *testing.T
 			writeCollectionCommandWALFrame(t, dir, baseLSN+1, commitlog.CommandKindCollectionInsertBatchByID, commitlog.PayloadFormatCollectionInsertBatchByIDV1, insertPayload)
 			writeCollectionCommandWALFrame(t, dir, baseLSN+2, tc.kind, tc.format, tc.payload(t))
 
-			reopen, err := backenddb.Open(backenddb.Options{
-				Dir:                    dir,
-				CommandWAL:             true,
-				Durability:             backenddb.DurabilityDurable,
-				DisableBackgroundPrune: true,
-			})
-			if err == nil {
-				_ = reopen.Close()
-				t.Fatalf("Open replay with unsupported %s succeeded, want ErrCommandWALRejected", tc.name)
+			reopen := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = reopen.Close() }()
+			reopened := openColumnStoreCollectionM10B(t, reopen)
+			tc.verifyRows(t, reopened)
+			assertColumnManifestStateM10B(t, reopened, 2, baseLSN+2)
+			parts := columnManifestAllPartsForCollectionM12C(t, reopen, reopened)
+			if len(parts) != 2 {
+				t.Fatalf("replay manifest parts=%+v, want insert and %s parts", parts, tc.name)
 			}
-			if !errors.Is(err, backenddb.ErrCommandWALRejected) {
-				t.Fatalf("Open replay with unsupported %s error=%v, want ErrCommandWALRejected", tc.name, err)
-			}
-			if !strings.Contains(err.Error(), "M12B") || !strings.Contains(err.Error(), string(tc.name)) {
-				t.Fatalf("Open replay with unsupported %s error=%v, want M12B operation diagnostics", tc.name, err)
-			}
+			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, parts[0], ColumnPublishOperationInsert, []string{"e1"}, []bool{false})
+			assertColumnPhysicalAssetRowsM12C(t, reopen, reopened, parts[1], tc.wantOperation, tc.wantIDs, tc.wantDeleted)
 		})
 	}
 }
@@ -1708,6 +1860,137 @@ func columnManifestAssetRefsForCollectionM12A(t testing.TB, d *backenddb.DB, col
 		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
 	}
 	return refs
+}
+
+func columnManifestAllPartsForCollectionM12C(t testing.TB, d *backenddb.DB, col *Collection) []columnManifestPartSnapshot {
+	t.Helper()
+	id, ok := col.ColumnStoreCacheIdentity()
+	if !ok || id.ManifestRoot == 0 {
+		t.Fatalf("ColumnStoreCacheIdentity=%+v ok=%v, want manifest root", id, ok)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	iter, err := snap.IteratorAtRoot(id.ManifestRoot, []byte(columnManifestPartRecordPrefix), nil)
+	if err != nil {
+		t.Fatalf("IteratorAtRoot manifest root: %v", err)
+	}
+	defer func() { _ = iter.Close() }()
+	parts := make([]columnManifestPartSnapshot, 0, 4)
+	iter.Seek([]byte(columnManifestPartRecordPrefix))
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+			break
+		}
+		if iter.IsDeleted() {
+			iter.Next()
+			continue
+		}
+		value, _, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			t.Fatalf("manifest part record %q must be inline", key)
+		}
+		part, err := decodeColumnManifestPartRecord(value)
+		if err != nil {
+			t.Fatalf("decodeColumnManifestPartRecord(%q): %v", key, err)
+		}
+		parts = append(parts, part)
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		t.Fatalf("manifest part iterator: %v", err)
+	}
+	return parts
+}
+
+func columnManifestPartByReasonM12C(t testing.TB, parts []columnManifestPartSnapshot, operation ColumnPublishOperation) columnManifestPartSnapshot {
+	t.Helper()
+	var matches []columnManifestPartSnapshot
+	for _, part := range parts {
+		if part.Reason == string(operation) {
+			matches = append(matches, part)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("manifest parts with reason %q=%d want 1; parts=%+v", operation, len(matches), parts)
+	}
+	return matches[0]
+}
+
+func installSyntheticNonJSONColumnStoreCatalogM12C(t testing.TB, d *backenddb.DB, col *Collection) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot: nil")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	systemRoot := snapshotSystemRoot(snap)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if catalog == nil {
+		t.Fatal("catalogForSnapshot: nil catalog")
+	}
+	meta := catalog.meta
+	meta.Options.ColumnStore = testColumnStoreConfig(nil)
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	// This is intentionally a handle-local catalog install: the test exercises
+	// the public write preflight for a BSON column-enabled collection with real
+	// existing rows, not catalog metadata publication.
+	col.meta = normalized
+	col.rememberCatalogAtSystemRoot(systemRoot, cloneCatalogWithRootUpdates(catalog, normalized, nil, nil))
+}
+
+func assertColumnPhysicalAssetRowsM12C(t testing.TB, d *backenddb.DB, col *Collection, part columnManifestPartSnapshot, operation ColumnPublishOperation, wantIDs []string, wantDeleted []bool) {
+	t.Helper()
+	if len(wantIDs) != len(wantDeleted) {
+		t.Fatalf("bad test expectation ids=%d deleted=%d", len(wantIDs), len(wantDeleted))
+	}
+	if part.Reason != string(operation) {
+		t.Fatalf("part reason=%q want %q", part.Reason, operation)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), part.AssetRef)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil {
+		t.Fatalf("missing column store config")
+	}
+	if err := validateColumnPhysicalAssetForManifest(raw, part.AssetRef, *cfg); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
+	}
+	asset, err := decodeColumnPhysicalAsset(raw)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset: %v", err)
+	}
+	if asset.Header.Operation != operation {
+		t.Fatalf("asset operation=%q want %q", asset.Header.Operation, operation)
+	}
+	if len(asset.Rows) != len(wantIDs) {
+		t.Fatalf("asset rows=%d want %d", len(asset.Rows), len(wantIDs))
+	}
+	for i, row := range asset.Rows {
+		if gotID := string(row.ID); gotID != wantIDs[i] {
+			t.Fatalf("row[%d] id=%q want %q", i, gotID, wantIDs[i])
+		}
+		if row.Deleted != wantDeleted[i] {
+			t.Fatalf("row[%d] deleted=%v want %v", i, row.Deleted, wantDeleted[i])
+		}
+		if row.Deleted && len(row.Values) != 0 {
+			t.Fatalf("row[%d] deleted values=%d want 0", i, len(row.Values))
+		}
+		if !row.Deleted && len(row.Values) != len(cfg.Columns) {
+			t.Fatalf("row[%d] values=%d want %d", i, len(row.Values), len(cfg.Columns))
+		}
+	}
 }
 
 func columnAssetRefsEqualM12B(a, b []ColumnAssetRef) bool {

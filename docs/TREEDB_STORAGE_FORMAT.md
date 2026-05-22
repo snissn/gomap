@@ -18,10 +18,11 @@ Operator-facing behavior is covered by:
 ## TL;DR
 
 - `Options.Dir` is a *root* directory containing:
-  - `Dir/maindb/`: main database (`index.db`, `wal`, `value_vlog`, and optional `leaf_vlog`)
+  - `Dir/maindb/`: main database (`index.db`, `wal`, `value_vlog`, optional `leaf_vlog`, and `column_assets`)
   - `Dir/dictdb/`: dictionary store (for value-log compression)
 - Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
+- Column-store physical assets are **value-log-shaped column assets**, not generic row `value_vlog` payloads. They live under the isolated typed column asset manager namespace.
 
 ## Directory layout
 
@@ -33,6 +34,7 @@ TreeDB creates/manages two sub-databases under the root directory:
 - `Dir/maindb/wal/`: redo journal segments named `commit-l<lane>-<seq>.log`.
 - `Dir/maindb/value_vlog/`: persistent large-value segments named `value-l<lane>-<seq>.log`.
 - `Dir/maindb/leaf_vlog/`: optional persistent outer-leaf generation segments named `value-l<lane>-<seq>.log`.
+- `Dir/maindb/column_assets/`: isolated typed column asset manager root for column-store physical assets.
 - `Dir/maindb/LOCK`: cross-process exclusive-open lock for the main DB.
 
 ### Dictionary store (`Dir/dictdb/`)
@@ -42,6 +44,49 @@ TreeDB creates/manages two sub-databases under the root directory:
 
 The dictionary store is used to persist trained dictionary bytes so value-log
 compressed frames can be decoded after restart.
+
+### Column assets (`column_assets/`)
+
+Column-store assets use an isolated value-log-shaped manager instead of ordinary
+row value-log entries. A collection namespace such as `events/column-assets`
+maps to:
+
+```text
+Dir/maindb/column_assets/events/column-assets/
+  assets/segments/segment-000001.tca
+  assets/indexes/
+  prepared/
+  quarantine/
+  tmp/
+```
+
+Column manifest records stored in B-tree/root metadata hold durable
+`ColumnAssetRef` values: kind, namespace, generation, part id, segment file id,
+offset, length, and checksum. GC/rewrite must enumerate those refs from
+manifest/control roots, not by scanning row documents.
+
+The current physical part payload uses the `TCPA` envelope, version 2:
+
+```text
+u32      Magic = "TCPA"
+u16      Version = 2
+string   Collection
+string   Namespace
+u64      Generation
+u64      PartID
+u64      AppliedCommandLSN
+string   Operation        // insert, update, or delete
+u64      SchemaHash
+u64      ColumnCount
+u64      RowCount
+columns  declared column descriptors
+rows     row id + deleted flag + optional declared column values
+```
+
+Insert and update rows must have `deleted=false` and one declared value per
+column. Delete/tombstone rows must have `deleted=true` and no column values.
+Readers validate namespace, generation, part id, schema hash, column
+descriptors, length, and checksum before accepting an asset ref.
 
 ## Value pointers (`page.ValuePtr`)
 

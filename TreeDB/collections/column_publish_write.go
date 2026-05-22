@@ -68,29 +68,17 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 	if !columnStoreWriteEnabled(meta) {
 		return nil
 	}
-	switch operation {
-	case ColumnPublishOperationInsert:
-		if normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatJSON {
-			return nil
-		}
-		return fmt.Errorf("%w: M12B unsupported column-store write collection=%q operation=%s document_format=%q",
+	if normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON {
+		return fmt.Errorf("%w: M12C unsupported column-store write collection=%q operation=%s document_format=%q",
 			backenddb.ErrCommandWALRejected,
 			meta.Name,
 			operation,
 			meta.Options.DocumentFormat,
 		)
-	case ColumnPublishOperationUpdate:
-		return fmt.Errorf("%w: M12B unsupported column-store write collection=%q operation=%s",
-			backenddb.ErrCommandWALRejected,
-			meta.Name,
-			operation,
-		)
-	case ColumnPublishOperationDelete:
-		return fmt.Errorf("%w: M12B unsupported column-store write collection=%q operation=%s",
-			backenddb.ErrCommandWALRejected,
-			meta.Name,
-			operation,
-		)
+	}
+	switch operation {
+	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate, ColumnPublishOperationDelete:
+		return nil
 	default:
 		return fmt.Errorf("%w: unsupported column-store write operation collection=%q operation=%q",
 			backenddb.ErrCommandWALRejected,
@@ -346,6 +334,9 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		input.declaredRowsReady = true
 		return input, nil
 	case ColumnPublishOperationDelete:
+		if len(input.documents) != input.rows {
+			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset delete documents=%d rows=%d", len(input.documents), input.rows)
+		}
 		input.declaredRowsReady = true
 		return input, nil
 	default:
@@ -427,50 +418,92 @@ func (c *Collection) prepareColumnPhysicalAssetsForCommand(input columnWritePubl
 		if len(rows) != input.rows {
 			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset %s prepared rows=%d rows=%d", input.operation, len(rows), input.rows)
 		}
-		generation := uint64(1)
-		if hookInput.CurrentManifest != nil {
-			generation = hookInput.CurrentManifest.Generation + 1
-		}
-		const partID = uint64(1)
-		encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
-			Collection:        hookInput.Collection,
-			Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
-			Generation:        generation,
-			PartID:            partID,
-			AppliedCommandLSN: hookInput.AppliedCommandLSN,
-			Operation:         hookInput.Operation,
-			SchemaHash:        hookInput.ColumnStore.SchemaHash,
-			Columns:           hookInput.ColumnStore.Columns,
-			Rows:              rows,
-		})
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
-		ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, partID)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
-		if err := validateColumnPhysicalAssetForManifest(encoded, ref, hookInput.ColumnStore); err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
-		if prepared.CommandBytes == 0 {
-			prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
-		}
-		prepared.RowCount = summary.RowCount
-		prepared.ColumnPayloadBytes = summary.PayloadBytes
-		prepared.Assets = []ColumnPreparedAsset{{
-			Ref:          ref,
-			Bytes:        ref.Length,
-			PublishID:    hookInput.AppliedCommandLSN,
-			GenerationID: generation,
-			Reason:       string(input.operation),
-		}}
-		return prepared, nil
+		return c.prepareColumnPhysicalAssetRowsForCommand(prepared, input, hookInput, rows)
 	case ColumnPublishOperationDelete:
-		return prepared, nil
+		if len(input.documents) != input.rows {
+			return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: column physical asset delete documents=%d rows=%d", len(input.documents), input.rows)
+		}
+		if input.rows == 0 {
+			return prepared, nil
+		}
+		rows := make([]columnDeclaredRow, len(input.documents))
+		for i, doc := range input.documents {
+			rows[i] = columnDeclaredRow{
+				ID:      append([]byte(nil), doc.ID...),
+				Deleted: true,
+			}
+		}
+		return c.prepareColumnPhysicalAssetRowsForCommand(prepared, input, hookInput, rows)
 	default:
 		return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
 	}
+}
+
+func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow) (ColumnPublishPreparedAssets, error) {
+	generation := uint64(1)
+	if hookInput.CurrentManifest != nil {
+		generation = hookInput.CurrentManifest.Generation + 1
+	}
+	const partID = uint64(1)
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        hookInput.Collection,
+		Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
+		Generation:        generation,
+		PartID:            partID,
+		AppliedCommandLSN: hookInput.AppliedCommandLSN,
+		Operation:         hookInput.Operation,
+		SchemaHash:        hookInput.ColumnStore.SchemaHash,
+		Columns:           hookInput.ColumnStore.Columns,
+		Rows:              rows,
+	})
+	if err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
+	ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, partID)
+	if err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
+	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, hookInput.ColumnStore, generation, partID, len(encoded)); err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
+	if prepared.CommandBytes == 0 {
+		prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
+	}
+	prepared.RowCount = summary.RowCount
+	prepared.ColumnPayloadBytes = summary.PayloadBytes
+	prepared.Assets = []ColumnPreparedAsset{{
+		Ref:          ref,
+		Bytes:        ref.Length,
+		PublishID:    hookInput.AppliedCommandLSN,
+		GenerationID: generation,
+		Reason:       string(input.operation),
+	}}
+	return prepared, nil
+}
+
+func validateColumnPhysicalAssetPreparedRefForManifest(ref ColumnAssetRef, cfg ColumnStoreConfig, generation, partID uint64, payloadLen int) error {
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return err
+	}
+	if cfg.AssetManager == nil {
+		return errors.New("collections: column physical asset manifest validation requires asset manager")
+	}
+	if ref.Kind != ColumnAssetKindTCS1PartImage {
+		return fmt.Errorf("collections: column physical asset kind=%q want %q", ref.Kind, ColumnAssetKindTCS1PartImage)
+	}
+	if ref.Namespace != cfg.AssetManager.Namespace {
+		return fmt.Errorf("collections: column physical asset namespace=%q want %q", ref.Namespace, cfg.AssetManager.Namespace)
+	}
+	if ref.Generation != generation {
+		return fmt.Errorf("collections: column physical asset generation=%d want %d", ref.Generation, generation)
+	}
+	if ref.PartID != partID {
+		return fmt.Errorf("collections: column physical asset part_id=%d want %d", ref.PartID, partID)
+	}
+	if ref.Length != int64(payloadLen) {
+		return fmt.Errorf("collections: column physical asset length=%d want %d", ref.Length, payloadLen)
+	}
+	return nil
 }
 
 func columnWriteDocumentsBytes(docs []columnWriteDocument) int64 {

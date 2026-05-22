@@ -2172,12 +2172,11 @@ func TestCollectionCommandWALCreateCollectionReplaySameColumnMetadataAdvancesBef
 
 func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) {
 	tests := []struct {
-		name            string
-		kind            commitlog.CommandKind
-		format          commitlog.PayloadFormat
-		payload         func(t *testing.T) []byte
-		verify          func(t *testing.T, col *Collection)
-		unsupportedM12B bool
+		name    string
+		kind    commitlog.CommandKind
+		format  commitlog.PayloadFormat
+		payload func(t *testing.T) []byte
+		verify  func(t *testing.T, col *Collection)
 	}{
 		{
 			name:   "insert",
@@ -2200,10 +2199,9 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 			},
 		},
 		{
-			name:            "update",
-			kind:            commitlog.CommandKindCollectionUpdateBatchByID,
-			format:          commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
-			unsupportedM12B: true,
+			name:   "update",
+			kind:   commitlog.CommandKindCollectionUpdateBatchByID,
+			format: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
 			payload: func(t *testing.T) []byte {
 				t.Helper()
 				payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("events", []commitlog.CollectionDocument{{
@@ -2221,10 +2219,9 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 			},
 		},
 		{
-			name:            "delete",
-			kind:            commitlog.CommandKindCollectionDeleteBatchByID,
-			format:          commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
-			unsupportedM12B: true,
+			name:   "delete",
+			kind:   commitlog.CommandKindCollectionDeleteBatchByID,
+			format: commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
 			payload: func(t *testing.T) []byte {
 				t.Helper()
 				payload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("events", [][]byte{[]byte("e2")})
@@ -2257,18 +2254,6 @@ func TestCollectionCommandWALReplayMutationsBypassOpenProfileGate(t *testing.T) 
 				Durability:             backenddb.DurabilityWALOnRelaxed,
 				DisableBackgroundPrune: true,
 			})
-			if tt.unsupportedM12B {
-				if reopen != nil {
-					_ = reopen.Close()
-				}
-				if err == nil {
-					t.Fatalf("Open relaxed command WAL DB after unsupported %s replay succeeded, want ErrCommandWALRejected", tt.name)
-				}
-				if !errors.Is(err, backenddb.ErrCommandWALRejected) || !strings.Contains(err.Error(), "M12B") {
-					t.Fatalf("Open relaxed command WAL DB after unsupported %s replay error=%v, want M12B ErrCommandWALRejected", tt.name, err)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("Open relaxed command WAL DB after mutation replay: %v", err)
 			}

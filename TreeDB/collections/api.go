@@ -9809,6 +9809,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationDelete,
+				documents:        columnWriteDocumentsFromIDs(deleteIDs),
 				rows:             len(existing),
 			})
 			return err
@@ -10039,6 +10040,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 				baseRootIDs:      cloneColumnPublishBaseRootIDs(baseRootIDs),
 				commandWALIntent: commandWALIntent,
 				operation:        ColumnPublishOperationDelete,
+				documents:        columnWriteDocumentsFromIDs([][]byte{documentID}),
 				rows:             1,
 			})
 			return err
