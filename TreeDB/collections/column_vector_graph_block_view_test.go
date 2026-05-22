@@ -82,12 +82,19 @@ func TestColumnVectorGraphBlockViewAccessorsV1(t *testing.T) {
 	if math.Abs(float64(invNorm-1)) > 1e-6 {
 		t.Fatalf("invNorm=%v want 1", invNorm)
 	}
-	adjacency, adjacencyScratch, err := view.adjacency(ref.rowIndex, nil)
+	adjacency, adjacencyScratch, direct, err := view.adjacency(ref.rowIndex, nil)
 	if err != nil {
 		t.Fatalf("adjacency: %v", err)
 	}
-	if !slices.Equal(adjacency, []uint32{0}) || !slices.Equal(adjacencyScratch, []uint32{0}) {
-		t.Fatalf("adjacency=%v scratch=%v want [0]", adjacency, adjacencyScratch)
+	if !slices.Equal(adjacency, []uint32{0}) {
+		t.Fatalf("adjacency=%v want [0]", adjacency)
+	}
+	if columnPhysicalNativeLittleEndian {
+		if !direct || len(adjacencyScratch) != 0 {
+			t.Fatalf("direct=%t scratch=%v want direct adjacency view with no scratch", direct, adjacencyScratch)
+		}
+	} else if direct || !slices.Equal(adjacencyScratch, []uint32{0}) {
+		t.Fatalf("direct=%t scratch=%v want scratch adjacency decode", direct, adjacencyScratch)
 	}
 	stats := reader.Stats()
 	if stats.RowFetches != 0 || stats.RowsFetched != 0 {

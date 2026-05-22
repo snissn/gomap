@@ -693,7 +693,7 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 	case ColumnStoreValueAdjacencyList:
 		start := len(scratch.Uint32Values)
 		var err error
-		scratch.Uint32Values, err = cur.appendUint32Slice(scratch.Uint32Values)
+		scratch.Uint32Values, err = cur.appendUint32SliceWithEncoding(scratch.Uint32Values, col.FixedWidthEncoding)
 		if err != nil {
 			return err
 		}
@@ -796,12 +796,21 @@ func columnPhysicalCopyLittleEndianFloat32Bytes(dst []float32, raw []byte) {
 }
 
 func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
+	return c.appendUint32SliceWithEncoding(dst, ColumnFixedWidthEncodingDefault)
+}
+
+func (c *manifestCursor) appendUint32SliceWithEncoding(dst []uint32, encoding ColumnFixedWidthEncoding) ([]uint32, error) {
 	n := c.u64()
 	if c.err != nil {
 		return dst, c.err
 	}
 	byteLen, ok := c.fixedWidthSliceByteLen(n, 4, "uint32 slice")
 	if !ok {
+		return dst, c.err
+	}
+	littleEndian, err := columnFixedWidthEncodingIsLittleEndian(encoding)
+	if err != nil {
+		c.err = fmt.Errorf("collections: unsupported fixed_width_encoding %q", encoding)
 		return dst, c.err
 	}
 	base := len(dst)
@@ -813,26 +822,37 @@ func (c *manifestCursor) appendUint32Slice(dst []uint32) ([]uint32, error) {
 	} else {
 		dst = dst[:need]
 	}
-	// Keep cursor state out of the per-element loop; vector search decodes
-	// these fixed-width slices for every candidate row fetch.
 	pos := c.pos
 	end := pos + int(byteLen)
 	raw := c.raw
 	if pos < end {
-		_ = raw[end-1] // BCE: prove the full [pos, end) range before the loop.
+		_ = raw[end-1]
+	}
+	if littleEndian && columnPhysicalNativeLittleEndian {
+		dstBytes := unsafe.Slice((*byte)(unsafe.Pointer(unsafe.SliceData(dst[base:need]))), int(byteLen))
+		copy(dstBytes, raw[pos:end])
+		c.pos = end
+		return dst, nil
 	}
 	i := base
-	for ; i+4 <= need; i += 4 {
-		_ = raw[pos+15] // BCE: each unrolled iteration reads exactly 16 bytes.
-		dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
-		dst[i+1] = uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7])
-		dst[i+2] = uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11])
-		dst[i+3] = uint32(raw[pos+12])<<24 | uint32(raw[pos+13])<<16 | uint32(raw[pos+14])<<8 | uint32(raw[pos+15])
-		pos += 16
-	}
-	for ; i < need; i++ {
-		dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
-		pos += 4
+	if littleEndian {
+		for ; i < need; i++ {
+			dst[i] = uint32(raw[pos]) | uint32(raw[pos+1])<<8 | uint32(raw[pos+2])<<16 | uint32(raw[pos+3])<<24
+			pos += 4
+		}
+	} else {
+		for ; i+4 <= need; i += 4 {
+			_ = raw[pos+15]
+			dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
+			dst[i+1] = uint32(raw[pos+4])<<24 | uint32(raw[pos+5])<<16 | uint32(raw[pos+6])<<8 | uint32(raw[pos+7])
+			dst[i+2] = uint32(raw[pos+8])<<24 | uint32(raw[pos+9])<<16 | uint32(raw[pos+10])<<8 | uint32(raw[pos+11])
+			dst[i+3] = uint32(raw[pos+12])<<24 | uint32(raw[pos+13])<<16 | uint32(raw[pos+14])<<8 | uint32(raw[pos+15])
+			pos += 16
+		}
+		for ; i < need; i++ {
+			dst[i] = uint32(raw[pos])<<24 | uint32(raw[pos+1])<<16 | uint32(raw[pos+2])<<8 | uint32(raw[pos+3])
+			pos += 4
+		}
 	}
 	c.pos = end
 	return dst, nil

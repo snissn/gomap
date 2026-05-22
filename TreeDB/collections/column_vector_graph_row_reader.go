@@ -477,7 +477,11 @@ func (r *columnVectorGraphPhysicalRowReader) readNativeGraphAdjacency(cur *manif
 	}
 	start := len(scratch.Uint32Values)
 	var err error
-	scratch.Uint32Values, err = cur.appendUint32Slice(scratch.Uint32Values)
+	encoding := ColumnFixedWidthEncodingDefault
+	if r.reader != nil && len(r.reader.view.Config.Columns) > columnVectorGraphPhysicalRowValueAdjacency {
+		encoding = r.reader.view.Config.Columns[columnVectorGraphPhysicalRowValueAdjacency].FixedWidthEncoding
+	}
+	scratch.Uint32Values, err = cur.appendUint32SliceWithEncoding(scratch.Uint32Values, encoding)
 	if err != nil {
 		return nil, err
 	}

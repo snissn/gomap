@@ -412,11 +412,19 @@ func (v *columnVectorGraphBlockView) invNorm(rowIndex int) (float32, error) {
 	return v.invNorms[rowIndex], nil
 }
 
-func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) ([]uint32, []uint32, error) {
+func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) ([]uint32, []uint32, bool, error) {
 	if err := v.checkRowIndex(rowIndex); err != nil {
-		return nil, scratch, err
+		return nil, scratch, false, err
 	}
 	span := v.adjSpans[rowIndex]
+	if span.count == 0 {
+		return nil, scratch, true, nil
+	}
+	if v.adjacencyLittleEndian() && columnPhysicalNativeLittleEndian {
+		raw := v.block.raw[span.start:span.end]
+		adjacency := unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(raw))), span.count)
+		return adjacency, scratch, true, nil
+	}
 	base := len(scratch)
 	need := base + span.count
 	if cap(scratch) < need {
@@ -427,11 +435,29 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 		scratch = scratch[:need]
 	}
 	pos := span.start
+	if v.adjacencyLittleEndian() {
+		for i := base; i < need; i++ {
+			scratch[i] = uint32(v.block.raw[pos]) | uint32(v.block.raw[pos+1])<<8 | uint32(v.block.raw[pos+2])<<16 | uint32(v.block.raw[pos+3])<<24
+			pos += 4
+		}
+		return scratch[base:], scratch, false, nil
+	}
 	for i := base; i < need; i++ {
 		scratch[i] = uint32(v.block.raw[pos])<<24 | uint32(v.block.raw[pos+1])<<16 | uint32(v.block.raw[pos+2])<<8 | uint32(v.block.raw[pos+3])
 		pos += 4
 	}
-	return scratch[base:], scratch, nil
+	return scratch[base:], scratch, false, nil
+}
+
+func (v *columnVectorGraphBlockView) adjacencyLittleEndian() bool {
+	if v == nil || v.reader == nil || v.reader.reader == nil {
+		return false
+	}
+	cols := v.reader.reader.view.Config.Columns
+	if len(cols) <= columnVectorGraphPhysicalRowValueAdjacency {
+		return false
+	}
+	return cols[columnVectorGraphPhysicalRowValueAdjacency].FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian
 }
 
 func columnVectorGraphReadBytesSpan(cur *manifestCursor) (int, int, error) {
