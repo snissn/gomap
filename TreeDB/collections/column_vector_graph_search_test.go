@@ -79,8 +79,8 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	if stats.Candidates != uint64(len(rows)) {
 		t.Fatalf("Candidates=%d want %d", stats.Candidates, len(rows))
 	}
-	if stats.Edges == 0 || stats.CandidateFetches != uint64(len(rows)) || stats.ScoreBatches != uint64(len(rows)) || stats.ExpansionFetches != 0 || stats.ResultFetches != uint64(len(got)) {
-		t.Fatalf("stats=%+v want candidate/result fetches without duplicate expansion row fetches", stats)
+	if stats.Edges == 0 || stats.CandidateFetches != uint64(len(rows)) || stats.ScoreBatches != uint64(len(rows)) || stats.ExpansionFetches != stats.AdjacencyExpansions || stats.ResultFetches != uint64(len(got)) {
+		t.Fatalf("stats=%+v want candidate/result fetches plus lazy adjacency expansion fetches", stats)
 	}
 	readerStats := reader.Stats()
 	if readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
@@ -112,8 +112,8 @@ func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
 	if len(got) != 1 || got[0].Ordinal != 4 || string(got[0].ID) != "doc-best" {
 		t.Fatalf("results=%+v want best-first traversal to reach doc-best before lower-score branch", got)
 	}
-	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ScoreBatches != 4 || stats.ExpansionFetches != 0 {
-		t.Fatalf("stats=%+v want four scored candidates without duplicate expansion row fetches", stats)
+	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ScoreBatches != 4 || stats.ExpansionFetches != stats.AdjacencyExpansions {
+		t.Fatalf("stats=%+v want four scored candidates plus lazy adjacency expansion fetches", stats)
 	}
 	if readerStats := reader.Stats(); readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
 		t.Fatalf("reader stats=%+v want no generic row fetches for scoring or result IDs stats=%+v", readerStats, stats)
