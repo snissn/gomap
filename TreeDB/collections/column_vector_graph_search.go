@@ -373,13 +373,6 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 	})
 }
 
-func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(plan *columnVectorGraphSearchPlan, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
-	if !scratch.markVisited(ordinal) {
-		return nil
-	}
-	return r.scoreAndPushFrontierVisited(plan, nil, query, queryInvNorm, ordinal, topK, scratch, stats)
-}
-
 func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	view := singleBlockView
 	rowIndex := ordinal
