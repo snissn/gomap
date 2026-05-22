@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -1644,6 +1645,45 @@ func BenchmarkColumnQueryPlannerCapabilitiesM14A(b *testing.B) {
 }
 
 var columnQueryPlannerBenchSinkM14A int
+
+func TestColumnQueryPlannerCapabilitiesAllocationBudgetM1634(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(1024))
+	defer closeFn()
+	req := ColumnQueryPlanRequest{
+		Name:             "m1634_insert",
+		ProjectedColumns: []string{"time_us", "kind", "did"},
+		ForceKind:        ColumnQueryPlanSerialColumnScan,
+		Capabilities: ColumnQueryPlannerCapabilities{
+			SerialColumnScan:   true,
+			AggregateMetadata:  true,
+			ParallelColumnScan: true,
+			MaxParallelWorkers: 4,
+		},
+	}
+	plan, err := reopened.PlanColumnQuery(req)
+	if err != nil {
+		t.Fatalf("PlanColumnQuery preview: %v", err)
+	}
+	if !plan.Supported || plan.Kind != ColumnQueryPlanSerialColumnScan || plan.Diagnostics.PhysicalAssetCount == 0 {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	allocs := testing.AllocsPerRun(50, func() {
+		plan, err := reopened.PlanColumnQuery(req)
+		if err != nil {
+			panic(fmt.Sprintf("PlanColumnQuery: %v", err))
+		}
+		if !plan.Supported || plan.Kind != ColumnQueryPlanSerialColumnScan || plan.Diagnostics.PhysicalAssetCount == 0 {
+			panic(fmt.Sprintf("unexpected plan: %+v", plan))
+		}
+	})
+	maxAllocs := 12.0
+	if runtime.GOOS == "windows" || collectionsRaceEnabled {
+		maxAllocs += 16
+	}
+	if allocs > maxAllocs {
+		t.Fatalf("planner capability allocs/run=%.2f want <= %.2f", allocs, maxAllocs)
+	}
+}
 
 func equalInts(left, right []int) bool {
 	return slices.Equal(left, right)
