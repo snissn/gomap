@@ -56,9 +56,8 @@ type columnVectorGraphNativeSearchResult struct {
 }
 
 type columnVectorGraphSearchCandidate struct {
-	ordinal   int
-	score     float64
-	adjacency []uint32
+	ordinal int
+	score   float64
 }
 
 // columnVectorGraphNativeSearchScratch is caller-owned mutable search state.
@@ -76,7 +75,6 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
-	adjacencyBuf   []uint32
 	searchPlan     columnVectorGraphSearchPlan
 }
 
@@ -103,20 +101,12 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	if frontierCap < topK {
 		frontierCap = topK
 	}
-	adjacencyCap := 0
-	if frontierCap > 0 && degree > 0 {
-		if frontierCap > math.MaxInt/degree {
-			return fmt.Errorf("collections: column_graph native search adjacency scratch overflows: frontierCap=%d degree=%d", frontierCap, degree)
-		}
-		adjacencyCap = frontierCap * degree
-	}
 	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
 	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topK)
 	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
-	s.adjacencyBuf = resizeColumnVectorGraphNativeUint32Scratch(s.adjacencyBuf, adjacencyCap)
 	return nil
 }
 
@@ -140,19 +130,10 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 }
 
 func resizeColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearchCandidate, target int) []columnVectorGraphSearchCandidate {
-	if len(dst) > 0 {
-		clearColumnVectorGraphNativeCandidateAdjacencyRefs(dst)
-	}
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]columnVectorGraphSearchCandidate, 0, target)
 	}
 	return dst[:0]
-}
-
-func clearColumnVectorGraphNativeCandidateAdjacencyRefs(candidates []columnVectorGraphSearchCandidate) {
-	for i := range candidates {
-		candidates[i].adjacency = nil
-	}
 }
 
 func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSearchResult, target int) []columnVectorGraphNativeSearchResult {
@@ -457,7 +438,6 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphS
 	lastIdx := len(s.frontier) - 1
 	best := s.frontier[0]
 	last := s.frontier[lastIdx]
-	s.frontier[lastIdx].adjacency = nil
 	s.frontier = s.frontier[:lastIdx]
 	if len(s.frontier) > 0 {
 		s.frontier[0] = last
