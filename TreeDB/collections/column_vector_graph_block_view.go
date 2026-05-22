@@ -121,6 +121,9 @@ func (p *columnVectorGraphSearchPlan) blockViewForAssetOrdinal(assetOrdinal int)
 	if err != nil {
 		return nil, err
 	}
+	if reader.closed {
+		return nil, errors.New("collections: physical column row reader is closed")
+	}
 	if assetOrdinal < 0 || assetOrdinal >= len(reader.ranges) {
 		return nil, fmt.Errorf("collections: column_graph block view asset ordinal=%d outside ranges=%d", assetOrdinal, len(reader.ranges))
 	}
