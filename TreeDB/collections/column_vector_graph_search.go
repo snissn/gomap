@@ -435,6 +435,7 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacency(plan *colu
 		return nil, err
 	}
 	scratch.expandScratch.Uint32Values = adjacencyScratch
+	stats.ExpansionFetches++
 	stats.AdjacencyExpansions++
 	if direct {
 		stats.AdjacencyDirectViews++
