@@ -1,0 +1,129 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/internal/commitlog
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                                                       │ artifacts/command-wal/pr1/microbench.txt │
+                                                       │                  sec/op                  │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                 152.5n ±  78%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                1.093µ ± 104%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                               1.990µ ±   2%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                              1.763µ ±   2%
+CommandWALRawKVBatchPayloadDecode/ops_1_value_64-12                                 79.56n ±   7%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_64-12                                935.9n ±   1%
+CommandWALRawKVBatchPayloadDecode/ops_128_value_64-12                               7.419µ ±   1%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12                              2.735µ ±   3%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                   7.865n ±  21%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                  81.66n ±  40%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                 646.1n ±   5%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                83.55n ±   4%
+CommandWALFrameEncode/ops_1_value_64-12                                             203.4n ±   8%
+CommandWALFrameEncode/ops_16_value_64-12                                            1.126µ ±   2%
+CommandWALFrameEncode/ops_128_value_64-12                                           7.931µ ±   2%
+CommandWALFrameEncode/ops_16_value_1024-12                                          11.45µ ±   4%
+CommandWALFrameDecode/ops_1_value_64-12                                             204.1n ±  11%
+CommandWALFrameDecode/ops_16_value_64-12                                            1.112µ ±   1%
+CommandWALFrameDecode/ops_128_value_64-12                                           7.822µ ±   1%
+CommandWALFrameDecode/ops_16_value_1024-12                                          11.26µ ±   1%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                     277.8n ±   6%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                    1.545µ ±   4%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                   11.42µ ±   6%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                  16.78µ ±  30%
+WriterAppendBatchLegacyRawKV/ops_1_value_64-12                                      69.41n ±   7%
+WriterAppendBatchLegacyRawKV/ops_16_value_64-12                                     766.2n ±   3%
+WriterAppendBatchLegacyRawKV/ops_128_value_64-12                                    6.211µ ±   9%
+WriterAppendBatchLegacyRawKV/ops_16_value_1024-12                                   6.910µ ±   6%
+geomean                                                                             1.032µ
+
+                                                       │ artifacts/command-wal/pr1/microbench.txt │
+                                                       │                   B/s                    │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                557.5Mi ± 345%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                               1.174Gi ± 273%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                              4.975Gi ±   2%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                             8.823Gi ±   2%
+CommandWALRawKVBatchPayloadDecode/ops_1_value_64-12                                1.042Gi ±   7%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_64-12                               1.328Gi ±   1%
+CommandWALRawKVBatchPayloadDecode/ops_128_value_64-12                              1.334Gi ±   1%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12                             5.685Gi ±   3%
+CommandWALFrameEncode/ops_1_value_64-12                                            904.7Mi ±   8%
+CommandWALFrameEncode/ops_16_value_64-12                                           1.190Gi ±   2%
+CommandWALFrameEncode/ops_128_value_64-12                                          1.261Gi ±   2%
+CommandWALFrameEncode/ops_16_value_1024-12                                         1.367Gi ±   4%
+CommandWALFrameDecode/ops_1_value_64-12                                            901.8Mi ±  10%
+CommandWALFrameDecode/ops_16_value_64-12                                           1.204Gi ±   1%
+CommandWALFrameDecode/ops_128_value_64-12                                          1.278Gi ±   1%
+CommandWALFrameDecode/ops_16_value_1024-12                                         1.389Gi ±   1%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                    662.7Mi ±   6%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                   887.6Mi ±   4%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                  896.2Mi ±   5%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                 954.5Mi ±  23%
+WriterAppendBatchLegacyRawKV/ops_1_value_64-12                                     1.369Gi ±   7%
+WriterAppendBatchLegacyRawKV/ops_16_value_64-12                                    1.893Gi ±   3%
+WriterAppendBatchLegacyRawKV/ops_128_value_64-12                                   1.863Gi ±   8%
+WriterAppendBatchLegacyRawKV/ops_16_value_1024-12                                  2.281Gi ±   6%
+geomean                                                                            1.427Gi
+
+                                                       │ artifacts/command-wal/pr1/microbench.txt │
+                                                       │                   B/op                   │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                  96.00 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                               1.375Ki ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                              10.62Ki ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                             18.00Ki ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_1_value_64-12                                  144.0 ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_64-12                               2.250Ki ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_128_value_64-12                              18.00Ki ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12                             17.25Ki ± 0%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                    0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                   0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                  0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                 0.000 ± 0%
+CommandWALFrameEncode/ops_1_value_64-12                                              208.0 ± 0%
+CommandWALFrameEncode/ops_16_value_64-12                                           1.500Ki ± 0%
+CommandWALFrameEncode/ops_128_value_64-12                                          10.62Ki ± 0%
+CommandWALFrameEncode/ops_16_value_1024-12                                         18.00Ki ± 0%
+CommandWALFrameDecode/ops_1_value_64-12                                              96.00 ± 0%
+CommandWALFrameDecode/ops_16_value_64-12                                           1.375Ki ± 0%
+CommandWALFrameDecode/ops_128_value_64-12                                          10.62Ki ± 0%
+CommandWALFrameDecode/ops_16_value_1024-12                                         18.00Ki ± 0%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                      0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                     0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                    0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                   0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_1_value_64-12                                       0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_16_value_64-12                                      0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_128_value_64-12                                     0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_16_value_1024-12                                    0.000 ± 0%
+geomean                                                                                         ¹
+¹ summaries must be >0 to compute geomean
+
+                                                       │ artifacts/command-wal/pr1/microbench.txt │
+                                                       │                allocs/op                 │
+CommandWALRawKVBatchPayloadEncode/ops_1_value_64-12                                  1.000 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_64-12                                 1.000 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_128_value_64-12                                1.000 ± 0%
+CommandWALRawKVBatchPayloadEncode/ops_16_value_1024-12                               1.000 ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_1_value_64-12                                  3.000 ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_64-12                                 33.00 ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_128_value_64-12                                257.0 ± 0%
+CommandWALRawKVBatchPayloadDecode/ops_16_value_1024-12                               33.00 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_1_value_64-12                                    0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_64-12                                   0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_128_value_64-12                                  0.000 ± 0%
+CommandWALRawKVBatchPayloadScan/ops_16_value_1024-12                                 0.000 ± 0%
+CommandWALFrameEncode/ops_1_value_64-12                                              1.000 ± 0%
+CommandWALFrameEncode/ops_16_value_64-12                                             1.000 ± 0%
+CommandWALFrameEncode/ops_128_value_64-12                                            1.000 ± 0%
+CommandWALFrameEncode/ops_16_value_1024-12                                           1.000 ± 0%
+CommandWALFrameDecode/ops_1_value_64-12                                              1.000 ± 0%
+CommandWALFrameDecode/ops_16_value_64-12                                             1.000 ± 0%
+CommandWALFrameDecode/ops_128_value_64-12                                            1.000 ± 0%
+CommandWALFrameDecode/ops_16_value_1024-12                                           1.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_1_value_64-12                                      0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_64-12                                     0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_128_value_64-12                                    0.000 ± 0%
+WriterAppendCommandRawKVBatch/ops_16_value_1024-12                                   0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_1_value_64-12                                       0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_16_value_64-12                                      0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_128_value_64-12                                     0.000 ± 0%
+WriterAppendBatchLegacyRawKV/ops_16_value_1024-12                                    0.000 ± 0%
+geomean                                                                                         ¹
+¹ summaries must be >0 to compute geomean

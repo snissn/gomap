@@ -1,0 +1,30 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12         	     200	    105413 ns/op	   1214266 docs/s	   46341 B/op	     819 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12         	     200	    106233 ns/op	   1204899 docs/s	   46290 B/op	     819 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=false/command_wal=false-12         	     200	    106777 ns/op	   1198765 docs/s	   46392 B/op	     819 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12          	     200	    140416 ns/op	    911577 docs/s	  102985 B/op	    1343 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12          	     200	    146592 ns/op	    873174 docs/s	  103325 B/op	    1343 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=false/command_wal=true-12          	     200	    163903 ns/op	    780952 docs/s	  103204 B/op	    1343 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12          	     200	    225671 ns/op	    567197 docs/s	   98498 B/op	     940 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12          	     200	    274579 ns/op	    466168 docs/s	   97818 B/op	     940 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=true/command_wal=false-12          	     200	    265495 ns/op	    482119 docs/s	   97906 B/op	     940 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12           	     200	    267908 ns/op	    477776 docs/s	  154581 B/op	    1464 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12           	     200	    264886 ns/op	    483227 docs/s	  154534 B/op	    1464 allocs/op
+BenchmarkCollectionCommandWALInsertBatchByID/indexed=true/command_wal=true-12           	     200	    266779 ns/op	    479798 docs/s	  154292 B/op	    1464 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12         	     200	    150082 ns/op	    852865 docs/s	   71439 B/op	    1111 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12         	     200	    147650 ns/op	    866912 docs/s	   69307 B/op	    1111 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=false/command_wal=false-12         	     200	    144547 ns/op	    885523 docs/s	   68874 B/op	    1111 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12          	     200	    160777 ns/op	    796133 docs/s	   72514 B/op	    1354 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12          	     200	    155963 ns/op	    820709 docs/s	   73454 B/op	    1354 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=false/command_wal=true-12          	     200	    158464 ns/op	    807754 docs/s	   73342 B/op	    1354 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12          	     200	    313887 ns/op	    407790 docs/s	  158984 B/op	    2213 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12          	     200	    312922 ns/op	    409047 docs/s	  156954 B/op	    2212 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=true/command_wal=false-12          	     200	    316124 ns/op	    404905 docs/s	  159129 B/op	    2212 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12           	     200	    323587 ns/op	    395566 docs/s	  148629 B/op	    2444 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12           	     200	    337021 ns/op	    379798 docs/s	  149262 B/op	    2444 allocs/op
+BenchmarkCollectionCommandWALDeleteBatchByID/indexed=true/command_wal=true-12           	     200	    333995 ns/op	    383239 docs/s	  148987 B/op	    2444 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	2.519s

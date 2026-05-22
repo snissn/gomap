@@ -113,7 +113,8 @@ The default run uses:
 - 100,000 documents
 - batch size 16,000
 - two secondary indexes for the primary TreeDB/SQLite comparison
-- TreeDB `production_fast`
+- TreeDB collection benchmark engine `production_wal_on_fast`
+- raw TreeDB compaction/profile fixtures remain on profile `fast`
 - TreeDB document formats `template-v1`, `bson`, and `json`
 - SQLite JSON and SQLite native-column baselines
 - full leafgen pack/GC with:

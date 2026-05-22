@@ -18,6 +18,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
@@ -118,19 +119,30 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached         *caching.DB
-	backend        *db.DB
-	dictdb         *db.DB
-	templateDB     *DB
-	writePath      writePathInfo
-	bgVac          bgIndexVacuumWorker
-	notifyError    func(error)
-	bgErrMu        sync.Mutex
-	bgErr          error
-	durabilityMode string
-	dir            string
-	maintenance    maintenanceCoordinator
+	cached                          *caching.DB
+	backend                         *db.DB
+	dictdb                          *db.DB
+	templateDB                      *DB
+	writePath                       writePathInfo
+	commandWALCached                bool
+	commandWALPendingMu             sync.Mutex
+	commandWALFirst                 atomic.Uint64
+	commandWALLast                  atomic.Uint64
+	commandWALCheckpointCutoverLast atomic.Uint64
+	commandWALLiveFrames            atomic.Uint64
+	bgVac                           bgIndexVacuumWorker
+	notifyError                     func(error)
+	bgErrMu                         sync.Mutex
+	bgErr                           error
+	durabilityMode                  string
+	dir                             string
+	maintenance                     maintenanceCoordinator
 }
+
+var (
+	testAfterPublicCommandWALPointAppend func(commitlog.RawKVOperation)
+	testAfterCachedCheckpoint            func()
+)
 
 type writePathInfo struct {
 	mode       string
@@ -215,6 +227,10 @@ func writePathFromOptions(opts Options) writePathInfo {
 	}
 	if opts.ReadOnly {
 		info.mode = "readonly"
+	}
+	if opts.CommandWAL && !opts.ReadOnly {
+		info.mode = "command_wal_cached"
+		info.redoLog = "command_wal"
 	}
 	if opts.Durability == db.DurabilityWALOffRelaxed {
 		info.redoLog = "off"
@@ -380,23 +396,6 @@ func Open(opts Options) (*DB, error) {
 	applyEnvMaintenanceOverrides(&opts)
 	forceTemplateCompressionOff(&opts)
 
-	writePath := writePathFromOptions(opts)
-	if envBool(envWritePathLog) {
-		effectivePolicy := opts.ValueLog.Generational.Policy
-		if effectivePolicy == ValueLogGenerationDefault {
-			effectivePolicy = ValueLogGenerationHotWarmCold
-		}
-		fmt.Fprintf(
-			os.Stderr,
-			"treedb write_path mode=%s value_store=%s redo_log=%s vlog_generation_policy_raw=%d vlog_generation_policy_effective=%d\n",
-			writePath.mode,
-			writePath.valueStore,
-			writePath.redoLog,
-			opts.ValueLog.Generational.Policy,
-			effectivePolicy,
-		)
-	}
-
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return nil, err
@@ -413,15 +412,21 @@ func Open(opts Options) (*DB, error) {
 	// (like value-log compression) remain controlled by opts/env unless the
 	// caller opts out via IgnoreFormatConfig.
 	var persistedFormat *db.FormatConfig
-	if !opts.IgnoreFormatConfig {
+	if opts.IgnoreFormatConfig {
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(maindbDir)
+		if err != nil {
+			return nil, err
+		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
+	} else {
 		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
 			return nil, err
 		} else if ok {
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 			persistedFormat = &cfg
 		}
 	}
-
 	// Apply runtime-only index/cache overrides after loading persisted format.json
 	// so downstream apps can toggle safe behavior without plumbing new CLI flags.
 	//
@@ -440,6 +445,23 @@ func Open(opts Options) (*DB, error) {
 
 	// Keep opts.DisableSideStores consistent with the resolved layout.
 	opts.DisableSideStores = layout.disableSideStores
+
+	writePath := writePathFromOptions(opts)
+	if envBool(envWritePathLog) {
+		effectivePolicy := opts.ValueLog.Generational.Policy
+		if effectivePolicy == ValueLogGenerationDefault {
+			effectivePolicy = ValueLogGenerationHotWarmCold
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"treedb write_path mode=%s value_store=%s redo_log=%s vlog_generation_policy_raw=%d vlog_generation_policy_effective=%d\n",
+			writePath.mode,
+			writePath.valueStore,
+			writePath.redoLog,
+			opts.ValueLog.Generational.Policy,
+			effectivePolicy,
+		)
+	}
 
 	// Dict compression requires a persistent dict store so dictionaries can be
 	// published and older dict-compressed frames remain decodable.
@@ -508,6 +530,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.Dir = dictdbDir
+		dictOpts.CommandWAL = false
 		// Side stores are opened via the backend (no caching layer). They must
 		// not inherit outer-leaf-in-value-log from the main DB, since that mode
 		// requires a leaf-page log wired by the cached layer.
@@ -557,6 +580,7 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.Dir = templatedbDir
+		templateOpts.CommandWAL = false
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
 		// Like dictdb, templatedb is an internal side store; avoid inheriting the
@@ -621,7 +645,7 @@ func Open(opts Options) (*DB, error) {
 		opts.MemtableMode = "adaptive"
 	}
 
-	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed
+	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed || opts.CommandWAL
 	relaxedSync := opts.Durability != db.DurabilityDurable
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
@@ -716,7 +740,11 @@ func Open(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}
+	if out.commandWALCached {
+		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
+		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
+	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
 	// bounded for long-running workloads, aligning operational expectations with
@@ -1281,6 +1309,13 @@ func (db *DB) Close() error {
 
 	// Close cached layer first if present
 	if db.cached != nil {
+		if db.commandWALCached {
+			if e := db.checkpointCachedForPublicCommandWAL(); e != nil {
+				wrapped := fmt.Errorf("treedb: final command WAL checkpoint during close: %w", e)
+				db.reportError(wrapped)
+				err = errors.Join(err, wrapped)
+			}
+		}
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 	}
@@ -1449,6 +1484,11 @@ func (db *DB) Set(key, value []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, false)
+			})
+		}
 		return db.cached.Set(key, value)
 	}
 	return db.backend.Set(key, value)
@@ -1462,6 +1502,11 @@ func (db *DB) SetSync(key, value []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, true)
+			})
+		}
 		return db.cached.SetSync(key, value)
 	}
 	return db.backend.SetSync(key, value)
@@ -1478,6 +1523,9 @@ func (db *DB) SetSync(key, value []byte) error {
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
+	}
+	if db.commandWALCached {
+		return ErrCommandWALRejected
 	}
 	if db.cached != nil {
 		return db.cached.Update(key, fn)
@@ -1497,6 +1545,9 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
 	}
+	if db.commandWALCached {
+		return ErrCommandWALRejected
+	}
 	if db.cached != nil {
 		return db.cached.UpdateSync(key, fn)
 	}
@@ -1509,6 +1560,11 @@ func (db *DB) Delete(key []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, false)
+			})
+		}
 		return db.cached.Delete(key)
 	}
 	return db.backend.Delete(key)
@@ -1521,6 +1577,9 @@ func (db *DB) Delete(key []byte) error {
 func (db *DB) DeleteRange(start, end []byte) error {
 	if err := db.ensureOpen(); err != nil {
 		return err
+	}
+	if db.commandWALCached {
+		return ErrCommandWALRejected
 	}
 	if db.cached != nil {
 		return db.cached.DeleteRange(start, end)
@@ -1554,6 +1613,11 @@ func (db *DB) DeleteSync(key []byte) error {
 		return err
 	}
 	if db.cached != nil {
+		if db.commandWALCached {
+			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, true)
+			})
+		}
 		return db.cached.DeleteSync(key)
 	}
 	return db.backend.DeleteSync(key)
@@ -1587,7 +1651,11 @@ func (db *DB) NewBatch() Batch {
 		return nil
 	}
 	if db.cached != nil {
-		return db.cached.NewBatch()
+		inner := db.cached.NewBatch()
+		if db.commandWALCached {
+			return newCommandWALPublicBatch(db, inner, 0)
+		}
+		return inner
 	}
 	return db.backend.NewBatch()
 }
@@ -1606,7 +1674,11 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 		return nil
 	}
 	if db.cached != nil {
-		return db.cached.NewBatchWithSize(size)
+		inner := db.cached.NewBatchWithSize(size)
+		if db.commandWALCached {
+			return newCommandWALPublicBatch(db, inner, size)
+		}
+		return inner
 	}
 	return db.backend.NewBatchWithSize(size)
 }
@@ -1641,6 +1713,7 @@ func (db *DB) Stats() map[string]string {
 			stats = make(map[string]string)
 		}
 		writePathStatsInto(stats, db.writePath)
+		db.publicCommandWALLiveStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		maintenanceStatsInto(stats, &db.maintenance)
@@ -1707,9 +1780,23 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	if db.cached != nil {
-		return db.cached.Checkpoint()
+		return db.checkpointCachedForPublicCommandWAL()
 	}
 	return db.backend.Checkpoint()
+}
+
+func (db *DB) checkpointCachedForPublicCommandWAL() error {
+	if db == nil || db.cached == nil {
+		return ErrClosed
+	}
+	if err := db.cached.Checkpoint(); err != nil {
+		return err
+	}
+	if testAfterCachedCheckpoint != nil {
+		testAfterCachedCheckpoint()
+	}
+	db.clearPublishedPublicCommandWALPending()
+	return nil
 }
 
 // CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.
@@ -1777,10 +1864,21 @@ func VacuumIndexOffline(opts Options) error {
 
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
-	if !opts.IgnoreFormatConfig {
+	if opts.IgnoreFormatConfig {
+		requiresCommandWAL, err := db.CommandWALRequiredFeatureEnabled(layout.mainDir)
+		if err != nil {
+			return err
+		}
+		if requiresCommandWAL {
+			return db.ErrCommandWALUnsupported
+		}
+	} else {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
+			if cfg.RequiresCommandWALV1() {
+				return db.ErrCommandWALUnsupported
+			}
 			cfg.ApplyToOptions(&opts)
 		}
 	}

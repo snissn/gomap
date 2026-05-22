@@ -914,7 +914,7 @@ func TestRunBenchmark_CheckpointBetweenTests_RunsFinalCheckpoint(t *testing.T) {
 }
 
 func TestRunBenchmark_CapturesTreeDBStatsAfterClose(t *testing.T) {
-	const dbName = "close_stats_mock"
+	const dbName = "treedb_close_stats_mock"
 	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
 		return &closeStatsDB{name: dbName}, nil
 	})
@@ -1522,6 +1522,16 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 			"TreeDB": {
 				"treedb.cache.vlog_mmap.read.hits":                                                     "7",
 				"treedb.cache.vlog_mmap.read.hit_ratio":                                                "0.700000",
+				"treedb.applied_command_lsn":                                                           "3",
+				"treedb.command_wal.enabled":                                                           "true",
+				"treedb.command_wal.required_feature":                                                  "true",
+				"treedb.command_wal.live_accepted_frames":                                              "3",
+				"treedb.command_wal.live_accepted_max_lsn":                                             "3",
+				"treedb.command_wal.live_covered_frames":                                               "3",
+				"treedb.command_wal.live_covered_max_lsn":                                              "3",
+				"treedb.command_wal.frames":                                                            "3",
+				"treedb.command_wal.typed_segments":                                                    "1",
+				"treedb.command_wal.max_lsn":                                                           "3",
 				"treedb.leaf_generation.generations.pinned":                                            "1",
 				"treedb.leaf_generation.pins.total":                                                    "4",
 				"treedb.publish.ordered_root_delta_group.calls_total":                                  "9",
@@ -1555,6 +1565,16 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 		"publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total: 2048",
 		"publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total: 4096",
 		"publish.ordered_root_delta_group.write_lock_hold_ns_total: 12345",
+		"applied_command_lsn: 3",
+		"command_wal.enabled: true",
+		"command_wal.required_feature: true",
+		"command_wal.live_accepted_frames: 3",
+		"command_wal.live_accepted_max_lsn: 3",
+		"command_wal.live_covered_frames: 3",
+		"command_wal.live_covered_max_lsn: 3",
+		"command_wal.frames: 3",
+		"command_wal.typed_segments: 1",
+		"command_wal.max_lsn: 3",
 	} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("expected selected ordered-root stat %q in markdown, got:\n%s", want, md)

@@ -4,7 +4,10 @@ import "testing"
 
 func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 	stats := map[string]string{
-		"treedb.commit_seq": "7",
+		"treedb.commit_seq":          "7",
+		"treedb.applied_command_lsn": "9",
+		"treedb.command_wal.enabled": "true",
+		"treedb.command_wal.frames":  "3",
 		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total": "5",
 		"treedb.process.read_path.outer_leaf.cache.hits":                      "11",
 		"treedb.vlog.mmap_read.fallback_readat":                               "13",
@@ -16,6 +19,9 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 	got := Selected(stats)
 	for _, key := range []string{
 		"treedb.commit_seq",
+		"treedb.applied_command_lsn",
+		"treedb.command_wal.enabled",
+		"treedb.command_wal.frames",
 		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total",
 		"treedb.process.read_path.outer_leaf.cache.hits",
 		"treedb.vlog.mmap_read.fallback_readat",
