@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"gonum.org/v1/gonum/blas/blas32"
 )
 
@@ -181,11 +182,16 @@ type VectorIndex struct {
 	insertScratch vectorIndexSearchScratch
 	searchScratch sync.Pool
 
-	mutationSeq            uint64
-	persistedEpoch         uint64
-	persistedBytesDisk     int64
-	persistedSnapshotDirty bool
-	lastRebuildDuration    time.Duration
+	mutationSeq             uint64
+	persistedEpoch          uint64
+	persistedBytesDisk      int64
+	persistedSnapshotDirty  bool
+	nativeFullSnapshotDirty bool
+	nativePersistent        bool
+	dirtyMeta               bool
+	dirtyNodes              map[int]struct{}
+	dirtyDocs               map[string]struct{}
+	lastRebuildDuration     time.Duration
 }
 
 type vectorIndexNode struct {
@@ -221,6 +227,7 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 	if err := c.flushBufferedWrites(); err != nil {
 		return nil, err
 	}
+	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	materializer, err := c.NewStoredDocumentJSONMaterializer()
 	if err != nil {
 		return nil, err
@@ -244,6 +251,9 @@ func (c *Collection) BuildVectorIndex(opts VectorIndexOptions) (*VectorIndex, er
 		return nil, err
 	}
 	c.RegisterVectorIndex(index)
+	if c.manager != nil && index.needsNativeAutoPersist() {
+		c.manager.registerCollectionHandle(c)
+	}
 	return index, nil
 }
 
@@ -338,6 +348,7 @@ func (c *Collection) RegisterVectorIndex(index *VectorIndex) {
 		c.vectorIndexes = make(map[string]*VectorIndex)
 	}
 	index.collection = c
+	index.setNativePersistent(collectionMetaDeclaresVectorIndex(c.meta, index.name))
 	c.vectorIndexes[index.name] = index
 }
 
@@ -349,6 +360,18 @@ func (c *Collection) UnregisterVectorIndex(name string) {
 	c.vectorIndexesMu.Lock()
 	defer c.vectorIndexesMu.Unlock()
 	delete(c.vectorIndexes, name)
+	if !c.hasNativePersistentVectorIndexLocked() && c.manager != nil {
+		c.manager.unregisterCollectionHandle(c)
+	}
+}
+
+func (c *Collection) hasNativePersistentVectorIndexLocked() bool {
+	for _, index := range c.vectorIndexes {
+		if index != nil && index.isNativePersistent() {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Collection) registeredVectorIndexes() []*VectorIndex {
@@ -367,42 +390,213 @@ func (c *Collection) registeredVectorIndexes() []*VectorIndex {
 	return out
 }
 
-func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) {
+func (c *Collection) hasRegisteredVectorIndex(name string) bool {
+	if c == nil || name == "" {
+		return false
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	_, ok := c.vectorIndexes[name]
+	return ok
+}
+
+func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
+	if c == nil || name == "" {
+		return nil
+	}
+	c.vectorIndexesMu.RLock()
+	defer c.vectorIndexesMu.RUnlock()
+	return c.vectorIndexes[name]
+}
+
+func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struct{}, error) {
+	if c == nil {
+		return nil, nil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil, nil
+	}
+	c.vectorIndexLoadMu.Lock()
+	defer c.vectorIndexLoadMu.Unlock()
+	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		return nil, nil
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed
+	}
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	if catalog == nil {
+		_ = snap.Close()
+		return nil, errCollectionNotFound
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	_ = snap.Close()
+
+	declared := make(map[string]VectorIndexDefinition, len(c.meta.VectorIndexes))
+	for _, def := range c.meta.VectorIndexes {
+		declared[def.Name] = def
+	}
+	for _, index := range c.registeredVectorIndexes() {
+		def, ok := declared[index.name]
+		if !ok {
+			if index.isNativePersistent() {
+				c.UnregisterVectorIndex(index.name)
+			}
+			continue
+		}
+		if index.validateNativeSnapshotDefinition(def) != "" {
+			c.UnregisterVectorIndex(index.name)
+		}
+	}
+	var rebuilt map[string]struct{}
+	for _, def := range c.meta.VectorIndexes {
+		if index := c.registeredVectorIndex(def.Name); index != nil {
+			if index.validateNativeSnapshotDefinition(def) == "" {
+				index.setNativePersistent(true)
+				continue
+			}
+		}
+		index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			return nil, err
+		}
+		if index != nil {
+			continue
+		}
+		if status.ExactFallbackReason == "missing_graph_root" {
+			if _, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(def)); err != nil {
+				return nil, err
+			}
+			if rebuilt == nil {
+				rebuilt = make(map[string]struct{}, 1)
+			}
+			rebuilt[def.Name] = struct{}{}
+		}
+	}
+	return rebuilt, nil
+}
+
+func (c *Collection) declaredNativeVectorIndexesLoadedForCurrentCatalog() bool {
+	if c == nil || c.db == nil {
+		return false
+	}
+	commitSeq, systemRoot := dbCommitSeqAndSystemRoot(c.db)
+	c.catalogMu.RLock()
+	catalogCurrent := c.catalog != nil && c.catalogCommitSeq == commitSeq && c.catalogSystemRoot == systemRoot
+	var defs []VectorIndexDefinition
+	if catalogCurrent {
+		defs = append([]VectorIndexDefinition(nil), c.catalog.meta.VectorIndexes...)
+	}
+	c.catalogMu.RUnlock()
+	if !catalogCurrent {
+		return false
+	}
+	if len(defs) == 0 {
+		for _, index := range c.registeredVectorIndexes() {
+			if index.isNativePersistent() {
+				return false
+			}
+		}
+		return true
+	}
+	declared := make(map[string]struct{}, len(defs))
+	for _, def := range defs {
+		declared[def.Name] = struct{}{}
+		index := c.registeredVectorIndex(def.Name)
+		if index == nil || !index.isNativePersistent() || index.validateNativeSnapshotDefinition(def) != "" {
+			return false
+		}
+	}
+	for _, index := range c.registeredVectorIndexes() {
+		if !index.isNativePersistent() {
+			continue
+		}
+		if _, ok := declared[index.name]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Collection) notifyVectorIndexesUpsert(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
-		return
+		return nil
+	}
+	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
+	if err != nil {
+		return err
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
-		return
+		return nil
+	}
+	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
+		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
+		if _, ok := rebuilt[index.name]; ok {
+			continue
+		}
 		for _, documentID := range documentIDs {
 			if len(documentID) == 0 {
 				continue
 			}
-			_ = index.InsertDocument(documentID)
+			if err := index.InsertDocument(documentID); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) {
+func (c *Collection) notifyVectorIndexesDelete(documentIDs [][]byte) error {
 	if len(documentIDs) == 0 {
-		return
+		return nil
+	}
+	rebuilt, err := c.ensureDeclaredNativeVectorIndexesLoaded()
+	if err != nil {
+		return err
 	}
 	indexes := c.registeredVectorIndexes()
 	if len(indexes) == 0 {
-		return
+		return nil
+	}
+	if c.manager != nil && vectorIndexListHasNativePersistent(indexes) {
+		c.manager.registerCollectionHandle(c)
 	}
 	for _, index := range indexes {
+		if _, ok := rebuilt[index.name]; ok {
+			continue
+		}
 		for _, documentID := range documentIDs {
 			index.TombstoneDocumentID(documentID)
 		}
 	}
+	return nil
 }
 
-func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) {
+func vectorIndexListHasNativePersistent(indexes []*VectorIndex) bool {
+	for _, index := range indexes {
+		if index != nil && index.isNativePersistent() {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, results []UpdateBatchResult) error {
 	if len(items) == 0 || len(results) == 0 {
-		return
+		return nil
 	}
 	var updated [][]byte
 	for i := range items {
@@ -413,7 +607,101 @@ func (c *Collection) notifyVectorIndexesUpdateBatch(items []UpdateBatchItem, res
 			updated = append(updated, items[i].DocumentID)
 		}
 	}
-	c.notifyVectorIndexesUpsert(updated)
+	return c.notifyVectorIndexesUpsert(updated)
+}
+
+func (c *Collection) notifyVectorIndexesBSONSetUpdateBatch(items []BSONSetUpdateBatchItem, results []UpdateBatchResult) error {
+	if len(items) == 0 || len(results) == 0 {
+		return nil
+	}
+	var updated [][]byte
+	for i := range items {
+		if i >= len(results) {
+			break
+		}
+		if results[i].Modified {
+			updated = append(updated, items[i].DocumentID)
+		}
+	}
+	return c.notifyVectorIndexesUpsert(updated)
+}
+
+func (c *Collection) persistNativeVectorIndexIfDeclared(index *VectorIndex) error {
+	if c == nil || index == nil || !index.needsNativeAutoPersist() {
+		return nil
+	}
+	if !collectionMetaDeclaresVectorIndex(c.meta, index.name) {
+		declared, err := c.refreshVectorIndexDeclaration(index.name)
+		if err != nil || !declared {
+			return err
+		}
+	}
+	if !index.isNativePersistent() || !index.hasNativePersistedSnapshot() {
+		_, err := index.SaveNativeSnapshot()
+		if errors.Is(err, errVectorIndexNotDeclared) {
+			return nil
+		}
+		return err
+	}
+	_, err := index.SaveNativeDeltaSnapshot()
+	if errors.Is(err, errVectorIndexNotDeclared) {
+		return nil
+	}
+	return err
+}
+
+func (c *Collection) refreshVectorIndexDeclaration(name string) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil || catalog == nil {
+		return false, err
+	}
+	c.meta = catalog.meta
+	c.rememberCatalog(snap, catalog)
+	return collectionMetaDeclaresVectorIndex(catalog.meta, name), nil
+}
+
+func (c *Collection) persistDirtyNativeVectorIndexes() error {
+	indexes := c.registeredVectorIndexes()
+	for _, index := range indexes {
+		if err := c.persistNativeVectorIndexIfDeclared(index); err != nil {
+			return err
+		}
+	}
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() {
+		c.manager.unregisterCollectionHandle(c)
+	}
+	return nil
+}
+
+func (c *Collection) hasDirtyNativeVectorIndex() bool {
+	for _, index := range c.registeredVectorIndexes() {
+		if index == nil || (!index.isNativePersistent() && !collectionMetaDeclaresVectorIndex(c.meta, index.name)) {
+			continue
+		}
+		if index.needsNativeAutoPersist() {
+			return true
+		}
+	}
+	return false
+}
+
+func collectionMetaDeclaresVectorIndex(meta CollectionMeta, name string) bool {
+	if name == "" {
+		return false
+	}
+	_, ok := findVectorIndex(meta.VectorIndexes, name)
+	return ok
 }
 
 // InsertDocument adds or replaces one committed collection document in the
@@ -493,6 +781,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	}
 	if idx.dimensions == 0 {
 		idx.dimensions = len(vector)
+		idx.markVectorMetaDirtyLocked()
 	} else if len(vector) != idx.dimensions {
 		return fmt.Errorf("collections: vector field %q in document %q has dimension %d, want %d", idx.field, documentID, len(vector), idx.dimensions)
 	}
@@ -503,10 +792,13 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	node := idx.newVectorIndexNode(documentID, vector, level)
 	idx.nodes = append(idx.nodes, node)
 	idx.markGraphChangedLocked()
+	idx.markVectorNodeDirtyLocked(nodeID)
+	idx.markVectorDocDirtyLocked(documentID)
 	idx.currentNode[string(documentID)] = nodeID
 	if idx.entry < 0 {
 		idx.entry = nodeID
 		idx.maxLevel = level
+		idx.markVectorMetaDirtyLocked()
 		return nil
 	}
 	entryPoint := idx.entry
@@ -527,6 +819,7 @@ func (idx *VectorIndex) insertVectorLocked(documentID []byte, vector []float32) 
 	if level > idx.maxLevel {
 		idx.entry = nodeID
 		idx.maxLevel = level
+		idx.markVectorMetaDirtyLocked()
 	}
 	return nil
 }
@@ -582,8 +875,10 @@ func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
 	}
 	if nodeID >= 0 && nodeID < len(idx.nodes) {
 		idx.nodes[nodeID].deleted = true
+		idx.markVectorNodeDirtyLocked(nodeID)
 	}
 	delete(idx.currentNode, string(documentID))
+	idx.markVectorDocDirtyLocked(documentID)
 	idx.markGraphChangedLocked()
 	if idx.entry == nodeID {
 		idx.entry = idx.firstLiveNodeLocked()
@@ -591,6 +886,7 @@ func (idx *VectorIndex) tombstoneDocumentIDLocked(documentID []byte) {
 		if idx.entry >= 0 {
 			idx.entry = idx.firstLiveNodeAtLevelLocked(idx.maxLevel)
 		}
+		idx.markVectorMetaDirtyLocked()
 	}
 }
 
@@ -641,6 +937,60 @@ func (idx *VectorIndex) markGraphChangedLocked() {
 	}
 }
 
+func (idx *VectorIndex) setNativePersistent(enabled bool) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	idx.nativePersistent = enabled
+	idx.mu.Unlock()
+}
+
+func (idx *VectorIndex) isNativePersistent() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.nativePersistent
+}
+
+func (idx *VectorIndex) hasNativePersistedSnapshot() bool {
+	if idx == nil {
+		return false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.persistedEpoch != 0
+}
+
+func (idx *VectorIndex) markVectorMetaDirtyLocked() {
+	if !idx.nativePersistent {
+		return
+	}
+	idx.dirtyMeta = true
+}
+
+func (idx *VectorIndex) markVectorNodeDirtyLocked(nodeID int) {
+	if !idx.nativePersistent || nodeID < 0 {
+		return
+	}
+	if idx.dirtyNodes == nil {
+		idx.dirtyNodes = make(map[int]struct{})
+	}
+	idx.dirtyNodes[nodeID] = struct{}{}
+}
+
+func (idx *VectorIndex) markVectorDocDirtyLocked(documentID []byte) {
+	if !idx.nativePersistent || len(documentID) == 0 {
+		return
+	}
+	if idx.dirtyDocs == nil {
+		idx.dirtyDocs = make(map[string]struct{})
+	}
+	idx.dirtyDocs[string(documentID)] = struct{}{}
+}
+
 func (idx *VectorIndex) maxNeighborsForLayer(layer int) int {
 	if layer == 0 {
 		return maxInt(idx.m*2, idx.m)
@@ -683,6 +1033,7 @@ func (idx *VectorIndex) linkLayerLocked(fromNodeID, toNodeID, layer int) {
 		neighbors = idx.pruneLayerNeighborsLocked(fromNodeID, neighbors, limit)
 	}
 	idx.nodes[fromNodeID].neighbors[layer] = neighbors
+	idx.markVectorNodeDirtyLocked(fromNodeID)
 }
 
 func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndexNeighbor, limit int) []vectorIndexNeighbor {
@@ -1563,7 +1914,7 @@ func (idx *VectorIndex) Stats() VectorIndexStats {
 		MaxLevel:            idx.maxLevel,
 		Epoch:               idx.persistedEpoch,
 		BytesDisk:           idx.persistedBytesDisk,
-		SnapshotDirty:       idx.persistedSnapshotDirty,
+		SnapshotDirty:       idx.persistedSnapshotDirty || (idx.nativePersistent && idx.persistedEpoch == 0 && idx.mutationSeq != 0),
 		LastRebuildDuration: idx.lastRebuildDuration,
 	}
 	var edges int
@@ -1638,6 +1989,12 @@ func (idx *VectorIndex) CheckRecall(queries [][]float32, opts VectorIndexSearchO
 }
 
 func vectorFromStoredDocument(materializer *StoredDocumentJSONMaterializer, document []byte, fieldPath []string) ([]float32, bool, error) {
+	if materializer != nil && materializer.DocumentFormat() == DocumentFormatBSON {
+		return vectorFromBSONField(document, fieldPath)
+	}
+	if materializer == nil {
+		return nil, false, errors.New("collections: nil stored document materializer")
+	}
 	jsonDoc, err := materializer.StoredDocumentJSON(document)
 	if err != nil {
 		return nil, false, err
@@ -1683,6 +2040,9 @@ func (idx *VectorIndex) Rebuild() error {
 	idx.dimensions = dimensions
 	idx.lastRebuildDuration = collectionObservedElapsedSince(start)
 	idx.markGraphChangedLocked()
+	if idx.nativePersistent {
+		idx.nativeFullSnapshotDirty = true
+	}
 	idx.mu.Unlock()
 	idx.collection.RegisterVectorIndex(idx)
 	return nil

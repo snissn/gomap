@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -316,6 +317,77 @@ func BenchmarkCollectionVectorIndexIncrementalWrite(b *testing.B) {
 			b.Fatalf("close db: %v", err)
 		}
 	}
+}
+
+func BenchmarkCollectionVectorIndexNativeRootIncrementalWrite(b *testing.B) {
+	docs := vectorBenchmarkDocs(b)
+	dims := vectorBenchmarkDims(b)
+	ids, documents := vectorBenchmarkWriteBatch(docs, dims)
+	def := VectorIndexDefinition{
+		Name:           "embedding_write",
+		Field:          "embedding",
+		Metric:         VectorMetricCosine,
+		Dimensions:     dims,
+		M:              16,
+		EfConstruction: defaultVectorIndexEfConstruction,
+		EfSearch:       defaultVectorIndexEfSearch,
+	}
+
+	b.ReportMetric(float64(docs), "docs/write")
+	b.ReportMetric(float64(dims), "dims")
+	baseDir := b.TempDir()
+	var indexBytes int64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		dir := filepath.Join(baseDir, fmt.Sprintf("iter-%06d", i))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create db dir: %v", err)
+		}
+		d, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			b.Fatalf("open db: %v", err)
+		}
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+			_ = d.Close()
+			b.Fatalf("create collection: %v", err)
+		}
+		col, err := mgr.OpenCollection("docs")
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("open collection: %v", err)
+		}
+		index, err := col.BuildVectorIndex(vectorIndexOptionsFromDefinition(def))
+		if err != nil {
+			_ = d.Close()
+			b.Fatalf("build empty native vector index: %v", err)
+		}
+		b.StartTimer()
+		vectorBenchmarkInsertBatches(b, col, ids, documents, 512)
+		if err := col.Flush(); err != nil {
+			_ = d.Close()
+			b.Fatalf("flush native vector index: %v", err)
+		}
+		b.StopTimer()
+		stats := index.Stats()
+		if stats.LiveDocs != docs {
+			_ = d.Close()
+			b.Fatalf("native incremental index live docs=%d want %d", stats.LiveDocs, docs)
+		}
+		if stats.SnapshotDirty {
+			_ = d.Close()
+			b.Fatalf("native incremental index snapshot is dirty: %+v", stats)
+		}
+		indexBytes = stats.BytesMemory
+		if err := d.Close(); err != nil {
+			b.Fatalf("close db: %v", err)
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			b.Fatalf("remove db dir: %v", err)
+		}
+	}
+	b.ReportMetric(float64(indexBytes), "index_bytes")
 }
 
 func BenchmarkCollectionVectorIndexSearch(b *testing.B) {

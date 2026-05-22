@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/buger/jsonparser"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 // VectorMetric selects the exact distance function used by collection vector
@@ -163,11 +165,7 @@ func (c *Collection) SearchVectorsExact(query []float32, opts VectorSearchOption
 				return err
 			}
 		}
-		jsonDoc, err := materializer.StoredDocumentJSON(record.Document)
-		if err != nil {
-			return err
-		}
-		vector, ok, err := vectorFromJSONField(jsonDoc, fieldPath)
+		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, fieldPath)
 		if err != nil {
 			return fmt.Errorf("collections: vector field %q in document %q: %w", opts.Field, record.ID, err)
 		}
@@ -327,6 +325,63 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 		return nil, false, errors.New("empty vector")
 	}
 	return out, true, nil
+}
+
+func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
+	raw := bson.Raw(document)
+	value, err := raw.LookupErr(fieldPath...)
+	if errors.Is(err, bsoncore.ErrElementNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if value.Type == 0 || value.Type == bson.TypeNull {
+		return nil, false, nil
+	}
+	array, ok := value.ArrayOK()
+	if !ok {
+		return nil, false, errors.New("not a numeric array")
+	}
+	values, err := array.Values()
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]float32, 0, len(values))
+	for i, item := range values {
+		n, ok := bsonVectorNumberAsFloat64(item)
+		if !ok {
+			return nil, false, fmt.Errorf("element %d is not numeric", i)
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) || n > math.MaxFloat32 || n < -math.MaxFloat32 {
+			return nil, false, fmt.Errorf("element %d is not a finite float32", i)
+		}
+		out = append(out, float32(n))
+	}
+	if len(out) == 0 {
+		return nil, false, errors.New("empty vector")
+	}
+	return out, true, nil
+}
+
+func bsonVectorNumberAsFloat64(value bson.RawValue) (float64, bool) {
+	switch value.Type {
+	case bson.TypeDouble:
+		return value.Double(), true
+	case bson.TypeInt32:
+		return float64(value.Int32()), true
+	case bson.TypeInt64:
+		return float64(value.Int64()), true
+	case bson.TypeDecimal128:
+		decimal, ok := value.Decimal128OK()
+		if !ok || decimal.IsNaN() || decimal.IsInf() != 0 {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(decimal.String(), 64)
+		return n, err == nil
+	default:
+		return value.AsFloat64OK()
+	}
 }
 
 func exactVectorDistance(left, right []float32, metric VectorMetric) (float32, error) {
