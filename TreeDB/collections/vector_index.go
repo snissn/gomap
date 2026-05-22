@@ -2090,6 +2090,21 @@ func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCa
 }
 
 func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
+	if idx.metric == VectorMetricCosine && candidate.nodeID >= 0 && candidate.nodeID < len(idx.nodes) {
+		candidateNode := &idx.nodes[candidate.nodeID]
+		if len(candidateNode.vector) > 0 && candidateNode.cachedInvNorm != 0 {
+			for _, existing := range selected {
+				distance := idx.distanceBetweenFloat32CosineCandidateAndNodeLocked(candidateNode, existing.nodeID)
+				if math.IsInf(float64(distance), 1) {
+					continue
+				}
+				if distance < candidate.distance {
+					return false
+				}
+			}
+			return true
+		}
+	}
 	for _, existing := range selected {
 		distance, ok := idx.distanceBetweenNodesFastLocked(candidate.nodeID, existing.nodeID)
 		if !ok {
@@ -2100,6 +2115,21 @@ func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorInde
 		}
 	}
 	return true
+}
+
+func (idx *VectorIndex) distanceBetweenFloat32CosineCandidateAndNodeLocked(candidate *vectorIndexNode, existingNodeID int) float32 {
+	if existingNodeID < 0 || existingNodeID >= len(idx.nodes) {
+		return float32(math.Inf(1))
+	}
+	existing := &idx.nodes[existingNodeID]
+	if len(existing.vector) == len(candidate.vector) && existing.cachedInvNorm != 0 {
+		return vectorDistanceBetweenFloat32NodesCosineUnchecked(candidate, existing)
+	}
+	distance, err := vectorDistanceBetweenStoredNodes(candidate, existing, idx.metric)
+	if err != nil {
+		return float32(math.Inf(1))
+	}
+	return distance
 }
 
 // sortVectorIndexCandidatesByDistanceLocked keeps the common already-sorted
