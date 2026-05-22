@@ -12,6 +12,7 @@ import (
 
 	"github.com/buger/jsonparser"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 // VectorMetric selects the exact distance function used by collection vector
@@ -328,7 +329,13 @@ func vectorFromJSONField(document []byte, fieldPath []string) ([]float32, bool, 
 
 func vectorFromBSONField(document []byte, fieldPath []string) ([]float32, bool, error) {
 	raw := bson.Raw(document)
-	value := raw.Lookup(fieldPath...)
+	value, err := raw.LookupErr(fieldPath...)
+	if errors.Is(err, bsoncore.ErrElementNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
 	if value.Type == 0 || value.Type == bson.TypeNull {
 		return nil, false, nil
 	}

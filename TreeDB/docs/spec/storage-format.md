@@ -28,10 +28,9 @@ The old collection root-delta WAL storage class (`wal/collection-l*.log`,
 It is retained in `collection-wal-durability-plan.md` as historical design
 context. The active target is the user-command WAL: command frames ordered by
 `LSN`, checkpointed by durable `AppliedLSN`, and defined in
-`user-command-wal.md`. When command WAL storage lands, exact frame bytes,
-checksums, commit markers, segment metadata, cleanup records, and golden
-encodings must be maintained here and mapped to tests in
-`TreeDB/docs/spec/verification.md`.
+`user-command-wal.md`. Exact command-frame bytes, checksums, segment metadata,
+cleanup records, and golden encodings must be maintained here and mapped to
+tests in `TreeDB/docs/spec/verification.md` as each milestone lands.
 
 The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
@@ -90,19 +89,27 @@ Notes:
 
 ## 3.1 Command WAL Meta Extension
 
-When `format.json` advertises the required `command_wal_v1` storage feature,
-the meta page body extends the 60-byte body above with:
+Command-WAL V1 meta pages extend the 60-byte body above with an in-page marker
+and the applied command stream boundary:
 
 ```text
 body offset 60 / page offset 76:
+[8]byte CommandWALV1Marker = "TMETAW1\x00"
+
+body offset 68 / page offset 84:
 u64 AppliedCommandLSN
 ```
 
-The `command_wal_v1` meta body size is 68 bytes. Bytes after offset 68 are
+The `command_wal_v1` meta body size is 76 bytes. Bytes after offset 76 are
 reserved and must be written as zero until assigned by a later required feature.
 `AppliedCommandLSN` is the physical on-disk field for the logical `AppliedLSN`
 command stream boundary. Alternating meta-page selection must choose roots and
 `AppliedCommandLSN` from the same meta page candidate.
+
+The marker is checksummed with the selected meta page. A decoder must treat
+`AppliedCommandLSN` as zero unless the marker is present in that same page body.
+`format.json`, manifests, stats, or any other sidecar file must not decide
+whether a meta page's `AppliedCommandLSN` bytes are authoritative.
 
 Rules:
 
@@ -111,9 +118,14 @@ Rules:
   command effects is invalid.
 - Selecting roots that contain command effects without the matching
   `AppliedCommandLSN` is invalid for durable root publish/checkpoint state.
-- Required feature validation must fail closed if a `command_wal_v1` directory is
-  opened by code that decodes only the 60-byte pre-command-WAL meta body.
-- PR2 must add golden meta-page fixtures covering both alternating meta pages,
+- Required feature validation must fail closed before full `command_wal_v1`
+  execution is enabled if a command-WAL directory is opened by code that decodes
+  only the 60-byte pre-command-WAL meta body.
+- `format.json` must use version 3 or newer when `required_features` contains
+  `command_wal_v1`; putting required features in version 2 is invalid because
+  older binaries would ignore unknown JSON fields and fail open.
+- PR2 must add meta-page tests covering `AppliedCommandLSN` encode/decode,
+  in-page marker gating for legacy/reserved bytes, alternating meta pages,
   old/new tuple selection, and checksum validation over the extended body.
 
 ## 3.2 Collection Document Payloads
@@ -470,19 +482,199 @@ collection and catalog commands must use typed command payloads inside the
 shared commit-log frame stream; they must not be encoded as physical root deltas
 and must not create `wal/collection-l*.log` files.
 
-When command WAL storage lands, this document must specify the exact typed frame
-bytes for the shared commit-log payload:
+The commit-log physical segment header remains unchanged:
 
-- command frame version and required reader version;
-- `CommandKind`, `Scope`, `LSN`, flags, and payload-format encoding;
-- payload length caps and digest coverage;
-- external reference encoding for value-log, leaf-log, and future side-file refs;
-- precondition and result-assertion encoding;
-- fail-closed rejection rules for old raw `commitlog.Record` payloads once the
-  command WAL required feature is present;
-- fail-closed handling for unknown required versions, command kinds, critical
-  flags, malformed lengths, duplicate LSNs, missing external refs, and corrupt
-  complete frames.
+```text
+u32 StoredLenAndFlags
+u32 StoredCRC32
+bytes StoredPayload[StoredLenAndFlags & lenMask]
+```
+
+`StoredPayload`, after optional existing zstd decompression, is a command frame:
+
+```text
+bytes[4] Magic              // "TCW1"
+u16      Version            // 1
+u16      MinReaderVersion   // reader must support at least this version
+u16      CommandKind
+u16      Scope
+u64      FeatureFlags       // low 32 bits are critical in PR1
+u64      LSN
+u64      CatalogEpoch
+u64      SchemaEpoch
+u64      BaseAppliedLSN
+u16      PayloadFormat
+u16      ReservedZero
+u32      PayloadLen
+u32      ExternalRefsLen
+u32      PreconditionsLen
+u32      ResultAssertionsLen
+bytes[32] PayloadSHA256
+bytes Payload[PayloadLen]
+bytes ExternalRefs[ExternalRefsLen]
+bytes Preconditions[PreconditionsLen]
+bytes ResultAssertions[ResultAssertionsLen]
+```
+
+Current command kinds:
+
+| Value | Kind | Scope | Payload format | Status |
+|---:|---|---|---|---|
+| 1 | `RawKVBatch` | raw KV | `RawKVBatchV1` | typed raw key/value command batch |
+| 100 | `CollectionInsertBatchByID` | collection | `CollectionInsertBatchByIDV1` | deterministic collection insert/upsert-by-id batch |
+| 101 | `CollectionDeleteBatchByID` | collection | `CollectionDeleteBatchByIDV1` | deterministic collection delete-by-id batch |
+| 102 | `CollectionUpdateBatchByID` | collection | `CollectionUpdateBatchByIDV1` | deterministic collection update/replace-by-id batch |
+| 200 | `CatalogCreateCollection` | catalog | `CatalogCreateCollectionV1` | deterministic catalog create-collection command; old placeholder name is an alias only |
+
+Current payload format IDs:
+
+| Value | Payload format |
+|---:|---|
+| 1 | `RawKVBatchV1` |
+| 2 | `NativeWireDeterministic` |
+| 3 | `CollectionInsertBatchByIDV1` |
+| 4 | `CollectionDeleteBatchByIDV1` |
+| 5 | `CollectionUpdateBatchByIDV1` |
+| 6 | `CatalogCreateCollectionV1` |
+
+`RawKVBatchV1` payload:
+
+```text
+u16 Version        // 1
+u32 OpCount
+Op[OpCount]
+
+Op:
+u8  Op             // 1=set, 2=delete
+u32 KeyLen
+u32 ValueLen
+bytes Key[KeyLen]
+bytes Value[ValueLen]
+```
+
+A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
+all contained operations decode as one batch. Delete operations require
+`ValueLen=0`.
+
+Writers may use compact all-zero set payload variants when every operation is a
+set with the same non-empty zero-filled value length:
+
+```text
+u16 Version        // 2
+u32 OpCount
+u32 ValueLen
+ZeroOp[OpCount]
+
+ZeroOp:
+u32 KeyLen
+bytes Key[KeyLen]
+```
+
+Version 3 is the same compact zero-set payload with a narrower per-key length
+field and is valid only when every key length fits in `u16`:
+
+```text
+u16 Version        // 3
+u32 OpCount
+u32 ValueLen
+ZeroOp[OpCount]
+
+ZeroOp:
+u16 KeyLen
+bytes Key[KeyLen]
+```
+
+Readers expand version 2 and version 3 entries to ordinary `RawKVBatch` set
+operations with a zero-filled `Value[ValueLen]`; the command frame still carries
+payload format `RawKVBatchV1`.
+
+`CatalogCreateCollectionV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionNameLen
+u32 MetadataLen
+bytes CollectionName[CollectionNameLen]
+bytes Metadata[MetadataLen] // canonical collection metadata JSON
+```
+
+The payload name and decoded metadata name must match. Replay is idempotent only
+when an existing catalog entry has identical normalized metadata; incompatible
+metadata fails closed before advancing `AppliedCommandLSN`.
+
+`CollectionInsertBatchByIDV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 DocumentCount
+bytes Collection[CollectionLen]
+Document[DocumentCount]
+
+Document:
+u32 IDLen
+u32 DocumentLen
+bytes ID[IDLen]
+bytes Document[DocumentLen]
+```
+
+`CollectionUpdateBatchByIDV1` uses the same canonical payload layout as
+`CollectionInsertBatchByIDV1`; each document is the final accepted replacement
+for the listed ID after user callbacks or declarative updates have resolved.
+
+`CollectionDeleteBatchByIDV1` payload:
+
+```text
+u16 Version        // 1
+u32 CollectionLen
+u32 IDCount
+bytes Collection[CollectionLen]
+ID[IDCount]
+
+ID:
+u32 IDLen
+bytes ID[IDLen]
+```
+
+Collection batch payloads require a non-empty collection name and non-empty
+document IDs. Encoders canonicalize entries by strictly increasing document ID
+before writing the payload, and decoders reject duplicate or out-of-order IDs.
+
+`ExternalRefs`, `Preconditions`, and `ResultAssertions` are length-delimited
+sections so PR1 can harden framing before replay uses them. The PR1 external-ref
+section starts with `u32 Count`; each ref is:
+
+```text
+u16 Class          // 1=value-log, 2=leaf-log, 3=payload file
+u16 Flags
+u32 PathLen
+u64 FileID
+u64 Offset
+u64 Length
+bytes[32] Digest
+bytes Path[PathLen]
+```
+
+Precondition and result-assertion sections each start with `u32 Count`; every
+entry is:
+
+```text
+u16 Type
+u16 ReservedZero
+u32 PayloadLen
+bytes Payload[PayloadLen]
+```
+
+Readers must fail closed on:
+
+- old raw `commitlog.Record` payloads when reading as command WAL;
+- unsupported required frame versions;
+- unknown command kinds;
+- unknown critical flags;
+- malformed section lengths before allocating section-owned objects;
+- payload digest mismatch;
+- corrupt complete physical segment CRC;
+- duplicate command `LSN` during segment scan.
 
 Activation must begin from a clean WAL state or an explicit rebuild. The command
 WAL implementation does not need to replay old raw batch segments in command WAL
@@ -494,14 +686,15 @@ applied marker. Recovery skips typed command frames with `LSN <= AppliedLSN`
 and replays complete frames with higher LSNs through the deterministic command
 executor before serving reads.
 
-The V1 physical storage target for `AppliedLSN` is an explicit gated meta-page
+The V1 physical storage target for `AppliedLSN` is the in-page-marked meta-page
 field named `AppliedCommandLSN`, encoded by the command-WAL meta extension in
-Section 3.1 at body offset 60 / page offset 76. It must be selected atomically
+Section 3.1 at body offset 68 / page offset 84. It must be selected atomically
 with the roots that contain the corresponding command effects. PR1 may document
 a blocking reason to revisit this before PR2 starts, but storage-format
 implementation must not proceed with both meta-page and system-root storage as
-live options. A sidecar cleanup file, manifest, stats record, or post-commit
-maintenance record is not authoritative state for recovery.
+live options. A sidecar cleanup file, manifest, stats record, format-config
+marker, or post-commit maintenance record is not authoritative state for
+recovery.
 
 The deprecated collection root-delta WAL format (`collection_wal_v1`,
 `wal/collection-l*.log`, `WALLSN`, `CollectionSeq`, and collection root-delta

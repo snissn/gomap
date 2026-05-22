@@ -198,7 +198,7 @@ Collection metadata mutators:
 
 | Method | Contract |
 |---|---|
-| `CollectionManager.CreateCollection` | Current behavior publishes the catalog entry under the selected non-sync durability mode. Target WAL-on behavior is a `CatalogMutation` command or explicit WAL-on rejection until that command kind lands. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |
+| `CollectionManager.CreateCollection` | WAL-off behavior publishes the catalog entry under the selected non-sync durability mode. Command-WAL behavior uses a `CatalogCreateCollection` frame and publishes the catalog root plus `AppliedCommandLSN` in one backend tuple. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |
 | `Collection.CreateIndex` and index-drop methods | These methods establish an index/schema barrier. They drain collection writes admitted before the barrier before taking the backfill/planning snapshot, or target a `CatalogMutation` command frame that carries descriptor changes atomically. A unique-index conflict is an ordinary pre-commit error and must not expose partial schema/index state. |
 
 Barrier methods:

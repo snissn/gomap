@@ -413,7 +413,6 @@ func buildDictCompressedDBForAudit(t *testing.T, dir string) {
 		Dir:            dir,
 		FlushThreshold: 1 << 20,
 		ValueLog: treedb.ValueLogOptions{
-			ForcePointers:    true,
 			PointerThreshold: 1,
 			Compression:      treedb.ValueLogCompressionAuto,
 			AutoPolicy:       treedb.ValueLogAutoSize,

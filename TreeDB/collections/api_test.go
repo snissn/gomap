@@ -174,6 +174,139 @@ func TestCollectionRegisterVectorIndexDoesNotRetainCleanHandle(t *testing.T) {
 	}
 }
 
+func TestCollectionUnregisterNativeVectorIndexReleasesHandleWithAdHocRemaining(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	nativeIndex, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new native vector index: %v", err)
+	}
+	adHocIndex, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "adhoc_embedding",
+		Field:      "adhoc_embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new ad hoc vector index: %v", err)
+	}
+
+	col.RegisterVectorIndex(nativeIndex)
+	col.RegisterVectorIndex(adHocIndex)
+	mgr.registerCollectionHandle(col)
+	if got := collectionManagerHandleCount(mgr); got != 1 {
+		t.Fatalf("registered handles=%d want 1", got)
+	}
+	col.UnregisterVectorIndex("embedding")
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("native unregister retained %d handles with only ad hoc indexes left; want 0", got)
+	}
+}
+
+func TestCollectionAdHocVectorIndexWritesDoNotRetainManagerHandle(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	col.RegisterVectorIndex(index)
+
+	if _, err := col.Insert([]byte("a"), []byte(`{"embedding":[1,0]}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if got := collectionManagerHandleCount(mgr); got != 0 {
+		t.Fatalf("ad hoc vector write retained %d manager handles; want 0", got)
+	}
+	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1})
+	if err != nil {
+		t.Fatalf("search ad hoc index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a")
+}
+
+func TestCollectionDeclaredNativeVectorIndexesLoadedRejectsExtraNativeRuntime(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+		}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	declared, err := newVectorIndex(col, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
+	if err != nil {
+		t.Fatalf("new declared index: %v", err)
+	}
+	stale, err := newVectorIndex(col, VectorIndexOptions{Name: "stale_embedding", Field: "stale_embedding", Metric: VectorMetricCosine, Dimensions: 2})
+	if err != nil {
+		t.Fatalf("new stale index: %v", err)
+	}
+	col.RegisterVectorIndex(declared)
+	col.RegisterVectorIndex(stale)
+	stale.setNativePersistent(true)
+
+	if col.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
+		t.Fatal("declared native check accepted an extra stale native runtime")
+	}
+}
+
 func collectionManagerHandleCount(mgr *CollectionManager) int {
 	mgr.collectionsMu.RLock()
 	defer mgr.collectionsMu.RUnlock()

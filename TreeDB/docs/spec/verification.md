@@ -208,7 +208,7 @@ requirements that the ticket and implementation PRs must satisfy.
 
 In this matrix, `AppliedLSN` names the logical command stream boundary.
 `AppliedCommandLSN` is used only when the test or statement specifically refers
-to the V1 gated meta-page storage field.
+to the V1 in-page-marked meta-page storage field.
 
 | Normative statement | Owner section | Required test/evidence | Status |
 |---|---|---|---|
@@ -225,10 +225,10 @@ to the V1 gated meta-page storage field.
 | Batch commands are one command frame, one LSN, and all-or-nothing. | `user-command-wal.md` batch atomicity | `TestCommandWALRawKVBatchOneLSNAtomic`, `TestCommandWALCollectionInsertBatchOneLSNAtomic`, `TestCommandWALOversizedBatchRejectsBeforeLSN` | planned |
 | Callback update APIs never replay Go callback code. | `user-command-wal.md` update API categories | `TestCommandWALCallbackUpdateLogsFinalReplacement`, `TestCommandWALRecoveryDoesNotInvokeCallback` | planned |
 | Resolver helpers are resolved before WAL append. | `user-command-wal.md` update API categories | `TestCommandWALSetNowStoresResolvedLiteral`, `TestCommandWALRecoveryDoesNotInvokeResolver` | planned |
-| Catalog/schema barriers cannot race lower unapplied commands. | `collections-write-domain.md` barrier semantics | `TestCommandWALCatalogMutationDrainsLowerLSNs`, `TestCommandWALCreateIndexRejectsUntilCatalogCommandSupported` | planned |
+| Catalog/schema barriers cannot race lower unapplied commands. | `collections-write-domain.md` barrier semantics | `TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN`, `TestCollectionCommandWALRejectsCatalogIndexMutations` | PR6 coverage for create collection and rejected index DDL; index command support remains future |
 | Read-only open fails when mutating command replay would be required. | `recovery.md`, `contracts.md` read-only open | `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired` | planned |
 | Backup/restore either includes needed WAL/external refs or has durable cleanup proof. | `backup-restore.md` restore validation | `TestCommandWALBackupManifestRestoresUnappliedCommands`, `TestCommandWALRestoreMissingRequiredFrameFailsWithoutCleanupProof` | planned |
-| Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`, `TestNativeWireAndLocalCommandDigestStable` | planned |
+| Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALNativeWireAlignmentManifestCoverage`, `TestNativeWireAndLocalCommandDigestStable` | planned |
 | Raft/local recoverability is not reported before local command WAL publish and `AppliedLSN`. | `native-query-raft-roadmap.md` local apply layering | `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN` | future |
 
 ### 11.5.2 Milestone Test Slices
@@ -238,31 +238,73 @@ PR 1: typed commit-log frames and feature gate:
 - `TestCommandWALFormatGoldenV1EmptySegment`;
 - `TestCommandWALFormatGoldenV1RawKVBatch`;
 - `TestCommandWALFormatGoldenV1CollectionInsertBatchByID`;
-- `TestCommandWALFormatGoldenV1CatalogMutationPlaceholder`;
+- `TestCommandWALFormatGoldenV1CatalogCreateCollection`;
 - `TestCommandWALFormatRejectsUnsupportedRequiredVersion`;
+- `TestCommandWALFormatRejectsUnknownRequiredKind`;
 - `TestCommandWALFormatRejectsUnknownCriticalFlag`;
 - `TestCommandWALFormatSkipsUnknownNonCriticalExtensionOnlyWhenAllowed`;
+- `TestCommandWALFormatRoundTripExternalRefs`;
 - `TestCommandWALFormatRejectsMalformedLengthBeforeAllocation`;
 - `TestCommandWALFormatRejectsHeaderPayloadDigestAndTrailerMismatch`;
 - `TestCommandWALFeatureGateRejectsLegacyRawPayload`;
 - `TestCommandWALFeatureGateRequiresCleanLegacyWALBeforeActivation`;
+- `TestCommandWALRequiredFeatureFailsClosedUntilExecutionEnabled`;
 - `TestCommandWALNoCollectionSegmentFamilyCreated`;
-- `TestCommandWALSingleJournalOwnerRejectsSecondMutableWriter`;
+- `TestCommandWALTerminalShortHeaderIgnored`;
+- `TestCommandWALDuplicateLSNFailsClosed`;
+- `TestCommandWALDuplicateLSNAcrossSegmentsFailsClosed`;
+- `TestCommandWALRawKVBatchOneLSNAtomic`;
+- `TestCommandWALRawKVBatchPreservesEmptySetValue`;
 - `TestCommandWALExistingCoverageInventoryMapsLegacyWALTests`;
 - `TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents`.
 
 PR 2: shared journal ownership and `AppliedCommandLSN` plumbing:
 
+- `TestCommandJournalAllocatesContiguousLSNs`;
+- `TestCommandJournalSeedsLSNFromExistingFrames`;
+- `TestCommandJournalSeedsLSNFromExistingSegmentFamily`;
+- `TestCommandJournalSeedsLSNFromExistingLanes`;
+- `TestCommandJournalTruncatesTerminalTailBeforeAppend`;
+- `TestCommandJournalTruncatesActiveTerminalTailPerLane`;
+- `TestCommandJournalRejectsNonActiveTerminalTail`;
+- `TestCommandJournalConcurrentAppendsSerializeFrameOrder`;
+- `TestCommandJournalRejectsIndependentMutableOwner`;
+- `TestJournalOwnerRollbackMaxLSNClearsExhausted`;
+- `TestCommandJournalUsesCommitSegmentFamily`;
+- `TestCommandJournalValidationFailureDoesNotConsumeLSN`;
+- `TestCommandJournalUnsupportedVersionDoesNotConsumeLSN`;
+- `TestCommandJournalAppendFailureRollsBackLSN`;
+- `TestCommandJournalOversizedFrameDoesNotConsumeLSN`;
+- `TestCommandJournalDeterministicStressReopenAcrossLanesAndTails`;
+- `FuzzCommandWALDecodeFrame`;
+- `FuzzCommandWALRawKVBatchPayload`;
+- `TestMetaPageBodyAppliedCommandLSNRoundTrip`;
+- `TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes`;
+- `TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN`;
 - `TestCommandWALAppliedCommandLSNMetaFieldRoundTrip`;
-- `TestCommandWALMetaGateRejectsOldBinaryServingCommandWALDir`;
+- `TestCommandWALAppliedCommandLSNAlternatingMetaPages`;
+- `TestCommandWALLegacyMetaDecodeIgnoresReservedAppliedLSNBytes`;
 - `TestCommandWALRootsAndAppliedCommandLSNPublishAtomically`;
 - `TestCommandWALPublishHelperRejectsRootsWithoutAppliedLSN`;
 - `TestCommandWALAppliedLSNContiguousPrefixOnly`;
-- `TestCommandWALCheckpointCleansOnlyCoveredSegments`;
-- `TestCommandWALCheckpointCrashBeforeCleanupReplaysIdempotently`;
-- `TestCommandWALCleanupManifestMissingBlocksSegmentDeletion`;
+- `TestCommandWALAppliedLSNContiguousPrefixMatchesModelStress`;
+- `TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments`;
+- `TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment`;
+- `TestCommandWALSegmentMaxLSNStreamsFrames`;
+- `TestCommandWALSegmentMaxLSNFailsClosedOnNonIncreasingLSN`;
+- `TestCommandWALOpenFailsClosedOnCorruptTypedSegmentEvenWhenCovered`;
+- `TestCommandWALOpenFailsClosedOnNonActiveTerminalTailEvenWhenCovered`;
+- `TestCommandWALOpenFailsClosedOnTypedTailWithHigherLegacyRawSegment`;
+- `TestCommandWALOpenAllowsActiveTypedTailWithHigherPartialLegacyAliasSegment`;
+- `TestCommandWALOpenAllowsActivePartialFirstFrameTail`;
+- `TestCommandWALOpenFailsClosedOnNonActivePartialFirstFrameTail`;
 - `TestCommandWALReadOnlyOpenWithUnappliedFrameFailsRecoveryRequired`;
-- `TestCommandWALExistingCheckpointCleanupTestsMappedToAppliedLSN`.
+- `TestCommandWALReadOnlyOpenAllowsFramesCoveredByAppliedLSN`;
+- `TestCommandWALWriteOpenSkipsCoveredFramesBeforeLegacyReplay`;
+- `TestCommandWALWriteOpenRejectsUnappliedFramesUntilDispatcher`;
+- `TestCommandWALWriteOpenRejectsFirstUnappliedFrameUntilDispatcher`;
+- `TestCommandWALWALOffOpenRejectsUnappliedFramesUntilDispatcher`;
+- `TestCommandWALBackupManifestShapeIncludesAppliedLSNAndRanges`.
 
 PR 3: recovery dispatcher and raw KV command conversion:
 
@@ -271,61 +313,138 @@ PR 3: recovery dispatcher and raw KV command conversion:
 - `TestCommandWALCrashAfterFrameBeforeRootPublishRecovers`;
 - `TestCommandWALCrashDuringRootPublishSelectsOldTupleOrNewTuple`;
 - `TestCommandWALCrashAfterRootAppliedLSNBeforeCleanupSkipsFrame`;
+- `TestCommandWALRawSetReplayRePointersWhenThresholdDrops`;
+- `TestCommandWALRawEmptyBatchAdvancesAppliedLSNAsNoop`;
 - `TestCommandWALRecoveryCrashDuringReplayResumesFromAppliedLSN`;
 - `TestCommandWALStrictCommandEffectWithoutAppliedLSNFailsClosed`;
 - `TestCommandWALIdempotentSkipRequiresDigestProof`;
 - `TestCommandWALExistingRawReplayTestsMappedToRawKVBatch`;
 - `TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence`.
 
+PR3 implementation evidence:
+
+- `RawKVBatch` is the first replayable command kind for direct backend
+  command-WAL mode.
+- Read-write recovery dispatches typed frames, replays raw KV commands through
+  the normal backend batch executor, and publishes roots plus
+  `AppliedCommandLSN` in one finalize boundary.
+- Clean read-write reopens still run covered-segment cleanup, so a prior crash
+  after root plus `AppliedCommandLSN` publication but before cleanup converges
+  on the next open even when no frames need replay.
+- Explicit `CommandWAL` activation first fails closed on dirty legacy WAL,
+  then persists `command_wal_v1` after replay preconditions are clear and
+  before opening the command journal, so a process cannot acknowledge typed
+  frames without a durable required-feature gate.
+- Raw KV `SetRID` command entries preserve the existing value-log RID fence by
+  requiring the referenced RID to be present in scanned value-log segments
+  before recovery can publish the command.
+- Pointer-backed raw KV command writes resolve the source RID directly from
+  value-log pointer metadata instead of scanning whole value-log segments.
+- Inline-only raw KV replay does not depend on value-log RID scanning. Recovery
+  builds the RID map and replay value-log appender only when a pending frame
+  contains `SetRID`, the current value-placement policy requires
+  re-pointerizing a logged `set`, or value-log-backed leaf pages require a
+  replay appender.
+- Raw KV `set` replay that exceeds the current inline threshold is
+  re-pointerized through the existing replay value-log appender, and the
+  appended value-log bytes are synced before roots plus `AppliedCommandLSN` are
+  published.
+- Empty `RawKVBatch` frames are explicit no-op command frames: they publish the
+  current roots with the frame LSN so command-stream contiguity remains exact.
+- Command WAL with WAL-off durability fails closed, including after
+  `command_wal_v1` is persisted, because PR3 requires a recoverable command
+  frame before root visibility.
+- Command journal flush/sync failures and post-append root publication failures
+  poison the open handle so no later write can create a durable LSN gap before
+  reopen recovery.
+- Once a command frame has been appended, later flush/sync failures are
+  commit-ambiguous rather than definitely-not-committed: recovery may replay
+  the frame after close and read-write reopen.
+- `RawKVBatch` frames that reference value-log RIDs require the external ref to
+  reach the same fresh-process recovery boundary before the frame is appended;
+  non-sync writes do not add a power-loss fsync guarantee, while sync writes
+  sync external refs before the command frame.
+- Operators and callers must treat a poisoned command-WAL handle as
+  recovery-required: close the handle and reopen read-write before issuing more
+  writes. The poisoned state is intentionally not cleared by an in-process
+  retry.
+- Public cached-mode command WAL writes remain fail-closed until the cached
+  writer is converted to the shared typed command journal. This prevents mixed
+  legacy raw records in `command_wal_v1` directories.
+- Strict split-state detection for non-idempotent command kinds remains a
+  required gate before collection/catalog commands can be marked
+  `WAL-supported`; raw KV `set`/`delete` replay uses absolute deterministic
+  assignments and never skips over missing LSNs without contiguous proof.
+
 PR 4: collection insert/delete by explicit ID:
 
-- `TestCommandWALCollectionInsertAckBeforeCheckpointRecovers`;
-- `TestCommandWALCollectionInsertBatchOneLSNAtomic`;
-- `TestCommandWALCollectionDeleteAckBeforeCheckpointRecovers`;
-- `TestCommandWALCollectionDeleteBatchOneLSNAtomic`;
-- `TestCommandWALInsertUniqueConflictBeforeFrameLeavesNoPartialItems`;
-- `TestCommandWALInsertDuplicateReplayUsesConfiguredIdempotencyRule`;
-- `TestCommandWALUnsupportedIndexedInsertModeFailsBeforeStagingUntilSupported`;
-- `TestCommandWALWALOffDoesNotCreateCommandFrameForFlushBoundaryWrites`.
+- `TestCollectionCommandWALInsertBatchByIDPublishesAppliedLSN`;
+- `TestCollectionCommandWALInsertBatchByIDReplayRecoversUnappliedFrame`;
+- `TestCollectionCommandWALInsertBatchByIDReplayTemplateV1StoredDocument`;
+- `TestCollectionCommandWALInsertBatchByIDReplayAdvancesEmptyFrame`;
+- `TestCollectionCommandWALDeleteBatchByIDReplayIgnoresMissingIDs`;
+- `TestCollectionCommandWALDeleteBatchByIDReplayAdvancesMissingOnlyFrame`;
+- `BenchmarkCollectionCommandWALInsertBatchByID`;
+- `BenchmarkCollectionCommandWALDeleteBatchByID`;
+- acceptance artifact:
+  `artifacts/command-wal/pr4/acceptance.json`.
 
 PR 5: collection update by explicit ID:
 
-- `TestCommandWALCallbackUpdateLogsFinalReplacement`;
-- `TestCommandWALRecoveryDoesNotInvokeCallback`;
-- `TestCommandWALDeclarativeSetStoresCanonicalOps`;
-- `TestCommandWALSetNowStoresResolvedLiteral`;
-- `TestCommandWALRecoveryDoesNotInvokeResolver`;
-- `TestCommandWALUpdateChangedSecondaryRecoversAtomically`;
-- `TestCommandWALUpdateUnchangedSecondaryPreservesIndexState`;
-- `TestCommandWALUpdateBatchOneLSNAtomic`;
-- `TestCommandWALUnsupportedUpdateOperatorFailsBeforeFrame`;
-- `TestCommandWALQueryWideUpdateRejectedInWALOnMode`.
+- `TestCommandWALFormatGoldenV1CollectionUpdateBatchByID`;
+- `TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation`;
+- `TestCollectionCommandWALUpdateByIDPublishesAppliedLSN`;
+- `TestCollectionCommandWALUpdateByIDReplayRecoversUnappliedFrame`;
+- `TestCollectionCommandWALUpdateByIDIndexedPublishesSecondaryRoots`;
+- `BenchmarkCollectionCommandWALUpdateBatchByID`;
+- acceptance artifact:
+  `artifacts/command-wal/pr5/acceptance.json`.
 
 PR 6: catalog mutation commands:
 
-- `TestCommandWALCreateCollectionCommandReopens`;
-- `TestCommandWALCreateCollectionIdempotentRetrySameMetadata`;
-- `TestCommandWALCreateCollectionIncompatibleRetryFailsNoMutation`;
-- `TestCommandWALCreateIndexCommandDrainsLowerLSNs`;
-- `TestCommandWALDropIndexCommandDoesNotResurrectSameNameOldUID`;
-- `TestCommandWALCatalogEpochGuardRejectsStaleReplay`;
-- `TestCommandWALSchemaEpochGuardRejectsStaleReplay`.
+- `TestCommandWALFormatGoldenV1CatalogCreateCollection`;
+- `TestCollectionCommandWALCreateCollectionPublishesAppliedLSN`;
+- `TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame`;
+- `TestCollectionCommandWALCreateCollectionReplaySameMetadataIdempotent`;
+- `TestCollectionCommandWALCreateCollectionReplayIncompatibleMetadataFailsClosed`;
+- `TestCollectionCommandWALCreateCollectionDrainsRecoveredLowerLSN`;
+- `TestCollectionCommandWALRejectsCatalogIndexMutations`;
+- `BenchmarkCollectionCommandWALCreateCollection`;
+- `BenchmarkCollectionCommandWALRejectedIndexDDL`;
+- acceptance artifact:
+  `artifacts/command-wal/pr6/acceptance.json`.
+
+PR 6.5: collection/catalog command-WAL performance polish:
+
+- consolidated benchmark evidence:
+  `artifacts/command-wal/pr6_5/collection-catalog-performance-summary.md`;
+- acceptance artifact:
+  `artifacts/command-wal/pr6_5/acceptance.json`;
+- default-ready collection throughput follow-up:
+  `https://github.com/snissn/gomap/issues/1584`;
+- PR9 raw KV default cutover evidence must not be used to claim collection
+  command-WAL default readiness until every supported collection lane clears
+  strict `>1.01x` command-WAL/WAL-off throughput.
 
 PR 7: matrix enforcement and drift tests:
 
-- `TestCommandWALSupportMatrixCoversMutatingCollectionRegistry`;
-- `TestCommandWALSupportMatrixCoversMongoGatewayMutations`;
-- `TestCommandWALSupportMatrixCoversNativeWireMutations`;
+- `TestCommandWALSupportMatrixIsWellFormed`;
+- `TestCommandWALSupportMatrixCoversCollectionMutators`;
+- `TestCommandWALSupportMatrixCoversMongoMutationHandlers`;
+- `TestCommandWALSupportMatrixCoversNativeWireMutationCommands`;
+- `TestCommandWALSupportMatrixDocumentsRejectedCommandsWithPublicError`;
+- `TestCommandWALRejectedErrorDistinctFromUnsupported`;
+- `TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature`;
+- `TestCommandWALNoActiveCollectionWALImplementationDrift`;
 - `TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc`;
 - `TestCommandWALDocsRequireAppliedCommandLSNAsV1Target`;
-- `TestCommandWALDocsRequireBatchAtomicityText`;
-- `TestCommandWALUnsupportedCommandReturnsStablePublicError`.
+- `TestCommandWALDocsRequireBatchAtomicityText`.
 
 PR 8: native-wire/Raft alignment closeout:
 
-- `TestCommandWALPayloadMatchesNativeWireDeterministicFixture`;
+- `TestCommandWALNativeWireAlignmentManifestCoverage`;
 - `TestNativeWireAndLocalCommandDigestStable`;
-- `TestNativeWireAckVisibleRequiresRootPublishAndAppliedLSN`;
+- `TestNativeWireAckFlushedRequiresRootPublishAndAppliedLSN`;
 - `TestNativeWirePostFramePublishFailureCommitAmbiguous`;
 - `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN`;
 - `TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema`.
@@ -344,6 +463,9 @@ Required cut points:
 | after external-ref prepare starts but before protection | no frame; orphan prepare classified after recovery |
 | after external-ref protection but before frame append | no frame; protected ref released or quarantined by recovery artifact |
 | after partial frame header | terminal tail ignored only for active tail; sealed/nonterminal segment fails |
+| after partial first frame in newest command segment | active tail is ignored/truncated; older partial first-frame tails fail closed |
+| after active command segment tail with higher canonical legacy raw WAL file present | legacy raw WAL files do not affect typed command active-tail selection |
+| after active command segment tail with higher partial legacy alias WAL file present | legacy alias WAL files do not affect typed command active-tail selection |
 | after complete frame before WAL sync boundary | relaxed modes follow their advertised boundary; durable mode must not acknowledge |
 | after complete recoverable frame before command apply | read-write recovery replays; read-only open fails recovery-required |
 | during command apply before root publish | copy-on-write partial pages are unreachable; recovery replays |
@@ -597,6 +719,35 @@ Production persistent column-store writes may start only after this command WAL
 verification gate links to green typed-frame, `AppliedCommandLSN`, collection
 command, catalog barrier, external-ref, backup/restore, and read-only-open
 evidence.
+
+### Public raw KV command-WAL cutover evidence
+
+The first PR9 public cutover gate is:
+
+- `TestPublicCommandWALRawKVWritesUseTypedFrames`
+
+The PR9 public cutover performance gate is strict parity-plus. Required point
+`Set`, focused `Batch.Write`, `unified_bench` batch-write, and incompressible
+value-log auto/off lanes must each report candidate throughput strictly greater
+than `1.01x` of the relevant baseline. Any required lane at or below `1.01x` is
+a failing gate, including sub-parity results such as `0.80x`; those results may
+be recorded only as failing evidence, not accepted evidence.
+
+The same strict parity-plus rule applies to every command-WAL acceptance artifact
+with a required performance gate: a passing status must have `>` throughput-gate
+semantics, explicit `1.01x` minimum ratio thresholds, and recorded comparative
+throughput ratios above that bar. Historical or diagnostic results below that
+bar must be labeled as failing evidence.
+
+This test must prove public `treedb.Open` can open a read-write
+`command_wal_v1` handle, route raw KV writes through typed `RawKVBatch` command
+frames, expose mode proof through stats, reopen without explicit backend-only
+APIs, and recover final set/delete state. Mode proof must include cheap live
+accepted/covered command-frame counters so benchmark artifacts do not require
+diagnostic WAL segment scans. It is intentionally narrower than the future
+cached typed-frame path: while this gate is active,
+`treedb.write_path.mode=command_wal_cached` is the expected proof that public
+command-WAL writes did not use the cached legacy redo journal.
 
 ## 12. Collections Document Formats
 

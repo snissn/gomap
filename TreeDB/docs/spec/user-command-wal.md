@@ -140,6 +140,37 @@ not grow separate local-WAL and native-wire encoders for the same command unless
 the divergence is documented in the command matrix and covered by golden fixtures
 that prove both encodings lower to the same command semantics.
 
+### 5.1 Native-wire and Raft alignment
+
+The V1 local command WAL and native-wire deterministic-entry encoder have the
+same semantic owner but not the same durability role. Native-wire/Raft entries
+describe deterministic user command input. Local command-WAL frames describe the
+single-node recoverable command that TreeDB will replay after a crash. A
+native-wire mutation that maps to a supported command-WAL kind must lower to a
+local command-WAL frame and satisfy the requested local ack boundary before
+reporting local recoverability.
+
+`raft_committed` is not local WAL append. It is a future distributed consensus
+policy that may wrap native-wire deterministic entry bytes with term/index
+metadata. Applying a committed Raft entry still has to respect the local
+recoverability boundary for the serving replica: the replica may not claim that
+the command is locally recoverable until the local command-WAL frame, required
+external refs, normal executor effects, and any requested root/`AppliedLSN`
+barrier are complete.
+
+The V1 relationship between native-wire deterministic fixtures and local
+command-WAL fixtures is tracked in
+`TreeDB/docs/spec/command-wal-nativewire-alignment.json`. Entries marked
+`lowered_equivalent_v1` are reserved for matched logical inputs that prove
+native-wire deterministic command bytes lower to the listed local command-WAL
+payload schema before local acknowledgement. Entries marked
+`lowered_kind_only_v1` pin only the shared command kind and supported surface:
+their current native-wire and local command-WAL fixtures intentionally use
+different logical inputs and must not be treated as payload-equivalence proof.
+Entries marked `future_rejected_v1` have pinned native-wire deterministic bytes
+but remain explicitly rejected by local command WAL until the matching command
+kind and recovery tests land.
+
 This is a compatibility-breaking WAL format transition. TreeDB is pre-alpha, so
 the command WAL implementation may require old directories to be cleanly
 checkpointed with the previous binary or rebuilt. Once a directory advertises
@@ -171,7 +202,7 @@ type CommandEnvelope struct {
 of deterministic command identity. They may influence when an API returns, but
 must not change replay bytes.
 
-### 5.1 Required Envelope Properties
+### 5.2 Required Envelope Properties
 
 - `LSN` is assigned by the shared commit-log journal service before a complete
   frame can become recoverable.
@@ -188,7 +219,7 @@ must not change replay bytes.
   idempotent-skip rule. Strict commands fail closed if replay observes evidence
   that the command effect already exists while `AppliedLSN` does not cover it.
 
-### 5.2 Compatibility-Breaking Command WAL Format
+### 5.3 Compatibility-Breaking Command WAL Format
 
 The first implementation should modify `TreeDB/internal/commitlog` into the
 command WAL format rather than layering command frames beside legacy raw batch
@@ -212,7 +243,7 @@ Required integration points:
   handling, rotation, flush/sync ordering, and cleanup only after durable proof;
 - fail closed on unknown required frame versions or command kinds.
 
-### 5.3 Single Journal Owner
+### 5.4 Single Journal Owner
 
 Exactly one journal owner may open mutable WAL writers for a database directory.
 The implementation should extract or reuse the existing cached WAL lane writer
@@ -242,21 +273,34 @@ replayable without adding query-wide mutation semantics.
 
 | Surface | Current user-facing shape | V1 WAL command | Status policy |
 |---|---|---|---|
-| Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | `WAL-supported`; this is the bridge from the current commit log. |
-| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
-| Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | `WAL-supported` after canonical payload and recovery tests. |
-| Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | `WAL-supported` after operator registry, canonical encoding, and recovery tests. |
+| Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
+| Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR4 implementation: `WAL-supported` for JSON, BSON, and template-v1 stored documents through the normal collection executor. |
+| Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | PR4 implementation: `WAL-supported`; missing IDs are explicit no-ops and recovery still advances `AppliedCommandLSN`. |
+| Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | PR5 implementation: callback and BSON-set update paths are `WAL-supported` by logging final accepted replacements; operator-native payloads remain future work. |
 | Resolver-backed update helpers | helpers such as server-now, UUID, random, or sequence values used by declarative update APIs | not a replay command; lowers to resolved literals inside `CollectionUpdateByIDOps` | `WAL-supported` only when resolved before WAL append. Recovery must not invoke helper functions. |
-| Collection update callback | explicit document ID plus Go callback | `CollectionReplaceBatchByID` after callback execution | Callback itself is not replayed. WAL logs final accepted replacements/no-ops. |
+| Collection update callback | explicit document ID plus Go callback | `CollectionUpdateBatchByID` after callback execution | PR5 implementation: callback itself is not replayed. WAL logs final accepted replacements; missing/no-op updates do not append production frames. |
 | Mongo `updateOne` | `_id` equality plus accepted `$set` subset | `CollectionUpdateByIDSet` or final replacement | `WAL-supported` only after canonical lowering and result assertions. |
 | Mongo `deleteOne` | `_id` equality | `CollectionDeleteBatchByID` | Same as native explicit-ID delete. |
-| Collection/index metadata | create collection, create/drop index | `CatalogMutation` | Add deliberately; if not implemented yet, reject in WAL-on durable-at-ack modes. |
+| Collection/catalog metadata | create collection | `CatalogCreateCollection` | PR6 implementation: `WAL-supported`; payload carries canonical collection metadata, replay is idempotent for matching metadata and fail-closed for incompatible metadata. |
+| Collection/index metadata | create/drop index | future catalog command | `WAL-rejected` in PR6; public index DDL fails before frame append or `AppliedCommandLSN` advancement until index catalog commands land. |
 | Query-wide update/delete | predicate/range matched mutation | none | `WAL-rejected`; future command kind required. |
 | User-defined callback replay | arbitrary function | none | `WAL-rejected`; lower to final replacement first. |
 | Column-store file publish | external side-file refs | future command plus external-ref classes | Deferred until external-file prepare/recovery is specified. |
 
 The matrix is normative for planning: adding or broadening a mutating API also
-requires a matrix update in the same PR.
+requires a matrix update in the same PR. PR7 makes this executable through
+`TreeDB/docs/spec/command-wal-support-matrix.json`; docs tests require current
+collection APIs, Mongo gateway mutating commands, and native-wire mutating
+commands to have explicit `WAL-supported`, `WAL-rejected`, `WAL-off-only`, or
+`future` status.
+
+Collection command replay handlers live in the `TreeDB/collections` package
+because replay must re-enter the normal collection executor. Binaries that may
+open `command_wal_v1` directories containing collection frames must import that
+package before `db.Open` recovery runs, or call
+`collections.RegisterCommandWALReplayHandlers()` during startup. A backend-only
+binary without those handlers must fail closed on collection command kinds
+rather than skipping frames.
 
 ### 6.1 Batch Atomicity
 
@@ -374,15 +418,16 @@ Required publish/checkpoint ordering:
 6. delete or mark clean WAL segments whose max LSN <= AppliedLSN
 ```
 
-The V1 implementation target is an explicit gated meta-page field named
+The V1 implementation target is an in-page-marked meta-page field named
 `AppliedCommandLSN`. It must be selected by the same meta-page choice as the
-roots. PR1 may document a blocking reason to change this decision before PR2
-starts, but PR2 must not proceed with both meta-page and system-root storage as
-live implementation options.
+roots, and the same selected page body must contain the command-WAL V1 marker
+before the field is authoritative. PR1 may document a blocking reason to change
+this decision before PR2 starts, but PR2 must not proceed with both meta-page
+and system-root storage as live implementation options.
 
-A sidecar file, post-commit manifest, async stats record, or post-work callback
-must not be the authoritative `AppliedLSN` source because it would allow split
-states after crash.
+A sidecar file, format-config marker, post-commit manifest, async stats record,
+or post-work callback must not be the authoritative `AppliedLSN` source because
+it would allow split states after crash.
 
 ### 8.1 Crash-Correctness Requirements
 
@@ -778,8 +823,8 @@ Deliverables:
 - single mutable journal owner per DB directory;
 - typed command appends use `wal/commit-l<lane>-<seq>.log`;
 - WAL sequence allocation comes from the shared journal service;
-- durable `AppliedCommandLSN` storage in the gated meta-page format, selected by
-  the same meta-page boundary as command roots;
+- durable `AppliedCommandLSN` storage in the in-page-marked meta-page format,
+  selected by the same meta-page boundary as command roots;
 - checkpoint and publish-boundary integration;
 - segment cleanup rules;
 - read-only dirty-WAL detection;
@@ -793,6 +838,23 @@ Acceptance:
 - roots and `AppliedLSN` cannot be published as split commits;
 - typed command frames with `LSN <= AppliedLSN` are skipped during recovery;
 - read-only open fails when mutating recovery would be required.
+
+Implementation evidence expected for this milestone:
+
+- the cached write path and command journal service acquire the same mutable
+  journal-owner lock before opening commit-log writers;
+- the command journal service assigns contiguous LSNs before typed frame append;
+- `AppliedCommandLSN` is stored in the alternating meta page body and published
+  with roots through a dedicated command-WAL publish helper;
+- read-only opens scan typed command frames and return `ErrRecoveryRequired`
+  when any complete frame has `LSN > AppliedCommandLSN`;
+- read-write opens keep typed command frames with `LSN <= AppliedCommandLSN`
+  out of legacy raw batch replay and fail closed on higher typed LSNs until the
+  PR3 typed replay dispatcher is present;
+- cleanup removes only non-active typed command WAL segments whose max complete
+  LSN is covered by durable `AppliedCommandLSN`;
+- benchmark evidence records shared journal allocation/append overhead and
+  root/meta publication overhead with `AppliedCommandLSN`.
 
 ### PR 3: Recovery dispatcher and raw KV command conversion
 
@@ -831,43 +893,133 @@ Acceptance:
 - crash after acknowledged insert/delete and before checkpoint recovers correctly;
 - duplicate/missing IDs replay idempotency behavior is explicit and tested.
 
+PR4 evidence:
+
+- canonical frame fixtures:
+  `command_wal_v1_collection_insert_by_id.hex` and
+  `command_wal_v1_collection_delete_by_id.hex`;
+- normal path: public `InsertBatch` appends one collection command frame and
+  publishes roots with `AppliedCommandLSN`;
+- recovery path: unapplied insert/delete frames replay through collection
+  executors, including template-v1 stored documents and missing-only delete
+  no-ops;
+- unsupported index DDL fails with `ErrCommandWALUnsupported` until PR6+ index
+  catalog commands;
+- performance artifacts:
+  `artifacts/command-wal/pr4/collection-insert-delete-microbench.txt` and
+  `artifacts/command-wal/pr4/collection-insert-delete-microbench-benchstat.txt`.
+
 ### PR 5: Collection update by explicit ID
 
 Deliverables:
 
-- `CollectionReplaceBatchByID` for callback APIs after final replacement is known;
-- `CollectionUpdateByIDOps` for declarative update operators over canonical
-  literal values;
-- resolver-backed helpers such as server-now or UUID lower to resolved literals
-  before WAL append;
-- optional `CollectionUpdateByIDSet` for Mongo `$set` if it remains a distinct,
-  compact subset of the declarative operator payload;
-- result assertions for matched/modified counts;
+- `CollectionUpdateBatchByID` canonical payload for callback/BSON-set APIs after
+  final replacement is known;
+- public `Update`, `UpdateBatch`, and structured BSON `$set` update paths lower
+  to accepted replacement documents before WAL append;
+- declarative operator and resolver-backed helper payloads stay explicitly
+  future work rather than replaying helper functions;
 - one-frame/one-LSN all-or-nothing semantics for replacement/update batches, with
   no implicit atomic split without a future `CommandGroup` protocol;
-- tests for indexed fields, unchanged fields, BSON `_id` preservation, and
-  unique-index conflicts.
+- tests for public publish, open-time replay, indexed secondary-root updates,
+  no-op frame advancement, and corrupt-payload count bounds.
 
 Acceptance:
 
 - no Go callback is replayed;
-- no resolver helper is invoked during recovery;
+- no resolver/helper code is invoked during recovery for implemented update
+  paths because the WAL payload is the resolved stored document;
 - recovered primary and secondary index state matches normal execution;
-- unsupported update operators fail closed in WAL-on modes.
+- unsupported future update operators remain outside the support matrix until a
+  canonical operator payload lands.
+
+PR5 evidence:
+
+- canonical frame fixture:
+  `command_wal_v1_collection_update_by_id.hex`;
+- normal path: public `Update`, `UpdateBatch`, and BSON-set updates append one
+  collection update command frame and publish roots with `AppliedCommandLSN`;
+- recovery path: unapplied update frames replay through the collection executor
+  without invoking the original callback;
+- indexed public update coverage verifies secondary index delete/set state under
+  command WAL;
+- performance artifacts:
+  `artifacts/command-wal/pr5/collection-update-microbench.txt` and
+  `artifacts/command-wal/pr5/collection-update-microbench-benchstat.txt`.
 
 ### PR 6: Catalog mutation commands
 
 Deliverables:
 
-- create collection command;
-- create/drop index commands or explicit WAL-on rejection until implemented;
-- catalog/schema epoch guards;
-- recovery tests around DDL plus subsequent document mutations.
+- `CatalogCreateCollection` command frame and payload fixture;
+- public `CreateCollection` appends one catalog command frame and publishes the
+  system catalog root plus `AppliedCommandLSN` in one backend tuple;
+- open-time replay creates missing collections, treats same-metadata replay as
+  idempotent, and fails closed on incompatible metadata without publishing the
+  replay LSN;
+- create/drop index commands remain explicit WAL-on pre-frame rejections until
+  index catalog payloads land;
+- lower-LSN drain evidence uses the shared command journal: recovered lower raw
+  KV frames advance `AppliedCommandLSN` before a catalog create receives the next
+  contiguous LSN.
 
 Acceptance:
 
-- GUI/Mongo-compatible `create` behavior has documented durability semantics;
-- schema/index changes cannot race lower unapplied command LSNs.
+- GUI/Mongo-compatible `create` maps to the same `CreateCollection` command-WAL
+  path: acknowledged success means the catalog command frame is recoverable and
+  the catalog root plus `AppliedCommandLSN` were published together; it is not an
+  fsync guarantee unless the caller uses a sync-capable durability barrier;
+- schema/index changes cannot race lower unapplied command LSNs because catalog
+  create uses the shared command journal and contiguous `AppliedCommandLSN`
+  validation;
+- unsupported index DDL is cheap and non-mutating in command-WAL mode.
+
+PR6 evidence:
+
+- canonical frame fixture:
+  `command_wal_v1_catalog_create_collection.hex`;
+- normal path: public `CreateCollection` appends a `CatalogCreateCollection`
+  frame and advances `AppliedCommandLSN`;
+- recovery path: unapplied catalog create frames replay through the collection
+  catalog executor, including same-metadata idempotent replay;
+- negative path: incompatible replay fails closed, and rejected index DDL leaves
+  `AppliedCommandLSN` and frame count unchanged;
+- performance artifact:
+  `artifacts/command-wal/pr6/bench.txt`.
+
+### PR 6.5: Collection/catalog command-WAL performance polish
+
+Deliverables:
+
+- consolidate the PR4, PR5, and PR6 collection/catalog command-WAL performance
+  artifacts before matrix hardening and public raw KV default cutover;
+- apply the strict default-ready throughput gate to collection/catalog lanes:
+  command-WAL throughput divided by the relevant WAL-off baseline throughput
+  must be greater than `1.01x`; anything not strictly greater than `1.01x`
+  fails;
+- explicitly prevent PR9 public raw KV performance evidence from being reused as
+  a collection command-WAL default-readiness claim;
+- convert any below-gate collection overhead into a follow-up issue with exact
+  lane thresholds.
+
+Acceptance:
+
+- catalog create remains default-ready on performance evidence because the PR6
+  artifact shows command-WAL create throughput above the WAL-off baseline;
+- collection insert/delete/update command-WAL lanes remain supported command
+  kinds but are not default-ready performance lanes until the follow-up issue
+  clears strict `>1.01x` throughput for every supported lane;
+- PR9 must restrict default-readiness claims to public raw KV unless it adds
+  new collection/catalog performance artifacts that clear the same strict gate.
+
+PR6.5 evidence:
+
+- consolidated performance summary:
+  `artifacts/command-wal/pr6_5/collection-catalog-performance-summary.md`;
+- acceptance artifact:
+  `artifacts/command-wal/pr6_5/acceptance.json`;
+- follow-up issue for the below-gate collection lanes:
+  `https://github.com/snissn/gomap/issues/1584`.
 
 ### PR 7: Matrix enforcement and future-command guardrails
 
@@ -884,6 +1036,17 @@ Acceptance:
 - adding a new mutating command without a WAL status fails tests;
 - current unsupported query-wide mutation remains explicitly rejected.
 
+PR7 evidence:
+
+- machine-readable matrix:
+  `TreeDB/docs/spec/command-wal-support-matrix.json`;
+- docs tests require rows for current collection mutators, Mongo gateway
+  mutation handlers, and native-wire mutation commands;
+- docs drift test rejects active collection-WAL segment references outside the
+  deprecated implementation/docs allowance;
+- public sentinel aliases:
+  `db.ErrCommandWALRejected` and `treedb.ErrCommandWALRejected`.
+
 ### PR 8: Raft alignment design closeout
 
 Deliverables:
@@ -897,6 +1060,50 @@ Acceptance:
 
 - future Raft work can reuse the command payload contract without depending on
   local WAL segment layout.
+
+### PR 9: Default command-WAL public raw KV cutover
+
+Deliverables:
+
+- public `treedb.Open` read-write handles no longer fail closed solely because
+  `CommandWAL` or persisted `command_wal_v1` is active;
+- public raw KV `Set`, `Delete`, and `Batch.Write` calls use `RawKVBatch`
+  command frames through the cached public command-WAL path;
+- the public command-WAL write path uses cached visibility while disabling the
+  cached legacy redo journal and appending typed command frames through the
+  shared backend journal owner;
+- stats expose mode proof with `treedb.write_path.mode=command_wal_cached`,
+  `treedb.command_wal.required_feature=true`, live accepted/covered command
+  frame counters, and max LSN. Diagnostic WAL segment scans are optional
+  inventory proof, not required for normal benchmark mode proof.
+
+Acceptance:
+
+- public raw KV command-WAL writes reopen through `treedb.Open` without explicit
+  backend-only APIs;
+- recovery preserves visible state and deletes after public batch writes;
+- the support matrix classifies public raw KV writes as `WAL-supported` and
+  points at executable evidence;
+- point `Set`, focused `Batch.Write`, `unified_bench` batch-write, and
+  incompressible value-log auto/off throughput gates each require candidate
+  throughput strictly greater than `1.01x` of the relevant baseline. Any
+  required lane at or below `1.01x`, including sub-parity evidence such as
+  `0.80x`, is a failing gate rather than accepted evidence.
+- all required command-WAL acceptance performance gates use the same strict
+  parity-plus policy: passing evidence must include `>` semantics, explicit
+  `1.01x` minimum ratio thresholds, and comparative throughput ratios above the
+  threshold; stale or diagnostic evidence below that threshold is failing
+  evidence.
+
+PR9 initial evidence:
+
+- `TestPublicCommandWALRawKVWritesUseTypedFrames` opens with public
+  `treedb.Open`, writes `Set` plus batch set/delete operations, proves command
+  frame/max-LSN stats are non-zero, closes, reopens from persisted
+  `command_wal_v1`, and verifies the final public state;
+- this PR intentionally routes public command-WAL writes through cached
+  visibility plus typed command-WAL frames rather than re-enabling the cached
+  legacy redo journal.
 
 ## 16. Deprecation of the Collection Root-Delta WAL Target
 

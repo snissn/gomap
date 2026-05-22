@@ -2,11 +2,13 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"math"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionSearchVectorsExactTopKAndTieOrder(t *testing.T) {
@@ -47,6 +49,27 @@ func TestCollectionSearchVectorsExactTopKAndTieOrder(t *testing.T) {
 	requireVectorResultIDs(t, results, "a", "b")
 	if results[0].Distance != 0 || results[1].Distance != 0 {
 		t.Fatalf("distances=%v,%v want exact zero ties", results[0].Distance, results[1].Distance)
+	}
+}
+
+func TestVectorFromBSONFieldPropagatesMalformedTraversal(t *testing.T) {
+	missingDoc := mustBSONCollectionDocument(t, bson.D{{Key: "name", Value: "ada"}})
+	if _, ok, err := vectorFromBSONField(missingDoc, []string{"payload", "embedding"}); err != nil || ok {
+		t.Fatalf("missing BSON vector ok=%v err=%v want missing without error", ok, err)
+	}
+
+	malformedNested := []byte{10, 0, 0, 0, 0}
+	doc := make([]byte, 0, 4+1+len("payload")+1+len(malformedNested)+1)
+	doc = append(doc, 0, 0, 0, 0)
+	doc = append(doc, 0x03)
+	doc = append(doc, "payload"...)
+	doc = append(doc, 0)
+	doc = append(doc, malformedNested...)
+	doc = append(doc, 0)
+	binary.LittleEndian.PutUint32(doc[:4], uint32(len(doc)))
+
+	if _, ok, err := vectorFromBSONField(doc, []string{"payload", "embedding"}); err == nil || ok {
+		t.Fatalf("malformed BSON traversal ok=%v err=%v want error", ok, err)
 	}
 }
 

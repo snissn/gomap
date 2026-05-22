@@ -104,6 +104,43 @@ jobs:
           ci_list() {
             sed -e 's/\r$//' -e '/^#/d' -e '/^$/d' "$1"
           }
+          run_named_test_file() {
+            pkg="$1"
+            label="$2"
+            tests_file="$3"
+            output_file="$4"
+            max_regex_chars=6000
+            chunk=""
+            chunk_count=0
+            chunk_index=0
+            while IFS= read -r test_name || [ -n "$test_name" ]; do
+              if [ -z "$test_name" ]; then
+                continue
+              fi
+              if [ -n "$chunk" ]; then
+                candidate="${chunk}|${test_name}"
+              else
+                candidate="$test_name"
+              fi
+              if [ -n "$chunk" ] && [ "${#candidate}" -gt "$max_regex_chars" ]; then
+                chunk_index=$((chunk_index + 1))
+                regex="^(${chunk})$"
+                echo "${label} chunk=${chunk_index} tests=${chunk_count} regex_len=${#regex}"
+                go test -json -timeout 30m -p 1 "$pkg" -run "$regex" | tee -a "$output_file"
+                chunk="$test_name"
+                chunk_count=1
+              else
+                chunk="$candidate"
+                chunk_count=$((chunk_count + 1))
+              fi
+            done < "$tests_file"
+            if [ -n "$chunk" ]; then
+              chunk_index=$((chunk_index + 1))
+              regex="^(${chunk})$"
+              echo "${label} chunk=${chunk_index} tests=${chunk_count} regex_len=${#regex}"
+              go test -json -timeout 30m -p 1 "$pkg" -run "$regex" | tee -a "$output_file"
+            fi
+          }
           trap cleanup EXIT
           case "${{ matrix.shard_kind }}" in
             all)
@@ -156,15 +193,11 @@ jobs:
                 ran_tests=true
               fi
               if [ -s "$root_test_file" ]; then
-                root_regex="^($(paste -sd'|' "$root_test_file"))$"
-                echo "TreeDB root test shard=${package_shard_index}/${package_shard_count} regex=${root_regex}"
-                go test -json -timeout 30m -p 1 . -run "$root_regex" | tee -a treedb-test.jsonl
+                run_named_test_file . "TreeDB root test shard=${package_shard_index}/${package_shard_count}" "$root_test_file" treedb-test.jsonl
                 ran_tests=true
               fi
               if [ -s "$db_test_file" ]; then
-                db_regex="^($(paste -sd'|' "$db_test_file"))$"
-                echo "TreeDB/db test shard=${package_shard_index}/${package_shard_count} regex=${db_regex}"
-                go test -json -timeout 30m -p 1 ./db -run "$db_regex" | tee -a treedb-test.jsonl
+                run_named_test_file ./db "TreeDB/db test shard=${package_shard_index}/${package_shard_count}" "$db_test_file" treedb-test.jsonl
                 ran_tests=true
               fi
               if [ "$ran_tests" = false ]; then
@@ -473,10 +506,13 @@ jobs:
               continue
             fi
 
+            # #1529 intentionally makes this a strict parity-plus gate. A
+            # result at or below 1.01x is failing evidence, even for the
+            # incompressible auto-vs-off case.
             if go run .github/scripts/check_vlog_auto_incompressible.go \
               -off-log "${off_log}" \
               -auto-log "${auto_log}" \
-              -min-throughput-frac 0.95 \
+              -min-throughput-frac 1.01 \
               -max-size-frac 1.02; then
               exit 0
             fi

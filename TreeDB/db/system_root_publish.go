@@ -58,6 +58,9 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if db.closing.Load() {
 		return 0, ErrClosed
 	}
+	if err := db.rejectUnloggedCommandWALRootPublish(); err != nil {
+		return 0, err
+	}
 	if iter == nil {
 		return 0, errors.New("nil system root iterator")
 	}

@@ -12,6 +12,7 @@ KEYS="${KEYS:-4000000}"
 PROFILE="${PROFILE:-fast}"
 TESTS="${TESTS:-batch_write,batch_random,random_read,prefix_scan}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
+MIN_THROUGHPUT_RATIO="${MIN_THROUGHPUT_RATIO:-1.01}"
 
 BASE_FLAGS="-treedb-force-value-pointers -treedb-index-optimizations=false"
 ALL_FLAGS="-treedb-index-optimizations=true"
@@ -27,11 +28,12 @@ keys=$KEYS
 profile=$PROFILE
 tests=$TESTS
 extra_args=$EXTRA_ARGS
+min_throughput_ratio=$MIN_THROUGHPUT_RATIO
 EOF
 
 echo "treedb all-flags gate"
 echo "out=$OUT"
-echo "runs=$RUNS keys=$KEYS profile=$PROFILE tests=$TESTS"
+echo "runs=$RUNS keys=$KEYS profile=$PROFILE tests=$TESTS min_throughput_ratio=$MIN_THROUGHPUT_RATIO"
 
 make unified-bench >/dev/null
 
@@ -60,13 +62,14 @@ for run in $(seq 1 "$RUNS"); do
   run_variant "allflags" "$ALL_FLAGS" "$run"
 done
 
-python3 - "$OUT" <<'PY'
+python3 - "$OUT" "$MIN_THROUGHPUT_RATIO" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
 out = Path(sys.argv[1])
+min_throughput_ratio = float(sys.argv[2])
 runs_dir = out / "runs"
 
 metric_labels = {
@@ -123,7 +126,7 @@ for variant in data.keys():
     for f in files:
         data[variant].append(parse_run(f))
 
-summary = {"base": {}, "allflags": {}, "delta_pct": {}}
+summary = {"base": {}, "allflags": {}, "delta_pct": {}, "ratio": {}}
 for metric in metrics + ["index_db_bytes"]:
     summary["base"][metric] = median([r[metric] for r in data["base"]])
     summary["allflags"][metric] = median([r[metric] for r in data["allflags"]])
@@ -131,18 +134,22 @@ for metric in metrics + ["index_db_bytes"]:
     a = summary["allflags"][metric]
     if b == 0:
         summary["delta_pct"][metric] = None
+        summary["ratio"][metric] = None
     else:
         summary["delta_pct"][metric] = (a - b) * 100.0 / b
+        summary["ratio"][metric] = a / b
 
 pass_checks = []
 for metric in metrics:
-    pass_checks.append(summary["allflags"][metric] > summary["base"][metric])
+    ratio = summary["ratio"][metric]
+    pass_checks.append(ratio is not None and ratio > min_throughput_ratio)
 pass_checks.append(summary["allflags"]["index_db_bytes"] < summary["base"]["index_db_bytes"])
 gate_pass = all(pass_checks)
 
 summary_path = out / "summary.json"
 summary_payload = {
     "gate_pass": gate_pass,
+    "min_throughput_ratio": min_throughput_ratio,
     "summary": summary,
     "runs": data,
 }
@@ -153,18 +160,26 @@ md.append("# TreeDB all-flags gate")
 md.append("")
 md.append(f"- runs per variant: {len(data['base'])}")
 md.append(f"- artifacts: `{out}`")
+md.append(f"- throughput gate: candidate/baseline > {min_throughput_ratio:.2f}x")
 md.append("")
-md.append("| metric | base median | all-flags median | delta |")
-md.append("|---|---:|---:|---:|")
+md.append("| metric | base median | all-flags median | ratio | delta | gate |")
+md.append("|---|---:|---:|---:|---:|---|")
 for metric in metrics:
     b = summary["base"][metric]
     a = summary["allflags"][metric]
     d = summary["delta_pct"][metric]
-    md.append(f"| {metric} | {b:,} | {a:,} | {d:+.2f}% |")
+    ratio = summary["ratio"][metric]
+    passed = ratio is not None and ratio > min_throughput_ratio
+    ratio_s = "-" if ratio is None else f"{ratio:.4f}x"
+    delta_s = "-" if d is None else f"{d:+.2f}%"
+    md.append(f"| {metric} | {b:,} | {a:,} | {ratio_s} | {delta_s} | {'PASS' if passed else 'FAIL'} |")
 b = summary["base"]["index_db_bytes"]
 a = summary["allflags"]["index_db_bytes"]
 d = summary["delta_pct"]["index_db_bytes"]
-md.append(f"| index_db_bytes | {fmt_bytes(b)} | {fmt_bytes(a)} | {d:+.2f}% |")
+ratio = summary["ratio"]["index_db_bytes"]
+ratio_s = "-" if ratio is None else f"{ratio:.4f}x"
+delta_s = "-" if d is None else f"{d:+.2f}%"
+md.append(f"| index_db_bytes | {fmt_bytes(b)} | {fmt_bytes(a)} | {ratio_s} | {delta_s} | {'PASS' if a < b else 'FAIL'} |")
 md.append("")
 md.append(f"- gate: {'PASS' if gate_pass else 'FAIL'}")
 

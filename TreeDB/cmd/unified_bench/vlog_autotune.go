@@ -48,6 +48,12 @@ type vlogSegmentSpec struct {
 	IoNsPerStoredByte  float64
 }
 
+const (
+	vlogAutotuneStrictThroughputRatio = 1.01
+	vlogAutotuneIOThroughputRatio     = 1.15
+	vlogAutotuneMarqueeRatio          = 1.10
+)
+
 func runVlogAutotuneSuite(caseName string) (*vlogAutotuneReport, error) {
 	report := &vlogAutotuneReport{Suite: "vlog_autotune"}
 	cases := buildVlogAutotuneCases()
@@ -271,8 +277,8 @@ func evalVlogAutotuneMarks(c vlogAutotuneCase, modes []vlogAutotuneModeReport) [
 			offThroughput := off.Result.Segments[0].ThroughputRawMBps
 			marks = append(marks, benchMark{
 				Name:   "cpu_bound_throughput",
-				Pass:   autoThroughput >= offThroughput*0.95,
-				Detail: fmt.Sprintf("auto=%.3f off=%.3f", autoThroughput, offThroughput),
+				Pass:   throughputRatioPass(autoThroughput, offThroughput, vlogAutotuneStrictThroughputRatio),
+				Detail: throughputRatioDetail(autoThroughput, offThroughput, vlogAutotuneStrictThroughputRatio),
 			})
 			autoKept := auto.Result.Segments[0].KeptFrac
 			marks = append(marks, benchMark{
@@ -287,8 +293,8 @@ func evalVlogAutotuneMarks(c vlogAutotuneCase, modes []vlogAutotuneModeReport) [
 			offThroughput := off.Result.Segments[0].ThroughputRawMBps
 			marks = append(marks, benchMark{
 				Name:   "io_bound_throughput",
-				Pass:   autoThroughput >= offThroughput*1.15,
-				Detail: fmt.Sprintf("auto=%.3f off=%.3f", autoThroughput, offThroughput),
+				Pass:   throughputRatioPass(autoThroughput, offThroughput, vlogAutotuneIOThroughputRatio),
+				Detail: throughputRatioDetail(autoThroughput, offThroughput, vlogAutotuneIOThroughputRatio),
 			})
 			autoKept := auto.Result.Segments[0].KeptFrac
 			marks = append(marks, benchMark{
@@ -408,11 +414,22 @@ func marqueeMarks(auto caching.VlogAutotuneBenchResult, off *vlogAutotuneModeRep
 		offThroughput := off.Result.ThroughputMB
 		marks = append(marks, benchMark{
 			Name:   "marquee_throughput_gain",
-			Pass:   throughput >= offThroughput*1.10,
-			Detail: fmt.Sprintf("auto=%.3f off=%.3f", throughput, offThroughput),
+			Pass:   throughputRatioPass(throughput, offThroughput, vlogAutotuneMarqueeRatio),
+			Detail: throughputRatioDetail(throughput, offThroughput, vlogAutotuneMarqueeRatio),
 		})
 	}
 	return marks
+}
+
+func throughputRatioPass(candidate, baseline, minRatio float64) bool {
+	return baseline > 0 && candidate/baseline > minRatio
+}
+
+func throughputRatioDetail(candidate, baseline, minRatio float64) string {
+	if baseline <= 0 {
+		return fmt.Sprintf("candidate=%.3f baseline=%.3f ratio=nan min=>%.2fx", candidate, baseline, minRatio)
+	}
+	return fmt.Sprintf("candidate=%.3f baseline=%.3f ratio=%.4fx min=>%.2fx", candidate, baseline, candidate/baseline, minRatio)
 }
 
 func findMode(modes []vlogAutotuneModeReport, name string) *vlogAutotuneModeReport {
