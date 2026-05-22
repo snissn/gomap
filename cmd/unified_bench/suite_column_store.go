@@ -1679,7 +1679,7 @@ func columnStoreSuiteEffectiveQueryNames(explicit []string, flagValue string) ([
 
 func columnStoreSuiteParseQueryNames(value string) ([]string, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || value == "all" {
+	if value == "" || strings.EqualFold(value, "all") {
 		return columnStoreQueryNames(), nil
 	}
 	return columnStoreSuiteNormalizeQueryNames(strings.Split(value, ","))
@@ -1692,9 +1692,9 @@ func columnStoreSuiteNormalizeQueryNames(names []string) ([]string, error) {
 	out := make([]string, 0, len(names))
 	seen := make(map[string]struct{}, len(names))
 	for _, raw := range names {
-		name := strings.TrimSpace(raw)
+		name := strings.ToLower(strings.TrimSpace(raw))
 		if name == "" {
-			return nil, errors.New("column_store: empty query name in -column-store-query")
+			return nil, errors.New("column_store: empty query name")
 		}
 		if name == "all" {
 			if len(names) == 1 {

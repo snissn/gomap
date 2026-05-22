@@ -2503,14 +2503,23 @@ func TestColumnStoreSuiteParseQueryNamesM1634(t *testing.T) {
 			t.Fatalf("default len=%d want %d", len(got), len(columnStoreQueryNameList))
 		}
 	})
-	t.Run("subset trims whitespace", func(t *testing.T) {
-		got, err := columnStoreSuiteParseQueryNames(" q3, q5 ")
+	t.Run("subset trims whitespace and normalizes case", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames(" Q3, q5 ")
 		if err != nil {
 			t.Fatalf("parse subset: %v", err)
 		}
 		want := []string{columnStoreQueryQ3, columnStoreQueryQ5}
 		if !slices.Equal(got, want) {
 			t.Fatalf("subset=%v want %v", got, want)
+		}
+	})
+	t.Run("all normalizes case", func(t *testing.T) {
+		got, err := columnStoreSuiteParseQueryNames(" All ")
+		if err != nil {
+			t.Fatalf("parse all: %v", err)
+		}
+		if len(got) != len(columnStoreQueryNameList) {
+			t.Fatalf("all len=%d want %d", len(got), len(columnStoreQueryNameList))
 		}
 	})
 	for _, value := range []string{"missing", "q3,q3", "all,q3", "q3,"} {
