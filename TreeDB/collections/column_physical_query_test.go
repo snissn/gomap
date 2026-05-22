@@ -352,6 +352,41 @@ func TestColumnStoreRetainedPayloadNoneAllowsIndexWhenColumnStoreDisabledM13C(t 
 	}
 }
 
+func TestColumnStoreRetainedPayloadRejectsCreateIndexOnColumnSubtreeM13C(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "events",
+		Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+			Enabled:         true,
+			RetainedPayload: ColumnRetainedPayloadNonColumn,
+			Columns: []ColumnStoreColumn{
+				{Name: "repo", Path: "commit.repo", ValueType: ColumnStoreValueString},
+				{Name: "author", Path: "author", ValueType: ColumnStoreValueString},
+			},
+		}},
+	}
+	cases := []struct {
+		name  string
+		field string
+		want  bool
+	}{
+		{name: "exact", field: "commit.repo", want: true},
+		{name: "descendant", field: "commit.repo.id", want: true},
+		{name: "ancestor", field: "commit", want: true},
+		{name: "root descendant", field: "author.name", want: true},
+		{name: "sibling prefix", field: "commit.repository", want: false},
+		{name: "retained payload", field: "payload.repo", want: false},
+	}
+	for _, tc := range cases {
+		err := rejectCreateIndexOnRetainedColumnField(meta, IndexDefinition{Name: tc.name + "_idx", Field: tc.field, ValueType: IndexValueString})
+		if tc.want && (err == nil || !strings.Contains(err.Error(), "retained-payload column field")) {
+			t.Fatalf("%s CreateIndex err=%v want retained-payload column rejection", tc.name, err)
+		}
+		if !tc.want && err != nil {
+			t.Fatalf("%s CreateIndex err=%v want nil", tc.name, err)
+		}
+	}
+}
+
 func TestColumnStoreRetainedPayloadDisablesDirectBufferedUpdateM13C(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 	if err != nil {

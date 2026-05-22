@@ -3144,11 +3144,21 @@ func rejectCreateIndexOnRetainedColumnField(meta CollectionMeta, def IndexDefini
 		return fmt.Errorf("collections: CreateIndex on retained-payload-none collection field %q is unsupported because primary rows retain no JSON payload for index maintenance", field)
 	}
 	for _, col := range cfg.Columns {
-		if field == strings.TrimSpace(col.Path) {
+		columnPath := strings.TrimSpace(col.Path)
+		if columnRetainedPayloadPathOverlaps(field, columnPath) {
 			return fmt.Errorf("collections: CreateIndex on retained-payload column field %q is unsupported because primary rows omit declared column payloads", field)
 		}
 	}
 	return nil
+}
+
+func columnRetainedPayloadPathOverlaps(indexPath, columnPath string) bool {
+	if indexPath == "" || columnPath == "" {
+		return false
+	}
+	return indexPath == columnPath ||
+		strings.HasPrefix(indexPath, columnPath+".") ||
+		strings.HasPrefix(columnPath, indexPath+".")
 }
 
 // CreateVectorIndex adds vector index metadata to the collection schema.
