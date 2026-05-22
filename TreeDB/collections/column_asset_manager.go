@@ -62,6 +62,14 @@ type columnAssetVerifiedChecksumEntry struct {
 	valid bool
 }
 
+type columnAssetVerifiedChecksumFileIdentity struct {
+	dev             uint64
+	ino             uint64
+	size            int64
+	modTimeUnixNano int64
+	valid           bool
+}
+
 type columnAssetVerifiedChecksumKey struct {
 	rootDir    string
 	kind       ColumnAssetKind
@@ -72,6 +80,10 @@ type columnAssetVerifiedChecksumKey struct {
 	offset     int64
 	length     int64
 	checksum   uint32
+	fileDev    uint64
+	fileIno    uint64
+	fileSize   int64
+	fileModNS  int64
 }
 
 type columnAssetSegmentAllocationCache struct {
@@ -687,7 +699,7 @@ func readColumnPhysicalAssetFromManagerIntoWithIntegrity(rootDir string, ref Col
 	if n != len(raw) {
 		return nil, io.ErrUnexpectedEOF
 	}
-	if err := verifyColumnPhysicalAssetReadChecksumWithIntegrity(raw, ref, verifyChecksum, integrity, rootDir); err != nil {
+	if err := verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, verifyChecksum, integrity, rootDir, columnAssetVerifiedChecksumFileIdentityFromFile(file)); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -724,23 +736,30 @@ func verifyColumnPhysicalAssetReadChecksum(raw []byte, ref ColumnAssetRef, verif
 }
 
 func verifyColumnPhysicalAssetReadChecksumWithIntegrity(raw []byte, ref ColumnAssetRef, verify bool, integrity ColumnAssetReadIntegrity, rootDir string) error {
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, verify, integrity, rootDir, columnAssetVerifiedChecksumFileIdentity{})
+}
+
+func verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw []byte, ref ColumnAssetRef, verify bool, integrity ColumnAssetReadIntegrity, rootDir string, fileIdentity columnAssetVerifiedChecksumFileIdentity) error {
 	if !verify {
 		return nil
 	}
-	if integrity == ColumnAssetReadIntegrityCachedVerify && columnAssetVerifiedChecksumCacheContains(rootDir, ref) {
+	if integrity == ColumnAssetReadIntegrityCachedVerify && columnAssetVerifiedChecksumCacheContains(rootDir, ref, fileIdentity) {
 		return nil
 	}
 	if checksum := page.Checksum(raw); checksum != ref.Checksum {
 		return fmt.Errorf("collections: column physical asset checksum=%d does not match ref checksum=%d", checksum, ref.Checksum)
 	}
 	if integrity == ColumnAssetReadIntegrityCachedVerify {
-		columnAssetVerifiedChecksumCacheStore(rootDir, ref)
+		columnAssetVerifiedChecksumCacheStore(rootDir, ref, fileIdentity)
 	}
 	return nil
 }
 
-func columnAssetVerifiedChecksumCacheContains(rootDir string, ref ColumnAssetRef) bool {
-	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref)
+func columnAssetVerifiedChecksumCacheContains(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) bool {
+	if !fileIdentity.valid {
+		return false
+	}
+	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
 	idx := columnAssetVerifiedChecksumCacheIndex(key)
 	columnAssetVerifiedChecksumCache.Lock()
 	entry := columnAssetVerifiedChecksumCache.entries[idx]
@@ -748,15 +767,18 @@ func columnAssetVerifiedChecksumCacheContains(rootDir string, ref ColumnAssetRef
 	return entry.valid && entry.key == key
 }
 
-func columnAssetVerifiedChecksumCacheStore(rootDir string, ref ColumnAssetRef) {
-	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref)
+func columnAssetVerifiedChecksumCacheStore(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) {
+	if !fileIdentity.valid {
+		return
+	}
+	key := columnAssetVerifiedChecksumKeyForRef(rootDir, ref, fileIdentity)
 	idx := columnAssetVerifiedChecksumCacheIndex(key)
 	columnAssetVerifiedChecksumCache.Lock()
 	columnAssetVerifiedChecksumCache.entries[idx] = columnAssetVerifiedChecksumEntry{key: key, valid: true}
 	columnAssetVerifiedChecksumCache.Unlock()
 }
 
-func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef) columnAssetVerifiedChecksumKey {
+func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) columnAssetVerifiedChecksumKey {
 	return columnAssetVerifiedChecksumKey{
 		rootDir:    rootDir,
 		kind:       ref.Kind,
@@ -767,6 +789,10 @@ func columnAssetVerifiedChecksumKeyForRef(rootDir string, ref ColumnAssetRef) co
 		offset:     ref.Offset,
 		length:     ref.Length,
 		checksum:   ref.Checksum,
+		fileDev:    fileIdentity.dev,
+		fileIno:    fileIdentity.ino,
+		fileSize:   fileIdentity.size,
+		fileModNS:  fileIdentity.modTimeUnixNano,
 	}
 }
 
@@ -781,6 +807,10 @@ func columnAssetVerifiedChecksumCacheIndex(key columnAssetVerifiedChecksumKey) i
 	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.offset))
 	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.length))
 	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.checksum))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.fileDev)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, key.fileIno)
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileSize))
+	h = columnAssetVerifiedChecksumCacheHashUint64(h, uint64(key.fileModNS))
 	return int(h % columnAssetVerifiedChecksumCacheSlots)
 }
 
@@ -817,8 +847,9 @@ type columnPhysicalAssetReadCache struct {
 }
 
 type columnPhysicalAssetSegmentReader struct {
-	file *os.File
-	mmap []byte
+	file     *os.File
+	mmap     []byte
+	identity columnAssetVerifiedChecksumFileIdentity
 }
 
 func newColumnPhysicalAssetReadCache(rootDir string, namespace string) (columnPhysicalAssetReadCache, error) {
@@ -889,7 +920,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 		if raw, ok, err := reader.readView(ref); err != nil {
 			return nil, err
 		} else if ok {
-			if err := c.verifyReadChecksum(raw, ref); err != nil {
+			if err := c.verifyReadChecksum(raw, ref, reader.identity); err != nil {
 				return nil, err
 			}
 			c.lastView = true
@@ -909,17 +940,17 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if err != nil {
 		return nil, err
 	}
-	if err := c.verifyReadChecksum(raw, ref); err != nil {
+	if err := c.verifyReadChecksum(raw, ref, reader.identity); err != nil {
 		return nil, err
 	}
 	return raw, nil
 }
 
-func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef) error {
+func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, fileIdentity columnAssetVerifiedChecksumFileIdentity) error {
 	if c == nil {
 		return errors.New("collections: nil column physical asset read cache")
 	}
-	return verifyColumnPhysicalAssetReadChecksumWithIntegrity(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir)
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
 }
 
 func getColumnPhysicalAssetReadScratch(minLen int) []byte {
@@ -960,7 +991,10 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPh
 	if err != nil {
 		return nil, err
 	}
-	reader := &columnPhysicalAssetSegmentReader{file: file}
+	reader := &columnPhysicalAssetSegmentReader{
+		file:     file,
+		identity: columnAssetVerifiedChecksumFileIdentityFromFile(file),
+	}
 	if c.returnViews {
 		if mapped, err := mmapColumnPhysicalAssetFile(file); err == nil {
 			reader.mmap = mapped

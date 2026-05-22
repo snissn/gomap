@@ -29,6 +29,28 @@ func mmapColumnPhysicalAssetFile(file *os.File) ([]byte, error) {
 	return syscall.Mmap(fd, 0, int(size), syscall.PROT_READ, syscall.MAP_SHARED)
 }
 
+func columnAssetVerifiedChecksumFileIdentityFromFile(file *os.File) columnAssetVerifiedChecksumFileIdentity {
+	if file == nil {
+		return columnAssetVerifiedChecksumFileIdentity{}
+	}
+	fd := int(file.Fd())
+	var stat syscall.Stat_t
+	for {
+		err := syscall.Fstat(fd, &stat)
+		if err == nil {
+			return columnAssetVerifiedChecksumFileIdentity{
+				dev:   uint64(stat.Dev),
+				ino:   uint64(stat.Ino),
+				size:  stat.Size,
+				valid: true,
+			}
+		}
+		if err != syscall.EINTR {
+			return columnAssetVerifiedChecksumFileIdentity{}
+		}
+	}
+}
+
 func munmapColumnPhysicalAssetFile(data []byte) error {
 	if len(data) == 0 {
 		return nil
