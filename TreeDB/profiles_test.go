@@ -193,6 +193,9 @@ func TestApplyProfile_CommandWALRelaxedSetsCommandWALAndRelaxedPolicy(t *testing
 	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
 		t.Fatalf("expected command_wal_relaxed to keep the fast collection/index layout bundle: %+v", opts)
 	}
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_relaxed profile")
+	}
 }
 
 func TestApplyProfile_ExplicitLegacyNamesPreserveLegacySemantics(t *testing.T) {
