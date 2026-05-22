@@ -589,7 +589,7 @@ func (e *columnPhysicalQueryExecutor) supportsDirectAssetReduce() bool {
 		return e.groupColumnIdx >= 0 && e.distinctColumnIdx >= 0
 	case ColumnPhysicalQueryHourCount:
 		return e.valueColumnIdx >= 0
-	case ColumnPhysicalQueryGroupInt64Span:
+	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
 		return e.groupColumnIdx >= 0 && e.valueColumnIdx >= 0
 	default:
 		return false
@@ -776,6 +776,14 @@ func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCol
 			if err := exec.visitDirectHourCount(value, valueOK); err != nil {
 				return columnPhysicalAssetScanSummary{}, err
 			}
+		case ColumnPhysicalQueryGroupMinInt64:
+			if err := exec.visitDirectGroupMinInt64(group, groupOK, value, valueOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		case ColumnPhysicalQueryGroupMaxInt64:
+			if err := exec.visitDirectGroupMaxInt64(group, groupOK, value, valueOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
 		case ColumnPhysicalQueryGroupInt64Span:
 			if err := exec.visitDirectGroupInt64Span(group, groupOK, value, valueOK); err != nil {
 				return columnPhysicalAssetScanSummary{}, err
@@ -920,6 +928,36 @@ func (e *columnPhysicalQueryExecutor) visitDirectHourCount(value int64, valueOK 
 		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
 	}
 	e.hourCounts[columnPhysicalQueryUTCHour(value)]++
+	e.reduceRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) visitDirectGroupMinInt64(group []byte, groupOK bool, value int64, valueOK bool) error {
+	if !groupOK {
+		return fmt.Errorf("%w: physical column query missing string group value", ErrColumnQueryPlanUnsupported)
+	}
+	if !valueOK {
+		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
+	}
+	key := e.interner.internBytes(group)
+	if cur, ok := e.int64Values[key]; !ok || value < cur {
+		e.int64Values[key] = value
+	}
+	e.reduceRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) visitDirectGroupMaxInt64(group []byte, groupOK bool, value int64, valueOK bool) error {
+	if !groupOK {
+		return fmt.Errorf("%w: physical column query missing string group value", ErrColumnQueryPlanUnsupported)
+	}
+	if !valueOK {
+		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
+	}
+	key := e.interner.internBytes(group)
+	if cur, ok := e.int64Values[key]; !ok || value > cur {
+		e.int64Values[key] = value
+	}
 	e.reduceRows++
 	return nil
 }
