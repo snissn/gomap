@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -40,6 +42,7 @@ const (
 
 type config struct {
 	dir                   string
+	datasetDir            string
 	keepDir               bool
 	matrix                bool
 	profile               treedb.Profile
@@ -69,6 +72,7 @@ type config struct {
 
 type result struct {
 	Dir                   string                         `json:"dir"`
+	DatasetDir            string                         `json:"dataset_dir,omitempty"`
 	KeptDir               bool                           `json:"kept_dir"`
 	Profile               string                         `json:"profile"`
 	Docs                  int                            `json:"docs"`
@@ -178,6 +182,29 @@ type memoryReport struct {
 	IndexBytesMemory     int64  `json:"index_bytes_memory"`
 }
 
+type datasetManifest struct {
+	Version             int    `json:"version"`
+	Docs                int    `json:"docs"`
+	Dimensions          int    `json:"dimensions"`
+	Queries             int    `json:"queries"`
+	TopK                int    `json:"top_k"`
+	Metric              string `json:"metric"`
+	DocumentVectorsFile string `json:"document_vectors_file"`
+	QueryVectorsFile    string `json:"query_vectors_file"`
+	DocumentsJSONLFile  string `json:"documents_jsonl_file"`
+	FloatFormat         string `json:"float_format"`
+}
+
+type workload struct {
+	datasetDir string
+	manifest   datasetManifest
+}
+
+type datasetDocumentHeader struct {
+	Index int    `json:"index"`
+	ID    string `json:"id"`
+}
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "treedb-vector-search-demo: %v\n", err)
@@ -247,6 +274,7 @@ func parseConfig(args []string) (config, error) {
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&cfg.dir, "dir", "", "TreeDB directory to create; empty uses a temporary directory; explicit directories are kept")
+	fs.StringVar(&cfg.datasetDir, "dataset-dir", "", "Optional exported vector dataset directory to load documents and queries from")
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
@@ -325,7 +353,10 @@ func parseConfig(args []string) (config, error) {
 	if cfg.validateDocs < 0 {
 		return config{}, errors.New("-validate-docs cannot be negative")
 	}
-	if cfg.validateQueries > cfg.docs {
+	if cfg.datasetDir != "" {
+		cfg.datasetDir = filepath.Clean(cfg.datasetDir)
+	}
+	if cfg.datasetDir == "" && cfg.validateQueries > cfg.docs {
 		return config{}, errors.New("-validate-queries cannot exceed -docs")
 	}
 	if cfg.validateDocs > cfg.docs {
@@ -356,6 +387,7 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 	parts := strings.Split(raw, ",")
 	out := make([]int, 0, len(parts))
 	seen := make(map[int]struct{}, len(parts)+1)
+	seen[1] = struct{}{}
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -365,8 +397,8 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid -search-concurrency value %q", part)
 		}
-		if value <= 1 {
-			return nil, fmt.Errorf("-search-concurrency values must be greater than 1: %d", value)
+		if value <= 0 {
+			return nil, fmt.Errorf("-search-concurrency values must be positive: %d", value)
 		}
 		if _, ok := seen[value]; ok {
 			continue
@@ -374,7 +406,6 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 		seen[value] = struct{}{}
 		out = append(out, value)
 	}
-	sort.Ints(out)
 	if len(out) == 0 {
 		return nil, errors.New("-search-concurrency must include at least one value greater than 1")
 	}
@@ -436,6 +467,15 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
 	}
+	work, err := loadWorkload(&cfg)
+	if err != nil {
+		return result{}, err
+	}
+	if work.datasetDir != "" {
+		if err := validateDatasetDocuments(cfg, work); err != nil {
+			return result{}, err
+		}
+	}
 	dir, err := normalizeDemoDir(cfg.dir)
 	if err != nil {
 		return result{}, err
@@ -487,6 +527,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res := result{
 		Dir:                   dir,
+		DatasetDir:            cfg.datasetDir,
 		KeptDir:               cfg.keepDir || explicitDir,
 		Profile:               string(cfg.profile),
 		Docs:                  cfg.docs,
@@ -523,7 +564,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 
 	insertStart := time.Now()
-	if err := insertDocuments(col, cfg.docs, cfg.dimensions, cfg.batchSize); err != nil {
+	if err := insertDocuments(col, cfg, work); err != nil {
 		_ = cleanupBackend()
 		return result{}, err
 	}
@@ -660,13 +701,13 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		IndexBytesMemory:     res.IndexStatsLoaded.BytesMemory,
 	}
 
-	validation, err := validateCompactedData(col, loaded, cfg)
+	validation, err := validateCompactedData(col, loaded, cfg, work)
 	if err != nil {
 		return result{}, err
 	}
 	res.Validation = validation
 
-	searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg)
+	searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg, work)
 	if err != nil {
 		return result{}, err
 	}
@@ -803,18 +844,79 @@ func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	return out, nil
 }
 
-func insertDocuments(col *collections.Collection, docs, dims, batchSize int) error {
-	for start := 0; start < docs; start += batchSize {
-		end := start + batchSize
-		if end > docs {
-			end = docs
+func loadWorkload(cfg *config) (workload, error) {
+	if cfg.datasetDir == "" {
+		return workload{}, nil
+	}
+	m, err := loadDatasetManifest(cfg.datasetDir)
+	if err != nil {
+		return workload{}, err
+	}
+	if m.Version != 1 {
+		return workload{}, fmt.Errorf("unsupported dataset manifest version %d", m.Version)
+	}
+	if m.Docs != cfg.docs {
+		return workload{}, fmt.Errorf("dataset docs=%d does not match -docs=%d", m.Docs, cfg.docs)
+	}
+	if m.Dimensions != cfg.dimensions {
+		return workload{}, fmt.Errorf("dataset dims=%d does not match -dims=%d", m.Dimensions, cfg.dimensions)
+	}
+	if cfg.queries > m.Queries {
+		return workload{}, fmt.Errorf("dataset queries=%d is less than -queries=%d", m.Queries, cfg.queries)
+	}
+	if cfg.validateQueries > m.Queries {
+		cfg.validateQueries = m.Queries
+	}
+	if m.Metric != "" && m.Metric != "cosine" {
+		return workload{}, fmt.Errorf("dataset metric=%q, want cosine", m.Metric)
+	}
+	if m.FloatFormat != "" && m.FloatFormat != "float32_le_row_major" {
+		return workload{}, fmt.Errorf("dataset float_format=%q, want float32_le_row_major", m.FloatFormat)
+	}
+	return workload{datasetDir: cfg.datasetDir, manifest: m}, nil
+}
+
+func loadDatasetManifest(dir string) (datasetManifest, error) {
+	path := filepath.Join(dir, "manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return datasetManifest{}, fmt.Errorf("read dataset manifest: %w", err)
+	}
+	var m datasetManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return datasetManifest{}, fmt.Errorf("decode dataset manifest: %w", err)
+	}
+	if m.DocumentsJSONLFile == "" {
+		m.DocumentsJSONLFile = "documents.jsonl"
+	}
+	if m.QueryVectorsFile == "" {
+		m.QueryVectorsFile = "queries.f32"
+	}
+	return m, nil
+}
+
+func datasetPath(work workload, name, fallback string) string {
+	if name == "" {
+		name = fallback
+	}
+	return filepath.Join(work.datasetDir, filepath.Clean(name))
+}
+
+func insertDocuments(col *collections.Collection, cfg config, work workload) error {
+	if work.datasetDir != "" {
+		return insertDatasetDocuments(col, cfg, work)
+	}
+	for start := 0; start < cfg.docs; start += cfg.batchSize {
+		end := start + cfg.batchSize
+		if end > cfg.docs {
+			end = cfg.docs
 		}
 		ids := make([][]byte, end-start)
 		documents := make([][]byte, end-start)
 		for i := start; i < end; i++ {
 			j := i - start
 			ids[j] = documentID(i)
-			documents[j] = documentJSON(i, dims)
+			documents[j] = documentJSON(i, cfg.dimensions)
 		}
 		if _, err := col.InsertBatch(ids, documents); err != nil {
 			return err
@@ -823,7 +925,99 @@ func insertDocuments(col *collections.Collection, docs, dims, batchSize int) err
 	return nil
 }
 
-func validateCompactedData(col *collections.Collection, idx *collections.VectorIndex, cfg config) (out validationResult, err error) {
+func insertDatasetDocuments(col *collections.Collection, cfg config, work workload) error {
+	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	ids := make([][]byte, 0, cfg.batchSize)
+	documents := make([][]byte, 0, cfg.batchSize)
+	rows := 0
+	flush := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		_, err := col.InsertBatch(ids, documents)
+		ids = ids[:0]
+		documents = documents[:0]
+		return err
+	}
+	for i := 0; scanner.Scan(); i++ {
+		if i >= cfg.docs {
+			return fmt.Errorf("dataset documents file has more than %d rows", cfg.docs)
+		}
+		line := append([]byte(nil), scanner.Bytes()...)
+		var header datasetDocumentHeader
+		if err := json.Unmarshal(line, &header); err != nil {
+			return fmt.Errorf("decode dataset document %d: %w", i, err)
+		}
+		if header.Index != i {
+			return fmt.Errorf("dataset document index=%d at row %d", header.Index, i)
+		}
+		if header.ID == "" {
+			return fmt.Errorf("dataset document %d has empty id", i)
+		}
+		ids = append(ids, []byte(header.ID))
+		documents = append(documents, line)
+		rows++
+		if len(ids) == cfg.batchSize {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if rows != cfg.docs {
+		return fmt.Errorf("dataset documents rows=%d, want %d", rows, cfg.docs)
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateDatasetDocuments(cfg config, work workload) error {
+	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	rows := 0
+	for i := 0; scanner.Scan(); i++ {
+		if i >= cfg.docs {
+			return fmt.Errorf("dataset documents file has more than %d rows", cfg.docs)
+		}
+		var header datasetDocumentHeader
+		if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
+			return fmt.Errorf("decode dataset document %d: %w", i, err)
+		}
+		if header.Index != i {
+			return fmt.Errorf("dataset document index=%d at row %d", header.Index, i)
+		}
+		if header.ID == "" {
+			return fmt.Errorf("dataset document %d has empty id", i)
+		}
+		rows++
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if rows != cfg.docs {
+		return fmt.Errorf("dataset documents rows=%d, want %d", rows, cfg.docs)
+	}
+	return nil
+}
+
+func validateCompactedData(col *collections.Collection, idx *collections.VectorIndex, cfg config, work workload) (out validationResult, err error) {
 	start := time.Now()
 	defer func() {
 		elapsed := phaseSince(start)
@@ -835,23 +1029,32 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 		QueriesChecked:   cfg.validateQueries,
 		MinRecall:        cfg.minRecall,
 	}
+	expectedDocs, err := expectedValidationDocuments(cfg, work)
+	if err != nil {
+		return out, err
+	}
 	for i := 0; i < cfg.validateDocs; i++ {
-		docIndex := validationDocIndex(i, cfg.docs)
-		got, err := col.Get(documentID(docIndex))
+		expected := expectedDocs[i]
+		id := expected.id
+		want := expected.line
+		got, err := col.Get(id)
 		if err != nil {
-			return out, fmt.Errorf("get compacted doc %d: %w", docIndex, err)
+			return out, fmt.Errorf("get compacted doc %q: %w", id, err)
 		}
-		want := documentJSON(docIndex, cfg.dimensions)
 		if !bytes.Equal(got, want) {
-			return out, fmt.Errorf("compacted doc %d mismatch", docIndex)
+			return out, fmt.Errorf("compacted doc %d mismatch", expected.index)
 		}
 	}
 	if cfg.validateQueries == 0 {
 		return out, nil
 	}
+	queries, err := loadQueries(cfg.validateQueries, cfg, work, 0)
+	if err != nil {
+		return out, err
+	}
 	// Recall validation disables exact fallback on the ANN side so it measures
 	// the graph result against the exact baseline computed inside CheckRecall.
-	recall, err := idx.CheckRecall(validationQueries(cfg.validateQueries, cfg.docs, cfg.dimensions), collections.VectorIndexSearchOptions{
+	recall, err := idx.CheckRecall(queries, collections.VectorIndexSearchOptions{
 		TopK:                 cfg.topK,
 		EfSearch:             cfg.efSearch,
 		DisableExactFallback: true,
@@ -869,17 +1072,135 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	return out, nil
 }
 
-func benchmarkSearch(idx *collections.VectorIndex, cfg config) (searchBenchmarkResult, error) {
-	return benchmarkSearchConcurrent(idx, cfg, 1)
+func expectedDocument(docIndex int, cfg config, work workload) ([]byte, []byte, error) {
+	if work.datasetDir == "" {
+		return documentID(docIndex), documentJSON(docIndex, cfg.dimensions), nil
+	}
+	line, header, err := datasetDocument(docIndex, work)
+	if err != nil {
+		return nil, nil, err
+	}
+	return []byte(header.ID), line, nil
 }
 
-func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config) ([]searchBenchmarkResult, error) {
+type expectedValidationDocument struct {
+	index int
+	id    []byte
+	line  []byte
+}
+
+func expectedValidationDocuments(cfg config, work workload) ([]expectedValidationDocument, error) {
+	out := make([]expectedValidationDocument, cfg.validateDocs)
+	if cfg.validateDocs == 0 {
+		return out, nil
+	}
+	if work.datasetDir == "" {
+		for i := 0; i < cfg.validateDocs; i++ {
+			docIndex := validationDocIndex(i, cfg.docs)
+			out[i] = expectedValidationDocument{
+				index: docIndex,
+				id:    documentID(docIndex),
+				line:  documentJSON(docIndex, cfg.dimensions),
+			}
+		}
+		return out, nil
+	}
+	positions := make(map[int][]int, cfg.validateDocs)
+	indexes := make([]int, cfg.validateDocs)
+	for i := 0; i < cfg.validateDocs; i++ {
+		docIndex := validationDocIndex(i, cfg.docs)
+		indexes[i] = docIndex
+		positions[docIndex] = append(positions[docIndex], i)
+	}
+	if err := datasetDocuments(indexes, work, func(docIndex int, line []byte, header datasetDocumentHeader) {
+		for _, pos := range positions[docIndex] {
+			out[pos] = expectedValidationDocument{
+				index: docIndex,
+				id:    []byte(header.ID),
+				line:  append([]byte(nil), line...),
+			}
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func datasetDocument(docIndex int, work workload) ([]byte, datasetDocumentHeader, error) {
+	var line []byte
+	var header datasetDocumentHeader
+	err := datasetDocuments([]int{docIndex}, work, func(_ int, gotLine []byte, gotHeader datasetDocumentHeader) {
+		line = append([]byte(nil), gotLine...)
+		header = gotHeader
+	})
+	if err != nil {
+		return nil, datasetDocumentHeader{}, err
+	}
+	return line, header, nil
+}
+
+func datasetDocuments(docIndexes []int, work workload, visit func(docIndex int, line []byte, header datasetDocumentHeader)) error {
+	if len(docIndexes) == 0 {
+		return nil
+	}
+	remaining := make(map[int]struct{}, len(docIndexes))
+	for _, docIndex := range docIndexes {
+		remaining[docIndex] = struct{}{}
+	}
+	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	for i := 0; scanner.Scan(); i++ {
+		if _, ok := remaining[i]; !ok {
+			continue
+		}
+		line := append([]byte(nil), scanner.Bytes()...)
+		var header datasetDocumentHeader
+		if err := json.Unmarshal(line, &header); err != nil {
+			return fmt.Errorf("decode dataset document %d: %w", i, err)
+		}
+		if header.Index != i {
+			return fmt.Errorf("dataset document index=%d at row %d", header.Index, i)
+		}
+		if header.ID == "" {
+			return fmt.Errorf("dataset document %d has empty id", i)
+		}
+		visit(i, line, header)
+		delete(remaining, i)
+		if len(remaining) == 0 {
+			return nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	missing := make([]int, 0, len(remaining))
+	for docIndex := range remaining {
+		missing = append(missing, docIndex)
+	}
+	sort.Ints(missing)
+	return fmt.Errorf("dataset document %d not found", missing[0])
+}
+
+func benchmarkSearch(idx *collections.VectorIndex, cfg config, work workload) (searchBenchmarkResult, error) {
+	return benchmarkSearchConcurrent(idx, cfg, work, 1)
+}
+
+func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config, work workload) ([]searchBenchmarkResult, error) {
 	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
 	levels = append(levels, 1)
 	levels = append(levels, cfg.searchConcurrency...)
+	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]searchBenchmarkResult, 0, len(levels))
 	for _, concurrency := range levels {
-		bench, err := benchmarkSearchConcurrent(idx, cfg, concurrency)
+		bench, err := benchmarkSearchLoadedConcurrent(idx, cfg, queries, concurrency)
 		if err != nil {
 			return nil, err
 		}
@@ -888,11 +1209,21 @@ func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config) ([]searchBe
 	return out, nil
 }
 
-func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, concurrency int) (searchBenchmarkResult, error) {
+func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, work workload, concurrency int) (searchBenchmarkResult, error) {
 	if concurrency <= 0 {
 		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
-	queries := syntheticQueries(cfg.queries, cfg.docs, cfg.dimensions, cfg.validateQueries)
+	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
+	if err != nil {
+		return searchBenchmarkResult{}, err
+	}
+	return benchmarkSearchLoadedConcurrent(idx, cfg, queries, concurrency)
+}
+
+func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, queries [][]float32, concurrency int) (searchBenchmarkResult, error) {
+	if concurrency <= 0 {
+		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
+	}
 	latencies := make([]int64, len(queries))
 	var next atomic.Int64
 	var candidatesTotal int64
@@ -991,6 +1322,36 @@ func vectorIndexOptions(def collections.VectorIndexDefinition) collections.Vecto
 		EfSearch:       def.EfSearch,
 		Encoding:       def.Encoding,
 	}
+}
+
+func loadQueries(count int, cfg config, work workload, syntheticOffset int) ([][]float32, error) {
+	if work.datasetDir == "" {
+		return syntheticQueries(count, cfg.docs, cfg.dimensions, syntheticOffset), nil
+	}
+	return readFloat32Vectors(datasetPath(work, work.manifest.QueryVectorsFile, "queries.f32"), count, cfg.dimensions)
+}
+
+func readFloat32Vectors(path string, count, dims int) ([][]float32, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 1<<20)
+	rowBytes := dims * 4
+	buf := make([]byte, rowBytes)
+	out := make([][]float32, count)
+	for i := 0; i < count; i++ {
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, fmt.Errorf("read vector %d from %s: %w", i, path, err)
+		}
+		v := make([]float32, dims)
+		for j := 0; j < dims; j++ {
+			v[j] = math.Float32frombits(binary.LittleEndian.Uint32(buf[j*4:]))
+		}
+		out[i] = v
+	}
+	return out, nil
 }
 
 func validationQueries(count, docs, dims int) [][]float32 {

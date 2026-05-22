@@ -12,6 +12,10 @@ It compares:
 - `github.com/ashvardanian/NumKong/golang` scalar `AngularF32`
 - `github.com/ashvardanian/NumKong/golang` packed batch kernels
 - `github.com/axiomhq/simd-go` `DotProductFloat32`
+- `github.com/viterin/vek/vek32` `Dot`
+- `github.com/tphakala/simd/f32` `DotProduct`, `DotProductUnsafe`, and
+  `DotProductBatch`
+- `github.com/ic-timon/da-hvri/simd` `DotProduct`
 
 It also includes focused TreeDB rerank-shape benchmarks:
 
@@ -37,6 +41,10 @@ The benchmark compares that against:
 - using `PackedMatrix.DotsF32WithPool` with a reusable `WorkerPool`
 - using `AngularsPackedF32` directly
 - looping over candidates with `axiomhq/simd-go` `DotProductFloat32`
+- looping over candidates with `vek32` and `tphakala/simd/f32` fused dot
+  products
+- using `tphakala/simd/f32.DotProductBatch` for one query against many rows
+- looping over candidates with `da-hvri` dot products
 
 NumKong's public Go API currently allocates the packed buffer inside
 `NewPackedMatrixF32`. There is no public pack-into-caller-buffer API, so the
@@ -68,3 +76,13 @@ As of this benchmark, `go get github.com/ashvardanian/simsimd/golang@latest`
 fails because the latest `github.com/ashvardanian/simsimd` module does not
 contain a `golang` package. If that package becomes available, add it beside the
 NumKong and Axiom cases in `vector_distance_kernels_test.go`.
+
+`github.com/pehringer/simd` is intentionally not included in timed cases. Its
+public API exposes elementwise operations such as `MulFloat32`, but not a fused
+dot/reduction primitive. A multiply-into-temporary plus sum shape would add
+memory traffic that TreeDB's search hot loop is specifically trying to avoid.
+
+`github.com/ic-timon/da-hvri/simd.DotProductBatchFlat` is also intentionally
+not included in the 64-dimensional TreeDB shapes because its public batch API is
+fixed to `Dim = 512`. The scalar `DotProduct` path is included because it
+accepts arbitrary equal-length vectors.

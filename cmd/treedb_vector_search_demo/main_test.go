@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -81,6 +85,72 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 	if res.IndexStatsLoaded.LiveDocs != 128 {
 		t.Fatalf("loaded live docs=%d want 128", res.IndexStatsLoaded.LiveDocs)
+	}
+}
+
+func TestExecuteConsumesDatasetDir(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 64, 8, 4, 3)
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		datasetDir:            datasetDir,
+		keepDir:               true,
+		docs:                  64,
+		dimensions:            8,
+		queries:               4,
+		searchConcurrency:     []int{2},
+		validateQueries:       2,
+		validateDocs:          2,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		disableExactFallback:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute with dataset: %v", err)
+	}
+	if res.DatasetDir != datasetDir {
+		t.Fatalf("dataset_dir=%q want %q", res.DatasetDir, datasetDir)
+	}
+	if res.Validation.DocumentsChecked != 2 || res.Validation.QueriesChecked != 2 {
+		t.Fatalf("validation counts=%+v, want 2 docs and 2 queries", res.Validation)
+	}
+	if res.Search.Queries != 4 {
+		t.Fatalf("search queries=%d want 4", res.Search.Queries)
+	}
+}
+
+func TestExecuteDatasetDirClampsValidateQueries(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 64, 8, 2, 3)
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		datasetDir:            datasetDir,
+		keepDir:               true,
+		docs:                  64,
+		dimensions:            8,
+		queries:               2,
+		searchConcurrency:     []int{2},
+		validateQueries:       64,
+		validateDocs:          1,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		disableExactFallback:  true,
+	})
+	if err != nil {
+		t.Fatalf("execute with dataset: %v", err)
+	}
+	if res.ValidateQueries != 2 || res.Validation.QueriesChecked != 2 {
+		t.Fatalf("validate queries result=%d validation=%+v, want clamped to 2", res.ValidateQueries, res.Validation)
 	}
 }
 
@@ -461,6 +531,11 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 			want: "-top-k cannot exceed -docs",
 		},
 		{
+			name: "synthetic validate queries exceeds docs",
+			args: []string{"-docs", "2", "-top-k", "2", "-validate-queries", "3"},
+			want: "-validate-queries cannot exceed -docs",
+		},
+		{
 			name: "negative validate docs",
 			args: []string{"-validate-docs", "-1"},
 			want: "-validate-docs cannot be negative",
@@ -475,6 +550,70 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseConfigDatasetDirAllowsValidateQueriesAboveDocs(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-dataset-dir", filepath.Join("tmp", "dataset"),
+		"-docs", "2",
+		"-top-k", "2",
+		"-validate-queries", "7",
+		"-validate-docs", "2",
+	})
+	if err != nil {
+		t.Fatalf("parseConfig: %v", err)
+	}
+	if cfg.validateQueries != 7 {
+		t.Fatalf("validateQueries=%d want 7", cfg.validateQueries)
+	}
+	if cfg.datasetDir != filepath.Join("tmp", "dataset") {
+		t.Fatalf("datasetDir=%q", cfg.datasetDir)
+	}
+}
+
+func TestParseSearchConcurrencyAcceptsSerialAndPreservesOrder(t *testing.T) {
+	got, err := parseSearchConcurrency("4,1,2,4,8")
+	if err != nil {
+		t.Fatalf("parseSearchConcurrency: %v", err)
+	}
+	want := []int{4, 2, 8}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("concurrency=%v want %v", got, want)
+	}
+}
+
+func TestDemoDatasetJSONEmbeddingsMatchBinaryVectors(t *testing.T) {
+	const docs = 8
+	const dims = 4
+	dir := writeDemoDataset(t, docs, dims, 2, 2)
+	vectors, err := readFloat32Vectors(filepath.Join(dir, "documents.f32"), docs, dims)
+	if err != nil {
+		t.Fatalf("read documents.f32: %v", err)
+	}
+	f, err := os.Open(filepath.Join(dir, "documents.jsonl"))
+	if err != nil {
+		t.Fatalf("open documents.jsonl: %v", err)
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for i := 0; scanner.Scan(); i++ {
+		var doc struct {
+			Index     int       `json:"index"`
+			Embedding []float32 `json:"embedding"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &doc); err != nil {
+			t.Fatalf("decode document %d: %v", i, err)
+		}
+		if doc.Index != i {
+			t.Fatalf("document index=%d at row %d", doc.Index, i)
+		}
+		if !reflect.DeepEqual(doc.Embedding, vectors[i]) {
+			t.Fatalf("document %d embedding=%v binary=%v", i, doc.Embedding, vectors[i])
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan documents.jsonl: %v", err)
 	}
 }
 
@@ -581,5 +720,87 @@ func TestRunTextOutput(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("text output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func writeDemoDataset(t *testing.T, docs, dims, queries, topK int) string {
+	t.Helper()
+	dir := t.TempDir()
+	m := map[string]any{
+		"version":               1,
+		"docs":                  docs,
+		"dimensions":            dims,
+		"queries":               queries,
+		"top_k":                 topK,
+		"metric":                "cosine",
+		"document_vectors_file": "documents.f32",
+		"query_vectors_file":    "queries.f32",
+		"documents_jsonl_file":  "documents.jsonl",
+		"float_format":          "float32_le_row_major",
+	}
+	manifest, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(manifest, '\n'), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	writeTestVectorFile(t, filepath.Join(dir, "documents.f32"), docs, dims, func(i int) []float32 {
+		return embedding(i, dims)
+	})
+	stride := queryDocStride(docs)
+	writeTestVectorFile(t, filepath.Join(dir, "queries.f32"), queries, dims, func(i int) []float32 {
+		return embedding(queryDocIndex(i, docs, stride), dims)
+	})
+	f, err := os.Create(filepath.Join(dir, "documents.jsonl"))
+	if err != nil {
+		t.Fatalf("create documents jsonl: %v", err)
+	}
+	enc := json.NewEncoder(f)
+	for i := 0; i < docs; i++ {
+		if err := enc.Encode(struct {
+			Index     int       `json:"index"`
+			ID        string    `json:"id"`
+			Group     int       `json:"group"`
+			Source    string    `json:"source"`
+			Embedding []float32 `json:"embedding"`
+		}{
+			Index:     i,
+			ID:        fmt.Sprintf("dataset-doc-%06d", i),
+			Group:     i % 16,
+			Source:    "exported-test-dataset",
+			Embedding: embedding(i, dims),
+		}); err != nil {
+			_ = f.Close()
+			t.Fatalf("write document %d: %v", i, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close documents jsonl: %v", err)
+	}
+	return dir
+}
+
+func writeTestVectorFile(t *testing.T, path string, count, dims int, vector func(int) []float32) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create vector file: %v", err)
+	}
+	for i := 0; i < count; i++ {
+		v := vector(i)
+		if len(v) != dims {
+			_ = f.Close()
+			t.Fatalf("vector %d dims=%d want %d", i, len(v), dims)
+		}
+		for _, value := range v {
+			if err := binary.Write(f, binary.LittleEndian, value); err != nil {
+				_ = f.Close()
+				t.Fatalf("write vector %d: %v", i, err)
+			}
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close vector file: %v", err)
 	}
 }

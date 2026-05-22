@@ -55,6 +55,15 @@ The matrix search stage defaults to 10,000 ANN queries per lane and parallel
 concurrency levels `2,4,8,16,32,64,128`; override those with `-queries` and
 `-search-concurrency`.
 
+When `-dataset-dir` is used, `-queries` may truncate the exported query vector
+file but cannot exceed the manifest query count. `-validate-queries` is a recall
+sample size and is clamped to the exported query count.
+
+Dataset-mode TreeDB documents intentionally store the full exported JSONL
+record, including the `embedding` field, while comparator backends may consume
+the binary `documents.f32` vectors directly. Storage numbers should be read with
+that representation difference in mind.
+
 The demo defaults to TreeDB's `bench` profile because this is a benchmark
 harness. That profile uses the same index storage profile as `fast`: outer
 index leaves are stored in the leaf value log, leaf prefix compression is

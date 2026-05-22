@@ -13,7 +13,6 @@ import (
 	"time"
 	"unsafe"
 
-	axiomsimd "github.com/axiomhq/simd-go"
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -2217,7 +2216,7 @@ func vectorDistanceBetweenFloat32NodesCosine(left, right *vectorIndexNode) (floa
 
 func dotProductFloat32ForCosine(left, right []float32, leftNormSquared, rightNormSquared float64) float64 {
 	if safeFloat32DotProductForCosine(leftNormSquared, rightNormSquared) {
-		return float64(axiomsimd.DotProductFloat32(left, right))
+		return float64(vectorDotProductFloat32(left, right))
 	}
 	return dotProductFloat32Wide(left, right)
 }
