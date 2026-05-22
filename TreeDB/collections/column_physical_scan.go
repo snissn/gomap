@@ -258,17 +258,12 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshot(
 		return view, err
 	}
 	diag.ManifestRecords = len(records)
-	manifest, err := decodeColumnManifestRecords(records)
+	manifest, refs, mutationParts, err := decodeColumnManifestSnapshotViewForScan(records, cfg.AssetManager.Namespace)
 	if err != nil {
 		view.Diagnostics = diag
 		return view, err
 	}
 	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "physical column scan"); err != nil {
-		view.Diagnostics = diag
-		return view, err
-	}
-	refs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
-	if err != nil {
 		view.Diagnostics = diag
 		return view, err
 	}
@@ -886,6 +881,221 @@ func decodeColumnManifestSnapshotForScan(records []columnManifestRecord) (column
 	return snapshot, nil
 }
 
+func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, expectedNamespace string) (columnManifestSnapshot, []columnManifestAssetRefForScan, int, error) {
+	var snapshot columnManifestSnapshot
+	sawHeader := false
+	partRecords := 0
+	metadataRecords := 0
+	dictionaryRecords := 0
+	int64ValueRecords := 0
+	for _, record := range records {
+		switch {
+		case bytes.Equal(record.key, columnManifestHeaderRecordKeyBytes):
+			if sawHeader {
+				return columnManifestSnapshot{}, nil, 0, errors.New("collections: duplicate column manifest binary header record")
+			}
+			header, err := decodeColumnManifestHeaderRecord(record.value)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, err
+			}
+			snapshot = header
+			sawHeader = true
+		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
+			partRecords++
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			metadataRecords++
+		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+			dictionaryRecords++
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			int64ValueRecords++
+		}
+	}
+	if !sawHeader {
+		return columnManifestSnapshot{}, nil, 0, errors.New("collections: column manifest missing binary header record")
+	}
+	if metadataRecords > 0 {
+		snapshot.AggregateMetadata = make([]columnManifestAggregateMetadataSnapshot, 0, metadataRecords)
+	}
+	if dictionaryRecords > 0 {
+		snapshot.DictionaryCodes = make([]columnManifestDictionaryCodesSnapshot, 0, dictionaryRecords)
+	}
+	if int64ValueRecords > 0 {
+		snapshot.Int64Values = make([]columnManifestInt64ValuesSnapshot, 0, int64ValueRecords)
+	}
+
+	refs := make([]columnManifestAssetRefForScan, 0, partRecords)
+	livePartRows := make(map[[2]uint64]int, partRecords)
+	mutationParts := 0
+	activeParts := 0
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
+		if err != nil {
+			return columnManifestSnapshot{}, nil, 0, err
+		}
+		if keyGeneration > snapshot.Generation {
+			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: column manifest part generation=%d is newer than header generation=%d", keyGeneration, snapshot.Generation)
+		}
+		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, expectedNamespace)
+		if err != nil {
+			return columnManifestSnapshot{}, nil, 0, err
+		}
+		if ref.Kind != ColumnAssetKindTCS1PartImage {
+			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
+		}
+		if ref.Generation != keyGeneration {
+			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: column manifest part key generation=%d does not match ref generation=%d", keyGeneration, ref.Generation)
+		}
+		if ref.PartID != keyPartID {
+			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
+		}
+		operation, ok := columnPhysicalScanOperationFromBytes(reason)
+		if !ok {
+			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
+		}
+		livePartRows[[2]uint64{ref.Generation, ref.PartID}] = rows
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation})
+		if ref.Generation == snapshot.Generation {
+			activeParts++
+		}
+		if operation != ColumnPublishOperationInsert {
+			mutationParts++
+		}
+	}
+	for _, record := range records {
+		switch {
+		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
+			aggregate, err := decodeColumnManifestAggregateMetadataRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, err
+			}
+			snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
+		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
+			dictionary, err := decodeColumnManifestDictionaryCodesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, err
+			}
+			snapshot.DictionaryCodes = append(snapshot.DictionaryCodes, dictionary)
+		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
+			values, err := decodeColumnManifestInt64ValuesRecordForScan(record.key, record.value, expectedNamespace, snapshot.Generation, livePartRows)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, 0, err
+			}
+			snapshot.Int64Values = append(snapshot.Int64Values, values)
+		}
+	}
+	if uint64(activeParts) != snapshot.ExpectedParts {
+		return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: invalid column manifest part count=%d want %d", activeParts, snapshot.ExpectedParts)
+	}
+	return snapshot, refs, mutationParts, nil
+}
+
+func decodeColumnManifestAggregateMetadataRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) (columnManifestAggregateMetadataSnapshot, error) {
+	generation, partID, name, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
+	if err != nil {
+		return columnManifestAggregateMetadataSnapshot{}, err
+	}
+	ref, _, bytesValue, publishID, generationID, reason, err := decodeColumnManifestPartFieldsForScan(raw, expectedNamespace)
+	if err != nil {
+		return columnManifestAggregateMetadataSnapshot{}, err
+	}
+	if ref.Kind != ColumnAssetKindTCS1AggregateMetadata {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata asset kind=%q want %q", ref.Kind, ColumnAssetKindTCS1AggregateMetadata)
+	}
+	if ref.Generation != generation || ref.PartID != partID {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata key generation/part does not match ref")
+	}
+	if ref.Generation > activeGeneration {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
+	}
+	if _, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]; !ok {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
+	}
+	if !bytes.Equal(name, reason) {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata key name=%q does not match record name=%q", string(name), string(reason))
+	}
+	return columnManifestAggregateMetadataSnapshot{
+		AssetRef:     ref,
+		Name:         string(name),
+		Bytes:        bytesValue,
+		PublishID:    publishID,
+		GenerationID: generationID,
+	}, nil
+}
+
+func decodeColumnManifestDictionaryCodesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) (columnManifestDictionaryCodesSnapshot, error) {
+	generation, partID, columnName, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
+	if err != nil {
+		return columnManifestDictionaryCodesSnapshot{}, err
+	}
+	ref, _, bytesValue, publishID, generationID, reason, err := decodeColumnManifestPartFieldsForScan(raw, expectedNamespace)
+	if err != nil {
+		return columnManifestDictionaryCodesSnapshot{}, err
+	}
+	if ref.Kind != ColumnAssetKindTCS1DictionaryCodes {
+		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes asset kind=%q want %q", ref.Kind, ColumnAssetKindTCS1DictionaryCodes)
+	}
+	if ref.Generation != generation || ref.PartID != partID {
+		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes key generation/part does not match ref")
+	}
+	if ref.Generation > activeGeneration {
+		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
+	}
+	if _, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]; !ok {
+		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
+	}
+	if !bytes.Equal(columnName, reason) {
+		return columnManifestDictionaryCodesSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes key column=%q does not match record column=%q", string(columnName), string(reason))
+	}
+	return columnManifestDictionaryCodesSnapshot{
+		AssetRef:     ref,
+		ColumnName:   string(columnName),
+		Bytes:        bytesValue,
+		PublishID:    publishID,
+		GenerationID: generationID,
+	}, nil
+}
+
+func decodeColumnManifestInt64ValuesRecordForScan(key, raw []byte, expectedNamespace string, activeGeneration uint64, livePartRows map[[2]uint64]int) (columnManifestInt64ValuesSnapshot, error) {
+	generation, partID, columnName, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
+	if err != nil {
+		return columnManifestInt64ValuesSnapshot{}, err
+	}
+	ref, rows, bytesValue, publishID, generationID, reason, err := decodeColumnManifestPartFieldsForScan(raw, expectedNamespace)
+	if err != nil {
+		return columnManifestInt64ValuesSnapshot{}, err
+	}
+	if ref.Kind != ColumnAssetKindTCS1Int64Values {
+		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values asset kind=%q want %q", ref.Kind, ColumnAssetKindTCS1Int64Values)
+	}
+	if ref.Generation != generation || ref.PartID != partID {
+		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values key generation/part does not match ref")
+	}
+	if ref.Generation > activeGeneration {
+		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", ref.Generation, activeGeneration)
+	}
+	partRows, ok := livePartRows[[2]uint64{ref.Generation, ref.PartID}]
+	if !ok {
+		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", ref.Generation, ref.PartID)
+	}
+	if rows != partRows {
+		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values rows=%d does not match part rows=%d", rows, partRows)
+	}
+	if !bytes.Equal(columnName, reason) {
+		return columnManifestInt64ValuesSnapshot{}, fmt.Errorf("collections: column manifest int64 values key column=%q does not match record column=%q", string(columnName), string(reason))
+	}
+	return columnManifestInt64ValuesSnapshot{
+		AssetRef:     ref,
+		ColumnName:   string(columnName),
+		Rows:         rows,
+		Bytes:        bytesValue,
+		PublishID:    publishID,
+		GenerationID: generationID,
+	}, nil
+}
+
 func columnManifestPartGenerationFromRecordKeyForScan(key []byte) (uint64, error) {
 	generation, _, err := columnManifestPartKeyFromRecordKeyForScan(key)
 	return generation, err
@@ -943,13 +1153,24 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 }
 
 func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (ColumnAssetRef, []byte, error) {
+	ref, _, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(raw, expectedNamespace)
+	if err != nil {
+		return ColumnAssetRef{}, nil, err
+	}
+	if ref.Kind != ColumnAssetKindTCS1PartImage {
+		return ColumnAssetRef{}, nil, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
+	}
+	return ref, reason, nil
+}
+
+func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string) (ColumnAssetRef, int, int64, uint64, uint64, []byte, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnManifestPartMagic {
-		return ColumnAssetRef{}, nil, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
 	version := cur.u16()
 	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
-		return ColumnAssetRef{}, nil, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kindBytes := cur.stringBytes()
 	namespaceBytes := cur.stringBytes()
@@ -963,36 +1184,37 @@ func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (C
 	if version >= columnManifestRecordVersion {
 		rows64 = cur.u64()
 	}
-	_ = cur.u64() // bytes; scan only needs the durable asset ref.
-	_ = cur.u64() // publish_id
-	_ = cur.u64() // generation_id
+	bytes64 := cur.u64()
+	publishID := cur.u64()
+	generationID := cur.u64()
 	reason := cur.stringBytes()
 	if err := cur.err; err != nil {
-		return ColumnAssetRef{}, nil, err
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, err
 	}
 	if cur.pos != len(raw) {
-		return ColumnAssetRef{}, nil, errors.New("collections: trailing bytes in column manifest part record")
-	}
-	if !columnPhysicalBytesEqualString(kindBytes, string(ColumnAssetKindTCS1PartImage)) {
-		return ColumnAssetRef{}, nil, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: trailing bytes in column manifest part record")
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
-		return ColumnAssetRef{}, nil, fmt.Errorf("collections: column manifest part namespace=%q want %q", string(namespaceBytes), expectedNamespace)
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: column manifest part namespace=%q want %q", string(namespaceBytes), expectedNamespace)
 	}
 	if fileID64 > uint64(math.MaxUint32) {
-		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part file_id overflows uint32")
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: column manifest part file_id overflows uint32")
 	}
 	if checksum64 > uint64(math.MaxUint32) {
-		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part checksum overflows uint32")
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: column manifest part checksum overflows uint32")
 	}
 	if rows64 > uint64(maxCollectionInt) {
-		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part rows overflows int")
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: column manifest part rows overflows int")
 	}
-	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) {
-		return ColumnAssetRef{}, nil, errors.New("collections: column manifest part offsets or byte counts overflow int64")
+	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || bytes64 > uint64(math.MaxInt64) {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: column manifest part offsets or byte counts overflow int64")
+	}
+	kind, ok := columnAssetKindFromBytesForScan(kindBytes)
+	if !ok {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
 	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
+		Kind:       kind,
 		Namespace:  expectedNamespace,
 		Generation: generation,
 		PartID:     partID,
@@ -1002,9 +1224,30 @@ func decodeColumnManifestPartRefForScan(raw []byte, expectedNamespace string) (C
 		Checksum:   uint32(checksum64),
 	}
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
-		return ColumnAssetRef{}, nil, err
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, err
 	}
-	return ref, reason, nil
+	if bytes64 == 0 {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, errors.New("collections: column prepared asset bytes=0 must be positive")
+	}
+	if int64(bytes64) != ref.Length {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: column prepared asset bytes=%d does not match ref length=%d", bytes64, ref.Length)
+	}
+	return ref, int(rows64), int64(bytes64), publishID, generationID, reason, nil
+}
+
+func columnAssetKindFromBytesForScan(raw []byte) (ColumnAssetKind, bool) {
+	switch {
+	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1PartImage)):
+		return ColumnAssetKindTCS1PartImage, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1AggregateMetadata)):
+		return ColumnAssetKindTCS1AggregateMetadata, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1DictionaryCodes)):
+		return ColumnAssetKindTCS1DictionaryCodes, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1Int64Values)):
+		return ColumnAssetKindTCS1Int64Values, true
+	default:
+		return "", false
+	}
 }
 
 func scanColumnPhysicalAssetRows(raw []byte, ref ColumnAssetRef, expectedCollection string, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, visitor func(columnPhysicalScanRowView) error) (columnPhysicalAssetScanSummary, error) {
