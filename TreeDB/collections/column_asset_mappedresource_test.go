@@ -83,6 +83,48 @@ func TestColumnAssetReadCacheReportsMappedResourceHandlesGateA1736(t *testing.T)
 	}
 }
 
+func TestColumnAssetReadCacheMappedResourceHeapHandlesOwnStableBytesGateA1736(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	firstPayload := []byte("aaaaaaaaaaaaaaaa")
+	secondPayload := []byte("bbbbbbbbbbbbbbbb")
+	first, err := writeColumnPhysicalAssetToManager(root, *normalized, firstPayload, 7, 3)
+	if err != nil {
+		t.Fatalf("write first asset: %v", err)
+	}
+	second, err := writeColumnPhysicalAssetToManager(root, *normalized, secondPayload, 7, 4)
+	if err != nil {
+		t.Fatalf("write second asset: %v", err)
+	}
+
+	manager := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new read cache: %v", err)
+	}
+	defer readCache.close()
+	if err := readCache.useMappedResourceManager(manager, mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "snapshot-7", Namespace: normalized.AssetManager.Namespace}, "typed-row-asset-read"); err != nil {
+		t.Fatalf("useMappedResourceManager: %v", err)
+	}
+	if _, err := readCache.read(first, nil); err != nil {
+		t.Fatalf("read first: %v", err)
+	}
+	if len(readCache.resourceHandles) != 1 {
+		t.Fatalf("resource handles after first read=%d want 1", len(readCache.resourceHandles))
+	}
+	firstHandle := readCache.resourceHandles[0]
+	if _, err := readCache.read(second, nil); err != nil {
+		t.Fatalf("read second: %v", err)
+	}
+	if got := firstHandle.Bytes(); !bytes.Equal(got, firstPayload) {
+		t.Fatalf("first handle bytes after second read=%q want %q", got, firstPayload)
+	}
+}
+
 func TestColumnAssetReadCacheMappedResourceScopeValidationGateA1736(t *testing.T) {
 	readCache := columnPhysicalAssetReadCache{namespace: "events"}
 	manager := mappedresource.NewManager()

@@ -1042,7 +1042,15 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 	if reason == "" {
 		reason = "column_physical_asset_read"
 	}
-	handle, err := c.resourceManager.AcquireBytes(key, scope, source, raw, mappedresource.AcquireOptions{
+	handleBytes := raw
+	if source == mappedresource.SourceHeapCopy && len(raw) != 0 {
+		// AcquireBytes requires immutable bytes for the handle lifetime. Syscall
+		// reads may return c.scratch, which is reused on later reads, so the
+		// accounting/pin handle owns a stable copy when mapped-resource reporting
+		// is enabled. The caller still receives the original raw bytes.
+		handleBytes = append([]byte(nil), raw...)
+	}
+	handle, err := c.resourceManager.AcquireBytes(key, scope, source, handleBytes, mappedresource.AcquireOptions{
 		Reason:         reason,
 		ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity),
 		FallbackReason: fallback,
