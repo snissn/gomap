@@ -14,6 +14,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// Corrupt manifests can declare arbitrarily large expected_parts values. Cap
+// speculative preallocation to a small metadata budget while still letting
+// legitimately larger manifests append as records are decoded.
+const columnManifestScanPreallocMaxParts = 4096
+
 type columnPhysicalScanRequest struct {
 	ProjectedColumns    []string
 	Visitor             func(columnPhysicalScanRowView) error
@@ -181,6 +186,16 @@ func columnManifestScanSidecarCapacity(parts, perPart int) int {
 		return 0
 	}
 	return parts * perPart
+}
+
+func columnManifestScanPartPreallocCapacity(expectedParts uint64) int {
+	if expectedParts == 0 {
+		return 0
+	}
+	if expectedParts > uint64(columnManifestScanPreallocMaxParts) {
+		return columnManifestScanPreallocMaxParts
+	}
+	return int(expectedParts)
 }
 
 type columnPhysicalScanSnapshotView struct {
@@ -528,6 +543,9 @@ func validateColumnManifestIdentityAtRoot(snap *backenddb.Snapshot, rootID uint6
 	if err != nil {
 		return fmt.Errorf("collections: column manifest root %d invalid identity: %w", rootID, err)
 	}
+	if err := validateColumnManifestIdentityFor("active", identity); err != nil {
+		return err
+	}
 	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
 		return fmt.Errorf("collections: column manifest identity mismatch root=%+v active=%+v", record, identity)
 	}
@@ -624,8 +642,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				RowRemainderBytes:  int64(header.rowRemainderBytes),
 				ColumnPayloadBytes: int64(header.columnPayloadBytes),
 			}
-			if header.expectedParts > 0 && header.expectedParts <= uint64(maxCollectionInt) {
-				expectedParts := int(header.expectedParts)
+			if expectedParts := columnManifestScanPartPreallocCapacity(header.expectedParts); expectedParts > 0 {
 				refs = make([]columnManifestAssetRefForScan, 0, expectedParts)
 				livePartRows.initCapacity(expectedParts)
 				if filter.AggregateMetadata {
@@ -907,8 +924,8 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if err := validateColumnManifestHeaderRecordForScan(header, cfg, identity, collection); err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
-			if header.expectedParts > 0 && header.expectedParts <= uint64(maxCollectionInt) {
-				livePartRows.initCapacity(int(header.expectedParts))
+			if expectedParts := columnManifestScanPartPreallocCapacity(header.expectedParts); expectedParts > 0 {
+				livePartRows.initCapacity(expectedParts)
 			}
 			writeHashBytes(&d, header.collection)
 			writeHashBytes(&d, header.operation)

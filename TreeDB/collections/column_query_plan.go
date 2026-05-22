@@ -147,9 +147,9 @@ func (c *Collection) PlanColumnQuery(req ColumnQueryPlanRequest) (ColumnQueryPla
 	columnStoreEnabled := false
 	if catalog != nil {
 		collectionName = catalog.meta.Name
-		rootID = catalog.rootID(collectionColumnManifestRootName(collectionName))
 		if cfgPtr := catalog.meta.Options.ColumnStore; cfgPtr != nil {
 			cfg = *cfgPtr
+			rootID = catalog.rootID(collectionColumnManifestRootName(collectionName))
 			columnStoreEnabled = true
 		}
 	}

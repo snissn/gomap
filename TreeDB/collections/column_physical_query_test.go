@@ -131,6 +131,54 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 	}
 }
 
+func TestSortColumnPhysicalQueryGroupsByKeySmallM1634(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []ColumnPhysicalQueryGroup
+		want []string
+	}{
+		{
+			name: "reverse small",
+			in: []ColumnPhysicalQueryGroup{
+				{Key: "z", Count: 1},
+				{Key: "m", Count: 2},
+				{Key: "a", Count: 3},
+			},
+			want: []string{"a", "m", "z"},
+		},
+		{
+			name: "already sorted small",
+			in: []ColumnPhysicalQueryGroup{
+				{Key: "a", Count: 1},
+				{Key: "m", Count: 2},
+				{Key: "z", Count: 3},
+			},
+			want: []string{"a", "m", "z"},
+		},
+		{
+			name: "duplicates small",
+			in: []ColumnPhysicalQueryGroup{
+				{Key: "b", Count: 1},
+				{Key: "a", Count: 2},
+				{Key: "b", Count: 3},
+			},
+			want: []string{"a", "b", "b"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sortColumnPhysicalQueryGroupsByKey(tc.in)
+			got := make([]string, len(tc.in))
+			for i, group := range tc.in {
+				got[i] = group.Key
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("sorted keys=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestColumnPhysicalQueryAggregateMetadataRequiresRegisteredAssetM1634(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(96)
 	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
@@ -385,6 +433,18 @@ func TestColumnPhysicalQueryParallelMatchesSerialInsertOnlyM14B(t *testing.T) {
 				t.Fatalf("over-partitioned groups=%+v want serial %+v", overPartitioned.Groups, serial.Groups)
 			}
 		})
+	}
+}
+
+func TestColumnPhysicalQueryParallelWorkerCountCapsFanoutM14B(t *testing.T) {
+	if got, want := columnPhysicalQueryParallelWorkerCount(1024, 8192), columnPhysicalQueryMaxParallelWorkers; got != want {
+		t.Fatalf("worker count=%d want cap %d", got, want)
+	}
+	if got, want := columnPhysicalQueryParallelWorkerCount(1024, 8), 8; got != want {
+		t.Fatalf("worker count=%d want asset refs %d", got, want)
+	}
+	if got, want := columnPhysicalQueryParallelWorkerCount(4, 8192), 4; got != want {
+		t.Fatalf("worker count=%d want requested workers %d", got, want)
 	}
 }
 
