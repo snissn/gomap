@@ -415,11 +415,16 @@ func TestColumnAssetReachabilityPlanRetainsMissingLiveSegmentM15A(t *testing.T) 
 }
 
 func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T) {
-	const namespace = "events/column-assets"
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
 	input := columnAssetReachabilityInput{
-		rootDir:     t.TempDir(),
+		rootDir:     root,
 		collection:  "events",
-		namespace:   namespace,
+		namespace:   namespaceName,
 		detailed:    true,
 		activeGen:   1,
 		recoveryGen: 1,
@@ -427,7 +432,7 @@ func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T
 	for _, fileID := range []uint32{3, 1, 2} {
 		input.addRef(ColumnAssetRef{
 			Kind:       ColumnAssetKindTCS1PartImage,
-			Namespace:  namespace,
+			Namespace:  namespaceName,
 			Generation: 1,
 			PartID:     uint64(fileID),
 			FileID:     fileID,
@@ -448,6 +453,9 @@ func TestColumnAssetReachabilityPlanOrdersMissingSegmentEntriesM15A(t *testing.T
 	for i, want := range []uint32{1, 2, 3} {
 		if got := plan.SegmentEntries[i].FileID; got != want {
 			t.Fatalf("segment entry %d fileID=%d want %d; entries=%+v", i, got, want, plan.SegmentEntries)
+		}
+		if got, wantPath := plan.SegmentEntries[i].Path, columnAssetReachabilitySegmentPath(namespace.SegmentDir, columnAssetSegmentFileName(want)); got != wantPath {
+			t.Fatalf("segment entry %d path=%q want %q; entries=%+v", i, got, wantPath, plan.SegmentEntries)
 		}
 		if got := plan.SegmentEntries[i].Status; got != ColumnAssetReachabilitySegmentMissing {
 			t.Fatalf("segment entry %d status=%q want missing; entries=%+v", i, got, plan.SegmentEntries)
@@ -652,6 +660,136 @@ func TestColumnAssetReachabilitySegmentFileIDRejectsNonCanonicalM15A(t *testing.
 	}
 }
 
+func TestColumnAssetReachabilityKnownSourcesHaveMasksM15B(t *testing.T) {
+	if len(columnAssetReachabilitySourceBits) > 64 {
+		t.Fatalf("source mask table has %d entries; uint64 mask needs an explicit overflow strategy", len(columnAssetReachabilitySourceBits))
+	}
+	seen := make(map[columnAssetReachabilitySourceMask]ColumnAssetReachabilitySource, len(columnAssetReachabilitySourceBits))
+	for _, entry := range columnAssetReachabilitySourceBits {
+		mask, ok := columnAssetReachabilitySourceBit(entry.source)
+		if entry.source == columnAssetReachabilitySourceUnknown {
+			if ok || mask != columnAssetReachabilitySourceUnknownMask {
+				t.Fatalf("unknown table source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+			}
+			continue
+		}
+		if prev, dup := seen[entry.mask]; dup {
+			t.Fatalf("source %q duplicates mask %b already used by %q", entry.source, entry.mask, prev)
+		}
+		seen[entry.mask] = entry.source
+		if !ok || mask == 0 || entry.mask == 0 || mask != entry.mask || mask == columnAssetReachabilitySourceUnknownMask {
+			t.Fatalf("source %q mask=%b ok=%t, want table mask %b", entry.source, mask, ok, entry.mask)
+		}
+	}
+	mask, ok := columnAssetReachabilitySourceBit(ColumnAssetReachabilitySource("future_source"))
+	if ok || mask != columnAssetReachabilitySourceUnknownMask {
+		t.Fatalf("unknown source mask=%b ok=%t, want unknown mask and ok=false", mask, ok)
+	}
+	knownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(knownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate}) {
+		t.Fatalf("known source list=%v want candidate only without stray unknown sources", knownSources)
+	}
+	unknownSources := columnAssetReachabilitySourcesForMaskWithUnknown(
+		columnAssetReachabilitySourceCandidateMask|columnAssetReachabilitySourceUnknownMask,
+		[]ColumnAssetReachabilitySource{"future_source"},
+	)
+	if !reflect.DeepEqual(unknownSources, []ColumnAssetReachabilitySource{ColumnAssetReachabilitySourceCandidate, "future_source"}) {
+		t.Fatalf("unknown source list=%v want candidate plus original unknown source", unknownSources)
+	}
+}
+
+func TestColumnAssetReachabilityUnknownSourceFailsClosedM15B(t *testing.T) {
+	const namespaceName = "events/column-assets"
+	root := t.TempDir()
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	payload := []byte("unknown-source-column-asset")
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(1)), payload, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1PartImage,
+		Namespace:  namespaceName,
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+	input := columnAssetReachabilityInput{
+		rootDir:        root,
+		collection:     "events",
+		namespace:      namespaceName,
+		detailed:       true,
+		segmentDetails: true,
+		activeGen:      1,
+		recoveryGen:    1,
+	}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
+		t.Fatal("unknown source ref was dropped, want fail-closed retention")
+	}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source_2")) {
+		t.Fatal("second unknown source ref was dropped, want diagnostics to retain distinct sources")
+	}
+
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete {
+		t.Fatalf("plan marked complete with unknown source: %+v", plan)
+	}
+	if plan.Refs.Total != 1 || plan.Refs.Uncertain != 1 || plan.Refs.Protected != 0 || plan.Refs.Reclaimable != 0 {
+		t.Fatalf("ref stats=%+v want one uncertain unknown-source ref", plan.Refs)
+	}
+	if len(plan.Entries) != 1 || plan.Entries[0].Status != ColumnAssetReachabilityUncertain {
+		t.Fatalf("entries=%+v want one uncertain ref entry", plan.Entries)
+	}
+	if len(plan.Entries[0].Sources) != 2 ||
+		plan.Entries[0].Sources[0] != ColumnAssetReachabilitySource("future_source") ||
+		plan.Entries[0].Sources[1] != ColumnAssetReachabilitySource("future_source_2") {
+		t.Fatalf("entry sources=%v want original unknown source values", plan.Entries[0].Sources)
+	}
+	if plan.Segments.Unknown != 1 || plan.Segments.Protected != 0 || plan.Segments.Reclaimable != 0 {
+		t.Fatalf("segment stats=%+v want existing unknown-source segment retained as unknown", plan.Segments)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown {
+		t.Fatalf("segment entries=%+v want unknown segment entry", plan.SegmentEntries)
+	}
+}
+
+func TestColumnAssetReachabilityInputSkipsUnknownSourceDetailsWhenNotDetailedM15B(t *testing.T) {
+	ref := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		FileID:    1,
+		Offset:    8,
+		Length:    64,
+		Checksum:  99,
+		Namespace: "events/column-assets",
+	}
+	input := columnAssetReachabilityInput{segmentDetails: true}
+	if !input.addRef(ref, ColumnAssetReachabilitySource("future_source")) {
+		t.Fatal("first unknown source ref was dropped")
+	}
+	if input.addRef(ref, ColumnAssetReachabilitySource("future_source_2")) {
+		t.Fatal("second unknown source ref should be collapsed when detailed diagnostics are disabled")
+	}
+	if input.unknownSources != nil {
+		t.Fatalf("unknownSources allocated in non-detailed mode: %+v", input.unknownSources)
+	}
+	if got := input.refs[ref]; got&columnAssetReachabilitySourceUnknownMask == 0 {
+		t.Fatalf("ref source mask=%b want unknown bit", got)
+	}
+}
+
 func TestColumnAssetReachabilityPlanMarksZeroByteUnknownSegmentIncompleteM15A(t *testing.T) {
 	const namespaceName = "events/column-assets"
 	root := t.TempDir()
@@ -838,9 +976,9 @@ func TestColumnAssetReachabilityAddRefsCancellationKeepsPartialCountsConsistentM
 	if len(input.refs) != columnAssetReachabilityContextCheckInterval || input.sourceCounts.CandidateRefs != columnAssetReachabilityContextCheckInterval {
 		t.Fatalf("partial input inconsistent: refs=%d sources=%+v", len(input.refs), input.sourceCounts)
 	}
-	builder := input.refs[ref1]
-	if builder == nil || len(builder.sources) != 1 || builder.sources[0] != ColumnAssetReachabilitySourceCandidate {
-		t.Fatalf("partial ref builder=%+v want single candidate source", builder)
+	sourceMask := input.refs[ref1]
+	if sourceMask != columnAssetReachabilitySourceCandidateMask {
+		t.Fatalf("partial ref sourceMask=%b want candidate", sourceMask)
 	}
 }
 

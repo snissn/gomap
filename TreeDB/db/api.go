@@ -315,6 +315,21 @@ func (db *DB) ColumnAssetRootDir() string {
 	return ColumnAssetRootDirPath(db.dir)
 }
 
+// CheckStorageMaintenanceReady verifies this handle may run destructive storage
+// maintenance such as GC, rewrite cleanup, or typed column asset reclamation.
+// It returns ErrClosed for nil or closing handles, ErrReadOnly for read-only
+// handles, and otherwise returns any command-WAL poison error that would make
+// storage maintenance unsafe.
+func (db *DB) CheckStorageMaintenanceReady() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	return db.commandWALPoisonedError()
+}
+
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
