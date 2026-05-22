@@ -622,7 +622,8 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 }
 
 func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
-	if req.AggregateMetadataName != "" || view.MutationParts != 0 {
+	if req.AggregateMetadataName != "" || view.MutationParts != 0 ||
+		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
