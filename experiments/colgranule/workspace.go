@@ -2,6 +2,7 @@ package colgranule
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -29,16 +30,26 @@ const (
 )
 
 type ColumnWorkspaceOptions struct {
-	Collection     string
-	ValidationMode ColumnWorkspaceValidationMode
+	Collection       string
+	ValidationMode   ColumnWorkspaceValidationMode
+	ManifestSyncMode ColumnWorkspaceManifestSyncMode
+	syncTempFile     func(*os.File) error
 }
 
 type ColumnWorkspaceValidationMode string
+type ColumnWorkspaceManifestSyncMode string
 
 const (
 	ColumnWorkspaceValidateFullImage  ColumnWorkspaceValidationMode = "full_image"
 	ColumnWorkspaceValidateTCS1Header ColumnWorkspaceValidationMode = "tcs1_header"
+
+	ColumnWorkspaceManifestSyncDurable              ColumnWorkspaceManifestSyncMode = "durable"
+	ColumnWorkspaceManifestSyncDisabledForBenchmark ColumnWorkspaceManifestSyncMode = "benchmark_no_sync"
 )
+
+var columnWorkspaceSyncTempFile = func(file *os.File) error {
+	return file.Sync()
+}
 
 type ColumnWorkspaceNamespace struct {
 	RootDir       string `json:"root_dir"`
@@ -95,6 +106,13 @@ func normalizeColumnWorkspaceOptions(opts ColumnWorkspaceOptions) (ColumnWorkspa
 	default:
 		return ColumnWorkspaceOptions{}, fmt.Errorf("colgranule: unsupported workspace validation mode %s", opts.ValidationMode)
 	}
+	switch opts.ManifestSyncMode {
+	case "":
+		opts.ManifestSyncMode = ColumnWorkspaceManifestSyncDurable
+	case ColumnWorkspaceManifestSyncDurable, ColumnWorkspaceManifestSyncDisabledForBenchmark:
+	default:
+		return ColumnWorkspaceOptions{}, fmt.Errorf("colgranule: unsupported workspace manifest sync mode %s", opts.ManifestSyncMode)
+	}
 	return opts, nil
 }
 
@@ -104,6 +122,8 @@ type ColumnWorkspace struct {
 	assets         *ColumnAssetManager
 	manifest       ColumnWorkspaceManifest
 	validationMode ColumnWorkspaceValidationMode
+	manifestSync   ColumnWorkspaceManifestSyncMode
+	syncTempFile   func(*os.File) error
 	partByID       map[uint64]int
 	cacheSeen      map[string]struct{}
 	cache          ColumnWorkspaceCacheStats
@@ -232,6 +252,8 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 		namespace:      namespace,
 		assets:         assetManager,
 		validationMode: normalized.ValidationMode,
+		manifestSync:   normalized.ManifestSyncMode,
+		syncTempFile:   normalized.syncTempFile,
 		partByID:       make(map[uint64]int),
 		cacheSeen:      make(map[string]struct{}),
 	}
@@ -240,6 +262,16 @@ func OpenColumnWorkspace(dir string, opts ColumnWorkspaceOptions) (*ColumnWorksp
 		return nil, err
 	}
 	return w, nil
+}
+
+func (w *ColumnWorkspace) ManifestSyncMode() ColumnWorkspaceManifestSyncMode {
+	if w == nil {
+		return ""
+	}
+	if w.manifestSync == "" {
+		return ColumnWorkspaceManifestSyncDurable
+	}
+	return w.manifestSync
 }
 
 func (w *ColumnWorkspace) Close() error {
@@ -272,13 +304,7 @@ func (w *ColumnWorkspace) Manifest() ColumnWorkspaceManifest {
 	if w == nil {
 		return ColumnWorkspaceManifest{}
 	}
-	out := w.manifest
-	out.Parts = append([]ColumnWorkspacePartManifest(nil), w.manifest.Parts...)
-	for i := range out.Parts {
-		out.Parts[i].SortKey = append([]SortKeyColumn(nil), out.Parts[i].SortKey...)
-		out.Parts[i].Coverage = cloneColumnWorkspacePartCoverage(out.Parts[i].Coverage)
-	}
-	return out
+	return cloneColumnWorkspaceManifest(w.manifest)
 }
 
 func (w *ColumnWorkspace) CacheStats() ColumnWorkspaceCacheStats {
@@ -325,23 +351,95 @@ func (w *ColumnWorkspace) PublishPart(part *ColumnPart, dictionaries map[string]
 	if err := validateColumnWorkspacePartManifest(entry); err != nil {
 		return ColumnWorkspacePartManifest{}, err
 	}
-	if idx, ok := w.partByID[entry.PartID]; ok {
+	prepared := []ColumnPreparedAsset{{
+		Ref:          entry.AssetRef,
+		Bytes:        entry.AssetBytes,
+		GenerationID: w.manifest.Generation + 1,
+		PublishID:    w.manifest.PublishID + 1,
+		Reason:       "workspace part publish",
+	}}
+	synced, tracked, err := w.syncPreparedAssetsForManifest(prepared)
+	if err != nil {
+		if tracked {
+			markErr := w.assets.MarkPublishFailed(prepared, "workspace part asset sync failed")
+			return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+		}
+		return ColumnWorkspacePartManifest{}, err
+	}
+	oldGeneration := w.manifest.Generation
+	oldPublishID := w.manifest.PublishID
+	oldUpdatedUnix := w.manifest.UpdatedUnix
+	idx, existed := w.partByID[entry.PartID]
+	var oldEntry ColumnWorkspacePartManifest
+	insertIdx := -1
+	if existed {
+		oldEntry = w.manifest.Parts[idx]
 		w.manifest.Parts[idx] = entry
 	} else {
-		w.partByID[entry.PartID] = len(w.manifest.Parts)
-		w.manifest.Parts = append(w.manifest.Parts, entry)
+		insertIdx = sort.Search(len(w.manifest.Parts), func(i int) bool {
+			return w.manifest.Parts[i].PartID >= entry.PartID
+		})
+		w.manifest.Parts = append(w.manifest.Parts, ColumnWorkspacePartManifest{})
+		copy(w.manifest.Parts[insertIdx+1:], w.manifest.Parts[insertIdx:])
+		w.manifest.Parts[insertIdx] = entry
+		for partID, partIdx := range w.partByID {
+			if partIdx >= insertIdx {
+				w.partByID[partID] = partIdx + 1
+			}
+		}
+		w.partByID[entry.PartID] = insertIdx
 	}
 	w.manifest.Generation++
 	w.manifest.PublishID++
 	w.manifest.UpdatedUnix = time.Now().UnixNano()
-	sort.Slice(w.manifest.Parts, func(i, j int) bool {
-		return w.manifest.Parts[i].PartID < w.manifest.Parts[j].PartID
-	})
-	w.rebuildPartIndex()
 	if err := w.saveManifest(); err != nil {
+		w.manifest.Generation = oldGeneration
+		w.manifest.PublishID = oldPublishID
+		w.manifest.UpdatedUnix = oldUpdatedUnix
+		if existed {
+			w.manifest.Parts[idx] = oldEntry
+		} else {
+			copy(w.manifest.Parts[insertIdx:], w.manifest.Parts[insertIdx+1:])
+			w.manifest.Parts[len(w.manifest.Parts)-1] = ColumnWorkspacePartManifest{}
+			w.manifest.Parts = w.manifest.Parts[:len(w.manifest.Parts)-1]
+			delete(w.partByID, entry.PartID)
+			for partID, partIdx := range w.partByID {
+				if partIdx > insertIdx {
+					w.partByID[partID] = partIdx - 1
+				}
+			}
+		}
+		if tracked {
+			if markErr := w.assets.MarkPublishFailed(prepared, "workspace part manifest publish failed"); markErr != nil {
+				return ColumnWorkspacePartManifest{}, errors.Join(err, markErr)
+			}
+		}
 		return ColumnWorkspacePartManifest{}, err
 	}
+	if tracked {
+		if err := w.assets.MarkPublishSucceeded(synced); err != nil {
+			return ColumnWorkspacePartManifest{}, err
+		}
+	}
 	return entry, nil
+}
+
+func (w *ColumnWorkspace) syncPreparedAssetsForManifest(prepared []ColumnPreparedAsset) (ColumnAssetSyncedPublishClosure, bool, error) {
+	if w == nil || w.assets == nil {
+		return ColumnAssetSyncedPublishClosure{}, false, fmt.Errorf("colgranule: closed column workspace")
+	}
+	if len(prepared) == 0 || w.ManifestSyncMode() == ColumnWorkspaceManifestSyncDisabledForBenchmark {
+		return ColumnAssetSyncedPublishClosure{}, false, nil
+	}
+	closure, err := w.assets.PreparePublishClosure(prepared)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, false, err
+	}
+	synced, err := w.assets.SyncPublishClosure(closure)
+	if err != nil {
+		return ColumnAssetSyncedPublishClosure{}, true, err
+	}
+	return synced, true, nil
 }
 
 func (w *ColumnWorkspace) LoadPart(partID uint64) (ColumnWorkspaceLoadResult, error) {
@@ -431,7 +529,7 @@ func (w *ColumnWorkspace) saveManifest() error {
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err = tmp.Sync(); err != nil {
+	if err = w.syncManifestTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
@@ -477,7 +575,7 @@ func (w *ColumnWorkspace) SavePreparedAssetRegistry(publishID uint64, generation
 		_ = os.Remove(tmpPath)
 		return err
 	}
-	if err = tmp.Sync(); err != nil {
+	if err = w.syncManifestTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return err
@@ -491,6 +589,20 @@ func (w *ColumnWorkspace) SavePreparedAssetRegistry(publishID uint64, generation
 		return err
 	}
 	return nil
+}
+
+func (w *ColumnWorkspace) syncManifestTempFile(file *os.File) error {
+	if w == nil {
+		return fmt.Errorf("colgranule: nil column workspace")
+	}
+	if w.ManifestSyncMode() == ColumnWorkspaceManifestSyncDisabledForBenchmark {
+		return nil
+	}
+	syncTempFile := w.syncTempFile
+	if syncTempFile == nil {
+		syncTempFile = columnWorkspaceSyncTempFile
+	}
+	return syncTempFile(file)
 }
 
 func (w *ColumnWorkspace) LoadPreparedAssetRegistry() (ColumnPreparedAssetRegistry, error) {
@@ -795,6 +907,16 @@ func validateColumnPreparedAssetRegistry(registry ColumnPreparedAssetRegistry) e
 
 func cloneColumnPreparedAssets(assets []ColumnPreparedAsset) []ColumnPreparedAsset {
 	return append([]ColumnPreparedAsset(nil), assets...)
+}
+
+func cloneColumnWorkspaceManifest(manifest ColumnWorkspaceManifest) ColumnWorkspaceManifest {
+	out := manifest
+	out.Parts = append([]ColumnWorkspacePartManifest(nil), manifest.Parts...)
+	for i := range out.Parts {
+		out.Parts[i].SortKey = append([]SortKeyColumn(nil), out.Parts[i].SortKey...)
+		out.Parts[i].Coverage = cloneColumnWorkspacePartCoverage(out.Parts[i].Coverage)
+	}
+	return out
 }
 
 func columnWorkspaceSegmentFileID(name string) (uint32, bool) {
