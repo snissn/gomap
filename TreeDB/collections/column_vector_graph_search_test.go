@@ -50,7 +50,7 @@ func columnVectorGraphNativeSearchProduction8192BenchShapeV3() columnVectorGraph
 }
 
 func columnVectorGraphNativeSearchProductionSweepBenchShapesV3() []columnVectorGraphNativeSearchBenchShapeV3 {
-	dims := []int{128, 384, 768, 1536}
+	dims := []int{128, 384, 768, 1024, 1536}
 	shapes := make([]columnVectorGraphNativeSearchBenchShapeV3, 0, len(dims)+1)
 	shapes = append(shapes, columnVectorGraphNativeSearchBenchShapeV3{
 		rows:                1024,
