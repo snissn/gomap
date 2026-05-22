@@ -355,6 +355,9 @@ func (r *columnDictionaryInt64GroupOneShotReducer) translateDictionary(dictionar
 		r.localToGlobal = make([]uint32, len(dictionary))
 	}
 	localToGlobal := r.localToGlobal[:len(dictionary)]
+	if len(r.groupDict) == 0 {
+		r.growScratch(len(dictionary))
+	}
 	for localCode, value := range dictionary {
 		globalCode, ok := r.groupByValue[value]
 		if !ok {
@@ -372,16 +375,54 @@ func (r *columnDictionaryInt64GroupOneShotReducer) translateDictionary(dictionar
 }
 
 func (r *columnDictionaryInt64GroupOneShotReducer) growScratch(groups int) {
+	if groups > columnDictionaryInt64GroupMaxGroups {
+		groups = columnDictionaryInt64GroupMaxGroups
+	}
 	words := (groups + 63) / 64
 	if len(r.seen) < words {
-		r.seen = append(r.seen, make([]uint64, words-len(r.seen))...)
+		if cap(r.seen) < words {
+			next := make([]uint64, words, columnDictionaryInt64GroupNextScratchCap(cap(r.seen), words))
+			copy(next, r.seen)
+			r.seen = next
+		} else {
+			r.seen = r.seen[:words]
+		}
 	}
 	if len(r.minValues) < groups {
-		r.minValues = append(r.minValues, make([]int64, groups-len(r.minValues))...)
+		if cap(r.minValues) < groups {
+			next := make([]int64, groups, columnDictionaryInt64GroupNextScratchCap(cap(r.minValues), groups))
+			copy(next, r.minValues)
+			r.minValues = next
+		} else {
+			r.minValues = r.minValues[:groups]
+		}
 	}
 	if r.kind == ColumnPhysicalQueryGroupInt64Span && len(r.maxValues) < groups {
-		r.maxValues = append(r.maxValues, make([]int64, groups-len(r.maxValues))...)
+		if cap(r.maxValues) < groups {
+			next := make([]int64, groups, columnDictionaryInt64GroupNextScratchCap(cap(r.maxValues), groups))
+			copy(next, r.maxValues)
+			r.maxValues = next
+		} else {
+			r.maxValues = r.maxValues[:groups]
+		}
 	}
+	if cap(r.result) < groups {
+		r.result = make([]ColumnPhysicalQueryGroup, 0, columnDictionaryInt64GroupNextScratchCap(cap(r.result), groups))
+	}
+}
+
+func columnDictionaryInt64GroupNextScratchCap(current, required int) int {
+	next := current * 2
+	if next < 4 {
+		next = 4
+	}
+	if next < required {
+		next = required
+	}
+	if next > columnDictionaryInt64GroupMaxGroups {
+		next = columnDictionaryInt64GroupMaxGroups
+	}
+	return next
 }
 
 func (r *columnDictionaryInt64GroupOneShotReducer) reduceValue(code uint32, value int64) {
