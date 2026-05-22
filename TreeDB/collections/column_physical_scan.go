@@ -14,6 +14,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// Corrupt manifests can declare arbitrarily large expected_parts values. Cap
+// speculative preallocation to a small metadata budget while still letting
+// legitimately larger manifests append as records are decoded.
 const columnManifestScanPreallocMaxParts = 4096
 
 type columnPhysicalScanRequest struct {

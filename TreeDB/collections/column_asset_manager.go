@@ -732,11 +732,7 @@ func columnAssetReadIntegrityLabel(integrity ColumnAssetReadIntegrity) string {
 }
 
 func verifyColumnPhysicalAssetReadChecksum(raw []byte, ref ColumnAssetRef, verify bool) error {
-	return verifyColumnPhysicalAssetReadChecksumWithIntegrity(raw, ref, verify, ColumnAssetReadIntegrityVerify, "")
-}
-
-func verifyColumnPhysicalAssetReadChecksumWithIntegrity(raw []byte, ref ColumnAssetRef, verify bool, integrity ColumnAssetReadIntegrity, rootDir string) error {
-	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, verify, integrity, rootDir, columnAssetVerifiedChecksumFileIdentity{})
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, verify, ColumnAssetReadIntegrityVerify, "", columnAssetVerifiedChecksumFileIdentity{})
 }
 
 func verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw []byte, ref ColumnAssetRef, verify bool, integrity ColumnAssetReadIntegrity, rootDir string, fileIdentity columnAssetVerifiedChecksumFileIdentity) error {

@@ -39,10 +39,11 @@ func columnAssetVerifiedChecksumFileIdentityFromFile(file *os.File) columnAssetV
 		err := syscall.Fstat(fd, &stat)
 		if err == nil {
 			return columnAssetVerifiedChecksumFileIdentity{
-				dev:   uint64(stat.Dev),
-				ino:   uint64(stat.Ino),
-				size:  stat.Size,
-				valid: true,
+				dev:             uint64(stat.Dev),
+				ino:             uint64(stat.Ino),
+				size:            stat.Size,
+				modTimeUnixNano: columnAssetStatModTimeUnixNano(&stat),
+				valid:           true,
 			}
 		}
 		if err != syscall.EINTR {
