@@ -25,23 +25,65 @@ import (
 const (
 	columnStorePathRowStoreBaseline   = "row_store_baseline"
 	columnStorePathBTreeIndexBaseline = "b_tree_index_baseline"
+	columnStorePathSerialColumnScan   = "serial_column_scan"
+	columnStorePathAggregateMetadata  = "aggregate_metadata"
+	columnStorePathParallelColumnScan = "parallel_column_scan"
 	columnStoreSuiteBenchTestName     = "column_store"
 	columnStoreSuiteBenchDBName       = "treedb_column_store"
 	columnStoreSuiteBenchDisplayName  = "TreeDB Column Store"
+	columnStoreSuitePathCanonicalHelp = "row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan"
+	columnStoreQueryQ1                = "q1"
+	columnStoreQueryQ2                = "q2"
+	columnStoreQueryQ3                = "q3"
+	columnStoreQueryQ4A               = "q4a"
+	columnStoreQueryQ4B               = "q4b"
+	columnStoreQueryQ5                = "q5"
+	columnStoreQueryQ5Metadata        = "q5_metadata"
+	columnStoreSuiteBenchMetricPrefix = "column_store_"
+	columnStoreSuiteAliasFullScanQ1   = "alias_full_scan_from_" + columnStoreQueryQ1
+	columnStoreSuiteAliasPrefixQ4A    = "alias_prefix_scan_from_" + columnStoreQueryQ4A
+	columnStoreSuiteQ5AggregateMin    = "q5_did_time_span_min"
+	columnStoreSuiteQ5AggregateMax    = "q5_did_time_span_max"
 )
 
+type columnStoreSuitePathAlias struct {
+	alias     string
+	canonical string
+}
+
 var (
-	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, "Forced column-store execution label for -suite column_store (row_store_baseline; physical column labels fail closed until implemented)")
+	columnStoreSuitePathAliases = []columnStoreSuitePathAlias{
+		{alias: "", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row-store-baseline", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row_store", canonical: columnStorePathRowStoreBaseline},
+		{alias: "row", canonical: columnStorePathRowStoreBaseline},
+		{alias: "b-tree-index-baseline", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "btree_index_baseline", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "b_tree", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "index", canonical: columnStorePathBTreeIndexBaseline},
+		{alias: "serial-column-scan", canonical: columnStorePathSerialColumnScan},
+		{alias: "serial", canonical: columnStorePathSerialColumnScan},
+		{alias: "aggregate-metadata", canonical: columnStorePathAggregateMetadata},
+		{alias: "metadata", canonical: columnStorePathAggregateMetadata},
+		{alias: "parallel-column-scan", canonical: columnStorePathParallelColumnScan},
+		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
+	}
+	columnStoreSuitePathUsage = fmt.Sprintf(
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: row_store_baseline, b_tree_index_baseline; fail-closed until physical assets exist: serial_column_scan, aggregate_metadata, parallel_column_scan)",
+		columnStoreSuitePathCanonicalHelp,
+		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
+	)
+	columnStoreSuitePathArg    = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
 
 	columnStoreSuiteSupportedForcedPaths = []string{
 		columnStorePathRowStoreBaseline,
+		columnStorePathBTreeIndexBaseline,
 	}
 	columnStoreSuiteUnsupportedForcedPaths = []string{
-		columnStorePathBTreeIndexBaseline,
-		"serial_column_scan",
-		"aggregate_metadata",
-		"parallel_column_scan",
+		columnStorePathSerialColumnScan,
+		columnStorePathAggregateMetadata,
+		columnStorePathParallelColumnScan,
 	}
 	// These files are opportunistic control-plane telemetry for the benchmark
 	// report. Missing files are reported, not fatal, because the exact set can
@@ -97,23 +139,33 @@ type columnStoreStageMetric struct {
 }
 
 type columnStoreQueryMetric struct {
-	Name                string  `json:"name"`
-	PlanLabel           string  `json:"plan_label"`
-	AliasOf             string  `json:"alias_of,omitempty"`
-	ImplementationNote  string  `json:"implementation_note,omitempty"`
-	DurationMS          float64 `json:"duration_ms"`
-	Rows                int     `json:"rows"`
-	RowsPerSecond       float64 `json:"rows_per_second"`
-	MiBPerSecond        float64 `json:"mib_per_second"`
-	NsPerRow            float64 `json:"ns_per_row"`
-	BytesRead           int64   `json:"bytes_read"`
-	RowMaterializations int     `json:"row_materializations"`
-	ResultCount         int     `json:"result_count"`
-	RawHash             uint64  `json:"raw_hash"`
-	ProductionHash      uint64  `json:"production_hash"`
-	MetadataHits        int     `json:"metadata_hits"`
-	SkippedGranules     int     `json:"skipped_granules"`
-	CacheLabel          string  `json:"cache_label"`
+	Name                 string  `json:"name"`
+	PlanLabel            string  `json:"plan_label"`
+	AliasOf              string  `json:"alias_of,omitempty"`
+	ImplementationNote   string  `json:"implementation_note,omitempty"`
+	DurationMS           float64 `json:"duration_ms"`
+	Rows                 int     `json:"rows"`
+	RowsPerSecond        float64 `json:"rows_per_second"`
+	MiBPerSecond         float64 `json:"mib_per_second"`
+	NsPerRow             float64 `json:"ns_per_row"`
+	BytesRead            int64   `json:"bytes_read"`
+	RowMaterializations  int     `json:"row_materializations"`
+	ResultCount          int     `json:"result_count"`
+	RawHash              uint64  `json:"raw_hash"`
+	ProductionHash       uint64  `json:"production_hash"`
+	MetadataHits         int     `json:"metadata_hits"`
+	SkippedGranules      int     `json:"skipped_granules"`
+	ScheduledGranules    int     `json:"scheduled_granules"`
+	WorkerCount          int     `json:"worker_count"`
+	PlannerDurationMS    float64 `json:"planner_duration_ms"`
+	ScanDurationMS       float64 `json:"scan_duration_ms"`
+	ReduceDurationMS     float64 `json:"reduce_duration_ms"`
+	ParityHashDurationMS float64 `json:"parity_hash_duration_ms"`
+	PlannerCandidates    int     `json:"planner_candidates"`
+	PlannerReason        string  `json:"planner_reason,omitempty"`
+	CacheHits            uint64  `json:"cache_hits"`
+	CacheMisses          uint64  `json:"cache_misses"`
+	CacheLabel           string  `json:"cache_label"`
 
 	duration time.Duration
 }
@@ -204,13 +256,13 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		fixture = "synthetic"
 	}
 	if fixture != "synthetic" {
-		return "", fmt.Errorf("column_store: unsupported fixture %q; synthetic is the M11A CI fixture and JSONBENCH_DATA large mode is not wired yet", fixture)
+		return "", fmt.Errorf("column_store: unsupported fixture %q; synthetic is the M11B CI fixture and JSONBENCH_DATA large mode is not wired yet", fixture)
 	}
 	forcedPath := normalizeColumnStoreSuitePath(opts.ForcedPath)
 	if forcedPath == "" {
 		forcedPath = normalizeColumnStoreSuitePath(*columnStoreSuitePathArg)
 	}
-	if err := validateColumnStoreSuiteForcedPath(forcedPath); err != nil {
+	if _, err := columnStoreSuitePlanKind(forcedPath); err != nil {
 		return "", err
 	}
 	if err := validateColumnStoreSuiteDBSelection(baseCfg.DBsArg, baseCfg.DBsExcludeArg); err != nil {
@@ -265,14 +317,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		return "", err
 	}
 	manager := collections.NewCollectionManager(db)
-	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: "events",
-		Options: collections.CollectionOptions{
-			DocumentFormat:               collections.DocumentFormatJSON,
-			DisableIndexedWriteMemtables: true,
-			ColumnStore:                  columnStoreSuiteConfig(),
-		},
-	}); err != nil {
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(forcedPath)); err != nil {
 		_ = db.Close()
 		return "", fmt.Errorf("column_store: create collection: %w", err)
 	}
@@ -385,9 +430,9 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:             sourceBytes,
 			RetainedPayloadBytes:            retainedPayloadBytes,
-			RetainedPayloadBytesNote:        "M11A retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
+			RetainedPayloadBytesNote:        "M11B retains the source JSONBench payload as the reconstructable row baseline; compressed retained payload accounting is future work",
 			ColumnAssetBytes:                columnAssetBytes,
-			ColumnAssetBytesNote:            "not measured in M11A because physical column assets are not published yet",
+			ColumnAssetBytesNote:            "not measured in M11B because physical column assets are not published yet",
 			ManifestControlBytes:            manifestControlBytes,
 			ManifestControlMissing:          manifestControlMissing,
 			CommandWALBytesBeforeCheckpoint: commandWALBytesBeforeCheckpoint,
@@ -402,10 +447,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			ManifestRoot:                    manifestIdentity.ManifestRoot,
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
-		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path",
-		PhysicalColumnQuery:    "not implemented in M11A; forced physical column labels fail closed",
+		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus M11B planner diagnostics",
+		PhysicalColumnQuery:    "physical column assets/scanners are not implemented in M11B; serial/aggregate/parallel physical labels fail closed through the planner",
 		BenchmarkOnlyRelaxed:   false,
-		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, and q1-q5 row-store baseline scans are timed separately",
+		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, scan, reduce, and parity hash stages are timed separately for the forced execution label",
 	}
 	if baseCfg.KeepDir {
 		report.DataDir = dataDir
@@ -444,32 +489,20 @@ func columnStoreSuiteEffectiveProfile(profile string) (string, error) {
 		// Accept unified-bench's default profile as an alias for the durable gate.
 		return "durable", nil
 	case "fast", "unsafe", "wal_on_fast":
-		return "", fmt.Errorf("column_store: profile %q is benchmark-relaxed and unsupported for M11A production column-store writes; use -profile durable", profile)
+		return "", fmt.Errorf("column_store: profile %q is benchmark-relaxed and unsupported for M11B production column-store writes; use -profile durable", profile)
 	default:
-		return "", fmt.Errorf("column_store: unsupported profile %q; use durable for the M11A production gate", profile)
+		return "", fmt.Errorf("column_store: unsupported profile %q; use durable for the M11B production gate", profile)
 	}
 }
 
 func normalizeColumnStoreSuitePath(path string) string {
 	path = strings.ToLower(strings.TrimSpace(path))
-	switch path {
-	case "", "row-store-baseline", "row_store", "row":
-		return columnStorePathRowStoreBaseline
-	case "b-tree-index-baseline", "btree_index_baseline", "b_tree", "index":
-		return columnStorePathBTreeIndexBaseline
-	default:
-		return path
+	for _, alias := range columnStoreSuitePathAliases {
+		if path == alias.alias {
+			return alias.canonical
+		}
 	}
-}
-
-func validateColumnStoreSuiteForcedPath(path string) error {
-	if columnStoreSuitePathListed(path, columnStoreSuiteSupportedForcedPaths) {
-		return nil
-	}
-	if columnStoreSuitePathListed(path, columnStoreSuiteUnsupportedForcedPaths) {
-		return fmt.Errorf("column_store: forced path %q is not implemented in M11A; refusing to route through row store; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
-	}
-	return fmt.Errorf("column_store: unknown forced path %q; supported=%s fail_closed=%s", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+	return path
 }
 
 func validateColumnStoreSuiteExecutionPath(profileDir, executionPath string) error {
@@ -486,13 +519,32 @@ func validateColumnStoreSuiteExecutionPath(profileDir, executionPath string) err
 	return nil
 }
 
-func columnStoreSuitePathListed(path string, paths []string) bool {
-	for _, candidate := range paths {
-		if path == candidate {
-			return true
+func columnStoreSuitePathAliasHelp(aliases []columnStoreSuitePathAlias) string {
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias.alias == "" {
+			continue
 		}
+		out = append(out, alias.alias)
 	}
-	return false
+	return strings.Join(out, ", ")
+}
+
+func columnStoreSuitePlanKind(path string) (collections.ColumnQueryPlanKind, error) {
+	switch path {
+	case columnStorePathRowStoreBaseline:
+		return collections.ColumnQueryPlanRowStoreBaseline, nil
+	case columnStorePathBTreeIndexBaseline:
+		return collections.ColumnQueryPlanBTreeIndexBaseline, nil
+	case columnStorePathSerialColumnScan:
+		return collections.ColumnQueryPlanSerialColumnScan, nil
+	case columnStorePathAggregateMetadata:
+		return collections.ColumnQueryPlanAggregateMetadata, nil
+	case columnStorePathParallelColumnScan:
+		return collections.ColumnQueryPlanParallelColumnScan, nil
+	default:
+		return "", fmt.Errorf("column_store: unknown forced path %q; supported=%s aliases=%s fail_closed=%s; see -column-store-path help", path, columnStoreSuitePathList(columnStoreSuiteSupportedForcedPaths), columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases), columnStoreSuitePathList(columnStoreSuiteUnsupportedForcedPaths))
+	}
 }
 
 func columnStoreArtifactPathsForProfileDir(profileDir string, cfg BenchConfig, runBenchprof bool) columnStoreArtifactPaths {
@@ -597,12 +649,35 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 		},
 		SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
 		AggregateMetadata: []collections.ColumnAggregateMetadata{
-			{Name: "q5_did_time_span_min", Column: "time_us", Kind: collections.ColumnAggregateMin},
-			{Name: "q5_did_time_span_max", Column: "time_us", Kind: collections.ColumnAggregateMax},
+			{Name: columnStoreSuiteQ5AggregateMin, Column: "time_us", Kind: collections.ColumnAggregateMin},
+			{Name: columnStoreSuiteQ5AggregateMax, Column: "time_us", Kind: collections.ColumnAggregateMax},
 		},
 		RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
 		Reconstruction:  collections.ColumnReconstructionRetainedPayloadAndColumns,
 		ProfileSupport:  collections.ColumnStoreProfileDurableOnly,
+	}
+}
+
+func columnStoreSuiteCollectionMeta(path string) *collections.CollectionMeta {
+	meta := &collections.CollectionMeta{
+		Name: "events",
+		Options: collections.CollectionOptions{
+			DocumentFormat:               collections.DocumentFormatJSON,
+			DisableIndexedWriteMemtables: true,
+			ColumnStore:                  columnStoreSuiteConfig(),
+		},
+	}
+	if path == columnStorePathBTreeIndexBaseline {
+		meta.Indexes = columnStoreSuiteIndexes()
+	}
+	return meta
+}
+
+func columnStoreSuiteIndexes() []collections.IndexDefinition {
+	return []collections.IndexDefinition{
+		{Name: "kind_idx", Field: "kind", ValueType: collections.IndexValueString},
+		{Name: "time_us_idx", Field: "time_us", ValueType: collections.IndexValueInt64},
+		{Name: "did_idx", Field: "did", ValueType: collections.IndexValueString},
 	}
 }
 
@@ -642,7 +717,7 @@ func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]ui
 	}
 	out := make(map[string]uint64)
 	for _, name := range columnStoreQueryNameList {
-		hash, _, err := columnStoreQueryHash(columnStoreQueryCanonicalName(name, columnStorePathRowStoreBaseline), decoded)
+		hash, _, err := columnStoreQueryHash(name, decoded)
 		if err != nil {
 			return nil, err
 		}
@@ -895,21 +970,47 @@ func runColumnStoreSuiteQueriesProfiled(cfg BenchConfig, collection *collections
 }
 
 func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, rawHashes map[string]uint64, path string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+	path = normalizeColumnStoreSuitePath(path)
+	forceKind, err := columnStoreSuitePlanKind(path)
+	if err != nil {
+		return nil, nil, err
+	}
 	queries := make([]columnStoreQueryMetric, 0, len(columnStoreQueryNameList))
 	parity := make(map[string]columnStoreParity, len(columnStoreQueryNameList))
 	var firstErr error
 	for _, name := range columnStoreQueryNameList {
-		hashName := columnStoreQueryCanonicalName(name, path)
-		start := time.Now()
-		events, materialized, bytesRead, err := scanColumnStoreSuiteEvents(collection, rows)
+		plannerStart := time.Now()
+		plan, err := collection.PlanColumnQuery(columnStoreSuitePlanRequest(name, rows, forceKind))
+		plannerElapsed := time.Since(plannerStart)
 		if err != nil {
 			return nil, nil, err
 		}
-		hash, resultCount, err := columnStoreQueryHash(hashName, events)
+		if !plan.Supported {
+			reason := strings.TrimSpace(plan.Diagnostics.UnsupportedPlanReason)
+			if reason == "" {
+				reason = "planner did not report an unsupported reason"
+			}
+			return nil, nil, fmt.Errorf("column_store: forced path %q unsupported for %s: refusing to route through row store; reason=%s: %w", path, name, reason, collections.ErrColumnQueryPlanUnsupported)
+		}
+
+		scanStart := time.Now()
+		events, materialized, bytesRead, err := scanColumnStoreSuiteEventsWithPlan(collection, rows, name, plan)
+		scanElapsed := time.Since(scanStart)
+		if err != nil {
+			return nil, nil, err
+		}
+		reduceStart := time.Now()
+		planLabel := string(plan.Kind)
+		lines, err := columnStoreQueryLines(columnStoreQueryHashLineName(name), events)
 		if err != nil {
 			return nil, nil, fmt.Errorf("column_store: reduce %s: %w", name, err)
 		}
-		elapsed := time.Since(start)
+		reduceElapsed := time.Since(reduceStart)
+		parityHashStart := time.Now()
+		hash := columnStoreHashLines(lines)
+		parityHashElapsed := time.Since(parityHashStart)
+		resultCount := len(lines)
+		elapsed := plannerElapsed + scanElapsed + reduceElapsed + parityHashElapsed
 		rawHash := rawHashes[name]
 		pass := rawHash == hash
 		parity[name] = columnStoreParity{Pass: pass, RawHash: rawHash, ProductionHash: hash}
@@ -917,10 +1018,12 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
 		metric := columnStoreQueryMetric{
-			Name:                name,
-			PlanLabel:           path,
-			AliasOf:             columnStoreQueryAliasOf(name, path),
-			ImplementationNote:  columnStoreQueryImplementationNote(name, path),
+			Name: name,
+			// PlanLabel records the executed planner kind after alias
+			// normalization, not necessarily the raw requested path string.
+			PlanLabel:           planLabel,
+			AliasOf:             columnStoreQueryAliasOf(name, planLabel),
+			ImplementationNote:  columnStoreQueryImplementationNote(name, planLabel),
 			DurationMS:          durationMS(elapsed),
 			duration:            elapsed,
 			Rows:                rows,
@@ -932,13 +1035,99 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			ResultCount:         resultCount,
 			RawHash:             rawHash,
 			ProductionHash:      hash,
-			MetadataHits:        0,
-			SkippedGranules:     0,
-			CacheLabel:          "reopened_warm_process",
+			// TODO(#1534 M11C): populate from physical aggregate-metadata diagnostics.
+			MetadataHits:         0,
+			SkippedGranules:      plan.Diagnostics.SkippedGranules,
+			ScheduledGranules:    plan.Diagnostics.ScheduledGranules,
+			WorkerCount:          columnStoreSuiteMetricWorkerCount(plan),
+			PlannerDurationMS:    durationMS(plannerElapsed),
+			ScanDurationMS:       durationMS(scanElapsed),
+			ReduceDurationMS:     durationMS(reduceElapsed),
+			ParityHashDurationMS: durationMS(parityHashElapsed),
+			PlannerCandidates:    plan.Diagnostics.CandidatePlans,
+			PlannerReason:        plan.Diagnostics.Reason,
+			CacheHits:            plan.Diagnostics.DecodedBlockCacheHits,
+			CacheMisses:          plan.Diagnostics.DecodedBlockCacheMisses,
+			CacheLabel:           "reopened_warm_process",
 		}
 		queries = append(queries, metric)
 	}
 	return queries, parity, firstErr
+}
+
+func columnStoreSuiteMetricWorkerCount(plan collections.ColumnQueryPlan) int {
+	if plan.Diagnostics.WorkerCount > 0 {
+		return plan.Diagnostics.WorkerCount
+	}
+	switch plan.Kind {
+	case collections.ColumnQueryPlanRowStoreBaseline, collections.ColumnQueryPlanBTreeIndexBaseline:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.ColumnQueryPlanKind) collections.ColumnQueryPlanRequest {
+	return collections.ColumnQueryPlanRequest{
+		Name:                  name,
+		ProjectedColumns:      []string{"time_us", "kind", "did"},
+		CandidateIndexColumns: columnStoreSuiteQueryIndexCandidates(name),
+		AggregateMetadataName: columnStoreSuiteAggregateMetadataName(name),
+		EstimatedRows:         rows,
+		ForceKind:             forceKind,
+		Capabilities: collections.ColumnQueryPlannerCapabilities{
+			// M11B deliberately has no physical column assets yet; this keeps
+			// recovery-authoritative physical planner gates unreachable until
+			// a later physical-asset scanner milestone wires real assets.
+			SerialColumnScan:       true,
+			AggregateMetadata:      true,
+			ParallelColumnScan:     true,
+			PhysicalAssetCount:     0,
+			PartCount:              2,
+			GranuleCount:           2,
+			MaxParallelWorkers:     2,
+			PlannerCandidateBudget: 5,
+		},
+	}
+}
+
+func columnStoreSuiteQueryIndexCandidates(name string) []string {
+	// Candidates must stay one-index-entry-per-document scalar fields because
+	// the M11B B-tree baseline does a full ordered index pass for parity, then
+	// verifies the materialized count against the fixture row count. The selected
+	// index records which secondary structure is traversed; it is not a
+	// predicate-selective read path until range pushdown lands.
+	switch name {
+	case columnStoreQueryQ1, columnStoreQueryQ2:
+		return []string{"kind"}
+	case columnStoreQueryQ3:
+		return []string{"time_us"}
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+		return []string{"did"}
+	default:
+		return nil
+	}
+}
+
+func columnStoreSuiteAggregateMetadataName(name string) string {
+	if name == columnStoreQueryQ5Metadata {
+		// The executable q5_metadata path still aliases q5 until physical
+		// aggregate metadata assets exist, but forced aggregate_metadata planning
+		// should validate against a real registered catalog entry.
+		return columnStoreSuiteQ5AggregateMin
+	}
+	return ""
+}
+
+func scanColumnStoreSuiteEventsWithPlan(collection *collections.Collection, rows int, queryName string, plan collections.ColumnQueryPlan) ([]columnStoreDecodedEvent, int, int64, error) {
+	switch plan.Kind {
+	case collections.ColumnQueryPlanRowStoreBaseline:
+		return scanColumnStoreSuiteEvents(collection, rows)
+	case collections.ColumnQueryPlanBTreeIndexBaseline:
+		return scanColumnStoreSuiteEventsByIndex(collection, rows, queryName, plan.IndexName)
+	default:
+		return nil, 0, 0, fmt.Errorf("column_store: executable path %q is not implemented: %w", plan.Kind, collections.ErrColumnQueryPlanUnsupported)
+	}
 }
 
 func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([]columnStoreDecodedEvent, int, int64, error) {
@@ -967,7 +1156,62 @@ func scanColumnStoreSuiteEvents(collection *collections.Collection, rows int) ([
 	return events, materialized, bytesRead, nil
 }
 
-var columnStoreQueryNameList = [...]string{"q1", "q2", "q3", "q4a", "q4b", "q5", "q5_metadata"}
+// scanColumnStoreSuiteEventsByIndex is an M11B B-tree baseline, not predicate
+// pushdown. It scans one selected scalar secondary index fully in index order,
+// materializes every source document, and relies on deterministic reduction
+// hashing for parity. queryName is intentionally only diagnostic until M11C
+// wires query predicates into bounded index/column scans.
+func scanColumnStoreSuiteEventsByIndex(collection *collections.Collection, rows int, queryName, indexName string) ([]columnStoreDecodedEvent, int, int64, error) {
+	if strings.TrimSpace(indexName) == "" {
+		return nil, 0, 0, fmt.Errorf("column_store: no B-tree index selected for %s", queryName)
+	}
+	events := make([]columnStoreDecodedEvent, 0, rows)
+	var materialized int
+	var bytesRead int64
+	// The M11B B-tree baseline intentionally performs a full ordered pass over
+	// the planner-selected secondary index for parity. The selected index affects
+	// the secondary structure traversed and write-amplification accounting, not
+	// read selectivity; range pushdown is deferred to M11C. The collection index
+	// implementation emits one secondary entry per document for these scalar
+	// fields, so rows+1 is a sentinel limit: truncated catches the sentinel
+	// overflow boundary and materialized != rows catches underruns.
+	truncated, err := collection.ScanBorrowedDocumentsByIndexRange(indexName, collections.IndexRangeOptions{
+		Lower: collections.IndexRangeBound{Unbounded: true},
+		Upper: collections.IndexRangeBound{Unbounded: true},
+		Limit: rows + 1,
+	}, func(record collections.BorrowedDocumentRecord) (bool, error) {
+		var event columnStoreDecodedEvent
+		// The decoded event must remain value-owned; do not add fields that
+		// retain slices backed by BorrowedDocumentRecord.Document.
+		if err := json.Unmarshal(record.Document, &event); err != nil {
+			return false, err
+		}
+		events = append(events, event)
+		materialized++
+		bytesRead += int64(len(record.Document))
+		return true, nil
+	})
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("column_store: scan B-tree index %s for %s: %w", indexName, queryName, err)
+	}
+	if truncated {
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan exceeded expected row count: expected exactly %d document entries, observed %d materialized rows at sentinel limit %d; scalar index should emit one secondary entry per document", rows, materialized, rows+1)
+	}
+	if materialized != rows {
+		return nil, 0, 0, fmt.Errorf("column_store: B-tree index scan materialized %d rows, want %d", materialized, rows)
+	}
+	return events, materialized, bytesRead, nil
+}
+
+var columnStoreQueryNameList = [...]string{
+	columnStoreQueryQ1,
+	columnStoreQueryQ2,
+	columnStoreQueryQ3,
+	columnStoreQueryQ4A,
+	columnStoreQueryQ4B,
+	columnStoreQueryQ5,
+	columnStoreQueryQ5Metadata,
+}
 
 func columnStoreQueryNames() []string {
 	return append([]string(nil), columnStoreQueryNameList[:]...)
@@ -983,24 +1227,23 @@ func columnStoreQueryNameKnown(name string) bool {
 }
 
 func columnStoreQueryAliasOf(name, path string) string {
-	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
-		return "q5"
+	if name == columnStoreQueryQ5Metadata && (path == columnStorePathRowStoreBaseline || path == columnStorePathBTreeIndexBaseline) {
+		return columnStoreQueryQ5
 	}
 	return ""
 }
 
 func columnStoreQueryImplementationNote(name, path string) string {
-	if name == "q5_metadata" && path == columnStorePathRowStoreBaseline {
-		return "row_store_baseline_alias_until_physical_aggregate_metadata_path"
+	if name == columnStoreQueryQ5Metadata && path == columnStorePathBTreeIndexBaseline {
+		return "q5_alias_full_unbounded_secondary_index_scan_no_predicate_pushdown_until_physical_aggregate_metadata_path"
+	}
+	if name == columnStoreQueryQ5Metadata && path == columnStorePathRowStoreBaseline {
+		return path + "_alias_until_physical_aggregate_metadata_path"
+	}
+	if path == columnStorePathBTreeIndexBaseline {
+		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
 	}
 	return ""
-}
-
-func columnStoreQueryCanonicalName(name, path string) string {
-	if alias := columnStoreQueryAliasOf(name, path); alias != "" {
-		return alias
-	}
-	return name
 }
 
 func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64, int, error) {
@@ -1008,34 +1251,40 @@ func columnStoreQueryHash(name string, events []columnStoreDecodedEvent) (uint64
 	if err != nil {
 		return 0, 0, err
 	}
+	// ResultCount is the reduced result row count; the parity hash covers the
+	// same reduced rows after deterministic ordering.
+	return columnStoreHashLines(lines), len(lines), nil
+}
+
+func columnStoreHashLines(lines []string) uint64 {
 	sort.Strings(lines)
 	h := fnv.New64a()
 	for _, line := range lines {
 		_, _ = h.Write([]byte(line))
 		_, _ = h.Write([]byte{0})
 	}
-	return h.Sum64(), len(lines), nil
+	return h.Sum64()
 }
 
 func columnStoreQueryHashLineName(name string) string {
 	// q5_metadata is an execution/reporting label until the physical metadata
 	// path exists; parity hashes use q5's logical result lines so alias
 	// equivalence is directly testable.
-	if name == "q5_metadata" {
-		return "q5"
+	if name == columnStoreQueryQ5Metadata {
+		return columnStoreQueryQ5
 	}
 	return name
 }
 
 func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
-	case "q1":
+	case columnStoreQueryQ1:
 		counts := make(map[string]int)
 		for _, event := range events {
 			counts[event.Kind]++
 		}
 		return formatIntMapLines(name, counts), nil
-	case "q2":
+	case columnStoreQueryQ2:
 		distinct := make(map[string]map[string]struct{})
 		for _, event := range events {
 			set := distinct[event.Kind]
@@ -1050,14 +1299,14 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			counts[kind] = len(set)
 		}
 		return formatIntMapLines(name, counts), nil
-	case "q3":
+	case columnStoreQueryQ3:
 		counts := make(map[string]int)
 		for _, event := range events {
 			hour := (event.TimeUS / 3_600_000_000) % 24
 			counts[fmt.Sprintf("hour_%02d", hour)]++
 		}
 		return formatIntMapLines(name, counts), nil
-	case "q4a":
+	case columnStoreQueryQ4A:
 		mins := make(map[string]int64)
 		for _, event := range events {
 			if cur, ok := mins[event.Did]; !ok || event.TimeUS < cur {
@@ -1065,7 +1314,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			}
 		}
 		return formatInt64MapLines(name, mins), nil
-	case "q4b":
+	case columnStoreQueryQ4B:
 		maxs := make(map[string]int64)
 		for _, event := range events {
 			if cur, ok := maxs[event.Did]; !ok || event.TimeUS > cur {
@@ -1073,7 +1322,7 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			}
 		}
 		return formatInt64MapLines(name, maxs), nil
-	case "q5":
+	case columnStoreQueryQ5:
 		type span struct {
 			min int64
 			max int64
@@ -1230,8 +1479,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | B/read | rows materialized | skipped granules | metadata hits | hash parity | note |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
+	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | B/read | rows materialized | cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
@@ -1245,8 +1494,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if note != "" {
 			noteCell = "`" + note + "`"
 		}
-		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %d | %d | %d | %d | %s | %s |\n",
-			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.BytesRead, q.RowMaterializations, q.SkippedGranules, q.MetadataHits, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			q.Name, q.PlanLabel, q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.BytesRead, q.RowMaterializations, q.CacheHits, q.CacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
@@ -1350,20 +1599,31 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 	cfg.BatchSize = report.BatchSize
 	cfg.Profile = profile
 	cfg.DBsArg = "treedb"
-	testOrder := []string{columnStoreSuiteBenchTestName, "alias_full_scan_from_q1", "alias_prefix_scan_from_q4a", "column_store_q1", "column_store_q2", "column_store_q3", "column_store_q4a", "column_store_q4b", "column_store_q5", "column_store_q5_metadata"}
+	testOrder := []string{
+		columnStoreSuiteBenchTestName,
+		columnStoreSuiteAliasFullScanQ1,
+		columnStoreSuiteAliasPrefixQ4A,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5,
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata,
+	}
 	cfg.TestsArg = strings.Join(testOrder, ",")
 	results := make(map[string]map[string]float64)
 	displayNames := map[string]string{
-		columnStoreSuiteBenchTestName: "Column store query phase",
-		"alias_full_scan_from_q1":     "Alias full scan from q1",
-		"alias_prefix_scan_from_q4a":  "Alias prefix scan from q4a",
-		"column_store_q1":             "Column q1",
-		"column_store_q2":             "Column q2",
-		"column_store_q3":             "Column q3",
-		"column_store_q4a":            "Column q4a",
-		"column_store_q4b":            "Column q4b",
-		"column_store_q5":             "Column q5",
-		"column_store_q5_metadata":    "Column q5 metadata",
+		columnStoreSuiteBenchTestName:                                  "Column store query phase",
+		columnStoreSuiteAliasFullScanQ1:                                "Alias full scan from q1",
+		columnStoreSuiteAliasPrefixQ4A:                                 "Alias prefix scan from q4a",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ1:         "Column q1",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ2:         "Column q2",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ3:         "Column q3",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4A:        "Column q4a",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ4B:        "Column q4b",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5:         "Column q5",
+		columnStoreSuiteBenchMetricPrefix + columnStoreQueryQ5Metadata: "Column q5 metadata",
 	}
 	byName := make(map[string]columnStoreQueryMetric, len(report.Queries))
 	var queryDuration time.Duration
@@ -1376,16 +1636,16 @@ func columnStoreBenchRun(baseCfg BenchConfig, profile, dataDir string, report co
 		}
 		queryDuration += duration
 		queryMaterializations += q.RowMaterializations
-		results["column_store_"+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+		results[columnStoreSuiteBenchMetricPrefix+q.Name] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	if queryDuration > 0 {
 		results[columnStoreSuiteBenchTestName] = map[string]float64{columnStoreSuiteBenchDisplayName: float64(queryMaterializations) / queryDuration.Seconds()}
 	}
-	if q, ok := byName["q1"]; ok {
-		results["alias_full_scan_from_q1"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+	if q, ok := byName[columnStoreQueryQ1]; ok {
+		results[columnStoreSuiteAliasFullScanQ1] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
-	if q, ok := byName["q4a"]; ok {
-		results["alias_prefix_scan_from_q4a"] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
+	if q, ok := byName[columnStoreQueryQ4A]; ok {
+		results[columnStoreSuiteAliasPrefixQ4A] = map[string]float64{columnStoreSuiteBenchDisplayName: q.RowsPerSecond}
 	}
 	return BenchRun{
 		Config:       cfg,

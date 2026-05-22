@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"math"
@@ -134,6 +135,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		}
 		if q.BytesRead <= 0 {
 			t.Fatalf("query %s bytes_read=%d", q.Name, q.BytesRead)
+		}
+		if q.ScanDurationMS < 0 {
+			t.Fatalf("query %s scan_duration_ms=%v", q.Name, q.ScanDurationMS)
+		}
+		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
+			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
@@ -931,7 +938,7 @@ func TestColumnStoreQueryHashCanonicalizesQ5MetadataAliasM11A(t *testing.T) {
 	}
 }
 
-func TestColumnStoreSuiteRejectsForcedColumnPathM11A(t *testing.T) {
+func TestColumnStoreSuiteRejectsForcedColumnPathM11B(t *testing.T) {
 	cfg := BenchConfig{Keys: 8, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
 	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
 		ForcedPath: "serial_column_scan",
@@ -939,13 +946,19 @@ func TestColumnStoreSuiteRejectsForcedColumnPathM11A(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected forced serial column scan to fail closed")
 	}
+	if !errors.Is(err, collections.ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("expected ErrColumnQueryPlanUnsupported, got %v", err)
+	}
 	msg := err.Error()
-	if !strings.Contains(msg, "serial_column_scan") || !strings.Contains(msg, "not implemented") || !strings.Contains(msg, "refusing to route through row store") || !strings.Contains(msg, "supported=") {
+	if !strings.Contains(msg, "serial_column_scan") ||
+		!strings.Contains(msg, "unsupported") ||
+		!strings.Contains(msg, "refusing to route through row store") ||
+		!strings.Contains(msg, "reason=no durable physical column assets are available") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestColumnStoreSuiteRejectsOraclePathLabelM11A(t *testing.T) {
+func TestColumnStoreSuiteRejectsOraclePathLabelM11B(t *testing.T) {
 	_, err := runColumnStoreSuite(BenchConfig{Keys: 8, BatchSize: 4, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}, columnStoreSuiteOptions{
 		ProfileDir:    t.TempDir(),
 		ExecutionPath: "oracle",
@@ -999,6 +1012,224 @@ func TestColumnStoreSuiteRejectsInvalidKeysAndBatchSizeM11A(t *testing.T) {
 				t.Fatalf("unexpected error %q, want substring %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestColumnStoreSuitePlanKindMapsKnownPathsM11B(t *testing.T) {
+	cases := []struct {
+		path string
+		want collections.ColumnQueryPlanKind
+	}{
+		{columnStorePathRowStoreBaseline, collections.ColumnQueryPlanRowStoreBaseline},
+		{columnStorePathBTreeIndexBaseline, collections.ColumnQueryPlanBTreeIndexBaseline},
+		{columnStorePathSerialColumnScan, collections.ColumnQueryPlanSerialColumnScan},
+		{columnStorePathAggregateMetadata, collections.ColumnQueryPlanAggregateMetadata},
+		{columnStorePathParallelColumnScan, collections.ColumnQueryPlanParallelColumnScan},
+	}
+	for _, tc := range cases {
+		if tc.path != string(tc.want) {
+			t.Fatalf("path constant %q diverged from planner kind %q", tc.path, tc.want)
+		}
+		got, err := columnStoreSuitePlanKind(tc.path)
+		if err != nil {
+			t.Fatalf("columnStoreSuitePlanKind(%q): %v", tc.path, err)
+		}
+		if got != tc.want {
+			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", tc.path, got, tc.want)
+		}
+	}
+	if _, err := columnStoreSuitePlanKind("future_alias"); err == nil {
+		t.Fatal("expected unknown path to fail")
+	} else {
+		msg := err.Error()
+		for _, want := range []string{
+			"future_alias",
+			"supported=",
+			"aliases=",
+			"serial-column-scan",
+			"aggregate-metadata",
+			"fail_closed=",
+			"-column-store-path",
+		} {
+			if !strings.Contains(msg, want) {
+				t.Fatalf("unknown path error %q missing %q", msg, want)
+			}
+		}
+	}
+}
+
+func TestColumnStoreSuitePathFlagDocumentsAliasesM11B(t *testing.T) {
+	f := flag.Lookup("column-store-path")
+	if f == nil {
+		t.Fatal("missing column-store-path flag")
+	}
+	for _, want := range []string{"aliases:", "executable:", "fail-closed", "row-store-baseline", "b-tree-index-baseline", "serial-column-scan", "aggregate-metadata", "parallel-column-scan"} {
+		if !strings.Contains(f.Usage, want) {
+			t.Fatalf("column-store-path help missing %q:\n%s", want, f.Usage)
+		}
+	}
+}
+
+func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
+	dir := t.TempDir()
+	cfg := BenchConfig{
+		Keys:      64,
+		BatchSize: 16,
+		DBsArg:    "treedb",
+		Profile:   "durable",
+		Progress:  false,
+		SeedUsed:  1,
+	}
+
+	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:    dir,
+		ExecutionPath: "native-fastpath",
+		ForcedPath:    columnStorePathBTreeIndexBaseline,
+		RunBenchprof:  false,
+	})
+	if err != nil {
+		t.Fatalf("runColumnStoreSuite btree baseline: %v", err)
+	}
+
+	var report columnStoreSuiteReport
+	data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+	if err != nil {
+		t.Fatalf("read column_store_results.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal column_store_results.json: %v", err)
+	}
+	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
+	for _, q := range report.Queries {
+		if q.PlanLabel != columnStorePathBTreeIndexBaseline {
+			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathBTreeIndexBaseline)
+		}
+		if q.PlannerReason == "" || q.PlannerCandidates == 0 {
+			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
+		}
+		if q.WorkerCount != 1 {
+			t.Fatalf("query %s worker_count=%d want 1 for caller-thread B-tree baseline", q.Name, q.WorkerCount)
+		}
+		if !strings.Contains(q.PlannerReason, "full-scan B-tree baseline") {
+			t.Fatalf("query %s planner_reason=%q want full-scan baseline disclosure", q.Name, q.PlannerReason)
+		}
+		if q.RowMaterializations != report.Rows {
+			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
+		}
+		if q.Name != "q5_metadata" && !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") {
+			t.Fatalf("query %s missing B-tree baseline implementation note: %+v", q.Name, q)
+		}
+	}
+	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") || !strings.Contains(q.ImplementationNote, "physical_aggregate_metadata_path") {
+		t.Fatalf("q5_metadata should report both q5 aliasing and B-tree baseline scan semantics: %+v", q)
+	}
+	if got, want := queryMetrics["q5_metadata"].ProductionHash, queryMetrics["q5"].ProductionHash; got != want {
+		t.Fatalf("q5_metadata production hash=%016x want q5 hash=%016x", got, want)
+	}
+	for name, parity := range report.Parity {
+		if !parity.Pass {
+			t.Fatalf("parity %s failed: %+v", name, parity)
+		}
+	}
+}
+
+func TestColumnStoreSuiteQueriesNormalizeForcedPathAliasesM11B(t *testing.T) {
+	const rows = 16
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	db, err := openColumnStoreSuiteDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathRowStoreBaseline)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 8); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+
+	rawHashes, err := columnStoreReferenceHashes(events)
+	if err != nil {
+		t.Fatalf("reference hashes: %v", err)
+	}
+	queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, "row")
+	if err != nil {
+		t.Fatalf("runColumnStoreSuiteQueries row alias: %v", err)
+	}
+	if len(queries) == 0 || len(parity) == 0 {
+		t.Fatalf("queries=%d parity=%d want non-empty", len(queries), len(parity))
+	}
+	for _, q := range queries {
+		if q.PlanLabel != columnStorePathRowStoreBaseline {
+			t.Fatalf("query %s plan_label=%q want %q", q.Name, q.PlanLabel, columnStorePathRowStoreBaseline)
+		}
+		if q.WorkerCount != 1 {
+			t.Fatalf("query %s worker_count=%d want 1 for caller-thread row baseline", q.Name, q.WorkerCount)
+		}
+	}
+
+	physicalAliases := map[string]collections.ColumnQueryPlanKind{
+		"serial":               collections.ColumnQueryPlanSerialColumnScan,
+		"serial-column-scan":   collections.ColumnQueryPlanSerialColumnScan,
+		"metadata":             collections.ColumnQueryPlanAggregateMetadata,
+		"aggregate-metadata":   collections.ColumnQueryPlanAggregateMetadata,
+		"parallel":             collections.ColumnQueryPlanParallelColumnScan,
+		"parallel-column-scan": collections.ColumnQueryPlanParallelColumnScan,
+	}
+	for alias, want := range physicalAliases {
+		normalized := normalizeColumnStoreSuitePath(alias)
+		got, err := columnStoreSuitePlanKind(normalized)
+		if err != nil {
+			t.Fatalf("columnStoreSuitePlanKind(%q): %v", alias, err)
+		}
+		if got != want {
+			t.Fatalf("columnStoreSuitePlanKind(%q)=%q want %q", alias, got, want)
+		}
+		if _, _, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, alias); !errors.Is(err, collections.ErrColumnQueryPlanUnsupported) {
+			t.Fatalf("physical alias %q err=%v want ErrColumnQueryPlanUnsupported", alias, err)
+		}
+	}
+}
+
+func TestColumnStoreSuiteIndexCandidateCoverageM11B(t *testing.T) {
+	for _, name := range columnStoreQueryNames() {
+		if got := columnStoreSuiteQueryIndexCandidates(name); len(got) == 0 {
+			t.Fatalf("query %s has no B-tree baseline candidate columns", name)
+		}
+	}
+}
+
+func TestColumnStoreSuiteBTreeIndexScanMaterializesOneEntryPerDocumentM11B(t *testing.T) {
+	const rows = 2048
+	events, _ := buildColumnStoreSyntheticFixture(rows, 1)
+	db, err := openColumnStoreSuiteDB(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(columnStorePathBTreeIndexBaseline)); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	collection, err := manager.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if err := insertColumnStoreFixture(collection, events, 256); err != nil {
+		t.Fatalf("insert fixture: %v", err)
+	}
+
+	decoded, materialized, _, err := scanColumnStoreSuiteEventsByIndex(collection, rows, "q1", "kind_idx")
+	if err != nil {
+		t.Fatalf("scanColumnStoreSuiteEventsByIndex: %v", err)
+	}
+	if materialized != rows || len(decoded) != rows {
+		t.Fatalf("index scan materialized=%d decoded=%d want %d", materialized, len(decoded), rows)
 	}
 }
 
@@ -1138,11 +1369,26 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 		names = append(names, agg.Name)
 	}
 	got := strings.Join(names, ",")
-	if !strings.Contains(got, "q5_did_time_span_min") || !strings.Contains(got, "q5_did_time_span_max") {
+	if !strings.Contains(got, columnStoreSuiteQ5AggregateMin) || !strings.Contains(got, columnStoreSuiteQ5AggregateMax) {
 		t.Fatalf("aggregate metadata names=%q", got)
 	}
 	if strings.Contains(got, "q5_did_time_span,") || strings.HasSuffix(got, "q5_did_time_span") {
 		t.Fatalf("aggregate metadata min name is ambiguous: %q", got)
+	}
+}
+
+func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testing.T) {
+	cfg := columnStoreSuiteConfig()
+	registered := make(map[string]bool, len(cfg.AggregateMetadata))
+	for _, agg := range cfg.AggregateMetadata {
+		registered[agg.Name] = true
+	}
+	name := columnStoreSuiteAggregateMetadataName("q5_metadata")
+	if name == "" {
+		t.Fatal("q5_metadata did not request aggregate metadata")
+	}
+	if !registered[name] {
+		t.Fatalf("q5_metadata requested aggregate metadata %q outside registered names", name)
 	}
 }
 
@@ -1183,7 +1429,15 @@ func TestColumnStoreSuiteREADMEDocumentsCommandM11A(t *testing.T) {
 	}
 }
 
-func BenchmarkColumnStoreSuiteRowBaselineQueriesM11A(b *testing.B) {
+func BenchmarkColumnStoreSuiteRowBaselineQueriesM11B(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathRowStoreBaseline)
+}
+
+func BenchmarkColumnStoreSuiteBTreeIndexBaselineQueriesM11B(b *testing.B) {
+	benchmarkColumnStoreSuiteQueriesM11B(b, columnStorePathBTreeIndexBaseline)
+}
+
+func benchmarkColumnStoreSuiteQueriesM11B(b *testing.B, path string) {
 	const rows = 10_000
 	const batchSize = 1_000
 
@@ -1194,14 +1448,7 @@ func BenchmarkColumnStoreSuiteRowBaselineQueriesM11A(b *testing.B) {
 		b.Fatalf("open db: %v", err)
 	}
 	manager := collections.NewCollectionManager(db)
-	if _, err := manager.CreateCollection(&collections.CollectionMeta{
-		Name: "events",
-		Options: collections.CollectionOptions{
-			DocumentFormat:               collections.DocumentFormatJSON,
-			DisableIndexedWriteMemtables: true,
-			ColumnStore:                  columnStoreSuiteConfig(),
-		},
-	}); err != nil {
+	if _, err := manager.CreateCollection(columnStoreSuiteCollectionMeta(path)); err != nil {
 		b.Fatalf("create collection: %v", err)
 	}
 	collection, err := manager.OpenCollection("events")
@@ -1237,7 +1484,7 @@ func BenchmarkColumnStoreSuiteRowBaselineQueriesM11A(b *testing.B) {
 	b.SetBytes(sourceBytes * int64(queryCount))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, columnStorePathRowStoreBaseline)
+		queries, parity, err := runColumnStoreSuiteQueries(collection, rows, rawHashes, path)
 		if err != nil {
 			b.Fatalf("queries: %v", err)
 		}
