@@ -39,3 +39,8 @@ The TreeDB dataset exporter writes row-major little-endian `float32` vector
 files plus JSONL convenience files. TreeDB loads documents from the exported
 JSONL and query vectors from the exported binary query file; the Python
 Vectorlite benchmark consumes the exported binary vector files directly.
+
+Record the generated `README.md`, `treedb.json`, and `vectorlite.json` with any
+published result. The script records the git commit and run shape; reruns can
+also override `PYTHON`, `VENV`, or preinstall pinned Python packages when exact
+dependency reproduction is required.

@@ -124,8 +124,9 @@ def connect(db_path: Path):
     return db
 
 
-def configure_sqlite(db: sqlite3.Connection, page_size: int, cache_mb: int) -> None:
-    db.execute(f"pragma page_size={page_size}")
+def configure_sqlite(db: sqlite3.Connection, page_size: int, cache_mb: int, *, set_page_size: bool = False) -> None:
+    if set_page_size:
+        db.execute(f"pragma page_size={page_size}")
     db.execute("pragma journal_mode=wal")
     db.execute("pragma synchronous=normal")
     db.execute("pragma temp_store=memory")
@@ -150,7 +151,7 @@ def build_database(args: argparse.Namespace, dataset_dir: Path, manifest: dict[s
 
     start = time.perf_counter()
     db = connect(db_path)
-    configure_sqlite(db, args.page_size, args.cache_mb)
+    configure_sqlite(db, args.page_size, args.cache_mb, set_page_size=True)
     version = db.execute("select vectorlite_info()").fetchone()[0]
     db.execute("create table documents(id text primary key, document blob not null)")
     db.execute(
