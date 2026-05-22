@@ -2518,6 +2518,27 @@ func TestCollectionVectorIndexNativeRootRebuildUsesCurrentRootForStaleHandle(t *
 	if loaded == nil || !loadStatus.Loaded || loadStatus.RootID != rebuild.RootID {
 		t.Fatalf("load status=%+v loaded=%v rebuild=%+v", loadStatus, loaded != nil, rebuild)
 	}
+	if _, err := staleCol.InsertBatch(
+		[][]byte{[]byte("c")},
+		[][]byte{[]byte(`{"embedding":[0.95,0.05]}`)},
+	); err != nil {
+		t.Fatalf("insert through rebuilt stale handle: %v", err)
+	}
+	if err := mgr.FlushAll(); err != nil {
+		t.Fatalf("flush rebuilt stale handle: %v", err)
+	}
+	reloaded, reloadStatus, err := freshCol.LoadVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatalf("reload rebuilt stale-handle root: %v", err)
+	}
+	if reloaded == nil || !reloadStatus.Loaded || reloadStatus.RootID == rebuild.RootID {
+		t.Fatalf("reload status=%+v loaded=%v rebuild=%+v", reloadStatus, reloaded != nil, rebuild)
+	}
+	results, _, err := reloaded.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search rebuilt stale-handle root: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a", "c", "b")
 }
 
 func TestCollectionVectorIndexNativeRootRebuildIgnoresStaleRuntimeSave(t *testing.T) {

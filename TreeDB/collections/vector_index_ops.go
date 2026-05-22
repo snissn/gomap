@@ -72,6 +72,7 @@ func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) 
 		return VectorIndexStatus{}, err
 	}
 	c.RegisterVectorIndex(index)
+	index.recordNativeDefinition(def)
 	if c.manager != nil && index.isNativePersistent() {
 		c.manager.registerCollectionHandle(c)
 	}
