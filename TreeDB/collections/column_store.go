@@ -13,11 +13,23 @@ import (
 )
 
 const (
-	columnManifestFormatTCS1        = "tcs1"
-	columnManifestIdentityMagic     = uint32(0x54434d49) // TCMI
-	columnManifestIdentityVersion   = uint16(1)
-	columnManifestIdentityRecordKey = "\x00column-manifest/identity"
+	columnManifestFormatTCS1                    = "tcs1"
+	columnManifestIdentityMagic                 = uint32(0x54434d49) // TCMI
+	columnManifestIdentityVersion               = uint16(1)
+	columnManifestIdentityMagicOffset           = 0
+	columnManifestIdentityEncodingVersionOffset = 4
+	columnManifestIdentityManifestVersionOffset = 6
+	columnManifestIdentityGenerationOffset      = 8
+	columnManifestIdentityChecksumOffset        = 16
+	columnManifestIdentityReservedOffset        = 24
+	columnManifestIdentityReservedSize          = 4
+	columnManifestIdentityRecordSize            = columnManifestIdentityReservedOffset + columnManifestIdentityReservedSize
+	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
 )
+
+func newColumnManifestIdentityRecordKey() []byte {
+	return []byte(columnManifestIdentityRecordKey)
+}
 
 type ColumnStoreValueType string
 
@@ -511,6 +523,18 @@ func validateColumnManifestIdentityFor(label string, identity ColumnManifestIden
 	return nil
 }
 
+// normalizeColumnManifestIdentityDefaults is used by M10A publish-plan
+// assembly before fail-closed identity validation.
+func normalizeColumnManifestIdentityDefaults(identity *ColumnManifestIdentity) {
+	if identity == nil {
+		return
+	}
+	normalizeColumnManifestIdentityFormat(identity)
+	if identity.Version == 0 {
+		identity.Version = columnManifestIdentityVersion
+	}
+}
+
 func normalizeColumnManifestIdentityFormat(identity *ColumnManifestIdentity) {
 	if identity == nil {
 		return
@@ -540,7 +564,7 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 	if rootID == 0 {
 		return fmt.Errorf("collections: active column manifest generation %d for %q is missing root descriptor %q", identity.Generation, catalog.meta.Name, rootName)
 	}
-	entry, err := snap.GetEntryAtRoot(rootID, []byte(columnManifestIdentityRecordKey))
+	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return fmt.Errorf("collections: active column manifest root %d for %q is missing identity record", rootID, catalog.meta.Name)
 	}
@@ -561,30 +585,38 @@ func validateColumnStoreCatalogRoot(snap *backenddb.Snapshot, catalog *collectio
 }
 
 func encodeColumnManifestIdentityRecord(identity ColumnManifestIdentity) []byte {
-	out := make([]byte, 28)
-	binary.BigEndian.PutUint32(out[0:4], columnManifestIdentityMagic)
-	binary.BigEndian.PutUint16(out[4:6], columnManifestIdentityVersion)
-	binary.BigEndian.PutUint16(out[6:8], identity.Version)
-	binary.BigEndian.PutUint64(out[8:16], identity.Generation)
-	binary.BigEndian.PutUint64(out[16:24], identity.Checksum)
-	binary.BigEndian.PutUint32(out[24:28], 0)
+	record := encodeColumnManifestIdentityRecordArray(identity)
+	return record[:]
+}
+
+func encodeColumnManifestIdentityRecordArray(identity ColumnManifestIdentity) [columnManifestIdentityRecordSize]byte {
+	var out [columnManifestIdentityRecordSize]byte
+	binary.BigEndian.PutUint32(out[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOffset], columnManifestIdentityMagic)
+	binary.BigEndian.PutUint16(out[columnManifestIdentityEncodingVersionOffset:columnManifestIdentityManifestVersionOffset], columnManifestIdentityVersion)
+	binary.BigEndian.PutUint16(out[columnManifestIdentityManifestVersionOffset:columnManifestIdentityGenerationOffset], identity.Version)
+	binary.BigEndian.PutUint64(out[columnManifestIdentityGenerationOffset:columnManifestIdentityChecksumOffset], identity.Generation)
+	binary.BigEndian.PutUint64(out[columnManifestIdentityChecksumOffset:columnManifestIdentityReservedOffset], identity.Checksum)
+	binary.BigEndian.PutUint32(out[columnManifestIdentityReservedOffset:columnManifestIdentityRecordSize], 0)
 	return out
 }
 
 func decodeColumnManifestIdentityRecord(raw []byte) (columnManifestIdentityRecord, error) {
-	if len(raw) != 28 {
+	if len(raw) != columnManifestIdentityRecordSize {
 		return columnManifestIdentityRecord{}, fmt.Errorf("malformed identity record length %d", len(raw))
 	}
-	if magic := binary.BigEndian.Uint32(raw[0:4]); magic != columnManifestIdentityMagic {
+	if magic := binary.BigEndian.Uint32(raw[columnManifestIdentityMagicOffset:columnManifestIdentityEncodingVersionOffset]); magic != columnManifestIdentityMagic {
 		return columnManifestIdentityRecord{}, fmt.Errorf("bad identity magic 0x%x", magic)
 	}
-	if version := binary.BigEndian.Uint16(raw[4:6]); version != columnManifestIdentityVersion {
+	if version := binary.BigEndian.Uint16(raw[columnManifestIdentityEncodingVersionOffset:columnManifestIdentityManifestVersionOffset]); version != columnManifestIdentityVersion {
 		return columnManifestIdentityRecord{}, fmt.Errorf("unsupported identity version %d", version)
 	}
+	if reserved := binary.BigEndian.Uint32(raw[columnManifestIdentityReservedOffset:columnManifestIdentityRecordSize]); reserved != 0 {
+		return columnManifestIdentityRecord{}, fmt.Errorf("non-zero identity reserved trailer field 0x%08x", reserved)
+	}
 	return columnManifestIdentityRecord{
-		Version:    binary.BigEndian.Uint16(raw[6:8]),
-		Generation: binary.BigEndian.Uint64(raw[8:16]),
-		Checksum:   binary.BigEndian.Uint64(raw[16:24]),
+		Version:    binary.BigEndian.Uint16(raw[columnManifestIdentityManifestVersionOffset:columnManifestIdentityGenerationOffset]),
+		Generation: binary.BigEndian.Uint64(raw[columnManifestIdentityGenerationOffset:columnManifestIdentityChecksumOffset]),
+		Checksum:   binary.BigEndian.Uint64(raw[columnManifestIdentityChecksumOffset:columnManifestIdentityReservedOffset]),
 	}, nil
 }
 
@@ -786,8 +818,13 @@ func writeHashBool(d *xxhash.Digest, value bool) {
 }
 
 func columnManifestIdentityIterator(identity ColumnManifestIdentity) *systemTargetIterator {
+	return columnManifestIdentityRecordIterator(encodeColumnManifestIdentityRecordArray(identity))
+}
+
+func columnManifestIdentityRecordIterator(record [columnManifestIdentityRecordSize]byte) *systemTargetIterator {
+	value := record[:]
 	return &systemTargetIterator{entries: []systemTargetEntry{{
-		key:   []byte(columnManifestIdentityRecordKey),
-		value: encodeColumnManifestIdentityRecord(identity),
+		key:   newColumnManifestIdentityRecordKey(),
+		value: value,
 	}}}
 }
