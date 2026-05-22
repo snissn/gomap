@@ -13,6 +13,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -68,45 +69,51 @@ type config struct {
 	jsonOut               bool
 
 	indexOuterLeavesInValueLog *bool
+	vectorIndexStrategy        collections.VectorIndexStrategy
 }
 
 type result struct {
-	Dir                   string                         `json:"dir"`
-	DatasetDir            string                         `json:"dataset_dir,omitempty"`
-	KeptDir               bool                           `json:"kept_dir"`
-	Profile               string                         `json:"profile"`
-	Docs                  int                            `json:"docs"`
-	Dimensions            int                            `json:"dimensions"`
-	Queries               int                            `json:"queries"`
-	SearchConcurrency     []int                          `json:"search_concurrency"`
-	ValidateQueries       int                            `json:"validate_queries"`
-	ValidateDocs          int                            `json:"validate_docs"`
-	TopK                  int                            `json:"top_k"`
-	M                     int                            `json:"m"`
-	EfConstruction        int                            `json:"ef_construction"`
-	EfSearch              int                            `json:"ef_search"`
-	ValuePointerThreshold int                            `json:"value_pointer_threshold"`
-	LeafGenerationTarget  int64                          `json:"leaf_generation_segment_target"`
-	MinRecall             float64                        `json:"min_recall"`
-	Compact               bool                           `json:"compact"`
-	CompactSyncEachPhase  bool                           `json:"compact_sync_each_phase"`
-	DisableExactFallback  bool                           `json:"disable_exact_fallback"`
-	Insert                phaseResult                    `json:"insert"`
-	Rebuild               phaseResult                    `json:"rebuild"`
-	CompactPhase          phaseResult                    `json:"compact_phase"`
-	ReopenLoad            phaseResult                    `json:"reopen_load"`
-	Validation            validationResult               `json:"validation"`
-	Search                searchBenchmarkResult          `json:"search"`
-	SearchBenchmarks      []searchBenchmarkResult        `json:"search_benchmarks"`
-	StorageBeforeCompact  storageReport                  `json:"storage_before_compact"`
-	StorageAfterCompact   storageReport                  `json:"storage_after_compact"`
-	IndexStatsBefore      collections.VectorIndexStats   `json:"index_stats_before_compact"`
-	IndexStatsLoaded      collections.VectorIndexStats   `json:"index_stats_loaded"`
-	NativeRootBytes       int64                          `json:"native_root_bytes"`
-	CompactStorage        *backenddb.CompactStorageStats `json:"compact_storage,omitempty"`
-	FormatConfig          *backenddb.FormatConfig        `json:"format_config,omitempty"`
-	StorageExpectation    storageExpectationReport       `json:"storage_expectation"`
-	Memory                memoryReport                   `json:"memory"`
+	Backend               string                            `json:"backend"`
+	Engine                string                            `json:"engine"`
+	VectorIndexStrategy   collections.VectorIndexStrategy   `json:"vector_index_strategy"`
+	VectorIndexSearchPath collections.VectorIndexSearchPath `json:"vector_index_search_path,omitempty"`
+	Dir                   string                            `json:"dir"`
+	DatasetDir            string                            `json:"dataset_dir,omitempty"`
+	KeptDir               bool                              `json:"kept_dir"`
+	Profile               string                            `json:"profile"`
+	Docs                  int                               `json:"docs"`
+	Dimensions            int                               `json:"dimensions"`
+	Queries               int                               `json:"queries"`
+	SearchConcurrency     []int                             `json:"search_concurrency"`
+	ValidateQueries       int                               `json:"validate_queries"`
+	ValidateDocs          int                               `json:"validate_docs"`
+	TopK                  int                               `json:"top_k"`
+	M                     int                               `json:"m"`
+	EfConstruction        int                               `json:"ef_construction"`
+	EfSearch              int                               `json:"ef_search"`
+	ValuePointerThreshold int                               `json:"value_pointer_threshold"`
+	LeafGenerationTarget  int64                             `json:"leaf_generation_segment_target"`
+	MinRecall             float64                           `json:"min_recall"`
+	Compact               bool                              `json:"compact"`
+	CompactSyncEachPhase  bool                              `json:"compact_sync_each_phase"`
+	DisableExactFallback  bool                              `json:"disable_exact_fallback"`
+	Insert                phaseResult                       `json:"insert"`
+	Rebuild               phaseResult                       `json:"rebuild"`
+	CompactPhase          phaseResult                       `json:"compact_phase"`
+	ReopenLoad            phaseResult                       `json:"reopen_load"`
+	Validation            validationResult                  `json:"validation"`
+	Search                searchBenchmarkResult             `json:"search"`
+	SearchBenchmarks      []searchBenchmarkResult           `json:"search_benchmarks"`
+	StorageBeforeCompact  storageReport                     `json:"storage_before_compact"`
+	StorageAfterCompact   storageReport                     `json:"storage_after_compact"`
+	IndexStatsBefore      collections.VectorIndexStats      `json:"index_stats_before_compact"`
+	IndexStatsLoaded      collections.VectorIndexStats      `json:"index_stats_loaded"`
+	NativeRootBytes       int64                             `json:"native_root_bytes"`
+	VectorIndexStatus     collections.VectorIndexStatus     `json:"vector_index_status"`
+	CompactStorage        *backenddb.CompactStorageStats    `json:"compact_storage,omitempty"`
+	FormatConfig          *backenddb.FormatConfig           `json:"format_config,omitempty"`
+	StorageExpectation    storageExpectationReport          `json:"storage_expectation"`
+	Memory                memoryReport                      `json:"memory"`
 }
 
 type matrixResult struct {
@@ -268,8 +275,10 @@ func parseConfig(args []string) (config, error) {
 		compact:               false,
 		disableExactFallback:  true,
 		profile:               treedb.ProfileBench,
+		vectorIndexStrategy:   collections.VectorIndexStrategyNativeRuntime,
 	}
 	profileRaw := string(cfg.profile)
+	vectorIndexStrategyRaw := string(cfg.vectorIndexStrategy)
 	searchConcurrencyRaw := defaultSearchConcurrency
 	fs := flag.NewFlagSet("treedb_vector_search_demo", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -278,6 +287,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: durable, fast, wal_on_fast, or bench")
+	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: native_runtime or column_graph")
 	fs.IntVar(&cfg.docs, "docs", cfg.docs, "Number of synthetic documents to load")
 	fs.IntVar(&cfg.dimensions, "dims", cfg.dimensions, "Vector dimensions per document")
 	fs.IntVar(&cfg.queries, "queries", cfg.queries, "Number of ANN search queries to benchmark")
@@ -311,6 +321,11 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.profile = profile
+	strategy, err := parseVectorIndexStrategy(vectorIndexStrategyRaw)
+	if err != nil {
+		return config{}, err
+	}
+	cfg.vectorIndexStrategy = strategy
 	if cfg.docs <= 0 {
 		return config{}, errors.New("-docs must be positive")
 	}
@@ -366,6 +381,17 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("-min-recall must be 0 when -validate-queries is 0")
 	}
 	return cfg, nil
+}
+
+func parseVectorIndexStrategy(raw string) (collections.VectorIndexStrategy, error) {
+	switch collections.VectorIndexStrategy(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", collections.VectorIndexStrategyNativeRuntime:
+		return collections.VectorIndexStrategyNativeRuntime, nil
+	case collections.VectorIndexStrategyColumnGraph:
+		return collections.VectorIndexStrategyColumnGraph, nil
+	default:
+		return "", fmt.Errorf("unsupported -vector-index-strategy %q", raw)
+	}
 }
 
 func parseProfile(raw string) (treedb.Profile, error) {
@@ -443,6 +469,9 @@ func normalizeDemoDir(dir string) (string, error) {
 
 func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error) {
 	opts := treedb.OptionsFor(defaultProfile(cfg.profile), dir)
+	if cfg.vectorIndexStrategy == collections.VectorIndexStrategyColumnGraph {
+		opts.Durability = treedb.DurabilityDurable
+	}
 	if cfg.indexOuterLeavesInValueLog != nil {
 		opts.IndexOuterLeavesInValueLog = *cfg.indexOuterLeavesInValueLog
 		opts.IndexInternalBaseDelta = !*cfg.indexOuterLeavesInValueLog
@@ -462,8 +491,33 @@ func openDemoBackend(cfg config, dir string) (*backenddb.DB, func() error, error
 	return treedb.OpenBackend(opts)
 }
 
+func resultBackendForStrategy(strategy collections.VectorIndexStrategy) string {
+	if strategy == collections.VectorIndexStrategyColumnGraph {
+		return "treedb_column_graph"
+	}
+	return "treedb"
+}
+
+func columnGraphDemoColumnStoreConfig(dims int) *collections.ColumnStoreConfig {
+	return &collections.ColumnStoreConfig{
+		Enabled:        true,
+		ProfileSupport: collections.ColumnStoreProfileBenchmarkRelaxed,
+		Columns: []collections.ColumnStoreColumn{
+			{
+				Name:       "embedding",
+				Path:       "embedding",
+				ValueType:  collections.ColumnStoreValueFloat32Vector,
+				VectorDims: dims,
+			},
+		},
+	}
+}
+
 func execute(ctx context.Context, cfg config) (result, error) {
 	cfg.profile = defaultProfile(cfg.profile)
+	if cfg.vectorIndexStrategy == "" {
+		cfg.vectorIndexStrategy = collections.VectorIndexStrategyNativeRuntime
+	}
 	if err := applySearchBenchmarkDefaults(&cfg); err != nil {
 		return result{}, err
 	}
@@ -524,8 +578,12 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		M:              cfg.m,
 		EfConstruction: cfg.efConstruction,
 		EfSearch:       cfg.efSearch,
+		Strategy:       cfg.vectorIndexStrategy,
 	}
 	res := result{
+		Backend:               resultBackendForStrategy(def.Strategy),
+		Engine:                "treedb",
+		VectorIndexStrategy:   def.Strategy,
 		Dir:                   dir,
 		DatasetDir:            cfg.datasetDir,
 		KeptDir:               cfg.keepDir || explicitDir,
@@ -548,12 +606,29 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		DisableExactFallback:  cfg.disableExactFallback,
 	}
 
+	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
+		mainDir := filepath.Join(dir, "maindb")
+		if err := os.MkdirAll(mainDir, 0o755); err != nil {
+			return result{}, err
+		}
+		if err := backenddb.SaveFormatConfig(mainDir, backenddb.FormatConfig{
+			RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1},
+		}); err != nil {
+			return result{}, fmt.Errorf("enable command WAL format for column_graph: %w", err)
+		}
+	}
 	d, cleanupBackend, err := openDemoBackend(cfg, dir)
 	if err != nil {
 		return result{}, err
 	}
 	mgr := collections.NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "docs"}); err != nil {
+	meta := &collections.CollectionMeta{Name: "docs"}
+	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
+		meta.Options.DocumentFormat = collections.DocumentFormatJSON
+		meta.Options.ColumnStore = columnGraphDemoColumnStoreConfig(cfg.dimensions)
+		meta.VectorIndexes = []collections.VectorIndexDefinition{def}
+	}
+	if _, err := mgr.CreateCollection(meta); err != nil {
 		_ = cleanupBackend()
 		return result{}, err
 	}
@@ -574,9 +649,11 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res.Insert = phaseSince(insertStart)
 
-	if _, err := col.CreateVectorIndex(def); err != nil {
-		_ = cleanupBackend()
-		return result{}, err
+	if def.Strategy != collections.VectorIndexStrategyColumnGraph {
+		if _, err := col.CreateVectorIndex(def); err != nil {
+			_ = cleanupBackend()
+			return result{}, err
+		}
 	}
 	rebuildStart := time.Now()
 	status, err := col.RebuildVectorIndex(def.Name)
@@ -584,13 +661,19 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		_ = cleanupBackend()
 		return result{}, err
 	}
-	if !status.NativeRootLoaded || status.RootID == 0 {
+	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
+		if !status.Loaded || status.State != collections.VectorIndexStateColumnGraphLoaded {
+			_ = cleanupBackend()
+			return result{}, fmt.Errorf("unexpected column_graph vector status: %+v", status)
+		}
+	} else if !status.NativeRootLoaded || status.RootID == 0 {
 		_ = cleanupBackend()
 		return result{}, fmt.Errorf("unexpected native vector root status: %+v", status)
 	}
 	res.Rebuild = phaseSince(rebuildStart)
 	res.NativeRootBytes = status.NativeRootBytes
 	res.IndexStatsBefore = status.Stats
+	res.VectorIndexStatus = status
 
 	if err := d.Checkpoint(); err != nil {
 		_ = cleanupBackend()
@@ -676,21 +759,52 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	var beforeLoad runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&beforeLoad)
-	loaded, loadStatus, err := col.LoadVectorIndexSnapshot(vectorIndexOptions(def))
-	if err != nil {
-		return result{}, err
-	}
-	if loaded == nil {
-		return result{}, fmt.Errorf("native vector root load returned no runtime: %+v", loadStatus)
-	}
-	if !loadStatus.Loaded {
-		return result{}, fmt.Errorf("native vector root not marked loaded: %+v", loadStatus)
-	}
-	if loadStatus.RootID == 0 {
-		return result{}, fmt.Errorf("native vector root loaded with zero root id: %+v", loadStatus)
+	var loaded *collections.VectorIndex
+	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
+		searcher, err := col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: def.Name})
+		if err != nil {
+			return result{}, err
+		}
+		response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+			Query:    embedding(0, cfg.dimensions),
+			TopK:     cfg.topK,
+			EfSearch: cfg.efSearch,
+		})
+		if closeErr := searcher.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if err != nil {
+			return result{}, err
+		}
+		if response.Strategy != collections.VectorIndexStrategyColumnGraph || response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader {
+			return result{}, fmt.Errorf("unexpected column_graph search path after reopen: strategy=%s path=%s", response.Strategy, response.Path)
+		}
+		res.VectorIndexSearchPath = response.Path
+		res.IndexStatsLoaded = response.Status.Stats
+		res.VectorIndexStatus = response.Status
+	} else {
+		var loadStatus collections.VectorIndexLoadStatus
+		loaded, loadStatus, err = col.LoadVectorIndexSnapshot(vectorIndexOptions(def))
+		if err != nil {
+			return result{}, err
+		}
+		if loaded == nil {
+			return result{}, fmt.Errorf("native vector root load returned no runtime: %+v", loadStatus)
+		}
+		if !loadStatus.Loaded {
+			return result{}, fmt.Errorf("native vector root not marked loaded: %+v", loadStatus)
+		}
+		if loadStatus.RootID == 0 {
+			return result{}, fmt.Errorf("native vector root loaded with zero root id: %+v", loadStatus)
+		}
+		res.IndexStatsLoaded = loaded.Stats()
+		status, err := col.VectorIndexStatus(def.Name)
+		if err != nil {
+			return result{}, err
+		}
+		res.VectorIndexStatus = status
 	}
 	res.ReopenLoad = phaseSince(reopenStart)
-	res.IndexStatsLoaded = loaded.Stats()
 	var afterLoad runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&afterLoad)
@@ -701,19 +815,31 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		IndexBytesMemory:     res.IndexStatsLoaded.BytesMemory,
 	}
 
-	validation, err := validateCompactedData(col, loaded, cfg, work)
-	if err != nil {
-		return result{}, err
+	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
+		validation, err := validateCompactedColumnGraphData(col, def.Name, cfg, work)
+		if err != nil {
+			return result{}, err
+		}
+		res.Validation = validation
+		searchBenchmarks, err := benchmarkColumnGraphSearchMatrix(col, def.Name, cfg, work)
+		if err != nil {
+			return result{}, err
+		}
+		res.SearchBenchmarks = searchBenchmarks
+	} else {
+		validation, err := validateCompactedData(col, loaded, cfg, work)
+		if err != nil {
+			return result{}, err
+		}
+		res.Validation = validation
+		searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg, work)
+		if err != nil {
+			return result{}, err
+		}
+		res.SearchBenchmarks = searchBenchmarks
 	}
-	res.Validation = validation
-
-	searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg, work)
-	if err != nil {
-		return result{}, err
-	}
-	res.SearchBenchmarks = searchBenchmarks
-	if len(searchBenchmarks) > 0 {
-		res.Search = searchBenchmarks[0]
+	if len(res.SearchBenchmarks) > 0 {
+		res.Search = res.SearchBenchmarks[0]
 	}
 	if err := closeReopened(); err != nil {
 		return result{}, err
@@ -1072,6 +1198,104 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 	return out, nil
 }
 
+func validateCompactedColumnGraphData(col *collections.Collection, indexName string, cfg config, work workload) (out validationResult, err error) {
+	start := time.Now()
+	defer func() {
+		elapsed := phaseSince(start)
+		out.DurationNanos = elapsed.DurationNanos
+		out.Seconds = elapsed.Seconds
+	}()
+	out = validationResult{
+		DocumentsChecked: cfg.validateDocs,
+		QueriesChecked:   cfg.validateQueries,
+		MinRecall:        cfg.minRecall,
+	}
+	expectedDocs, err := expectedValidationDocuments(cfg, work)
+	if err != nil {
+		return out, err
+	}
+	for i := 0; i < cfg.validateDocs; i++ {
+		expected := expectedDocs[i]
+		got, err := col.Get(expected.id)
+		if err != nil {
+			return out, fmt.Errorf("get compacted doc %q: %w", expected.id, err)
+		}
+		if !jsonDocumentsEqual(got, expected.line) {
+			return out, fmt.Errorf("compacted doc %d mismatch", expected.index)
+		}
+	}
+	if cfg.validateQueries == 0 {
+		return out, nil
+	}
+	queries, err := loadQueries(cfg.validateQueries, cfg, work, 0)
+	if err != nil {
+		return out, err
+	}
+	searcher, err := col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: indexName})
+	if err != nil {
+		return out, err
+	}
+	defer func() {
+		if closeErr := searcher.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+	for _, query := range queries {
+		exact, err := col.SearchVectorsExact(query, collections.VectorSearchOptions{
+			Field:  "embedding",
+			Metric: collections.VectorMetricCosine,
+			TopK:   cfg.topK,
+		})
+		if err != nil {
+			return out, err
+		}
+		response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+			Query:    query,
+			TopK:     cfg.topK,
+			EfSearch: cfg.efSearch,
+		})
+		if err != nil {
+			return out, err
+		}
+		if response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader {
+			return out, fmt.Errorf("unexpected column_graph validation path %q", response.Path)
+		}
+		exactIDs := make(map[string]struct{}, len(exact))
+		for _, result := range exact {
+			exactIDs[string(result.DocumentID)] = struct{}{}
+		}
+		out.ExactTotal += len(exact)
+		out.ANNTotal += len(response.Results)
+		for _, result := range response.Results {
+			if _, ok := exactIDs[string(result.ID)]; ok {
+				out.Overlap++
+			}
+		}
+	}
+	if out.ExactTotal > 0 {
+		out.Recall = float64(out.Overlap) / float64(out.ExactTotal)
+	}
+	if out.Recall < cfg.minRecall {
+		return out, fmt.Errorf("recall %.4f below minimum %.4f", out.Recall, cfg.minRecall)
+	}
+	return out, nil
+}
+
+func jsonDocumentsEqual(a, b []byte) bool {
+	if bytes.Equal(a, b) {
+		return true
+	}
+	var av any
+	var bv any
+	if err := json.Unmarshal(a, &av); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(b, &bv); err != nil {
+		return false
+	}
+	return reflect.DeepEqual(av, bv)
+}
+
 func expectedDocument(docIndex int, cfg config, work workload) ([]byte, []byte, error) {
 	if work.datasetDir == "" {
 		return documentID(docIndex), documentJSON(docIndex, cfg.dimensions), nil
@@ -1307,6 +1531,132 @@ func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, q
 		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
 		AvgRerank:            float64(rerankTotal) / float64(len(queries)),
 		ExactFallbacks:       int(exactFallbacks),
+		DisableExactFallback: cfg.disableExactFallback,
+	}, nil
+}
+
+func benchmarkColumnGraphSearchMatrix(col *collections.Collection, indexName string, cfg config, work workload) ([]searchBenchmarkResult, error) {
+	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
+	levels = append(levels, 1)
+	levels = append(levels, cfg.searchConcurrency...)
+	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]searchBenchmarkResult, 0, len(levels))
+	for _, concurrency := range levels {
+		bench, err := benchmarkColumnGraphSearchLoadedConcurrent(col, indexName, cfg, queries, concurrency)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, bench)
+	}
+	return out, nil
+}
+
+func benchmarkColumnGraphSearchLoadedConcurrent(col *collections.Collection, indexName string, cfg config, queries [][]float32, concurrency int) (searchBenchmarkResult, error) {
+	if concurrency <= 0 {
+		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
+	}
+	searchers := make([]*collections.VectorIndexSearcher, concurrency)
+	for i := range searchers {
+		searcher, err := col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: indexName})
+		if err != nil {
+			for _, opened := range searchers[:i] {
+				_ = opened.Close()
+			}
+			return searchBenchmarkResult{}, err
+		}
+		searchers[i] = searcher
+	}
+	defer func() {
+		for _, searcher := range searchers {
+			_ = searcher.Close()
+		}
+	}()
+
+	latencies := make([]int64, len(queries))
+	var next atomic.Int64
+	var candidatesTotal int64
+	var errMu sync.Mutex
+	var firstErr error
+	setErr := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	worker := func(searcher *collections.VectorIndexSearcher) {
+		for {
+			i := int(next.Add(1) - 1)
+			if i >= len(queries) {
+				return
+			}
+			start := time.Now()
+			response, err := searcher.Search(collections.VectorIndexSearcherSearchOptions{
+				Query:    queries[i],
+				TopK:     cfg.topK,
+				EfSearch: cfg.efSearch,
+			})
+			if err != nil {
+				setErr(err)
+				return
+			}
+			latencies[i] = time.Since(start).Nanoseconds()
+			if response.Strategy != collections.VectorIndexStrategyColumnGraph || response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader {
+				setErr(fmt.Errorf("unexpected column_graph benchmark path: strategy=%s path=%s", response.Strategy, response.Path))
+				return
+			}
+			if len(response.Results) == 0 {
+				setErr(errors.New("vector search returned no results"))
+				return
+			}
+			atomic.AddInt64(&candidatesTotal, int64(response.Stats.Candidates))
+		}
+	}
+	startAll := time.Now()
+	if concurrency == 1 {
+		worker(searchers[0])
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(concurrency)
+		for i := 0; i < concurrency; i++ {
+			searcher := searchers[i]
+			go func() {
+				defer wg.Done()
+				worker(searcher)
+			}()
+		}
+		wg.Wait()
+	}
+	total := time.Since(startAll)
+	if firstErr != nil {
+		return searchBenchmarkResult{}, firstErr
+	}
+	var latencyTotal int64
+	for _, latency := range latencies {
+		latencyTotal += latency
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	avg := float64(latencyTotal) / float64(len(queries))
+	opsPerSecond := 0.0
+	if total > 0 {
+		opsPerSecond = float64(len(queries)) / total.Seconds()
+	}
+	return searchBenchmarkResult{
+		Concurrency:          concurrency,
+		Queries:              len(queries),
+		TotalDurationNanos:   total.Nanoseconds(),
+		AvgNanos:             avg,
+		AvgMicros:            avg / 1000,
+		OpsPerSecond:         opsPerSecond,
+		P50Nanos:             percentile(latencies, 0.50),
+		P95Nanos:             percentile(latencies, 0.95),
+		P99Nanos:             percentile(latencies, 0.99),
+		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
+		AvgRerank:            0,
+		ExactFallbacks:       0,
 		DisableExactFallback: cfg.disableExactFallback,
 	}, nil
 }

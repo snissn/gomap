@@ -84,6 +84,8 @@ def backend_name(result: dict[str, Any]) -> str:
     backend = result.get("backend")
     if backend in (None, "", "treedb"):
         return "TreeDB native HNSW"
+    if backend == "treedb_column_graph":
+        return "TreeDB column-store graph HNSW"
     if backend == "sqlite_vectorlite":
         return "SQLite+Vectorlite HNSW"
     if backend == "pgvector":
