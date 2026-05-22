@@ -28,13 +28,13 @@ type JSONBenchPartBuildReport struct {
 }
 
 type JSONBenchPartBuildAttempt struct {
-	Duration        time.Duration `json:"duration"`
-	AllocatedBytes  uint64        `json:"allocated_bytes"`
-	Mallocs         uint64        `json:"mallocs"`
-	TemporaryBytes  uint64        `json:"temporary_bytes_estimate"`
-	TotalBytes      int           `json:"total_bytes"`
-	EncodedRawBytes int           `json:"encoded_raw_bytes"`
-	StoredBytes     int           `json:"stored_bytes"`
+	Duration                  time.Duration `json:"duration"`
+	AllocatedBytes            uint64        `json:"allocated_bytes"`
+	Mallocs                   uint64        `json:"mallocs"`
+	TemporaryBytes            uint64        `json:"temporary_bytes_estimate"`
+	TotalBytes                int           `json:"total_bytes"`
+	EncodedRawBytes           int           `json:"encoded_raw_bytes"`
+	DeclaredColumnStoredBytes int           `json:"declared_column_stored_bytes"`
 }
 
 func RunJSONBenchPartBuildReports(ds JSONBenchDataset, rowsPerGranule int, attempts int) ([]JSONBenchPartBuildReport, error) {
@@ -114,13 +114,13 @@ func measureJSONBenchPartBuild(ds JSONBenchDataset, rowsPerGranule int, layout J
 		temporary = allocated - uint64(accounting.TotalStoredBytes)
 	}
 	attempt := JSONBenchPartBuildAttempt{
-		Duration:        duration,
-		AllocatedBytes:  allocated,
-		Mallocs:         after.Mallocs - before.Mallocs,
-		TemporaryBytes:  temporary,
-		TotalBytes:      accounting.TotalStoredBytes,
-		EncodedRawBytes: accounting.EncodedRawBytes,
-		StoredBytes:     accounting.DeclaredColumnStoredBytes,
+		Duration:                  duration,
+		AllocatedBytes:            allocated,
+		Mallocs:                   after.Mallocs - before.Mallocs,
+		TemporaryBytes:            temporary,
+		TotalBytes:                accounting.TotalStoredBytes,
+		EncodedRawBytes:           accounting.EncodedRawBytes,
+		DeclaredColumnStoredBytes: accounting.DeclaredColumnStoredBytes,
 	}
 	return part, attempt, accounting, nil
 }
@@ -131,7 +131,9 @@ func (r *JSONBenchPartBuildReport) fillDerivedMetrics() {
 		r.RowsPerSecond = float64(r.Rows) / seconds
 		r.EncodedMiBPerSecond = float64(r.Accounting.EncodedRawBytes) / seconds / 1024 / 1024
 		r.StoredMiBPerSecond = float64(r.Accounting.TotalStoredBytes) / seconds / 1024 / 1024
-		r.NanosPerRow = float64(r.Best.Duration.Nanoseconds()) / float64(r.Rows)
+		if r.Rows > 0 {
+			r.NanosPerRow = float64(r.Best.Duration.Nanoseconds()) / float64(r.Rows)
+		}
 	}
 	r.AllocatedBytesPerOp = r.Best.AllocatedBytes
 	r.AllocsPerOp = r.Best.Mallocs
