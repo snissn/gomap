@@ -137,6 +137,80 @@ func TestColumnPhysicalRowReaderCachedBlocksOwnRawBytesV1(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalRowReaderHotBlockFastPathInvalidatesOnEvictionV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	left := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 1, testColumnPhysicalRowReaderRowsV1(0, 4, normalized))
+	right := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 2, testColumnPhysicalRowReaderRowsV1(4, 4, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, left, right), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"embedding", "neighbors"},
+		MaxDecodedBlocks:  1,
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	scratch := columnPhysicalRowReaderScratch{
+		Values:        make([]columnDeclaredValue, 0, 2),
+		Float32Values: make([]float32, 0, normalized.Columns[1].VectorDims),
+		Uint32Values:  make([]uint32, 0, 4),
+	}
+	row, err := reader.FetchRow(0, &scratch)
+	if err != nil {
+		t.Fatalf("warm left block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-000", 0, []float32{0, 0.25, 0.5, 0.75}, []uint32{0, 1, 2})
+	row, err = reader.FetchRow(4, &scratch)
+	if err != nil {
+		t.Fatalf("fetch right block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-004", 4, []float32{4, 4.25, 4.5, 4.75}, []uint32{4, 5, 6})
+	row, err = reader.FetchRow(1, &scratch)
+	if err != nil {
+		t.Fatalf("refetch evicted left block: %v", err)
+	}
+	assertColumnPhysicalRowReaderVectorRowV1(t, row, "doc-001", 1, []float32{1, 1.25, 1.5, 1.75}, []uint32{1, 2, 3})
+	stats := reader.Stats()
+	if stats.CacheMisses != 3 || stats.CacheHits != 0 || stats.BlockEvictions != 2 {
+		t.Fatalf("cache stats=%+v want misses=3 hits=0 evictions=2", stats)
+	}
+}
+
+func TestColumnPhysicalRowReaderHotBlockFastPathPreservesInterleavedLRUV1(t *testing.T) {
+	normalized := testColumnPhysicalRowReaderConfigV1(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	left := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 1, testColumnPhysicalRowReaderRowsV1(0, 3, normalized))
+	middle := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 2, testColumnPhysicalRowReaderRowsV1(3, 3, normalized))
+	right := writeColumnPhysicalRowReaderAssetForTestV1(t, root, normalized, 10, 3, testColumnPhysicalRowReaderRowsV1(6, 3, normalized))
+	reader, err := newColumnPhysicalRowReaderFromSnapshotView(columnPhysicalRowReaderViewForTestV1(root, normalized, left, middle, right), columnPhysicalRowReaderOptions{
+		ProjectedColumns:  []string{"doc_ordinal"},
+		MaxDecodedBlocks:  2,
+		RequireInsertOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalRowReaderFromSnapshotView: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnPhysicalRowReaderScratch
+	for _, ordinal := range []int{0, 3, 4, 1, 4, 6} {
+		if _, err := reader.FetchRow(ordinal, &scratch); err != nil {
+			t.Fatalf("FetchRow(%d): %v", ordinal, err)
+		}
+	}
+	row, err := reader.FetchRow(5, &scratch)
+	if err != nil {
+		t.Fatalf("FetchRow(5): %v", err)
+	}
+	if len(row.Values) != 1 || row.Values[0].Int64 != 5 {
+		t.Fatalf("row=%+v want doc_ordinal 5", row)
+	}
+	stats := reader.Stats()
+	if stats.CacheMisses != 3 || stats.CacheHits != 4 || stats.BlockEvictions != 1 {
+		t.Fatalf("cache stats=%+v want misses=3 hits=4 evictions=1", stats)
+	}
+}
+
 func TestColumnPhysicalRowReaderRejectsMutationPartsV1(t *testing.T) {
 	normalized := testColumnPhysicalRowReaderConfigV1(t)
 	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
