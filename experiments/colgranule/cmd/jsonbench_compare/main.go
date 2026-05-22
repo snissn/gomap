@@ -26,16 +26,27 @@ import (
 )
 
 type clickHouseResult struct {
-	System             string      `json:"system"`
-	Version            string      `json:"version"`
-	OS                 string      `json:"os"`
-	Machine            string      `json:"machine"`
-	DatasetSize        int         `json:"dataset_size"`
-	NumLoadedDocuments int         `json:"num_loaded_documents"`
-	TotalSize          int64       `json:"total_size"`
-	DataSize           int64       `json:"data_size"`
-	IndexSize          int64       `json:"index_size"`
-	Result             [][]float64 `json:"result"`
+	System             string                       `json:"system"`
+	Version            string                       `json:"version"`
+	OS                 string                       `json:"os"`
+	Machine            string                       `json:"machine"`
+	DatasetSize        int                          `json:"dataset_size"`
+	NumLoadedDocuments int                          `json:"num_loaded_documents"`
+	TotalSize          int64                        `json:"total_size"`
+	DataSize           int64                        `json:"data_size"`
+	IndexSize          int64                        `json:"index_size"`
+	Result             [][]float64                  `json:"result"`
+	Q4Fairness         []clickHouseQ4FairnessResult `json:"q4_fairness"`
+}
+
+type clickHouseQ4FairnessResult struct {
+	Query       string    `json:"query"`
+	Description string    `json:"description"`
+	Table       string    `json:"table"`
+	SortKey     string    `json:"sort_key"`
+	QueryShape  string    `json:"query_shape"`
+	Attempts    []float64 `json:"attempts"`
+	Best        float64   `json:"best"`
 }
 
 type comparisonRaw struct {
@@ -57,6 +68,7 @@ type comparisonRaw struct {
 	RawTreeDBJSON           remainingTreeDBResult                 `json:"raw_treedb_json"`
 	QueryTimings            []colgranule.JSONBenchQueryTiming     `json:"query_timings"`
 	EncodedPartQueryTimings []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_query_timings"`
+	EncodedPartQ4Fairness   []colgranule.JSONBenchPartQueryTiming `json:"encoded_part_q4_fairness_timings"`
 	ColumnSummaries         []colgranule.ColumnCodecSummary       `json:"column_summaries"`
 	BestColumnStorage       []bestColumnStorage                   `json:"best_column_storage"`
 }
@@ -125,6 +137,8 @@ func main() {
 	must(err)
 	encodedPartTimings, err := colgranule.RunJSONBenchPartQueries(ds, *rowsPerGranule, *attempts)
 	must(err)
+	encodedPartQ4Fairness, err := colgranule.RunJSONBenchPartQ4FairnessQueries(ds, *rowsPerGranule, *attempts)
+	must(err)
 	must(validateEncodedPartParity(timings, encodedPartTimings))
 	var remaining remainingTreeDBResult
 	var remainingJSON remainingTreeDBResult
@@ -169,6 +183,7 @@ func main() {
 		RawTreeDBJSON:           rawTreeDBJSON,
 		QueryTimings:            timings,
 		EncodedPartQueryTimings: encodedPartTimings,
+		EncodedPartQ4Fairness:   encodedPartQ4Fairness,
 		ColumnSummaries:         summaries,
 		BestColumnStorage:       bestColumns(summaries),
 	}
@@ -897,6 +912,38 @@ func writeMarkdown(path string, raw comparisonRaw) {
 				strings.Join(d.ColumnsProjected, ","))
 		}
 	}
+	if len(raw.EncodedPartQ4Fairness) > 0 {
+		fmt.Fprintf(&b, "\n## Q4 Sort-Order Fairness\n\n")
+		fmt.Fprintf(&b, "Q4a compares time-ordered TreeDB against a time-ordered ClickHouse table when the local ClickHouse result includes `q4_fairness`. Q4b compares a TreeDB part ordered by `kind`, `operation`, `collection`, `did`, and `time_us` against the standard ClickHouse table order, without TreeDB's global `time_us` early-stop shortcut.\n\n")
+		fmt.Fprintf(&b, "| Query | TreeDB best | Best cache | ClickHouse local | TreeDB / ClickHouse | Speedup | TreeDB sort key | Early stop | Kernel | Diagnostics | ClickHouse shape |\n")
+		fmt.Fprintf(&b, "|---|---:|---|---:|---:|---:|---|---|---|---|---|\n")
+		for _, timing := range raw.EncodedPartQ4Fairness {
+			d := timing.Diagnostics
+			local := clickHouseQ4FairnessBest(raw.ClickHouseLocal, timing.Query)
+			localSeconds := local.Best
+			localShape := local.QueryShape
+			if localShape == "" {
+				localShape = "not provided"
+			}
+			fmt.Fprintf(&b, "| %s | %.6fs | %s | %s | %s | %s | `%s` | %t | `%s` | rows=%d granules=%d skipped=%d decoded=%d blocks=%d bytes=%d | `%s` |\n",
+				timing.Query,
+				timing.Best.Seconds(),
+				timing.BestCache,
+				formatSeconds(localSeconds),
+				formatRatio(timing.Best.Seconds(), localSeconds),
+				formatSpeedup(timing.Best.Seconds(), localSeconds),
+				strings.Join(d.SortKey, ","),
+				d.EarlyStopAvailable,
+				d.AggregateKernel,
+				d.RowsScanned,
+				d.GranulesConsidered,
+				d.GranulesSkipped,
+				d.GranulesDecoded,
+				d.BlocksDecoded,
+				d.BytesDecoded,
+				localShape)
+		}
+	}
 	fmt.Fprintf(&b, "\n## Storage Footprint\n\n")
 	allBest := bestTotal(raw.BestColumnStorage, nil)
 	queryBest := bestTotal(raw.BestColumnStorage, queryPathColumns())
@@ -1043,6 +1090,30 @@ func clickHouseBest(result clickHouseResult, i int) float64 {
 	return best
 }
 
+func clickHouseQ4FairnessBest(result clickHouseResult, query string) clickHouseQ4FairnessResult {
+	prefix := strings.ToLower(query)
+	var out clickHouseQ4FairnessResult
+	for _, candidate := range result.Q4Fairness {
+		if !strings.HasPrefix(strings.ToLower(candidate.Query), prefix) {
+			continue
+		}
+		if candidate.Best == 0 {
+			for i, attempt := range candidate.Attempts {
+				if i == 0 || attempt < candidate.Best {
+					candidate.Best = attempt
+				}
+			}
+		}
+		if candidate.Best == 0 {
+			continue
+		}
+		if out.Best == 0 || candidate.Best < out.Best {
+			out = candidate
+		}
+	}
+	return out
+}
+
 func queryPathColumns() map[string]bool {
 	return map[string]bool{
 		"kind_code": true, "commit_operation_code": true, "commit_collection_code": true, "did_code": true, "time_us": true,
@@ -1065,6 +1136,27 @@ func ratio(numerator, denominator float64) float64 {
 		return 0
 	}
 	return numerator / denominator
+}
+
+func formatSeconds(seconds float64) string {
+	if seconds == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.6fs", seconds)
+}
+
+func formatRatio(numerator, denominator float64) string {
+	if denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2fx", ratio(numerator, denominator))
+}
+
+func formatSpeedup(numerator, denominator float64) string {
+	if numerator == 0 || denominator == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.2fx", ratio(denominator, numerator))
 }
 
 func mib(bytes int64) float64 {
