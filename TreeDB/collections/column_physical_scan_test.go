@@ -849,6 +849,46 @@ func TestColumnManifestPlannerCapabilitiesRejectOrphanAggregateMetadataM1634(t *
 	}
 }
 
+func TestColumnManifestSnapshotSidecarFilterStillValidatesSkippedRecordsM1634(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	cfg, input, _, asset := columnManifestPlannerOnePartFixtureM14A(t)
+	dictionary := asset
+	dictionary.Ref.Kind = ColumnAssetKindTCS1DictionaryCodes
+	dictionary.Ref.PartID = asset.Ref.PartID + 1
+	dictionary.Ref.Offset += dictionary.Ref.Length
+	dictionary.Ref.Length = 256
+	dictionary.Bytes = dictionary.Ref.Length
+	dictionary.Reason = "kind"
+	input.Prepared.Assets = []ColumnPreparedAsset{asset, dictionary}
+	manifest, err := encodeColumnManifestForWrite(input)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestForWrite: %v", err)
+	}
+	rootID := publishColumnManifestRecordsForScanTestM13A(t, d, manifest.Identity, manifest.Records)
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+
+	_, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+		snap,
+		rootID,
+		*cfg,
+		manifest.Identity,
+		"events",
+		columnManifestScanSidecarFilter{Int64Values: true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "matching live part") {
+		t.Fatalf("loadColumnManifestSnapshotViewForScanFromRootWithSidecars err=%v want skipped sidecar validation failure", err)
+	}
+}
+
 func TestColumnManifestPlannerCapabilitiesRejectActivePartCountMismatchM14A(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {

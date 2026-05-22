@@ -2370,32 +2370,32 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 		{
 			name:      "q1_dictionary_codes",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
-			maxAllocs: 31,
+			maxAllocs: 26,
 		},
 		{
 			name:      "q2_dictionary_codes",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
-			maxAllocs: 50,
+			maxAllocs: 45,
 		},
 		{
 			name:      "q3_int64_values",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
-			maxAllocs: 22,
+			maxAllocs: 14,
 		},
 		{
 			name:      "q4a_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 45,
+			maxAllocs: 42,
 		},
 		{
 			name:      "q4b_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 45,
+			maxAllocs: 42,
 		},
 		{
 			name:      "q5_dictionary_int64",
 			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"},
-			maxAllocs: 46,
+			maxAllocs: 43,
 		},
 	}
 	for _, tc := range tests {
@@ -2431,6 +2431,90 @@ func TestColumnPhysicalQuerySerialSidecarAllocationBudgetM1634(t *testing.T) {
 			}
 			if allocs > maxAllocs {
 				t.Fatalf("%s routed sidecar allocs/run=%.2f want <= %.2f", tc.name, allocs, maxAllocs)
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalQueryManifestSidecarFilterM1634(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(128)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	all, closeAll, err := collection.prepareColumnPhysicalScanSnapshotView()
+	if closeAll != nil {
+		defer closeAll()
+	}
+	if err != nil {
+		t.Fatalf("prepare full snapshot view: %v", err)
+	}
+	if got, want := len(all.AssetRefs), 1; got != want {
+		t.Fatalf("full asset refs=%d want %d", got, want)
+	}
+	if got, want := len(all.DictionaryCodes), 2; got != want {
+		t.Fatalf("full dictionary sidecars=%d want %d", got, want)
+	}
+	if got, want := len(all.Int64Values), 1; got != want {
+		t.Fatalf("full int64 sidecars=%d want %d", got, want)
+	}
+	if got, want := len(all.AggregateMetadata), 2; got != want {
+		t.Fatalf("full aggregate sidecars=%d want %d", got, want)
+	}
+
+	tests := []struct {
+		name           string
+		req            ColumnPhysicalQueryRequest
+		wantDictionary int
+		wantInt64      int
+		wantAggregate  int
+	}{
+		{
+			name:           "q1_dictionary_only",
+			req:            ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"},
+			wantDictionary: 2,
+		},
+		{
+			name:           "q2_dictionary_only",
+			req:            ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"},
+			wantDictionary: 2,
+		},
+		{
+			name:      "q3_int64_only",
+			req:       ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"},
+			wantInt64: 1,
+		},
+		{
+			name:           "q4_dictionary_and_int64",
+			req:            ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			wantDictionary: 2,
+			wantInt64:      1,
+		},
+		{
+			name:          "q5_metadata_aggregate_only",
+			req:           ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"},
+			wantAggregate: 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			view, closeView, err := collection.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(tc.req))
+			if closeView != nil {
+				defer closeView()
+			}
+			if err != nil {
+				t.Fatalf("prepare filtered snapshot view: %v", err)
+			}
+			if got, want := len(view.AssetRefs), len(all.AssetRefs); got != want {
+				t.Fatalf("filtered asset refs=%d want %d", got, want)
+			}
+			if got := len(view.DictionaryCodes); got != tc.wantDictionary {
+				t.Fatalf("filtered dictionary sidecars=%d want %d", got, tc.wantDictionary)
+			}
+			if got := len(view.Int64Values); got != tc.wantInt64 {
+				t.Fatalf("filtered int64 sidecars=%d want %d", got, tc.wantInt64)
+			}
+			if got := len(view.AggregateMetadata); got != tc.wantAggregate {
+				t.Fatalf("filtered aggregate sidecars=%d want %d", got, tc.wantAggregate)
 			}
 		})
 	}
