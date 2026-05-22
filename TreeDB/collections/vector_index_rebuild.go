@@ -14,6 +14,7 @@ import (
 const (
 	columnVectorGraphNeighborInsertionLimit = 32
 	maxColumnVectorGraphAdjacencyOrdinal    = uint64(^uint32(0))
+	columnVectorGraphLayeredAdjacencyMagic  = ^uint32(0)
 )
 
 var (
@@ -432,42 +433,148 @@ func buildColumnVectorGraphAdjacency(rows []columnVectorGraphAssetRow, def Vecto
 	if uint64(len(rows)) > maxColumnVectorGraphAdjacencyOrdinal {
 		return fmt.Errorf("collections: column vector graph row count=%d exceeds uint32 adjacency encoding", len(rows))
 	}
-	degree := def.M
-	if degree <= 0 {
-		degree = defaultVectorIndexM
-	}
-	maxDegree := len(rows) - 1
-	if maxDegree < 0 {
-		maxDegree = 0
-	}
-	if degree > maxDegree {
-		degree = maxDegree
-	}
 	for i := range rows {
 		if len(rows[i].Vector) != def.Dimensions {
 			return fmt.Errorf("collections: column vector graph row[%d] vector dims=%d want %d", i, len(rows[i].Vector), def.Dimensions)
 		}
 	}
+
+	index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		return err
+	}
+	index.mu.Lock()
+	defer index.mu.Unlock()
 	for i := range rows {
-		if degree <= 0 {
-			rows[i].Adjacency = nil
-			continue
+		if err := index.insertVectorLocked(rows[i].ID, rows[i].Vector); err != nil {
+			return fmt.Errorf("collections: build column vector graph row[%d]: %w", i, err)
 		}
-		candidates, err := topColumnVectorGraphNeighbors(rows, i, degree)
+	}
+
+	inputOrdinalByNode := make([]int, len(index.nodes))
+	for i := range inputOrdinalByNode {
+		inputOrdinalByNode[i] = -1
+	}
+	for i := range rows {
+		nodeID, ok := index.currentNode[string(rows[i].ID)]
+		if !ok || nodeID < 0 || nodeID >= len(index.nodes) || index.nodes[nodeID].deleted {
+			return fmt.Errorf("collections: column vector graph row[%d] missing native graph node", i)
+		}
+		inputOrdinalByNode[nodeID] = i
+	}
+	order := columnVectorGraphNativeLocalityOrder(index)
+	if len(order) != len(rows) {
+		return fmt.Errorf("collections: column vector graph locality order rows=%d want %d", len(order), len(rows))
+	}
+	orderedRows := make([]columnVectorGraphAssetRow, len(rows))
+	nodeOrdinal := make([]int, len(index.nodes))
+	for i := range nodeOrdinal {
+		nodeOrdinal[i] = -1
+	}
+	for ordinal, nodeID := range order {
+		inputOrdinal := -1
+		if nodeID >= 0 && nodeID < len(inputOrdinalByNode) {
+			inputOrdinal = inputOrdinalByNode[nodeID]
+		}
+		if inputOrdinal < 0 {
+			return fmt.Errorf("collections: column vector graph locality node=%d missing input row", nodeID)
+		}
+		orderedRows[ordinal] = rows[inputOrdinal]
+		nodeOrdinal[nodeID] = ordinal
+	}
+	copy(rows, orderedRows)
+	nodeIDByOrdinal := order
+	for i := range rows {
+		nodeID := nodeIDByOrdinal[i]
+		adjacency, err := columnVectorGraphLayeredAdjacencyFromNativeNode(&index.nodes[nodeID], nodeOrdinal)
 		if err != nil {
 			return err
 		}
-		neighbors := make([]uint32, len(candidates))
-		for n := range candidates {
-			ordinal := candidates[n].ordinal
-			if ordinal < 0 || uint64(ordinal) > maxColumnVectorGraphAdjacencyOrdinal {
-				return fmt.Errorf("collections: column vector graph neighbor ordinal=%d exceeds uint32 adjacency encoding", ordinal)
-			}
-			neighbors[n] = uint32(ordinal)
-		}
-		rows[i].Adjacency = neighbors
+		rows[i].Adjacency = adjacency
 	}
 	return nil
+}
+
+func columnVectorGraphNativeLocalityOrder(index *VectorIndex) []int {
+	if index == nil || len(index.nodes) == 0 {
+		return nil
+	}
+	order := make([]int, 0, len(index.nodes))
+	visited := make([]bool, len(index.nodes))
+	queue := make([]int, 0, len(index.nodes))
+	if index.entry >= 0 && index.entry < len(index.nodes) && !index.nodes[index.entry].deleted {
+		visited[index.entry] = true
+		queue = append(queue, index.entry)
+	}
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		copy(queue, queue[1:])
+		queue = queue[:len(queue)-1]
+		order = append(order, nodeID)
+		node := &index.nodes[nodeID]
+		for layer := len(node.neighbors) - 1; layer >= 0; layer-- {
+			for _, neighbor := range node.neighbors[layer] {
+				neighborID := neighbor.nodeID
+				if neighborID < 0 || neighborID >= len(index.nodes) || visited[neighborID] || index.nodes[neighborID].deleted {
+					continue
+				}
+				visited[neighborID] = true
+				queue = append(queue, neighborID)
+			}
+		}
+	}
+	for nodeID := range index.nodes {
+		if visited[nodeID] || index.nodes[nodeID].deleted {
+			continue
+		}
+		order = append(order, nodeID)
+	}
+	return order
+}
+
+func columnVectorGraphLayeredAdjacencyFromNativeNode(node *vectorIndexNode, nodeOrdinal []int) ([]uint32, error) {
+	if node == nil {
+		return nil, nil
+	}
+	maxLayer := len(node.neighbors) - 1
+	for maxLayer >= 0 && len(node.neighbors[maxLayer]) == 0 {
+		maxLayer--
+	}
+	if maxLayer < 0 {
+		return nil, nil
+	}
+	layers := make([][]uint32, maxLayer+1)
+	for layer := 0; layer <= maxLayer; layer++ {
+		if len(node.neighbors[layer]) == 0 {
+			continue
+		}
+		layers[layer] = make([]uint32, 0, len(node.neighbors[layer]))
+		for _, neighbor := range node.neighbors[layer] {
+			neighborID := neighbor.nodeID
+			if neighborID < 0 || neighborID >= len(nodeOrdinal) {
+				return nil, fmt.Errorf("collections: column vector graph neighbor node=%d out of range", neighborID)
+			}
+			ordinal := nodeOrdinal[neighborID]
+			if ordinal < 0 || uint64(ordinal) > maxColumnVectorGraphAdjacencyOrdinal {
+				return nil, fmt.Errorf("collections: column vector graph neighbor ordinal=%d exceeds uint32 adjacency encoding", ordinal)
+			}
+			layers[layer] = append(layers[layer], uint32(ordinal))
+		}
+	}
+	if maxLayer == 0 {
+		return layers[0], nil
+	}
+	total := 2
+	for layer := 0; layer <= maxLayer; layer++ {
+		total += 1 + len(layers[layer])
+	}
+	encoded := make([]uint32, 0, total)
+	encoded = append(encoded, columnVectorGraphLayeredAdjacencyMagic, uint32(maxLayer))
+	for layer := 0; layer <= maxLayer; layer++ {
+		encoded = append(encoded, uint32(len(layers[layer])))
+		encoded = append(encoded, layers[layer]...)
+	}
+	return encoded, nil
 }
 
 func topColumnVectorGraphNeighbors(rows []columnVectorGraphAssetRow, row, degree int) ([]columnVectorGraphNeighbor, error) {

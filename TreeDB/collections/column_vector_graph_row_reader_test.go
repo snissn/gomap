@@ -43,6 +43,7 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	if got, want := reader.RowCount(), len(rows); got != want {
 		t.Fatalf("RowCount=%d want %d", got, want)
 	}
+	wantGraph := columnGraphRebuildNativeGraphLayoutV2A(t, def, rows)
 	scratch := columnPhysicalRowReaderScratch{
 		Values:        make([]columnDeclaredValue, 0, 3),
 		Float32Values: make([]float32, 0, def.Dimensions),
@@ -52,7 +53,8 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	if err != nil {
 		t.Fatalf("FetchRow(1): %v", err)
 	}
-	assertColumnVectorGraphPhysicalRowV2B(t, row, "doc-b", 1, 1, []float32{0, 1, 0}, 1, []uint32{0, 2})
+	wantInput := columnGraphRebuildInputByIDV2B(t, rows, wantGraph.ids[1])
+	assertColumnVectorGraphPhysicalRowV2B(t, row, wantGraph.ids[1], 1, 1, wantInput.vector, 1, wantGraph.adjacency[1])
 
 	var batchIDs []string
 	if err := reader.FetchBatch([]int{2, 0}, &scratch, func(row columnVectorGraphPhysicalRow) error {
@@ -61,13 +63,24 @@ func TestColumnVectorGraphPhysicalRowReaderFetchesPublishedGraphRowsV2B(t *testi
 	}); err != nil {
 		t.Fatalf("FetchBatch: %v", err)
 	}
-	if got, want := strings.Join(batchIDs, ","), "doc-c,doc-a"; got != want {
+	if got, want := strings.Join(batchIDs, ","), strings.Join([]string{wantGraph.ids[2], wantGraph.ids[0]}, ","); got != want {
 		t.Fatalf("batch IDs=%q want %q", got, want)
 	}
 	stats := reader.Stats()
 	if stats.RowFetches != 1 || stats.BatchFetches != 1 || stats.RowsFetched != 3 {
 		t.Fatalf("stats=%+v want one row fetch, one batch fetch, three fetched rows", stats)
 	}
+}
+
+func columnGraphRebuildInputByIDV2B(tb testing.TB, rows []columnGraphRebuildInputRowV2A, id string) columnGraphRebuildInputRowV2A {
+	tb.Helper()
+	for _, row := range rows {
+		if row.id == id {
+			return row
+		}
+	}
+	tb.Fatalf("missing input row id=%q", id)
+	return columnGraphRebuildInputRowV2A{}
 }
 
 func TestColumnVectorGraphPhysicalRowReaderOpensEmptyPublishedGraphV2B(t *testing.T) {

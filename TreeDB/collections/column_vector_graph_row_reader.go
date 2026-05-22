@@ -520,10 +520,8 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	for i, neighbor := range graphRow.Adjacency {
-		if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
-			return columnVectorGraphPhysicalRow{}, err
-		}
+	if err := validateColumnVectorGraphAdjacency(r.def.Name, row.Ordinal, graphRow.Adjacency, rowCount); err != nil {
+		return columnVectorGraphPhysicalRow{}, err
 	}
 	return graphRow, nil
 }
@@ -574,4 +572,83 @@ func validateColumnVectorGraphAdjacencyOrdinal(graphName string, ordinal int, ad
 		return fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", graphName, ordinal, adjacencyIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 	}
 	return nil
+}
+
+func validateColumnVectorGraphAdjacency(graphName string, ordinal int, adjacency []uint32, rowCount int) error {
+	maxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
+	if err != nil {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d malformed adjacency: %w", graphName, ordinal, err)
+	}
+	for layer := 0; layer <= maxLayer; layer++ {
+		neighbors, err := columnVectorGraphAdjacencyLayer(adjacency, layer)
+		if err != nil {
+			return fmt.Errorf("collections: column_graph %q ordinal=%d malformed adjacency layer=%d: %w", graphName, ordinal, layer, err)
+		}
+		for i, neighbor := range neighbors {
+			if err := validateColumnVectorGraphAdjacencyOrdinal(graphName, ordinal, i, neighbor, rowCount); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func columnVectorGraphAdjacencyMaxLayer(adjacency []uint32) (int, error) {
+	if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+		return 0, nil
+	}
+	maxLayer := int(adjacency[1])
+	pos := 2
+	for layer := 0; layer <= maxLayer; layer++ {
+		if pos >= len(adjacency) {
+			return 0, fmt.Errorf("layer=%d missing count", layer)
+		}
+		count := int(adjacency[pos])
+		pos++
+		if count < 0 || count > len(adjacency)-pos {
+			return 0, fmt.Errorf("layer=%d count=%d exceeds remaining=%d", layer, count, len(adjacency)-pos)
+		}
+		pos += count
+	}
+	if pos != len(adjacency) {
+		return 0, fmt.Errorf("trailing adjacency values=%d", len(adjacency)-pos)
+	}
+	return maxLayer, nil
+}
+
+func columnVectorGraphAdjacencyLayer(adjacency []uint32, wantLayer int) ([]uint32, error) {
+	if wantLayer < 0 {
+		return nil, fmt.Errorf("negative layer=%d", wantLayer)
+	}
+	if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+		if wantLayer == 0 {
+			return adjacency, nil
+		}
+		return nil, nil
+	}
+	maxLayer := int(adjacency[1])
+	if wantLayer > maxLayer {
+		return nil, nil
+	}
+	pos := 2
+	for layer := 0; layer <= maxLayer; layer++ {
+		if pos >= len(adjacency) {
+			return nil, fmt.Errorf("layer=%d missing count", layer)
+		}
+		count := int(adjacency[pos])
+		pos++
+		if count < 0 || count > len(adjacency)-pos {
+			return nil, fmt.Errorf("layer=%d count=%d exceeds remaining=%d", layer, count, len(adjacency)-pos)
+		}
+		layerAdjacency := adjacency[pos : pos+count]
+		if layer == wantLayer {
+			return layerAdjacency, nil
+		}
+		pos += count
+	}
+	return nil, nil
+}
+
+func columnVectorGraphAdjacencyIsLayered(adjacency []uint32) bool {
+	return len(adjacency) >= 2 && adjacency[0] == columnVectorGraphLayeredAdjacencyMagic
 }

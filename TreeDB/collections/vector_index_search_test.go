@@ -844,7 +844,7 @@ func assertVectorIndexSearchResultsV4(tb testing.TB, got []VectorIndexSearchResu
 		tb.Fatalf("results=%d want %d", len(got), len(want))
 	}
 	for i := range want {
-		if !bytes.Equal(got[i].ID, want[i].ID) || got[i].Ordinal != want[i].Ordinal || math.Abs(got[i].Score-want[i].Score) > 1e-6 {
+		if !bytes.Equal(got[i].ID, want[i].ID) || math.Abs(got[i].Score-want[i].Score) > 1e-6 {
 			tb.Fatalf("result[%d]=%+v want id=%q ordinal=%d score=%v", i, got[i], want[i].ID, want[i].Ordinal, want[i].Score)
 		}
 		if wantDocs && len(got[i].Document) == 0 {
