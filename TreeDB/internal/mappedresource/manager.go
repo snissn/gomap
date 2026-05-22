@@ -360,12 +360,19 @@ func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []
 func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.active[id]; ok {
+	_, ok := m.active[id]
+	if ok {
 		delete(m.active, id)
 	} else {
 		ensureDeniedMap(&m.stats)[DenyReleaseMismatch]++
 	}
 	m.stats.TotalReleases++
+	if releaseErr != nil {
+		m.stats.Errors++
+	}
+	if !ok {
+		return
+	}
 	if m.stats.ActiveHandles > 0 {
 		m.stats.ActiveHandles--
 	}
@@ -376,9 +383,6 @@ func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr erro
 		m.stats.ActiveHeapCopyBytes -= bytes
 	case SourceDerivedMetadata:
 		m.stats.ActiveDerivedMetadataBytes -= bytes
-	}
-	if releaseErr != nil {
-		m.stats.Errors++
 	}
 }
 

@@ -52,6 +52,27 @@ func TestAcquireBytesReleaseUpdatesAccountingAndPins(t *testing.T) {
 	}
 }
 
+func TestReleaseMismatchDoesNotCorruptActiveAccounting(t *testing.T) {
+	mgr := NewManager()
+	h, err := mgr.AcquireBytes(testKey(), testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{Reason: "unit"})
+	if err != nil {
+		t.Fatalf("AcquireBytes: %v", err)
+	}
+	mgr.release(999, SourceHeapCopy, 16, nil)
+	stats := mgr.Stats()
+	if stats.ActiveHandles != 1 || stats.ActiveHeapCopyBytes != 16 || stats.DeniedByReason[DenyReleaseMismatch] != 1 {
+		_ = h.Release()
+		t.Fatalf("release mismatch corrupted active stats: %+v", stats)
+	}
+	if err := h.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	stats = mgr.Stats()
+	if stats.ActiveHandles != 0 || stats.ActiveHeapCopyBytes != 0 || stats.TotalReleases != 2 {
+		t.Fatalf("stats after real release: %+v", stats)
+	}
+}
+
 func TestAcquireFileRangeMappedAndHeapReturnIdenticalBytes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap unsupported in test manager on windows")

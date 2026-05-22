@@ -148,8 +148,10 @@ func liveHandleBytes(h *Handle) ([]byte, error) {
 	if h == nil {
 		return nil, errors.New("mappedresource: nil handle")
 	}
-	if h.Released() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.done {
 		return nil, errors.New("mappedresource: handle is released")
 	}
-	return h.Bytes(), nil
+	return h.bytes, nil
 }

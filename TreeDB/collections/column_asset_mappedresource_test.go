@@ -117,11 +117,21 @@ func TestColumnAssetReadCacheMappedResourceHeapHandlesOwnStableBytesGateA1736(t 
 		t.Fatalf("resource handles after first read=%d want 1", len(readCache.resourceHandles))
 	}
 	firstHandle := readCache.resourceHandles[0]
+	if got := firstHandle.Bytes(); !bytes.Equal(got, firstPayload) {
+		t.Fatalf("first handle bytes before scratch reuse=%q want %q", got, firstPayload)
+	}
 	if _, err := readCache.read(second, nil); err != nil {
 		t.Fatalf("read second: %v", err)
 	}
-	if got := firstHandle.Bytes(); !bytes.Equal(got, firstPayload) {
-		t.Fatalf("first handle bytes after second read=%q want %q", got, firstPayload)
+	if !firstHandle.Released() {
+		t.Fatal("first heap handle is still active after scratch-backed read reuse")
+	}
+	if len(readCache.resourceHandles) != 1 || readCache.resourceHandles[0] == firstHandle {
+		t.Fatalf("resource handles after second read=%d first retained=%v", len(readCache.resourceHandles), len(readCache.resourceHandles) == 1 && readCache.resourceHandles[0] == firstHandle)
+	}
+	stats := manager.Stats()
+	if stats.ActiveHandles != 1 || stats.ActiveHeapCopyBytes != int64(len(secondPayload)) || stats.TotalReleases != 1 {
+		t.Fatalf("stats after second scratch-backed read: %+v", stats)
 	}
 }
 
