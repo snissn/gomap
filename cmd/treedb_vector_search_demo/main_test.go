@@ -271,6 +271,9 @@ func TestRunJSONOutput(t *testing.T) {
 	if res.Profile != "bench" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
 	}
+	if res.VectorIndexSearchPath != nativeRuntimeSnapshotPath {
+		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, nativeRuntimeSnapshotPath)
+	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
 	}
