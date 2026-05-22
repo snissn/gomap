@@ -427,6 +427,8 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 	} else {
 		scratch = scratch[:need]
 	}
+	// Adjacency uses the current big-endian row-record payload encoding; dense
+	// little-endian adjacency blocks are a later format-level optimization.
 	pos := span.start
 	for i := base; i < need; i++ {
 		scratch[i] = uint32(v.block.raw[pos])<<24 | uint32(v.block.raw[pos+1])<<16 | uint32(v.block.raw[pos+2])<<8 | uint32(v.block.raw[pos+3])
