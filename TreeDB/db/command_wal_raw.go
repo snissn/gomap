@@ -33,6 +33,16 @@ type CommandWALIntent struct {
 
 var ErrCommandWALMissingValueLogRID = errors.New("treedb: command wal missing value-log rid")
 
+// AssignedLSN returns the command LSN already assigned to this intent. Replay
+// intents use this to finalize durable command coverage without appending a
+// duplicate foreground command frame.
+func (intent *CommandWALIntent) AssignedLSN() uint64 {
+	if intent == nil {
+		return 0
+	}
+	return intent.inner.lsn
+}
+
 func (db *DB) CommandWALEnabled() bool {
 	return db != nil && db.commandWAL
 }

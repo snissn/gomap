@@ -602,6 +602,49 @@ The payload name and decoded metadata name must match. Replay is idempotent only
 when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
 
+Column-enabled collection metadata is stored inside the canonical collection
+metadata JSON under `options.column_store`. It is production-facing
+control-plane state, not a sidecar hint. Current normalized fields are:
+
+- `enabled`: column storage is enabled for the collection.
+- `columns`, `sort_key`, and `aggregate_metadata`: declared projection schema,
+  analytical ordering, and aggregate metadata definitions.
+- `retained_payload` and `reconstruction`: how non-column row bytes and column
+  values reconstruct full documents. The current default retained-payload policy
+  is `non-column`.
+- `asset_manager`: the typed column asset manager. Current production metadata
+  requires `kind="value-log"` and an isolated namespace.
+- `manifest_root`: descriptor for the collection system root that owns the
+  active column manifest identity record. The root name must be
+  `<collection>/column/manifest`, and its storage policy must match
+  `control_root_storage_policy`.
+- `active_manifest`: published column manifest identity
+  `{generation, format, version, checksum}`. Current format is `tcs1`, version
+  `1`.
+- `recovery_authoritative_manifest` and
+  `recovery_authoritative_applied_command_lsn`: the manifest generation and
+  command stream boundary considered safe for recovery. When `active_manifest`
+  is present, the recovery-authoritative identity must also be present and must
+  match it until a later format explicitly supports split active/recovery
+  generations; the applied command LSN must also be present and non-zero.
+- `profile_support`: current production default is `durable-only`.
+  `benchmark-relaxed` is permitted only for explicit benchmark/experimental
+  use under relaxed durability modes.
+- `locator`: current default strategy is `side-index`.
+- `schema_hash`: normalized hash of stable column schema/config fields used for
+  cache identity invalidation. Manifest generation and recovery LSN are not
+  schema-hash inputs.
+
+Readers must fail closed for a column-enabled collection when:
+
+- active manifest metadata is missing required recovery-authoritative metadata,
+- active and recovery-authoritative identities disagree,
+- the manifest root descriptor does not match the collection system root name/policy,
+- manifest identity format/version/checksum fields are invalid,
+- the recovery-authoritative applied command LSN is zero while an active manifest
+  is present, or
+- a durable-only column collection is opened under a relaxed durability mode.
+
 `CollectionInsertBatchByIDV1` payload:
 
 ```text

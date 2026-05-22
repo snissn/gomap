@@ -86,6 +86,9 @@ func TestColumnStoreActiveManifestRootValidates(t *testing.T) {
 	if cacheID.ManifestGeneration != identity.Generation || cacheID.ManifestRoot != rootID {
 		t.Fatalf("unexpected active manifest identity: %+v rootID=%d", cacheID, rootID)
 	}
+	if cacheID.RecoveryAuthoritativeGeneration != identity.Generation {
+		t.Fatalf("unexpected recovery-authoritative generation: %+v", cacheID)
+	}
 }
 
 func TestColumnStoreDisabledCollectionHasNoCacheIdentity(t *testing.T) {
@@ -137,6 +140,36 @@ func TestColumnStoreActiveManifestFailsClosedWithoutRootDescriptor(t *testing.T)
 	_, err = NewCollectionManager(d).OpenCollection("events")
 	if err == nil || !strings.Contains(err.Error(), "missing root descriptor") {
 		t.Fatalf("OpenCollection err=%v want missing root descriptor", err)
+	}
+}
+
+func TestColumnStoreActiveManifestRequiresRecoveryAuthoritativeMetadata(t *testing.T) {
+	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	cfg := testColumnStoreConfig(identity)
+	cfg.RecoveryAuthoritativeManifest = nil
+	_, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err == nil || !strings.Contains(err.Error(), "recovery-authoritative") {
+		t.Fatalf("normalizeCollectionMeta err=%v want recovery-authoritative metadata failure", err)
+	}
+}
+
+func TestColumnStoreActiveManifestRequiresRecoveryAuthoritativeAppliedLSN(t *testing.T) {
+	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	cfg := testColumnStoreConfig(identity)
+	cfg.RecoveryAuthoritativeAppliedCommandLSN = 0
+	_, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err == nil || !strings.Contains(err.Error(), "AppliedCommandLSN") {
+		t.Fatalf("normalizeCollectionMeta err=%v want recovery-authoritative AppliedCommandLSN failure", err)
+	}
+}
+
+func TestColumnStoreActiveManifestFailsClosedOnRecoveryAuthoritativeMismatch(t *testing.T) {
+	identity := &ColumnManifestIdentity{Generation: 42, Version: 1, Checksum: 0xfeedbeef}
+	cfg := testColumnStoreConfig(identity)
+	cfg.RecoveryAuthoritativeManifest = &ColumnManifestIdentity{Generation: 41, Version: 1, Checksum: 0xfeedbeef}
+	_, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err == nil || !strings.Contains(err.Error(), "must match active") {
+		t.Fatalf("normalizeCollectionMeta err=%v want active/recovery-authoritative mismatch", err)
 	}
 }
 
@@ -211,6 +244,66 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			},
 			want: "unsupported active column manifest version",
 		},
+		{
+			name: "missing active manifest version",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				ActiveManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Checksum:   123,
+				},
+			},
+			want: "active column manifest version is required",
+		},
+		{
+			name: "missing recovery-authoritative manifest version",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				ActiveManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Version:    1,
+					Checksum:   123,
+				},
+				RecoveryAuthoritativeManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Checksum:   123,
+				},
+			},
+			want: "recovery-authoritative column manifest version is required",
+		},
+		{
+			name: "recovery without active manifest",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				RecoveryAuthoritativeManifest: &ColumnManifestIdentity{
+					Generation: 7,
+					Version:    1,
+					Checksum:   123,
+				},
+			},
+			want: "without active",
+		},
+		{
+			name: "unsupported profile support",
+			cfg: &ColumnStoreConfig{
+				Enabled:        true,
+				Columns:        []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				ProfileSupport: "relaxed-production",
+			},
+			want: "unsupported column profile support",
+		},
+		{
+			name: "manifest root descriptor mismatch",
+			cfg: &ColumnStoreConfig{
+				Enabled:      true,
+				Columns:      []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64}},
+				ManifestRoot: &ColumnManifestRootDescriptor{Name: "events/wrong-root"},
+			},
+			want: "column manifest root descriptor",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,6 +312,147 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 				t.Fatalf("normalizeCollectionMeta err=%v want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestColumnStoreProfileSupportMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		durability backenddb.DurabilityMode
+		profile    ColumnStoreProfileSupport
+		wantCreate string
+		wantOpen   string
+	}{
+		{name: "durable default", durability: backenddb.DurabilityDurable},
+		{name: "wal on relaxed default rejected", durability: backenddb.DurabilityWALOnRelaxed, wantCreate: "durable-only", wantOpen: "durable-only"},
+		{name: "wal off relaxed default rejected", durability: backenddb.DurabilityWALOffRelaxed, wantCreate: "durable-only", wantOpen: "durable-only"},
+		{name: "wal on relaxed benchmark allowed", durability: backenddb.DurabilityWALOnRelaxed, profile: ColumnStoreProfileBenchmarkRelaxed},
+		{name: "wal off relaxed benchmark allowed", durability: backenddb.DurabilityWALOffRelaxed, profile: ColumnStoreProfileBenchmarkRelaxed},
+	}
+	for _, tt := range tests {
+		wantProfile := tt.profile
+		if wantProfile == "" {
+			wantProfile = ColumnStoreProfileDurableOnly
+		}
+		t.Run(tt.name+"/create", func(t *testing.T) {
+			d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: tt.durability})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = d.Close() }()
+			cfg := testColumnStoreConfig(nil)
+			cfg.ProfileSupport = tt.profile
+			_, err = NewCollectionManager(d).CreateCollection(&CollectionMeta{
+				Name:    "events",
+				Options: CollectionOptions{ColumnStore: cfg},
+			})
+			if tt.wantCreate != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantCreate) {
+					t.Fatalf("CreateCollection err=%v want %q", err, tt.wantCreate)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := NewCollectionManager(d).OpenCollection("events")
+			if tt.wantOpen != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantOpen) {
+					t.Fatalf("OpenCollection err=%v want %q", err, tt.wantOpen)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			if got := col.Meta().Options.ColumnStore.ProfileSupport; got != wantProfile {
+				t.Fatalf("ProfileSupport=%q want %q", got, wantProfile)
+			}
+		})
+		t.Run(tt.name+"/open", func(t *testing.T) {
+			dir := t.TempDir()
+			createDB, err := backenddb.Open(backenddb.Options{Dir: dir})
+			if err != nil {
+				t.Fatalf("open durable create db: %v", err)
+			}
+			cfg := testColumnStoreConfig(nil)
+			cfg.ProfileSupport = tt.profile
+			if _, err := NewCollectionManager(createDB).CreateCollection(&CollectionMeta{
+				Name:    "events",
+				Options: CollectionOptions{ColumnStore: cfg},
+			}); err != nil {
+				t.Fatalf("durable CreateCollection: %v", err)
+			}
+			if err := createDB.Close(); err != nil {
+				t.Fatalf("close durable create db: %v", err)
+			}
+			openDB, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: tt.durability})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = openDB.Close() }()
+			col, err := NewCollectionManager(openDB).OpenCollection("events")
+			if tt.wantOpen != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantOpen) {
+					t.Fatalf("OpenCollection err=%v want %q", err, tt.wantOpen)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("OpenCollection: %v", err)
+			}
+			if got := col.Meta().Options.ColumnStore.ProfileSupport; got != wantProfile {
+				t.Fatalf("ProfileSupport=%q want %q", got, wantProfile)
+			}
+		})
+	}
+}
+
+func TestColumnStoreProfileSupportRejectsWriteDomainCacheOpen(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOnRelaxed})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "seed"}); err != nil {
+		t.Fatalf("create seed collection: %v", err)
+	}
+	state := d.State()
+	if state == nil || state.SystemRootPageID == 0 {
+		t.Fatalf("unexpected db state: %+v", state)
+	}
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)}})
+	if err != nil {
+		t.Fatalf("normalize column meta: %v", err)
+	}
+	domain := &collectionWriteDomain{
+		loaded:         true,
+		meta:           meta,
+		catalog:        &collectionCatalog{meta: meta},
+		baseSystemRoot: state.SystemRootPageID,
+		baseCommitSeq:  state.CommitSeq,
+	}
+	mgr.domainMu.Lock()
+	mgr.domains = map[string]*collectionWriteDomain{"events": domain}
+	mgr.domainMu.Unlock()
+
+	_, err = mgr.OpenCollection("events")
+	if err == nil || !strings.Contains(err.Error(), "durable-only") {
+		t.Fatalf("OpenCollection cached err=%v want durable-only rejection", err)
+	}
+}
+
+func TestColumnStoreDisabledCacheIdentityAllocatesZero(t *testing.T) {
+	catalog := &collectionCatalog{meta: CollectionMeta{Name: "users"}}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if id, ok := columnStoreCacheIdentity(catalog, 123, 456); ok {
+			t.Fatalf("column-disabled collection returned cache identity: %+v", id)
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("disabled ColumnStoreCacheIdentity allocated %f times, want 0", allocs)
 	}
 }
 
@@ -294,6 +528,15 @@ func BenchmarkColumnStoreControlPlane(b *testing.B) {
 		}
 		_ = key
 	})
+	b.Run("disabled_cache_identity", func(b *testing.B) {
+		b.ReportAllocs()
+		disabledCatalog := &collectionCatalog{meta: CollectionMeta{Name: "users"}}
+		for i := 0; i < b.N; i++ {
+			if id, ok := columnStoreCacheIdentity(disabledCatalog, 123, 456); ok {
+				b.Fatalf("bad disabled identity: %+v", id)
+			}
+		}
+	})
 	b.Run("decode_manifest_identity_record", func(b *testing.B) {
 		b.ReportAllocs()
 		record := encodeColumnManifestIdentityRecord(*identity)
@@ -310,7 +553,12 @@ func BenchmarkColumnStoreControlPlane(b *testing.B) {
 }
 
 func testColumnStoreConfig(active *ColumnManifestIdentity) *ColumnStoreConfig {
-	return &ColumnStoreConfig{
+	var recovery *ColumnManifestIdentity
+	if active != nil {
+		copied := *active
+		recovery = &copied
+	}
+	cfg := &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
 			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
@@ -323,8 +571,13 @@ func testColumnStoreConfig(active *ColumnManifestIdentity) *ColumnStoreConfig {
 			{Name: "min_time_us", Column: "time_us", Kind: ColumnAggregateMin},
 			{Name: "max_time_us", Column: "time_us", Kind: ColumnAggregateMax},
 		},
-		ActiveManifest: active,
+		ActiveManifest:                active,
+		RecoveryAuthoritativeManifest: recovery,
 	}
+	if active != nil {
+		cfg.RecoveryAuthoritativeAppliedCommandLSN = 99
+	}
+	return cfg
 }
 
 func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
@@ -344,6 +597,12 @@ func assertNormalizedColumnStoreMeta(t *testing.T, meta CollectionMeta) {
 	}
 	if cfg.Locator == nil || cfg.Locator.Strategy != ColumnLocatorStrategySideIndex {
 		t.Fatalf("unexpected locator metadata: %+v", cfg.Locator)
+	}
+	if cfg.ManifestRoot == nil || cfg.ManifestRoot.Name != "events/column/manifest" {
+		t.Fatalf("unexpected manifest root descriptor: %+v", cfg.ManifestRoot)
+	}
+	if cfg.ProfileSupport != ColumnStoreProfileDurableOnly {
+		t.Fatalf("unexpected profile support: %q", cfg.ProfileSupport)
 	}
 }
 

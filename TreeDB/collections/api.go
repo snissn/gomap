@@ -2722,6 +2722,12 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 }
 
 func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
+	if !coveredCommandWALIntent {
+		if err := validateColumnStoreProfileSupportForDB(m.db, normalized.Options.ColumnStore, "create"); err != nil {
+			return nil, err
+		}
+	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -2809,6 +2815,10 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 }
 
 func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
+	return m.openCollectionWithCommandWALIntent(name, nil)
+}
+
+func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, commandWALIntent *backenddb.CommandWALIntent) (*Collection, error) {
 	if m == nil {
 		return nil, errCollectionManagerNil
 	}
@@ -2821,9 +2831,15 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	if err := ValidateCollectionName(name); err != nil {
 		return nil, err
 	}
+	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	if collection, ok := m.openCollectionFromWriteDomainCache(name); ok {
 		if m.db.IsClosing() {
 			return nil, backenddb.ErrClosed
+		}
+		if !coveredCommandWALIntent {
+			if err := validateColumnStoreProfileSupportForDB(m.db, collection.meta.Options.ColumnStore, "open"); err != nil {
+				return nil, err
+			}
 		}
 		return collection, nil
 	}
@@ -2838,6 +2854,11 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 	}
 	if catalog == nil {
 		return nil, errCollectionNotFound
+	}
+	if !coveredCommandWALIntent {
+		if err := validateColumnStoreProfileSupportForDB(m.db, catalog.meta.Options.ColumnStore, "open"); err != nil {
+			return nil, err
+		}
 	}
 	collection := &Collection{
 		db:          m.db,
