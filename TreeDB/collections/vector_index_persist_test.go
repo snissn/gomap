@@ -2059,6 +2059,57 @@ func TestCollectionVectorIndexNativeRootFlushAllOnClosePersistsDirtyGraph(t *tes
 	requireVectorResultIDs(t, results, "a", "b")
 }
 
+func TestCollectionVectorIndexNativeRootAdHocDirtyRuntimeDoesNotPinManagerHandle(t *testing.T) {
+	col := &Collection{meta: CollectionMeta{Name: "docs"}}
+	native, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	})
+	if err != nil {
+		t.Fatalf("new native vector index: %v", err)
+	}
+	native.setNativePersistent(true)
+	native.recordPersistedSnapshot(10, 128, 0)
+	adHoc, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "scratch_embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+		M:          4,
+	})
+	if err != nil {
+		t.Fatalf("new ad hoc vector index: %v", err)
+	}
+	adHoc.mutationSeq = 1
+	col.vectorIndexes = map[string]*VectorIndex{
+		native.name: native,
+		adHoc.name:  adHoc,
+	}
+
+	if col.hasDirtyNativeVectorIndex() {
+		t.Fatal("clean native index plus dirty ad hoc runtime pinned the native manager handle")
+	}
+}
+
+func TestVectorIndexStatusRootIDUsesNewestOverlayRoot(t *testing.T) {
+	rootName := collectionVectorIndexRootName("docs", "embedding")
+	catalog := &collectionCatalog{
+		rootOverlays: map[string][]uint64{
+			rootName: {30, 20},
+		},
+	}
+	rootID, overlayRootIDs := vectorIndexStatusRootID(catalog, rootName)
+	if rootID != 30 {
+		t.Fatalf("status root=%d want newest overlay root 30", rootID)
+	}
+	if len(overlayRootIDs) != 2 || overlayRootIDs[0] != 30 || overlayRootIDs[1] != 20 {
+		t.Fatalf("overlay roots=%v want [30 20]", overlayRootIDs)
+	}
+}
+
 func TestCollectionVectorIndexNativeRootRebuildPersistsFullSnapshotOnClose(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})

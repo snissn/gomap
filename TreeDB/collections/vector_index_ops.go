@@ -171,11 +171,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	}
 
 	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
-	rootID := catalog.rootID(rootName)
-	overlayRootIDs := catalog.overlayRootIDs(rootName)
-	if rootID == 0 && len(overlayRootIDs) != 0 {
-		rootID = overlayRootIDs[len(overlayRootIDs)-1]
-	}
+	rootID, overlayRootIDs := vectorIndexStatusRootID(catalog, rootName)
 	status := VectorIndexStatus{
 		Definition: def,
 		Name:       def.Name,
@@ -229,6 +225,15 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 	}
 	status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
 	return status, nil
+}
+
+func vectorIndexStatusRootID(catalog *collectionCatalog, rootName string) (uint64, []uint64) {
+	rootID := catalog.rootID(rootName)
+	overlayRootIDs := catalog.overlayRootIDs(rootName)
+	if rootID == 0 && len(overlayRootIDs) != 0 {
+		rootID = overlayRootIDs[0]
+	}
+	return rootID, overlayRootIDs
 }
 
 func (c *Collection) registeredVectorIndex(name string) *VectorIndex {

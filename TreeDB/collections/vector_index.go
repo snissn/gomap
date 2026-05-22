@@ -790,6 +790,9 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 
 func (c *Collection) hasDirtyNativeVectorIndex() bool {
 	for _, index := range c.registeredVectorIndexes() {
+		if index == nil || (!index.isNativePersistent() && !collectionMetaDeclaresVectorIndex(c.meta, index.name)) {
+			continue
+		}
 		if index.needsNativeAutoPersist() {
 			return true
 		}
