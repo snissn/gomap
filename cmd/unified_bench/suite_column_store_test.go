@@ -648,7 +648,7 @@ func TestColumnStoreBenchRunFiltersSelectedQueryOrderM1634(t *testing.T) {
 	if !slices.Equal(run.TestOrder, wantOrder) {
 		t.Fatalf("TestOrder=%v want %v", run.TestOrder, wantOrder)
 	}
-	if strings.Contains(run.Config.TestsArg, columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1) {
+	if columnStoreTestCommaListContains(run.Config.TestsArg, columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1) {
 		t.Fatalf("TestsArg includes unselected q1: %q", run.Config.TestsArg)
 	}
 	if _, ok := run.Results[columnStoreSuiteBenchMetricPrefix+columnStoreQueryQ1]; ok {
@@ -2276,6 +2276,15 @@ func TestColumnStoreSuiteReportsKeptDataDirM11A(t *testing.T) {
 
 func columnStoreTestStringSliceContains(values []string, want string) bool {
 	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func columnStoreTestCommaListContains(values string, want string) bool {
+	for _, value := range strings.Split(values, ",") {
 		if value == want {
 			return true
 		}
