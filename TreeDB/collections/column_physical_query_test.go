@@ -1454,8 +1454,9 @@ func TestColumnPhysicalQueryAdapterAllocationSlopeM13B(t *testing.T) {
 			t.Fatalf("large RunColumnPhysicalQuery: %v", err)
 		}
 	})
-	if largeAllocs > smallAllocs+64 {
-		t.Fatalf("allocation slope looks row-linear: small=%.0f large=%.0f", smallAllocs, largeAllocs)
+	const maxExtraFixtureAllocs = 64 // permits manifest/fixture-scale setup drift while still rejecting row-linear allocation.
+	if largeAllocs > smallAllocs+maxExtraFixtureAllocs {
+		t.Fatalf("allocation slope looks row-linear: small=%.0f large=%.0f max_extra=%.0f", smallAllocs, largeAllocs, float64(maxExtraFixtureAllocs))
 	}
 }
 
