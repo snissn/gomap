@@ -500,6 +500,11 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaAndManifestRowsV2B(t
 	return publishColumnVectorGraphPhysicalReaderTestAssetWithMetaManifestRowsAndBaseAssetsV2B(tb, rows, manifestRows, mutateMeta, nil)
 }
 
+func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(tb testing.TB, dims, m int, rows []columnVectorGraphAssetRow) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
+	return publishColumnVectorGraphPhysicalReaderTestAssetWithShapeMetaManifestRowsAndBaseAssetsV2B(tb, dims, m, rows, len(rows), nil, nil)
+}
+
 func publishColumnVectorGraphPhysicalReaderTestAssetWithMutationPartV2B(tb testing.TB, rows []columnVectorGraphAssetRow) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
 	return publishColumnVectorGraphPhysicalReaderTestAssetWithMetaManifestRowsAndBaseAssetsV2B(tb, rows, len(rows), nil, func(baseCfg ColumnStoreConfig) []ColumnPreparedAsset {
@@ -524,16 +529,21 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithMutationPartV2B(tb testi
 
 func publishColumnVectorGraphPhysicalReaderTestAssetWithMetaManifestRowsAndBaseAssetsV2B(tb testing.TB, rows []columnVectorGraphAssetRow, manifestRows int, mutateMeta func(CollectionMeta) CollectionMeta, baseAssets func(ColumnStoreConfig) []ColumnPreparedAsset) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
+	return publishColumnVectorGraphPhysicalReaderTestAssetWithShapeMetaManifestRowsAndBaseAssetsV2B(tb, 3, 2, rows, manifestRows, mutateMeta, baseAssets)
+}
+
+func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeMetaManifestRowsAndBaseAssetsV2B(tb testing.TB, dims, m int, rows []columnVectorGraphAssetRow, manifestRows int, mutateMeta func(CollectionMeta) CollectionMeta, baseAssets func(ColumnStoreConfig) []ColumnPreparedAsset) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
 		tb.Fatalf("open db: %v", err)
 	}
-	baseCfg, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(3))
+	baseCfg, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(dims))
 	if err != nil {
 		_ = d.Close()
 		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
 	}
-	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 2)
+	def := columnGraphRebuildVectorIndexDefinitionV2A(dims, m)
 	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, 2, 1, 1, rows)
 	if err != nil {
 		_ = d.Close()

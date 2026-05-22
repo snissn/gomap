@@ -498,9 +498,18 @@ func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, r
 	if len(row.Vector) != len(query) {
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", row.Ordinal, len(row.Vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	var dot float64
-	for i, v := range query {
-		dot += float64(v) * float64(row.Vector[i])
+	dot := float64(vectorDotProductFloat32(query, row.Vector))
+	if !math.IsInf(dot, 0) && !math.IsNaN(dot) {
+		return dot * float64(queryInvNorm) * float64(row.InvNorm), nil
 	}
+	dot = columnVectorGraphNativeDotProductFloat64(query, row.Vector)
 	return dot * float64(queryInvNorm) * float64(row.InvNorm), nil
+}
+
+func columnVectorGraphNativeDotProductFloat64(left, right []float32) float64 {
+	var dot float64
+	for i, v := range left {
+		dot += float64(v) * float64(right[i])
+	}
+	return dot
 }
