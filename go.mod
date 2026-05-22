@@ -18,6 +18,7 @@ require (
 	github.com/nutsdb/nutsdb v1.1.0
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721
+	github.com/snissn/go-crc32-asm v0.0.0-20260522013757-a412646a9aef
 	github.com/stretchr/testify v1.11.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/tidwall/btree v1.8.1
@@ -26,8 +27,9 @@ require (
 	github.com/tidwall/match v1.1.1
 	github.com/tidwall/redcon v1.6.2
 	github.com/tphakala/simd v1.0.22
+	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957
 	github.com/yuin/goldmark v1.7.13
-	github.com/zeebo/xxh3 v1.0.2
+	github.com/zeebo/xxh3 v1.1.0
 	go.etcd.io/bbolt v1.4.3
 	go.mongodb.org/mongo-driver/v2 v2.6.0
 	golang.org/x/sys v0.38.0
@@ -64,7 +66,7 @@ require (
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
-	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
+	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
@@ -79,7 +81,6 @@ require (
 	github.com/tidwall/pretty v1.2.0 // indirect
 	github.com/tidwall/rtred v0.1.2 // indirect
 	github.com/tidwall/tinyqueue v0.1.1 // indirect
-	github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

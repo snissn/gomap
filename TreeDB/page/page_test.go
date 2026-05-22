@@ -100,10 +100,10 @@ func TestStructAlignment(t *testing.T) {
 	}
 }
 
-func TestCRC32C(t *testing.T) {
+func TestCRC32IEEE(t *testing.T) {
 	data := []byte("hello world")
-	// Calculated using a standard CRC32C (Castagnoli) calculator
-	expected := uint32(0xc99465aa)
+	// Calculated using a standard CRC-32/IEEE calculator.
+	expected := uint32(0x0d4a1185)
 
 	sum := Checksum(data)
 	if sum != expected {

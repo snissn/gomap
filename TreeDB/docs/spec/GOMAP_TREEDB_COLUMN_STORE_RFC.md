@@ -663,7 +663,7 @@ ColumnFileRef {
     RelativePath   string
     Offset         uint64
     Size           uint64
-    ChecksumCRC32C uint32
+    ChecksumCRC32IEEE uint32
 }
 ```
 
@@ -809,16 +809,16 @@ ColumnBlockDirectoryEntry {
     CodecOffset       uint64
     CodecSize         uint32
     RawSize           uint32
-    ChecksumCRC32C    uint32
+    ChecksumCRC32IEEE    uint32
     MinMaxOffset      uint32 optional by flags
 }
 ```
 
 The column file reference records a checksum for the referenced byte range.
-`ChecksumCRC32C` in each block is still useful because a reader may decode one
+`ChecksumCRC32IEEE` in each block is still useful because a reader may decode one
 block after slicing a larger column file. This avoids requiring a full column
 stream scan to validate one projected block. A later format can use xxhash128
-or CityHash128 if evidence shows CRC32C is too weak for the block slice use
+or CityHash128 if evidence shows CRC-32/IEEE is too weak for the block slice use
 case.
 
 `TCS1` column files should store already-encoded block payloads directly.
@@ -2697,7 +2697,7 @@ Gates:
 6. Which ZSTD implementation should be used for generic column blocks:
    existing `snissn/compress/zstd`, `klauspost/compress/zstd`, or both behind
    a small interface?
-7. Should `TCS1` use CRC32C only, or add a 128-bit checksum for compressed
+7. Should `TCS1` use CRC32IEEE only, or add a 128-bit checksum for compressed
    block payloads after the format proves useful?
 8. Which fast-filter metadata belongs inside `TCS1` side streams versus shared
    `filters/<name>` roots used by non-column collection layouts?
@@ -2755,7 +2755,7 @@ Fix: Gates are relative to same-run baselines and include high-entropy fallback
 requirements.
 
 Finding: Column file checksums might make block checksums look duplicative.
-Fix: The proposal keeps per-block CRC32C because projected reads may slice a
+Fix: The proposal keeps per-block CRC32IEEE because projected reads may slice a
 larger column file, but leaves a stronger checksum as an open question.
 
 Finding: A direct column-store path could bypass secondary index correctness.

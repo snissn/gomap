@@ -49,7 +49,7 @@ All pages begin with a 16-byte header:
 
 ```text
 u64 PageID
-u32 Checksum   // CRC32C over page with checksum bytes zeroed
+u32 Checksum   // CRC-32/IEEE over page with checksum bytes zeroed
 u16 Flags      // low bits: page type; high bits: encoding flags
 u16 Count      // entry count
 ```
@@ -63,7 +63,7 @@ Page types (`Flags` low bits):
 
 ### 2.3 Checksum
 
-- Checksum algorithm: CRC32C (Castagnoli).
+- Checksum algorithm: CRC-32/IEEE.
 - Verification may be cached unless `VerifyOnRead` forces every-read checks.
 
 ## 3. Meta Page Body
@@ -345,7 +345,7 @@ Notes:
 Each value-log record is:
 
 ```text
-u32 CRC32C
+u32 CRC32
 u8  Version         // currently 1
 u8  Flags           // bit0 = grouped record
 u16 Reserved
@@ -424,7 +424,7 @@ Segment envelope:
 
 ```text
 u32 LengthField      // high bit = compressed flag, remaining bits = payload length
-u32 CRC32C(payload_stored)
+u32 CRC32(payload_stored)
 bytes PayloadStored[Length]
 ```
 

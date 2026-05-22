@@ -762,7 +762,7 @@ CollectionWALTransaction {
     Stats                    CollectionWALStats
 
     ReplayDigest             bytes
-    RecordChecksumCRC32C     uint32
+    RecordChecksumCRC32IEEE     uint32
 }
 
 RootRef {
@@ -905,7 +905,7 @@ on it.
 
 Two digests are required:
 
-- `RecordChecksumCRC32C`: covers the whole encoded record for corruption
+- `RecordChecksumCRC32IEEE`: covers the whole encoded record for corruption
   detection;
 - `ReplayDigest`: covers replay-critical fields only: identity, dependencies,
   root deltas, side refs, system delta template, and preconditions.
@@ -1110,7 +1110,7 @@ Normative v1 bounds:
 
 | Field / structure | v1 bound | Rule |
 |---|---:|---|
-| Encoded `CollectionWALTransaction` | **16 MiB** | Includes all encoded transaction fields and `RecordChecksumCRC32C`; excludes only the outer segment frame header. Hard cap; not configurable upward at runtime. |
+| Encoded `CollectionWALTransaction` | **16 MiB** | Includes all encoded transaction fields and `RecordChecksumCRC32IEEE`; excludes only the outer segment frame header. Hard cap; not configurable upward at runtime. |
 | Collection WAL outer frame payload | 16 MiB | Must equal one encoded transaction or commit-marker record. |
 | Collection WAL segment size | 64 MiB default, 1 GiB absolute max | Segment size may be lower by config; never disables per-frame/per-transaction caps. |
 | Root deltas per transaction | 64 | Count is checked before allocation. |
@@ -1128,7 +1128,7 @@ Normative v1 bounds:
 | Root name | 256 UTF-8 bytes | Must be derived, not trusted from WAL name fields. |
 | `RelativePath` | 512 bytes | Advisory only; slash-separated; max 16 components; component max 128 bytes. |
 | Resolved absolute path | 4096 bytes and OS component limits | Reject if exceeded after safe resolution. |
-| Digest fields | exact declared length | `CollectionUID=16`, CRC32C `4`, replay/catalog digest exact algorithm length, e.g. 32 bytes. |
+| Digest fields | exact declared length | `CollectionUID=16`, CRC-32/IEEE `4`, replay/catalog digest exact algorithm length, e.g. 32 bytes. |
 | Varint/uvarint | max 10 bytes, minimal encoding | Overflow and non-minimal encodings are malformed. |
 | Compressed decoded bytes | 64 MiB per payload | Decode only after checksum; output length must exactly match declared raw length. |
 | Recovery heap budget | 128 MiB per DB open worker | On budget exhaustion: stop open/quarantine; never continue with partial roots. |
@@ -1212,7 +1212,7 @@ Decoder order is mandatory:
 3. read at most 16 MiB into a bounded buffer or stream checksum into bounded
    scratch;
 4. verify frame checksum;
-5. verify transaction `RecordChecksumCRC32C`;
+5. verify transaction `RecordChecksumCRC32IEEE`;
 6. parse only the fixed-width transaction prefix;
 7. validate transaction version, feature flags, digest lengths, and scalar
    fields;
@@ -1249,7 +1249,7 @@ CollectionWALSegmentMeta {
     FirstFrameOffset              uint64
     LastCompleteFrameEndOffset    uint64
     Sealed                        bool
-    MetadataChecksumCRC32C        uint32
+    MetadataChecksumCRC32IEEE        uint32
 }
 ```
 
@@ -1266,7 +1266,7 @@ CollectionWALCleanupRecord {
     MaxWALLSN                     uint64
     ParticipantCollectionUIDs     []uuid128
     State                         planned | unlinked | dirsynced
-    RecordChecksumCRC32C          uint32
+    RecordChecksumCRC32IEEE          uint32
 }
 ```
 
@@ -1441,7 +1441,7 @@ rename must be same-directory/same-device and atomic; cross-device rename is a
 configuration or corruption error. File and parent-directory fsyncs are part of
 the selected durability boundary.
 
-CRC32C and replay digests detect accidental corruption and implementation bugs;
+CRC-32/IEEE and replay digests detect accidental corruption and implementation bugs;
 they do not authenticate malicious local rewrites by a user who can modify DB
 files. Collection WAL's local threat model treats hostile local writers as out
 of scope only when the directory/file ownership and permission checks above
@@ -3201,7 +3201,7 @@ Keep and expand tests that document current behavior:
 ### 11.2 Format Tests
 
 - exact-byte `CollectionWALTransaction` v1 golden files;
-- corrupt `RecordChecksumCRC32C` rejection;
+- corrupt `RecordChecksumCRC32IEEE` rejection;
 - `ReplayDigest` changes when replay-critical fields change and does not change
   when observability-only fields change;
 - truncated tail without commit marker is ignored;
