@@ -69,6 +69,52 @@ func TestRunJSONBenchQueriesSample(t *testing.T) {
 	}
 }
 
+func TestRunJSONBenchPartQueriesSampleMatchesRawReference(t *testing.T) {
+	ds, err := LoadJSONBenchColumns("testdata/jsonbench_sample.jsonl", 0)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(sample): %v", err)
+	}
+	rawTimings, err := RunJSONBenchQueries(ds, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchQueries: %v", err)
+	}
+	const rowsPerGranule = 2
+	partTimings, err := RunJSONBenchPartQueries(ds, rowsPerGranule, 2)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartQueries: %v", err)
+	}
+	granules := (ds.Rows + rowsPerGranule - 1) / rowsPerGranule
+	if len(partTimings) != len(rawTimings) {
+		t.Fatalf("part timings=%d raw timings=%d", len(partTimings), len(rawTimings))
+	}
+	rawByQuery := make(map[string]JSONBenchQueryTiming, len(rawTimings))
+	for _, timing := range rawTimings {
+		rawByQuery[timing.Query] = timing
+	}
+	for _, timing := range partTimings {
+		raw, ok := rawByQuery[timing.Query]
+		if !ok {
+			t.Fatalf("unexpected part query %s", timing.Query)
+		}
+		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
+			t.Fatalf("%s part rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
+		}
+		if timing.Engine != "encoded_column_part" {
+			t.Fatalf("%s engine=%q want encoded_column_part", timing.Query, timing.Engine)
+		}
+		if len(timing.Attempts) != 2 || timing.Attempts[0].Cache != "cold" || timing.Attempts[1].Cache != "warm" {
+			t.Fatalf("%s attempts=%+v want cold,warm labels", timing.Query, timing.Attempts)
+		}
+		for _, attempt := range timing.Attempts {
+			if attempt.ResultRows != raw.ResultRows || attempt.ResultDigest != raw.ResultDigest {
+				t.Fatalf("%s/%s rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, attempt.Cache, attempt.ResultRows, attempt.ResultDigest, raw.ResultRows, raw.ResultDigest)
+			}
+			assertJSONBenchPartDiagnostics(t, timing.Query, attempt.Diagnostics, ds.Rows, granules)
+		}
+		assertJSONBenchPartDiagnostics(t, timing.Query, timing.Diagnostics, ds.Rows, granules)
+	}
+}
+
 func TestLoadJSONBenchColumnsLocal1MIfPresent(t *testing.T) {
 	path := os.Getenv("JSONBENCH_DATA")
 	if path == "" {
@@ -114,5 +160,68 @@ func TestLoadJSONBenchColumnsLocalDirIfPresent(t *testing.T) {
 	}
 	if len(ds.Files) == 0 {
 		t.Fatalf("files=0 want nonzero")
+	}
+}
+
+func TestRunJSONBenchPartQueriesLocalIfPresent(t *testing.T) {
+	path := os.Getenv("JSONBENCH_DATA")
+	if path == "" {
+		t.Skip("JSONBENCH_DATA not set")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("local JSONBench fixture not present at %s", path)
+	}
+	ds, err := LoadJSONBenchColumns(path, 1000)
+	if err != nil {
+		t.Fatalf("LoadJSONBenchColumns(local): %v", err)
+	}
+	rawTimings, err := RunJSONBenchQueries(ds, 1)
+	if err != nil {
+		t.Fatalf("RunJSONBenchQueries(local): %v", err)
+	}
+	partTimings, err := RunJSONBenchPartQueries(ds, DefaultRowsPerGranule, 2)
+	if err != nil {
+		t.Fatalf("RunJSONBenchPartQueries(local): %v", err)
+	}
+	rawByQuery := make(map[string]JSONBenchQueryTiming, len(rawTimings))
+	for _, timing := range rawTimings {
+		rawByQuery[timing.Query] = timing
+	}
+	for _, timing := range partTimings {
+		raw, ok := rawByQuery[timing.Query]
+		if !ok {
+			t.Fatalf("unexpected local part query %s", timing.Query)
+		}
+		if timing.ResultRows != raw.ResultRows || timing.ResultDigest != raw.ResultDigest {
+			t.Fatalf("%s local part rows/digest=(%d,%d) raw=(%d,%d)", timing.Query, timing.ResultRows, timing.ResultDigest, raw.ResultRows, raw.ResultDigest)
+		}
+	}
+}
+
+func assertJSONBenchPartDiagnostics(t *testing.T, query string, diagnostics JSONBenchPartQueryDiagnostics, rows int, granules int) {
+	t.Helper()
+	if diagnostics.RowsScanned != rows {
+		t.Fatalf("%s diagnostics rows=%d want %d: %+v", query, diagnostics.RowsScanned, rows, diagnostics)
+	}
+	if diagnostics.GranulesConsidered <= 0 || diagnostics.GranulesConsidered > granules {
+		t.Fatalf("%s diagnostics granules=%d want 1..%d: %+v", query, diagnostics.GranulesConsidered, granules, diagnostics)
+	}
+	if diagnostics.GranulesSkipped < 0 || diagnostics.GranulesSkipped > diagnostics.GranulesConsidered {
+		t.Fatalf("%s diagnostics skipped=%d want 0..%d: %+v", query, diagnostics.GranulesSkipped, diagnostics.GranulesConsidered, diagnostics)
+	}
+	if diagnostics.GranulesDecoded <= 0 || diagnostics.GranulesDecoded > diagnostics.GranulesConsidered {
+		t.Fatalf("%s diagnostics decoded granules=%d want 1..%d: %+v", query, diagnostics.GranulesDecoded, diagnostics.GranulesConsidered, diagnostics)
+	}
+	if diagnostics.BlocksDecoded <= 0 || diagnostics.BytesDecoded <= 0 {
+		t.Fatalf("%s diagnostics missing decoded blocks/bytes: %+v", query, diagnostics)
+	}
+	if diagnostics.AggregateKernel == "" {
+		t.Fatalf("%s diagnostics missing aggregate kernel: %+v", query, diagnostics)
+	}
+	if diagnostics.CacheState != "cold" && diagnostics.CacheState != "warm" {
+		t.Fatalf("%s diagnostics cache=%q want cold or warm", query, diagnostics.CacheState)
+	}
+	if len(diagnostics.ColumnsProjected) == 0 {
+		t.Fatalf("%s diagnostics missing columns projected: %+v", query, diagnostics)
 	}
 }

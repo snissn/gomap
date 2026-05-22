@@ -35,8 +35,8 @@ func TestColumnPartBuildPrimaryEqualsSortKey(t *testing.T) {
 	assertInt64s(t, "value", scan.Columns["value"], []int64{100, 200, 300, 400, 500})
 	assertInt64s(t, "kind_code", scan.Columns["kind_code"], []int64{0, 1, 1, 0, 2})
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{0, 1, 1, 1, 0})
-	if scan.Diagnostics.RowsScanned != 5 || scan.Diagnostics.GranulesConsidered != 3 || scan.Diagnostics.BlocksDecoded != 12 {
-		t.Fatalf("diagnostics=%+v want rows=5 granules=3 blocks=12", scan.Diagnostics)
+	if scan.Diagnostics.RowsScanned != 5 || scan.Diagnostics.GranulesConsidered != 3 || scan.Diagnostics.GranulesDecoded != 3 || scan.Diagnostics.BlocksDecoded != 12 {
+		t.Fatalf("diagnostics=%+v want rows=5 granules=3 decoded=3 blocks=12", scan.Diagnostics)
 	}
 
 	scanner := part.NewScanner()
@@ -125,6 +125,9 @@ func TestColumnPartCodecBlocksCanSplitIndependently(t *testing.T) {
 	assertInt64s(t, "value", scan.Columns["value"], []int64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100})
 	assertInt64s(t, "kind_code", scan.Columns["kind_code"], []int64{2, 0, 1, 2, 0, 1, 2, 1, 0, 1})
 	assertInt64s(t, "has_reply", scan.Columns["has_reply"], []int64{1, 0, 1, 0, 1, 0, 1, 0, 1, 0})
+	if scan.Diagnostics.GranulesDecoded != 4 || scan.Diagnostics.BlocksDecoded != 14 {
+		t.Fatalf("diagnostics=%+v want decoded=4 blocks=14", scan.Diagnostics)
+	}
 }
 
 func TestColumnPartPreservesExplicitCompressionNoneOverride(t *testing.T) {
