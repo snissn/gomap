@@ -235,6 +235,37 @@ When enabled, part build estimates uncompressed declared-column bytes per row
 and chooses rows per mark from a target byte budget with min/max row clamps.
 Fixed `RowsPerGranule` remains the default path for existing gates.
 
+M8A adds a non-durable mutation adapter over the same manifest path. The adapter
+publishes bulk base batches, row-aligned insert/update delta parts, and delete
+tombstones, then persists a new collection manifest generation. It accepts
+complete declared-column vectors produced from collection-shaped mutations; it
+does not encode physical column diffs as replay source of truth and still does
+not claim command-WAL durable-at-ack semantics. The restart/replay tests compare
+logical rows and JSONBench q1-q5 hashes after applying the same mutation
+sequence into a fresh workspace.
+
+The M8A locator profile keeps the V1 locator shape as one primary id to latest
+visible row locator per manifest generation. It does not use one locator per
+column because column parts remain row-aligned across declared columns. The
+current reader builds an in-memory side index while opening a manifest, and the
+no-side-index comparison scans part-local locator maps. On an Apple M3, the
+measured profile was:
+
+| Delta parts | Side-index locator | Part-local scan locator | Side-index point value | Part-local scan point value |
+|---:|---:|---:|---:|---:|
+| 1 | ~10-11 ns/op, 0 allocs | ~63-65 ns/op, 0 allocs | ~58-66 ns/op, 0 allocs | ~114-145 ns/op, 0 allocs |
+| 8 | ~10-12 ns/op, 0 allocs | ~237-262 ns/op, 0 allocs | ~58-69 ns/op, 0 allocs | ~284-317 ns/op, 0 allocs |
+| 32 | ~10-11 ns/op, 0 allocs | ~867-987 ns/op, 0 allocs | ~58-75 ns/op, 0 allocs | ~912-1100 ns/op, 0 allocs |
+| 128 | ~10-12 ns/op, 0 allocs | ~4.0-4.6 us/op, 0 allocs | ~58-66 ns/op, 0 allocs | ~4.1-4.2 us/op, 0 allocs |
+
+This is enough to defer a root-backed locator for the next production step. The
+manifest-load side index gives constant-time, zero-allocation lookup and
+scratch-backed point reconstruction, while the scan path only proves why an
+index is needed once part counts grow. A production root-backed locator should
+be added later only when a real update/delete or point-reconstruction workload
+needs persistent locator state across opens, and it should map `primary id ->
+latest visible row locator` for a generation rather than `primary id + column`.
+
 The multipart query gate should preserve the M2 encoded-part execution shape:
 avoid projected-row materialization for hot q1-q5 kernels, report visible,
 superseded, deleted, part, block, decoded-byte, and cache diagnostics, and keep
