@@ -826,6 +826,12 @@ func columnVectorGraphDeep1BApproxRecall(exact []float32, approximate []float32,
 	if topK > len(exact) {
 		topK = len(exact)
 	}
+	if topK > len(approximate) {
+		topK = len(approximate)
+	}
+	if topK <= 0 {
+		return 0, 0
+	}
 	exactRows := make([]int, topK)
 	exactScores := make([]float32, topK)
 	approxRows := make([]int, topK)
@@ -834,6 +840,13 @@ func columnVectorGraphDeep1BApproxRecall(exact []float32, approximate []float32,
 	columnVectorGraphDeep1BTopKFromScores(approximate, topK, approxRows, approxScores)
 	overlap := columnVectorGraphDeep1BTopKOverlap(exactRows, approxRows)
 	return overlap, float64(overlap) / float64(topK)
+}
+
+func TestColumnVectorGraphDeep1BApproxRecallEmpty(t *testing.T) {
+	overlap, recall := columnVectorGraphDeep1BApproxRecall(nil, nil, 10)
+	if overlap != 0 || recall != 0 || math.IsNaN(recall) {
+		t.Fatalf("empty recall=(overlap=%d recall=%v), want 0,0", overlap, recall)
+	}
 }
 
 func columnVectorGraphDeep1BCandidateRecall(exact []float32, approximate []float32, targetK int, candidateK int) (int, float64) {

@@ -374,7 +374,6 @@ func BenchmarkColumnVectorGraphDeep1BPersistedBuildOpenDecode(b *testing.B) {
 					var lastLoadStats ColumnVectorGraphLoadStats
 					b.ReportAllocs()
 					b.ResetTimer()
-					b.StopTimer()
 					for i := 0; i < b.N; i++ {
 						fixture := buildColumnVectorGraphDeep1BFixtureWithPhaseTimer(b, b, data, shape.rows, compressionCase.vectorCompression, compressionCase.adjacencyCompression)
 						totalBuildNanos += fixture.buildNanos
@@ -388,6 +387,7 @@ func BenchmarkColumnVectorGraphDeep1BPersistedBuildOpenDecode(b *testing.B) {
 							b.Fatalf("Close Deep1B persisted vector graph fixture: %v", err)
 						}
 					}
+					b.StopTimer()
 					if b.N > 0 {
 						avgPersisted := &columnVectorGraphPersistedFixture{
 							buildNanos:  totalBuildNanos / int64(b.N),
@@ -579,8 +579,12 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 							}
 							elapsed := time.Since(start)
 							b.StopTimer()
+							decodeIterations := min(b.N, 3)
+							if decodeIterations < 1 {
+								decodeIterations = 1
+							}
 							decodeStart := time.Now()
-							for i := 0; i < b.N; i++ {
+							for i := 0; i < decodeIterations; i++ {
 								decoded, _, err := decodeCodec.Decode(decodeEncoded)
 								if err != nil {
 									b.Fatalf("JZIP-style decode: %v", err)
@@ -588,16 +592,16 @@ func BenchmarkColumnVectorGraphDeep1BJZIPNeighborhoodCompressionSmoke(b *testing
 								benchSink += int64(len(decoded))
 							}
 							decodeElapsed := time.Since(decodeStart)
-							if b.N > 0 {
-								decodeNanos = decodeElapsed.Nanoseconds() / int64(b.N)
+							if decodeIterations > 0 {
+								decodeNanos = decodeElapsed.Nanoseconds() / int64(decodeIterations)
 							}
 							if elapsed > 0 && b.N > 0 {
 								b.ReportMetric(float64(b.N)/elapsed.Seconds(), "granules/s")
 								b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N)/1e6, "encode_ms")
 							}
-							if decodeElapsed > 0 && b.N > 0 {
+							if decodeElapsed > 0 && decodeIterations > 0 {
 								decodeSeconds := float64(decodeNanos) / 1e9
-								b.ReportMetric(float64(b.N)/decodeElapsed.Seconds(), "decode_granules/s")
+								b.ReportMetric(float64(decodeIterations)/decodeElapsed.Seconds(), "decode_granules/s")
 								b.ReportMetric(float64(granuleRows)/decodeSeconds, "decode_vectors/s")
 								b.ReportMetric(float64(warm.RawBytes)/decodeSeconds/1e6, "decode_raw_MB/s")
 								b.ReportMetric(float64(warm.TransformRawBytes)/decodeSeconds/1e6, "decode_transform_MB/s")
@@ -920,7 +924,14 @@ func BenchmarkColumnVectorGraphDeep1BSphericalDirectScore(b *testing.B) {
 		b.ReportMetric(float64(metrics.FallbackAngles), "poly_fallback_angles")
 		b.ReportMetric(float64(metrics.TerminalAngles), "terminal_exact_angles")
 		if metrics.TotalAngles > 0 {
-			b.ReportMetric(float64(metrics.FallbackAngles)/float64(metrics.TotalAngles), "poly_fallback_angle_ratio")
+			nonTerminalAngles := metrics.TotalAngles - metrics.TerminalAngles
+			if nonTerminalAngles < 0 {
+				nonTerminalAngles = 0
+			}
+			b.ReportMetric(float64(nonTerminalAngles), "poly_non_terminal_angles")
+			if nonTerminalAngles > 0 {
+				b.ReportMetric(float64(metrics.FallbackAngles)/float64(nonTerminalAngles), "poly_fallback_angle_ratio")
+			}
 			b.ReportMetric(float64(metrics.TerminalAngles)/float64(metrics.TotalAngles), "terminal_exact_angle_ratio")
 		}
 		b.ReportMetric(halfPiFallbackThreshold, "poly_fallback_threshold_rad")
