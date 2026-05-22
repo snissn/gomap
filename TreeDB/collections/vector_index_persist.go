@@ -12,8 +12,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 const (
@@ -25,7 +30,17 @@ const (
 	vectorIndexEdgesFile      = "edges.json"
 	vectorIndexTombstonesFile = "tombstones.json"
 	vectorIndexDocMapFile     = "docmap.json"
+
+	vectorIndexNativeKeyMeta           = "meta"
+	vectorIndexNativeKeyPrefixNode     = "node/"
+	vectorIndexNativeKeyPrefixEdge     = "edge/"
+	vectorIndexNativeKeyPrefixTomb     = "tomb/"
+	vectorIndexNativeKeyPrefixDoc      = "doc/"
+	vectorIndexNativeKeyOrdinalWidth   = 20
+	vectorIndexNativeKeyEdgeLayerWidth = 3
 )
+
+var errVectorIndexNotDeclared = errors.New("collections: vector index is not declared in collection metadata")
 
 // VectorIndexLoadStatus reports whether a persisted vector index loaded or why
 // callers should use exact search as the safe fallback.
@@ -33,6 +48,8 @@ type VectorIndexLoadStatus struct {
 	Loaded              bool
 	ExactFallbackReason string
 	ManifestPath        string
+	RootName            string
+	RootID              uint64
 	Epoch               uint64
 	BytesDisk           int64
 }
@@ -45,9 +62,112 @@ type VectorIndexPruneStatus struct {
 	RemovedBytes  int64
 }
 
-// SaveSnapshot persists the current in-memory vector index as an immutable
-// epoch and atomically publishes a manifest that points at it.
+// SaveSnapshot persists the current in-memory vector index. Declared collection
+// vector indexes use a native TreeDB collection root; ad hoc in-memory indexes
+// keep using the legacy sidecar snapshot path.
 func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
+	status, err := idx.SaveNativeSnapshot()
+	if err == nil || !errors.Is(err, errVectorIndexNotDeclared) {
+		return status, err
+	}
+	return idx.saveLegacySnapshot()
+}
+
+// SaveNativeSnapshot persists the current in-memory vector index as ordinary
+// TreeDB collection-root content and publishes that root through the collection
+// root descriptor system state.
+func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	if idx == nil {
+		return status, errors.New("collections: vector index is nil")
+	}
+	c := idx.collection
+	if c == nil {
+		return status, errCollectionNil
+	}
+	if c.db == nil {
+		return status, errCollectionDBNil
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return status, err
+	}
+
+	pin := c.db.AcquireSnapshot()
+	if pin == nil {
+		return status, backenddb.ErrClosed
+	}
+	defer func() { _ = pin.Close() }()
+	catalog, err := loadCollectionCatalog(pin, c.meta.Name)
+	if err != nil {
+		return status, err
+	}
+	if catalog == nil {
+		return status, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, idx.name)
+	if !ok {
+		return status, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, idx.name)
+	}
+	if reason := idx.validateNativeSnapshotDefinition(def); reason != "" {
+		return status, fmt.Errorf("collections: vector index %q does not match collection metadata: %s", idx.name, reason)
+	}
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, idx.name)
+	status.RootName = rootName
+	baseRoot := catalog.rootID(rootName)
+	baseRootIDs := map[string]uint64{rootName: baseRoot}
+	baseSystemRoot := snapshotSystemRoot(pin)
+	baseCommitSeq := snapshotCommitSeq(pin)
+	policy, err := collectionRootStoragePolicyForDB(c.db, catalog.meta, rootName)
+	if err != nil {
+		return status, err
+	}
+
+	snapshot, snapshotSeq := idx.persistSnapshot()
+	table, bytesDisk, err := buildVectorIndexNativeSnapshotTable(snapshot)
+	if err != nil {
+		return status, err
+	}
+	table.Freeze()
+	publishTable, pointerized, err := pointerizeCollectionRunTableValues(c.db, table)
+	if err != nil {
+		resetCollectionRunTable(table)
+		return status, err
+	}
+	if pointerized {
+		defer resetCollectionRunTable(publishTable)
+	}
+	iter := publishTable.NewIterator(nil, nil)
+	newSystemRoot, rootIDs, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder([]backenddb.OrderedRootDeltaPublishInput{{
+		// Native vector snapshots are full graph images. Publish a replacement
+		// root so keys removed by rebuild/shrink do not survive from prior roots.
+		BaseRoot:      0,
+		Iter:          iter,
+		StoragePolicy: policy,
+	}}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		return c.buildRootDescriptorSystemDeltaIteratorForMeta(catalog.meta, baseCommitSeq, baseSystemRoot, []string{rootName}, baseRootIDs, rootIDs)
+	})
+	_ = iter.Close()
+	resetCollectionRunTable(table)
+	if err != nil {
+		return status, err
+	}
+	if len(rootIDs) != 1 {
+		return status, unexpectedOrderedRootCountError(catalog.meta.Name, 1, len(rootIDs))
+	}
+	status.Loaded = true
+	status.RootID = rootIDs[0]
+	status.Epoch = rootIDs[0]
+	status.BytesDisk = bytesDisk
+	idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, []string{rootName}, rootIDs)
+	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return status, nil
+}
+
+func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
@@ -173,6 +293,78 @@ func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
 // with ExactFallbackReason set and no error, so callers can safely use exact
 // search as the correctness fallback.
 func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	index, status, err := c.LoadNativeVectorIndexSnapshot(opts)
+	if err != nil {
+		return nil, status, err
+	}
+	if index != nil || status.Loaded || status.ExactFallbackReason != "missing_vector_index_metadata" {
+		return index, status, nil
+	}
+	return c.loadLegacyVectorIndexSnapshot(opts)
+}
+
+// LoadNativeVectorIndexSnapshot loads a declared vector index from its TreeDB
+// collection root. Missing or invalid graph roots return a non-loaded status so
+// callers can safely fall back to exact search.
+func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
+	status := VectorIndexLoadStatus{}
+	if c == nil {
+		return nil, status, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, status, errCollectionDBNil
+	}
+	name := vectorIndexOptionName(opts)
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, status, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	if err != nil {
+		return nil, status, err
+	}
+	if catalog == nil {
+		return nil, status, errCollectionNotFound
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, name)
+	if !ok {
+		status.ExactFallbackReason = "missing_vector_index_metadata"
+		return nil, status, nil
+	}
+	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
+	status.RootName = rootName
+	rootID := catalog.rootID(rootName)
+	if rootID == 0 && len(catalog.overlayRootIDs(rootName)) == 0 {
+		status.ExactFallbackReason = "missing_graph_root"
+		return nil, status, nil
+	}
+	snapshot, bytesDisk, reason, err := readVectorIndexNativeSnapshot(snap, catalog, rootName)
+	if err != nil {
+		return nil, status, err
+	}
+	if reason != "" {
+		status.ExactFallbackReason = reason
+		return nil, status, nil
+	}
+	index, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		return nil, status, err
+	}
+	if reason := index.loadPersistSnapshot(snapshot); reason != "" {
+		status.ExactFallbackReason = reason
+		return nil, status, nil
+	}
+	status.Loaded = true
+	status.RootID = rootID
+	status.Epoch = rootID
+	status.BytesDisk = bytesDisk
+	index.recordLoadedSnapshot(status.Epoch, bytesDisk)
+	c.RegisterVectorIndex(index)
+	return index, status, nil
+}
+
+func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
 	status := VectorIndexLoadStatus{}
 	if c == nil {
 		return nil, status, errCollectionNil
@@ -513,6 +705,219 @@ func vectorIndexSnapshotBytes(manifestData []byte, entries []vectorIndexManifest
 		total += entry.Size
 	}
 	return total
+}
+
+func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (memtable.Table, int64, error) {
+	entryCount := 1 + len(snapshot.Nodes) + len(snapshot.Edges) + len(snapshot.Tombstones.NodeIDs) + len(snapshot.DocMap.Current)
+	table := newCollectionRunTable(entryCount)
+	var bytesDisk int64
+	add := func(key []byte, payload any) error {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		data = append(data, '\n')
+		bytesDisk += int64(len(data))
+		table.SetSteal(key, data)
+		return nil
+	}
+	if err := add([]byte(vectorIndexNativeKeyMeta), snapshot.Meta); err != nil {
+		return nil, 0, err
+	}
+	for i := range snapshot.Nodes {
+		if err := add(vectorIndexNativeNodeKey(i), snapshot.Nodes[i]); err != nil {
+			return nil, 0, err
+		}
+	}
+	for i := range snapshot.Edges {
+		edge := snapshot.Edges[i]
+		if err := add(vectorIndexNativeEdgeKey(edge.NodeID, edge.Layer), edge); err != nil {
+			return nil, 0, err
+		}
+	}
+	for _, nodeID := range snapshot.Tombstones.NodeIDs {
+		if err := add(vectorIndexNativeTombstoneKey(nodeID), nodeID); err != nil {
+			return nil, 0, err
+		}
+	}
+	for docID, nodeID := range snapshot.DocMap.Current {
+		if err := add(vectorIndexNativeDocKey(docID), nodeID); err != nil {
+			return nil, 0, err
+		}
+	}
+	return table, bytesDisk, nil
+}
+
+func readVectorIndexNativeSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string) (vectorIndexPersistSnapshot, int64, string, error) {
+	var snapshot vectorIndexPersistSnapshot
+	var bytesDisk int64
+	rawMeta, ok, err := collectionGetAppendAtCatalogRoot(snap, catalog, rootName, []byte(vectorIndexNativeKeyMeta), nil)
+	if err != nil {
+		return snapshot, 0, "", err
+	}
+	if !ok {
+		return snapshot, 0, "missing_graph_root_entry", nil
+	}
+	bytesDisk += int64(len(rawMeta))
+	if err := json.Unmarshal(rawMeta, &snapshot.Meta); err != nil {
+		return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+	}
+
+	nodes := make(map[int]vectorIndexPersistNode)
+	maxNodeID := -1
+	snapshot.DocMap.Current = make(map[string]int)
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, nil, nil, false)
+	if err != nil {
+		return snapshot, bytesDisk, "", err
+	}
+	if it == nil {
+		return snapshot, bytesDisk, "missing_graph_root", nil
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := it.KeyCopy(nil)
+		value := it.ValueCopy(nil)
+		if err := it.Error(); err != nil {
+			return snapshot, bytesDisk, "", err
+		}
+		if bytes.Equal(key, []byte(vectorIndexNativeKeyMeta)) {
+			it.Next()
+			continue
+		}
+		bytesDisk += int64(len(value))
+		switch {
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixNode)):
+			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixNode):]))
+			if !ok {
+				return snapshot, bytesDisk, "invalid_graph_root_key", nil
+			}
+			var node vectorIndexPersistNode
+			if err := json.Unmarshal(value, &node); err != nil {
+				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+			}
+			nodes[nodeID] = node
+			if nodeID > maxNodeID {
+				maxNodeID = nodeID
+			}
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixEdge)):
+			var edge vectorIndexPersistEdges
+			if err := json.Unmarshal(value, &edge); err != nil {
+				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+			}
+			snapshot.Edges = append(snapshot.Edges, edge)
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixTomb)):
+			nodeID, ok := parseVectorIndexNativeOrdinal(string(key[len(vectorIndexNativeKeyPrefixTomb):]))
+			if !ok {
+				return snapshot, bytesDisk, "invalid_graph_root_key", nil
+			}
+			snapshot.Tombstones.NodeIDs = append(snapshot.Tombstones.NodeIDs, nodeID)
+		case bytes.HasPrefix(key, []byte(vectorIndexNativeKeyPrefixDoc)):
+			var nodeID int
+			if err := json.Unmarshal(value, &nodeID); err != nil {
+				return snapshot, bytesDisk, "invalid_graph_root_entry", nil
+			}
+			snapshot.DocMap.Current[string(key[len(vectorIndexNativeKeyPrefixDoc):])] = nodeID
+		default:
+			return snapshot, bytesDisk, "invalid_graph_root_key", nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return snapshot, bytesDisk, "", err
+	}
+	if maxNodeID < 0 {
+		return snapshot, bytesDisk, "empty_index", nil
+	}
+	snapshot.Nodes = make([]vectorIndexPersistNode, maxNodeID+1)
+	for nodeID := 0; nodeID <= maxNodeID; nodeID++ {
+		node, ok := nodes[nodeID]
+		if !ok {
+			return snapshot, bytesDisk, "missing_graph_root_entry", nil
+		}
+		snapshot.Nodes[nodeID] = node
+	}
+	sort.Ints(snapshot.Tombstones.NodeIDs)
+	return snapshot, bytesDisk, "", nil
+}
+
+func vectorIndexNativeNodeKey(nodeID int) []byte {
+	return []byte(vectorIndexNativeKeyPrefixNode + formatVectorIndexNativeOrdinal(nodeID))
+}
+
+func vectorIndexNativeEdgeKey(nodeID, layer int) []byte {
+	return []byte(vectorIndexNativeKeyPrefixEdge + formatVectorIndexNativeOrdinal(nodeID) + "/" + formatVectorIndexNativeEdgeLayer(layer))
+}
+
+func vectorIndexNativeTombstoneKey(nodeID int) []byte {
+	return []byte(vectorIndexNativeKeyPrefixTomb + formatVectorIndexNativeOrdinal(nodeID))
+}
+
+func vectorIndexNativeDocKey(docID string) []byte {
+	key := make([]byte, 0, len(vectorIndexNativeKeyPrefixDoc)+len(docID))
+	key = append(key, vectorIndexNativeKeyPrefixDoc...)
+	key = append(key, docID...)
+	return key
+}
+
+func formatVectorIndexNativeOrdinal(value int) string {
+	return fmt.Sprintf("%0*d", vectorIndexNativeKeyOrdinalWidth, value)
+}
+
+func formatVectorIndexNativeEdgeLayer(value int) string {
+	return fmt.Sprintf("%0*d", vectorIndexNativeKeyEdgeLayerWidth, value)
+}
+
+func parseVectorIndexNativeOrdinal(value string) (int, bool) {
+	if len(value) != vectorIndexNativeKeyOrdinalWidth {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func vectorIndexOptionName(opts VectorIndexOptions) string {
+	if opts.Name != "" {
+		return opts.Name
+	}
+	return vectorIndexDefaultName(opts.Field)
+}
+
+func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOptions {
+	return VectorIndexOptions{
+		Name:           def.Name,
+		Field:          def.Field,
+		Metric:         def.Metric,
+		Dimensions:     def.Dimensions,
+		M:              def.M,
+		EfConstruction: def.EfConstruction,
+		EfSearch:       def.EfSearch,
+		Encoding:       def.Encoding,
+	}
+}
+
+func (idx *VectorIndex) validateNativeSnapshotDefinition(def VectorIndexDefinition) string {
+	if idx == nil {
+		return "nil_index"
+	}
+	if def.Field != idx.field {
+		return "field_mismatch"
+	}
+	if def.Metric != idx.metric {
+		return "metric_mismatch"
+	}
+	if def.Encoding != idx.encoding {
+		return "encoding_mismatch"
+	}
+	if def.Dimensions != idx.dimensions {
+		return "dimension_mismatch"
+	}
+	if def.M != idx.m || def.EfConstruction != idx.efConstruction || def.EfSearch != idx.efSearch {
+		return "hnsw_param_mismatch"
+	}
+	return ""
 }
 
 func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, snapshotSeq uint64) {

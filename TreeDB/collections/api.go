@@ -3171,14 +3171,15 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	clearedRootNames := []string{collectionVectorIndexRootName(baseMeta.Name, name)}
 	newSystemRoot, _, err := c.db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
-		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, nil)
+		return c.buildSchemaOnlySystemDeltaIterator(baseMeta, encodedMeta, clearedRootNames)
 	})
 	if err != nil {
 		return nil, err
 	}
 	c.meta = newMeta
-	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, nil, nil)
+	nextCatalog := cloneCatalogWithRootUpdates(catalog, newMeta, clearedRootNames, []uint64{0})
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	return newMeta.copy(), nil
@@ -17991,6 +17992,11 @@ func collectionRootStoragePolicyForDB(db *backenddb.DB, meta CollectionMeta, roo
 			return backendRootStoragePolicy(idx.StoragePolicy)
 		}
 	}
+	for _, idx := range meta.VectorIndexes {
+		if rootName == collectionVectorIndexRootName(meta.Name, idx.Name) {
+			return backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
+		}
+	}
 	return backenddb.OrderedRootStorageDefault, fmt.Errorf("collections: unknown collection root %q for %q", rootName, meta.Name)
 }
 
@@ -18773,6 +18779,9 @@ func collectionRootNames(meta CollectionMeta) []string {
 	for _, idx := range meta.Indexes {
 		out = append(out, collectionSecondaryRootName(meta.Name, idx.Name))
 	}
+	for _, idx := range meta.VectorIndexes {
+		out = append(out, collectionVectorIndexRootName(meta.Name, idx.Name))
+	}
 	return out
 }
 
@@ -18790,6 +18799,10 @@ func collectionIndexStateRootName(collection string) string {
 
 func collectionSecondaryRootName(collection, indexName string) string {
 	return collection + "/index/" + indexName
+}
+
+func collectionVectorIndexRootName(collection, indexName string) string {
+	return collection + "/vector-index/" + indexName
 }
 
 func systemCollectionMetaKey(collection string) string {
