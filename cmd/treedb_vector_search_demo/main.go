@@ -39,6 +39,7 @@ const (
 	defaultEfSearch              = 128
 	defaultValuePointerThreshold = 1024
 	defaultLeafGenerationTarget  = 4 << 20
+	nativeRuntimeSnapshotPath    = collections.VectorIndexSearchPath("native_runtime_snapshot")
 )
 
 type config struct {
@@ -860,6 +861,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		if loadStatus.RootID == 0 {
 			return result{}, fmt.Errorf("native vector root loaded with zero root id: %+v", loadStatus)
 		}
+		res.VectorIndexSearchPath = nativeRuntimeSnapshotPath
 		res.IndexStatsLoaded = loaded.Stats()
 		status, err := col.VectorIndexStatus(def.Name)
 		if err != nil {
@@ -2086,7 +2088,7 @@ func resultSearchPath(res result) string {
 	if res.VectorIndexSearchPath != "" {
 		return string(res.VectorIndexSearchPath)
 	}
-	return "native_runtime_snapshot"
+	return string(nativeRuntimeSnapshotPath)
 }
 
 func printSearchBenchmarks(w io.Writer, benchmarks []searchBenchmarkResult) {
