@@ -373,7 +373,11 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			return fmt.Errorf("colgranule: missing column %s", column.Name)
 		}
 		enc.str(column.Name)
-		enc.u16(uint16(columnTypeCode(column.Type)))
+		columnType, err := columnTypeCode(column.Type)
+		if err != nil {
+			return err
+		}
+		enc.u16(columnType)
 		cardinality, err := imageColumnCardinalityForDescriptor(column, partColumn)
 		if err != nil {
 			return err
@@ -809,16 +813,16 @@ func durationNanos(d time.Duration) int64 {
 	return int64(d)
 }
 
-func columnTypeCode(t ColumnType) uint16 {
+func columnTypeCode(t ColumnType) (uint16, error) {
 	switch t {
 	case ColumnTypeInt64:
-		return 1
+		return 1, nil
 	case ColumnTypeLowCardinalityCode:
-		return 2
+		return 2, nil
 	case ColumnTypeBool:
-		return 3
+		return 3, nil
 	default:
-		return 0
+		return 0, fmt.Errorf("colgranule: unsupported column type %s", t)
 	}
 }
 

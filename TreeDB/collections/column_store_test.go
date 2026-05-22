@@ -414,6 +414,41 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "column manifest root descriptor",
 		},
 		{
+			name: "aggregate min missing group column",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", Kind: ColumnAggregateMin}},
+			},
+			want: "requires a group column",
+		},
+		{
+			name: "aggregate min group column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin}},
+			},
+			want: "group column",
+		},
+		{
+			name: "aggregate min value column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueString},
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "min_time_us", Column: "time_us", GroupColumn: "did", Kind: ColumnAggregateMin}},
+			},
+			want: "value column",
+		},
+		{
 			name: "invalid asset namespace traversal",
 			cfg: &ColumnStoreConfig{
 				Enabled:      true,
