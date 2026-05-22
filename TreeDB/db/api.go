@@ -312,6 +312,9 @@ func (db *DB) ColumnAssetRootDir() string {
 	if db == nil {
 		return ""
 	}
+	if db.columnAssetRootDir != "" {
+		return db.columnAssetRootDir
+	}
 	return ColumnAssetRootDirPath(db.dir)
 }
 
