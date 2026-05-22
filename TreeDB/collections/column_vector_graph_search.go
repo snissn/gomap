@@ -31,16 +31,19 @@ type columnVectorGraphNativeSearchOptions struct {
 }
 
 type columnVectorGraphNativeSearchStats struct {
-	Candidates       uint64
-	Edges            uint64
-	CandidateFetches uint64
-	ExpansionFetches uint64
-	ResultFetches    uint64
-	ScoreBatches     uint64
-	OrdinalsGrouped  uint64
-	BlockViewHits    uint64
-	BlockViewMisses  uint64
-	BlockViewBuilds  uint64
+	Candidates              uint64
+	Edges                   uint64
+	CandidateFetches        uint64
+	ExpansionFetches        uint64
+	ResultFetches           uint64
+	ScoreBatches            uint64
+	OrdinalsGrouped         uint64
+	BlockViewHits           uint64
+	BlockViewMisses         uint64
+	BlockViewBuilds         uint64
+	AdjacencyExpansions     uint64
+	AdjacencyScratchDecodes uint64
+	AdjacencyDirectViews    uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -53,9 +56,8 @@ type columnVectorGraphNativeSearchResult struct {
 }
 
 type columnVectorGraphSearchCandidate struct {
-	ordinal   int
-	score     float64
-	adjacency []uint32
+	ordinal int
+	score   float64
 }
 
 // columnVectorGraphNativeSearchScratch is caller-owned mutable search state.
@@ -73,7 +75,6 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
-	adjacencyBuf   []uint32
 	searchPlan     columnVectorGraphSearchPlan
 }
 
@@ -100,20 +101,12 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	if frontierCap < topK {
 		frontierCap = topK
 	}
-	adjacencyCap := 0
-	if frontierCap > 0 && degree > 0 {
-		if frontierCap > math.MaxInt/degree {
-			return fmt.Errorf("collections: column_graph native search adjacency scratch overflows: frontierCap=%d degree=%d", frontierCap, degree)
-		}
-		adjacencyCap = frontierCap * degree
-	}
 	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
 	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topK)
 	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
-	s.adjacencyBuf = resizeColumnVectorGraphNativeUint32Scratch(s.adjacencyBuf, adjacencyCap)
 	return nil
 }
 
@@ -137,19 +130,10 @@ func prepareColumnVectorGraphNativeRowScratch(s *columnPhysicalRowReaderScratch,
 }
 
 func resizeColumnVectorGraphNativeCandidateScratch(dst []columnVectorGraphSearchCandidate, target int) []columnVectorGraphSearchCandidate {
-	if len(dst) > 0 {
-		clearColumnVectorGraphNativeCandidateAdjacencyRefs(dst)
-	}
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]columnVectorGraphSearchCandidate, 0, target)
 	}
 	return dst[:0]
-}
-
-func clearColumnVectorGraphNativeCandidateAdjacencyRefs(candidates []columnVectorGraphSearchCandidate) {
-	for i := range candidates {
-		candidates[i].adjacency = nil
-	}
 }
 
 func resizeColumnVectorGraphNativeResultScratch(dst []columnVectorGraphNativeSearchResult, target int) []columnVectorGraphNativeSearchResult {
@@ -285,9 +269,11 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			}
 			continue
 		}
-		// Candidate scoring fetches adjacency once into scratch-owned storage;
-		// expansion validates and consumes that copy without a second row fetch.
-		for i, neighbor := range candidate.adjacency {
+		adjacency, err := r.expandCandidateAdjacency(plan, candidate.ordinal, scratch, &stats)
+		if err != nil {
+			return nil, stats, err
+		}
+		for i, neighbor := range adjacency {
 			if stats.Candidates >= uint64(efSearch) {
 				break
 			}
@@ -399,12 +385,6 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(plan *columnVe
 		if err != nil {
 			return err
 		}
-		scratch.scoreScratch.Uint32Values = scratch.scoreScratch.Uint32Values[:0]
-		adjacency, adjacencyScratch, err := view.adjacency(ref.rowIndex, scratch.scoreScratch.Uint32Values)
-		if err != nil {
-			return err
-		}
-		scratch.scoreScratch.Uint32Values = adjacencyScratch
 		stats.CandidateFetches++
 		score, err := columnVectorGraphNativeCosineScore(query, queryInvNorm, columnVectorGraphPhysicalRow{Ordinal: ordinal, Vector: vector, InvNorm: invNorm})
 		if err != nil {
@@ -415,9 +395,8 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(plan *columnVe
 		}
 		stats.Candidates++
 		candidate := columnVectorGraphSearchCandidate{
-			ordinal:   ordinal,
-			score:     score,
-			adjacency: scratch.copyCandidateAdjacency(adjacency),
+			ordinal: ordinal,
+			score:   score,
 		}
 		scratch.insertTop(topK, candidate)
 		scratch.pushFrontier(candidate)
@@ -425,21 +404,24 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontier(plan *columnVe
 	return nil
 }
 
-func (s *columnVectorGraphNativeSearchScratch) copyCandidateAdjacency(adjacency []uint32) []uint32 {
-	start := len(s.adjacencyBuf)
-	need := start + len(adjacency)
-	if need > cap(s.adjacencyBuf) {
-		nextCap := cap(s.adjacencyBuf) * 2
-		if nextCap < need {
-			nextCap = need
-		}
-		next := make([]uint32, len(s.adjacencyBuf), nextCap)
-		copy(next, s.adjacencyBuf)
-		s.adjacencyBuf = next
+func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacency(plan *columnVectorGraphSearchPlan, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]uint32, error) {
+	view, ref, err := plan.blockViewForOrdinal(ordinal)
+	if err != nil {
+		return nil, err
 	}
-	s.adjacencyBuf = s.adjacencyBuf[:need]
-	copy(s.adjacencyBuf[start:need], adjacency)
-	return s.adjacencyBuf[start:need]
+	scratch.expandScratch.Uint32Values = scratch.expandScratch.Uint32Values[:0]
+	adjacency, adjacencyScratch, err := view.adjacency(ref.rowIndex, scratch.expandScratch.Uint32Values)
+	if err != nil {
+		return nil, err
+	}
+	scratch.expandScratch.Uint32Values = adjacencyScratch
+	stats.ExpansionFetches++
+	stats.AdjacencyExpansions++
+	stats.AdjacencyScratchDecodes++
+	stats.BlockViewHits = plan.hits
+	stats.BlockViewMisses = plan.misses
+	stats.BlockViewBuilds = plan.builds
+	return adjacency, nil
 }
 
 func (s *columnVectorGraphNativeSearchScratch) markVisited(ordinal int) bool {
@@ -462,7 +444,6 @@ func (s *columnVectorGraphNativeSearchScratch) popFrontier() (columnVectorGraphS
 	lastIdx := len(s.frontier) - 1
 	best := s.frontier[0]
 	last := s.frontier[lastIdx]
-	s.frontier[lastIdx].adjacency = nil
 	s.frontier = s.frontier[:lastIdx]
 	if len(s.frontier) > 0 {
 		s.frontier[0] = last
