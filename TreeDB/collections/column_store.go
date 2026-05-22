@@ -123,6 +123,12 @@ type ColumnAssetReadIntegrity string
 
 const (
 	ColumnAssetReadIntegrityVerify ColumnAssetReadIntegrity = "verify"
+	// ColumnAssetReadIntegrityCachedVerify verifies each immutable typed asset
+	// ref on first process read, then skips repeated hot-read CRC work for the
+	// same ref. It is a benchmark-relaxed mode: post-verification file
+	// corruption can be missed until the cache entry is evicted or the process
+	// restarts.
+	ColumnAssetReadIntegrityCachedVerify ColumnAssetReadIntegrity = "cached_verify"
 	// ColumnAssetReadIntegritySkipChecksums is an unsafe relaxed hot-read mode
 	// for benchmark/performance attribution. It skips per-read payload checksum
 	// verification and may skip redundant per-row tags after the asset header and
