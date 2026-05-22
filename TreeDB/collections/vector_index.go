@@ -2534,9 +2534,9 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 	}
 	defer func() { _ = materializer.Close() }()
 
-	estimatedDocs := opts.TopK
+	estimatedDocs := 0
 	idx.mu.RLock()
-	if liveDocs := len(idx.currentNode); liveDocs > estimatedDocs {
+	if liveDocs := len(idx.currentNode); liveDocs > 0 {
 		estimatedDocs = liveDocs
 	}
 	idx.mu.RUnlock()
