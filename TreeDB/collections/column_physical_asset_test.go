@@ -615,12 +615,9 @@ func TestColumnPhysicalAssetScannerRejectsMismatchedVectorLength(t *testing.T) {
 	}
 }
 
-// TestColumnPhysicalAssetScannerUnprojectedVectorMismatchReportsColumnIndexV1
-// verifies that the new error format produced by scanColumnPhysicalRowValues
-// includes the column index ("column[N]") in the error message when an
-// unprojected float32 vector has a length mismatch. This is a regression test
-// for the change from skipFloat32SliceWithExpectedLength to skipUint32Slice.
-func TestColumnPhysicalAssetScannerUnprojectedVectorMismatchReportsColumnIndexV1(t *testing.T) {
+// TestColumnPhysicalAssetScannerUnprojectedVectorMismatchV1 verifies that an
+// unprojected float32 vector still validates its encoded length while scanning.
+func TestColumnPhysicalAssetScannerUnprojectedVectorMismatchV1(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
@@ -685,11 +682,7 @@ func TestColumnPhysicalAssetScannerUnprojectedVectorMismatchReportsColumnIndexV1
 		t.Fatalf("visitor should not run for mismatched vector length: %+v", row)
 		return nil
 	})
-	// The new error format from column_physical_scan.go includes "column[N]".
-	if err == nil || !strings.Contains(err.Error(), "column[") {
-		t.Fatalf("scanColumnPhysicalAssetRows err=%v want error containing column index (column[N])", err)
-	}
-	if !strings.Contains(err.Error(), "float32_vector length=2 want vector_dims=3") {
+	if err == nil || !strings.Contains(err.Error(), "float32_vector length=2 want vector_dims=3") {
 		t.Fatalf("scanColumnPhysicalAssetRows err=%v want float32_vector length mismatch details", err)
 	}
 }

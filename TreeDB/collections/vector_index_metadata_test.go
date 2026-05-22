@@ -10,10 +10,9 @@ import (
 
 var vectorIndexStatusBenchSink VectorIndexStatus
 
-// TestCollectionMetaVersionIsV2 verifies that the collection metadata version
-// written to disk is 2 after the PR downgrade from 3. It also verifies that a
-// document with a different version is rejected on decode.
-func TestCollectionMetaVersionIsV2(t *testing.T) {
+// TestCollectionMetaVersionMatchesCurrent verifies that the collection metadata
+// version written to disk matches the current on-disk metadata version.
+func TestCollectionMetaVersionMatchesCurrent(t *testing.T) {
 	raw, err := encodeCollectionMeta(CollectionMeta{Name: "docs"})
 	if err != nil {
 		t.Fatalf("encodeCollectionMeta: %v", err)
@@ -22,15 +21,15 @@ func TestCollectionMetaVersionIsV2(t *testing.T) {
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatalf("unmarshal collectionMetaDisk: %v", err)
 	}
-	if disk.Version != 2 {
-		t.Fatalf("collection metadata version=%d want 2", disk.Version)
+	if disk.Version != collectionMetaVersion {
+		t.Fatalf("collection metadata version=%d want %d", disk.Version, collectionMetaVersion)
 	}
 }
 
-// TestCollectionMetaDecodeRejectsWrongVersionV2 verifies that decodeCollectionMeta
-// returns an error when the on-disk version does not match collectionMetaVersion (2).
-func TestCollectionMetaDecodeRejectsWrongVersionV2(t *testing.T) {
-	for _, version := range []int{1, 3, 99} {
+// TestCollectionMetaDecodeRejectsWrongVersion verifies that decodeCollectionMeta
+// returns an error when the on-disk version does not match collectionMetaVersion.
+func TestCollectionMetaDecodeRejectsWrongVersion(t *testing.T) {
+	for _, version := range []int{1, 2, 99} {
 		wrong, err := json.Marshal(collectionMetaDisk{Version: version, Name: "docs"})
 		if err != nil {
 			t.Fatalf("marshal wrong version: %v", err)
@@ -41,9 +40,9 @@ func TestCollectionMetaDecodeRejectsWrongVersionV2(t *testing.T) {
 	}
 }
 
-// TestCollectionMetaVersionPreservedAfterRoundTripV2 verifies that
-// creating and decoding a collection meta round-trips cleanly with version 2.
-func TestCollectionMetaVersionPreservedAfterRoundTripV2(t *testing.T) {
+// TestCollectionMetaVersionPreservedAfterRoundTrip verifies that
+// creating and decoding a collection meta round-trips cleanly.
+func TestCollectionMetaVersionPreservedAfterRoundTrip(t *testing.T) {
 	original := CollectionMeta{
 		Name: "roundtrip",
 		VectorIndexes: []VectorIndexDefinition{{
