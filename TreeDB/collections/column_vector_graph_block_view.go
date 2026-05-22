@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unsafe"
 )
 
 var errColumnVectorGraphBlockViewRowOutOfBounds = errors.New("column_graph block view row outside block")
@@ -421,10 +422,11 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 	if span.count == 0 {
 		return nil, scratch, true, nil
 	}
-	if v.adjacencyLittleEndian() && columnPhysicalNativeLittleEndian {
-		raw := v.block.raw[span.start:span.end]
-		adjacency := unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(raw))), span.count)
-		return adjacency, scratch, true, nil
+	if v.adjacencyLittleEndian() {
+		adjacency, ok := columnVectorGraphLittleEndianUint32DirectView(v.block.raw[span.start:span.end], span.count)
+		if ok {
+			return adjacency, scratch, true, nil
+		}
 	}
 	base := len(scratch)
 	need := base + span.count
@@ -448,6 +450,17 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 		pos += 4
 	}
 	return scratch[base:], scratch, false, nil
+}
+
+func columnVectorGraphLittleEndianUint32DirectView(raw []byte, count int) ([]uint32, bool) {
+	if !columnPhysicalNativeLittleEndian || count <= 0 || len(raw) != count*4 {
+		return nil, false
+	}
+	ptr := unsafe.Pointer(unsafe.SliceData(raw))
+	if uintptr(ptr)%unsafe.Alignof(uint32(0)) != 0 {
+		return nil, false
+	}
+	return unsafe.Slice((*uint32)(ptr), count), true
 }
 
 func (v *columnVectorGraphBlockView) adjacencyLittleEndian() bool {
