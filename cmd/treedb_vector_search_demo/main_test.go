@@ -88,6 +88,19 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 }
 
+func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
+	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
+	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v1" {
+		t.Fatalf("required features=%v, want command_wal_v1", cfg.RequiredFeatures)
+	}
+	if !cfg.IndexOuterLeavesInValueLog || !cfg.LeafPrefixCompression || !cfg.IndexColumnarLeaves || !cfg.IndexPackedValuePtr || cfg.IndexInternalBaseDelta {
+		t.Fatalf("index format config lost bench profile knobs: %+v", cfg)
+	}
+	if cfg.ValueLogCompression != "auto" || cfg.ValueLogBlockCodec != "snappy" || cfg.ValueLogAutoPolicy != "balanced" {
+		t.Fatalf("value-log format config lost bench profile knobs: %+v", cfg)
+	}
+}
+
 func TestExecuteConsumesDatasetDir(t *testing.T) {
 	datasetDir := writeDemoDataset(t, 64, 8, 4, 3)
 	res, err := execute(context.Background(), config{
@@ -182,6 +195,9 @@ func TestRunJSONOutput(t *testing.T) {
 	}
 	if res.Profile != "bench" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
+	}
+	if res.VectorIndexSearchPath != nativeRuntimeSnapshotPath {
+		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, nativeRuntimeSnapshotPath)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -708,6 +724,9 @@ func TestRunTextOutput(t *testing.T) {
 	for _, want := range []string{
 		"TreeDB vector search demo",
 		"profile=bench",
+		"backend=treedb",
+		"vector_index_strategy=native_runtime",
+		"vector_index_search_path=native_runtime_snapshot",
 		"value_pointer_threshold=1024",
 		"leaf_generation_segment_target=4194304",
 		"Storage",
