@@ -632,6 +632,17 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 
+	if result, ok, err := runColumnDictionaryCodeGroupCountOneShot(view, req, &readCache); ok {
+		result.Diagnostics.SegmentFileCacheHits = readCache.hits
+		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+		return result, true, err
+	}
+	if result, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, req, &readCache); ok {
+		result.Diagnostics.SegmentFileCacheHits = readCache.hits
+		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+		return result, true, err
+	}
+
 	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
