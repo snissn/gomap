@@ -62,9 +62,9 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 		{
 			name:       "q4b",
 			hashName:   "q4b",
-			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"},
+			req:        ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "max_time_us"},
 			wantCount:  12,
-			wantDirect: true,
+			wantDirect: false,
 		},
 		{
 			name:       "q5",
@@ -105,7 +105,8 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			if result.Diagnostics.WorkerCount != 1 {
 				t.Fatalf("%s worker count=%d want 1 diagnostics=%+v", tc.name, result.Diagnostics.WorkerCount, result.Diagnostics)
 			}
-			if tc.name != "q5_metadata" && result.Diagnostics.DecodedBlocks == 0 {
+			wantMetadata := tc.name == "q4b" || tc.name == "q5_metadata"
+			if !wantMetadata && result.Diagnostics.DecodedBlocks == 0 {
 				t.Fatalf("%s decoded blocks=0 diagnostics=%+v", tc.name, result.Diagnostics)
 			}
 			if tc.wantDirect && result.Diagnostics.DirectReduceBlocks != result.Diagnostics.DecodedBlocks {
@@ -114,7 +115,7 @@ func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 			if !tc.wantDirect && result.Diagnostics.DirectReduceBlocks != 0 {
 				t.Fatalf("%s direct reduce blocks=%d want zero for non-vectorized shape diagnostics=%+v", tc.name, result.Diagnostics.DirectReduceBlocks, result.Diagnostics)
 			}
-			if tc.name == "q5_metadata" {
+			if wantMetadata {
 				if result.Diagnostics.MetadataHits == 0 {
 					t.Fatalf("%s metadata hits=0 diagnostics=%+v", tc.name, result.Diagnostics)
 				}

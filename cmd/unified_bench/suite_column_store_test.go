@@ -1383,7 +1383,8 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {
-				if tc.forcedPath == columnStorePathAggregateMetadata && q.Name != columnStoreQueryQ5Metadata {
+				metadataFastPath := q.Name == columnStoreQueryQ4B || q.Name == columnStoreQueryQ5Metadata
+				if tc.forcedPath == columnStorePathAggregateMetadata && !metadataFastPath {
 					if q.PlanLabel != columnStorePathSerialColumnScan {
 						t.Fatalf("query %s plan_label=%q want %q under aggregate_metadata forced path", q.Name, q.PlanLabel, columnStorePathSerialColumnScan)
 					}
@@ -1412,6 +1413,16 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				}
 			}
 			if tc.forcedPath == columnStorePathAggregateMetadata {
+				q4b := queryMetrics[columnStoreQueryQ4B]
+				if q4b.PlanLabel != columnStorePathAggregateMetadata {
+					t.Fatalf("q4b plan_label=%q want %q", q4b.PlanLabel, columnStorePathAggregateMetadata)
+				}
+				if q4b.MetadataHits == 0 {
+					t.Fatalf("q4b metadata_hits=0 want aggregate metadata fast path: %+v", q4b)
+				}
+				if !strings.Contains(q4b.ThroughputInterpretation, "metadata-bound") {
+					t.Fatalf("q4b throughput_interpretation=%q want metadata-bound aggregate classification", q4b.ThroughputInterpretation)
+				}
 				interpretation := queryMetrics[columnStoreQueryQ5Metadata].ThroughputInterpretation
 				if queryMetrics[columnStoreQueryQ5Metadata].MetadataHits > 0 {
 					if !strings.Contains(interpretation, "metadata-bound") {
@@ -1997,12 +2008,19 @@ func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testi
 	for _, agg := range cfg.AggregateMetadata {
 		registered[agg.Name] = true
 	}
-	name := columnStoreSuiteAggregateMetadataName("q5_metadata")
+	name := columnStoreSuiteAggregateMetadataName(columnStoreQueryQ5Metadata)
 	if name == "" {
 		t.Fatal("q5_metadata did not request aggregate metadata")
 	}
 	if !registered[name] {
 		t.Fatalf("q5_metadata requested aggregate metadata %q outside registered names", name)
+	}
+	name = columnStoreSuiteAggregateMetadataName(columnStoreQueryQ4B)
+	if name == "" {
+		t.Fatal("q4b did not request aggregate metadata")
+	}
+	if !registered[name] {
+		t.Fatalf("q4b requested aggregate metadata %q outside registered names", name)
 	}
 }
 
