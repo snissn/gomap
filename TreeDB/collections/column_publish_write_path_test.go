@@ -696,10 +696,11 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	insertLSN := d.State().AppliedCommandLSN
 	assertColumnManifestStateM10B(t, col, 1, insertLSN, mgr)
 	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
-	if len(refs) != 1 {
+	physicalRefs := columnManifestPhysicalAssetRefsForTestM1634(refs)
+	if len(physicalRefs) != 1 {
 		t.Fatalf("manifest refs=%+v, want one physical asset ref", refs)
 	}
-	ref := refs[0]
+	ref := physicalRefs[0]
 	if ref.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace || ref.Length <= 0 {
 		t.Fatalf("invalid physical asset ref: %+v", ref)
 	}
@@ -730,12 +731,13 @@ func TestColumnStoreCommandWALWritesPhysicalColumnAssetsM12A(t *testing.T) {
 	reopened := openColumnStoreCollectionM10B(t, reopen)
 	assertColumnManifestStateM10B(t, reopened, 1, insertLSN)
 	reopenRefs := columnManifestAssetRefsForCollectionM12A(t, reopen, reopened)
-	if len(reopenRefs) != 1 || reopenRefs[0] != ref {
+	reopenPhysicalRefs := columnManifestPhysicalAssetRefsForTestM1634(reopenRefs)
+	if len(reopenPhysicalRefs) != 1 || reopenPhysicalRefs[0] != ref {
 		t.Fatalf("reopen refs=%+v want %+v", reopenRefs, []ColumnAssetRef{ref})
 	}
 	reopenSnapshot := columnManifestSnapshotForCollectionM12A(t, reopen, reopened)
-	if reopenSnapshot.Generation != 1 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenRefs[0] {
-		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenRefs[0])
+	if reopenSnapshot.Generation != 1 || len(reopenSnapshot.Parts) != 1 || reopenSnapshot.Parts[0].AssetRef != reopenPhysicalRefs[0] {
+		t.Fatalf("reopen snapshot generation=%d parts=%+v, want only active generation ref %+v", reopenSnapshot.Generation, reopenSnapshot.Parts, reopenPhysicalRefs[0])
 	}
 	reopenRaw, err := readColumnPhysicalAssetFromManager(reopen.ColumnAssetRootDir(), reopenRefs[0])
 	if err != nil {
@@ -1860,6 +1862,16 @@ func columnManifestAssetRefsForCollectionM12A(t testing.TB, d *backenddb.DB, col
 		t.Fatalf("enumerateColumnManifestAssetRefs: %v", err)
 	}
 	return refs
+}
+
+func columnManifestPhysicalAssetRefsForTestM1634(refs []ColumnAssetRef) []ColumnAssetRef {
+	out := make([]ColumnAssetRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Kind == ColumnAssetKindTCS1PartImage {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 func columnManifestAllPartsForCollectionM12C(t testing.TB, d *backenddb.DB, col *Collection) []columnManifestPartSnapshot {

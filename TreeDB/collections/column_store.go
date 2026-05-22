@@ -149,9 +149,10 @@ type ColumnSortKey struct {
 }
 
 type ColumnAggregateMetadata struct {
-	Name   string              `json:"name"`
-	Column string              `json:"column,omitempty"`
-	Kind   ColumnAggregateKind `json:"kind"`
+	Name        string              `json:"name"`
+	Column      string              `json:"column,omitempty"`
+	GroupColumn string              `json:"group_column,omitempty"`
+	Kind        ColumnAggregateKind `json:"kind"`
 }
 
 type ColumnAssetManagerConfig struct {
@@ -377,6 +378,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		return nil
 	}
 	columnNames := make(map[string]struct{}, len(cfg.Columns))
+	columnTypes := make(map[string]ColumnStoreValueType, len(cfg.Columns))
 	columnPaths := make(map[string]struct{}, len(cfg.Columns))
 	for i := range cfg.Columns {
 		col := cfg.Columns[i]
@@ -396,6 +398,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			return fmt.Errorf("collections: duplicate column path %q", col.Path)
 		}
 		columnNames[col.Name] = struct{}{}
+		columnTypes[col.Name] = col.ValueType
 		columnPaths[col.Path] = struct{}{}
 	}
 	for _, sortKey := range cfg.SortKey {
@@ -418,8 +421,16 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 				return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 			}
 		}
+		if aggregate.GroupColumn != "" {
+			if _, ok := columnNames[aggregate.GroupColumn]; !ok {
+				return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
+			}
+		}
 		if err := validateColumnAggregateKind(aggregate.Kind, aggregate.Column); err != nil {
 			return fmt.Errorf("collections: invalid aggregate metadata %q: %w", aggregate.Name, err)
+		}
+		if err := validateColumnAggregateMetadataPhysicalSpec(aggregate, columnTypes); err != nil {
+			return err
 		}
 		if _, ok := aggregateNames[aggregate.Name]; ok {
 			return fmt.Errorf("collections: duplicate aggregate metadata %q", aggregate.Name)
@@ -526,6 +537,30 @@ func validateColumnAggregateKind(kind ColumnAggregateKind, column string) error 
 	default:
 		return fmt.Errorf("unsupported aggregate kind %q", kind)
 	}
+}
+
+func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetadata, columnTypes map[string]ColumnStoreValueType) error {
+	switch aggregate.Kind {
+	case ColumnAggregateMin, ColumnAggregateMax:
+		if aggregate.GroupColumn == "" {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q requires a group column", aggregate.Name, aggregate.Kind)
+		}
+		groupType, ok := columnTypes[aggregate.GroupColumn]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
+		}
+		if groupType != ColumnStoreValueString {
+			return fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, groupType, ColumnStoreValueString)
+		}
+		valueType, ok := columnTypes[aggregate.Column]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+		}
+		if valueType != ColumnStoreValueInt64 {
+			return fmt.Errorf("collections: aggregate metadata %q value column %q has type %q, want %q", aggregate.Name, aggregate.Column, valueType, ColumnStoreValueInt64)
+		}
+	}
+	return nil
 }
 
 func validateColumnManifestIdentity(identity ColumnManifestIdentity) error {
@@ -822,6 +857,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 	for _, aggregate := range cfg.AggregateMetadata {
 		writeHashString(&d, aggregate.Name)
 		writeHashString(&d, aggregate.Column)
+		writeHashString(&d, aggregate.GroupColumn)
 		writeHashString(&d, string(aggregate.Kind))
 	}
 	if cfg.AssetManager != nil {

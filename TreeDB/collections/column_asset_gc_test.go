@@ -560,8 +560,9 @@ func TestColumnAssetGCRetainsSupersededSegmentWhileOlderSnapshotPinnedM15C(t *te
 	if err != nil {
 		t.Fatalf("scanColumnPhysicalRowsAtSnapshot pinned: %v", err)
 	}
-	if diag.RowsScanned != 2 || diag.AssetRefs != len(beforeRefs) {
-		t.Fatalf("pinned diag=%+v want 2 rows and %d old refs", diag, len(beforeRefs))
+	beforePhysicalRefs := columnManifestPhysicalAssetRefsForTestM1634(beforeRefs)
+	if diag.RowsScanned != 2 || diag.AssetRefs != len(beforePhysicalRefs) {
+		t.Fatalf("pinned diag=%+v want 2 rows and %d old physical refs", diag, len(beforePhysicalRefs))
 	}
 	if err := pinned.Close(); err != nil {
 		t.Fatalf("Close pinned snapshot: %v", err)

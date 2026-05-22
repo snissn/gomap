@@ -399,7 +399,7 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 			return columnAssetRewriteCopyResult{}, fmt.Errorf("collections: column asset rewrite read generation=%d part_id=%d: %w", oldRef.Generation, oldRef.PartID, err)
 		}
 		rawScratch = raw
-		newRef, err := appender.append(raw, oldRef.Generation, oldRef.PartID)
+		newRef, err := appender.appendKind(raw, oldRef.Kind, oldRef.Generation, oldRef.PartID)
 		if err != nil {
 			return columnAssetRewriteCopyResult{}, err
 		}
@@ -444,8 +444,8 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 
 func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	for idx, ref := range refs {
-		if ref.Kind != ColumnAssetKindTCS1PartImage {
-			return fmt.Errorf("collections: column asset rewrite supports only %s refs: ref %d kind %q", ColumnAssetKindTCS1PartImage, idx, ref.Kind)
+		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1AggregateMetadata {
+			return fmt.Errorf("collections: column asset rewrite supports only physical part or aggregate metadata refs: ref %d kind %q", idx, ref.Kind)
 		}
 	}
 	return nil
@@ -474,16 +474,26 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 		if !inPlace {
 			patched[i] = record
 		}
-		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+		isPart := bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes)
+		isMetadata := bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes)
+		if !isPart && !isMetadata {
 			continue
 		}
 		oldRef, offsets, err := columnAssetRewriteManifestPartRefForPatch(record.value, expectedNamespace)
 		if err != nil {
 			return nil, 0, err
 		}
-		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
-		if err != nil {
-			return nil, 0, err
+		var keyGeneration, keyPartID uint64
+		if isPart {
+			keyGeneration, keyPartID, err = columnManifestPartKeyFromRecordKeyForScan(record.key)
+			if err != nil {
+				return nil, 0, err
+			}
+		} else {
+			keyGeneration, keyPartID, _, err = columnManifestAggregateMetadataKeyFromRecordKey(record.key)
+			if err != nil {
+				return nil, 0, err
+			}
 		}
 		if oldRef.Generation != keyGeneration {
 			return nil, 0, fmt.Errorf("collections: column asset rewrite part key generation=%d does not match ref generation=%d", keyGeneration, oldRef.Generation)
@@ -552,7 +562,8 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	if cur.pos != len(raw) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: trailing bytes in column manifest part record")
 	}
-	if !columnPhysicalBytesEqualString(kindBytes, string(ColumnAssetKindTCS1PartImage)) {
+	kind := ColumnAssetKind(string(kindBytes))
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1AggregateMetadata {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
@@ -568,7 +579,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part offsets or byte counts overflow int64")
 	}
 	ref := ColumnAssetRef{
-		Kind:       ColumnAssetKindTCS1PartImage,
+		Kind:       kind,
 		Namespace:  expectedNamespace,
 		Generation: generation,
 		PartID:     partID,

@@ -481,7 +481,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 			want: []string{"decode-bound", "effective_rows_processed=1024", "row_materializations=1024/1024"},
 		},
 		{
-			name: "scan backed aggregate fallback",
+			name: "aggregate metadata fallback without metadata hits",
 			q: columnStoreQueryMetric{
 				Name:                columnStoreQueryQ5Metadata,
 				PlanLabel:           columnStorePathAggregateMetadata,
@@ -491,7 +491,7 @@ func TestColumnStoreSuiteThroughputInterpretationM14C(t *testing.T) {
 				BytesRead:           96 << 10,
 				MetadataHits:        0,
 			},
-			want: []string{"fallback-bound", "scan-backed", "aggregate metadata", "mark-pruning not active", "metadata_hits=0"},
+			want: []string{"fallback-bound", "metadata hits reported", "physical scan/reroute", "mark-pruning not active", "metadata_hits=0"},
 		},
 		{
 			name: "metadata hit future path",
@@ -600,7 +600,7 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 				Name:                     columnStoreQueryQ5Metadata,
 				PlanLabel:                columnStorePathAggregateMetadata,
 				RowsProcessed:            1024,
-				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer; mark-pruning not active",
+				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits reported, so evidence must be treated as a physical scan/reroute rather than the metadata-asset fast path; mark-pruning not active",
 			},
 			{
 				Name:                     "q|pipe`tick",
@@ -1418,7 +1418,7 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 						t.Fatalf("q5_metadata throughput_interpretation=%q want metadata-bound aggregate classification", interpretation)
 					}
 				} else if !strings.Contains(interpretation, "fallback-bound") {
-					t.Fatalf("q5_metadata throughput_interpretation=%q want scan-backed aggregate fallback classification", interpretation)
+					t.Fatalf("q5_metadata throughput_interpretation=%q want aggregate fallback classification", interpretation)
 				}
 			}
 			if got := queryMetrics[columnStoreQueryQ5Metadata].PlanLabel; got != tc.q5Plan {
@@ -1598,7 +1598,7 @@ func TestColumnStoreSuiteRunsBTreeIndexBaselineM11B(t *testing.T) {
 			t.Fatalf("query %s missing B-tree baseline implementation note: %+v", q.Name, q)
 		}
 	}
-	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") || !strings.Contains(q.ImplementationNote, "physical_aggregate_metadata_path") {
+	if q := queryMetrics["q5_metadata"]; q.AliasOf != "q5" || !strings.Contains(q.ImplementationNote, "no_predicate_pushdown") {
 		t.Fatalf("q5_metadata should report both q5 aliasing and B-tree baseline scan semantics: %+v", q)
 	}
 	if got, want := queryMetrics["q5_metadata"].ProductionHash, queryMetrics["q5"].ProductionHash; got != want {

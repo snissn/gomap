@@ -180,7 +180,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.GranuleCount = 0
 	caps.MutationParts = 0
 	caps.DeclaredColumnCount = len(cfg.Columns)
-	caps.AggregateMetadataCount = len(cfg.AggregateMetadata)
+	caps.AggregateMetadataCount = columnMaterializableAggregateMetadataCount(cfg)
 	caps.VisibilityMetadata = false
 	caps.ParallelWorkUnits = 0
 
@@ -238,7 +238,7 @@ func (c *Collection) deriveColumnQueryPlannerCapabilitiesM14B(collectionName str
 	caps.ParallelWorkUnits = columnQueryParallelWorkUnits(caps)
 	if columnQueryForcedPhysicalExecution(req.ForceKind) && caps.PhysicalAssetCount > 0 {
 		caps.SerialColumnScan = true
-		caps.AggregateMetadata = len(cfg.AggregateMetadata) > 0
+		caps.AggregateMetadata = caps.MutationParts == 0 && columnMaterializableAggregateMetadataCount(cfg) > 0
 		caps.ParallelColumnScan = caps.MutationParts == 0 && columnQueryParallelWorkerCount(caps) > 1
 	}
 	return caps
@@ -338,7 +338,7 @@ func forcedColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCache
 		return unsupportedColumnQueryPlan(ColumnQueryPlanSerialColumnScan, physicalColumnQueryUnsupportedReasonForCatalog(catalog, identity, identityOK, req, ColumnQueryPlanSerialColumnScan), diag)
 	case ColumnQueryPlanAggregateMetadata:
 		if ok, plan := aggregateColumnQueryPlan(catalog, identity, identityOK, req, diag); ok {
-			plan.Diagnostics.Reason = "forced scan-backed aggregate metadata plan"
+			plan.Diagnostics.Reason = "forced aggregate metadata asset"
 			return plan
 		}
 		return unsupportedColumnQueryPlan(ColumnQueryPlanAggregateMetadata, aggregateColumnQueryUnsupportedReason(catalog, identity, identityOK, req), diag)
@@ -373,7 +373,7 @@ func aggregateColumnQueryPlan(catalog *collectionCatalog, identity ColumnStoreCa
 	if !physicalColumnQuerySupported(catalog, identity, identityOK, req, ColumnQueryPlanAggregateMetadata) {
 		return false, ColumnQueryPlan{}
 	}
-	diag.Reason = "selected scan-backed aggregate metadata"
+	diag.Reason = "selected aggregate metadata asset"
 	diag.ScheduledGranules = req.Capabilities.GranuleCount
 	diag.WorkerCount = 1
 	return true, ColumnQueryPlan{Kind: ColumnQueryPlanAggregateMetadata, Supported: true, Diagnostics: diag}
@@ -540,11 +540,41 @@ func catalogHasColumnAggregateMetadata(catalog *collectionCatalog, name string) 
 	for _, aggregate := range catalog.meta.Options.ColumnStore.AggregateMetadata {
 		// Metadata can be supplied by pre-alpha JSON fixtures, so trim at the
 		// planner boundary until catalog loading owns canonicalization.
-		if strings.TrimSpace(aggregate.Name) == name {
+		if strings.TrimSpace(aggregate.Name) == name &&
+			columnAggregateMetadataMaterializable(*catalog.meta.Options.ColumnStore, aggregate) {
 			return true
 		}
 	}
 	return false
+}
+
+func columnMaterializableAggregateMetadataCount(cfg ColumnStoreConfig) int {
+	count := 0
+	for _, aggregate := range cfg.AggregateMetadata {
+		if columnAggregateMetadataMaterializable(cfg, aggregate) {
+			count++
+		}
+	}
+	return count
+}
+
+func columnAggregateMetadataMaterializable(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
+	if aggregate.Kind != ColumnAggregateMin && aggregate.Kind != ColumnAggregateMax {
+		return false
+	}
+	if strings.TrimSpace(aggregate.Column) == "" || strings.TrimSpace(aggregate.GroupColumn) == "" {
+		return false
+	}
+	groupOK, valueOK := false, false
+	for _, col := range cfg.Columns {
+		switch strings.TrimSpace(col.Name) {
+		case strings.TrimSpace(aggregate.GroupColumn):
+			groupOK = col.ValueType == ColumnStoreValueString
+		case strings.TrimSpace(aggregate.Column):
+			valueOK = col.ValueType == ColumnStoreValueInt64
+		}
+	}
+	return groupOK && valueOK
 }
 
 func missingColumnStoreRequestColumn(catalog *collectionCatalog, req ColumnQueryPlanRequest) (string, bool) {

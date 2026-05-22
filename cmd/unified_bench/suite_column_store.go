@@ -70,7 +70,7 @@ var (
 		{alias: "parallel", canonical: columnStorePathParallelColumnScan},
 	}
 	columnStoreSuitePathUsage = fmt.Sprintf(
-		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata currently executes only q5_metadata and remains scan-backed until real metadata assets land)",
+		"Forced column-store execution label for -suite column_store (canonical: %s; aliases: %s; executable: %s; accepted labels: row_store_baseline, b_tree_index_baseline, serial_column_scan, aggregate_metadata, parallel_column_scan; aggregate_metadata executes q5_metadata through typed aggregate metadata assets when available; other queries reroute to serial physical scan)",
 		columnStoreSuitePathCanonicalHelp,
 		columnStoreSuitePathAliasHelp(columnStoreSuitePathAliases),
 		columnStoreSuitePathList(columnStoreSuiteExecutableForcedPaths),
@@ -502,7 +502,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
 		ProductionScope:        "production column-enabled TreeDB collection manifest/control-plane path plus isolated physical column assets and M14B planner-routed physical query execution",
-		PhysicalColumnQuery:    "M14B routes forced serial, scan-backed aggregate_metadata, and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable only for q5_metadata and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
+		PhysicalColumnQuery:    "M14B routes forced serial and insert-only parallel_column_scan labels through the TreeDB physical query adapter; forced aggregate_metadata is executable for q5_metadata through typed aggregate metadata assets and other queries reroute to serial physical scan; unsupported prerequisites fail closed before row fallback",
 		BenchmarkOnlyRelaxed:   false,
 		StageSeparatedBoundary: "fixture generation, collection create, insert, checkpoint, reopen/recovery, planner, physical scan/reducer execution, row/B-tree reduce, and parity hash stages are timed separately for the forced execution label; M14B direct physical reducers are fused into scan timing unless visibility reconstruction reports a separate reduce phase",
 	}
@@ -704,8 +704,8 @@ func columnStoreSuiteConfig() *collections.ColumnStoreConfig {
 		},
 		SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
 		AggregateMetadata: []collections.ColumnAggregateMetadata{
-			{Name: columnStoreSuiteQ5AggregateMin, Column: "time_us", Kind: collections.ColumnAggregateMin},
-			{Name: columnStoreSuiteQ5AggregateMax, Column: "time_us", Kind: collections.ColumnAggregateMax},
+			{Name: columnStoreSuiteQ5AggregateMin, Column: "time_us", GroupColumn: "did", Kind: collections.ColumnAggregateMin},
+			{Name: columnStoreSuiteQ5AggregateMax, Column: "time_us", GroupColumn: "did", Kind: collections.ColumnAggregateMax},
 		},
 		RetainedPayload: collections.ColumnRetainedPayloadNonColumn,
 		Reconstruction:  collections.ColumnReconstructionRetainedPayloadAndColumns,
@@ -1166,9 +1166,6 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 
 func columnStoreSuiteAggregateMetadataName(name string) string {
 	if name == columnStoreQueryQ5Metadata {
-		// The executable q5_metadata path still aliases q5 until physical
-		// aggregate metadata assets exist, but forced aggregate_metadata planning
-		// should validate against a real registered catalog entry.
 		return columnStoreSuiteQ5AggregateMin
 	}
 	return ""
@@ -1244,6 +1241,11 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	if err != nil {
 		return columnStoreQueryExecution{}, err
 	}
+	if plan.Kind == collections.ColumnQueryPlanAggregateMetadata {
+		req.AggregateMetadataName = columnStoreSuiteAggregateMetadataName(queryName)
+	} else {
+		req.AggregateMetadataName = ""
+	}
 	start := time.Now()
 	var result collections.ColumnPhysicalQueryResult
 	switch plan.Kind {
@@ -1285,17 +1287,13 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		reduceDuration = time.Duration(diag.ReduceNanos)
 	}
 	return columnStoreQueryExecution{
-		Lines:               lines,
-		RowsProcessed:       diag.ReduceRows,
-		RowsProcessedKnown:  true,
-		BytesRead:           diag.PhysicalBytesScanned,
-		RowMaterializations: diag.RowMaterializations,
-		ResultCount:         len(lines),
-		// M14B routes the aggregate_metadata label through the physical query
-		// adapter but still scans column assets. Metadata-only reads remain an
-		// M14C measurement gate, so hits stay zero instead of pretending a fast
-		// path ran.
-		MetadataHits:           0,
+		Lines:                  lines,
+		RowsProcessed:          diag.ReduceRows,
+		RowsProcessedKnown:     true,
+		BytesRead:              diag.PhysicalBytesScanned,
+		RowMaterializations:    diag.RowMaterializations,
+		ResultCount:            len(lines),
+		MetadataHits:           diag.MetadataHits,
 		SkippedGranules:        diag.SkippedGranules,
 		ScheduledGranules:      diag.ScheduledGranules,
 		WorkerCount:            workers,
@@ -1487,16 +1485,16 @@ func columnStoreQueryImplementationNote(name, requestedPath, planPath string) st
 		return "aggregate_metadata_forced_path_rerouted_to_serial_column_scan_no_metadata_asset_for_query_m14b"
 	}
 	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathAggregateMetadata {
-		return "q5_alias_scan_backed_physical_aggregate_metadata_m14c_metadata_only_fast_path_deferred"
+		return "q5_metadata_physical_aggregate_metadata_asset_fast_path"
 	}
 	if name == columnStoreQueryQ5Metadata && (planPath == columnStorePathSerialColumnScan || planPath == columnStorePathParallelColumnScan) {
 		return planPath + "_q5_alias_physical_column_scan"
 	}
 	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathBTreeIndexBaseline {
-		return "q5_alias_full_unbounded_secondary_index_scan_no_predicate_pushdown_until_physical_aggregate_metadata_path"
+		return "q5_alias_full_unbounded_secondary_index_scan_no_predicate_pushdown"
 	}
 	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathRowStoreBaseline {
-		return planPath + "_alias_until_physical_aggregate_metadata_path"
+		return planPath + "_q5_alias_row_materialization_baseline"
 	}
 	if planPath == columnStorePathBTreeIndexBaseline {
 		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
@@ -1521,7 +1519,7 @@ func columnStoreQueryThroughputInterpretation(q columnStoreQueryMetric) string {
 		if q.MetadataHits > 0 {
 			return fmt.Sprintf("metadata-bound aggregate metadata path: %d metadata hits avoid full physical row scan; %s%s", q.MetadataHits, markPruning, evidence)
 		}
-		return "fallback-bound aggregate metadata label: no metadata hits yet, executes scan-backed physical reducer over declared columns; " + markPruning + evidence
+		return "fallback-bound aggregate metadata label: no metadata hits reported, so evidence must be treated as a physical scan/reroute rather than the metadata-asset fast path; " + markPruning + evidence
 	case columnStorePathParallelColumnScan:
 		if q.WorkerCount <= 0 {
 			return fmt.Sprintf("parallel physical scan: invalid reported worker_count=%d; overhead-bound interpretation is unavailable until worker diagnostics are valid; %s%s", q.WorkerCount, markPruning, evidence)

@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	columnManifestHeaderRecordKey  = "\x01column-manifest/v1/header"
-	columnManifestPartRecordPrefix = "\x02column-manifest/v1/part/"
+	columnManifestHeaderRecordKey               = "\x01column-manifest/v1/header"
+	columnManifestPartRecordPrefix              = "\x02column-manifest/v1/part/"
+	columnManifestAggregateMetadataRecordPrefix = "\x03column-manifest/v1/aggregate/"
 
 	columnManifestHeaderMagic   = uint32(0x54434d48) // TCMH
 	columnManifestPartMagic     = uint32(0x54434d50) // TCMP
@@ -24,8 +25,9 @@ const (
 
 var (
 	// Treat these shared key sentinels as read-only.
-	columnManifestHeaderRecordKeyBytes  = []byte(columnManifestHeaderRecordKey)
-	columnManifestPartRecordPrefixBytes = []byte(columnManifestPartRecordPrefix)
+	columnManifestHeaderRecordKeyBytes               = []byte(columnManifestHeaderRecordKey)
+	columnManifestPartRecordPrefixBytes              = []byte(columnManifestPartRecordPrefix)
+	columnManifestAggregateMetadataRecordPrefixBytes = []byte(columnManifestAggregateMetadataRecordPrefix)
 )
 
 type columnManifestRecord struct {
@@ -45,6 +47,7 @@ type columnManifestSnapshot struct {
 	RowRemainderBytes  int64
 	ColumnPayloadBytes int64
 	Parts              []columnManifestPartSnapshot
+	AggregateMetadata  []columnManifestAggregateMetadataSnapshot
 }
 
 type columnManifestPartSnapshot struct {
@@ -56,11 +59,28 @@ type columnManifestPartSnapshot struct {
 	Reason       string
 }
 
+type columnManifestAggregateMetadataSnapshot struct {
+	AssetRef     ColumnAssetRef
+	Name         string
+	Bytes        int64
+	PublishID    uint64
+	GenerationID uint64
+}
+
 func columnManifestPartRecordKey(generation, partID uint64) []byte {
 	key := make([]byte, len(columnManifestPartRecordPrefix)+16)
 	copy(key, columnManifestPartRecordPrefix)
 	binary.BigEndian.PutUint64(key[len(columnManifestPartRecordPrefix):], generation)
 	binary.BigEndian.PutUint64(key[len(columnManifestPartRecordPrefix)+8:], partID)
+	return key
+}
+
+func columnManifestAggregateMetadataRecordKey(generation, partID uint64, name string) []byte {
+	key := make([]byte, len(columnManifestAggregateMetadataRecordPrefix)+16+len(name))
+	copy(key, columnManifestAggregateMetadataRecordPrefix)
+	binary.BigEndian.PutUint64(key[len(columnManifestAggregateMetadataRecordPrefix):], generation)
+	binary.BigEndian.PutUint64(key[len(columnManifestAggregateMetadataRecordPrefix)+8:], partID)
+	copy(key[len(columnManifestAggregateMetadataRecordPrefix)+16:], name)
 	return key
 }
 
@@ -93,7 +113,7 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
-	retained, err := retainedColumnManifestPartRecordsForWrite(input.CurrentManifestRecords, generation)
+	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
@@ -102,6 +122,16 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 		partValue, err := encodeColumnManifestPartRecord(asset)
 		if err != nil {
 			return ColumnPublishManifestEncodeResult{}, err
+		}
+		if asset.Ref.Kind == ColumnAssetKindTCS1AggregateMetadata {
+			if asset.Reason == "" {
+				return ColumnPublishManifestEncodeResult{}, errors.New("collections: aggregate metadata manifest record requires aggregate name")
+			}
+			records = append(records, columnManifestRecord{
+				key:   columnManifestAggregateMetadataRecordKey(asset.Ref.Generation, asset.Ref.PartID, asset.Reason),
+				value: partValue,
+			})
+			continue
 		}
 		records = append(records, columnManifestRecord{
 			key:   columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID),
@@ -123,13 +153,13 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 	}, nil
 }
 
-func retainedColumnManifestPartRecordsForWrite(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
+func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
-		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) {
+		if !bytes.HasPrefix(record.key, []byte(columnManifestPartRecordPrefix)) && !bytes.HasPrefix(record.key, []byte(columnManifestAggregateMetadataRecordPrefix)) {
 			continue
 		}
 		part, err := decodeColumnManifestPartRecord(record.value)
@@ -160,8 +190,18 @@ func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, ge
 	writeManifestUint64(&b, uint64(input.Prepared.CommandBytes))
 	writeManifestUint64(&b, uint64(input.Prepared.RowRemainderBytes))
 	writeManifestUint64(&b, uint64(input.Prepared.ColumnPayloadBytes))
-	writeManifestUint64(&b, uint64(len(input.Prepared.Assets)))
+	writeManifestUint64(&b, uint64(columnManifestPreparedPartCount(input.Prepared.Assets)))
 	return b.Bytes(), nil
+}
+
+func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
+	count := 0
+	for _, asset := range assets {
+		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage {
+			count++
+		}
+	}
+	return count
 }
 
 func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
@@ -189,6 +229,7 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifestSnapshot, error) {
 	var snapshot columnManifestSnapshot
 	var parts []columnManifestPartSnapshot
+	var metadata []columnManifestAggregateMetadataSnapshot
 	sawHeader := false
 	for _, record := range records {
 		switch {
@@ -215,6 +256,12 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
 			}
 			parts = append(parts, part)
+		case bytes.HasPrefix(record.key, []byte(columnManifestAggregateMetadataRecordPrefix)):
+			aggregate, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
+			if err != nil {
+				return columnManifestSnapshot{}, err
+			}
+			metadata = append(metadata, aggregate)
 		}
 	}
 	if !sawHeader {
@@ -228,10 +275,56 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			snapshot.Parts = append(snapshot.Parts, part)
 		}
 	}
+	livePartNamespaces := make(map[[2]uint64]string, len(parts))
+	for _, part := range parts {
+		if part.AssetRef.Generation <= snapshot.Generation {
+			livePartNamespaces[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.AssetRef.Namespace
+		}
+	}
+	for _, aggregate := range metadata {
+		if aggregate.AssetRef.Generation > snapshot.Generation {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", aggregate.AssetRef.Generation, snapshot.Generation)
+		}
+		partNamespace, ok := livePartNamespaces[[2]uint64{aggregate.AssetRef.Generation, aggregate.AssetRef.PartID}]
+		if !ok {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", aggregate.AssetRef.Generation, aggregate.AssetRef.PartID)
+		}
+		if aggregate.AssetRef.Namespace != partNamespace {
+			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata namespace=%q does not match part namespace=%q", aggregate.AssetRef.Namespace, partNamespace)
+		}
+		snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
+	}
 	if uint64(len(snapshot.Parts)) != snapshot.ExpectedParts {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: invalid column manifest part count=%d want %d", len(snapshot.Parts), snapshot.ExpectedParts)
 	}
 	return snapshot, nil
+}
+
+func decodeColumnManifestAggregateMetadataRecord(key, raw []byte) (columnManifestAggregateMetadataSnapshot, error) {
+	generation, partID, name, err := columnManifestAggregateMetadataKeyFromRecordKey(key)
+	if err != nil {
+		return columnManifestAggregateMetadataSnapshot{}, err
+	}
+	part, err := decodeColumnManifestPartRecord(raw)
+	if err != nil {
+		return columnManifestAggregateMetadataSnapshot{}, err
+	}
+	if part.AssetRef.Kind != ColumnAssetKindTCS1AggregateMetadata {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata asset kind=%q want %q", part.AssetRef.Kind, ColumnAssetKindTCS1AggregateMetadata)
+	}
+	if part.AssetRef.Generation != generation || part.AssetRef.PartID != partID {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata key generation/part does not match ref")
+	}
+	if part.Reason != name {
+		return columnManifestAggregateMetadataSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata key name=%q does not match record name=%q", name, part.Reason)
+	}
+	return columnManifestAggregateMetadataSnapshot{
+		AssetRef:     part.AssetRef,
+		Name:         name,
+		Bytes:        part.Bytes,
+		PublishID:    part.PublishID,
+		GenerationID: part.GenerationID,
+	}, nil
 }
 
 func decodeColumnManifestHeaderRecord(raw []byte) (columnManifestSnapshot, error) {
@@ -351,11 +444,42 @@ func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAss
 	if iter == nil {
 		return nil, nil
 	}
-	iter.Seek([]byte(columnManifestPartRecordPrefix))
+	var refs []ColumnAssetRef
+	partRefs, err := enumerateColumnManifestAssetRefsForPrefix(iter, columnManifestPartRecordPrefixBytes, func(key, value []byte) (ColumnAssetRef, error) {
+		keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(key)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		part, err := decodeColumnManifestPartRecord(value)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
+			return ColumnAssetRef{}, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
+		}
+		return part.AssetRef, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, partRefs...)
+	metadataRefs, err := enumerateColumnManifestAssetRefsForPrefix(iter, columnManifestAggregateMetadataRecordPrefixBytes, func(key, value []byte) (ColumnAssetRef, error) {
+		metadata, err := decodeColumnManifestAggregateMetadataRecord(key, value)
+		return metadata.AssetRef, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, metadataRefs...)
+	return refs, iter.Error()
+}
+
+func enumerateColumnManifestAssetRefsForPrefix(iter iterator.UnsafeIterator, prefix []byte, decode func([]byte, []byte) (ColumnAssetRef, error)) ([]ColumnAssetRef, error) {
+	iter.Seek(prefix)
 	var refs []ColumnAssetRef
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if !bytes.HasPrefix(key, []byte(columnManifestPartRecordPrefix)) {
+		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
 		if iter.IsDeleted() {
@@ -364,23 +488,28 @@ func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAss
 		}
 		value, _, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
-			return nil, errors.New("collections: column manifest part record must be inline")
+			return nil, errors.New("collections: column manifest asset record must be inline")
 		}
-		keyGeneration, keyPartID, err := decodeColumnManifestPartRecordKey(key)
+		ref, err := decode(key, value)
 		if err != nil {
 			return nil, err
 		}
-		part, err := decodeColumnManifestPartRecord(value)
-		if err != nil {
-			return nil, err
-		}
-		if part.AssetRef.Generation != keyGeneration || part.AssetRef.PartID != keyPartID {
-			return nil, fmt.Errorf("collections: column manifest part key generation=%d part_id=%d does not match payload generation=%d part_id=%d", keyGeneration, keyPartID, part.AssetRef.Generation, part.AssetRef.PartID)
-		}
-		refs = append(refs, part.AssetRef)
+		refs = append(refs, ref)
 		iter.Next()
 	}
 	return refs, iter.Error()
+}
+
+func columnManifestAggregateMetadataKeyFromRecordKey(key []byte) (uint64, uint64, string, error) {
+	if !bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) {
+		return 0, 0, "", fmt.Errorf("collections: column manifest aggregate metadata key %q missing prefix", string(key))
+	}
+	if len(key) <= len(columnManifestAggregateMetadataRecordPrefix)+16 {
+		return 0, 0, "", fmt.Errorf("collections: column manifest aggregate metadata key length=%d too short", len(key))
+	}
+	return binary.BigEndian.Uint64(key[len(columnManifestAggregateMetadataRecordPrefix):]),
+		binary.BigEndian.Uint64(key[len(columnManifestAggregateMetadataRecordPrefix)+8:]),
+		string(key[len(columnManifestAggregateMetadataRecordPrefix)+16:]), nil
 }
 
 func columnManifestRootRecordIterator(identityRecord [columnManifestIdentityRecordSize]byte, records []columnManifestRecord) *systemTargetIterator {
