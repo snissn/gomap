@@ -33,7 +33,7 @@ def parse_ints(raw: str) -> list[int]:
             seen.add(value)
     if not values:
         raise ValueError("at least one concurrency value is required")
-    return sorted(values)
+    return values
 
 
 def percentile(sorted_values: list[int], p: float) -> int:
@@ -284,7 +284,7 @@ def benchmark_search(args: argparse.Namespace, queries: np.ndarray, concurrency:
     conns = [connect(db_path) for _ in range(concurrency)]
     for conn in conns:
         configure_sqlite(conn, args.page_size, args.cache_mb)
-        search_one(conn, queries[0], args.top_k, args.ef_search)
+        search_one(conn, queries[0], 1, args.ef_search)
 
     def worker(conn: sqlite3.Connection, indexes: range) -> None:
         for i in indexes:
@@ -357,7 +357,10 @@ def main() -> None:
     dataset_dir = Path(args.dataset_dir)
     manifest = load_manifest(dataset_dir)
     if manifest["metric"] != "cosine" or not manifest["normalized"]:
-        raise RuntimeError(f"unsupported dataset metric/normalization: {manifest}")
+        raise RuntimeError(
+            "unsupported dataset metric/normalization: "
+            f"metric={manifest.get('metric')!r} normalized={manifest.get('normalized')!r}"
+        )
     all_queries = load_vectors(dataset_dir / manifest["query_vectors_file"], manifest["queries"], manifest["dimensions"])
     queries = all_queries[: min(args.queries, len(all_queries))]
     concurrency = parse_ints(args.search_concurrency)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -567,6 +568,17 @@ func TestParseConfigDatasetDirAllowsValidateQueriesAboveDocs(t *testing.T) {
 	}
 	if cfg.datasetDir != filepath.Join("tmp", "dataset") {
 		t.Fatalf("datasetDir=%q", cfg.datasetDir)
+	}
+}
+
+func TestParseSearchConcurrencyAcceptsSerialAndPreservesOrder(t *testing.T) {
+	got, err := parseSearchConcurrency("4,1,2,4,8")
+	if err != nil {
+		t.Fatalf("parseSearchConcurrency: %v", err)
+	}
+	want := []int{4, 2, 8}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("concurrency=%v want %v", got, want)
 	}
 }
 

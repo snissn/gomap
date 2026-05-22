@@ -387,6 +387,7 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 	parts := strings.Split(raw, ",")
 	out := make([]int, 0, len(parts))
 	seen := make(map[int]struct{}, len(parts)+1)
+	seen[1] = struct{}{}
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
@@ -396,8 +397,8 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid -search-concurrency value %q", part)
 		}
-		if value <= 1 {
-			return nil, fmt.Errorf("-search-concurrency values must be greater than 1: %d", value)
+		if value <= 0 {
+			return nil, fmt.Errorf("-search-concurrency values must be positive: %d", value)
 		}
 		if _, ok := seen[value]; ok {
 			continue
@@ -405,7 +406,6 @@ func parseSearchConcurrency(raw string) ([]int, error) {
 		seen[value] = struct{}{}
 		out = append(out, value)
 	}
-	sort.Ints(out)
 	if len(out) == 0 {
 		return nil, errors.New("-search-concurrency must include at least one value greater than 1")
 	}
@@ -943,7 +943,7 @@ func insertDatasetDocuments(col *collections.Collection, cfg config, work worklo
 	}
 	for i := 0; scanner.Scan(); i++ {
 		if i >= cfg.docs {
-			return fmt.Errorf("dataset documents has more than %d rows", cfg.docs)
+			return fmt.Errorf("dataset documents file has more than %d rows", cfg.docs)
 		}
 		line := append([]byte(nil), scanner.Bytes()...)
 		var header datasetDocumentHeader
@@ -989,18 +989,20 @@ func validateCompactedData(col *collections.Collection, idx *collections.VectorI
 		QueriesChecked:   cfg.validateQueries,
 		MinRecall:        cfg.minRecall,
 	}
+	expectedDocs, err := expectedValidationDocuments(cfg, work)
+	if err != nil {
+		return out, err
+	}
 	for i := 0; i < cfg.validateDocs; i++ {
-		docIndex := validationDocIndex(i, cfg.docs)
-		id, want, err := expectedDocument(docIndex, cfg, work)
-		if err != nil {
-			return out, err
-		}
+		expected := expectedDocs[i]
+		id := expected.id
+		want := expected.line
 		got, err := col.Get(id)
 		if err != nil {
 			return out, fmt.Errorf("get compacted doc %q: %w", id, err)
 		}
 		if !bytes.Equal(got, want) {
-			return out, fmt.Errorf("compacted doc %d mismatch", docIndex)
+			return out, fmt.Errorf("compacted doc %d mismatch", expected.index)
 		}
 	}
 	if cfg.validateQueries == 0 {
@@ -1041,35 +1043,107 @@ func expectedDocument(docIndex int, cfg config, work workload) ([]byte, []byte, 
 	return []byte(header.ID), line, nil
 }
 
+type expectedValidationDocument struct {
+	index int
+	id    []byte
+	line  []byte
+}
+
+func expectedValidationDocuments(cfg config, work workload) ([]expectedValidationDocument, error) {
+	out := make([]expectedValidationDocument, cfg.validateDocs)
+	if cfg.validateDocs == 0 {
+		return out, nil
+	}
+	if work.datasetDir == "" {
+		for i := 0; i < cfg.validateDocs; i++ {
+			docIndex := validationDocIndex(i, cfg.docs)
+			out[i] = expectedValidationDocument{
+				index: docIndex,
+				id:    documentID(docIndex),
+				line:  documentJSON(docIndex, cfg.dimensions),
+			}
+		}
+		return out, nil
+	}
+	positions := make(map[int][]int, cfg.validateDocs)
+	indexes := make([]int, cfg.validateDocs)
+	for i := 0; i < cfg.validateDocs; i++ {
+		docIndex := validationDocIndex(i, cfg.docs)
+		indexes[i] = docIndex
+		positions[docIndex] = append(positions[docIndex], i)
+	}
+	if err := datasetDocuments(indexes, work, func(docIndex int, line []byte, header datasetDocumentHeader) {
+		for _, pos := range positions[docIndex] {
+			out[pos] = expectedValidationDocument{
+				index: docIndex,
+				id:    []byte(header.ID),
+				line:  append([]byte(nil), line...),
+			}
+		}
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func datasetDocument(docIndex int, work workload) ([]byte, datasetDocumentHeader, error) {
-	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	var line []byte
+	var header datasetDocumentHeader
+	err := datasetDocuments([]int{docIndex}, work, func(_ int, gotLine []byte, gotHeader datasetDocumentHeader) {
+		line = append([]byte(nil), gotLine...)
+		header = gotHeader
+	})
 	if err != nil {
 		return nil, datasetDocumentHeader{}, err
+	}
+	return line, header, nil
+}
+
+func datasetDocuments(docIndexes []int, work workload, visit func(docIndex int, line []byte, header datasetDocumentHeader)) error {
+	if len(docIndexes) == 0 {
+		return nil
+	}
+	remaining := make(map[int]struct{}, len(docIndexes))
+	for _, docIndex := range docIndexes {
+		remaining[docIndex] = struct{}{}
+	}
+	f, err := os.Open(datasetPath(work, work.manifest.DocumentsJSONLFile, "documents.jsonl"))
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	for i := 0; scanner.Scan(); i++ {
-		if i != docIndex {
+		if _, ok := remaining[i]; !ok {
 			continue
 		}
 		line := append([]byte(nil), scanner.Bytes()...)
 		var header datasetDocumentHeader
 		if err := json.Unmarshal(line, &header); err != nil {
-			return nil, datasetDocumentHeader{}, fmt.Errorf("decode dataset document %d: %w", docIndex, err)
+			return fmt.Errorf("decode dataset document %d: %w", i, err)
 		}
-		if header.Index != docIndex {
-			return nil, datasetDocumentHeader{}, fmt.Errorf("dataset document index=%d at row %d", header.Index, docIndex)
+		if header.Index != i {
+			return fmt.Errorf("dataset document index=%d at row %d", header.Index, i)
 		}
 		if header.ID == "" {
-			return nil, datasetDocumentHeader{}, fmt.Errorf("dataset document %d has empty id", docIndex)
+			return fmt.Errorf("dataset document %d has empty id", i)
 		}
-		return line, header, nil
+		visit(i, line, header)
+		delete(remaining, i)
+		if len(remaining) == 0 {
+			return nil
+		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, datasetDocumentHeader{}, err
+		return err
 	}
-	return nil, datasetDocumentHeader{}, fmt.Errorf("dataset document %d not found", docIndex)
+	missing := make([]int, 0, len(remaining))
+	for docIndex := range remaining {
+		missing = append(missing, docIndex)
+	}
+	sort.Ints(missing)
+	return fmt.Errorf("dataset document %d not found", missing[0])
 }
 
 func benchmarkSearch(idx *collections.VectorIndex, cfg config, work workload) (searchBenchmarkResult, error) {
@@ -1080,9 +1154,13 @@ func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config, work worklo
 	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
 	levels = append(levels, 1)
 	levels = append(levels, cfg.searchConcurrency...)
+	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]searchBenchmarkResult, 0, len(levels))
 	for _, concurrency := range levels {
-		bench, err := benchmarkSearchConcurrent(idx, cfg, work, concurrency)
+		bench, err := benchmarkSearchLoadedConcurrent(idx, cfg, queries, concurrency)
 		if err != nil {
 			return nil, err
 		}
@@ -1098,6 +1176,13 @@ func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, work wo
 	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
 	if err != nil {
 		return searchBenchmarkResult{}, err
+	}
+	return benchmarkSearchLoadedConcurrent(idx, cfg, queries, concurrency)
+}
+
+func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, queries [][]float32, concurrency int) (searchBenchmarkResult, error) {
+	if concurrency <= 0 {
+		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
 	}
 	latencies := make([]int64, len(queries))
 	var next atomic.Int64
@@ -1212,11 +1297,12 @@ func readFloat32Vectors(path string, count, dims int) ([][]float32, error) {
 		return nil, err
 	}
 	defer f.Close()
+	r := bufio.NewReaderSize(f, 1<<20)
 	rowBytes := dims * 4
 	buf := make([]byte, rowBytes)
 	out := make([][]float32, count)
 	for i := 0; i < count; i++ {
-		if _, err := io.ReadFull(f, buf); err != nil {
+		if _, err := io.ReadFull(r, buf); err != nil {
 			return nil, fmt.Errorf("read vector %d from %s: %w", i, path, err)
 		}
 		v := make([]float32, dims)
