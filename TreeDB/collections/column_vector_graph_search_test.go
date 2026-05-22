@@ -83,11 +83,8 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 		t.Fatalf("stats=%+v want candidate/result fetches plus lazy adjacency expansion fetches", stats)
 	}
 	readerStats := reader.Stats()
-	if readerStats.BatchFetches == 0 {
-		t.Fatalf("reader stats=%+v want batched top-k result fetch", readerStats)
-	}
-	if gotRows, wantRows := readerStats.RowsFetched, stats.ResultFetches; gotRows != wantRows {
-		t.Fatalf("reader rows_fetched=%d want top-k result fetches=%d stats=%+v", gotRows, wantRows, stats)
+	if readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
+		t.Fatalf("reader stats=%+v want no generic row fetches for scoring or result IDs", readerStats)
 	}
 }
 
@@ -118,8 +115,8 @@ func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
 	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ScoreBatches != 4 || stats.ExpansionFetches != stats.AdjacencyExpansions {
 		t.Fatalf("stats=%+v want four scored candidates plus lazy adjacency expansion fetches", stats)
 	}
-	if readerStats := reader.Stats(); readerStats.RowsFetched != stats.ResultFetches {
-		t.Fatalf("reader rows_fetched=%d want top-k result fetches stats=%+v", readerStats.RowsFetched, stats)
+	if readerStats := reader.Stats(); readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
+		t.Fatalf("reader stats=%+v want no generic row fetches for scoring or result IDs stats=%+v", readerStats, stats)
 	}
 }
 

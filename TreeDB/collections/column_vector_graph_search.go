@@ -290,13 +290,13 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
-	if err := r.fetchTopSearchResults(scratch, &stats); err != nil {
+	if err := r.fetchTopSearchResults(plan, scratch, &stats); err != nil {
 		return nil, stats, err
 	}
 	return scratch.results, stats, nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnVectorGraphSearchPlan, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	n := len(scratch.top)
 	scratch.resultOrder = scratch.resultOrder[:n]
 	scratch.resultOrdinals = scratch.resultOrdinals[:n]
@@ -307,34 +307,28 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(scratch *colu
 	for fetchPos, topIndex := range scratch.resultOrder {
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
-	fetched := 0
-	resultPos := 0
-	if err := r.fetchBatchUnchecked(scratch.resultOrdinals, &scratch.resultScratch, func(row columnVectorGraphPhysicalRow) error {
-		if resultPos >= n || scratch.resultOrdinals[resultPos] != row.Ordinal {
-			expected := -1
-			if resultPos < n {
-				expected = scratch.resultOrdinals[resultPos]
-			}
-			return fmt.Errorf("collections: column_graph %q result batch returned unexpected or out-of-order row ordinal=%d result_pos=%d expected_ordinal=%d", r.def.Name, row.Ordinal, resultPos, expected)
+	for resultPos, topIndex := range scratch.resultOrder {
+		ordinal := scratch.resultOrdinals[resultPos]
+		view, ref, err := plan.blockViewForOrdinal(ordinal)
+		if err != nil {
+			return err
 		}
-		topIndex := scratch.resultOrder[resultPos]
-		if cap(scratch.idBuffers[topIndex]) < len(row.ID) {
-			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
-		} else if columnVectorGraphNativeScratchCapOversized(cap(scratch.idBuffers[topIndex]), len(row.ID)) {
-			scratch.idBuffers[topIndex] = make([]byte, len(row.ID))
+		id, err := view.id(ref.rowIndex)
+		if err != nil {
+			return err
 		}
-		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(row.ID)]
-		copy(scratch.idBuffers[topIndex], row.ID)
-		fetched++
-		resultPos++
-		return nil
-	}); err != nil {
-		return err
-	}
-	if fetched != n {
-		return fmt.Errorf("collections: column_graph %q result batch rows=%d want %d", r.def.Name, fetched, n)
+		if cap(scratch.idBuffers[topIndex]) < len(id) {
+			scratch.idBuffers[topIndex] = make([]byte, len(id))
+		} else if columnVectorGraphNativeScratchCapOversized(cap(scratch.idBuffers[topIndex]), len(id)) {
+			scratch.idBuffers[topIndex] = make([]byte, len(id))
+		}
+		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(id)]
+		copy(scratch.idBuffers[topIndex], id)
 	}
 	stats.ResultFetches += uint64(n)
+	stats.BlockViewHits = plan.hits
+	stats.BlockViewMisses = plan.misses
+	stats.BlockViewBuilds = plan.builds
 	for i, candidate := range scratch.top {
 		scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
 			Ordinal: candidate.ordinal,
