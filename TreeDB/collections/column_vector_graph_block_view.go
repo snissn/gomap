@@ -434,9 +434,10 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 		return nil, scratch, true, nil
 	}
 	if v.adjacencyDirectView {
-		raw := v.block.raw[span.start:span.end]
-		adjacency := unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(raw))), span.count)
-		return adjacency, scratch, true, nil
+		adjacency, ok := columnVectorGraphLittleEndianUint32DirectView(v.block.raw[span.start:span.end], span.count)
+		if ok {
+			return adjacency, scratch, true, nil
+		}
 	}
 	base := len(scratch)
 	need := base + span.count
@@ -471,6 +472,17 @@ func columnVectorGraphBlockViewAdjacencyDirectView(reader *columnVectorGraphPhys
 		return false
 	}
 	return cols[columnVectorGraphPhysicalRowValueAdjacency].FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian
+}
+
+func columnVectorGraphLittleEndianUint32DirectView(raw []byte, count int) ([]uint32, bool) {
+	if !columnPhysicalNativeLittleEndian || count <= 0 || len(raw) != count*4 {
+		return nil, false
+	}
+	ptr := unsafe.Pointer(unsafe.SliceData(raw))
+	if uintptr(ptr)%unsafe.Alignof(uint32(0)) != 0 {
+		return nil, false
+	}
+	return unsafe.Slice((*uint32)(ptr), count), true
 }
 
 func (v *columnVectorGraphBlockView) adjacencyLittleEndian() bool {
