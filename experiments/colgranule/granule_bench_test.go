@@ -40,13 +40,20 @@ func BenchmarkEncodeInt64Granule(b *testing.B) {
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(fx.values) * 8))
+				builder := NewGranuleBuilder(cfg)
+				g, err := builder.BuildInt64(fx.values)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					g, err := EncodeInt64(nil, fx.values, cfg)
+					g, err = builder.BuildInt64(fx.values)
 					if err != nil {
 						b.Fatal(err)
 					}
-					benchSink += int64(len(g.Payload))
+					benchSink += int64(g.StoredBytes)
 				}
+				reportGranuleBenchMetrics(b, len(fx.values), len(fx.values)*8, g.StoredBytes)
 			})
 		}
 	}
@@ -59,19 +66,25 @@ func BenchmarkDecodeInt64Granule(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			name := fmt.Sprintf("%s/%s/%s/stored_%dB/raw_%dB", fx.name, cfg.Encoding, g.Compression, len(g.Payload), g.RawBytes)
+			name := fmt.Sprintf("%s/%s/requested_%s/actual_%s/stored_%dB/raw_%dB", fx.name, cfg.Encoding, cfg.Compression, g.Compression, g.StoredBytes, g.RawBytes)
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(fx.values) * 8))
-				scratch := make([]int64, 0, len(fx.values))
+				var reader GranuleReader
+				values, err := reader.DecodeInt64(g)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += values[len(values)-1]
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					values, err := DecodeInt64(scratch, g)
+					values, err := reader.DecodeInt64(g)
 					if err != nil {
 						b.Fatal(err)
 					}
 					benchSink += values[len(values)-1]
 				}
+				reportGranuleBenchMetrics(b, len(fx.values), len(fx.values)*8, g.StoredBytes)
 			})
 		}
 	}
@@ -86,25 +99,31 @@ func BenchmarkRangeScanInt64Granule(b *testing.B) {
 			}
 			low := fx.values[len(fx.values)/2]
 			high := low + 32
-			name := fmt.Sprintf("%s/%s/%s/hit/stored_%dB/raw_%dB", fx.name, cfg.Encoding, g.Compression, len(g.Payload), g.RawBytes)
+			name := fmt.Sprintf("%s/%s/requested_%s/actual_%s/hit/stored_%dB/raw_%dB", fx.name, cfg.Encoding, cfg.Compression, g.Compression, g.StoredBytes, g.RawBytes)
 			b.Run(name, func(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(fx.values) * 8))
-				scratch := make([]int64, 0, len(fx.values))
+				var reader GranuleReader
+				count, err := reader.RangeScanCountInt64(g, low, high)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchSink += int64(count)
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					count, out, err := RangeScanCount(g, low, high, scratch)
+					count, err := reader.RangeScanCountInt64(g, low, high)
 					if err != nil {
 						b.Fatal(err)
 					}
-					scratch = out
 					benchSink += int64(count)
 				}
+				reportGranuleBenchMetrics(b, len(fx.values), len(fx.values)*8, g.StoredBytes)
 			})
-			b.Run(fmt.Sprintf("%s/%s/%s/minmax_skip", fx.name, cfg.Encoding, g.Compression), func(b *testing.B) {
+			b.Run(fmt.Sprintf("%s/%s/requested_%s/actual_%s/minmax_skip", fx.name, cfg.Encoding, cfg.Compression, g.Compression), func(b *testing.B) {
 				b.ReportAllocs()
+				var reader GranuleReader
 				for i := 0; i < b.N; i++ {
-					count, _, err := RangeScanCount(g, g.Max+1, g.Max+100, nil)
+					count, err := reader.RangeScanCountInt64(g, g.Max+1, g.Max+100)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -124,12 +143,30 @@ func TestCompressionRatios(t *testing.T) {
 				t.Fatalf("EncodeInt64(%s,%s,%s): %v", fx.name, cfg.Encoding, cfg.Compression, err)
 			}
 			t.Logf("fixture=%s encoding=%s requested_compression=%s actual_compression=%s encoded_raw_bytes=%d stored_bytes=%d ratio_vs_values=%.4f ratio_vs_encoded=%.4f min=%d max=%d",
-				fx.name, cfg.Encoding, cfg.Compression, g.Compression, g.RawBytes, len(g.Payload),
-				float64(len(g.Payload))/float64(len(fx.values)*8),
-				float64(len(g.Payload))/float64(g.RawBytes),
+				fx.name, cfg.Encoding, cfg.Compression, g.Compression, g.RawBytes, g.StoredBytes,
+				float64(g.StoredBytes)/float64(len(fx.values)*8),
+				float64(g.StoredBytes)/float64(g.RawBytes),
 				g.Min, g.Max)
 		}
 	}
+}
+
+func reportGranuleBenchMetrics(b *testing.B, rows int, valueBytes int, storedBytes int) {
+	b.Helper()
+	if b.N == 0 || rows == 0 {
+		return
+	}
+	elapsed := b.Elapsed()
+	totalRows := float64(b.N) * float64(rows)
+	if elapsed > 0 {
+		seconds := elapsed.Seconds()
+		b.ReportMetric(totalRows/seconds, "rows/s")
+		b.ReportMetric(totalRows/seconds, "values/s")
+		b.ReportMetric(float64(b.N)*float64(valueBytes)/seconds/(1024*1024), "MiB/s")
+		b.ReportMetric(float64(elapsed.Nanoseconds())/totalRows, "ns/row")
+	}
+	b.ReportMetric(float64(valueBytes)/float64(rows), "value_B/row")
+	b.ReportMetric(float64(storedBytes)/float64(rows), "stored_B/row")
 }
 
 func makeMonotonic(n int) []int64 {

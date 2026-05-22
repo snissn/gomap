@@ -53,29 +53,29 @@ func SummarizeJSONBenchDataset(ds JSONBenchDataset, rowsPerGranule int, configs 
 				}
 				encoded = append(encoded, g)
 				summary.EncodedRawBytes += g.RawBytes
-				summary.StoredBytes += len(g.Payload)
+				summary.StoredBytes += g.StoredBytes
 				summary.ActualCompressionMix[g.Compression]++
 			}
 			summary.EncodeDuration = time.Since(start)
 			summary.Granules = len(encoded)
 
 			start = time.Now()
+			var reader GranuleReader
 			for _, g := range encoded {
-				if _, err := DecodeInt64(nil, g); err != nil {
+				if _, err := reader.DecodeInt64(g); err != nil {
 					return nil, fmt.Errorf("decode column=%s config=%s/%s: %w", name, cfg.Encoding, cfg.Compression, err)
 				}
 			}
 			summary.DecodeDuration = time.Since(start)
 
 			start = time.Now()
-			var scratch []int64
+			var scanReader GranuleReader
 			for _, g := range encoded {
-				count, out, err := RangeScanCount(g, low, high, scratch)
+				count, err := scanReader.RangeScanCountInt64(g, low, high)
 				if err != nil {
 					return nil, fmt.Errorf("range scan column=%s config=%s/%s: %w", name, cfg.Encoding, cfg.Compression, err)
 				}
 				summary.RangeScanMatches += count
-				scratch = out
 			}
 			summary.RangeScanDuration = time.Since(start)
 			out = append(out, summary)
