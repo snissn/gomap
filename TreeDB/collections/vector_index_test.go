@@ -171,7 +171,7 @@ func TestCollectionVectorIndexSearchKeepsExtraCandidatesThroughAttach(t *testing
 	}
 }
 
-func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) {
+func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentIDForDiverseNeighbors(t *testing.T) {
 	index, err := newVectorIndex(nil, VectorIndexOptions{
 		Name:   "embedding",
 		Field:  "embedding",
@@ -182,8 +182,8 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 	index.nodes = []vectorIndexNode{
 		{documentID: []byte("from"), vector: []float32{1, 0}},
-		{documentID: []byte("b"), vector: []float32{0.8, 0.2}},
-		{documentID: []byte("a"), vector: []float32{0.8, 0.2}},
+		{documentID: []byte("b"), vector: unitVectorAtDegrees(10)},
+		{documentID: []byte("a"), vector: unitVectorAtDegrees(-10)},
 		{documentID: []byte("far"), vector: []float32{0, 1}},
 	}
 	for i := range index.nodes {
@@ -191,12 +191,174 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentID(t *testing.T) 
 	}
 
 	got := index.pruneLayerNeighborsLocked(0, []vectorIndexNeighbor{
-		{nodeID: 3, distance: 1},
-		{nodeID: 1, distance: 0.03},
-		{nodeID: 2, distance: 0.03},
+		{nodeID: 3, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[3].vector)},
+		{nodeID: 1, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[2].vector)},
 	}, 2)
 	if len(got) != 2 || got[0].nodeID != 2 || got[1].nodeID != 1 {
 		t.Fatalf("pruned neighbors=%v want [2 1]", got)
+	}
+}
+
+func TestVectorIndexLevelForDocumentIDUsesMDependentHNSWDistribution(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      16,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+
+	const docs = 65536
+	var ge1, ge2, ge3 int
+	for i := 0; i < docs; i++ {
+		level := index.levelForDocumentID([]byte(fmt.Sprintf("doc-%06d", i)))
+		if level >= 1 {
+			ge1++
+		}
+		if level >= 2 {
+			ge2++
+		}
+		if level >= 3 {
+			ge3++
+		}
+	}
+	if ge1 < docs/20 || ge1 > docs/12 {
+		t.Fatalf("level>=1 count=%d, want roughly docs/M=%d", ge1, docs/16)
+	}
+	if ge2 < docs/400 || ge2 > docs/160 {
+		t.Fatalf("level>=2 count=%d, want roughly docs/M^2=%d", ge2, docs/(16*16))
+	}
+	if ge3 < 1 || ge3 > docs/2000 {
+		t.Fatalf("level>=3 count=%d, want roughly docs/M^3=%d", ge3, docs/(16*16*16))
+	}
+}
+
+func TestVectorIndexSelectLayerNeighborsUsesHNSWDiversity(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("query"), vector: query, level: 0},
+		{documentID: []byte("a"), vector: unitVectorAtDegrees(5), level: 0},
+		{documentID: []byte("redundant"), vector: unitVectorAtDegrees(6), level: 0},
+		{documentID: []byte("diverse"), vector: unitVectorAtDegrees(-7), level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: mustExactVectorDistance(t, query, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, query, index.nodes[2].vector)},
+		{nodeID: 3, distance: mustExactVectorDistance(t, query, index.nodes[3].vector)},
+	}
+
+	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 2, 0)
+	if len(got) != 2 || got[0] != 1 || got[1] != 3 {
+		t.Fatalf("selected neighbors=%v want diverse [1 3]", got)
+	}
+}
+
+func TestVectorIndexSelectLayerNeighborsSkipsDiversityForInnerProduct(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricInnerProduct,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("query"), vector: query, level: 0},
+		{documentID: []byte("best"), vector: []float32{10, 0}, level: 0},
+		{documentID: []byte("next"), vector: []float32{9, 0}, level: 0},
+		{documentID: []byte("orthogonal"), vector: []float32{0, 1}, level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: -10},
+		{nodeID: 2, distance: -9},
+		{nodeID: 3, distance: 0},
+	}
+
+	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 2, 0)
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("selected neighbors=%v want inner-product top candidates [1 2]", got)
+	}
+}
+
+func TestVectorIndexPruneLayerNeighborsUsesHNSWDiversity(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("from"), vector: []float32{1, 0}, level: 0},
+		{documentID: []byte("a"), vector: unitVectorAtDegrees(5), level: 0},
+		{documentID: []byte("redundant"), vector: unitVectorAtDegrees(6), level: 0},
+		{documentID: []byte("diverse"), vector: unitVectorAtDegrees(-7), level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+
+	got := index.pruneLayerNeighborsLocked(0, []vectorIndexNeighbor{
+		{nodeID: 1, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[2].vector)},
+		{nodeID: 3, distance: mustExactVectorDistance(t, index.nodes[0].vector, index.nodes[3].vector)},
+	}, 2)
+	if len(got) != 2 || got[0].nodeID != 1 || got[1].nodeID != 3 {
+		t.Fatalf("pruned neighbors=%v want diverse [1 3]", got)
+	}
+}
+
+func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+		M:      4,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	query := []float32{1, 0}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("query"), vector: query, level: 0},
+		{documentID: []byte("a"), vector: unitVectorAtDegrees(5), level: 0},
+		{documentID: []byte("b"), vector: unitVectorAtDegrees(6), level: 0},
+		{documentID: []byte("c"), vector: unitVectorAtDegrees(7), level: 0},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	candidates := []vectorIndexCandidate{
+		{nodeID: 1, distance: mustExactVectorDistance(t, query, index.nodes[1].vector)},
+		{nodeID: 2, distance: mustExactVectorDistance(t, query, index.nodes[2].vector)},
+		{nodeID: 3, distance: mustExactVectorDistance(t, query, index.nodes[3].vector)},
+	}
+
+	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 3, 0)
+	if len(got) != 3 {
+		t.Fatalf("selected %d neighbors=%v, want backfilled degree 3", len(got), got)
 	}
 }
 
@@ -264,6 +426,44 @@ func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 	if len(got) != 2 || got[0] != 2 || got[1] != 3 {
 		t.Fatalf("selected neighbors=%v want [2 3]", got)
 	}
+}
+
+func TestVectorIndexCandidateDiversityAllowsEqualDistance(t *testing.T) {
+	index, err := newVectorIndex(nil, VectorIndexOptions{
+		Name:   "embedding",
+		Field:  "embedding",
+		Metric: VectorMetricCosine,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	index.nodes = []vectorIndexNode{
+		{documentID: []byte("selected"), vector: []float32{1, 0}},
+		{documentID: []byte("candidate"), vector: []float32{0, 1}},
+	}
+	for i := range index.nodes {
+		index.nodes[i].cacheVectorNorms()
+	}
+	if !index.vectorIndexCandidateIsDiverseLocked(
+		vectorIndexCandidate{nodeID: 1, distance: 1},
+		[]vectorIndexCandidate{{nodeID: 0, distance: 0.1}},
+	) {
+		t.Fatal("equal candidate-to-selected distance was treated as occluded")
+	}
+}
+
+func unitVectorAtDegrees(degrees float64) []float32 {
+	radians := degrees * math.Pi / 180
+	return []float32{float32(math.Cos(radians)), float32(math.Sin(radians))}
+}
+
+func mustExactVectorDistance(t *testing.T, left, right []float32) float32 {
+	t.Helper()
+	distance, err := exactVectorDistance(left, right, VectorMetricCosine)
+	if err != nil {
+		t.Fatalf("exact vector distance: %v", err)
+	}
+	return distance
 }
 
 func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {

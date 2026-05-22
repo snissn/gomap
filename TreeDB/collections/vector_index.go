@@ -1110,10 +1110,17 @@ func (idx *VectorIndex) levelForDocumentID(documentID []byte) int {
 	var seed [8]byte
 	binary.LittleEndian.PutUint64(seed[:], xxhash.Sum64(documentID)^xxhash.Sum64String(idx.name))
 	hash := xxhash.Sum64(seed[:])
-	level := 0
-	for level < 32 && hash&0x3 == 0 {
-		level++
-		hash >>= 2
+	promotionBase := idx.m
+	if promotionBase < 2 {
+		promotionBase = 2
+	}
+	if hash == 0 {
+		return 32
+	}
+	u := (float64(hash>>11) + 1) / (float64(uint64(1)<<53) + 1)
+	level := int(-math.Log(u) / math.Log(float64(promotionBase)))
+	if level > 32 {
+		return 32
 	}
 	return level
 }
@@ -1293,18 +1300,7 @@ func (idx *VectorIndex) pruneLayerNeighborsLocked(_ int, neighbors []vectorIndex
 		}
 		scored = append(scored, vectorIndexCandidate{nodeID: neighborID, distance: distance})
 	}
-	slices.SortFunc(scored, func(left, right vectorIndexCandidate) int {
-		if left.distance < right.distance {
-			return -1
-		}
-		if left.distance > right.distance {
-			return 1
-		}
-		return bytes.Compare(idx.nodes[left.nodeID].documentID, idx.nodes[right.nodeID].documentID)
-	})
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
+	scored = idx.selectDiverseCandidatesLocked(scored, limit)
 	out := neighbors[:0]
 	for _, candidate := range scored {
 		out = append(out, vectorIndexNeighbor{nodeID: candidate.nodeID, distance: candidate.distance})
@@ -2023,15 +2019,85 @@ func (idx *VectorIndex) selectLayerNeighborsLocked(vector []float32, vectorNormS
 		}
 		scored = append(scored, candidate)
 	}
-	sortVectorIndexCandidates(scored)
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
+	scored = idx.selectDiverseCandidatesLocked(scored, limit)
 	out := make([]int, len(scored))
 	for i := range scored {
 		out[i] = scored[i].nodeID
 	}
 	return out
+}
+
+func (idx *VectorIndex) selectDiverseCandidatesLocked(candidates []vectorIndexCandidate, limit int) []vectorIndexCandidate {
+	if limit <= 0 || len(candidates) == 0 {
+		return nil
+	}
+	idx.sortVectorIndexCandidatesByDistanceLocked(candidates)
+	if len(candidates) <= limit {
+		return candidates
+	}
+	if idx.metric == VectorMetricInnerProduct {
+		return candidates[:limit]
+	}
+	var selectedStack [128]vectorIndexCandidate
+	selected := selectedStack[:0]
+	if limit > len(selectedStack) {
+		selected = make([]vectorIndexCandidate, 0, limit)
+	}
+	var rejectedStack [128]vectorIndexCandidate
+	rejected := rejectedStack[:0]
+	if len(candidates) > len(rejectedStack) {
+		rejected = make([]vectorIndexCandidate, 0, len(candidates))
+	}
+	for _, candidate := range candidates {
+		if len(selected) >= limit {
+			rejected = append(rejected, candidate)
+			continue
+		}
+		if idx.vectorIndexCandidateIsDiverseLocked(candidate, selected) {
+			selected = append(selected, candidate)
+		} else {
+			rejected = append(rejected, candidate)
+		}
+	}
+	for i := 0; len(selected) < limit && i < len(rejected); i++ {
+		selected = append(selected, rejected[i])
+	}
+	out := candidates[:0]
+	out = append(out, selected...)
+	return out
+}
+
+func (idx *VectorIndex) vectorIndexCandidateIsDiverseLocked(candidate vectorIndexCandidate, selected []vectorIndexCandidate) bool {
+	for _, existing := range selected {
+		distance := idx.distanceBetweenNodesLocked(candidate.nodeID, existing.nodeID)
+		if distance < candidate.distance {
+			return false
+		}
+	}
+	return true
+}
+
+func (idx *VectorIndex) sortVectorIndexCandidatesByDistanceLocked(candidates []vectorIndexCandidate) {
+	slices.SortFunc(candidates, func(left, right vectorIndexCandidate) int {
+		if left.distance < right.distance {
+			return -1
+		}
+		if left.distance > right.distance {
+			return 1
+		}
+		if left.nodeID >= 0 && left.nodeID < len(idx.nodes) && right.nodeID >= 0 && right.nodeID < len(idx.nodes) {
+			if cmp := bytes.Compare(idx.nodes[left.nodeID].documentID, idx.nodes[right.nodeID].documentID); cmp != 0 {
+				return cmp
+			}
+		}
+		if left.nodeID < right.nodeID {
+			return -1
+		}
+		if left.nodeID > right.nodeID {
+			return 1
+		}
+		return 0
+	})
 }
 
 func (idx *VectorIndex) distanceToNodeLocked(query []float32, nodeID int) float32 {
