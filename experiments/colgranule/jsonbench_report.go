@@ -92,6 +92,9 @@ func DefaultJSONBenchConfigs() []Config {
 		{Encoding: EncodingDeltaVarint, Compression: CompressionNone},
 		{Encoding: EncodingDeltaVarint, Compression: CompressionSnappy},
 		{Encoding: EncodingDeltaVarint, Compression: CompressionLZ4},
+		{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionNone},
+		{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionSnappy},
+		{Encoding: EncodingDoubleDeltaVarint, Compression: CompressionLZ4},
 	}
 }
 
