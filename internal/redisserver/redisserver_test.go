@@ -3,6 +3,7 @@ package redisserver
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -102,7 +103,7 @@ func readResp(r *bufio.Reader) (respValue, error) {
 		return respValue{kind: '+', str: line}, err
 	case '-':
 		line, err := readLine(r)
-		return respValue{kind: '-', str: line, err: fmt.Errorf("%s", line)}, err
+		return respValue{kind: '-', str: line, err: errors.New(line)}, err
 	case ':':
 		line, err := readLine(r)
 		if err != nil {

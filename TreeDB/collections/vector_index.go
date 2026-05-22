@@ -1593,7 +1593,8 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 		if !found {
 			continue
 		}
-		record := DocumentRecord{ID: bytes.Clone(documentID), Document: document}
+		resultID := bytes.Clone(documentID)
+		record := DocumentRecord{ID: resultID, Document: document}
 		if filter != nil {
 			include, err := filter(record)
 			if err != nil {
@@ -1621,7 +1622,7 @@ func (idx *VectorIndex) rerankCandidates(query []float32, candidateIDs [][]byte,
 			trace.RerankCount++
 		}
 		results = appendBoundedVectorSearchResult(results, VectorSearchResult{
-			DocumentID: bytes.Clone(documentID),
+			DocumentID: resultID,
 			Distance:   distance,
 			Document:   document,
 		}, topK)
@@ -2517,9 +2518,19 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 	}
 	defer func() { _ = materializer.Close() }()
 
-	documentIDs := make([][]byte, 0, opts.TopK)
-	vectorMatrix := make([]float32, 0, opts.TopK*queryDims)
-	documentNorms := make([]float64, 0, opts.TopK)
+	estimatedDocs := opts.TopK
+	idx.mu.RLock()
+	if liveDocs := len(idx.currentNode); liveDocs > estimatedDocs {
+		estimatedDocs = liveDocs
+	}
+	idx.mu.RUnlock()
+	matrixCap := 0
+	if estimatedDocs <= maxCollectionInt/queryDims {
+		matrixCap = estimatedDocs * queryDims
+	}
+	documentIDs := make([][]byte, 0, estimatedDocs)
+	vectorMatrix := make([]float32, 0, matrixCap)
+	documentNorms := make([]float64, 0, estimatedDocs)
 	_, err = idx.collection.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		vector, ok, err := vectorFromStoredDocument(materializer, record.Document, idx.fieldPath)
 		if err != nil {
@@ -2567,7 +2578,7 @@ func (idx *VectorIndex) checkRecallExactBatch(queries [][]float32, opts VectorIn
 			queryMatrix = append(queryMatrix, query...)
 		}
 		distances := make([]float64, len(queryBatch)*len(documentIDs))
-		angularDistancesFloat32Batch(queryMatrix, vectorMatrix, len(queryBatch), len(documentIDs), queryDims, distances)
+		angularDistancesFloat32Batch(queryMatrix, vectorMatrix, documentNorms, len(queryBatch), len(documentIDs), queryDims, distances)
 		for batchIndex := range queryBatch {
 			row := distances[batchIndex*len(documentIDs) : (batchIndex+1)*len(documentIDs)]
 			matches := make([]VectorSearchResult, 0, opts.TopK)

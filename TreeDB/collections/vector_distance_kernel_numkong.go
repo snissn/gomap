@@ -17,7 +17,7 @@ func dotProductFloat32(left, right []float32) float64 {
 	return nk.DotF32(left, right)
 }
 
-func angularDistancesFloat32Batch(queries, documents []float32, queryCount, documentCount, dims int, distances []float64) {
+func angularDistancesFloat32Batch(queries, documents []float32, documentNorms []float64, queryCount, documentCount, dims int, distances []float64) {
 	// CheckRecall compares against SearchVectorsExact, so its batch baseline must
 	// use the same float64 accumulation instead of NumKong's F32 angular kernel.
 	for queryIndex := 0; queryIndex < queryCount; queryIndex++ {
@@ -26,9 +26,8 @@ func angularDistancesFloat32Batch(queries, documents []float32, queryCount, docu
 		row := distances[queryIndex*documentCount : (queryIndex+1)*documentCount]
 		for docIndex := 0; docIndex < documentCount; docIndex++ {
 			document := documents[docIndex*dims : (docIndex+1)*dims]
-			documentNorm := vectorNormSquared(document)
 			dot := dotProductFloat32Wide(query, document)
-			row[docIndex] = 1 - dot/(math.Sqrt(queryNorm)*math.Sqrt(documentNorm))
+			row[docIndex] = 1 - dot/(math.Sqrt(queryNorm)*math.Sqrt(documentNorms[docIndex]))
 		}
 	}
 }

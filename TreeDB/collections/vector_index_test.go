@@ -935,6 +935,57 @@ func TestCollectionVectorIndexCheckRecall(t *testing.T) {
 	}
 }
 
+func TestCollectionVectorIndexCheckRecallExactBatchMatchesPerQueryExact(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := openVectorIndexTestCollection(t, d)
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("e")},
+		[][]byte{
+			[]byte(`{"embedding":[1,0,0]}`),
+			[]byte(`{"embedding":[0.9,0.1,0]}`),
+			[]byte(`{"embedding":[0.1,0.9,0]}`),
+			[]byte(`{"embedding":[0,1,0]}`),
+			[]byte(`{"embedding":[0,0.1,0.9]}`),
+		},
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
+	if err != nil {
+		t.Fatalf("build vector index: %v", err)
+	}
+	queries := [][]float32{{1, 0.05, 0}, {0.05, 1, 0}}
+	got, usedBatch, err := index.checkRecallExactBatch(queries, VectorIndexSearchOptions{TopK: 3})
+	if err != nil {
+		t.Fatalf("check recall exact batch: %v", err)
+	}
+	if !usedBatch {
+		t.Fatal("exact recall did not use batch path")
+	}
+	for i, query := range queries {
+		want, err := col.SearchVectorsExact(query, VectorSearchOptions{
+			Field:  "embedding",
+			Metric: VectorMetricCosine,
+			TopK:   3,
+		})
+		if err != nil {
+			t.Fatalf("exact search query %d: %v", i, err)
+		}
+		if len(got[i]) != len(want) {
+			t.Fatalf("query %d batch len=%d want %d", i, len(got[i]), len(want))
+		}
+		for j := range want {
+			if !bytes.Equal(got[i][j].DocumentID, want[j].DocumentID) || got[i][j].Distance != want[j].Distance {
+				t.Fatalf("query %d result %d batch=%+v want=%+v", i, j, got[i][j], want[j])
+			}
+		}
+	}
+}
+
 func TestCollectionVectorIndexCheckRecallUsesIndexRangeFilter(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -1028,8 +1079,12 @@ func TestAngularDistancesFloat32BatchMatchesExactCosine(t *testing.T) {
 	for _, document := range documents {
 		documentMatrix = append(documentMatrix, document...)
 	}
+	documentNorms := make([]float64, len(documents))
+	for i, document := range documents {
+		documentNorms[i] = vectorNormSquared(document)
+	}
 	distances := make([]float64, len(queries)*len(documents))
-	angularDistancesFloat32Batch(queryMatrix, documentMatrix, len(queries), len(documents), len(queries[0]), distances)
+	angularDistancesFloat32Batch(queryMatrix, documentMatrix, documentNorms, len(queries), len(documents), len(queries[0]), distances)
 	for queryIndex, query := range queries {
 		for docIndex, document := range documents {
 			want, err := exactVectorDistance(query, document, VectorMetricCosine)
