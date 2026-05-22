@@ -61,11 +61,11 @@ type columnDictionaryCodeGroupCountOneShotReducer struct {
 
 type columnDictionaryCodeGroupCountDistinctOneShotAsset struct {
 	groupRaw        []byte
+	groupRef        ColumnAssetRef
 	groupPayload    columnDictionaryCodesAssetPayload
-	groupDictionary []string
 	distinctRaw     []byte
+	distinctRef     ColumnAssetRef
 	distinctPayload columnDictionaryCodesAssetPayload
-	distinctDict    []string
 	bytes           int64
 }
 
@@ -229,16 +229,29 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		if !readCache.lastView {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
-		asset, payload, err := decodeColumnDictionaryCodesAssetPayload(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
+		dictCur, cardinality, rowCount, err := decodeColumnDictionaryCodesAssetHeader(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
 		}
-		localToGlobal, ok := reducer.translateDictionary(asset.Dictionary)
+		localToGlobal := reducer.prepareDictionary(cardinality)
+		ok := true
+		for localCode := 0; localCode < cardinality; localCode++ {
+			if !reducer.translateDictionaryValue(localToGlobal, localCode, dictCur.stringBytes()) {
+				ok = false
+				break
+			}
+			if dictCur.err != nil {
+				break
+			}
+		}
+		if dictCur.err != nil {
+			return ColumnPhysicalQueryResult{}, true, dictCur.err
+		}
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
-		cur := manifestCursor{raw: raw, pos: payload.offset}
-		for i := 0; i < payload.rowCount; i++ {
+		cur := manifestCursor{raw: raw, pos: dictCur.pos}
+		for i := 0; i < rowCount; i++ {
 			localCode := cur.u32()
 			if int(localCode) >= len(localToGlobal) {
 				return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
@@ -550,14 +563,28 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		if !readCache.lastView {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
-		groupAsset, groupPayload, err := decodeColumnDictionaryCodesAssetPayload(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
+		ok := true
+		groupCur, groupCardinality, groupRows, err := decodeColumnDictionaryCodesAssetHeader(groupRaw, groupSnapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
 		}
-		_, ok := reducer.translateGroupDictionary(groupAsset.Dictionary)
+		reducer.prepareGroupDictionary(groupCardinality)
+		for localCode := 0; localCode < groupCardinality; localCode++ {
+			if !reducer.translateGroupDictionaryValue(localCode, groupCur.stringBytes()) {
+				ok = false
+				break
+			}
+			if groupCur.err != nil {
+				break
+			}
+		}
+		if groupCur.err != nil {
+			return ColumnPhysicalQueryResult{}, true, groupCur.err
+		}
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
+		groupPayload := columnDictionaryCodesAssetPayload{rowCount: groupRows, offset: groupCur.pos}
 		distinctRaw, err := readCache.read(distinctSnapshot.AssetRef, scratch)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn, err)
@@ -566,14 +593,27 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		if !readCache.lastView {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
-		distinctAsset, distinctPayload, err := decodeColumnDictionaryCodesAssetPayload(distinctRaw, distinctSnapshot.AssetRef, view.Config, view.CollectionName, req.DistinctColumn, false)
+		distinctCur, distinctCardinality, distinctRows, err := decodeColumnDictionaryCodesAssetHeader(distinctRaw, distinctSnapshot.AssetRef, view.Config, view.CollectionName, req.DistinctColumn, false)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
 		}
+		reducer.prepareDistinctDictionary(distinctCardinality)
+		for localCode := 0; localCode < distinctCardinality; localCode++ {
+			if !reducer.translateDistinctDictionaryValue(localCode, distinctCur.stringBytes()) {
+				ok = false
+				break
+			}
+			if distinctCur.err != nil {
+				break
+			}
+		}
+		if distinctCur.err != nil {
+			return ColumnPhysicalQueryResult{}, true, distinctCur.err
+		}
+		distinctPayload := columnDictionaryCodesAssetPayload{rowCount: distinctRows, offset: distinctCur.pos}
 		if groupPayload.rowCount != distinctPayload.rowCount {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary code distinct row count mismatch group=%d distinct=%d", groupPayload.rowCount, distinctPayload.rowCount)
 		}
-		_, ok = reducer.translateDistinctDictionary(distinctAsset.Dictionary)
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
@@ -592,11 +632,11 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		// appending when reads are scratch-backed.
 		reducer.assets = append(reducer.assets, columnDictionaryCodeGroupCountDistinctOneShotAsset{
 			groupRaw:        groupRaw,
+			groupRef:        groupSnapshot.AssetRef,
 			groupPayload:    groupPayload,
-			groupDictionary: groupAsset.Dictionary,
 			distinctRaw:     distinctRaw,
+			distinctRef:     distinctSnapshot.AssetRef,
 			distinctPayload: distinctPayload,
-			distinctDict:    distinctAsset.Dictionary,
 			bytes:           groupSnapshot.AssetRef.Length + distinctSnapshot.AssetRef.Length,
 		})
 		reducer.assetBytes += groupSnapshot.AssetRef.Length + distinctSnapshot.AssetRef.Length
@@ -614,7 +654,7 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 	reducer.wordsPerGroup = wordsPerGroup
 	reducer.groupCounts = make([]int, len(reducer.groupDict))
 	reducer.seen = make([]uint64, totalWords)
-	rows, err := reducer.reduceAssets()
+	rows, err := reducer.reduceAssets(view, req)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
@@ -656,6 +696,29 @@ func (r *columnDictionaryCodeGroupCountOneShotReducer) translateDictionary(dicti
 	return localToGlobal, true
 }
 
+func (r *columnDictionaryCodeGroupCountOneShotReducer) prepareDictionary(cardinality int) []uint32 {
+	if cap(r.localToGlobal) < cardinality {
+		r.localToGlobal = make([]uint32, cardinality)
+	}
+	return r.localToGlobal[:cardinality]
+}
+
+func (r *columnDictionaryCodeGroupCountOneShotReducer) translateDictionaryValue(localToGlobal []uint32, localCode int, value []byte) bool {
+	globalCode, ok := r.byValue[unsafeStringFromBytes(value)]
+	if !ok {
+		if uint64(len(r.dictionary)) == uint64(^uint32(0)) {
+			return false
+		}
+		globalCode = uint32(len(r.dictionary))
+		key := columnDictionaryCodeOwnedString(value)
+		r.byValue[key] = globalCode
+		r.dictionary = append(r.dictionary, key)
+		r.counts = append(r.counts, 0)
+	}
+	localToGlobal[localCode] = globalCode
+	return true
+}
+
 func (r *columnDictionaryCodeGroupCountOneShotReducer) groups() []ColumnPhysicalQueryGroup {
 	r.result = r.result[:0]
 	for code, count := range r.counts {
@@ -671,72 +734,79 @@ func (r *columnDictionaryCodeGroupCountOneShotReducer) groups() []ColumnPhysical
 	return r.result
 }
 
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateGroupDictionary(dictionary []string) ([]uint32, bool) {
-	if cap(r.groupLocal) < len(dictionary) {
-		r.groupLocal = make([]uint32, len(dictionary))
+func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) prepareGroupDictionary(cardinality int) []uint32 {
+	if cap(r.groupLocal) < cardinality {
+		r.groupLocal = make([]uint32, cardinality)
 	}
-	localToGlobal := r.groupLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		globalCode, ok := r.groupByValue[value]
-		if !ok {
-			if uint64(len(r.groupDict)) == uint64(^uint32(0)) {
-				return nil, false
-			}
-			globalCode = uint32(len(r.groupDict))
-			r.groupByValue[value] = globalCode
-			r.groupDict = append(r.groupDict, value)
+	return r.groupLocal[:cardinality]
+}
+
+func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateGroupDictionaryValue(localCode int, value []byte) bool {
+	globalCode, ok := r.groupByValue[unsafeStringFromBytes(value)]
+	if !ok {
+		if uint64(len(r.groupDict)) == uint64(^uint32(0)) {
+			return false
 		}
-		localToGlobal[localCode] = globalCode
+		globalCode = uint32(len(r.groupDict))
+		key := columnDictionaryCodeOwnedString(value)
+		r.groupByValue[key] = globalCode
+		r.groupDict = append(r.groupDict, key)
 	}
-	return localToGlobal, true
+	r.groupLocal[localCode] = globalCode
+	return true
 }
 
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateDistinctDictionary(dictionary []string) ([]uint32, bool) {
-	if cap(r.distinctLocal) < len(dictionary) {
-		r.distinctLocal = make([]uint32, len(dictionary))
+func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) prepareDistinctDictionary(cardinality int) []uint32 {
+	if cap(r.distinctLocal) < cardinality {
+		r.distinctLocal = make([]uint32, cardinality)
 	}
-	localToGlobal := r.distinctLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		globalCode, ok := r.distinctByValue[value]
-		if !ok {
-			if uint64(len(r.distinctByValue)) == uint64(^uint32(0)) {
-				return nil, false
-			}
-			globalCode = uint32(len(r.distinctByValue))
-			r.distinctByValue[value] = globalCode
+	return r.distinctLocal[:cardinality]
+}
+
+func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateDistinctDictionaryValue(localCode int, value []byte) bool {
+	globalCode, ok := r.distinctByValue[unsafeStringFromBytes(value)]
+	if !ok {
+		if uint64(len(r.distinctByValue)) == uint64(^uint32(0)) {
+			return false
 		}
-		localToGlobal[localCode] = globalCode
+		globalCode = uint32(len(r.distinctByValue))
+		r.distinctByValue[columnDictionaryCodeOwnedString(value)] = globalCode
 	}
-	return localToGlobal, true
+	r.distinctLocal[localCode] = globalCode
+	return true
 }
 
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateKnownGroupDictionary(dictionary []string) []uint32 {
-	if cap(r.groupLocal) < len(dictionary) {
-		r.groupLocal = make([]uint32, len(dictionary))
-	}
-	localToGlobal := r.groupLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		localToGlobal[localCode] = r.groupByValue[value]
-	}
-	return localToGlobal
-}
-
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) translateKnownDistinctDictionary(dictionary []string) []uint32 {
-	if cap(r.distinctLocal) < len(dictionary) {
-		r.distinctLocal = make([]uint32, len(dictionary))
-	}
-	localToGlobal := r.distinctLocal[:len(dictionary)]
-	for localCode, value := range dictionary {
-		localToGlobal[localCode] = r.distinctByValue[value]
-	}
-	return localToGlobal
-}
-
-func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets() (int, error) {
+func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (int, error) {
 	rows := 0
 	for _, asset := range r.assets {
-		groupMap := r.translateKnownGroupDictionary(asset.groupDictionary)
-		distinctMap := r.translateKnownDistinctDictionary(asset.distinctDict)
+		groupDictCur, groupCardinality, _, err := decodeColumnDictionaryCodesAssetHeader(asset.groupRaw, asset.groupRef, view.Config, view.CollectionName, req.GroupColumn, false)
+		if err != nil {
+			return 0, err
+		}
+		groupMap := r.prepareGroupDictionary(groupCardinality)
+		for localCode := 0; localCode < groupCardinality; localCode++ {
+			groupMap[localCode] = r.groupByValue[unsafeStringFromBytes(groupDictCur.stringBytes())]
+			if groupDictCur.err != nil {
+				break
+			}
+		}
+		if groupDictCur.err != nil {
+			return 0, groupDictCur.err
+		}
+		distinctDictCur, distinctCardinality, _, err := decodeColumnDictionaryCodesAssetHeader(asset.distinctRaw, asset.distinctRef, view.Config, view.CollectionName, req.DistinctColumn, false)
+		if err != nil {
+			return 0, err
+		}
+		distinctMap := r.prepareDistinctDictionary(distinctCardinality)
+		for localCode := 0; localCode < distinctCardinality; localCode++ {
+			distinctMap[localCode] = r.distinctByValue[unsafeStringFromBytes(distinctDictCur.stringBytes())]
+			if distinctDictCur.err != nil {
+				break
+			}
+		}
+		if distinctDictCur.err != nil {
+			return 0, distinctDictCur.err
+		}
 		groupCur := manifestCursor{raw: asset.groupRaw, pos: asset.groupPayload.offset}
 		distinctCur := manifestCursor{raw: asset.distinctRaw, pos: asset.distinctPayload.offset}
 		for i := 0; i < asset.groupPayload.rowCount; i++ {
