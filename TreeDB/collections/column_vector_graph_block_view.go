@@ -68,13 +68,14 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 }
 
 type columnVectorGraphBlockView struct {
-	reader       *columnVectorGraphPhysicalRowReader
-	block        *columnPhysicalRowReaderBlock
-	idSpans      []columnVectorGraphByteSpan
-	vectorSpans  []columnVectorGraphVectorSpan
-	invNorms     []float32
-	adjSpans     []columnVectorGraphAdjacencySpan
-	rowValidated []bool
+	reader              *columnVectorGraphPhysicalRowReader
+	block               *columnPhysicalRowReaderBlock
+	idSpans             []columnVectorGraphByteSpan
+	vectorSpans         []columnVectorGraphVectorSpan
+	invNorms            []float32
+	adjSpans            []columnVectorGraphAdjacencySpan
+	rowValidated        []bool
+	adjacencyDirectView bool
 }
 
 func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
@@ -207,13 +208,14 @@ func newColumnVectorGraphBlockView(reader *columnVectorGraphPhysicalRowReader, b
 	}
 	rows := len(block.rowOffsets)
 	view := &columnVectorGraphBlockView{
-		reader:       reader,
-		block:        block,
-		idSpans:      make([]columnVectorGraphByteSpan, rows),
-		vectorSpans:  make([]columnVectorGraphVectorSpan, rows),
-		invNorms:     make([]float32, rows),
-		adjSpans:     make([]columnVectorGraphAdjacencySpan, rows),
-		rowValidated: make([]bool, rows),
+		reader:              reader,
+		block:               block,
+		idSpans:             make([]columnVectorGraphByteSpan, rows),
+		vectorSpans:         make([]columnVectorGraphVectorSpan, rows),
+		invNorms:            make([]float32, rows),
+		adjSpans:            make([]columnVectorGraphAdjacencySpan, rows),
+		rowValidated:        make([]bool, rows),
+		adjacencyDirectView: columnVectorGraphBlockViewAdjacencyDirectView(reader),
 	}
 	for rowIndex := 0; rowIndex < rows; rowIndex++ {
 		if err := view.indexRow(rowIndex); err != nil {
@@ -382,9 +384,14 @@ func (v *columnVectorGraphBlockView) vector(rowIndex int, scratch []float32) ([]
 	if err := v.checkRowIndex(rowIndex); err != nil {
 		return nil, scratch, err
 	}
+	vector, scratch := v.vectorUnchecked(rowIndex, scratch)
+	return vector, scratch, nil
+}
+
+func (v *columnVectorGraphBlockView) vectorUnchecked(rowIndex int, scratch []float32) ([]float32, []float32) {
 	span := v.vectorSpans[rowIndex]
 	if span.dims == 0 {
-		return nil, scratch, nil
+		return nil, scratch
 	}
 	base := len(scratch)
 	need := base + span.dims
@@ -397,21 +404,25 @@ func (v *columnVectorGraphBlockView) vector(rowIndex int, scratch []float32) ([]
 	}
 	if columnPhysicalNativeLittleEndian {
 		columnPhysicalCopyLittleEndianFloat32Bytes(scratch[base:need], v.block.raw[span.start:span.end])
-		return scratch[base:need], scratch, nil
+		return scratch[base:need], scratch
 	}
 	pos := span.start
 	for i := base; i < need; i++ {
 		scratch[i] = math.Float32frombits(uint32(v.block.raw[pos]) | uint32(v.block.raw[pos+1])<<8 | uint32(v.block.raw[pos+2])<<16 | uint32(v.block.raw[pos+3])<<24)
 		pos += 4
 	}
-	return scratch[base:], scratch, nil
+	return scratch[base:], scratch
 }
 
 func (v *columnVectorGraphBlockView) invNorm(rowIndex int) (float32, error) {
 	if err := v.checkRowIndex(rowIndex); err != nil {
 		return 0, err
 	}
-	return v.invNorms[rowIndex], nil
+	return v.invNormUnchecked(rowIndex), nil
+}
+
+func (v *columnVectorGraphBlockView) invNormUnchecked(rowIndex int) float32 {
+	return v.invNorms[rowIndex]
 }
 
 func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) ([]uint32, []uint32, bool, error) {
@@ -422,7 +433,7 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 	if span.count == 0 {
 		return nil, scratch, true, nil
 	}
-	if v.adjacencyLittleEndian() {
+	if v.adjacencyDirectView {
 		adjacency, ok := columnVectorGraphLittleEndianUint32DirectView(v.block.raw[span.start:span.end], span.count)
 		if ok {
 			return adjacency, scratch, true, nil
@@ -452,6 +463,17 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 		pos += 4
 	}
 	return scratch[base:], scratch, false, nil
+}
+
+func columnVectorGraphBlockViewAdjacencyDirectView(reader *columnVectorGraphPhysicalRowReader) bool {
+	if !columnPhysicalNativeLittleEndian || reader == nil || reader.reader == nil {
+		return false
+	}
+	cols := reader.reader.view.Config.Columns
+	if len(cols) <= columnVectorGraphPhysicalRowValueAdjacency {
+		return false
+	}
+	return cols[columnVectorGraphPhysicalRowValueAdjacency].FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian
 }
 
 func columnVectorGraphLittleEndianUint32DirectView(raw []byte, count int) ([]uint32, bool) {
