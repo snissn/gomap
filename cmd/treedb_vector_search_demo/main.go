@@ -136,6 +136,8 @@ type validationResult struct {
 	Overlap          int     `json:"overlap"`
 	Recall           float64 `json:"recall"`
 	MinRecall        float64 `json:"min_recall"`
+	DurationNanos    int64   `json:"duration_nanos"`
+	Seconds          float64 `json:"seconds"`
 }
 
 type searchBenchmarkResult struct {
@@ -821,8 +823,14 @@ func insertDocuments(col *collections.Collection, docs, dims, batchSize int) err
 	return nil
 }
 
-func validateCompactedData(col *collections.Collection, idx *collections.VectorIndex, cfg config) (validationResult, error) {
-	out := validationResult{
+func validateCompactedData(col *collections.Collection, idx *collections.VectorIndex, cfg config) (out validationResult, err error) {
+	start := time.Now()
+	defer func() {
+		elapsed := phaseSince(start)
+		out.DurationNanos = elapsed.DurationNanos
+		out.Seconds = elapsed.Seconds
+	}()
+	out = validationResult{
 		DocumentsChecked: cfg.validateDocs,
 		QueriesChecked:   cfg.validateQueries,
 		MinRecall:        cfg.minRecall,

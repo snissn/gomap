@@ -1,10 +1,11 @@
 module github.com/snissn/gomap
 
-go 1.23.0
+go 1.25.0
 
 require (
 	github.com/akrylysov/pogreb v0.10.2
 	github.com/ashvardanian/NumKong v1.5.3-0.20260420003853-48cbd21db85c
+	github.com/axiomhq/simd-go v0.0.0-20260109224133-a87ae27ede09
 	github.com/bmatsuo/lmdb-go v1.8.0
 	github.com/buger/jsonparser v1.1.2
 	github.com/cespare/xxhash/v2 v2.3.0
