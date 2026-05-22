@@ -408,6 +408,10 @@ func parseValueLogAutoPolicy(raw string) (ValueLogAutoPolicy, bool) {
 }
 
 func applyFormatConfigForMaintenance(opts *Options) error {
+	return applyFormatConfigForMaintenanceWithOptions(opts, false)
+}
+
+func applyFormatConfigForMaintenanceWithOptions(opts *Options, allowCommandWAL bool) error {
 	if opts == nil {
 		return nil
 	}
@@ -416,9 +420,10 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 		if err != nil {
 			return err
 		}
-		if requiresCommandWAL {
+		if requiresCommandWAL && !allowCommandWAL {
 			return ErrCommandWALUnsupported
 		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 		return nil
 	}
 	cfg, ok, err := LoadFormatConfig(opts.Dir)
@@ -428,9 +433,11 @@ func applyFormatConfigForMaintenance(opts *Options) error {
 	if !ok {
 		return nil
 	}
-	if cfg.RequiresCommandWALV1() {
+	requiresCommandWAL := cfg.RequiresCommandWALV1()
+	if requiresCommandWAL && !allowCommandWAL {
 		return ErrCommandWALUnsupported
 	}
+	opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	cfg.ApplyToOptions(opts)
 	return nil
 }

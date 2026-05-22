@@ -81,6 +81,75 @@ func TestVacuumIndexOffline_PreservesDataAndShrinksFile(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOffline_CommandWALPreservesDataAndShrinksFile(t *testing.T) {
+	dir := t.TempDir()
+	chunkSize := int64(4 * 1024 * 1024)
+
+	d, err := Open(Options{
+		Dir:                    dir,
+		ChunkSize:              chunkSize,
+		KeepRecent:             1,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+		PreferAppendAlloc:      true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	value := bytes.Repeat([]byte("v"), 200)
+	for i := 0; i < 128; i++ {
+		b := d.NewBatch()
+		k := []byte(fmt.Sprintf("k%06d", i))
+		if err := b.Set(k, value); err != nil {
+			t.Fatalf("set: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_ = b.Close()
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	indexPath := filepath.Join(dir, indexFileName)
+	beforeInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+	if beforeInfo.Size() != chunkSize {
+		t.Fatalf("index.db before=%d want chunk floor %d", beforeInfo.Size(), chunkSize)
+	}
+
+	if err := VacuumIndexOffline(Options{Dir: dir, KeepRecent: 1}); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	afterInfo, err := os.Stat(indexPath)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if afterInfo.Size() >= beforeInfo.Size() {
+		t.Fatalf("expected command-WAL vacuum to shrink index.db: before=%d after=%d", beforeInfo.Size(), afterInfo.Size())
+	}
+
+	verify, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open after: %v", err)
+	}
+	defer func() { _ = verify.Close() }()
+	got, err := verify.Get([]byte("k000010"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("value mismatch")
+	}
+}
+
 func TestVacuumIndexOffline_OuterLeavesInValueLog_PreservesLeafRefs(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -46,7 +47,7 @@ func leafFlagsInIndex(t *testing.T, indexPath string) uint16 {
 	return 0
 }
 
-func TestOfflineMaintenanceRejectsCommandWALBeforeSideStoreOpen(t *testing.T) {
+func TestOfflineMaintenanceCommandWALGateBeforeSideStoreOpen(t *testing.T) {
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "maindb")
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
@@ -56,15 +57,17 @@ func TestOfflineMaintenanceRejectsCommandWALBeforeSideStoreOpen(t *testing.T) {
 		t.Fatalf("SaveFormatConfig: %v", err)
 	}
 	// If public offline maintenance reaches side-store wiring, this malformed
-	// dictdb path returns a different error. command_wal_v1 must fail first even
-	// when IgnoreFormatConfig is set.
+	// dictdb path returns a different error. Index vacuum supports command-WAL
+	// DBs and should reach that validation; value-log rewrite must reject
+	// command-WAL before side-store wiring, even when IgnoreFormatConfig is set.
 	if err := os.MkdirAll(filepath.Join(root, "dictdb", "index.db"), 0o755); err != nil {
 		t.Fatalf("mkdir malformed dictdb index: %v", err)
 	}
 
 	for _, ignoreFormatConfig := range []bool{false, true} {
-		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig}); !errors.Is(err, treedb.ErrCommandWALUnsupported) {
-			t.Fatalf("VacuumIndexOffline IgnoreFormatConfig=%v error=%v, want ErrCommandWALUnsupported", ignoreFormatConfig, err)
+		err := treedb.VacuumIndexOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig})
+		if err == nil || errors.Is(err, treedb.ErrCommandWALUnsupported) || !strings.Contains(err.Error(), "dictdb index path is a directory") {
+			t.Fatalf("VacuumIndexOffline IgnoreFormatConfig=%v error=%v, want malformed dictdb error", ignoreFormatConfig, err)
 		}
 		if _, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: root, IgnoreFormatConfig: ignoreFormatConfig}); !errors.Is(err, treedb.ErrCommandWALUnsupported) {
 			t.Fatalf("ValueLogRewriteOffline IgnoreFormatConfig=%v error=%v, want ErrCommandWALUnsupported", ignoreFormatConfig, err)

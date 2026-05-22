@@ -41,7 +41,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	if opts.Dir == "" {
 		return errors.New("db dir required")
 	}
-	if err := applyFormatConfigForMaintenance(&opts); err != nil {
+	if err := applyFormatConfigForMaintenanceWithOptions(&opts, true); err != nil {
 		return err
 	}
 	if opts.ChunkSize == 0 {
