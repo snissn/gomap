@@ -161,13 +161,6 @@ func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint
 	return dst[:target]
 }
 
-func resizeColumnVectorGraphNativeUint32Scratch(dst []uint32, target int) []uint32 {
-	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
-		return make([]uint32, 0, target)
-	}
-	return dst[:0]
-}
-
 func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][]byte {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		next := make([][]byte, target)

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unsafe"
 )
 
 const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
@@ -143,6 +144,13 @@ func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing
 	}
 	if len(got) != 1 || got[0].Ordinal != 2 || string(got[0].ID) != "doc-best" {
 		t.Fatalf("results=%+v want scoring fetches not to mutate expansion adjacency", got)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchCandidateCarriesNoAdjacencyV3(t *testing.T) {
+	candidate := columnVectorGraphSearchCandidate{ordinal: 1, score: 1}
+	if got, want := unsafe.Sizeof(candidate), uintptr(16); got != want {
+		t.Fatalf("candidate size=%d want compact ordinal+score size=%d", got, want)
 	}
 }
 
