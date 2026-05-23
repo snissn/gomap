@@ -58,6 +58,25 @@ The resolver is pure metadata only: it must not perform filesystem IO, mmap,
 section decode, DB mutation, asset open, publication, query planning, or durable
 typed-column format work.
 
+## PR 2 Umbrella Rename Cleanup
+
+Issue #1752 is a naming cleanup only. It must not start the colgranule
+transplant, durable typed-column part format, query-planner rewrite, production
+storage behavior change, or #1736 resource-manager work.
+
+After PR 2, new umbrella docs, comments, tests, status labels, and debug output
+should use `typed storage`, `TypedStorage*`, `typed-row`, or `typed-column`
+terminology. Public/exported `ColumnStore*` names remain compatibility-retained
+unless a future PR adds wrappers/aliases and a deprecation plan.
+
+Remaining legacy names must fall into one of these classes:
+
+| Class | Allowed occurrences | Reason |
+| --- | --- | --- |
+| compatibility-retained | Public API/config names such as `ColumnStoreConfig`, durable manifest/config fields, and compatibility tests that prove existing users still compile. | Avoid public API and metadata breakage while typed-storage names are introduced internally. |
+| true typed-column terminology | `experiments/colgranule` and future sectioned, column-major `typed_column_part` data-plane terms. | Preserve the coherent typed-column data plane for #1753 transplant work. |
+| deferred | Historical RFCs, vector-search reconstruction notes, and large implementation files deferred to #1752 follow-ups. | Avoid broad mechanical churn or format claims before typed-column publication exists. |
+
 ## Current Derived Accelerator Classifications
 
 These existing assets are derived accelerators unless a future format explicitly
@@ -76,7 +95,7 @@ promotes them and updates the typed-storage ownership contract:
 Audit command used for the initial inventory:
 
 ```sh
-rg -n "ColumnStore|column store|column-store" TreeDB experiments docs
+rg -n "ColumnStore|column store|column-store" TreeDB docs experiments
 ```
 
 The repository currently has many legacy `ColumnStore*`, "column store", and
@@ -86,9 +105,9 @@ occurrence in its PR inventory.
 
 | Path | Symbol/text | Current meaning | Classification | Action | Deferral reason |
 | --- | --- | --- | --- | --- | --- |
-| `TreeDB/collections/api.go` | `ColumnStoreConfig`, `ColumnStoreColumn`, `ColumnStoreValueType`, retained-payload options | Public compatibility configuration for declared typed fields and retained payload behavior. | compatibility-retained | Keep as compatibility input; #1751 should normalize it through typed-storage layout names. | Public API compatibility; do not remove in PR 0. |
-| `TreeDB/collections/column_store.go` and related publish/reconstruction files | `ColumnStore*` implementation names and comments | Production declared-field extraction, retained-payload handling, reconstruction, and publication control plane currently attached to typed-row assets. | compatibility-retained | Document as typed-storage/typed-row behavior; rename/wrap later under #1751/#1752. | Avoid behavior or public API change in PR 0. |
-| `TreeDB/collections/column_physical_asset.go`, `column_physical_*.go`, `column_physical_row_reader.go` | column physical asset / `TCPA` wording | Current row-record physical asset for declared typed values. | rename-now when touched as typed-row terminology | Treat as `typed_row_asset`; broad rename deferred to #1752. | Current PR is naming scaffold only. |
+| `TreeDB/collections/api.go` | `ColumnStoreConfig`, `ColumnStoreColumn`, `ColumnStoreValueType`, retained-payload options | Public compatibility configuration for declared typed fields and retained payload behavior. | compatibility-retained | Keep as compatibility input normalized by the typed-storage layout resolver. | Public API compatibility; do not remove in PR 2. |
+| `TreeDB/collections/column_store.go` and related publish/reconstruction files | `ColumnStore*` implementation names and comments | Production declared-field extraction, retained-payload handling, reconstruction, and publication control plane currently attached to typed-row assets. | compatibility-retained | Document as typed-storage/typed-row behavior; rename/wrap incrementally after the public compatibility seam is stable. | Avoid behavior or public API change in PR 2. |
+| `TreeDB/collections/column_physical_asset.go`, `column_physical_*.go`, `column_physical_row_reader.go` | column physical asset / `TCPA` wording | Current row-record physical asset for declared typed values. | deferred | Treat as `typed_row_asset`; broad file/symbol rename remains deferred until it can be split without obscuring behavior changes. | Large implementation surface; PR 2 only cleans safe umbrella names. |
 | `TreeDB/collections/column_asset_manager.go`, `column_asset_reachability.go`, `column_asset_gc.go`, `column_asset_rewrite.go` | column asset manager / reachability / GC / rewrite wording | Typed physical asset manager rooted in current typed-row assets and future typed-column refs. | compatibility-retained | Keep behavior; align terminology as typed-storage resource management in follow-ups. | #1736/#1755 own deeper resource and maintenance integration. |
 | `TreeDB/collections/column_dictionary_codes_asset.go` | dictionary-code asset names | Derived code sidecar for declared values. | derived accelerator | Keep as non-authoritative sidecar; require owner/generation association in later work. | Query integration and metadata rules belong to later #1744 children. |
 | `TreeDB/collections/column_int64_values_asset.go` | int64-values asset names | Derived values sidecar for declared values. | derived accelerator | Keep as non-authoritative sidecar; require owner/generation association in later work. | Query integration and metadata rules belong to later #1744 children. |
@@ -96,7 +115,7 @@ occurrence in its PR inventory.
 | `experiments/colgranule/**` | `ColumnStoreOptions`, `ColumnPart*`, column/granule descriptors | Coherent experimental typed-column data plane to transplant. | true typed-column terminology | Preserve for #1753 transplant; do not rename in PR 0. | Avoid thrashing the experiment before transplant. |
 | `TreeDB/docs/spec/GOMAP_TREEDB_COLUMN_STORE_RFC.md` | broad "column-store" roadmap wording | Historical/pre-typed-storage RFC that predates the umbrella rename. | deferred | Keep as historical supporting material until a dedicated docs rewrite. | Large historical document; changing it here would obscure PR 0. |
 | `TreeDB/docs/spec/column-graph-native-*.md` | column-store-native vector wording | Historical/vector tracker docs for rebuilding native vector search. | deferred | Keep historical references; future vector typed-column docs belong to #1756. | Do not change vector path in PR 0. |
-| `TreeDB/docs/spec/storage-format.md`, `docs/TREEDB_STORAGE_FORMAT.md`, backup/recovery/verification docs | future/physical column-store asset wording | Storage-format and recovery docs describing existing/future typed physical assets. | deferred | Update after typed-storage layout/publication work clarifies exact durable terms. | Avoid changing format claims before #1753/#1755. |
+| `TreeDB/docs/spec/storage-format.md`, `docs/TREEDB_STORAGE_FORMAT.md`, backup/recovery/verification docs | typed asset manager and `column_assets` compatibility directory wording | Storage-format and recovery docs describing existing/future typed physical assets. | compatibility-retained | Keep the on-disk directory name; use typed-storage wording around it. | Directory and manifest names are durable compatibility metadata. |
 
 ## PR 0 Runtime Boundary
 

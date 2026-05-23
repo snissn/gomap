@@ -22,7 +22,7 @@ Operator-facing behavior is covered by:
   - `Dir/dictdb/`: dictionary store (for value-log compression)
 - Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
-- Column-store physical assets are **value-log-shaped column assets**, not generic row `value_vlog` payloads. They live under the isolated typed column asset manager namespace.
+- Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Current production typed-row assets live under the isolated typed asset manager namespace; future typed-column parts will use the same typed-storage lifecycle.
 
 ## Directory layout
 
@@ -34,7 +34,7 @@ TreeDB creates/manages two sub-databases under the root directory:
 - `Dir/maindb/wal/`: redo journal segments named `commit-l<lane>-<seq>.log`.
 - `Dir/maindb/value_vlog/`: persistent large-value segments named `value-l<lane>-<seq>.log`.
 - `Dir/maindb/leaf_vlog/`: optional persistent outer-leaf generation segments named `value-l<lane>-<seq>.log`.
-- `Dir/maindb/column_assets/`: isolated typed column asset manager root for column-store physical assets.
+- `Dir/maindb/column_assets/`: compatibility directory name for the isolated typed asset manager root used by typed-storage physical assets.
 - `Dir/maindb/LOCK`: cross-process exclusive-open lock for the main DB.
 
 ### Dictionary store (`Dir/dictdb/`)
@@ -45,11 +45,11 @@ TreeDB creates/manages two sub-databases under the root directory:
 The dictionary store is used to persist trained dictionary bytes so value-log
 compressed frames can be decoded after restart.
 
-### Column assets (`column_assets/`)
+### Typed-storage assets (`column_assets/`)
 
-Column-store assets use an isolated value-log-shaped manager instead of ordinary
-row value-log entries. A collection namespace such as `events/column-assets`
-maps to:
+Typed-storage assets use an isolated value-log-shaped manager instead of ordinary
+row value-log entries. The `column_assets` directory name is compatibility
+metadata. A collection namespace such as `events/column-assets` maps to:
 
 ```text
 Dir/maindb/column_assets/events/column-assets/

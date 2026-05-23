@@ -128,7 +128,7 @@ func ResolveTypedStorageLayout(meta CollectionMeta) (TypedStorageLayout, error) 
 		Enabled:             cfg.Enabled,
 		Fields:              fields,
 		RetainedPayload:     cfg.RetainedPayload,
-		DerivedAccelerators: derivedAcceleratorsFromColumnStoreConfig(*cfg),
+		DerivedAccelerators: derivedAcceleratorsFromTypedStorageCompatibilityConfig(*cfg),
 	}
 	applyRetainedPayloadToTypedStorageLayout(&layout)
 	return NormalizeTypedStorageLayout(layout)
@@ -340,7 +340,7 @@ func normalizeTypedStorageFieldOwner(owner TypedStorageFieldOwner) (TypedStorage
 	}
 }
 
-func derivedAcceleratorsFromColumnStoreConfig(cfg ColumnStoreConfig) []TypedStorageDerivedAccelerator {
+func derivedAcceleratorsFromTypedStorageCompatibilityConfig(cfg ColumnStoreConfig) []TypedStorageDerivedAccelerator {
 	var out []TypedStorageDerivedAccelerator
 	for _, col := range cfg.Columns {
 		if col.Dictionary {
@@ -366,7 +366,7 @@ func derivedAcceleratorsFromColumnStoreConfig(cfg ColumnStoreConfig) []TypedStor
 			Class: TypedStorageAssetClassDerivedAccelerator,
 		}
 		if aggregate.Column != "" {
-			if col, ok := columnStoreColumnByName(cfg.Columns, aggregate.Column); ok {
+			if col, ok := typedStorageCompatibilityColumnByName(cfg.Columns, aggregate.Column); ok {
 				accel.SourceFieldPath = col.Path
 				accel.SourceOwner = TypedStorageOwnerRowAsset
 			}
@@ -376,7 +376,7 @@ func derivedAcceleratorsFromColumnStoreConfig(cfg ColumnStoreConfig) []TypedStor
 	return out
 }
 
-func columnStoreColumnByName(columns []ColumnStoreColumn, name string) (ColumnStoreColumn, bool) {
+func typedStorageCompatibilityColumnByName(columns []ColumnStoreColumn, name string) (ColumnStoreColumn, bool) {
 	for _, col := range columns {
 		if col.Name == name {
 			return col, true

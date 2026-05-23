@@ -150,13 +150,13 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     fixtures, canonical validation, digest stability, benchmarks, and deferred
     Raft apply work.
 - `TreeDB/docs/spec/column-graph-native-reconstruction-inventory.md`
-  - issue #1646 V0 inventory for rebuilding column-store-native vector graph
-    search on generic column-store reader/cache APIs without carrying forward
-    decoded full-graph behavior as the product path.
+  - issue #1646 V0 inventory for rebuilding legacy native vector graph search
+    on typed-storage reader/cache APIs without carrying forward decoded
+    full-graph behavior as the product path.
 - `TreeDB/docs/spec/typed-storage-naming.md`
   - issue #1750 PR 0 naming scaffold establishing `typed storage` as the
     umbrella for typed-row and typed-column physical storage, with legacy
-    `ColumnStore*` inventory and derived-accelerator classifications.
+    compatibility-name inventory and derived-accelerator classifications.
 
 ## Canonical Ownership
 
@@ -198,8 +198,8 @@ blocking questions live:
 - Native-wire protocol questions: `native-wire-protocol.md`.
 - Raft sequencing and local recoverability questions:
   `native-query-raft-roadmap.md`.
-- Column-store persistence questions:
-  `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
+- Typed-storage persistence and historical roadmap questions:
+  `typed-storage-naming.md` and `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
 
 A blocking implementation question must be listed in this index and in its
 owner document. Non-blocking future-extension questions must be labeled as
