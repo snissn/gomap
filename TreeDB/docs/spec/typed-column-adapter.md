@@ -40,8 +40,8 @@ and `[]uint32` buffers.
 
 ## Retained Payload Seam
 
-`typedColumnAdapterRetainedPayloadSplitRestore` reuses the production retained
-payload split/restore helpers as an internal test seam. It does not alter
+`typedColumnAdapterRetainedPayloadSplitRestore` reuses the production
+retained-payload split/restore helpers as an internal test seam. It does not alter
 production retained-payload behavior.
 
 ## Boundary
