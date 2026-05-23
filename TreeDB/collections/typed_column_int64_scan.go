@@ -153,6 +153,13 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			continue
 		}
+		if ref.Reason != ColumnPublishOperationInsert {
+			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate scan requires insert-only typed refs, got %s", ref.Reason)
+		}
+		// Current durable typed-column publication emits one typed_column_part
+		// locator per generation (part_id=2) paired with that generation's
+		// physical row locator part (part_id=1). Duplicate generations are a
+		// manifest invariant violation and fail closed here.
 		if _, exists := refsByGeneration[ref.Ref.Generation]; exists {
 			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate typed_column_part ref for generation=%d", ref.Ref.Generation)
 		}

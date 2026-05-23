@@ -734,6 +734,7 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 	if valueCol.Definition.Type != typedcolumn.ColumnTypeInt64 || idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("value or primary id column is not int64")
 	}
+	idBlocksByRange := typedColumnBlocksByRange(idCol.Blocks)
 	var reader typedcolumn.GranuleReader
 	var valueScratch []int64
 	var idScratch []int64
@@ -745,7 +746,7 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 			result.Diagnostics.BlocksPruned++
 			continue
 		}
-		idBlock, ok := typedColumnFindAlignedBlock(idCol.Blocks, block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		idBlock, ok := idBlocksByRange[typedColumnBlockRange{FirstRow: block.Descriptor.FirstRow, RowCount: block.Descriptor.RowCount}]
 		if !ok {
 			return false, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
 		}
@@ -777,13 +778,17 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 	return !decodedAny && len(valueCol.Blocks) != 0, nil
 }
 
-func typedColumnFindAlignedBlock(blocks []typedcolumn.ColumnBlock, firstRow, rows int) (typedcolumn.ColumnBlock, bool) {
+type typedColumnBlockRange struct {
+	FirstRow int
+	RowCount int
+}
+
+func typedColumnBlocksByRange(blocks []typedcolumn.ColumnBlock) map[typedColumnBlockRange]typedcolumn.ColumnBlock {
+	out := make(map[typedColumnBlockRange]typedcolumn.ColumnBlock, len(blocks))
 	for _, block := range blocks {
-		if block.Descriptor.FirstRow == firstRow && block.Descriptor.RowCount == rows {
-			return block, true
-		}
+		out[typedColumnBlockRange{FirstRow: block.Descriptor.FirstRow, RowCount: block.Descriptor.RowCount}] = block
 	}
-	return typedcolumn.ColumnBlock{}, false
+	return out
 }
 
 func typedColumnAdapterInt64View(mgr *mappedresource.Manager, h *mappedresource.Handle) ([]int64, error) {
