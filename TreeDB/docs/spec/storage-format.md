@@ -710,6 +710,12 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   cache identity invalidation. Manifest generation and recovery LSN are not
   schema-hash inputs.
 
+Issue #1753 also adds `TreeDB/internal/typedcolumn` as a non-authoritative
+transplant of the `experiments/colgranule` typed-column data plane. Its part
+image/TCS1 bytes are not registered as production collection metadata in this
+PR, do not change the `options.column_store` contract above, and are documented
+in `typed-column-transplant.md` until #1754/#1755 add control-plane adapters.
+
 Readers must fail closed for a column-enabled collection when:
 
 - active manifest metadata is missing required recovery-authoritative metadata,

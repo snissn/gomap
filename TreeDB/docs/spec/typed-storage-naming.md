@@ -77,6 +77,15 @@ Remaining legacy names must fall into one of these classes:
 | true typed-column terminology | `experiments/colgranule` and future sectioned, column-major `typed_column_part` data-plane terms. | Preserve the coherent typed-column data plane for #1753 transplant work. |
 | deferred | Historical RFCs, vector-search reconstruction notes, and large implementation files deferred to #1752 follow-ups. | Avoid broad mechanical churn or format claims before typed-column publication exists. |
 
+## PR 3 Typed-Column Data-Plane Transplant
+
+Issue #1753 introduces `TreeDB/internal/typedcolumn` as an internal,
+non-authoritative transplant of the `experiments/colgranule` data plane. This is
+true typed-column terminology, but it is not production publication and does not
+make `typed_column_part` an authoritative owner yet. The transplant deliberately
+uses package-local `Options`/`Batch` names instead of adding new public or
+internal `ColumnStore*` umbrella names.
+
 ## Current Derived Accelerator Classifications
 
 These existing assets are derived accelerators unless a future format explicitly

@@ -157,6 +157,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1750 PR 0 naming scaffold establishing `typed storage` as the
     umbrella for typed-row and typed-column physical storage, with legacy
     compatibility-name inventory and derived-accelerator classifications.
+- `TreeDB/docs/spec/typed-column-transplant.md`
+  - issue #1753 implementation note for the non-authoritative
+    `TreeDB/internal/typedcolumn` data-plane transplant from
+    `experiments/colgranule`.
 
 ## Canonical Ownership
 
@@ -182,7 +186,8 @@ TreeDB-wide storage terms (`value log`, `leaf log`, `commit log`,
 Typed physical storage vocabulary (`typed storage`, `typed-row storage`,
 `typed-column storage`, `typed_row_asset`, `typed_column_part`,
 `retained_document`, `document_payload`, and `derived_accelerator`) is owned by
-`typed-storage-naming.md`. User-command WAL lifecycle terms
+`typed-storage-naming.md`; the #1753 non-authoritative typed-column transplant
+scope is recorded in `typed-column-transplant.md`. User-command WAL lifecycle terms
 (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`, `WAL-rejected`,
 `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
@@ -199,7 +204,8 @@ blocking questions live:
 - Raft sequencing and local recoverability questions:
   `native-query-raft-roadmap.md`.
 - Typed-storage persistence and historical roadmap questions:
-  `typed-storage-naming.md` and `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
+  `typed-storage-naming.md`, `typed-column-transplant.md`, and
+  `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
 
 A blocking implementation question must be listed in this index and in its
 owner document. Non-blocking future-extension questions must be labeled as
