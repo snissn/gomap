@@ -94,6 +94,8 @@ Useful flags:
   run.
 - `-disable-exact-fallback=false`: allow exact fallback during benchmark
   searches.
+- `-native-search-documents=false`: for native runtime vector indexes, report
+  pure ANN ID/distance search without fetching/materializing result documents.
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.

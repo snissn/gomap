@@ -168,6 +168,9 @@ type VectorIndexSearchOptions struct {
 	IndexRangeFilter     *VectorIndexRangeFilter
 	ExactFilterMaxDocs   int
 	DisableExactFallback bool
+	// SkipDocumentFetch leaves native runtime vector search results with IDs and distances only.
+	// Historical native runtime search behavior fetches result documents by default.
+	SkipDocumentFetch bool
 	// IncludeDocuments materializes full documents after column_graph top-k selection.
 	IncludeDocuments bool
 	// MaxDecodedBlocks bounds the physical column row reader cache for column_graph search.
@@ -1501,7 +1504,11 @@ func (idx *VectorIndex) Search(query []float32, opts VectorIndexSearchOptions) (
 	idx.mu.RUnlock()
 
 	if fastRerank && err == nil {
-		results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
+		if opts.SkipDocumentFetch {
+			cloneVectorSearchResultDocumentIDs(results)
+		} else {
+			results, err = idx.attachVectorSearchResultDocuments(results, resultNodeIDs, opts.TopK)
+		}
 	} else if !fastRerank {
 		results, err = idx.rerankCandidates(query, candidateIDs, filter, opts.TopK, &trace)
 	}

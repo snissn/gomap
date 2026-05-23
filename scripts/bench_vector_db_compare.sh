@@ -14,6 +14,7 @@ QUERIES="${QUERIES:-10000}"
 VALIDATE_QUERIES="${VALIDATE_QUERIES:-64}"
 VALIDATE_DOCS="${VALIDATE_DOCS:-16}"
 TREEDB_VALIDATION_EXACT_SOURCE="${TREEDB_VALIDATION_EXACT_SOURCE:-treedb}"
+TREEDB_NATIVE_SEARCH_DOCUMENTS="${TREEDB_NATIVE_SEARCH_DOCUMENTS:-true}"
 TOP_K="${TOP_K:-10}"
 SEARCH_CONCURRENCY="${SEARCH_CONCURRENCY:-2,4,8,16,32,64,128}"
 M="${M:-16}"
@@ -159,6 +160,7 @@ cat >"$RUN_DIR/README.md" <<EOF
 - validate queries: \`$VALIDATE_QUERIES\`
 - validate docs: \`$VALIDATE_DOCS\`
 - TreeDB validation exact source: \`$TREEDB_VALIDATION_EXACT_SOURCE\`
+- TreeDB native search documents: \`$TREEDB_NATIVE_SEARCH_DOCUMENTS\`
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
@@ -226,6 +228,7 @@ if contains_backend treedb; then
 		-validate-queries "$VALIDATE_QUERIES" \
 		-validate-docs "$VALIDATE_DOCS" \
 		-validation-exact-source "$TREEDB_VALIDATION_EXACT_SOURCE" \
+		-native-search-documents "$TREEDB_NATIVE_SEARCH_DOCUMENTS" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \

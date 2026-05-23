@@ -96,6 +96,14 @@ func TestCollectionVectorIndexSearchDocumentsAreOwned(t *testing.T) {
 			if !bytes.Equal(results[0].Document, docA) || !bytes.Equal(results[1].Document, docB) {
 				t.Fatalf("unexpected documents: %q %q", results[0].Document, results[1].Document)
 			}
+			idOnly, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true, SkipDocumentFetch: true})
+			if err != nil {
+				t.Fatalf("id-only search vector index: %v", err)
+			}
+			requireVectorResultIDs(t, idOnly, "a", "b")
+			if len(idOnly[0].Document) != 0 || len(idOnly[1].Document) != 0 {
+				t.Fatalf("id-only documents: %q %q, want empty", idOnly[0].Document, idOnly[1].Document)
+			}
 			for i, result := range results {
 				if cap(result.DocumentID) != len(result.DocumentID) {
 					t.Fatalf("result %d document id cap=%d len=%d, want exact cap", i, cap(result.DocumentID), len(result.DocumentID))

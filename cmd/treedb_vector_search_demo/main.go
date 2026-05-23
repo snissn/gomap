@@ -67,6 +67,7 @@ type config struct {
 	compactSyncEachPhase  bool
 	vacuumIndex           bool
 	disableExactFallback  bool
+	nativeSearchDocuments bool
 	requireValueLogBytes  bool
 	requireLeafVLogBytes  bool
 	jsonOut               bool
@@ -101,6 +102,7 @@ type result struct {
 	Compact               bool                              `json:"compact"`
 	CompactSyncEachPhase  bool                              `json:"compact_sync_each_phase"`
 	DisableExactFallback  bool                              `json:"disable_exact_fallback"`
+	NativeSearchDocuments bool                              `json:"native_search_documents"`
 	Insert                phaseResult                       `json:"insert"`
 	Rebuild               phaseResult                       `json:"rebuild"`
 	CompactPhase          phaseResult                       `json:"compact_phase"`
@@ -284,6 +286,7 @@ func parseConfig(args []string) (config, error) {
 		compact:               false,
 		vacuumIndex:           true,
 		disableExactFallback:  true,
+		nativeSearchDocuments: true,
 		profile:               treedb.ProfileBench,
 		vectorIndexStrategy:   collections.VectorIndexStrategyNativeRuntime,
 	}
@@ -317,6 +320,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.compactSyncEachPhase, "compact-sync-each-phase", false, "Ask CompactStorage to fsync each rewrite/pack phase")
 	fs.BoolVar(&cfg.vacuumIndex, "vacuum-index", cfg.vacuumIndex, "Run offline index.db vacuum after close before final storage/reopen")
 	fs.BoolVar(&cfg.disableExactFallback, "disable-exact-fallback", cfg.disableExactFallback, "Disable exact fallback during ANN benchmark queries")
+	fs.BoolVar(&cfg.nativeSearchDocuments, "native-search-documents", cfg.nativeSearchDocuments, "Fetch/materialize result documents during native runtime search benchmarks")
 	fs.BoolVar(&cfg.requireValueLogBytes, "require-value-log-bytes", false, "Fail if compacted storage has no value-log bytes")
 	fs.BoolVar(&cfg.requireLeafVLogBytes, "require-leaf-vlog-bytes", false, "Fail if compacted storage has no leaf value-log bytes")
 	fs.BoolVar(&cfg.jsonOut, "json", false, "Emit JSON instead of text")
@@ -699,6 +703,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Compact:               cfg.compact,
 		CompactSyncEachPhase:  cfg.compactSyncEachPhase,
 		DisableExactFallback:  cfg.disableExactFallback,
+		NativeSearchDocuments: cfg.nativeSearchDocuments,
 	}
 
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
@@ -1800,6 +1805,7 @@ func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, q
 				TopK:                 cfg.topK,
 				EfSearch:             cfg.efSearch,
 				DisableExactFallback: cfg.disableExactFallback,
+				SkipDocumentFetch:    !cfg.nativeSearchDocuments,
 			})
 			if err != nil {
 				setErr(err)
@@ -2245,8 +2251,8 @@ func percentile(sorted []int64, p float64) int64 {
 
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector search demo\n")
-	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
-		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
+	fmt.Fprintf(w, "dir=%s kept=%t profile=%s backend=%s vector_index_strategy=%s vector_index_search_path=%s native_search_documents=%t docs=%d dims=%d queries=%d top_k=%d m=%d ef_construction=%d ef_search=%d value_pointer_threshold=%d leaf_generation_segment_target=%d\n",
+		res.Dir, res.KeptDir, res.Profile, resultBackend(res), resultStrategy(res), resultSearchPath(res), res.NativeSearchDocuments, res.Docs, res.Dimensions, res.Queries, res.TopK, res.M, res.EfConstruction, res.EfSearch, res.ValuePointerThreshold, res.LeafGenerationTarget)
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
 	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)

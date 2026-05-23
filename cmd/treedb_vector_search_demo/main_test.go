@@ -847,6 +847,7 @@ func TestRunTextOutput(t *testing.T) {
 		"backend=treedb",
 		"vector_index_strategy=native_runtime",
 		"vector_index_search_path=native_runtime_snapshot",
+		"native_search_documents=true",
 		"value_pointer_threshold=1024",
 		"leaf_generation_segment_target=4194304",
 		"Storage",
