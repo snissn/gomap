@@ -175,6 +175,22 @@ func TestTypedStorageLayoutColumnRetainedPayloadFullCompatibility(t *testing.T) 
 			t.Fatalf("declared field was treated as overlapping retained ownership: %v", layout.FieldOwnerDebugRows())
 		}
 	}
+
+	retainedOnly, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection:      "events",
+		RetainedPayload: ColumnRetainedPayloadFull,
+		Fields: []TypedStorageField{{
+			Name:  "profile_name",
+			Path:  "profile.name",
+			Owner: TypedStorageOwnerRetainedDocument,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout retained-only full payload: %v", err)
+	}
+	if retainedOnly.RetainedDocumentCompatibilityDuplicate {
+		t.Fatalf("retained-only full payload should not mark typed-field compatibility duplication")
+	}
 }
 
 func TestTypedStorageDerivedAcceleratorNotAuthoritative(t *testing.T) {
@@ -212,6 +228,9 @@ func TestTypedStorageDerivedAcceleratorNotAuthoritative(t *testing.T) {
 		t.Fatalf("NormalizeTypedStorageLayout with derived accelerator: %v", err)
 	}
 	requireTypedStorageOwner(t, layout, "time_us", TypedStorageOwnerRowAsset)
+	if got := len(layout.DerivedAccelerators); got != 1 {
+		t.Fatalf("derived accelerators=%d want 1; layout=%v", got, layout.FieldOwnerDebugRows())
+	}
 	if got := layout.DerivedAccelerators[0].Class; got != TypedStorageAssetClassDerivedAccelerator {
 		t.Fatalf("derived class=%q want %q", got, TypedStorageAssetClassDerivedAccelerator)
 	}

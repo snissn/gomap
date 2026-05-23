@@ -298,7 +298,7 @@ func applyRetainedPayloadToTypedStorageLayout(layout *TypedStorageLayout) {
 	switch layout.RetainedPayload {
 	case ColumnRetainedPayloadFull:
 		layout.RetainedDocumentOwnsRemainder = true
-		layout.RetainedDocumentCompatibilityDuplicate = len(layout.Fields) > 0
+		layout.RetainedDocumentCompatibilityDuplicate = typedStorageLayoutHasTypedAssetOwnedFields(layout)
 	case ColumnRetainedPayloadNonColumn:
 		layout.RetainedDocumentOwnsRemainder = true
 		layout.RetainedDocumentCompatibilityDuplicate = false
@@ -306,6 +306,21 @@ func applyRetainedPayloadToTypedStorageLayout(layout *TypedStorageLayout) {
 		layout.RetainedDocumentOwnsRemainder = false
 		layout.RetainedDocumentCompatibilityDuplicate = false
 	}
+}
+
+func typedStorageLayoutHasTypedAssetOwnedFields(layout *TypedStorageLayout) bool {
+	if layout == nil {
+		return false
+	}
+	for _, field := range layout.Fields {
+		switch field.Owner {
+		case "", TypedStorageOwnerRowAsset, TypedStorageOwnerColumnPart:
+			return true
+		case TypedStorageOwnerRetainedDocument, "document_payload":
+			continue
+		}
+	}
+	return false
 }
 
 func normalizeTypedStorageFieldOwner(owner TypedStorageFieldOwner) (TypedStorageFieldOwner, error) {
