@@ -40,10 +40,12 @@ var (
 // The reader is not concurrency-safe. Parallel native search uses one reader
 // and one scratch per worker over immutable physical graph assets.
 type columnVectorGraphPhysicalRowReader struct {
-	def     VectorIndexDefinition
-	graph   columnVectorGraphManifestSnapshot
-	catalog *collectionCatalog
-	reader  *columnPhysicalRowReader
+	def                       VectorIndexDefinition
+	graph                     columnVectorGraphManifestSnapshot
+	catalog                   *collectionCatalog
+	reader                    *columnPhysicalRowReader
+	typedVectorSource         *columnVectorGraphTypedColumnVectorSource
+	typedVectorFallbackReason string
 }
 
 // columnVectorGraphPhysicalRow aliases caller-owned scratch and cached asset
@@ -97,12 +99,31 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		_ = reader.Close()
 		return nil, fmt.Errorf("collections: column_graph %q manifest row_count=%d physical_row_count=%d: %w", def.Name, want, got, errColumnVectorGraphManifestMismatch)
 	}
-	return &columnVectorGraphPhysicalRowReader{
+	graphReader := &columnVectorGraphPhysicalRowReader{
 		def:     def,
 		graph:   graph,
 		catalog: catalog,
 		reader:  reader,
-	}, nil
+	}
+	if catalog != nil && catalog.meta.Options.ColumnStore != nil {
+		baseCfg := catalog.meta.Options.ColumnStore
+		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
+			graphReader.typedVectorFallbackReason = ownerErr.Error()
+		} else if typedVectorOwner {
+			rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+			records, recordsErr := loadColumnManifestRecordsFromRoot(snap, rootID)
+			if recordsErr != nil {
+				graphReader.typedVectorFallbackReason = recordsErr.Error()
+			} else if manifest, manifestErr := decodeColumnManifestSnapshotForScan(records); manifestErr != nil {
+				graphReader.typedVectorFallbackReason = manifestErr.Error()
+			} else if source, fallbackReason := c.openColumnVectorGraphTypedColumnVectorSourceForReader(catalog, *baseCfg, manifest, records, graph, graphReader); source != nil {
+				graphReader.typedVectorSource = source
+			} else if fallbackReason != "" {
+				graphReader.typedVectorFallbackReason = fallbackReason
+			}
+		}
+	}
+	return graphReader, nil
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
@@ -230,10 +251,22 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 }
 
 func (r *columnVectorGraphPhysicalRowReader) Close() error {
-	if r == nil || r.reader == nil {
+	if r == nil {
 		return nil
 	}
-	return r.reader.Close()
+	var closeErr error
+	if r.typedVectorSource != nil {
+		if err := r.typedVectorSource.Close(); err != nil {
+			closeErr = err
+		}
+		r.typedVectorSource = nil
+	}
+	if r.reader != nil {
+		if err := r.reader.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (r *columnVectorGraphPhysicalRowReader) RowCount() int {
@@ -393,6 +426,9 @@ func (r *columnVectorGraphPhysicalRowReader) nativeGraphRowFromBlock(block *colu
 	vector, err := r.readNativeGraphVector(&cur, block.version, ordinal, scratch)
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+	}
+	if typedVector, _, ok := r.typedVectorForOrdinal(ordinal); ok {
+		vector = typedVector
 	}
 	invNorm, err := r.readNativeGraphInvNorm(&cur, block.version, ordinal)
 	if err != nil {
@@ -554,6 +590,10 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(ro
 	if len(vector.Float32Vector) != r.def.Dimensions {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", r.def.Name, row.Ordinal, len(vector.Float32Vector), r.def.Dimensions)
 	}
+	vectorValues := vector.Float32Vector
+	if typedVector, _, ok := r.typedVectorForOrdinal(row.Ordinal); ok {
+		vectorValues = typedVector
+	}
 	if invNorm.Float32 <= 0 || math.IsNaN(float64(invNorm.Float32)) || math.IsInf(float64(invNorm.Float32), 0) {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", r.def.Name, row.Ordinal, invNorm.Float32)
 	}
@@ -561,7 +601,7 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(ro
 		Ordinal:   row.Ordinal,
 		RowIndex:  row.RowIndex,
 		ID:        row.ID,
-		Vector:    vector.Float32Vector,
+		Vector:    vectorValues,
 		InvNorm:   invNorm.Float32,
 		Adjacency: adjacency.AdjacencyList,
 	}, nil
