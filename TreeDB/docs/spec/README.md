@@ -153,6 +153,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1646 V0 inventory for rebuilding column-store-native vector graph
     search on generic column-store reader/cache APIs without carrying forward
     decoded full-graph behavior as the product path.
+- `TreeDB/docs/spec/typed-storage-naming.md`
+  - issue #1750 PR 0 naming scaffold establishing `typed storage` as the
+    umbrella for typed-row and typed-column physical storage, with legacy
+    `ColumnStore*` inventory and derived-accelerator classifications.
 
 ## Canonical Ownership
 
@@ -165,7 +169,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Current recovery algorithm | `recovery.md` | `storage-format.md`, `verification.md`. |
 | Durable bytes and file names | `storage-format.md` | `recovery.md`, `architecture.md`, `backup-restore.md`. |
 | Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `user-command-wal.md`, `collection-wal-durability-plan.md` for historical external-ref context. |
-| Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future column-store docs. |
+| Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future typed-storage docs. |
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
@@ -175,9 +179,12 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 TreeDB-wide storage terms (`value log`, `leaf log`, `commit log`,
 `ValuePtr`) are owned by `storage-format.md` and `value-log-lifecycle.md`.
-User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`,
-`WAL-supported`, `WAL-rejected`, `WAL-off-only`) are owned by
-`user-command-wal.md`. Deprecated collection root-delta WAL terms
+Typed physical storage vocabulary (`typed storage`, `typed-row storage`,
+`typed-column storage`, `typed_row_asset`, `typed_column_part`,
+`retained_document`, `document_payload`, and `derived_accelerator`) is owned by
+`typed-storage-naming.md`. User-command WAL lifecycle terms
+(`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`, `WAL-rejected`,
+`WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
 `collection-wal-durability-plan.md` for historical design context only.
 
