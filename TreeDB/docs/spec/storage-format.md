@@ -732,7 +732,8 @@ Issue `#1753` added `TreeDB/internal/typedcolumn` as the transplanted
 it to production collection metadata for opt-in scalar `typed_column_part`
 owners; issue `#1756` adds fixed-dimension `float32_vector` dense sections. The
 transplant and adapter boundaries are documented in `typed-column-transplant.md`
-and `typed-column-adapter.md`.
+and `typed-column-adapter.md`; closeout evidence and #1736 COW-maintenance
+handoff facts are recorded in `typed-storage-closeout-1758.md`.
 
 Readers must fail closed for a column-enabled collection when:
 
