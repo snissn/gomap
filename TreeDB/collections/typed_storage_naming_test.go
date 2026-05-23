@@ -412,16 +412,20 @@ func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacy
 				}
 				return nil
 			}
+			rel, err := filepath.Rel(repoRoot, path)
+			if err != nil {
+				return err
+			}
+			rel = filepath.ToSlash(rel)
+			if typedStorageLegacyNameScanSkipsGeneratedArtifact(rel) {
+				return nil
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
 			if !utf8.Valid(data) {
 				return nil
-			}
-			rel, err := filepath.Rel(repoRoot, path)
-			if err != nil {
-				return err
 			}
 			var current typedStorageLegacyNameUsage
 			for _, line := range strings.Split(string(data), "\n") {
@@ -433,7 +437,7 @@ func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacy
 				current.occurrences += len(matches)
 			}
 			if current.matchingLines > 0 {
-				usage[filepath.ToSlash(rel)] = current
+				usage[rel] = current
 			}
 			return nil
 		})
@@ -442,6 +446,13 @@ func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacy
 		}
 	}
 	return usage
+}
+
+func typedStorageLegacyNameScanSkipsGeneratedArtifact(rel string) bool {
+	// CI test/race jobs write transient JSONL output under TreeDB before package
+	// tests run. The contract is over repository sources matched by the audit
+	// command in a clean checkout, not generated run logs.
+	return strings.HasPrefix(rel, "TreeDB/treedb-") && strings.HasSuffix(rel, ".jsonl")
 }
 
 var typedStorageMarkdownReferencePatterns = []*regexp.Regexp{
