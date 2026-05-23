@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func testTypedStorageColumnStoreConfig(policy ColumnRetainedPayloadPolicy) *ColumnStoreConfig {
+func testTypedStorageCompatibilityConfig(policy ColumnRetainedPayloadPolicy) *ColumnStoreConfig {
 	return &ColumnStoreConfig{
 		Enabled:         true,
 		RetainedPayload: policy,
@@ -58,13 +58,13 @@ func TestTypedStorageLayoutNormalizeDocumentOnly(t *testing.T) {
 func TestTypedStorageLayoutNormalizeExistingColumnStoreConfigUsesTypedRowAsset(t *testing.T) {
 	layout, err := ResolveTypedStorageLayout(CollectionMeta{
 		Name:    "events",
-		Options: CollectionOptions{ColumnStore: testTypedStorageColumnStoreConfig(ColumnRetainedPayloadNonColumn)},
+		Options: CollectionOptions{ColumnStore: testTypedStorageCompatibilityConfig(ColumnRetainedPayloadNonColumn)},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTypedStorageLayout: %v", err)
 	}
 	if !layout.Enabled {
-		t.Fatalf("column-store compatibility layout enabled=false")
+		t.Fatalf("typed-storage compatibility layout enabled=false")
 	}
 	requireTypedStorageOwner(t, layout, "time_us", TypedStorageOwnerRowAsset)
 	requireTypedStorageOwner(t, layout, "tag", TypedStorageOwnerRowAsset)
@@ -157,7 +157,7 @@ func TestTypedStorageLayoutRejectsOverlappingAuthoritativeOwners(t *testing.T) {
 func TestTypedStorageLayoutColumnRetainedPayloadFullCompatibility(t *testing.T) {
 	layout, err := ResolveTypedStorageLayout(CollectionMeta{
 		Name:    "events",
-		Options: CollectionOptions{ColumnStore: testTypedStorageColumnStoreConfig(ColumnRetainedPayloadFull)},
+		Options: CollectionOptions{ColumnStore: testTypedStorageCompatibilityConfig(ColumnRetainedPayloadFull)},
 	})
 	if err != nil {
 		t.Fatalf("ResolveTypedStorageLayout: %v", err)
@@ -236,6 +236,55 @@ func TestTypedStorageDerivedAcceleratorNotAuthoritative(t *testing.T) {
 	}
 	if got := layout.DerivedAccelerators[0].SourceOwner; got != TypedStorageOwnerRowAsset {
 		t.Fatalf("derived source owner=%q want %q", got, TypedStorageOwnerRowAsset)
+	}
+}
+
+func TestTypedStorageCompatibilityAliases(t *testing.T) {
+	var cfg ColumnStoreConfig
+	cfg.Enabled = true
+	cfg.Columns = []ColumnStoreColumn{{
+		Name:      "compat_field",
+		Path:      "compat_field",
+		ValueType: ColumnStoreValueString,
+	}}
+
+	layout, err := ResolveTypedStorageLayout(CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &cfg},
+	})
+	if err != nil {
+		t.Fatalf("ResolveTypedStorageLayout with public compatibility config: %v", err)
+	}
+	requireTypedStorageOwner(t, layout, "compat_field", TypedStorageOwnerRowAsset)
+}
+
+func TestTypedStorageStatusVocabulary(t *testing.T) {
+	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection:      "events",
+		RetainedPayload: ColumnRetainedPayloadFull,
+		Fields: []TypedStorageField{
+			{Name: "time_us", Path: "time_us", Owner: TypedStorageOwnerRowAsset, ValueType: ColumnStoreValueInt64},
+			{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+	}
+	rows := strings.Join(layout.FieldOwnerDebugRows(), "\n")
+	for _, want := range []string{
+		"time_us -> typed_row_asset",
+		"embedding -> typed_column_part",
+		"* -> retained_document(remainder)",
+		"document_payload -> compatibility_duplicate",
+	} {
+		if !strings.Contains(rows, want) {
+			t.Fatalf("status/debug rows missing %q in:\n%s", want, rows)
+		}
+	}
+	for _, legacyUmbrella := range []string{"column " + "store", "column-" + "store", "Column" + "Store"} {
+		if strings.Contains(rows, legacyUmbrella) {
+			t.Fatalf("status/debug rows contain legacy umbrella %q in:\n%s", legacyUmbrella, rows)
+		}
 	}
 }
 

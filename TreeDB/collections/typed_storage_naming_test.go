@@ -86,7 +86,7 @@ func TestTypedStorageLegacyNameInventoryTable(t *testing.T) {
 
 	requireDocContains(t, doc,
 		"## Legacy Name Inventory",
-		"rg -n \"ColumnStore|column store|column-store\" TreeDB experiments docs",
+		"rg -n \"ColumnStore|column store|column-store\" TreeDB docs experiments",
 		"| Path | Symbol/text | Current meaning | Classification | Action | Deferral reason |",
 		"`TreeDB/collections/api.go`",
 		"`ColumnStoreConfig`",
@@ -95,6 +95,27 @@ func TestTypedStorageLegacyNameInventoryTable(t *testing.T) {
 		"compatibility-retained",
 		"deferred",
 	)
+}
+
+func TestTypedStorageLegacyColumnStoreNamesRemainClassified(t *testing.T) {
+	doc := readTypedStorageNamingDoc(t)
+
+	requireDocContains(t, doc,
+		"## PR 2 Umbrella Rename Cleanup",
+		"Issue #1752 is a naming cleanup only",
+		"Public/exported `Column"+"Store*` names remain compatibility-retained",
+		"Remaining legacy names must fall into one of these classes:",
+		"| compatibility-retained |",
+		"| true typed-column terminology |",
+		"| deferred |",
+		"Public API compatibility; do not remove in PR 2",
+	)
+
+	for _, class := range []string{"compatibility-retained", "true typed-column terminology", "deferred"} {
+		if !strings.Contains(doc, class) {
+			t.Fatalf("typed-storage naming doc missing legacy class %q", class)
+		}
+	}
 }
 
 func TestTypedStoragePR0RuntimeBoundary(t *testing.T) {

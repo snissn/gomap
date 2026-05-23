@@ -21,9 +21,10 @@ A TreeDB deployment uses:
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
-- typed column asset manager segments under
+- typed asset manager segments under
   `column_assets/<namespace>/assets/segments/segment-*.tca` for production
-  column-store physical assets,
+  typed-storage physical assets (`column_assets` remains the compatibility
+  directory name),
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
@@ -419,14 +420,15 @@ Encoding rules:
 - if compact encoding is not smaller than the raw page, TreeDB stores the raw
   page payload instead.
 
-### 7.3 Column Asset Manager and TCPA Physical Assets
+### 7.3 Typed Asset Manager and TCPA Typed-Row Physical Assets
 
-Production column-store physical data is stored in typed column asset manager
-segments. These assets are value-log-shaped durable payloads, but they are not
-ordinary row `value_vlog` values and they are not split-leaf `leaf_vlog`
-records. Manifest/control roots can live in B-tree/root metadata; analytical
-column payloads, tombstones, marks, dictionaries, locators, and aggregate
-metadata belong under the isolated column asset manager namespace.
+Production typed-storage physical data is stored in typed asset manager segments
+under the compatibility `column_assets` directory. These assets are
+value-log-shaped durable payloads, but they are not ordinary row `value_vlog`
+values and they are not split-leaf `leaf_vlog` records. Manifest/control roots
+can live in B-tree/root metadata; typed-row payloads and derived accelerator
+payloads such as marks, dictionaries, locators, and aggregate metadata belong
+under the isolated typed asset manager namespace.
 
 A collection namespace such as `events/column-assets` maps to:
 
