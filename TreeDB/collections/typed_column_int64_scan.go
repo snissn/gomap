@@ -85,12 +85,20 @@ func (c *Collection) RunTypedColumnInt64PredicateScan(req TypedColumnInt64Predic
 		return TypedColumnInt64PredicateScanResult{}, err
 	}
 	start := time.Now()
+	hintCfg, hintColumn, hintDeclared, hintErr := c.typedColumnInt64PredicateCatalogColumn(req.Column)
+	if hintErr != nil {
+		return TypedColumnInt64PredicateScanResult{}, hintErr
+	}
+	hintTypedColumnOwner := hintDeclared && hintColumn.ValueType == ColumnStoreValueInt64 && !hintColumn.Nullable && columnStoreColumnIsTypedColumnPart(hintColumn)
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
 	if closeView != nil {
 		defer closeView()
 	}
 	if err != nil {
-		return c.runTypedColumnInt64PredicateScanDocumentFallback(req, ColumnStoreConfig{}, "column_store_unavailable", start)
+		if hintTypedColumnOwner {
+			return TypedColumnInt64PredicateScanResult{}, err
+		}
+		return c.runTypedColumnInt64PredicateScanDocumentFallback(req, hintCfg, "column_store_unavailable", start)
 	}
 	cfg := view.FullConfig
 	if !cfg.Enabled {
@@ -190,6 +198,7 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 			return result, fmt.Errorf("collections: typed-column int64 predicate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		result.Diagnostics.DecodedMetadataBytes += uint64(manifestBytes)
+		matchedStart := len(result.Rows)
 		partPruned, err := scanTypedColumnInt64PredicatePart(adapterPart.Part, adapterColumn.Definition.Name, req, typedRef.Ref.Generation, typedRef.Ref.PartID, &result)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
@@ -199,6 +208,30 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		} else {
 			result.Diagnostics.PartsDecoded++
 		}
+		if len(result.Rows) > matchedStart {
+			physicalRaw, err := readCache.read(physical.Ref, rawScratch)
+			result.Diagnostics.SegmentFileCacheHits = readCache.hits
+			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			if err != nil {
+				return result, fmt.Errorf("collections: typed-column int64 predicate physical id read generation=%d part_id=%d: %w", physical.Ref.Generation, physical.Ref.PartID, err)
+			}
+			rawScratch = physicalRaw
+			result.Diagnostics.PhysicalBytesScanned += int64(len(physicalRaw))
+			ids, err := typedColumnInt64PredicatePhysicalRowIDs(physicalRaw, physical.Ref, view.CollectionName, view.Config, result.Rows[matchedStart:])
+			if err != nil {
+				return result, fmt.Errorf("collections: typed-column int64 predicate physical id decode generation=%d part_id=%d: %w", physical.Ref.Generation, physical.Ref.PartID, err)
+			}
+			for rowIdx := matchedStart; rowIdx < len(result.Rows); rowIdx++ {
+				matched := &result.Rows[rowIdx]
+				documentID, ok := ids[matched.RowIndex]
+				if !ok {
+					return result, fmt.Errorf("collections: typed-column int64 predicate missing physical document id for row_index=%d", matched.RowIndex)
+				}
+				matched.Generation = physical.Ref.Generation
+				matched.PartID = physical.Ref.PartID
+				matched.DocumentID = documentID
+			}
+		}
 	}
 	stats := mgr.Stats()
 	result.Diagnostics.MappedBytes = stats.TotalMappedBytes
@@ -207,6 +240,57 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	result.Diagnostics.DecodedHeapCopyBytes += stats.TotalHeapCopyBytes
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, nil
+}
+
+func (c *Collection) typedColumnInt64PredicateCatalogColumn(column string) (ColumnStoreConfig, ColumnStoreColumn, bool, error) {
+	if c == nil {
+		return ColumnStoreConfig{}, ColumnStoreColumn{}, false, errCollectionNil
+	}
+	if c.db == nil {
+		return ColumnStoreConfig{}, ColumnStoreColumn{}, false, errCollectionDBNil
+	}
+	c.catalogMu.RLock()
+	defer c.catalogMu.RUnlock()
+	catalog := c.catalog
+	if catalog == nil || catalog.meta.Options.ColumnStore == nil || !catalog.meta.Options.ColumnStore.Enabled {
+		return ColumnStoreConfig{}, ColumnStoreColumn{}, false, nil
+	}
+	cfg := catalog.meta.Options.ColumnStore.copy()
+	col, _, ok := columnPhysicalQueryDeclaredColumn(cfg, column)
+	return cfg, col, ok, nil
+}
+
+func typedColumnInt64PredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, matchedRows []TypedColumnInt64PredicateScanRow) (map[int][]byte, error) {
+	projection := columnPhysicalScanProjection{outputByColumn: make([]int, len(cfg.Columns))}
+	for i := range projection.outputByColumn {
+		projection.outputByColumn[i] = -1
+	}
+	wanted := make(map[int]struct{}, len(matchedRows))
+	for _, row := range matchedRows {
+		if row.RowIndex < 0 {
+			return nil, fmt.Errorf("matched row_index=%d is negative", row.RowIndex)
+		}
+		wanted[row.RowIndex] = struct{}{}
+	}
+	ids := make(map[int][]byte, len(wanted))
+	_, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collection, &cfg, projection, ColumnPublishOperationInsert, func(row columnPhysicalScanRowView) error {
+		if row.Deleted {
+			return fmt.Errorf("physical row[%d] is deleted", row.RowIndex)
+		}
+		if _, ok := wanted[row.RowIndex]; ok {
+			ids[row.RowIndex] = bytes.Clone(row.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	for rowIndex := range wanted {
+		if ids[rowIndex] == nil {
+			return nil, fmt.Errorf("missing physical document id for row_index=%d", rowIndex)
+		}
+	}
+	return ids, nil
 }
 
 func typedColumnInt64PredicateMayMatch(req TypedColumnInt64PredicateScanRequest, minValue, maxValue int64) bool {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -78,6 +79,54 @@ func TestTypedColumnInt64ScanAllPrunedNoMatch(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64ScanDirectIdentityMatchesPhysicalFallback(t *testing.T) {
+	directDB, directCol := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = directDB.Close() }()
+	insertTypedColumnInt64ScanRows(t, directCol, []int64{10, 20, 30, 20})
+	direct, err := directCol.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20})
+	if err != nil {
+		t.Fatalf("direct scan: %v", err)
+	}
+
+	fallbackDB := openTypedColumnInt64ScanDB(t)
+	defer func() { _ = fallbackDB.Close() }()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(fallbackDB)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection fallback: %v", err)
+	}
+	fallbackCol, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection fallback: %v", err)
+	}
+	insertTypedColumnInt64ScanRows(t, fallbackCol, []int64{10, 20, 30, 20})
+	fallback, err := fallbackCol.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20})
+	if err != nil {
+		t.Fatalf("fallback scan: %v", err)
+	}
+	if !fallback.Diagnostics.Fallback || direct.Diagnostics.Fallback {
+		t.Fatalf("direct fallback=%v fallback fallback=%v", direct.Diagnostics.Fallback, fallback.Diagnostics.Fallback)
+	}
+	got := typedColumnInt64ScanIdentityStrings(direct)
+	want := typedColumnInt64ScanIdentityStrings(fallback)
+	if len(got) != len(want) {
+		t.Fatalf("direct identities=%v fallback identities=%v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("direct identities=%v fallback identities=%v", got, want)
+		}
+	}
+	for _, row := range direct.Rows {
+		if len(row.DocumentID) == 0 || row.PartID != columnPhysicalRowAssetPartID {
+			t.Fatalf("direct row=%+v want physical row asset identity and document id", row)
+		}
+	}
+}
+
 func TestTypedColumnInt64ScanFallbackWhenTypedColumnUnsupported(t *testing.T) {
 	d := openTypedColumnInt64ScanDB(t)
 	defer func() { _ = d.Close() }()
@@ -120,6 +169,22 @@ func TestTypedColumnInt64ScanStaleMetadataFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64ScanManifestSetupMismatchFailsClosed(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	col.catalogMu.Lock()
+	if col.catalog == nil || col.catalog.meta.Options.ColumnStore == nil || col.catalog.meta.Options.ColumnStore.RecoveryAuthoritativeManifest == nil {
+		col.catalogMu.Unlock()
+		t.Fatalf("missing cached recovery-authoritative manifest")
+	}
+	col.catalog.meta.Options.ColumnStore.RecoveryAuthoritativeManifest.Checksum++
+	col.catalogMu.Unlock()
+	if _, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2}); err == nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan err=nil want fail-closed manifest setup mismatch")
+	}
+}
+
 func TestTypedColumnInt64ScanReopen(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -154,23 +219,27 @@ func TestTypedColumnInt64ScanReopen(t *testing.T) {
 
 func BenchmarkTypedColumnInt64PredicateScan(b *testing.B) {
 	const rows = 4096
-	values := make([]int64, rows)
-	for i := range values {
-		values[i] = int64(i % 1024)
+	valuesHot := make([]int64, rows)
+	valuesCold := make([]int64, rows)
+	for i := range valuesHot {
+		valuesHot[i] = int64(i)
+		valuesCold[i] = int64(10000 + i)
 	}
 	b.Run("typed_column_part", func(b *testing.B) {
 		d, col := setupTypedColumnInt64ScanCollection(b)
 		defer func() { _ = d.Close() }()
-		insertTypedColumnInt64ScanRows(b, col, values)
+		insertTypedColumnInt64ScanRows(b, col, valuesHot)
+		insertTypedColumnInt64ScanRows(b, col, valuesCold)
 		b.ReportAllocs()
 		b.ResetTimer()
+		benchStart := time.Now()
 		for i := 0; i < b.N; i++ {
 			result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 100, High: 199, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
 			if err != nil {
 				b.Fatalf("RunTypedColumnInt64PredicateScan: %v", err)
 			}
 			if i == b.N-1 {
-				reportTypedColumnInt64ScanBenchMetrics(b, result.Diagnostics)
+				reportTypedColumnInt64ScanBenchMetrics(b, result.Diagnostics, time.Since(benchStart), b.N)
 			}
 		}
 	})
@@ -185,25 +254,27 @@ func BenchmarkTypedColumnInt64PredicateScan(b *testing.B) {
 		if err != nil {
 			b.Fatalf("OpenCollection: %v", err)
 		}
-		insertTypedColumnInt64ScanRows(b, col, values)
+		insertTypedColumnInt64ScanRows(b, col, valuesHot)
+		insertTypedColumnInt64ScanRows(b, col, valuesCold)
 		b.ReportAllocs()
 		b.ResetTimer()
+		benchStart := time.Now()
 		for i := 0; i < b.N; i++ {
 			result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 100, High: 199})
 			if err != nil {
 				b.Fatalf("RunTypedColumnInt64PredicateScan fallback: %v", err)
 			}
 			if i == b.N-1 {
-				reportTypedColumnInt64ScanBenchMetrics(b, result.Diagnostics)
+				reportTypedColumnInt64ScanBenchMetrics(b, result.Diagnostics, time.Since(benchStart), b.N)
 			}
 		}
 	})
 }
 
-func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64PredicateScanDiagnostics) {
+func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64PredicateScanDiagnostics, elapsed time.Duration, iterations int) {
 	b.Helper()
-	if diag.ScanNanos > 0 {
-		b.ReportMetric(float64(1_000_000_000)/float64(diag.ScanNanos), "ops/sec")
+	if elapsed > 0 && iterations > 0 {
+		b.ReportMetric(float64(iterations)/elapsed.Seconds(), "ops/sec")
 	}
 	b.ReportMetric(float64(diag.MappedBytes), "mapped_bytes/op")
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
@@ -259,6 +330,15 @@ func insertTypedColumnInt64ScanRows(tb testing.TB, col *Collection, values []int
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		tb.Fatalf("InsertBatch: %v", err)
 	}
+}
+
+func typedColumnInt64ScanIdentityStrings(result TypedColumnInt64PredicateScanResult) []string {
+	out := make([]string, len(result.Rows))
+	for i, row := range result.Rows {
+		out[i] = fmt.Sprintf("%s/%d/%d/%d/%d", string(row.DocumentID), row.Generation, row.PartID, row.RowIndex, row.Value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func assertTypedColumnInt64ScanValues(t *testing.T, result TypedColumnInt64PredicateScanResult, want []int64) {
