@@ -296,6 +296,45 @@ func TestTypedColumnAdapterReservedPrimaryIDFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterDuplicateOrAmbiguousFieldsFailClosed(t *testing.T) {
+	duplicate := []TypedStorageField{
+		{Name: "dup", Path: "left", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+		{Name: "dup", Path: "right", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+	}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: duplicate}, nil); err == nil || !strings.Contains(err.Error(), "duplicate column") {
+		t.Fatalf("build duplicate fields err=%v want duplicate column", err)
+	}
+
+	crossCollision := []TypedStorageField{
+		{Name: "left", Path: "right", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+		{Name: "right", Path: "other", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+	}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: crossCollision}, nil); err == nil || !strings.Contains(err.Error(), "ambiguous field name") {
+		t.Fatalf("build cross-collision fields err=%v want ambiguous field name", err)
+	}
+}
+
+func TestTypedColumnAdapterAmbiguousRowKeysFailClosed(t *testing.T) {
+	field := TypedStorageField{Name: "count", Path: "metrics.count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64}
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"count":         {Type: ColumnStoreValueInt64, Present: true, Int64: 10},
+		"metrics.count": {Type: ColumnStoreValueInt64, Present: true, Int64: 20},
+	}}}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows); err == nil || !strings.Contains(err.Error(), "ambiguous field keys") {
+		t.Fatalf("build ambiguous row err=%v want ambiguous field keys", err)
+	}
+}
+
+func TestTypedColumnAdapterMissingDeclaredValueTypeFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"count": {Present: true, Int64: 10},
+	}}}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows); err == nil || !strings.Contains(err.Error(), "declared type required") {
+		t.Fatalf("build missing declared type err=%v want declared type required", err)
+	}
+}
+
 func TestTypedColumnAdapterUnsupportedTypeFailsClosed(t *testing.T) {
 	field := typedColumnAdapterField("future", ColumnStoreValueType("decimal128"))
 	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, nil); !errors.Is(err, errTypedColumnAdapterUnsupportedType) {

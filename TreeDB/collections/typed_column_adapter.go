@@ -124,21 +124,53 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	return typedColumnAdapterColumn{Field: field, Definition: def, FixedWidthEncoding: field.FixedWidthEncoding}, nil
 }
 
-func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedColumnAdapterRow) (*typedColumnAdapterPart, error) {
-	if opts.PartID == 0 {
-		opts.PartID = 1
-	}
-	columns := make([]typedColumnAdapterColumn, 0, len(opts.Fields))
-	for _, field := range opts.Fields {
+func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColumnAdapterColumn, error) {
+	columns := make([]typedColumnAdapterColumn, 0, len(fields))
+	seenColumns := map[string]struct{}{typedColumnAdapterPrimaryIDColumn: {}}
+	seenNames := make(map[string]string, len(fields))
+	seenPaths := make(map[string]string, len(fields))
+	for _, field := range fields {
 		column, err := typedColumnAdapterMapField(field)
 		if err != nil {
 			return nil, err
 		}
+		if _, exists := seenColumns[column.Definition.Name]; exists {
+			return nil, fmt.Errorf("collections: typed-column adapter duplicate column %q", column.Definition.Name)
+		}
+		if field.Path != "" {
+			if owner, exists := seenNames[field.Path]; exists {
+				return nil, fmt.Errorf("collections: typed-column adapter ambiguous field path %q collides with field name %q", field.Path, owner)
+			}
+		}
+		if field.Name != "" {
+			if owner, exists := seenPaths[field.Name]; exists {
+				return nil, fmt.Errorf("collections: typed-column adapter ambiguous field name %q collides with field path %q", field.Name, owner)
+			}
+			seenNames[field.Name] = column.Definition.Name
+		}
+		seenColumns[column.Definition.Name] = struct{}{}
+		if field.Path != "" {
+			seenPaths[field.Path] = column.Definition.Name
+		}
 		columns = append(columns, column)
+	}
+	return columns, nil
+}
+
+func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedColumnAdapterRow) (*typedColumnAdapterPart, error) {
+	if opts.PartID == 0 {
+		opts.PartID = 1
+	}
+	columns, err := typedColumnAdapterColumnsForFields(opts.Fields)
+	if err != nil {
+		return nil, err
 	}
 	for i := range columns {
 		if columns[i].Field.ValueType == ColumnStoreValueString {
-			dict := buildTypedColumnAdapterStringDictionary(columns[i], rows)
+			dict, err := buildTypedColumnAdapterStringDictionary(columns[i], rows)
+			if err != nil {
+				return nil, err
+			}
 			columns[i].Dictionary = dict
 			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
 			columns[i].Definition.Cardinality = uint32(len(dict))
@@ -164,9 +196,9 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	for rowIdx, row := range rows {
 		batch.Columns[typedColumnAdapterPrimaryIDColumn][rowIdx] = row.PrimaryID
 		for _, column := range columns {
-			value, ok := row.Values[column.Field.Path]
-			if !ok && column.Field.Name != "" {
-				value, ok = row.Values[column.Field.Name]
+			value, ok, err := typedColumnAdapterRowValue(row, column)
+			if err != nil {
+				return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 			}
 			if !ok {
 				return nil, fmt.Errorf("collections: typed-column adapter row %d missing field %q", rowIdx, column.Field.Path)
@@ -205,13 +237,9 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 	if err != nil {
 		return nil, err
 	}
-	columns := make([]typedColumnAdapterColumn, 0, len(opts.Fields))
-	for _, field := range opts.Fields {
-		column, err := typedColumnAdapterMapField(field)
-		if err != nil {
-			return nil, err
-		}
-		columns = append(columns, column)
+	columns, err := typedColumnAdapterColumnsForFields(opts.Fields)
+	if err != nil {
+		return nil, err
 	}
 	dictionaries, err := image.Dictionaries()
 	if err != nil {
@@ -271,7 +299,10 @@ func (p *typedColumnAdapterPart) columnByName(name string) (typedColumnAdapterCo
 }
 
 func encodeTypedColumnAdapterValue(column typedColumnAdapterColumn, value columnDeclaredValue) (int64, error) {
-	if value.Type != "" && value.Type != column.Field.ValueType {
+	if value.Type == "" {
+		return 0, errors.New("declared type required")
+	}
+	if value.Type != column.Field.ValueType {
 		return 0, fmt.Errorf("value type=%q want %q", value.Type, column.Field.ValueType)
 	}
 	if !value.Present || value.Null {
@@ -323,12 +354,27 @@ func decodeTypedColumnAdapterValue(column typedColumnAdapterColumn, raw int64) (
 	return value, nil
 }
 
-func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, rows []typedColumnAdapterRow) map[string]int64 {
+func typedColumnAdapterRowValue(row typedColumnAdapterRow, column typedColumnAdapterColumn) (columnDeclaredValue, bool, error) {
+	pathValue, pathOK := row.Values[column.Field.Path]
+	if column.Field.Name == "" || column.Field.Name == column.Field.Path {
+		return pathValue, pathOK, nil
+	}
+	nameValue, nameOK := row.Values[column.Field.Name]
+	if pathOK && nameOK {
+		return columnDeclaredValue{}, false, fmt.Errorf("ambiguous field keys %q and %q", column.Field.Path, column.Field.Name)
+	}
+	if pathOK {
+		return pathValue, true, nil
+	}
+	return nameValue, nameOK, nil
+}
+
+func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, rows []typedColumnAdapterRow) (map[string]int64, error) {
 	seen := make(map[string]struct{})
-	for _, row := range rows {
-		value, ok := row.Values[column.Field.Path]
-		if !ok && column.Field.Name != "" {
-			value, ok = row.Values[column.Field.Name]
+	for rowIdx, row := range rows {
+		value, ok, err := typedColumnAdapterRowValue(row, column)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 		}
 		if ok && value.Present && !value.Null {
 			seen[value.String] = struct{}{}
@@ -343,7 +389,7 @@ func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, ro
 	for i, value := range values {
 		dict[value] = int64(i)
 	}
-	return dict
+	return dict, nil
 }
 
 func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string {
