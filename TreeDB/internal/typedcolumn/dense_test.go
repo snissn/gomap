@@ -209,6 +209,68 @@ func TestTypedColumnAggregateMetadataVectorPredicateFailsClosed1756(t *testing.T
 	}
 }
 
+func TestTypedColumnAggregateMetadataAdjacencyListPredicateFailsClosed1756(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("BuildColumnPart panicked for adjacency aggregate predicate: %v", r)
+		}
+	}()
+	_, err := BuildColumnPart(11, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "time_us", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "kind_code", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone, CompressionSet: true, Cardinality: 3},
+			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Encoding: EncodingRawUint32Dense, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 2},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+		AggregateMetadata: []AggregateMetadataDefinition{{
+			Name:      "kind_time",
+			Version:   AggregateMetadataDefinitionVersion,
+			Kind:      AggregateMetadataGroupMinMax,
+			Scope:     AggregateMetadataScopeGranule,
+			GroupKeys: []string{"kind_code"},
+			Measures: []AggregateMetadataMeasure{
+				{Op: AggregateMetadataMeasureCount},
+				{Op: AggregateMetadataMeasureMin, Column: "time_us"},
+				{Op: AggregateMetadataMeasureMax, Column: "time_us"},
+			},
+			Predicates:     []AggregateMetadataPredicate{{Column: "neighbors", Op: AggregateMetadataPredicateEq, Value: 1}},
+			MaxBytesPerRow: 256,
+		}},
+	}, Batch{
+		Rows: 2,
+		Columns: map[string][]int64{
+			"id":        {10, 11},
+			"time_us":   {100, 200},
+			"kind_code": {1, 2},
+		},
+		Uint32Vectors: map[string][]uint32{"neighbors": {1, 2, 0, 2}},
+	})
+	if err == nil {
+		t.Fatalf("BuildColumnPart err=nil for adjacency aggregate predicate")
+	}
+	if !strings.Contains(err.Error(), "aggregate metadata kind_time predicate column neighbors type=adjacency_list is not scalar") {
+		t.Fatalf("BuildColumnPart err=%v, want adjacency aggregate predicate fail-closed", err)
+	}
+}
+
+func TestTypedColumnDescriptorAccountingIncludesFixedWidthElements1756(t *testing.T) {
+	part := mustDenseVectorAdjacencyPart1756(t)
+	blocks := 0
+	for _, column := range part.Descriptor.Columns {
+		blocks += len(column.Blocks)
+	}
+	want := columnPartDescriptorBaseBytes + len(part.Descriptor.Granules)*granuleDescriptorBytes + len(part.Descriptor.Columns)*36 + blocks*columnBlockDescriptorBytes
+	if got := estimateColumnPartDescriptorBytes(part.Descriptor); got != want {
+		t.Fatalf("estimateColumnPartDescriptorBytes=%d want %d including 4-byte fixed-width field per column", got, want)
+	}
+}
+
 func TestTypedColumnVectorCountersDirectViewsAndScratchDecodes(t *testing.T) {
 	image := mustDenseVectorAdjacencyImage1756(t)
 	section := mustColumnDataSection1756(t, image, "embedding")

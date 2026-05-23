@@ -5,7 +5,7 @@ import "sort"
 const (
 	columnPartDescriptorBaseBytes = 96
 	granuleDescriptorBytes        = 64
-	columnDescriptorBytes         = 32
+	columnDescriptorBytes         = 36
 	columnBlockDescriptorBytes    = 64
 	sortKeyColumnDescriptorBytes  = 32
 	sortKeyMarkBaseBytes          = 16
