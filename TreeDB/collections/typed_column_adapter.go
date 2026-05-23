@@ -111,6 +111,9 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	if name == "" {
 		return typedColumnAdapterColumn{}, errors.New("collections: typed-column adapter field requires name or path")
 	}
+	if name == typedColumnAdapterPrimaryIDColumn || field.Path == typedColumnAdapterPrimaryIDColumn {
+		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q uses reserved primary-id column %q", field.Path, typedColumnAdapterPrimaryIDColumn)
+	}
 	def := typedcolumn.ColumnDefinition{
 		Name:           name,
 		Type:           mapping.ColumnType,

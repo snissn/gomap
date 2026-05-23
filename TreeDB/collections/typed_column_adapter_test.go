@@ -284,6 +284,18 @@ func TestTypedColumnAdapterTypedViewsValidateFixedWidth(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterReservedPrimaryIDFailsClosed(t *testing.T) {
+	for _, field := range []TypedStorageField{
+		typedColumnAdapterField(typedColumnAdapterPrimaryIDColumn, ColumnStoreValueInt64),
+		{Name: "user_id", Path: typedColumnAdapterPrimaryIDColumn, Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+	} {
+		_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, nil)
+		if err == nil || !strings.Contains(err.Error(), "reserved primary-id column") {
+			t.Fatalf("build reserved field %+v err=%v want reserved primary-id column", field, err)
+		}
+	}
+}
+
 func TestTypedColumnAdapterUnsupportedTypeFailsClosed(t *testing.T) {
 	field := typedColumnAdapterField("future", ColumnStoreValueType("decimal128"))
 	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, nil); !errors.Is(err, errTypedColumnAdapterUnsupportedType) {
