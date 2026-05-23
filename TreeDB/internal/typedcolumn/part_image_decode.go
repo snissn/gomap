@@ -364,7 +364,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
-	columnTotal, err := dec.boundedCount(columnCount, 14, "descriptor columns")
+	columnTotal, err := dec.boundedCount(columnCount, 18, "descriptor columns")
 	if err != nil {
 		return ColumnPartDescriptor{}, nil, err
 	}
