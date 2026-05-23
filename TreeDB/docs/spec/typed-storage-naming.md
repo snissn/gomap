@@ -30,6 +30,34 @@ Authoritative field owners are only:
 `derived_accelerator` is a classification only. It is not an authoritative field
 owner and must not silently become a second source of truth for a logical field.
 
+## PR 1 Layout Resolver Contract
+
+Issue #1751 adds the pure-metadata resolver surface that turns collection
+metadata into explicit typed-storage ownership rows. The implementation names are
+canonical for this seam:
+
+- `TypedStorageLayout`
+- `TypedStorageFieldOwner`
+- `TypedStorageOwnerRetainedDocument`
+- `TypedStorageOwnerRowAsset`
+- `TypedStorageOwnerColumnPart`
+- `TypedStorageAssetClass`
+- `TypedStorageAssetClassDerivedAccelerator`
+- `ResolveTypedStorageLayout`
+- `NormalizeTypedStorageLayout`
+
+Compatibility normalization keeps `ColumnStoreConfig` as input metadata. Existing
+declared columns with no explicit typed-storage owner resolve to
+`typed_row_asset`. `ColumnRetainedPayloadFull` is compatibility duplication in
+`document_payload`; it does not make the retained document a second
+authoritative owner for declared typed fields. `typed_column_part` ownership may
+be represented as a placeholder, but reads and publication must fail closed until
+the typed-column format/publication work lands.
+
+The resolver is pure metadata only: it must not perform filesystem IO, mmap,
+section decode, DB mutation, asset open, publication, query planning, or durable
+typed-column format work.
+
 ## Current Derived Accelerator Classifications
 
 These existing assets are derived accelerators unless a future format explicitly
