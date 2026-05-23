@@ -123,6 +123,32 @@ func TestDocs_CanonicalStoragePaths(t *testing.T) {
 	}
 }
 
+func TestTypedStorageStorageFormatDocsMentionCompatibilityDirectory(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read storage-format doc: %v", err)
+	}
+	doc := string(data)
+	pathNeedle := "`column_assets/<namespace>/assets/segments/segment-*.tca`"
+	if !strings.Contains(doc, pathNeedle) {
+		t.Fatalf("storage-format doc missing exact typed asset manager path %q", pathNeedle)
+	}
+
+	normalizedDoc := strings.Join(strings.Fields(doc), " ")
+	for _, want := range []string{
+		"- typed asset manager segments under `column_assets/<namespace>/assets/segments/segment-*.tca` for production typed-storage physical assets",
+		"`column_assets` remains the compatibility directory name",
+		"Production typed-storage physical data is stored in typed asset manager segments under the compatibility `column_assets` directory",
+		"typed-row payloads, typed-column part payloads, and derived accelerator payloads",
+	} {
+		if !strings.Contains(normalizedDoc, want) {
+			t.Fatalf("storage-format doc missing typed-storage compatibility wording %q", want)
+		}
+	}
+}
+
 func TestDocs_DurabilityMatrixSingleOwner(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	owner := filepath.Join(treeRoot, "docs", "spec", "write-path-and-durability.md")

@@ -327,33 +327,67 @@ func TestTypedStorageCompatibilityConfigCanOptIntoColumnPartOwner(t *testing.T) 
 	}
 }
 
-func TestTypedStorageStatusVocabulary(t *testing.T) {
-	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
-		Collection:      "events",
-		RetainedPayload: ColumnRetainedPayloadFull,
-		Fields: []TypedStorageField{
-			{Name: "time_us", Path: "time_us", Owner: TypedStorageOwnerRowAsset, ValueType: ColumnStoreValueInt64},
-			{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+func TestTypedStorageDebugRowsUseCanonicalVocabularyOnly(t *testing.T) {
+	cases := []struct {
+		name   string
+		layout TypedStorageLayout
+		want   []string
+	}{
+		{
+			name: "retained document remainder only",
+			layout: TypedStorageLayout{
+				Collection:      "events",
+				RetainedPayload: ColumnRetainedPayloadFull,
+			},
+			want: []string{"* -> retained_document(remainder)"},
 		},
-	})
-	if err != nil {
-		t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+		{
+			name: "typed row typed column and compatibility duplicate",
+			layout: TypedStorageLayout{
+				Collection:      "events",
+				RetainedPayload: ColumnRetainedPayloadFull,
+				Fields: []TypedStorageField{
+					{Name: "time_us", Path: "time_us", Owner: TypedStorageOwnerRowAsset, ValueType: ColumnStoreValueInt64},
+					{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 3},
+				},
+			},
+			want: []string{
+				"time_us -> typed_row_asset",
+				"embedding -> typed_column_part",
+				"* -> retained_document(remainder)",
+				"document_payload -> compatibility_duplicate",
+			},
+		},
+		{
+			name: "no retained document remainder",
+			layout: TypedStorageLayout{
+				Collection:      "events",
+				RetainedPayload: ColumnRetainedPayloadNone,
+				Fields: []TypedStorageField{
+					{Name: "score", Path: "score", Owner: TypedStorageOwnerRowAsset, ValueType: ColumnStoreValueDouble},
+				},
+			},
+			want: []string{"score -> typed_row_asset"},
+		},
 	}
-	rows := strings.Join(layout.FieldOwnerDebugRows(), "\n")
-	for _, want := range []string{
-		"time_us -> typed_row_asset",
-		"embedding -> typed_column_part",
-		"* -> retained_document(remainder)",
-		"document_payload -> compatibility_duplicate",
-	} {
-		if !strings.Contains(rows, want) {
-			t.Fatalf("status/debug rows missing %q in:\n%s", want, rows)
-		}
-	}
-	for _, legacyUmbrella := range []string{"column " + "store", "column-" + "store", "Column" + "Store"} {
-		if strings.Contains(rows, legacyUmbrella) {
-			t.Fatalf("status/debug rows contain legacy umbrella %q in:\n%s", legacyUmbrella, rows)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			layout, err := NormalizeTypedStorageLayout(tc.layout)
+			if err != nil {
+				t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+			}
+			rows := strings.Join(layout.FieldOwnerDebugRows(), "\n")
+			for _, want := range tc.want {
+				if !strings.Contains(rows, want) {
+					t.Fatalf("status/debug rows missing %q in:\n%s", want, rows)
+				}
+			}
+			for _, legacyUmbrella := range []string{"column " + "store", "column-" + "store", "Column" + "Store"} {
+				if strings.Contains(rows, legacyUmbrella) {
+					t.Fatalf("status/debug rows contain legacy umbrella %q in:\n%s", legacyUmbrella, rows)
+				}
+			}
+		})
 	}
 }
 
