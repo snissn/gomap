@@ -138,6 +138,9 @@ func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColu
 			return nil, fmt.Errorf("collections: typed-column adapter duplicate column %q", column.Definition.Name)
 		}
 		if field.Path != "" {
+			if owner, exists := seenPaths[field.Path]; exists {
+				return nil, fmt.Errorf("collections: typed-column adapter duplicate field path %q for columns %q and %q", field.Path, owner, column.Definition.Name)
+			}
 			if owner, exists := seenNames[field.Path]; exists {
 				return nil, fmt.Errorf("collections: typed-column adapter ambiguous field path %q collides with field name %q", field.Path, owner)
 			}
@@ -241,6 +244,9 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 	if err != nil {
 		return nil, err
 	}
+	if err := validateTypedColumnAdapterImageSchema(part, columns); err != nil {
+		return nil, err
+	}
 	dictionaries, err := image.Dictionaries()
 	if err != nil {
 		return nil, err
@@ -256,6 +262,29 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 		}
 	}
 	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: dictionaries}, nil
+}
+
+func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns []typedColumnAdapterColumn) error {
+	if part == nil {
+		return errors.New("collections: typed-column adapter nil image part")
+	}
+	primary, ok := part.Columns[typedColumnAdapterPrimaryIDColumn]
+	if !ok {
+		return fmt.Errorf("collections: typed-column adapter image missing primary-id column %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 || primary.Definition.Encoding != typedcolumn.EncodingRawInt64 {
+		return fmt.Errorf("collections: typed-column adapter image primary-id column %q type/encoding mismatch", typedColumnAdapterPrimaryIDColumn)
+	}
+	for _, column := range columns {
+		got, ok := part.Columns[column.Definition.Name]
+		if !ok {
+			return fmt.Errorf("collections: typed-column adapter image missing column %q", column.Definition.Name)
+		}
+		if got.Definition.Type != column.Definition.Type || got.Definition.Encoding != column.Definition.Encoding || got.Definition.Compression != column.Definition.Compression {
+			return fmt.Errorf("collections: typed-column adapter image column %q schema mismatch: got type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", column.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression)
+		}
+	}
+	return nil
 }
 
 func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, error) {

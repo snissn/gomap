@@ -305,12 +305,33 @@ func TestTypedColumnAdapterDuplicateOrAmbiguousFieldsFailClosed(t *testing.T) {
 		t.Fatalf("build duplicate fields err=%v want duplicate column", err)
 	}
 
+	duplicatePath := []TypedStorageField{
+		{Name: "left", Path: "same", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+		{Name: "right", Path: "same", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
+	}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: duplicatePath}, nil); err == nil || !strings.Contains(err.Error(), "duplicate field path") {
+		t.Fatalf("build duplicate path fields err=%v want duplicate field path", err)
+	}
+
 	crossCollision := []TypedStorageField{
 		{Name: "left", Path: "right", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
 		{Name: "right", Path: "other", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64},
 	}
 	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: crossCollision}, nil); err == nil || !strings.Contains(err.Error(), "ambiguous field name") {
 		t.Fatalf("build cross-collision fields err=%v want ambiguous field name", err)
+	}
+}
+
+func TestTypedColumnAdapterImageSchemaMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	mismatch := typedColumnAdapterField("count", ColumnStoreValueBool)
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
+		t.Fatalf("partFromImage schema mismatch err=%v want schema mismatch", err)
 	}
 }
 
