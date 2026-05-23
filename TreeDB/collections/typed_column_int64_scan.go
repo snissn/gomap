@@ -342,7 +342,7 @@ func (c *Collection) runTypedColumnInt64PredicateScanPhysicalFallback(view colum
 			}
 			result.Diagnostics.RowsScanned++
 			if typedColumnInt64PredicateMatches(req, value) {
-				result.Rows = append(result.Rows, TypedColumnInt64PredicateScanRow{Generation: row.Generation, PartID: row.PartID, RowIndex: row.RowIndex, DocumentID: bytes.Clone(row.ID), Value: value})
+				result.Rows = append(result.Rows, TypedColumnInt64PredicateScanRow{Generation: row.Generation, PartID: row.PartID, RowIndex: row.RowIndex, PrimaryID: int64(row.RowIndex), DocumentID: bytes.Clone(row.ID), Value: value})
 				result.Diagnostics.RowsMatched++
 			}
 			return nil
