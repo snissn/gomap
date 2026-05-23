@@ -1,9 +1,9 @@
 # TreeDB Typed Storage Naming
 
-This document is the PR 0 naming scaffold for issue #1750 under the
-#1744 typed-storage tracker. It is intentionally a vocabulary and inventory
-contract only. It does not define a new durable on-disk format, remove legacy
-public APIs, alter query planning, or change runtime behavior.
+This document is the PR 0 naming scaffold for issue #1750 under the #1744
+typed-storage tracker. It is intentionally a vocabulary and inventory contract
+only. It does not define a new durable on-disk format, remove legacy public
+APIs, alter query planning, or change runtime behavior.
 
 ## Naming Contract
 
