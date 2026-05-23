@@ -239,20 +239,29 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 			return typedColumnPartVisibleValues{}, err
 		}
 		raw, readErr := readCache.read(ref.Ref, nil)
-		closeErr := readCache.close()
 		if readErr != nil {
+			if closeErr := readCache.close(); closeErr != nil {
+				readErr = errors.Join(readErr, closeErr)
+			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction read generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, readErr)
-		}
-		if closeErr != nil {
-			return typedColumnPartVisibleValues{}, closeErr
 		}
 		part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
 		if err != nil {
+			if closeErr := readCache.close(); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
 		rows, err = part.scanRows()
+		closeErr := readCache.close()
 		if err != nil {
+			if closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
 			return typedColumnPartVisibleValues{}, err
+		}
+		if closeErr != nil {
+			return typedColumnPartVisibleValues{}, closeErr
 		}
 		if cache != nil {
 			cache[physicalRow.Generation] = rows
