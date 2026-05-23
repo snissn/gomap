@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -15,11 +15,21 @@ import (
 
 func typedStorageRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("runtime.Caller failed")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	for dir := filepath.Clean(wd); ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			if _, err := os.Stat(filepath.Join(dir, "TreeDB", "docs", "spec", "typed-storage-naming.md")); err == nil {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("find repo root from %s: go.mod with typed-storage spec not found", wd)
+		}
+	}
 }
 
 func readTypedStorageNamingDoc(t *testing.T) string {
@@ -396,6 +406,55 @@ func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacy
 	repoRoot := typedStorageRepoRoot(t)
 	roots := []string{"TreeDB", "docs", "experiments"}
 	usage := make(map[string]typedStorageLegacyNameUsage)
+	for _, rel := range typedStorageLegacyNameScanFiles(t, repoRoot, roots) {
+		if typedStorageLegacyNameScanSkipsGeneratedArtifact(rel) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read legacy-name scan file %s: %v", rel, err)
+		}
+		if !utf8.Valid(data) {
+			continue
+		}
+		var current typedStorageLegacyNameUsage
+		for _, line := range strings.Split(string(data), "\n") {
+			matches := typedStorageLegacyNamePattern.FindAllStringIndex(line, -1)
+			if len(matches) == 0 {
+				continue
+			}
+			current.matchingLines++
+			current.occurrences += len(matches)
+		}
+		if current.matchingLines > 0 {
+			usage[rel] = current
+		}
+	}
+	return usage
+}
+
+func typedStorageLegacyNameScanFiles(t *testing.T, repoRoot string, roots []string) []string {
+	t.Helper()
+	args := append([]string{"-C", repoRoot, "ls-files", "-z", "--"}, roots...)
+	out, err := exec.Command("git", args...).Output()
+	if err == nil && len(out) > 0 {
+		parts := strings.Split(string(out), "\x00")
+		files := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			files = append(files, filepath.ToSlash(part))
+		}
+		sort.Strings(files)
+		return files
+	}
+	return typedStorageLegacyNameWalkFiles(t, repoRoot, roots)
+}
+
+func typedStorageLegacyNameWalkFiles(t *testing.T, repoRoot string, roots []string) []string {
+	t.Helper()
+	var files []string
 	for _, root := range roots {
 		rootPath := filepath.Join(repoRoot, root)
 		if _, err := os.Stat(rootPath); err != nil {
@@ -410,42 +469,27 @@ func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacy
 				case ".git", "node_modules", "vendor":
 					return filepath.SkipDir
 				}
+				if strings.HasPrefix(d.Name(), ".") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasPrefix(d.Name(), ".") {
 				return nil
 			}
 			rel, err := filepath.Rel(repoRoot, path)
 			if err != nil {
 				return err
 			}
-			rel = filepath.ToSlash(rel)
-			if typedStorageLegacyNameScanSkipsGeneratedArtifact(rel) {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if !utf8.Valid(data) {
-				return nil
-			}
-			var current typedStorageLegacyNameUsage
-			for _, line := range strings.Split(string(data), "\n") {
-				matches := typedStorageLegacyNamePattern.FindAllStringIndex(line, -1)
-				if len(matches) == 0 {
-					continue
-				}
-				current.matchingLines++
-				current.occurrences += len(matches)
-			}
-			if current.matchingLines > 0 {
-				usage[rel] = current
-			}
+			files = append(files, filepath.ToSlash(rel))
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("walk legacy-name scan root %s: %v", rootPath, err)
 		}
 	}
-	return usage
+	sort.Strings(files)
+	return files
 }
 
 func typedStorageLegacyNameScanSkipsGeneratedArtifact(rel string) bool {
