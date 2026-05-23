@@ -113,11 +113,37 @@ func TestColumnVectorGraphNativeSearchUsesBestFirstFrontierV3(t *testing.T) {
 	if len(got) != 1 || got[0].Ordinal != 4 || string(got[0].ID) != "doc-best" {
 		t.Fatalf("results=%+v want best-first traversal to reach doc-best before lower-score branch", got)
 	}
-	if stats.Candidates != 4 || stats.CandidateFetches != 4 || stats.ScoreBatches != 4 || stats.ExpansionFetches != stats.AdjacencyExpansions {
-		t.Fatalf("stats=%+v want four scored candidates plus lazy adjacency expansion fetches", stats)
+	if stats.Candidates < 4 || stats.Candidates > uint64(len(rows)) || stats.CandidateFetches != stats.Candidates || stats.ScoreBatches != stats.Candidates || stats.ExpansionFetches != stats.AdjacencyExpansions {
+		t.Fatalf("stats=%+v want bounded best-first scored candidates plus lazy adjacency expansion fetches", stats)
 	}
 	if readerStats := reader.Stats(); readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
 		t.Fatalf("reader stats=%+v want no generic row fetches for scoring or result IDs stats=%+v", readerStats, stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchDoesNotStopBeforePromisingFrontierV6(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-start"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{1, 2, 3}},
+		{ID: []byte("doc-low-a"), Vector: []float32{-1, 0, 0}, InvNorm: 1},
+		{ID: []byte("doc-low-b"), Vector: []float32{-0.8, 0.6, 0}, InvNorm: 1},
+		{ID: []byte("doc-bridge"), Vector: []float32{0.5, 0.8660254, 0}, InvNorm: 1, Adjacency: []uint32{4}},
+		{ID: []byte("doc-best"), Vector: []float32{1, 0, 0}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer reader.Close()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 3}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 4 || string(got[0].ID) != "doc-best" {
+		t.Fatalf("results=%+v stats=%+v want bounded HNSW frontier to continue through bridge to doc-best", got, stats)
 	}
 }
 
