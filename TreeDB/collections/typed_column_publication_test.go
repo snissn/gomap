@@ -227,6 +227,36 @@ func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
 	}
 }
 
+func TestTypedColumnManifestRejectsUnexpectedTypedPartID1755(t *testing.T) {
+	asset := ColumnPreparedAsset{
+		Ref: ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1TypedColumnPart,
+			Namespace:  "events/column-assets",
+			Generation: 1,
+			PartID:     99,
+			FileID:     1,
+			Length:     64,
+			Checksum:   7,
+		},
+		Rows:         1,
+		Bytes:        64,
+		PublishID:    1,
+		GenerationID: 1,
+		Reason:       string(ColumnPublishOperationInsert),
+	}
+	raw, err := encodeColumnManifestPartRecord(asset)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestPartRecord: %v", err)
+	}
+	_, err = typedColumnPartRefsByGenerationFromManifestRecords([]columnManifestRecord{{
+		key:   columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID),
+		value: raw,
+	}}, asset.Ref.Namespace)
+	if err == nil || !strings.Contains(err.Error(), "unexpected part_id=99") {
+		t.Fatalf("typedColumnPartRefsByGenerationFromManifestRecords err=%v want unexpected part_id", err)
+	}
+}
+
 func TestTypedColumnManifestSnapshotViewAcceptsTypedPartRefs1755(t *testing.T) {
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()

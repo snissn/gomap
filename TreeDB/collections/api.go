@@ -18495,9 +18495,9 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	}
 	visibleRows := visible.Rows
 	visiblePos := 0
-	var typedColumnCache map[uint64][]typedColumnAdapterRow
+	var typedColumnCache *typedColumnPartReconstructionCache
 	if columnStoreHasTypedColumnPartOwners(columnStoreConfig) {
-		typedColumnCache = make(map[uint64][]typedColumnAdapterRow)
+		typedColumnCache = &typedColumnPartReconstructionCache{Rows: make(map[uint64][]typedColumnAdapterRow)}
 	}
 	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	for _, record := range records {

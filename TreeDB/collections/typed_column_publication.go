@@ -210,11 +210,17 @@ type typedColumnPartVisibleValues struct {
 	Values []columnDeclaredValue
 }
 
+type typedColumnPartReconstructionCache struct {
+	Rows       map[uint64][]typedColumnAdapterRow
+	Refs       map[uint64]columnManifestAssetRefForScan
+	RefsLoaded bool
+}
+
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow) (typedColumnPartVisibleValues, error) {
 	return c.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, cfg, physicalRow, nil)
 }
 
-func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache map[uint64][]typedColumnAdapterRow) (typedColumnPartVisibleValues, error) {
+func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache *typedColumnPartReconstructionCache) (typedColumnPartVisibleValues, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
 		return typedColumnPartVisibleValues{}, nil
 	}
@@ -225,9 +231,13 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 	if physicalRow.Deleted {
 		return typedColumnPartVisibleValues{}, nil
 	}
-	rows, ok := cache[physicalRow.Generation]
+	var rows []typedColumnAdapterRow
+	var ok bool
+	if cache != nil && cache.Rows != nil {
+		rows, ok = cache.Rows[physicalRow.Generation]
+	}
 	if !ok {
-		ref, found, err := c.typedColumnPartRefForGeneration(snap, manifestRootID, cfg, physicalRow.Generation)
+		ref, found, err := c.typedColumnPartRefForGenerationWithCache(snap, manifestRootID, cfg, physicalRow.Generation, cache)
 		if err != nil {
 			return typedColumnPartVisibleValues{}, err
 		}
@@ -264,7 +274,10 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 			return typedColumnPartVisibleValues{}, closeErr
 		}
 		if cache != nil {
-			cache[physicalRow.Generation] = rows
+			if cache.Rows == nil {
+				cache.Rows = make(map[uint64][]typedColumnAdapterRow)
+			}
+			cache.Rows[physicalRow.Generation] = rows
 		}
 	}
 	if physicalRow.RowIndex < 0 || physicalRow.RowIndex >= len(rows) {
@@ -286,39 +299,74 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 }
 
 func (c *Collection) typedColumnPartRefForGeneration(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig, generation uint64) (columnManifestAssetRefForScan, bool, error) {
-	if rootID == 0 {
-		return columnManifestAssetRefForScan{}, false, errors.New("collections: typed-column reconstruction missing manifest root")
+	return c.typedColumnPartRefForGenerationWithCache(snap, rootID, cfg, generation, nil)
+}
+
+func (c *Collection) typedColumnPartRefForGenerationWithCache(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig, generation uint64, cache *typedColumnPartReconstructionCache) (columnManifestAssetRefForScan, bool, error) {
+	if cache != nil && cache.RefsLoaded {
+		ref, found := cache.Refs[generation]
+		return ref, found, nil
 	}
-	if snap == nil {
-		return columnManifestAssetRefForScan{}, false, errCollectionDBNil
-	}
-	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+	refs, err := c.typedColumnPartRefsByGeneration(snap, rootID, cfg)
 	if err != nil {
 		return columnManifestAssetRefForScan{}, false, err
 	}
+	if cache != nil {
+		cache.Refs = refs
+		cache.RefsLoaded = true
+	}
+	ref, found := refs[generation]
+	return ref, found, nil
+}
+
+func (c *Collection) typedColumnPartRefsByGeneration(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig) (map[uint64]columnManifestAssetRefForScan, error) {
+	if rootID == 0 {
+		return nil, errors.New("collections: typed-column reconstruction missing manifest root")
+	}
+	if snap == nil {
+		return nil, errCollectionDBNil
+	}
+	if cfg.AssetManager == nil {
+		return nil, errors.New("collections: typed-column reconstruction requires column asset manager metadata")
+	}
+	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+	if err != nil {
+		return nil, err
+	}
+	return typedColumnPartRefsByGenerationFromManifestRecords(records, cfg.AssetManager.Namespace)
+}
+
+func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifestRecord, expectedNamespace string) (map[uint64]columnManifestAssetRefForScan, error) {
+	refs := make(map[uint64]columnManifestAssetRefForScan)
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
 		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
 		if err != nil {
-			return columnManifestAssetRefForScan{}, false, err
+			return nil, err
 		}
-		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, cfg.AssetManager.Namespace)
+		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, expectedNamespace)
 		if err != nil {
-			return columnManifestAssetRefForScan{}, false, err
+			return nil, err
 		}
-		if ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Generation != generation {
+		if ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			continue
 		}
 		if ref.Generation != keyGeneration || ref.PartID != keyPartID {
-			return columnManifestAssetRefForScan{}, false, fmt.Errorf("collections: typed-column manifest key generation/part mismatch")
+			return nil, fmt.Errorf("collections: typed-column manifest key generation/part mismatch")
+		}
+		if ref.PartID != typedColumnPartAssetPartID {
+			return nil, fmt.Errorf("collections: typed-column manifest unexpected part_id=%d", ref.PartID)
 		}
 		operation, ok := columnPhysicalScanOperationFromBytes(reason)
 		if !ok {
-			return columnManifestAssetRefForScan{}, false, fmt.Errorf("collections: unsupported typed-column manifest reason %q", string(reason))
+			return nil, fmt.Errorf("collections: unsupported typed-column manifest reason %q", string(reason))
 		}
-		return columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows}, true, nil
+		if _, exists := refs[ref.Generation]; exists {
+			return nil, fmt.Errorf("collections: duplicate typed-column manifest ref for generation=%d", ref.Generation)
+		}
+		refs[ref.Generation] = columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows}
 	}
-	return columnManifestAssetRefForScan{}, false, nil
+	return refs, nil
 }
