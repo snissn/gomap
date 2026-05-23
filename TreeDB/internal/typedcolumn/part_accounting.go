@@ -104,7 +104,7 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 		for _, block := range column.Blocks {
 			report := block.Granule.CodecReport
 			out.CodecBlocks++
-			valueBytes := logicalColumnValueBytes(column.Definition.Type, block.Descriptor.RowCount)
+			valueBytes := logicalColumnValueBytes(column.Definition, block.Descriptor.RowCount)
 			detail.Rows += block.Descriptor.RowCount
 			detail.Blocks++
 			detail.LogicalValueBytes += valueBytes
@@ -245,12 +245,14 @@ func (a ColumnPartByteAccounting) CategoryBytes() int {
 		a.LocatorBytes
 }
 
-func logicalColumnValueBytes(columnType ColumnType, rows int) int {
-	switch columnType {
+func logicalColumnValueBytes(def ColumnDefinition, rows int) int {
+	switch def.Type {
 	case ColumnTypeBool:
 		return rows
 	case ColumnTypeLowCardinalityCode:
 		return rows * 4
+	case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
+		return rows * def.FixedWidthElements * 4
 	default:
 		return rows * 8
 	}

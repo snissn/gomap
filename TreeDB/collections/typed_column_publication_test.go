@@ -103,6 +103,48 @@ func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
 	}
 }
 
+func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnVectorPartCollection1756(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("v1"), []byte("v2")}, [][]byte{
+		[]byte(`{"embedding":[1,0.5,-0.25],"payload":"alpha"}`),
+		[]byte(`{"embedding":[2,3,4],"payload":"beta"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
+	got, err := col.Get([]byte("v1"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get v1: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"embedding":[1,0.5,-0.25],"payload":"alpha"}`))
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("vectors")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, reopened, reopenedCol, 1, 1)
+	reopenedGot, err := reopenedCol.Get([]byte("v2"))
+	if err != nil {
+		t.Fatalf("reopened Get v2: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"embedding":[2,3,4],"payload":"beta"}`))
+}
+
 func TestTypedColumnReconstructionHybridOwners(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -396,11 +438,10 @@ func TestTypedColumnPublicationUnsupportedValueFailsClosed(t *testing.T) {
 	defer func() { _ = d.Close() }()
 	cfg := testColumnStoreConfig(nil)
 	cfg.Columns = []ColumnStoreColumn{{
-		Name:       "embedding",
-		Path:       "embedding",
-		ValueType:  ColumnStoreValueFloat32Vector,
-		Owner:      TypedStorageOwnerColumnPart,
-		VectorDims: 3,
+		Name:      "embedding_neighbors",
+		Path:      "embedding_neighbors",
+		ValueType: ColumnStoreValueAdjacencyList,
+		Owner:     TypedStorageOwnerColumnPart,
 	}}
 	cfg.SortKey = nil
 	cfg.AggregateMetadata = nil
@@ -412,7 +453,7 @@ func TestTypedColumnPublicationUnsupportedValueFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"embedding":[1,2,3]}`)})
+	_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"embedding_neighbors":[1,2,3]}`)})
 	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("InsertBatch error=%v want ErrCommandWALRejected", err)
 	}
@@ -501,6 +542,23 @@ func createTypedColumnPartCollection1755(t testing.TB, d *backenddb.DB) *Collect
 		t.Fatalf("CreateCollection: %v", err)
 	}
 	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return col
+}
+
+func createTypedColumnVectorPartCollection1756(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, Owner: TypedStorageOwnerColumnPart, VectorDims: 3}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "vectors", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("vectors")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}

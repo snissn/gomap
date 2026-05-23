@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const columnPartImageVersion uint16 = 1
+const columnPartImageVersion uint16 = 2
 
 const columnPartImageMagic uint32 = 0x4d494354 // "TCIM", little-endian on disk.
 
@@ -419,6 +419,10 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			return err
 		}
 		enc.u32(cardinality)
+		if column.FixedWidthElements < 0 || uint64(column.FixedWidthElements) > uint64(^uint32(0)) {
+			return fmt.Errorf("typedcolumn: descriptor column %s fixed-width elements=%d", column.Name, column.FixedWidthElements)
+		}
+		enc.u32(uint32(column.FixedWidthElements))
 		enc.u32(uint32(len(column.Blocks)))
 		for i, block := range column.Blocks {
 			if i >= len(partColumn.Blocks) {
@@ -865,6 +869,10 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 2, nil
 	case ColumnTypeBool:
 		return 3, nil
+	case ColumnTypeFloat32Vector:
+		return 4, nil
+	case ColumnTypeAdjacencyList:
+		return 5, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

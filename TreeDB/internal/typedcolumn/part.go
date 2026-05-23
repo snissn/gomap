@@ -7,7 +7,7 @@ import (
 	"sort"
 )
 
-const columnPartDescriptorVersion = 1
+const columnPartDescriptorVersion = 2
 
 type ColumnSchemaMode string
 
@@ -21,6 +21,8 @@ const (
 	ColumnTypeInt64              ColumnType = "int64"
 	ColumnTypeLowCardinalityCode ColumnType = "low_cardinality_code"
 	ColumnTypeBool               ColumnType = "bool"
+	ColumnTypeFloat32Vector      ColumnType = "float32_vector"
+	ColumnTypeAdjacencyList      ColumnType = "adjacency_list"
 )
 
 type SortKeyDirection string
@@ -74,18 +76,21 @@ type ColumnCompressionPolicy struct {
 }
 
 type ColumnDefinition struct {
-	Name           string
-	Type           ColumnType
-	Encoding       Encoding
-	Compression    Compression
-	CompressionSet bool
-	Cardinality    uint32
-	CodecBlockRows int
+	Name               string
+	Type               ColumnType
+	Encoding           Encoding
+	Compression        Compression
+	CompressionSet     bool
+	Cardinality        uint32
+	FixedWidthElements int
+	CodecBlockRows     int
 }
 
 type Batch struct {
-	Rows    int
-	Columns map[string][]int64
+	Rows           int
+	Columns        map[string][]int64
+	Float32Vectors map[string][]float32
+	Uint32Vectors  map[string][]uint32
 }
 
 type ColumnPart struct {
@@ -121,9 +126,10 @@ type GranuleDescriptor struct {
 }
 
 type ColumnPartColumnDescriptor struct {
-	Name   string
-	Type   ColumnType
-	Blocks []ColumnBlockDescriptor
+	Name               string
+	Type               ColumnType
+	FixedWidthElements int
+	Blocks             []ColumnBlockDescriptor
 }
 
 type ColumnBlockDescriptor struct {
@@ -162,6 +168,8 @@ type ColumnPartBuilder struct {
 	values64 []int64
 	codes32  []uint32
 	bools    []bool
+	float32s []float32
+	u32dense []uint32
 	builder  *GranuleBuilder
 }
 
@@ -595,8 +603,12 @@ func normalizeOptions(opts Options) (Options, error) {
 		if c.Column == "" {
 			return Options{}, fmt.Errorf("typedcolumn: empty sort key column at %d", i)
 		}
-		if _, ok := seen[c.Column]; !ok {
+		def, ok := columnsByName[c.Column]
+		if !ok {
 			return Options{}, fmt.Errorf("typedcolumn: sort key column %s is not declared", c.Column)
+		}
+		if def.Type == ColumnTypeFloat32Vector || def.Type == ColumnTypeAdjacencyList {
+			return Options{}, fmt.Errorf("typedcolumn: sort key column %s type=%s is not scalar", c.Column, def.Type)
 		}
 		if c.Direction == "" {
 			c.Direction = SortKeyAsc
@@ -654,8 +666,37 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		def.Encoding = EncodingLowCardinalityUint32
 	case ColumnTypeBool:
 		def.Encoding = EncodingBoolBitpackRLE
+	case ColumnTypeFloat32Vector:
+		if def.FixedWidthElements <= 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires positive fixed-width elements", def.Name)
+		}
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawFloat32Vector
+		}
+		if def.Encoding != EncodingRawFloat32Vector {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported float32_vector encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires uncompressed dense sections", def.Name)
+		}
+	case ColumnTypeAdjacencyList:
+		if def.FixedWidthElements <= 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires positive fixed-width elements", def.Name)
+		}
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawUint32Dense
+		}
+		if def.Encoding != EncodingRawUint32Dense {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported adjacency_list encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires uncompressed dense sections", def.Name)
+		}
 	default:
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported column type %s for %s", def.Type, def.Name)
+	}
+	if def.Type != ColumnTypeFloat32Vector && def.Type != ColumnTypeAdjacencyList && def.FixedWidthElements != 0 {
+		return ColumnDefinition{}, fmt.Errorf("typedcolumn: scalar column %s has fixed-width elements=%d", def.Name, def.FixedWidthElements)
 	}
 	return def, nil
 }
@@ -670,27 +711,67 @@ func validateCompression(compression Compression) error {
 }
 
 func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
-	if batch.Columns == nil {
-		return 0, errors.New("typedcolumn: nil column batch")
-	}
 	declared := make(map[string]struct{}, len(defs))
 	rows := batch.Rows
 	for _, def := range defs {
 		declared[def.Name] = struct{}{}
-		values, ok := batch.Columns[def.Name]
-		if !ok {
-			return 0, fmt.Errorf("typedcolumn: missing column %s", def.Name)
-		}
-		if rows == 0 {
-			rows = len(values)
-		}
-		if len(values) != rows {
-			return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+		switch def.Type {
+		case ColumnTypeFloat32Vector:
+			values, ok := batch.Float32Vectors[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing float32_vector column %s", def.Name)
+			}
+			columnRows, err := denseRowsForValues(len(values), def.FixedWidthElements, def.Name)
+			if err != nil {
+				return 0, err
+			}
+			if rows == 0 {
+				rows = columnRows
+			}
+			if columnRows != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, columnRows, rows)
+			}
+		case ColumnTypeAdjacencyList:
+			values, ok := batch.Uint32Vectors[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing adjacency_list column %s", def.Name)
+			}
+			columnRows, err := denseRowsForValues(len(values), def.FixedWidthElements, def.Name)
+			if err != nil {
+				return 0, err
+			}
+			if rows == 0 {
+				rows = columnRows
+			}
+			if columnRows != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, columnRows, rows)
+			}
+		default:
+			values, ok := batch.Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
 		}
 	}
 	for name := range batch.Columns {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared column %s", name)
+		}
+	}
+	for name := range batch.Float32Vectors {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared float32_vector column %s", name)
+		}
+	}
+	for name := range batch.Uint32Vectors {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared adjacency_list column %s", name)
 		}
 	}
 	if rows <= 0 {
@@ -795,11 +876,10 @@ func (b *ColumnPartBuilder) buildColumn(batch Batch, def ColumnDefinition) (Colu
 		blockRows = b.opts.PartPolicy.RowsPerGranule
 	}
 	column := ColumnPartColumn{Definition: def}
-	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type}
-	sourceValues := batch.Columns[def.Name]
+	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type, FixedWidthElements: def.FixedWidthElements}
 	for start := 0; start < len(b.order); start += blockRows {
 		end := min(start+blockRows, len(b.order))
-		g, err := b.buildColumnBlockGranule(sourceValues, def, start, end)
+		g, err := b.buildColumnBlockGranule(batch, def, start, end)
 		if err != nil {
 			return ColumnPartColumn{}, ColumnPartColumnDescriptor{}, err
 		}
@@ -822,13 +902,31 @@ func (b *ColumnPartBuilder) buildColumn(batch Batch, def ColumnDefinition) (Colu
 	return column, descriptor, nil
 }
 
-func (b *ColumnPartBuilder) buildColumnBlockGranule(sourceValues []int64, def ColumnDefinition, start int, end int) (EncodedGranule, error) {
+func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefinition, start int, end int) (EncodedGranule, error) {
+	cfg := Config{Encoding: def.Encoding, Compression: def.Compression}
+	b.builder.Reset(cfg)
+	switch def.Type {
+	case ColumnTypeFloat32Vector:
+		sourceValues := batch.Float32Vectors[def.Name]
+		values, err := b.gatherFloat32Dense(sourceValues, def.FixedWidthElements, start, end)
+		if err != nil {
+			return EncodedGranule{}, err
+		}
+		return b.builder.BuildFloat32Vector(values, end-start, def.FixedWidthElements)
+	case ColumnTypeAdjacencyList:
+		sourceValues := batch.Uint32Vectors[def.Name]
+		values, err := b.gatherUint32Dense(sourceValues, def.FixedWidthElements, start, end)
+		if err != nil {
+			return EncodedGranule{}, err
+		}
+		return b.builder.BuildUint32Dense(values, end-start, def.FixedWidthElements)
+	}
+
+	sourceValues := batch.Columns[def.Name]
 	b.values64 = ensureInt64Len(b.values64[:0], end-start)
 	for row := start; row < end; row++ {
 		b.values64[row-start] = sourceValues[b.order[row]]
 	}
-	cfg := Config{Encoding: def.Encoding, Compression: def.Compression}
-	b.builder.Reset(cfg)
 	switch def.Type {
 	case ColumnTypeInt64:
 		return b.builder.BuildInt64(b.values64)

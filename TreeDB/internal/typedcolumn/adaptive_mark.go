@@ -116,6 +116,16 @@ func EstimateBatchUncompressedBytes(batch Batch, defs []ColumnDefinition) (int, 
 			total += rows * 4
 		case ColumnTypeBool:
 			total += rows
+		case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
+			rowBytes, err := checkedMulInt(def.FixedWidthElements, 4, "dense column row bytes")
+			if err != nil {
+				return 0, err
+			}
+			bytes, err := checkedMulInt(rows, rowBytes, "dense column uncompressed bytes")
+			if err != nil {
+				return 0, err
+			}
+			total += bytes
 		default:
 			return 0, fmt.Errorf("typedcolumn: unsupported column type %s for adaptive mark sizing", def.Type)
 		}

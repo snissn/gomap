@@ -23,7 +23,7 @@ func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 		ColumnStoreValueFloat32:       typedColumnAdapterRepresented,
 		ColumnStoreValueDouble:        typedColumnAdapterRepresented,
 		ColumnStoreValueString:        typedColumnAdapterRepresented,
-		ColumnStoreValueFloat32Vector: typedColumnAdapterFailClosed,
+		ColumnStoreValueFloat32Vector: typedColumnAdapterRepresented,
 		ColumnStoreValueAdjacencyList: typedColumnAdapterFailClosed,
 	}
 	got := make(map[ColumnStoreValueType]typedColumnAdapterTypeStatus)
@@ -98,6 +98,22 @@ func TestTypedColumnAdapterRoundTripFloat64(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterRoundTripFloat32Vector(t *testing.T) {
+	want := [][]float32{{1, 0.5, -0.25}, {2, 3, 4}}
+	values := make([]columnDeclaredValue, len(want))
+	for i, v := range want {
+		values[i] = columnDeclaredValue{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: v}
+	}
+	field := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
+	field.VectorDims = 3
+	got := typedColumnAdapterRoundTrip(t, field, values)
+	for i := range want {
+		if !slices.Equal(got[i].Float32Vector, want[i]) {
+			t.Fatalf("vector[%d]=%v want %v all=%+v", i, got[i].Float32Vector, want[i], got)
+		}
+	}
+}
+
 func TestTypedColumnAdapterRoundTripString(t *testing.T) {
 	want := []string{"beta", "alpha", "beta"}
 	values := make([]columnDeclaredValue, len(want))
@@ -128,15 +144,21 @@ func TestTypedColumnAdapterRoundTripString(t *testing.T) {
 	}
 }
 
-func TestTypedColumnAdapterVectorAndAdjacencyRepresentedOrFailClosed(t *testing.T) {
-	for _, valueType := range []ColumnStoreValueType{ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList} {
-		mapping, err := typedColumnAdapterMappingForValueType(valueType)
-		if !errors.Is(err, errTypedColumnAdapterUnsupportedType) {
-			t.Fatalf("%s err=%v want errTypedColumnAdapterUnsupportedType", valueType, err)
-		}
-		if mapping.Status != typedColumnAdapterFailClosed || mapping.Reason == "" {
-			t.Fatalf("%s mapping=%+v want fail-closed reason", valueType, mapping)
-		}
+func TestTypedColumnAdapterVectorRepresentedAdjacencyFailsClosed(t *testing.T) {
+	mapping, err := typedColumnAdapterMappingForValueType(ColumnStoreValueFloat32Vector)
+	if err != nil {
+		t.Fatalf("float32_vector mapping err=%v", err)
+	}
+	if mapping.Status != typedColumnAdapterRepresented || mapping.ColumnType != typedcolumn.ColumnTypeFloat32Vector || mapping.Encoding != typedcolumn.EncodingRawFloat32Vector {
+		t.Fatalf("float32_vector mapping=%+v want dense represented", mapping)
+	}
+
+	mapping, err = typedColumnAdapterMappingForValueType(ColumnStoreValueAdjacencyList)
+	if !errors.Is(err, errTypedColumnAdapterUnsupportedType) {
+		t.Fatalf("adjacency_list err=%v want errTypedColumnAdapterUnsupportedType", err)
+	}
+	if mapping.Status != typedColumnAdapterFailClosed || mapping.Reason == "" {
+		t.Fatalf("adjacency_list mapping=%+v want fail-closed reason", mapping)
 	}
 }
 
