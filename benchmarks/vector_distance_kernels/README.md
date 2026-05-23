@@ -72,6 +72,13 @@ cd benchmarks/vector_distance_kernels
 GOWORK=off go test -bench 'BenchmarkTreeDBRerank' -benchmem -count=5 | tee /tmp/treedb_rerank_kernel.txt
 ```
 
+Focused 768-dimensional dot-product run, matching larger vector-search shapes:
+
+```sh
+cd benchmarks/vector_distance_kernels
+GOWORK=off go test -bench 'BenchmarkDotProduct(768|Batch768)' -benchmem -count=5 | tee /tmp/dot768_bench.txt
+```
+
 As of this benchmark, `go get github.com/ashvardanian/simsimd/golang@latest`
 fails because the latest `github.com/ashvardanian/simsimd` module does not
 contain a `golang` package. If that package becomes available, add it beside the
