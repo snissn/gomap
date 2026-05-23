@@ -18,10 +18,11 @@ The package preserves the colgranule data-plane shape:
 - sort-key mark and predicate/pruning metadata;
 - dictionary descriptors;
 - aggregate metadata descriptors and payloads;
-- latest-visible base/delta/tombstone part-set logic over caller-owned parts.
+- latest-visible base/delta/tombstone part-set logic over caller-owned parts;
+- a narrow `SectionReader` seam for #1754 mappedresource-backed byte access.
 
 Production control-plane adaptation is deferred to #1754/#1755. Any future byte
-access backed by production files should adapt this package to the #1736
+access backed by production files should adapt `SectionReader` to the #1736
 mapped-resource handles rather than reshaping this data plane into the existing
 typed-row physical asset format.
 
@@ -33,7 +34,7 @@ typed-row physical asset format.
 | `experiments/colgranule/granule.go` | copied to `TreeDB/internal/typedcolumn/granule.go` | package and error prefix renamed | preserve granule encodings/compression | `TestTypedColumnTransplantPartImageRoundTrip`, `TestTypedColumnTransplantPredicateMetadataRoundTrip` |
 | `experiments/colgranule/part.go` | copied/adapted to `TreeDB/internal/typedcolumn/part.go` | `ColumnStoreOptions` -> package-local `Options`; `ColumnBatch` -> `Batch`; error prefix renamed | avoid adding new `ColumnStore*` names while preserving part descriptors/build/scan | `TestTypedColumnTransplantPartImageRoundTrip`, `TestTypedColumnTransplantRowLocatorRoundTrip` |
 | `experiments/colgranule/part_image.go` | copied/adapted to `TreeDB/internal/typedcolumn/part_image.go` | package/error prefix renamed; section offsets aligned; padding accounting added | preserve sectioned image model and satisfy fixed-width alignment | `TestTypedColumnTransplantSectionDirectoryRoundTrip`, `TestTypedColumnTransplantFixedWidthSectionsAreAligned` |
-| `experiments/colgranule/part_image_decode.go` | copied/adapted to `TreeDB/internal/typedcolumn/part_image_decode.go` | package/error prefix renamed; validates aligned sections and permits explicit padding gaps | preserve decode/bounds checks for aligned section directories | `TestTypedColumnTransplantRejectsInvalidMagicOrVersion`, `TestTypedColumnTransplantRejectsTruncatedOrOutOfBoundsSection` |
+| `experiments/colgranule/part_image_decode.go` | copied/adapted to `TreeDB/internal/typedcolumn/part_image_decode.go` plus `section_reader.go` seam | package/error prefix renamed; validates aligned sections and permits explicit padding gaps; exposes `SectionReader` for future mappedresource adapters | preserve decode/bounds checks for aligned section directories while deferring #1736-backed IO to #1754 | `TestTypedColumnTransplantRejectsInvalidMagicOrVersion`, `TestTypedColumnTransplantRejectsTruncatedOrOutOfBoundsSection`, `TestTypedColumnTransplantSectionDirectoryRoundTrip` |
 | `experiments/colgranule/predicate.go` | copied to `TreeDB/internal/typedcolumn/predicate.go` | package/error prefix renamed | preserve sort-key mark and predicate/pruning metadata | `TestTypedColumnTransplantPredicateMetadataRoundTrip` |
 | `experiments/colgranule/aggregate_metadata.go` | copied to `TreeDB/internal/typedcolumn/aggregate_metadata.go` | package/error prefix renamed | preserve aggregate metadata descriptors/payloads | `TestTypedColumnTransplantDictionaryAggregateDescriptorsRoundTrip` |
 | `experiments/colgranule/aggregate.go` | copied to `TreeDB/internal/typedcolumn/aggregate.go` | package/error prefix renamed | preserve aggregate arena helpers used by metadata build | `TestTypedColumnTransplantDictionaryAggregateDescriptorsRoundTrip` |

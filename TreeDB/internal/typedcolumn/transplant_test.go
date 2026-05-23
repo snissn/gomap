@@ -63,13 +63,23 @@ func TestTypedColumnTransplantSectionDirectoryRoundTrip(t *testing.T) {
 	if len(parsed.Sections) != len(image.Sections) {
 		t.Fatalf("sections=%d want %d", len(parsed.Sections), len(image.Sections))
 	}
+	parsedReader := NewImageSectionReader(parsed)
+	imageReader := NewImageSectionReader(image)
 	for idx := range image.Sections {
 		want := image.Sections[idx]
 		got := parsed.Sections[idx]
 		if got.Kind != want.Kind || got.Category != want.Category || got.Name != want.Name || got.Column != want.Column || got.Offset != want.Offset || got.Length != want.Length {
 			t.Fatalf("section[%d]=%+v want %+v", idx, got, want)
 		}
-		assertTransplantBytes(t, got.Kind, parsed.sectionBytes(got), image.sectionBytes(want))
+		gotBytes, err := parsedReader.ReadSection(got)
+		if err != nil {
+			t.Fatalf("ReadSection(parsed %s): %v", got.Kind, err)
+		}
+		wantBytes, err := imageReader.ReadSection(want)
+		if err != nil {
+			t.Fatalf("ReadSection(image %s): %v", want.Kind, err)
+		}
+		assertTransplantBytes(t, got.Kind, gotBytes, wantBytes)
 	}
 	if parsed.PaddingBytes() == 0 {
 		t.Fatalf("expected aligned section directory to carry padding bytes")
