@@ -67,7 +67,7 @@ func TestMappedResourceStatsSnapshotIsDeepCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireBytes: %v", err)
 	}
-	defer h.Release()
+	defer func() { _ = h.Release() }()
 
 	badKey := testKey()
 	badKey.FileID = 0
