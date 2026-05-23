@@ -108,7 +108,7 @@ func TestTypedStorageLayoutTypedColumnScalarSupported(t *testing.T) {
 	}
 }
 
-func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) {
+func TestTypedStorageLayoutTypedColumnVectorSupported(t *testing.T) {
 	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
 		Collection: "events",
 		Fields: []TypedStorageField{{
@@ -117,6 +117,27 @@ func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) 
 			Owner:      TypedStorageOwnerColumnPart,
 			ValueType:  ColumnStoreValueFloat32Vector,
 			VectorDims: 3,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+	}
+	if err := layout.EnsureReadSupported(); err != nil {
+		t.Fatalf("EnsureReadSupported: %v", err)
+	}
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		t.Fatalf("EnsurePublicationSupported: %v", err)
+	}
+}
+
+func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) {
+	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection: "events",
+		Fields: []TypedStorageField{{
+			Name:      "embedding_neighbors",
+			Path:      "embedding_neighbors",
+			Owner:     TypedStorageOwnerColumnPart,
+			ValueType: ColumnStoreValueAdjacencyList,
 		}},
 	})
 	if err != nil {

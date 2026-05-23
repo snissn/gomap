@@ -480,9 +480,10 @@ Insert/update rows must have `Deleted=false` and exactly one value per declared
 `Deleted=true` and zero column values. For layouts with `typed_column_part`
 owners, a `TCPA` row asset is still published for row IDs/tombstones and any
 row-owned fields; the matching `tcs1_typed_column_part` for the same generation
-contains authoritative scalar typed-column values keyed by row index. Readers
-validate namespace, generation, part id, schema hash, declared column
-descriptors, length, and checksum before accepting an asset ref.
+contains authoritative scalar and fixed-dimension `float32_vector` typed-column
+values keyed by row index. Readers validate namespace, generation, part id,
+schema hash, declared column descriptors, length, and checksum before accepting
+an asset ref.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -497,9 +498,13 @@ Writers emit version 2.
 
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
 images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
-Issue `#1755` scalar path represents bool, int64, float32, double/float64, and string
-fields; nullable/missing values, vector sections, and adjacency sections fail
-closed until later typed-storage issues extend the format.
+Issue `#1755` scalar path represents bool, int64, float32, double/float64, and
+string fields. Issue `#1756` adds fixed-dimension `float32_vector` fields as
+uncompressed row-major little-endian dense `float32` sections whose element count
+per row is `vector_dims`. Nullable/missing values and production
+`adjacency_list` publication fail closed until later typed-storage issues extend
+the format; internal dense `uint32` adjacency sections are validated for the
+future vector graph path but are not authoritative collection fields yet.
 
 ## 8. Commit-Log Segment Format
 
@@ -722,11 +727,12 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   cache identity invalidation. Manifest generation and recovery LSN are not
   schema-hash inputs.
 
-Issue #1753 also adds `TreeDB/internal/typedcolumn` as a non-authoritative
-transplant of the `experiments/colgranule` typed-column data plane. Its part
-image/TCS1 bytes are not registered as production collection metadata in this
-PR, do not change the `options.column_store` contract above, and are documented
-in `typed-column-transplant.md` until #1754/#1755 add control-plane adapters.
+Issue `#1753` added `TreeDB/internal/typedcolumn` as the transplanted
+`experiments/colgranule` typed-column data plane. Issues `#1754`/`#1755` connect
+it to production collection metadata for opt-in scalar `typed_column_part`
+owners; issue `#1756` adds fixed-dimension `float32_vector` dense sections. The
+transplant and adapter boundaries are documented in `typed-column-transplant.md`
+and `typed-column-adapter.md`.
 
 Readers must fail closed for a column-enabled collection when:
 

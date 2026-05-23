@@ -83,8 +83,8 @@ func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 		{ValueType: ColumnStoreValueFloat32, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Reason: "stored as raw int64 float32 bit patterns until native float sections land"},
 		{ValueType: ColumnStoreValueDouble, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Reason: "stored as raw int64 float64 bit patterns until native float sections land"},
 		{ValueType: ColumnStoreValueString, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Reason: "stored as dictionary codes with dictionary section metadata"},
-		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterFailClosed, Reason: "dense vector typed-column sections are staged to #1756"},
-		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterFailClosed, Reason: "adjacency typed-column sections are staged to #1756"},
+		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Reason: "stored as fixed-dim dense little-endian float32 sections"},
+		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterFailClosed, Reason: "adjacency_list typed-column publication still lacks fixed-degree schema metadata"},
 	}
 }
 
@@ -127,6 +127,12 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		Encoding:       mapping.Encoding,
 		Compression:    typedcolumn.CompressionNone,
 		CompressionSet: true,
+	}
+	if field.ValueType == ColumnStoreValueFloat32Vector {
+		if field.VectorDims <= 0 {
+			return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector requires positive vector_dims", field.Path)
+		}
+		def.FixedWidthElements = field.VectorDims
 	}
 	return typedColumnAdapterColumn{Field: field, Definition: def, FixedWidthEncoding: field.FixedWidthEncoding}, nil
 }
@@ -201,7 +207,19 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	batch := typedcolumn.Batch{Rows: len(rows), Columns: make(map[string][]int64, len(defs))}
 	batch.Columns[typedColumnAdapterPrimaryIDColumn] = make([]int64, len(rows))
 	for _, column := range columns {
-		batch.Columns[column.Definition.Name] = make([]int64, len(rows))
+		switch column.Field.ValueType {
+		case ColumnStoreValueFloat32Vector:
+			if batch.Float32Vectors == nil {
+				batch.Float32Vectors = make(map[string][]float32)
+			}
+			elements, err := typedColumnAdapterDenseElements(len(rows), column.Definition.FixedWidthElements)
+			if err != nil {
+				return nil, err
+			}
+			batch.Float32Vectors[column.Definition.Name] = make([]float32, elements)
+		default:
+			batch.Columns[column.Definition.Name] = make([]int64, len(rows))
+		}
 	}
 	for rowIdx, row := range rows {
 		batch.Columns[typedColumnAdapterPrimaryIDColumn][rowIdx] = row.PrimaryID
@@ -213,11 +231,18 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			if !ok {
 				return nil, fmt.Errorf("collections: typed-column adapter row %d missing field %q", rowIdx, column.Field.Path)
 			}
-			encoded, err := encodeTypedColumnAdapterValue(column, value)
-			if err != nil {
-				return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+			switch column.Field.ValueType {
+			case ColumnStoreValueFloat32Vector:
+				if err := encodeTypedColumnAdapterFloat32VectorValue(batch.Float32Vectors[column.Definition.Name], rowIdx, column, value); err != nil {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+				}
+			default:
+				encoded, err := encodeTypedColumnAdapterValue(column, value)
+				if err != nil {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+				}
+				batch.Columns[column.Definition.Name][rowIdx] = encoded
 			}
-			batch.Columns[column.Definition.Name][rowIdx] = encoded
 		}
 	}
 	rowsPerGranule := opts.RowsPerGranule
@@ -298,8 +323,8 @@ func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns
 		if !ok {
 			return fmt.Errorf("collections: typed-column adapter image missing column %q", column.Definition.Name)
 		}
-		if got.Definition.Type != column.Definition.Type || got.Definition.Encoding != column.Definition.Encoding || got.Definition.Compression != column.Definition.Compression {
-			return fmt.Errorf("collections: typed-column adapter image column %q schema mismatch: got type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", column.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression)
+		if got.Definition.Type != column.Definition.Type || got.Definition.Encoding != column.Definition.Encoding || got.Definition.Compression != column.Definition.Compression || got.Definition.FixedWidthElements != column.Definition.FixedWidthElements {
+			return fmt.Errorf("collections: typed-column adapter image column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", column.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, got.Definition.FixedWidthElements, column.Definition.Type, column.Definition.Encoding, column.Definition.Compression, column.Definition.FixedWidthElements)
 		}
 	}
 	return nil
@@ -319,6 +344,18 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 	column, ok := p.columnByName(columnName)
 	if !ok {
 		return nil, fmt.Errorf("collections: typed-column adapter missing column %q", columnName)
+	}
+	if column.Field.ValueType == ColumnStoreValueFloat32Vector {
+		matrix, err := p.Part.DenseFloat32VectorColumn(column.Definition.Name, nil)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]columnDeclaredValue, matrix.Rows)
+		for i := 0; i < matrix.Rows; i++ {
+			start := i * matrix.ElementsPerRow
+			out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, Float32Vector: append([]float32(nil), matrix.Values[start:start+matrix.ElementsPerRow]...)}
+		}
+		return out, nil
 	}
 	scan, err := p.Part.NewScanner().ScanProjected([]string{column.Definition.Name})
 	if err != nil {
@@ -340,29 +377,27 @@ func (p *typedColumnAdapterPart) scanRows() ([]typedColumnAdapterRow, error) {
 	if p == nil || p.Part == nil {
 		return nil, errors.New("collections: nil typed-column adapter part")
 	}
-	projected := make([]string, 0, len(p.Columns)+1)
-	projected = append(projected, typedColumnAdapterPrimaryIDColumn)
-	for _, column := range p.Columns {
-		projected = append(projected, column.Definition.Name)
-	}
-	scan, err := p.Part.NewScanner().ScanProjected(projected)
+	scan, err := p.Part.NewScanner().ScanProjected([]string{typedColumnAdapterPrimaryIDColumn})
 	if err != nil {
 		return nil, err
 	}
 	ids := scan.Columns[typedColumnAdapterPrimaryIDColumn]
+	columnValues := make(map[string][]columnDeclaredValue, len(p.Columns))
+	for _, column := range p.Columns {
+		values, err := p.scanColumnValues(column.Definition.Name)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != len(ids) {
+			return nil, fmt.Errorf("collections: typed-column adapter column %q rows=%d want %d", column.Definition.Name, len(values), len(ids))
+		}
+		columnValues[column.Definition.Name] = values
+	}
 	rows := make([]typedColumnAdapterRow, len(ids))
 	for rowIdx, id := range ids {
 		values := make(map[string]columnDeclaredValue, len(p.Columns))
 		for _, column := range p.Columns {
-			encoded := scan.Columns[column.Definition.Name]
-			if len(encoded) != len(ids) {
-				return nil, fmt.Errorf("collections: typed-column adapter column %q rows=%d want %d", column.Definition.Name, len(encoded), len(ids))
-			}
-			value, err := decodeTypedColumnAdapterValue(column, encoded[rowIdx])
-			if err != nil {
-				return nil, fmt.Errorf("collections: typed-column adapter row %d column %q: %w", rowIdx, column.Definition.Name, err)
-			}
-			values[column.Field.Path] = value
+			values[column.Field.Path] = columnValues[column.Definition.Name][rowIdx]
 		}
 		rows[rowIdx] = typedColumnAdapterRow{PrimaryID: id, Values: values}
 	}
@@ -379,14 +414,8 @@ func (p *typedColumnAdapterPart) columnByName(name string) (typedColumnAdapterCo
 }
 
 func encodeTypedColumnAdapterValue(column typedColumnAdapterColumn, value columnDeclaredValue) (int64, error) {
-	if value.Type == "" {
-		return 0, errors.New("declared type required")
-	}
-	if value.Type != column.Field.ValueType {
-		return 0, fmt.Errorf("value type=%q want %q", value.Type, column.Field.ValueType)
-	}
-	if !value.Present || value.Null {
-		return 0, fmt.Errorf("null or missing values are not represented by the #1754 typed-column adapter")
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return 0, err
 	}
 	switch column.Field.ValueType {
 	case ColumnStoreValueBool:
@@ -409,6 +438,51 @@ func encodeTypedColumnAdapterValue(column typedColumnAdapterColumn, value column
 	default:
 		return 0, fmt.Errorf("%w: %s", errTypedColumnAdapterUnsupportedType, column.Field.ValueType)
 	}
+}
+
+func encodeTypedColumnAdapterFloat32VectorValue(dst []float32, rowIdx int, column typedColumnAdapterColumn, value columnDeclaredValue) error {
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return err
+	}
+	dims := column.Definition.FixedWidthElements
+	if dims <= 0 {
+		return fmt.Errorf("float32_vector fixed-width elements=%d", dims)
+	}
+	if len(value.Float32Vector) != dims {
+		return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), dims)
+	}
+	start, err := typedColumnAdapterDenseElements(rowIdx, dims)
+	if err != nil {
+		return err
+	}
+	if start > len(dst)-dims {
+		return fmt.Errorf("float32_vector row %d outside destination", rowIdx)
+	}
+	copy(dst[start:start+dims], value.Float32Vector)
+	return nil
+}
+
+func typedColumnAdapterDenseElements(rows int, elementsPerRow int) (int, error) {
+	if rows < 0 || elementsPerRow < 0 {
+		return 0, fmt.Errorf("dense elements negative operands rows=%d elements_per_row=%d", rows, elementsPerRow)
+	}
+	if elementsPerRow != 0 && rows > int(^uint(0)>>1)/elementsPerRow {
+		return 0, fmt.Errorf("dense elements overflow rows=%d elements_per_row=%d", rows, elementsPerRow)
+	}
+	return rows * elementsPerRow, nil
+}
+
+func validateTypedColumnAdapterDeclaredValue(column typedColumnAdapterColumn, value columnDeclaredValue) error {
+	if value.Type == "" {
+		return errors.New("declared type required")
+	}
+	if value.Type != column.Field.ValueType {
+		return fmt.Errorf("value type=%q want %q", value.Type, column.Field.ValueType)
+	}
+	if !value.Present || value.Null {
+		return fmt.Errorf("null or missing values are not represented by the typed-column adapter")
+	}
+	return nil
 }
 
 func decodeTypedColumnAdapterValue(column typedColumnAdapterColumn, raw int64) (columnDeclaredValue, error) {

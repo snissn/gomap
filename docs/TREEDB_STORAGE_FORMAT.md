@@ -22,7 +22,7 @@ Operator-facing behavior is covered by:
   - `Dir/dictdb/`: dictionary store (for value-log compression)
 - Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
-- Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Production typed-row assets and opt-in scalar typed-column parts live under the isolated typed asset manager namespace.
+- Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Production typed-row assets and opt-in scalar/vector typed-column parts live under the isolated typed asset manager namespace.
 
 ## Directory layout
 
@@ -64,8 +64,8 @@ Column manifest records stored in B-tree/root metadata hold durable
 `ColumnAssetRef` values: kind, namespace, generation, part id, segment file id,
 offset, length, and checksum. `tcs1_part_image` refs identify compatibility
 `TCPA` typed-row assets; `tcs1_typed_column_part` refs identify sectioned
-scalar typed-column parts. GC/rewrite must enumerate those refs from
-manifest/control roots, not by scanning row documents.
+scalar and fixed-dimension vector typed-column parts. GC/rewrite must enumerate
+those refs from manifest/control roots, not by scanning row documents.
 
 The typed-row physical part payload uses the `TCPA` envelope, version 3:
 
@@ -93,9 +93,10 @@ lossless. Delete/tombstone rows must have `deleted=true` and no column values.
 For layouts with `typed_column_part` owners, a `TCPA` row asset is still
 published for row IDs/tombstones and row-owned fields; the matching
 `tcs1_typed_column_part` for the same generation contains authoritative scalar
-typed-column values keyed by row index. The current scalar typed-column matrix is
-bool, int64, float32, double/float64, and string; nullable/missing values,
-vectors, and adjacency sections fail closed until later typed-storage issues.
+and fixed-dimension `float32_vector` typed-column values keyed by row index. The
+current typed-column publication matrix is bool, int64, float32, double/float64,
+string, and fixed-dimension float32 vectors; nullable/missing values and
+production adjacency sections fail closed until later typed-storage issues.
 Readers validate namespace, generation, part id, schema hash, column
 descriptors, length, and checksum before accepting an asset ref.
 

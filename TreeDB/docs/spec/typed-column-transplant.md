@@ -32,8 +32,8 @@ this data plane into the existing typed-row physical asset format.
 | Source | Destination / action | Semantic delta | Reason | Tests |
 | --- | --- | --- | --- | --- |
 | `experiments/colgranule/typed.go` | copied to `TreeDB/internal/typedcolumn/typed.go` | package and error prefix renamed | preserve typed codecs | `TestTypedColumnTransplantPartImageRoundTrip` |
-| `experiments/colgranule/granule.go` | copied to `TreeDB/internal/typedcolumn/granule.go` | package and error prefix renamed | preserve granule encodings/compression | `TestTypedColumnTransplantPartImageRoundTrip`, `TestTypedColumnTransplantPredicateMetadataRoundTrip` |
-| `experiments/colgranule/part.go` | copied/adapted to `TreeDB/internal/typedcolumn/part.go` | `ColumnStoreOptions` -> package-local `Options`; `ColumnBatch` -> `Batch`; error prefix renamed | avoid adding new `ColumnStore*` names while preserving part descriptors/build/scan | `TestTypedColumnTransplantPartImageRoundTrip`, `TestTypedColumnTransplantRowLocatorRoundTrip` |
+| `experiments/colgranule/granule.go` | copied to `TreeDB/internal/typedcolumn/granule.go` | package and error prefix renamed; #1756 adds raw dense `float32_vector` and `uint32` encodings | preserve granule encodings/compression | `TestTypedColumnTransplantPartImageRoundTrip`, `TestTypedColumnTransplantPredicateMetadataRoundTrip`, `TestTypedColumnVectorDenseDirectViewAligned` |
+| `experiments/colgranule/part.go` | copied/adapted to `TreeDB/internal/typedcolumn/part.go` plus #1756 `dense.go` | `ColumnStoreOptions` -> package-local `Options`; `ColumnBatch` -> `Batch`; error prefix renamed; #1756 adds fixed-width dense vector/adjacency batches | avoid adding new `ColumnStore*` names while preserving part descriptors/build/scan | `TestTypedColumnTransplantPartImageRoundTrip`, `TestTypedColumnTransplantRowLocatorRoundTrip`, `TestTypedColumnAdjacencyDirectViewAligned` |
 | `experiments/colgranule/part_image.go` | copied/adapted to `TreeDB/internal/typedcolumn/part_image.go` | package/error prefix renamed; section offsets aligned; padding accounting added | preserve sectioned image model and satisfy fixed-width alignment | `TestTypedColumnTransplantSectionDirectoryRoundTrip`, `TestTypedColumnTransplantFixedWidthSectionsAreAligned` |
 | `experiments/colgranule/part_image_decode.go` | copied/adapted to `TreeDB/internal/typedcolumn/part_image_decode.go` plus `section_reader.go` seam | package/error prefix renamed; validates aligned sections and permits explicit padding gaps; exposes `SectionReader` for future mappedresource adapters | preserve decode/bounds checks for aligned section directories while deferring #1736-backed IO to #1754 | `TestTypedColumnTransplantRejectsInvalidMagicOrVersion`, `TestTypedColumnTransplantRejectsTruncatedOrOutOfBoundsSection`, `TestTypedColumnTransplantSectionDirectoryRoundTrip` |
 | `experiments/colgranule/predicate.go` | copied to `TreeDB/internal/typedcolumn/predicate.go` | package/error prefix renamed | preserve sort-key mark and predicate/pruning metadata | `TestTypedColumnTransplantPredicateMetadataRoundTrip` |
@@ -59,6 +59,8 @@ this data plane into the existing typed-row physical asset format.
 
 `TreeDB/internal/typedcolumn` remains a data-plane package. Issue `#1754` added
 the narrow `typed_column_adapter.go` seam for metadata/resource adaptation, and
-Issue `#1755` routes scalar durable publication/reconstruction through that seam. Query
-planning, vector/adjacency sections, and predicate scan integration remain owned
-by later #1744 children.
+Issue `#1755` routes scalar durable publication/reconstruction through that seam.
+Issue `#1756` adds aligned fixed-width dense `float32_vector` sections and
+internal dense `uint32` adjacency validation. Query planning, native vector graph
+switching, production adjacency publication, and predicate scan integration remain
+owned by later #1744 children.
