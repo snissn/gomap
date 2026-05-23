@@ -333,6 +333,41 @@ func TestTypedColumnDenseMmapHeapParity1756(t *testing.T) {
 	}
 }
 
+func TestTypedColumnVectorDenseDirectViewKernelZeroAllocs1781(t *testing.T) {
+	const rows = 1024
+	const dims = 16
+	part := mustDenseVectorPart1756(t, rows, dims)
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	section := mustColumnDataSection1756(t, parsed, "embedding")
+	mgr := mappedresource.NewManager()
+	h := mustAcquireImageSectionBytes1756(t, mgr, parsed, section, parsed.SectionBytesMust1756(t, section))
+	defer h.Release()
+	view, err := mgr.Float32View(h)
+	if err != nil {
+		t.Fatalf("Float32View setup: %v", err)
+	}
+	if len(view) != rows*dims {
+		t.Fatalf("view elements=%d want %d", len(view), rows*dims)
+	}
+	var sum float32
+	allocs := testing.AllocsPerRun(1000, func() {
+		sum += denseFloat32KernelSum1781(view)
+	})
+	if allocs != 0 {
+		t.Fatalf("direct-view dense float32 kernel allocs/run=%v want 0", allocs)
+	}
+	if sum == 0 {
+		t.Fatalf("sum=0")
+	}
+}
+
 func BenchmarkTypedColumnVectorDenseDirectViewScan(b *testing.B) {
 	const rows = 1024
 	const dims = 16
@@ -366,6 +401,71 @@ func BenchmarkTypedColumnVectorDenseDirectViewScan(b *testing.B) {
 	stats := mgr.Stats()
 	b.ReportMetric(float64(stats.DirectViewSuccesses)/float64(b.N), "direct_views/op")
 	b.ReportMetric(float64(stats.DirectViewFailures)/float64(b.N), "scratch_decodes/op")
+	b.ReportMetric(float64(stats.TotalMappedBytes), "mapped_B")
+	b.ReportMetric(float64(stats.TotalHeapCopyBytes), "heap_copy_B")
+}
+
+func BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan(b *testing.B) {
+	const rows = 1024
+	const dims = 16
+	part := mustDenseVectorPart1756(b, rows, dims)
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		b.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		b.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	section := mustColumnDataSection1756(b, parsed, "embedding")
+	path := filepath.Join(b.TempDir(), "part.tcim")
+	if err := os.WriteFile(path, parsed.Bytes, 0o600); err != nil {
+		b.Fatalf("write image: %v", err)
+	}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "dense-mmap-heap-bench", Namespace: "typedcolumn-test"}
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: scope.Namespace, Kind: string(section.Kind), PartID: parsed.PartID, FileID: 1, Offset: int64(section.Offset), Length: int64(section.Length), Version: parsed.Version, Encoding: section.Encoding.String()}
+	for _, tc := range []struct {
+		name string
+		opts mappedresource.AcquireOptions
+	}{
+		{name: "mapped", opts: mappedresource.AcquireOptions{Reason: "mapped dense vector benchmark", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true}},
+		{name: "heap", opts: mappedresource.AcquireOptions{Reason: "heap dense vector benchmark", ValidationMode: mappedresource.ValidationVerify, AllowHeapCopy: true}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			mgr := mappedresource.NewManager()
+			h, err := mgr.AcquireFileRange(key, scope, path, tc.opts)
+			if err != nil {
+				b.Fatalf("AcquireFileRange: %v", err)
+			}
+			defer h.Release()
+			if _, err := mgr.Float32View(h); err != nil {
+				b.Fatalf("Float32View setup: %v", err)
+			}
+			baseStats := mgr.Stats()
+			b.ReportAllocs()
+			b.ResetTimer()
+			var sum float32
+			for i := 0; i < b.N; i++ {
+				view, err := mgr.Float32View(h)
+				if err != nil {
+					b.Fatalf("Float32View: %v", err)
+				}
+				sum += denseFloat32KernelSum1781(view)
+			}
+			b.StopTimer()
+			if sum == 0 {
+				b.Fatalf("sum=0")
+			}
+			elapsed := b.Elapsed()
+			stats := mgr.Stats()
+			b.ReportMetric(float64(b.N*rows)/elapsed.Seconds(), "rows/s")
+			b.ReportMetric(float64(b.N*rows*dims)/elapsed.Seconds(), "elements/s")
+			b.ReportMetric(float64(stats.DirectViewSuccesses-baseStats.DirectViewSuccesses)/float64(b.N), "direct_views/op")
+			b.ReportMetric(float64(stats.DirectViewFailures-baseStats.DirectViewFailures)/float64(b.N), "scratch_decodes/op")
+			b.ReportMetric(float64(stats.TotalMappedBytes), "mapped_B")
+			b.ReportMetric(float64(stats.TotalHeapCopyBytes), "heap_copy_B")
+		})
+	}
 }
 
 func BenchmarkTypedColumnVectorDenseSectionScan(b *testing.B) {
@@ -390,6 +490,14 @@ func BenchmarkTypedColumnVectorDenseSectionScan(b *testing.B) {
 	}
 	b.ReportMetric(float64(b.N*rows)/b.Elapsed().Seconds(), "rows/s")
 	b.ReportMetric(float64(b.N*rows*dims)/b.Elapsed().Seconds(), "elements/s")
+}
+
+func denseFloat32KernelSum1781(values []float32) float32 {
+	var sum float32
+	for _, value := range values {
+		sum += value
+	}
+	return sum
 }
 
 func mustDenseVectorAdjacencyImage1756(t testing.TB) ColumnPartImage {

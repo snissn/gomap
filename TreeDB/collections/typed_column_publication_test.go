@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -264,6 +265,69 @@ func TestTypedColumnReconstructionScanHybridOwners(t *testing.T) {
 	}
 	assertJSONEqualM13C(t, records[0].Document, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true,"payload":"alpha"}`))
 	assertJSONEqualM13C(t, records[1].Document, []byte(`{"time_us":2,"kind":"post","score":3.5,"flag":false,"payload":"beta"}`))
+}
+
+func TestTypedColumnReconstructionCacheDecodesOncePerGeneration1781(t *testing.T) {
+	const rows = 8
+	col, snap, visibleRows, cfg, manifestRootID := typedColumnReconstructionCacheFixture1781(t, rows)
+	cache := &typedColumnPartReconstructionCache{Rows: make(map[uint64][]typedColumnAdapterRow, 1)}
+	for _, row := range visibleRows {
+		typedValues, err := col.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, cfg, row, cache)
+		if err != nil {
+			t.Fatalf("typedColumnPartValuesForVisibleRowAtSnapshotWithCache: %v", err)
+		}
+		fullValues, err := mergeColumnReconstructionValues(cfg, row.Values, typedValues.Values)
+		if err != nil {
+			t.Fatalf("mergeColumnReconstructionValues: %v", err)
+		}
+		if len(fullValues) != len(cfg.Columns) {
+			t.Fatalf("full values=%d want columns=%d", len(fullValues), len(cfg.Columns))
+		}
+	}
+	if cache.PartLoads != 1 || cache.TypedPartDecodes != 1 || cache.CacheMisses != 1 || cache.CacheHits != rows-1 {
+		t.Fatalf("cache counters loads=%d decodes=%d hits=%d misses=%d want one load/decode/miss and %d hits", cache.PartLoads, cache.TypedPartDecodes, cache.CacheHits, cache.CacheMisses, rows-1)
+	}
+}
+
+func BenchmarkTypedColumnReconstructionCache1781(b *testing.B) {
+	const rows = 128
+	col, snap, visibleRows, cfg, manifestRootID := typedColumnReconstructionCacheFixture1781(b, rows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	var reconstructedRows int64
+	var partLoads, typedPartDecodes, cacheHits, cacheMisses uint64
+	for i := 0; i < b.N; i++ {
+		cache := &typedColumnPartReconstructionCache{Rows: make(map[uint64][]typedColumnAdapterRow, 1)}
+		for _, row := range visibleRows {
+			typedValues, err := col.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, cfg, row, cache)
+			if err != nil {
+				b.Fatalf("typedColumnPartValuesForVisibleRowAtSnapshotWithCache: %v", err)
+			}
+			fullValues, err := mergeColumnReconstructionValues(cfg, row.Values, typedValues.Values)
+			if err != nil {
+				b.Fatalf("mergeColumnReconstructionValues: %v", err)
+			}
+			if len(fullValues) == 0 {
+				b.Fatal("empty reconstruction values")
+			}
+			reconstructedRows++
+		}
+		partLoads += cache.PartLoads
+		typedPartDecodes += cache.TypedPartDecodes
+		cacheHits += cache.CacheHits
+		cacheMisses += cache.CacheMisses
+	}
+	b.StopTimer()
+	if typedPartDecodes != uint64(b.N) || partLoads != uint64(b.N) {
+		b.Fatalf("typed-column part decodes=%d loads=%d want one per benchmark op (%d), not per row", typedPartDecodes, partLoads, b.N)
+	}
+	elapsed := b.Elapsed()
+	b.ReportMetric(float64(reconstructedRows)/elapsed.Seconds(), "rows/s")
+	b.ReportMetric(float64(reconstructedRows)/float64(b.N), "rows/op")
+	b.ReportMetric(float64(partLoads)/float64(b.N), "part_loads/op")
+	b.ReportMetric(float64(typedPartDecodes)/float64(b.N), "typed_part_decodes/op")
+	b.ReportMetric(float64(cacheHits)/float64(b.N), "cache_hits/op")
+	b.ReportMetric(float64(cacheMisses)/float64(b.N), "cache_misses/op")
 }
 
 func TestTypedColumnPublicationRejectsOverlappingOwners(t *testing.T) {
@@ -763,6 +827,48 @@ func TestTypedColumnPublicationUnsupportedValueFailsClosed(t *testing.T) {
 	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("InsertBatch error=%v want ErrCommandWALRejected", err)
 	}
+}
+
+func typedColumnReconstructionCacheFixture1781(t testing.TB, rows int) (*Collection, *backenddb.Snapshot, []columnPhysicalVisibleRow, ColumnStoreConfig, uint64) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	t.Cleanup(func() { _ = d.Close() })
+	col := createTypedColumnPartCollection1755(t, d)
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		ids[i] = []byte(fmt.Sprintf("e%06d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":"kind-%02d","score":%.2f,"flag":%t,"payload":"payload-%d"}`, i+1, i%7, float64(i)+0.25, i%2 == 0, i))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	t.Cleanup(func() { _ = snap.Close() })
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("catalogForSnapshot returned nil")
+	}
+	cfg := catalog.meta.Options.ColumnStore.copy()
+	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+	visible, err := col.scanColumnPhysicalVisibleRowsAtSnapshot(snap, catalog, catalog.meta.Name, manifestRootID, cfg, true, nil)
+	if err != nil {
+		t.Fatalf("scanColumnPhysicalVisibleRowsAtSnapshot: %v", err)
+	}
+	if len(visible.Rows) != rows {
+		t.Fatalf("visible rows=%d want %d", len(visible.Rows), rows)
+	}
+	return col, snap, visible.Rows, cfg, manifestRootID
 }
 
 func typedColumnDocumentAtSnapshot1755(t testing.TB, col *Collection, snap *backenddb.Snapshot, id []byte) ([]byte, bool) {

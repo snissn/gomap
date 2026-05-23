@@ -214,6 +214,11 @@ type typedColumnPartReconstructionCache struct {
 	Rows       map[uint64][]typedColumnAdapterRow
 	Refs       map[uint64]columnManifestAssetRefForScan
 	RefsLoaded bool
+
+	CacheHits        uint64
+	CacheMisses      uint64
+	PartLoads        uint64
+	TypedPartDecodes uint64
 }
 
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow) (typedColumnPartVisibleValues, error) {
@@ -236,7 +241,12 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 	if cache != nil && cache.Rows != nil {
 		rows, ok = cache.Rows[physicalRow.Generation]
 	}
-	if !ok {
+	if ok {
+		cache.CacheHits++
+	} else {
+		if cache != nil {
+			cache.CacheMisses++
+		}
 		ref, found, err := c.typedColumnPartRefForGenerationWithCache(snap, manifestRootID, cfg, physicalRow.Generation, cache)
 		if err != nil {
 			return typedColumnPartVisibleValues{}, err
@@ -255,6 +265,9 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction read generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, readErr)
 		}
+		if cache != nil {
+			cache.PartLoads++
+		}
 		part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
 		if err != nil {
 			if closeErr := readCache.close(); closeErr != nil {
@@ -272,6 +285,9 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 		}
 		if closeErr != nil {
 			return typedColumnPartVisibleValues{}, closeErr
+		}
+		if cache != nil {
+			cache.TypedPartDecodes++
 		}
 		if cache != nil {
 			if cache.Rows == nil {
