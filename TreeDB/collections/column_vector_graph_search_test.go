@@ -49,6 +49,36 @@ func columnVectorGraphNativeSearchProduction8192BenchShapeV3() columnVectorGraph
 	}
 }
 
+func columnVectorGraphNativeSearchProductionSweepBenchShapesV3() []columnVectorGraphNativeSearchBenchShapeV3 {
+	dims := []int{128, 384, 768, 1024, 1536}
+	shapes := make([]columnVectorGraphNativeSearchBenchShapeV3, 0, len(dims)+1)
+	shapes = append(shapes, columnVectorGraphNativeSearchBenchShapeV3{
+		rows:                1024,
+		dims:                128,
+		m:                   16,
+		topK:                10,
+		efSearch:            128,
+		queryOrdinal:        512,
+		directPhysicalAsset: true,
+	})
+	for _, dim := range dims {
+		shapes = append(shapes, columnVectorGraphNativeSearchBenchShapeV3{
+			rows:                8192,
+			dims:                dim,
+			m:                   16,
+			topK:                10,
+			efSearch:            128,
+			queryOrdinal:        4096,
+			directPhysicalAsset: true,
+		})
+	}
+	return shapes
+}
+
+func columnVectorGraphNativeSearchBenchShapeNameV3(shape columnVectorGraphNativeSearchBenchShapeV3) string {
+	return fmt.Sprintf("rows=%d/dims=%d/degree=%d/topK=%d/efSearch=%d", shape.rows, shape.dims, shape.m, shape.topK, shape.efSearch)
+}
+
 func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -624,6 +654,15 @@ func BenchmarkColumnVectorGraphNativeSearchCosineProduction8192V3(b *testing.B) 
 	benchmarkColumnVectorGraphNativeSearchCosineV3(b, columnVectorGraphNativeSearchProduction8192BenchShapeV3())
 }
 
+func BenchmarkColumnVectorGraphNativeSearchCosineProductionSweepV3(b *testing.B) {
+	for _, shape := range columnVectorGraphNativeSearchProductionSweepBenchShapesV3() {
+		shape := shape
+		b.Run(columnVectorGraphNativeSearchBenchShapeNameV3(shape), func(b *testing.B) {
+			benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+		})
+	}
+}
+
 func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
 	b.Helper()
 	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(b, shape)
@@ -677,6 +716,15 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B) {
 
 func BenchmarkColumnVectorGraphNativeSearchCosineParallelProduction8192V3(b *testing.B) {
 	benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b, columnVectorGraphNativeSearchProduction8192BenchShapeV3())
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineParallelProductionSweepV3(b *testing.B) {
+	for _, shape := range columnVectorGraphNativeSearchProductionSweepBenchShapesV3() {
+		shape := shape
+		b.Run(columnVectorGraphNativeSearchBenchShapeNameV3(shape), func(b *testing.B) {
+			benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b, shape)
+		})
+	}
 }
 
 func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
