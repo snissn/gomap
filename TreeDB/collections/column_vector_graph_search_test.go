@@ -147,6 +147,31 @@ func TestColumnVectorGraphNativeSearchDoesNotStopBeforePromisingFrontierV6(t *te
 	}
 }
 
+func TestColumnVectorGraphNativeSearchExpandsEqualScoreFrontierV6(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-start"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{1, 2}},
+		{ID: []byte("doc-tie-low-ordinal"), Vector: []float32{0, 1, 0}, InvNorm: 1},
+		{ID: []byte("doc-tie-bridge"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{3}},
+		{ID: []byte("doc-best"), Vector: []float32{1, 0, 0}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer reader.Close()
+
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 3 || string(got[0].ID) != "doc-best" {
+		t.Fatalf("results=%+v stats=%+v want equal-score frontier expansion to reach doc-best", got, stats)
+	}
+}
+
 func TestColumnVectorGraphNativeSearchKeepsExpansionAdjacencyStableV3(t *testing.T) {
 	rows := []columnVectorGraphAssetRow{
 		{ID: []byte("doc-start"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{1, 2}},

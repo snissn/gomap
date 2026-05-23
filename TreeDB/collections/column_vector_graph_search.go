@@ -287,7 +287,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			}
 			continue
 		}
-		if len(scratch.top) >= efSearch && columnVectorGraphSearchCandidateWorse(candidate, scratch.top[len(scratch.top)-1]) {
+		if len(scratch.top) >= efSearch && candidate.score < scratch.top[len(scratch.top)-1].score {
 			break
 		}
 		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, &stats)
@@ -440,8 +440,18 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		ordinal: ordinal,
 		score:   score,
 	}
-	if len(scratch.top) < candidateLimit || columnVectorGraphSearchCandidateBetter(candidate, scratch.top[len(scratch.top)-1]) {
+	if len(scratch.top) < candidateLimit {
 		scratch.insertTop(candidateLimit, candidate)
+		scratch.pushFrontier(candidate)
+		return nil
+	}
+	worstRetained := scratch.top[len(scratch.top)-1]
+	if columnVectorGraphSearchCandidateBetter(candidate, worstRetained) {
+		scratch.insertTop(candidateLimit, candidate)
+		scratch.pushFrontier(candidate)
+		return nil
+	}
+	if candidate.score >= worstRetained.score {
 		scratch.pushFrontier(candidate)
 	}
 	return nil
@@ -611,10 +621,6 @@ func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchC
 		return left.ordinal < right.ordinal
 	}
 	return left.score > right.score
-}
-
-func columnVectorGraphSearchCandidateWorse(left, right columnVectorGraphSearchCandidate) bool {
-	return columnVectorGraphSearchCandidateBetter(right, left)
 }
 
 func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, row columnVectorGraphPhysicalRow) (float64, error) {
