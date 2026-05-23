@@ -528,6 +528,27 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	return asset, nil
 }
 
+func columnPhysicalAssetColumnMatchesManifestConfig(got, want ColumnStoreColumn) (bool, error) {
+	gotOwner, err := columnStoreColumnOwner(got)
+	if err != nil {
+		return false, fmt.Errorf("decoded owner: %w", err)
+	}
+	wantOwner, err := columnStoreColumnOwner(want)
+	if err != nil {
+		return false, fmt.Errorf("manifest owner: %w", err)
+	}
+	if gotOwner != TypedStorageOwnerRowAsset || wantOwner != TypedStorageOwnerRowAsset {
+		return false, nil
+	}
+	// TCPA row assets predate typed-storage owner metadata and do not encode an
+	// owner field. Treat the legacy zero owner and explicit typed_row_asset owner
+	// as the same physical schema while still requiring all encoded fields to
+	// match exactly.
+	got.Owner = ""
+	want.Owner = ""
+	return got == want, nil
+}
+
 func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig) error {
 	cfg = columnStoreRowAssetConfig(cfg)
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
@@ -562,7 +583,11 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 		return fmt.Errorf("collections: column physical asset columns=%d want %d", len(asset.Columns), len(cfg.Columns))
 	}
 	for i := range cfg.Columns {
-		if asset.Columns[i] != cfg.Columns[i] {
+		match, err := columnPhysicalAssetColumnMatchesManifestConfig(asset.Columns[i], cfg.Columns[i])
+		if err != nil {
+			return fmt.Errorf("collections: column physical asset column[%d]: %w", i, err)
+		}
+		if !match {
 			return fmt.Errorf("collections: column physical asset column[%d]=%+v want %+v", i, asset.Columns[i], cfg.Columns[i])
 		}
 	}

@@ -141,6 +141,14 @@ func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	if err := validateColumnPhysicalAssetForManifest(encoded, ref, *normalized); err != nil {
 		t.Fatalf("validateColumnPhysicalAssetForManifest: %v", err)
 	}
+	explicitRowOwner := *normalized
+	explicitRowOwner.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
+	for i := range explicitRowOwner.Columns {
+		explicitRowOwner.Columns[i].Owner = TypedStorageOwnerRowAsset
+	}
+	if err := validateColumnPhysicalAssetForManifest(encoded, ref, explicitRowOwner); err != nil {
+		t.Fatalf("validateColumnPhysicalAssetForManifest explicit typed_row_asset owner: %v", err)
+	}
 	wrongSchema := *normalized
 	wrongSchema.Columns = append([]ColumnStoreColumn(nil), normalized.Columns...)
 	wrongSchema.Columns[0].Path = "wrong_time_us"
