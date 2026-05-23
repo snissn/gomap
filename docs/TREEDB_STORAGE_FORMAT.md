@@ -22,7 +22,7 @@ Operator-facing behavior is covered by:
   - `Dir/dictdb/`: dictionary store (for value-log compression)
 - Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
-- Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Current production typed-row assets live under the isolated typed asset manager namespace; future typed-column parts will use the same typed-storage lifecycle.
+- Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Production typed-row assets and opt-in scalar typed-column parts live under the isolated typed asset manager namespace.
 
 ## Directory layout
 
@@ -62,10 +62,12 @@ Dir/maindb/column_assets/events/column-assets/
 
 Column manifest records stored in B-tree/root metadata hold durable
 `ColumnAssetRef` values: kind, namespace, generation, part id, segment file id,
-offset, length, and checksum. GC/rewrite must enumerate those refs from
+offset, length, and checksum. `tcs1_part_image` refs identify compatibility
+`TCPA` typed-row assets; `tcs1_typed_column_part` refs identify sectioned
+scalar typed-column parts. GC/rewrite must enumerate those refs from
 manifest/control roots, not by scanning row documents.
 
-The current physical part payload uses the `TCPA` envelope, version 3:
+The typed-row physical part payload uses the `TCPA` envelope, version 3:
 
 ```text
 u32      Magic = "TCPA"
@@ -84,10 +86,16 @@ rows     row id + deleted flag + optional declared column values
 ```
 
 Insert and update rows must have `deleted=false` and one declared value per
-column. Each declared value stores its type, null bit, and present bit; the
-present bit distinguishes an omitted nullable JSON path from an explicit JSON
-`null` so retained-payload reconstruction remains lossless. Delete/tombstone
-rows must have `deleted=true` and no column values.
+`typed_row_asset` column in the row asset. Each declared value stores its type,
+null bit, and present bit; the present bit distinguishes an omitted nullable JSON
+path from an explicit JSON `null` so retained-payload reconstruction remains
+lossless. Delete/tombstone rows must have `deleted=true` and no column values.
+For layouts with `typed_column_part` owners, a `TCPA` row asset is still
+published for row IDs/tombstones and row-owned fields; the matching
+`tcs1_typed_column_part` for the same generation contains authoritative scalar
+typed-column values keyed by row index. The current scalar typed-column matrix is
+bool, int64, float32, double/float64, and string; nullable/missing values,
+vectors, and adjacency sections fail closed until later typed-storage issues.
 Readers validate namespace, generation, part id, schema hash, column
 descriptors, length, and checksum before accepting an asset ref.
 

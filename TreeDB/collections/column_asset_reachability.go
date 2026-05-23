@@ -1021,7 +1021,7 @@ func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
 }
 
 func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
-	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values) &&
+	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1TypedColumnPart || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values) &&
 		ref.Namespace == namespace &&
 		ref.Generation != 0 &&
 		ref.PartID != 0 &&

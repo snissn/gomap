@@ -17,7 +17,7 @@ Required vocabulary:
 | --- | --- |
 | `typed storage` | Umbrella subsystem for typed-row storage and typed-column storage. |
 | `typed-row storage` / `typed_row_asset` | Current row-record physical asset path for declared typed values. |
-| `typed-column storage` / `typed_column_part` | Future true sectioned, column-major part assets transplanted from `experiments/colgranule`. |
+| `typed-column storage` / `typed_column_part` | Opt-in true sectioned, column-major part assets transplanted from `experiments/colgranule` (scalar durable publication starts in #1755). |
 | `retained document` / `document_payload` | Flexible document owner or retained residual payload used for reconstruction. |
 | `derived accelerator` | Non-authoritative duplicate, index, cache, or metadata derived from an authoritative owner. |
 
@@ -51,8 +51,9 @@ declared columns with no explicit typed-storage owner resolve to
 `typed_row_asset`. `ColumnRetainedPayloadFull` is compatibility duplication in
 `document_payload`; it does not make the retained document a second
 authoritative owner for declared typed fields. `typed_column_part` ownership may
-be represented as a placeholder, but reads and publication must fail closed until
-the typed-column format/publication work lands.
+be represented in metadata; after #1755, scalar bool/int64/float32/double/string
+owners have opt-in durable publication and reconstruction, while unsupported
+value types still fail closed.
 
 The resolver is pure metadata only: it must not perform filesystem IO, mmap,
 section decode, DB mutation, asset open, publication, query planning, or durable
@@ -88,13 +89,25 @@ internal `ColumnStore*` umbrella names.
 
 ## PR 4 Typed-Column Adapter
 
-Issue #1754 introduces `TreeDB/collections/typed_column_adapter.go` as a
-non-authoritative adapter seam from TreeDB typed-storage metadata and #1736
-resource handles to `TreeDB/internal/typedcolumn`. It may use
-`ColumnStoreValueType` as compatibility input, but existing `ColumnStoreConfig`
-metadata still resolves to `typed_row_asset` unless tests construct explicit
-`typed_column_part` fields. This adapter must not publish production manifests,
-change query planning, or enable authoritative `typed_column_part` reads.
+Issue #1754 introduces `TreeDB/collections/typed_column_adapter.go` as an
+adapter seam from TreeDB typed-storage metadata and #1736 resource handles to
+`TreeDB/internal/typedcolumn`. It may use `ColumnStoreValueType` as
+compatibility input, but existing `ColumnStoreConfig` metadata still resolves to
+`typed_row_asset` unless a column explicitly selects `typed_column_part`.
+
+## PR 5 Durable Scalar Typed-Column Publication
+
+Issue #1755 lets explicit scalar `typed_column_part` owners publish durable
+`tcs1_typed_column_part` assets and reconstruct retained-payload documents after
+reopen. A compatibility `typed_row_asset`/`TCPA` asset remains present per
+mutation generation as the row-ID/tombstone locator and owner of any
+`typed_row_asset` fields. The invariant remains one authoritative owner per
+logical field per generation: retained document, typed-row asset, or typed-column
+part.
+
+The #1755 path is intentionally not the query/vector switch. Vector and
+adjacency section representation remains #1756, and production predicate scan /
+query integration remains #1757.
 
 ## Current Derived Accelerator Classifications
 

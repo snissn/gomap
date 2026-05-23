@@ -1,0 +1,296 @@
+package collections
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+const (
+	columnPhysicalRowAssetPartID = uint64(1)
+	typedColumnPartAssetPartID   = uint64(2)
+)
+
+func columnStoreHasTypedColumnPartOwners(cfg ColumnStoreConfig) bool {
+	for _, col := range cfg.Columns {
+		if columnStoreColumnIsTypedColumnPart(col) {
+			return true
+		}
+	}
+	return false
+}
+
+func columnStoreRowAssetColumns(cfg ColumnStoreConfig) []ColumnStoreColumn {
+	columns := make([]ColumnStoreColumn, 0, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		if columnStoreColumnIsTypedRowAsset(col) {
+			columns = append(columns, col)
+		}
+	}
+	return columns
+}
+
+func columnStoreTypedColumnPartFields(cfg ColumnStoreConfig) []TypedStorageField {
+	fields := make([]TypedStorageField, 0, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		if !columnStoreColumnIsTypedColumnPart(col) {
+			continue
+		}
+		fields = append(fields, TypedStorageField{
+			Name:               col.Name,
+			Path:               col.Path,
+			Owner:              TypedStorageOwnerColumnPart,
+			ValueType:          col.ValueType,
+			Nullable:           col.Nullable,
+			Dictionary:         col.Dictionary,
+			VectorDims:         col.VectorDims,
+			FixedWidthEncoding: col.FixedWidthEncoding,
+		})
+	}
+	return fields
+}
+
+func columnStoreRowAssetConfig(cfg ColumnStoreConfig) ColumnStoreConfig {
+	if !columnStoreHasTypedColumnPartOwners(cfg) {
+		return cfg
+	}
+	out := cfg.copy()
+	out.Columns = columnStoreRowAssetColumns(cfg)
+	out.SortKey = filterColumnSortKeysForColumns(cfg.SortKey, out.Columns)
+	out.AggregateMetadata = filterColumnAggregateMetadataForColumns(cfg.AggregateMetadata, out.Columns)
+	// The manifest/schema identity remains the full typed-storage layout hash.
+	// Row assets only carry typed_row_asset-owned fields plus row locators.
+	out.SchemaHash = cfg.SchemaHash
+	return out
+}
+
+func filterColumnSortKeysForColumns(sortKeys []ColumnSortKey, columns []ColumnStoreColumn) []ColumnSortKey {
+	if len(sortKeys) == 0 {
+		return nil
+	}
+	present := columnStoreColumnNameSet(columns)
+	out := make([]ColumnSortKey, 0, len(sortKeys))
+	for _, sortKey := range sortKeys {
+		if _, ok := present[sortKey.Column]; ok {
+			out = append(out, sortKey)
+		}
+	}
+	return out
+}
+
+func filterColumnAggregateMetadataForColumns(aggregates []ColumnAggregateMetadata, columns []ColumnStoreColumn) []ColumnAggregateMetadata {
+	if len(aggregates) == 0 {
+		return nil
+	}
+	present := columnStoreColumnNameSet(columns)
+	out := make([]ColumnAggregateMetadata, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		if aggregate.Column != "" {
+			if _, ok := present[aggregate.Column]; !ok {
+				continue
+			}
+		}
+		if aggregate.GroupColumn != "" {
+			if _, ok := present[aggregate.GroupColumn]; !ok {
+				continue
+			}
+		}
+		out = append(out, aggregate)
+	}
+	return out
+}
+
+func columnStoreColumnNameSet(columns []ColumnStoreColumn) map[string]struct{} {
+	present := make(map[string]struct{}, len(columns))
+	for _, col := range columns {
+		present[col.Name] = struct{}{}
+	}
+	return present
+}
+
+func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColumn, rows []columnDeclaredRow) ([]columnDeclaredRow, error) {
+	if len(selected) == len(allColumns) {
+		all := true
+		for i := range selected {
+			if selected[i].Name != allColumns[i].Name || selected[i].Path != allColumns[i].Path {
+				all = false
+				break
+			}
+		}
+		if all {
+			return rows, nil
+		}
+	}
+	indexByName := make(map[string]int, len(allColumns))
+	for i, col := range allColumns {
+		indexByName[col.Name] = i
+	}
+	out := make([]columnDeclaredRow, len(rows))
+	for rowIdx, row := range rows {
+		out[rowIdx] = columnDeclaredRow{ID: bytes.Clone(row.ID), Deleted: row.Deleted}
+		if row.Deleted {
+			continue
+		}
+		if len(row.Values) != len(allColumns) {
+			return nil, fmt.Errorf("collections: typed-storage row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(allColumns))
+		}
+		out[rowIdx].Values = make([]columnDeclaredValue, len(selected))
+		for selectedIdx, col := range selected {
+			allIdx, ok := indexByName[col.Name]
+			if !ok {
+				return nil, fmt.Errorf("collections: typed-storage selected column %q not found", col.Name)
+			}
+			out[rowIdx].Values[selectedIdx] = row.Values[allIdx]
+		}
+	}
+	return out, nil
+}
+
+func typedColumnAdapterRowsFromDeclaredRows(allColumns []ColumnStoreColumn, fields []TypedStorageField, rows []columnDeclaredRow) ([]typedColumnAdapterRow, error) {
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	indexByPath := make(map[string]int, len(allColumns))
+	for i, col := range allColumns {
+		indexByPath[col.Path] = i
+	}
+	out := make([]typedColumnAdapterRow, len(rows))
+	for rowIdx, row := range rows {
+		if row.Deleted {
+			return nil, fmt.Errorf("collections: typed-column part row[%d] is deleted", rowIdx)
+		}
+		if len(row.Values) != len(allColumns) {
+			return nil, fmt.Errorf("collections: typed-column part row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(allColumns))
+		}
+		values := make(map[string]columnDeclaredValue, len(fields))
+		for _, field := range fields {
+			allIdx, ok := indexByPath[field.Path]
+			if !ok {
+				return nil, fmt.Errorf("collections: typed-column part field %q not found", field.Path)
+			}
+			values[field.Path] = row.Values[allIdx]
+		}
+		out[rowIdx] = typedColumnAdapterRow{PrimaryID: int64(rowIdx), Values: values}
+	}
+	return out, nil
+}
+
+func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow) ([]byte, int, error) {
+	fields := columnStoreTypedColumnPartFields(cfg)
+	if len(fields) == 0 {
+		return nil, 0, nil
+	}
+	adapterRows, err := typedColumnAdapterRowsFromDeclaredRows(cfg.Columns, fields, rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{
+		Collection:    "",
+		Namespace:     cfg.AssetManager.Namespace,
+		SchemaVersion: uint32(cfg.SchemaHash),
+		PartID:        partID,
+		Fields:        fields,
+	}, adapterRows)
+	if err != nil {
+		return nil, 0, err
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		return nil, 0, err
+	}
+	return image.Bytes, image.Rows, nil
+}
+
+type typedColumnPartVisibleValues struct {
+	Values []columnDeclaredValue
+}
+
+func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow) (typedColumnPartVisibleValues, error) {
+	fields := columnStoreTypedColumnPartFields(cfg)
+	if len(fields) == 0 {
+		return typedColumnPartVisibleValues{}, nil
+	}
+	if physicalRow.Deleted {
+		return typedColumnPartVisibleValues{}, nil
+	}
+	ref, ok, err := c.typedColumnPartRefForGeneration(snap, manifestRootID, cfg, physicalRow.Generation)
+	if err != nil {
+		return typedColumnPartVisibleValues{}, err
+	}
+	if !ok {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction missing typed_column_part asset for generation=%d", physicalRow.Generation)
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		return typedColumnPartVisibleValues{}, err
+	}
+	defer func() { _ = readCache.close() }()
+	raw, err := readCache.read(ref.Ref, nil)
+	if err != nil {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction read generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
+	}
+	part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
+	if err != nil {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
+	}
+	rows, err := part.scanRows()
+	if err != nil {
+		return typedColumnPartVisibleValues{}, err
+	}
+	if physicalRow.RowIndex < 0 || physicalRow.RowIndex >= len(rows) {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside typed_column_part rows=%d", physicalRow.RowIndex, len(rows))
+	}
+	row := rows[physicalRow.RowIndex]
+	if row.PrimaryID != int64(physicalRow.RowIndex) {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction locator=%d want row_index=%d", row.PrimaryID, physicalRow.RowIndex)
+	}
+	values := make([]columnDeclaredValue, len(fields))
+	for i, field := range fields {
+		value, ok := row.Values[field.Path]
+		if !ok {
+			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction missing field %q", field.Path)
+		}
+		values[i] = value
+	}
+	return typedColumnPartVisibleValues{Values: values}, nil
+}
+
+func (c *Collection) typedColumnPartRefForGeneration(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig, generation uint64) (columnManifestAssetRefForScan, bool, error) {
+	if rootID == 0 {
+		return columnManifestAssetRefForScan{}, false, errors.New("collections: typed-column reconstruction missing manifest root")
+	}
+	if snap == nil {
+		return columnManifestAssetRefForScan{}, false, errCollectionDBNil
+	}
+	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+	if err != nil {
+		return columnManifestAssetRefForScan{}, false, err
+	}
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
+		if err != nil {
+			return columnManifestAssetRefForScan{}, false, err
+		}
+		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, cfg.AssetManager.Namespace)
+		if err != nil {
+			return columnManifestAssetRefForScan{}, false, err
+		}
+		if ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Generation != generation {
+			continue
+		}
+		if ref.Generation != keyGeneration || ref.PartID != keyPartID {
+			return columnManifestAssetRefForScan{}, false, fmt.Errorf("collections: typed-column manifest key generation/part mismatch")
+		}
+		operation, ok := columnPhysicalScanOperationFromBytes(reason)
+		if !ok {
+			return columnManifestAssetRefForScan{}, false, fmt.Errorf("collections: unsupported typed-column manifest reason %q", string(reason))
+		}
+		return columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows}, true, nil
+	}
+	return columnManifestAssetRefForScan{}, false, nil
+}

@@ -84,6 +84,13 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 			meta.Options.DocumentFormat,
 		)
 	}
+	layout, err := ResolveTypedStorageLayout(meta)
+	if err != nil {
+		return err
+	}
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		return fmt.Errorf("%w: column-store write collection=%q operation=%q: %v", backenddb.ErrCommandWALRejected, meta.Name, operation, err)
+	}
 	switch operation {
 	case ColumnPublishOperationInsert, ColumnPublishOperationUpdate, ColumnPublishOperationDelete:
 		return nil
@@ -496,26 +503,30 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if hookInput.CurrentManifest != nil {
 		generation = hookInput.CurrentManifest.Generation + 1
 	}
-	const partID = uint64(1)
+	rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
+	rowAssetRows, err := projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
+	if err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
 	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
 		Collection:        hookInput.Collection,
 		Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
 		Generation:        generation,
-		PartID:            partID,
+		PartID:            columnPhysicalRowAssetPartID,
 		AppliedCommandLSN: hookInput.AppliedCommandLSN,
 		Operation:         hookInput.Operation,
 		SchemaHash:        hookInput.ColumnStore.SchemaHash,
-		Columns:           hookInput.ColumnStore.Columns,
-		Rows:              rows,
+		Columns:           rowAssetConfig.Columns,
+		Rows:              rowAssetRows,
 	})
 	if err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
-	ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, partID)
+	ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, columnPhysicalRowAssetPartID)
 	if err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
-	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, hookInput.ColumnStore, generation, partID, len(encoded)); err != nil {
+	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded)); err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
 	if prepared.CommandBytes == 0 {
@@ -531,8 +542,33 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		GenerationID: generation,
 		Reason:       string(input.operation),
 	}}
+	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
+		typedColumnImage, typedColumnRows, err := buildTypedColumnPartImageForDeclaredRows(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		if len(typedColumnImage) != 0 {
+			typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if typedColumnRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || typedColumnRef.Kind != ColumnAssetKindTCS1TypedColumnPart ||
+				typedColumnRef.Generation != generation || typedColumnRef.PartID != typedColumnPartAssetPartID || typedColumnRef.Length != int64(len(typedColumnImage)) {
+				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column part asset ref %+v", typedColumnRef)
+			}
+			prepped := ColumnPreparedAsset{
+				Ref:          typedColumnRef,
+				Rows:         typedColumnRows,
+				Bytes:        typedColumnRef.Length,
+				PublishID:    hookInput.AppliedCommandLSN,
+				GenerationID: generation,
+				Reason:       string(input.operation),
+			}
+			prepared.Assets = append(prepared.Assets, prepped)
+		}
+	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
-		dictionaryAssets, err := buildColumnDictionaryCodesAssets(hookInput.ColumnStore, rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
+		dictionaryAssets, err := buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}
@@ -541,12 +577,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			dictionaryRef, err := writeColumnDictionaryCodesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedDictionary, generation, partID)
+			dictionaryRef, err := writeColumnDictionaryCodesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedDictionary, generation, columnPhysicalRowAssetPartID)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
 			if dictionaryRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || dictionaryRef.Kind != ColumnAssetKindTCS1DictionaryCodes ||
-				dictionaryRef.Generation != generation || dictionaryRef.PartID != partID || dictionaryRef.Length != int64(len(encodedDictionary)) {
+				dictionaryRef.Generation != generation || dictionaryRef.PartID != columnPhysicalRowAssetPartID || dictionaryRef.Length != int64(len(encodedDictionary)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid dictionary codes asset ref %+v", dictionaryRef)
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
@@ -558,7 +594,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Reason:       dictionary.ColumnName,
 			})
 		}
-		int64Assets, err := buildColumnInt64ValuesAssets(hookInput.ColumnStore, rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
+		int64Assets, err := buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}
@@ -567,12 +603,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			valuesRef, err := writeColumnInt64ValuesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedValues, generation, partID)
+			valuesRef, err := writeColumnInt64ValuesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedValues, generation, columnPhysicalRowAssetPartID)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
 			if valuesRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || valuesRef.Kind != ColumnAssetKindTCS1Int64Values ||
-				valuesRef.Generation != generation || valuesRef.PartID != partID || valuesRef.Length != int64(len(encodedValues)) {
+				valuesRef.Generation != generation || valuesRef.PartID != columnPhysicalRowAssetPartID || valuesRef.Length != int64(len(encodedValues)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid int64 values asset ref %+v", valuesRef)
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
@@ -584,8 +620,8 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Reason:       values.ColumnName,
 			})
 		}
-		for _, aggregate := range hookInput.ColumnStore.AggregateMetadata {
-			metadata, ok, err := buildColumnAggregateMetadataAsset(hookInput.ColumnStore, rows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, partID, hookInput.AppliedCommandLSN)
+		for _, aggregate := range rowAssetConfig.AggregateMetadata {
+			metadata, ok, err := buildColumnAggregateMetadataAsset(rowAssetConfig, rowAssetRows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
@@ -596,12 +632,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			metadataRef, err := writeColumnAggregateMetadataAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedMetadata, generation, partID)
+			metadataRef, err := writeColumnAggregateMetadataAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedMetadata, generation, columnPhysicalRowAssetPartID)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
 			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
-				metadataRef.Generation != generation || metadataRef.PartID != partID || metadataRef.Length != int64(len(encodedMetadata)) {
+				metadataRef.Generation != generation || metadataRef.PartID != columnPhysicalRowAssetPartID || metadataRef.Length != int64(len(encodedMetadata)) {
 				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid aggregate metadata asset ref %+v", metadataRef)
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{

@@ -85,6 +85,13 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 	if cfg.Reconstruction != ColumnReconstructionRetainedPayloadAndColumns {
 		return nil, diag, fmt.Errorf("collections: unsupported column reconstruction policy %q", cfg.Reconstruction)
 	}
+	layout, err := ResolveTypedStorageLayout(catalog.meta)
+	if err != nil {
+		return nil, diag, err
+	}
+	if err := layout.EnsureReadSupported(); err != nil {
+		return nil, diag, err
+	}
 	visibilityStart := time.Now()
 	row, scanDiag, found, err := c.latestColumnPhysicalVisibleRowAtSnapshot(snap, catalog, documentID, nil)
 	diag.VisibilityNanos = time.Since(visibilityStart).Nanoseconds()
@@ -100,7 +107,16 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 		return nil, diag, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(documentID))
 	}
 	reconstructionStart := time.Now()
-	out, err := reconstructColumnDocumentFromVisibleRow(cfg, retained, row)
+	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+	typedValues, err := c.typedColumnPartValuesForVisibleRowAtSnapshot(snap, manifestRootID, cfg, row)
+	if err != nil {
+		return nil, diag, err
+	}
+	fullValues, err := mergeColumnReconstructionValues(cfg, row.Values, typedValues.Values)
+	if err != nil {
+		return nil, diag, err
+	}
+	out, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained, row, fullValues)
 	if err != nil {
 		return nil, diag, err
 	}
@@ -113,7 +129,49 @@ func reconstructColumnDocumentFromVisibleRow(cfg ColumnStoreConfig, retained []b
 	if row.Deleted {
 		return nil, errors.New("collections: column reconstruction latest physical row is deleted")
 	}
-	return reconstructColumnJSONDocument(cfg, retained, row.Values)
+	values, err := mergeColumnReconstructionValues(cfg, row.Values, nil)
+	if err != nil {
+		return nil, err
+	}
+	return reconstructColumnJSONDocument(cfg, retained, values)
+}
+
+func reconstructColumnDocumentFromVisibleRowValues(cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue) ([]byte, error) {
+	if row.Deleted {
+		return nil, errors.New("collections: column reconstruction latest physical row is deleted")
+	}
+	return reconstructColumnJSONDocument(cfg, retained, values)
+}
+
+func mergeColumnReconstructionValues(cfg ColumnStoreConfig, rowValues, typedColumnValues []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	values := make([]columnDeclaredValue, len(cfg.Columns))
+	rowIdx := 0
+	typedIdx := 0
+	for i, col := range cfg.Columns {
+		switch columnStoreColumnOwnerOrRowAsset(col) {
+		case TypedStorageOwnerRowAsset:
+			if rowIdx >= len(rowValues) {
+				return nil, fmt.Errorf("collections: column reconstruction missing typed_row_asset value for column %q", col.Name)
+			}
+			values[i] = rowValues[rowIdx]
+			rowIdx++
+		case TypedStorageOwnerColumnPart:
+			if typedIdx >= len(typedColumnValues) {
+				return nil, fmt.Errorf("collections: column reconstruction missing typed_column_part value for column %q", col.Name)
+			}
+			values[i] = typedColumnValues[typedIdx]
+			typedIdx++
+		default:
+			return nil, fmt.Errorf("collections: column reconstruction unsupported owner %q for column %q", col.Owner, col.Name)
+		}
+	}
+	if rowIdx != len(rowValues) {
+		return nil, fmt.Errorf("collections: column reconstruction unused typed_row_asset values=%d", len(rowValues)-rowIdx)
+	}
+	if typedIdx != len(typedColumnValues) {
+		return nil, fmt.Errorf("collections: column reconstruction unused typed_column_part values=%d", len(typedColumnValues)-typedIdx)
+	}
+	return values, nil
 }
 
 func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue) ([]byte, error) {

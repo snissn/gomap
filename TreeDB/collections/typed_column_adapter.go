@@ -242,6 +242,14 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns)}, nil
 }
 
+func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return nil, err
+	}
+	return typedColumnAdapterPartFromImage(opts, image)
+}
+
 func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
 	part, err := typedcolumn.ColumnPartFromImage(image)
 	if err != nil {
@@ -326,6 +334,39 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 		out[i] = value
 	}
 	return out, nil
+}
+
+func (p *typedColumnAdapterPart) scanRows() ([]typedColumnAdapterRow, error) {
+	if p == nil || p.Part == nil {
+		return nil, errors.New("collections: nil typed-column adapter part")
+	}
+	projected := make([]string, 0, len(p.Columns)+1)
+	projected = append(projected, typedColumnAdapterPrimaryIDColumn)
+	for _, column := range p.Columns {
+		projected = append(projected, column.Definition.Name)
+	}
+	scan, err := p.Part.NewScanner().ScanProjected(projected)
+	if err != nil {
+		return nil, err
+	}
+	ids := scan.Columns[typedColumnAdapterPrimaryIDColumn]
+	rows := make([]typedColumnAdapterRow, len(ids))
+	for rowIdx, id := range ids {
+		values := make(map[string]columnDeclaredValue, len(p.Columns))
+		for _, column := range p.Columns {
+			encoded := scan.Columns[column.Definition.Name]
+			if len(encoded) != len(ids) {
+				return nil, fmt.Errorf("collections: typed-column adapter column %q rows=%d want %d", column.Definition.Name, len(encoded), len(ids))
+			}
+			value, err := decodeTypedColumnAdapterValue(column, encoded[rowIdx])
+			if err != nil {
+				return nil, fmt.Errorf("collections: typed-column adapter row %d column %q: %w", rowIdx, column.Definition.Name, err)
+			}
+			values[column.Field.Path] = value
+		}
+		rows[rowIdx] = typedColumnAdapterRow{PrimaryID: id, Values: values}
+	}
+	return rows, nil
 }
 
 func (p *typedColumnAdapterPart) columnByName(name string) (typedColumnAdapterColumn, bool) {

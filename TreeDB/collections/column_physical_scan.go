@@ -370,10 +370,11 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 		RecoveryManifestGeneration: cfg.RecoveryAuthoritativeManifest.Generation,
 		AppliedCommandLSN:          cfg.RecoveryAuthoritativeAppliedCommandLSN,
 	}
+	rowAssetConfig := columnStoreRowAssetConfig(cfg)
 	view := columnPhysicalScanSnapshotView{
 		CollectionName:     collectionName,
 		Catalog:            catalog,
-		Config:             cfg,
+		Config:             rowAssetConfig,
 		ColumnStoreEnabled: columnStoreEnabled,
 		CommitSeq:          snapshotState.CommitSeq,
 		Diagnostics:        diag,
@@ -385,7 +386,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 		view.Diagnostics = diag
 		return view, err
 	}
-	manifest, refs, graphRefs, mutationParts, manifestRecords, err := loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap, rootID, cfg, *cfg.ActiveManifest, collectionName, filter, true, catalog.meta.VectorIndexes)
+	manifest, refs, graphRefs, mutationParts, manifestRecords, err := loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap, rootID, rowAssetConfig, *cfg.ActiveManifest, collectionName, filter, true, catalog.meta.VectorIndexes)
 	if err != nil {
 		diag.ManifestRecords = manifestRecords
 		view.Diagnostics = diag
@@ -685,7 +686,7 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			if err != nil {
 				return columnManifestSnapshot{}, nil, nil, 0, manifestRecords, err
 			}
-			if ref.Kind != ColumnAssetKindTCS1PartImage {
+			if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 				return columnManifestSnapshot{}, nil, nil, 0, manifestRecords, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 			}
 			if ref.Generation != keyGeneration {
@@ -698,13 +699,15 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			if !ok {
 				return columnManifestSnapshot{}, nil, nil, 0, manifestRecords, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
-			livePartRows.add(ref.Generation, ref.PartID, rows)
-			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
+			if ref.Kind == ColumnAssetKindTCS1PartImage {
+				livePartRows.add(ref.Generation, ref.PartID, rows)
+				refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
+				if operation != ColumnPublishOperationInsert {
+					mutationParts++
+				}
+			}
 			if ref.Generation == snapshot.Generation {
 				activeParts++
-			}
-			if operation != ColumnPublishOperationInsert {
-				mutationParts++
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
@@ -1625,6 +1628,9 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if err != nil {
 			return nil, 0, err
 		}
+		if ref.Kind == ColumnAssetKindTCS1TypedColumnPart {
+			continue
+		}
 		if ref.Kind != ColumnAssetKindTCS1PartImage {
 			return nil, 0, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 		}
@@ -1733,6 +1739,8 @@ func columnAssetKindFromBytesForScan(raw []byte) (ColumnAssetKind, bool) {
 	switch {
 	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1PartImage)):
 		return ColumnAssetKindTCS1PartImage, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1TypedColumnPart)):
+		return ColumnAssetKindTCS1TypedColumnPart, true
 	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1AggregateMetadata)):
 		return ColumnAssetKindTCS1AggregateMetadata, true
 	case columnPhysicalBytesEqualString(raw, string(ColumnAssetKindTCS1DictionaryCodes)):

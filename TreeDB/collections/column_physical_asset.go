@@ -529,6 +529,7 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 }
 
 func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig) error {
+	cfg = columnStoreRowAssetConfig(cfg)
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return err
 	}

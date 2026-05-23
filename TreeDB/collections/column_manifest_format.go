@@ -329,7 +329,7 @@ func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, ge
 func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
 	count := 0
 	for _, asset := range assets {
-		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage {
+		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage || asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart {
 			count++
 		}
 	}

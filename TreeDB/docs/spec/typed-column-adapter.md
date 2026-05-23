@@ -1,21 +1,27 @@
-# Typed-Column Adapter (#1754)
+# Typed-Column Adapter and Durable Scalar Publication (#1754/#1755)
 
-Status: current implementation note for issue #1754 under parent tracker #1744.
+Status: current implementation note for issues #1754 and #1755 under parent tracker #1744.
 
 `TreeDB/collections/typed_column_adapter.go` adapts the transplanted
 `TreeDB/internal/typedcolumn` data plane to TreeDB typed-storage field metadata,
 legacy `ColumnStoreValueType` compatibility names, retained-payload test seams,
 and #1736 `mappedresource` section access.
 
-This adapter is **non-authoritative**. It does not publish collection manifests,
-write recovery metadata, replay WAL state, switch query planning, or enable
-`typed_column_part` ownership in production. Existing `ColumnStoreConfig`
-metadata still resolves to `typed_row_asset` unless tests construct explicit
-`TypedStorageOwnerColumnPart` fields for this adapter seam.
+The #1754 adapter seam maps TreeDB metadata to `typedcolumn` parts. Issue #1755
+adds an opt-in durable scalar publication path for explicit
+`typed_column_part` owners: collection manifests can now reference immutable
+`tcs1_typed_column_part` assets beside the compatibility typed-row `TCPA` row
+locator/typed-row asset. Existing `ColumnStoreConfig` metadata still resolves to
+`typed_row_asset` unless a column explicitly sets `Owner:
+typed_column_part`.
+
+#1755 remains scoped: it does not switch query planning or physical predicate
+scans to typed-column sections, does not publish vector/adjacency sections, and
+does not make derived accelerators authoritative.
 
 ## Type Matrix
 
-| TreeDB declared type | #1754 adapter status | Representation |
+| TreeDB declared type | adapter / #1755 publication status | Representation |
 | --- | --- | --- |
 | `bool` | represented | `typedcolumn.ColumnTypeBool` bitpack/RLE encoding. |
 | `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint encoding. |
@@ -25,10 +31,25 @@ metadata still resolves to `typed_row_asset` unless tests construct explicit
 | `float32_vector` | fail closed | Dense vector typed-column sections are staged to #1756. |
 | `adjacency_list` | fail closed | Adjacency typed-column sections are staged to #1756. |
 
-Nullable/missing adapter values fail closed in #1754 because the transplanted
-part builder does not yet have a TreeDB nullable typed-column representation.
-Publication/reopen work in #1755 and vector/adjacency work in #1756 may extend
-this matrix without changing the existing typed-row compatibility path.
+Nullable/missing adapter values still fail closed because the transplanted part
+builder does not yet have a TreeDB nullable typed-column representation. Vector
+and adjacency work remains staged to #1756.
+
+## Durable Publication / Reconstruction Seam (#1755)
+
+For inserts and updates with scalar `typed_column_part` owners, TreeDB writes:
+
+- a compatibility `tcs1_part_image`/`TCPA` typed-row asset containing row IDs,
+  tombstones, and any `typed_row_asset` owned fields;
+- a `tcs1_typed_column_part` asset containing the authoritative scalar
+  `typed_column_part` values for the same generation.
+
+Deletes publish only a typed-row tombstone asset. Retained-payload
+reconstruction finds the latest visible typed-row locator for a document ID and,
+when that locator's generation has typed-column fields, reads the matching
+`typed_column_part` by row index. Reopen/recovery uses the manifest refs and
+existing typed asset manager paths; typed-column refs participate in reachability
+and rewrite/GC eligibility as durable typed-storage assets.
 
 ## Resource Seam
 
@@ -36,7 +57,8 @@ this matrix without changing the existing typed-row compatibility path.
 issue #1736 `mappedresource.Manager` handles. Tests cover file-backed mmap-or-heap
 reads and heap reads for the same section bytes. Fixed-width adapter reads use
 mappedresource typed-view validation for `[]int64`, `[]float32`, `[]float64`,
-and `[]uint32` buffers.
+and `[]uint32` buffers. Durable typed-column asset reads use the typed asset read
+cache with `mappedresource.ClassTypedColumnAsset` when a manager is supplied.
 
 ## Retained Payload Seam
 
@@ -47,6 +69,7 @@ production retained-payload behavior.
 ## Boundary
 
 The only production `TreeDB/collections` file that imports
-`TreeDB/internal/typedcolumn` in issue #1754 should be the adapter seam. Later
-PRs must keep publication/reopen/recovery wiring in #1755 and query/vector
-integration in #1756/#1757 rather than hiding those changes in the adapter.
+`TreeDB/internal/typedcolumn` is the adapter seam. Publication/reopen logic calls
+through that seam. Query/vector integration remains deferred to #1756/#1757, and
+`typed_column_part` supports only the scalar matrix above until those issues
+land.
