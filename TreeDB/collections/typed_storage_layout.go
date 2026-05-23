@@ -313,11 +313,13 @@ func typedStorageLayoutHasTypedAssetOwnedFields(layout *TypedStorageLayout) bool
 		return false
 	}
 	for _, field := range layout.Fields {
-		switch field.Owner {
-		case "", TypedStorageOwnerRowAsset, TypedStorageOwnerColumnPart:
-			return true
-		case TypedStorageOwnerRetainedDocument, "document_payload":
+		owner, err := normalizeTypedStorageFieldOwner(field.Owner)
+		if err != nil {
 			continue
+		}
+		switch owner {
+		case TypedStorageOwnerRowAsset, TypedStorageOwnerColumnPart:
+			return true
 		}
 	}
 	return false
