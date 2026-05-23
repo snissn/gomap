@@ -63,25 +63,33 @@ rows=8192:   ~0.91-0.98 ms   (~8-9M dots/sec)
 rows=65536:  ~7.9-8.1 ms     (~8M dots/sec)
 ```
 
-That host has an RTX 3060 Ti installed, but the local NVIDIA driver/runtime was
-mismatched while this benchmark was written, so CUDA cases skipped with:
+On the same host, using an RTX 3060 Ti with matching user-space driver
+libraries, the CUDA/cuBLAS candidates measured:
 
 ```text
-cudaGetDeviceCount: forward compatibility was attempted on non supported HW
+rows=128:    device-resident SGEMV ~3.4-3.5 us/op   (~36-38M dots/sec)
+             upload-query SGEMV    ~20 us/op        (~6M dots/sec)
+             device-resident SGEMM ~3.4-3.5 us/op   (~36-38M dots/sec)
+rows=1024:   device-resident SGEMV ~10.2-10.3 us/op (~99-100M dots/sec)
+             upload-query SGEMV    ~22 us/op        (~46M dots/sec)
+             device-resident SGEMM ~10.3 us/op      (~99M dots/sec)
+rows=8192:   device-resident SGEMV ~65 us/op        (~125M dots/sec)
+             upload-query SGEMV    ~86 us/op        (~95M dots/sec)
+             device-resident SGEMM ~65 us/op        (~125M dots/sec)
+rows=65536:  device-resident SGEMV ~0.50 ms/op      (~128-131M dots/sec)
+             upload-query SGEMV    ~0.55 ms/op      (~119M dots/sec)
+             device-resident SGEMM ~0.50 ms/op      (~131M dots/sec)
 ```
 
-The roofline for a device-resident GPU path is nevertheless useful. A 3060 Ti is
-roughly a 448 GB/s memory-bandwidth device. Scoring one query against 65,536
-rows of 768 float32s reads about 201 MB of row data, so a bandwidth-limited
-ideal is about 2.2k such tournaments/sec, or about 145M 768d dots/sec. That is
-roughly an 18x raw dot-throughput ceiling over the local CPU baseline for the
-large-row case. The CUDA/cuBLAS tournament exists to replace this roofline with
-measured numbers on a working CUDA host.
+The GPU win is clearest for large, device-resident batches. At 65,536 rows, the
+CUDA path is about 16x faster than the local CPU baseline (~0.50 ms vs ~8 ms).
+At 128 rows, launch/library overhead dominates and the device-resident GPU case
+is only modestly faster; uploading/downloading per query is slower than CPU.
 
 For native in-memory HNSW at `100k docs / 768 dims / ef_search=128`, prior
 single-thread no-document search measured about `0.83-0.92 ms/search`, or about
 `1.1k-1.2k searches/sec`, with roughly 63% of CPU samples in dot products. If a
 future GPU path can batch the graph scoring work into device-resident row groups
-and approach ~145M 768d dots/sec, the dot stage for a search that scores ~2k
-vectors would be around 14 us. End-to-end search would then be dominated by CPU
+at ~125-131M 768d dots/sec, the dot stage for a search that scores ~2k vectors
+would be around 15-16 us. End-to-end search would then be dominated by CPU
 frontier traversal and GPU scheduling/transfer unless those are also batched.
