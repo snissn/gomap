@@ -214,7 +214,7 @@ func TestColumnVectorGraphTypedColumnVectorCorruptPartFallsBack1782(t *testing.T
 	}
 }
 
-func TestColumnVectorGraphTypedColumnVectorUnsupportedOwnerFallsBack1782(t *testing.T) {
+func TestColumnVectorGraphTypedColumnVectorNonColumnPartOwnerUsesGraphVectors1782(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0, 1, 0}},
@@ -228,11 +228,28 @@ func TestColumnVectorGraphTypedColumnVectorUnsupportedOwnerFallsBack1782(t *test
 	mutateCurrentSnapshotColumnStoreForTest1782(t, d, col, func(cfg *ColumnStoreConfig) {
 		for i := range cfg.Columns {
 			if cfg.Columns[i].Path == def.Field {
-				cfg.Columns[i].Nullable = true
+				cfg.Columns[i].Owner = TypedStorageOwnerRowAsset
 			}
 		}
 	})
-	assertTypedColumnVectorFallbackSearch1782(t, col, def, rows)
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader non-column-part owner: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if reader.typedVectorSource != nil || reader.typedVectorFallbackReason != "" {
+		t.Fatalf("typed source active=%v fallback=%q want ordinary graph-vector path for non-column-part owner", reader.typedVectorSource != nil, reader.typedVectorFallbackReason)
+	}
+	query := []float32{0, 0, 1}
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: len(rows)}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine non-column-part owner: %v", err)
+	}
+	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
+	if stats.TypedColumnFallbacks != 0 || stats.VectorDirectViews != 0 || stats.VectorScratchDecodes == 0 {
+		t.Fatalf("stats=%+v want ordinary graph row vector scratch decodes", stats)
+	}
 }
 
 func TestColumnVectorGraphTypedColumnVectorTruncatedRefFailsClosed1782(t *testing.T) {

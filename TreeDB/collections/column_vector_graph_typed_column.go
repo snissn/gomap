@@ -107,6 +107,12 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		return nil, err
 	}
 	locations := make([]columnVectorGraphTypedColumnVectorLocation, len(graphIDs))
+	// The #1782 vector source is intentionally limited to the current insert-only
+	// publication shape: one physical row asset and one typed_column_part per
+	// manifest generation. Multipart lifecycle/compaction is deferred to #1787;
+	// columnVectorGraphTypedColumnPhysicalLocations and
+	// typedColumnPartRefsByGenerationFromManifestRecords fail closed if the
+	// manifest violates that shape.
 	usedGenerations := make(map[uint64]struct{})
 	for ordinal, id := range graphIDs {
 		loc, ok := physicalLocations[string(id)]
@@ -255,6 +261,9 @@ func (c *Collection) columnVectorGraphTypedColumnPhysicalLocations(collection st
 		}
 		if asset.Reason != ColumnPublishOperationInsert {
 			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source requires insert-only physical refs, got %s", asset.Reason)
+		}
+		if _, exists := rowsByGeneration[asset.Ref.Generation]; exists {
+			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source generation=%d has multiple physical row parts; multipart typed-column vector graph reads are deferred", asset.Ref.Generation)
 		}
 		raw, err := readCache.read(asset.Ref, scratch)
 		if err != nil {

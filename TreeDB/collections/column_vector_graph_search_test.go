@@ -811,6 +811,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalAdjacencyDirectViews atomic.Uint64
 	var totalVectorDirectViews atomic.Uint64
 	var totalVectorScratchDecodes atomic.Uint64
+	var totalTypedColumnMappedBytes atomic.Uint64
+	var totalTypedColumnHeapCopyBytes atomic.Uint64
+	var totalTypedColumnDecodedBytes atomic.Uint64
+	var totalTypedColumnActiveHandles atomic.Int64
+	var totalTypedColumnDeniedResources atomic.Uint64
 	var nextWorker atomic.Uint64
 	b.SetParallelism(1) // Keep one prewarmed reader/scratch per RunParallel worker.
 	b.ReportAllocs()
@@ -855,6 +860,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
 			localStats.VectorDirectViews += stats.VectorDirectViews
 			localStats.VectorScratchDecodes += stats.VectorScratchDecodes
+			localStats.TypedColumnMappedBytes = stats.TypedColumnMappedBytes
+			localStats.TypedColumnHeapCopyBytes = stats.TypedColumnHeapCopyBytes
+			localStats.TypedColumnDecodedBytes = stats.TypedColumnDecodedBytes
+			localStats.TypedColumnActiveHandles = stats.TypedColumnActiveHandles
+			localStats.TypedColumnDeniedResources = stats.TypedColumnDeniedResources
 		}
 		sink.Add(localSink)
 		totalCandidates.Add(localStats.Candidates)
@@ -872,6 +882,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalAdjacencyDirectViews.Add(localStats.AdjacencyDirectViews)
 		totalVectorDirectViews.Add(localStats.VectorDirectViews)
 		totalVectorScratchDecodes.Add(localStats.VectorScratchDecodes)
+		totalTypedColumnMappedBytes.Add(localStats.TypedColumnMappedBytes)
+		totalTypedColumnHeapCopyBytes.Add(localStats.TypedColumnHeapCopyBytes)
+		totalTypedColumnDecodedBytes.Add(localStats.TypedColumnDecodedBytes)
+		totalTypedColumnActiveHandles.Add(localStats.TypedColumnActiveHandles)
+		totalTypedColumnDeniedResources.Add(localStats.TypedColumnDeniedResources)
 	})
 	b.StopTimer()
 	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
@@ -885,21 +900,26 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		stats = addColumnPhysicalRowReaderStatsV3(stats, worker.reader.Stats())
 	}
 	reportColumnGraphNativeSearchBenchMetricsV3(b, b.N, baseStats, stats, columnVectorGraphNativeSearchStats{
-		Candidates:              totalCandidates.Load(),
-		Edges:                   totalEdges.Load(),
-		CandidateFetches:        totalCandidateFetches.Load(),
-		ExpansionFetches:        totalExpansionFetches.Load(),
-		ResultFetches:           totalResultFetches.Load(),
-		ScoreBatches:            totalScoreBatches.Load(),
-		OrdinalsGrouped:         totalOrdinalsGrouped.Load(),
-		BlockViewHits:           totalBlockViewHits.Load(),
-		BlockViewMisses:         totalBlockViewMisses.Load(),
-		BlockViewBuilds:         totalBlockViewBuilds.Load(),
-		AdjacencyExpansions:     totalAdjacencyExpansions.Load(),
-		AdjacencyScratchDecodes: totalAdjacencyScratchDecodes.Load(),
-		AdjacencyDirectViews:    totalAdjacencyDirectViews.Load(),
-		VectorDirectViews:       totalVectorDirectViews.Load(),
-		VectorScratchDecodes:    totalVectorScratchDecodes.Load(),
+		Candidates:                 totalCandidates.Load(),
+		Edges:                      totalEdges.Load(),
+		CandidateFetches:           totalCandidateFetches.Load(),
+		ExpansionFetches:           totalExpansionFetches.Load(),
+		ResultFetches:              totalResultFetches.Load(),
+		ScoreBatches:               totalScoreBatches.Load(),
+		OrdinalsGrouped:            totalOrdinalsGrouped.Load(),
+		BlockViewHits:              totalBlockViewHits.Load(),
+		BlockViewMisses:            totalBlockViewMisses.Load(),
+		BlockViewBuilds:            totalBlockViewBuilds.Load(),
+		AdjacencyExpansions:        totalAdjacencyExpansions.Load(),
+		AdjacencyScratchDecodes:    totalAdjacencyScratchDecodes.Load(),
+		AdjacencyDirectViews:       totalAdjacencyDirectViews.Load(),
+		VectorDirectViews:          totalVectorDirectViews.Load(),
+		VectorScratchDecodes:       totalVectorScratchDecodes.Load(),
+		TypedColumnMappedBytes:     totalTypedColumnMappedBytes.Load(),
+		TypedColumnHeapCopyBytes:   totalTypedColumnHeapCopyBytes.Load(),
+		TypedColumnDecodedBytes:    totalTypedColumnDecodedBytes.Load(),
+		TypedColumnActiveHandles:   totalTypedColumnActiveHandles.Load(),
+		TypedColumnDeniedResources: totalTypedColumnDeniedResources.Load(),
 	})
 }
 

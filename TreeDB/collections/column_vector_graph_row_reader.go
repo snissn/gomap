@@ -423,12 +423,17 @@ func (r *columnVectorGraphPhysicalRowReader) nativeGraphRowFromBlock(block *colu
 	scratch.Float32Values = scratch.Float32Values[:0]
 	scratch.Uint32Values = scratch.Uint32Values[:0]
 
-	vector, err := r.readNativeGraphVector(&cur, block.version, ordinal, scratch)
-	if err != nil {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
-	}
-	if typedVector, _, ok := r.typedVectorForOrdinal(ordinal); ok {
-		vector = typedVector
+	vector, _, typedVectorOK := r.typedVectorForOrdinal(ordinal)
+	if typedVectorOK {
+		if err := r.skipNativeGraphVector(&cur, block.version, ordinal); err != nil {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+		}
+	} else {
+		var err error
+		vector, err = r.readNativeGraphVector(&cur, block.version, ordinal, scratch)
+		if err != nil {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+		}
 	}
 	invNorm, err := r.readNativeGraphInvNorm(&cur, block.version, ordinal)
 	if err != nil {
@@ -496,6 +501,22 @@ func (r *columnVectorGraphPhysicalRowReader) readNativeGraphVector(cur *manifest
 	}
 	cur.pos = end
 	return scratch.Float32Values[base:], nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) skipNativeGraphVector(cur *manifestCursor, version uint16, ordinal int) error {
+	if err := r.readNativeGraphValueHeader(cur, version, ordinal, 0, ColumnStoreValueFloat32Vector); err != nil {
+		return err
+	}
+	n := cur.u64()
+	if cur.err != nil {
+		return cur.err
+	}
+	byteLen, ok := cur.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
+		return cur.err
+	}
+	cur.pos += int(byteLen)
+	return nil
 }
 
 func (r *columnVectorGraphPhysicalRowReader) readNativeGraphInvNorm(cur *manifestCursor, version uint16, ordinal int) (float32, error) {
@@ -578,21 +599,30 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(ro
 	vector := row.Values[columnVectorGraphPhysicalRowValueVector]
 	invNorm := row.Values[columnVectorGraphPhysicalRowValueInvNorm]
 	adjacency := row.Values[columnVectorGraphPhysicalRowValueAdjacency]
-	if vector.Type != ColumnStoreValueFloat32Vector || invNorm.Type != ColumnStoreValueFloat32 || adjacency.Type != ColumnStoreValueAdjacencyList {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types: vector=%q inv_norm=%q adjacency=%q", r.def.Name, row.Ordinal, vector.Type, invNorm.Type, adjacency.Type)
+	if invNorm.Type != ColumnStoreValueFloat32 || adjacency.Type != ColumnStoreValueAdjacencyList {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types: inv_norm=%q adjacency=%q", r.def.Name, row.Ordinal, invNorm.Type, adjacency.Type)
 	}
-	if !vector.Present || !invNorm.Present || !adjacency.Present {
+	if !invNorm.Present || !adjacency.Present {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", r.def.Name, row.Ordinal)
 	}
-	if vector.Null || invNorm.Null || adjacency.Null {
+	if invNorm.Null || adjacency.Null {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
 	}
-	if len(vector.Float32Vector) != r.def.Dimensions {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", r.def.Name, row.Ordinal, len(vector.Float32Vector), r.def.Dimensions)
-	}
-	vectorValues := vector.Float32Vector
-	if typedVector, _, ok := r.typedVectorForOrdinal(row.Ordinal); ok {
-		vectorValues = typedVector
+	vectorValues, _, typedVectorOK := r.typedVectorForOrdinal(row.Ordinal)
+	if !typedVectorOK {
+		if vector.Type != ColumnStoreValueFloat32Vector {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph vector type: vector=%q", r.def.Name, row.Ordinal, vector.Type)
+		}
+		if !vector.Present {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", r.def.Name, row.Ordinal)
+		}
+		if vector.Null {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
+		}
+		if len(vector.Float32Vector) != r.def.Dimensions {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", r.def.Name, row.Ordinal, len(vector.Float32Vector), r.def.Dimensions)
+		}
+		vectorValues = vector.Float32Vector
 	}
 	if invNorm.Float32 <= 0 || math.IsNaN(float64(invNorm.Float32)) || math.IsInf(float64(invNorm.Float32), 0) {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", r.def.Name, row.Ordinal, invNorm.Float32)
