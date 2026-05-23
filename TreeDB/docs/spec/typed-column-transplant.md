@@ -56,8 +56,8 @@ typed-row physical asset format.
 
 ## Boundary
 
-`TreeDB/internal/typedcolumn` must remain a data-plane package until the adapter
-PRs land. In issue `#1753`, it must not be imported by
-`TreeDB/collections` production files, and it must not change
-`ResolveTypedStorageLayout` fail-closed behavior for authoritative
-`typed_column_part` ownership.
+`TreeDB/internal/typedcolumn` remains a data-plane package. Issue `#1753`
+forbade production `TreeDB/collections` imports; issue `#1754` adds the narrow
+`typed_column_adapter.go` seam for metadata/resource adaptation. The adapter seam
+still must not publish manifests or change `ResolveTypedStorageLayout`
+fail-closed behavior for authoritative `typed_column_part` ownership.

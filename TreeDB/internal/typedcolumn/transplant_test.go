@@ -381,6 +381,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
+	allowedAdapter := filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go"))
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -394,9 +395,13 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			t.Fatalf("parse %s: %v", path, err)
 		}
 		for _, imp := range file.Imports {
-			if strings.Trim(imp.Path.Value, "\"") == "github.com/snissn/gomap/TreeDB/internal/typedcolumn" {
-				t.Fatalf("production collections import typedcolumn in %s; #1753 must not publish/control-plane integrate it", path)
+			if strings.Trim(imp.Path.Value, "\"") != "github.com/snissn/gomap/TreeDB/internal/typedcolumn" {
+				continue
 			}
+			if filepath.Clean(path) == allowedAdapter {
+				continue
+			}
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in the #1754 adapter seam", path)
 		}
 		return nil
 	})
