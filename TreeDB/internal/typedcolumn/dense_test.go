@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -82,6 +83,36 @@ func TestTypedColumnAdjacencyMisalignedFallsBackOrFailsClosed(t *testing.T) {
 	}
 	if !slices.Equal(values, []uint32{1, 2, 0, 2}) {
 		t.Fatalf("fallback adjacency=%v", values)
+	}
+}
+
+func TestTypedColumnVectorLogicalPrimaryKeyFailsClosed1756(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("BuildColumnPart panicked for vector logical primary key: %v", r)
+		}
+	}()
+	_, err := BuildColumnPart(9, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "embedding", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 3},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"embedding"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:           2,
+		Columns:        map[string][]int64{"id": {10, 11}},
+		Float32Vectors: map[string][]float32{"embedding": {1, 0.5, -0.25, 2, 3, 4}},
+	})
+	if err == nil {
+		t.Fatalf("BuildColumnPart err=nil for vector logical primary key")
+	}
+	if !strings.Contains(err.Error(), "logical primary key column embedding type=float32_vector is not scalar") {
+		t.Fatalf("BuildColumnPart err=%v, want vector logical primary key fail-closed", err)
 	}
 }
 

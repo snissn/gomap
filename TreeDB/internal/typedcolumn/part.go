@@ -595,8 +595,12 @@ func normalizeOptions(opts Options) (Options, error) {
 		columnsByName[def.Name] = def
 		opts.Columns[i] = def
 	}
-	if _, ok := seen[opts.LogicalPrimaryKey.Columns[0]]; !ok {
+	primaryKeyDefinition, ok := columnsByName[opts.LogicalPrimaryKey.Columns[0]]
+	if !ok {
 		return Options{}, fmt.Errorf("typedcolumn: logical primary key column %s is not declared", opts.LogicalPrimaryKey.Columns[0])
+	}
+	if primaryKeyDefinition.Type == ColumnTypeFloat32Vector || primaryKeyDefinition.Type == ColumnTypeAdjacencyList {
+		return Options{}, fmt.Errorf("typedcolumn: logical primary key column %s type=%s is not scalar", opts.LogicalPrimaryKey.Columns[0], primaryKeyDefinition.Type)
 	}
 	for i := range opts.SortKey.Columns {
 		c := &opts.SortKey.Columns[i]
