@@ -162,10 +162,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     `TreeDB/internal/typedcolumn` data-plane transplant from
     `experiments/colgranule`.
 - `TreeDB/docs/spec/typed-column-adapter.md`
-  - issues #1754/#1755 implementation note for the adapter from TreeDB
+  - issues #1754/#1755/#1756 implementation note for the adapter from TreeDB
     typed-storage field metadata and #1736 mapped resources to the transplanted
-    typed-column data plane, including opt-in durable scalar publication and
-    reconstruction.
+    typed-column data plane, including opt-in durable scalar and fixed-dimension
+    vector publication and reconstruction.
 
 ## Canonical Ownership
 

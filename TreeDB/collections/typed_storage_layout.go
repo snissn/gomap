@@ -415,14 +415,13 @@ func (l TypedStorageLayout) HasTypedColumnPartOwners() bool {
 }
 
 // EnsureReadSupported fails closed for typed_column_part owners whose value
-// types are not represented by the current durable typed-column scalar path.
+// types are not represented by the current durable typed-column path.
 func (l TypedStorageLayout) EnsureReadSupported() error {
 	return l.ensureTypedColumnPartSupported()
 }
 
 // EnsurePublicationSupported fails closed for typed_column_part owners whose
-// value types are not represented by the current durable typed-column scalar
-// path.
+// value types are not represented by the current durable typed-column path.
 func (l TypedStorageLayout) EnsurePublicationSupported() error {
 	return l.ensureTypedColumnPartSupported()
 }
@@ -437,8 +436,15 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 			if field.Nullable {
 				return fmt.Errorf("%w: nullable field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
 			}
-		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
-			return fmt.Errorf("%w: value_type %q for field %q is deferred", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+		case ColumnStoreValueFloat32Vector:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+			if field.VectorDims <= 0 {
+				return fmt.Errorf("%w: float32_vector field %q requires vector_dims", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+		case ColumnStoreValueAdjacencyList:
+			return fmt.Errorf("%w: value_type %q for field %q is deferred until fixed-degree adjacency metadata exists", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
 		default:
 			return fmt.Errorf("%w: value_type %q for field %q", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
 		}

@@ -180,8 +180,12 @@ func normalizeAggregateMetadataDefinition(def AggregateMetadataDefinition, colum
 		if predicate.Op != AggregateMetadataPredicateEq {
 			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s predicate %d op %s is unsupported", def.Name, i, predicate.Op)
 		}
-		if _, ok := columns[predicate.Column]; !ok {
+		predicateDef, ok := columns[predicate.Column]
+		if !ok {
 			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s predicate column %s is not declared", def.Name, predicate.Column)
+		}
+		if predicateDef.Type == ColumnTypeFloat32Vector || predicateDef.Type == ColumnTypeAdjacencyList {
+			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s predicate column %s type=%s is not scalar", def.Name, predicate.Column, predicateDef.Type)
 		}
 		if _, ok := seenPredicates[predicate.Column]; ok {
 			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s duplicate predicate column %s", def.Name, predicate.Column)

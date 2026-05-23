@@ -25,6 +25,8 @@ const (
 	EncodingNullableInt64
 	EncodingBoolBitpackRLE
 	EncodingLowCardinalityUint32
+	EncodingRawFloat32Vector
+	EncodingRawUint32Dense
 )
 
 func (e Encoding) String() string {
@@ -41,6 +43,10 @@ func (e Encoding) String() string {
 		return "bool_bitpack_rle"
 	case EncodingLowCardinalityUint32:
 		return "low_cardinality_uint32"
+	case EncodingRawFloat32Vector:
+		return "raw_float32_vector"
+	case EncodingRawUint32Dense:
+		return "raw_uint32_dense"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}

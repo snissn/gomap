@@ -17,7 +17,7 @@ Required vocabulary:
 | --- | --- |
 | `typed storage` | Umbrella subsystem for typed-row storage and typed-column storage. |
 | `typed-row storage` / `typed_row_asset` | Current row-record physical asset path for declared typed values. |
-| `typed-column storage` / `typed_column_part` | Opt-in true sectioned, column-major part assets transplanted from `experiments/colgranule` (scalar durable publication starts in #1755). |
+| `typed-column storage` / `typed_column_part` | Opt-in true sectioned, column-major part assets transplanted from `experiments/colgranule` (scalar durable publication starts in #1755; fixed-dimension vector sections start in #1756). |
 | `retained document` / `document_payload` | Flexible document owner or retained residual payload used for reconstruction. |
 | `derived accelerator` | Non-authoritative duplicate, index, cache, or metadata derived from an authoritative owner. |
 
@@ -51,9 +51,10 @@ declared columns with no explicit typed-storage owner resolve to
 `typed_row_asset`. `ColumnRetainedPayloadFull` is compatibility duplication in
 `document_payload`; it does not make the retained document a second
 authoritative owner for declared typed fields. `typed_column_part` ownership may
-be represented in metadata; after #1755, scalar bool/int64/float32/double/string
-owners have opt-in durable publication and reconstruction, while unsupported
-value types still fail closed.
+be represented in metadata; after #1755/#1756, scalar
+bool/int64/float32/double/string and fixed-dimension `float32_vector` owners have
+opt-in durable publication and reconstruction, while unsupported value types
+still fail closed.
 
 The resolver is pure metadata only: it must not perform filesystem IO, mmap,
 section decode, DB mutation, asset open, publication, query planning, or durable
@@ -97,17 +98,17 @@ compatibility input, but existing `ColumnStoreConfig` metadata still resolves to
 
 ## PR 5 Durable Scalar Typed-Column Publication
 
-Issue #1755 lets explicit scalar `typed_column_part` owners publish durable
-`tcs1_typed_column_part` assets and reconstruct retained-payload documents after
-reopen. A compatibility `typed_row_asset`/`TCPA` asset remains present per
-mutation generation as the row-ID/tombstone locator and owner of any
-`typed_row_asset` fields. The invariant remains one authoritative owner per
-logical field per generation: retained document, typed-row asset, or typed-column
-part.
+Issues #1755/#1756 let explicit scalar and fixed-dimension `float32_vector`
+`typed_column_part` owners publish durable `tcs1_typed_column_part` assets and
+reconstruct retained-payload documents after reopen. A compatibility
+`typed_row_asset`/`TCPA` asset remains present per mutation generation as the
+row-ID/tombstone locator and owner of any `typed_row_asset` fields. The invariant
+remains one authoritative owner per logical field per generation: retained
+document, typed-row asset, or typed-column part.
 
-The #1755 path is intentionally not the query/vector switch. Vector and
-adjacency section representation remains #1756, and production predicate scan /
-query integration remains #1757.
+The #1756 path is intentionally not the native vector graph/query switch.
+Production adjacency publication and predicate scan / query integration remain
+later #1744 children (#1757 for the scalar predicate MVP).
 
 ## Current Derived Accelerator Classifications
 
