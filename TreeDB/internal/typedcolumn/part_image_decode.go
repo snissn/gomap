@@ -1364,9 +1364,17 @@ func (i ColumnPartImage) validateDictionariesForDescriptor(dictionaries map[stri
 	}
 	lowCardinality := make(map[string]uint32)
 	for name, column := range columns {
-		if column.Definition.Type == ColumnTypeLowCardinalityCode {
-			lowCardinality[name] = column.Definition.Cardinality
+		if column.Definition.Type != ColumnTypeLowCardinalityCode {
+			continue
 		}
+		cardinality, err := imageColumnCardinalityForDescriptor(ColumnPartColumnDescriptor{
+			Name: name,
+			Type: column.Definition.Type,
+		}, column)
+		if err != nil {
+			return err
+		}
+		lowCardinality[name] = cardinality
 	}
 	for name, values := range dictionaries {
 		cardinality, ok := lowCardinality[name]
