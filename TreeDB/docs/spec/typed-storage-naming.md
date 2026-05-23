@@ -86,6 +86,16 @@ make `typed_column_part` an authoritative owner yet. The transplant deliberately
 uses package-local `Options`/`Batch` names instead of adding new public or
 internal `ColumnStore*` umbrella names.
 
+## PR 4 Typed-Column Adapter
+
+Issue #1754 introduces `TreeDB/collections/typed_column_adapter.go` as a
+non-authoritative adapter seam from TreeDB typed-storage metadata and #1736
+resource handles to `TreeDB/internal/typedcolumn`. It may use
+`ColumnStoreValueType` as compatibility input, but existing `ColumnStoreConfig`
+metadata still resolves to `typed_row_asset` unless tests construct explicit
+`typed_column_part` fields. This adapter must not publish production manifests,
+change query planning, or enable authoritative `typed_column_part` reads.
+
 ## Current Derived Accelerator Classifications
 
 These existing assets are derived accelerators unless a future format explicitly

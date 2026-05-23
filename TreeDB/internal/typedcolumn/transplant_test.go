@@ -394,9 +394,13 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			t.Fatalf("parse %s: %v", path, err)
 		}
 		for _, imp := range file.Imports {
-			if strings.Trim(imp.Path.Value, "\"") == "github.com/snissn/gomap/TreeDB/internal/typedcolumn" {
-				t.Fatalf("production collections import typedcolumn in %s; #1753 must not publish/control-plane integrate it", path)
+			if strings.Trim(imp.Path.Value, "\"") != "github.com/snissn/gomap/TreeDB/internal/typedcolumn" {
+				continue
 			}
+			if filepath.Base(path) == "typed_column_adapter.go" {
+				continue
+			}
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in the #1754 adapter seam", path)
 		}
 		return nil
 	})
