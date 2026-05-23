@@ -30,6 +30,26 @@ Authoritative field owners are only:
 `derived_accelerator` is a classification only. It is not an authoritative field
 owner and must not silently become a second source of truth for a logical field.
 
+## Code Vocabulary Contract
+
+The naming regression tests compare this table to Go constants so docs cannot
+drift from the runtime vocabulary strings.
+
+| Go symbol or alias | Documented string | Scope |
+| --- | --- | --- |
+| `TypedStorageOwnerRetainedDocument` | `retained_document` | Authoritative retained-document owner. |
+| `document_payload` alias | `document_payload` | Retained-payload/document-owner wording. |
+| `TypedStorageOwnerRowAsset` | `typed_row_asset` | Authoritative typed-row asset owner. |
+| `TypedStorageOwnerColumnPart` | `typed_column_part` | Authoritative typed-column part owner. |
+| `TypedStorageAssetClassDerivedAccelerator` | `derived_accelerator` | Non-authoritative sidecar classification. |
+| `ColumnStoreValueBool` | `bool` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueInt64` | `int64` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueFloat32` | `float32` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueDouble` | `double` | Legacy public declared-type compatibility name; docs may also say `float64`. |
+| `ColumnStoreValueString` | `string` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueAdjacencyList` | `adjacency_list` | Legacy public declared-type compatibility name. |
+
 ## PR 1 Layout Resolver Contract
 
 Issue #1751 adds the pure-metadata resolver surface that turns collection
@@ -136,6 +156,11 @@ The repository currently has many legacy `ColumnStore*`, "column store", and
 that touches a specific legacy occurrence must include the exact touched
 occurrence in its PR inventory.
 
+`TestTypedStorageLegacyNameAllowlistIsComplete` is the executable inventory for
+this contract: every match from the audit command must map to one of the
+classifications below, and line/occurrence count drift must update the
+classification explanation in the PR.
+
 | Path | Symbol/text | Current meaning | Classification | Action | Deferral reason |
 | --- | --- | --- | --- | --- | --- |
 | `TreeDB/collections/api.go` | `ColumnStoreConfig`, `ColumnStoreColumn`, `ColumnStoreValueType`, retained-payload options | Public compatibility configuration for declared typed fields and retained payload behavior. | compatibility-retained | Keep as compatibility input normalized by the typed-storage layout resolver. | Public API compatibility; do not remove in PR 2. |
@@ -160,3 +185,12 @@ This naming scaffold must preserve existing runtime behavior:
 - no query planner change;
 - no production data-path behavior change;
 - no #1736 resource-manager behavior change.
+
+## Naming Regression Test Boundary
+
+Issue #1773 adds regression coverage for this naming contract only. It is
+limited to docs, tests, and process evidence: repo-scan allowlist updates,
+spec link checks, and code-vocabulary alignment checks. A future exception that
+needs production behavior, public API, storage format, query planning, or
+publication changes must move to a separate implementation tracker and document
+why this naming guard is insufficient.
