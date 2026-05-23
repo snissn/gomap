@@ -227,6 +227,31 @@ func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
 	}
 }
 
+func TestTypedColumnManifestSnapshotViewAcceptsTypedPartRefs1755(t *testing.T) {
+	d, col, _ := setupSingleTypedColumnPart1755(t)
+	defer func() { _ = d.Close() }()
+	id, ok := col.ColumnStoreCacheIdentity()
+	if !ok || id.ManifestRoot == 0 {
+		t.Fatalf("ColumnStoreCacheIdentity=%+v ok=%v want manifest root", id, ok)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	records, err := loadColumnManifestRecordsFromRoot(snap, id.ManifestRoot)
+	if err != nil {
+		t.Fatalf("loadColumnManifestRecordsFromRoot: %v", err)
+	}
+	snapshot, refs, mutationParts, err := decodeColumnManifestSnapshotViewForScan(records, col.Meta().Options.ColumnStore.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotViewForScan: %v", err)
+	}
+	if snapshot.ExpectedParts != 2 || len(refs) != 1 || refs[0].Ref.Kind != ColumnAssetKindTCS1PartImage || mutationParts != 0 {
+		t.Fatalf("snapshot expected_parts=%d refs=%+v mutationParts=%d; want one physical ref and typed part counted", snapshot.ExpectedParts, refs, mutationParts)
+	}
+}
+
 func TestTypedColumnReachabilityRefsExposedForMaintenance(t *testing.T) {
 	d, col, typedRef := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()

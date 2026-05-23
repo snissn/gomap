@@ -1308,7 +1308,7 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 		if err != nil {
 			return columnManifestSnapshot{}, nil, 0, err
 		}
-		if ref.Kind != ColumnAssetKindTCS1PartImage {
+		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 		}
 		if ref.Generation != keyGeneration {
@@ -1321,13 +1321,15 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 		if !ok {
 			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
-		livePartRows.add(ref.Generation, ref.PartID, rows)
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
+		if ref.Kind == ColumnAssetKindTCS1PartImage {
+			livePartRows.add(ref.Generation, ref.PartID, rows)
+			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
+			if operation != ColumnPublishOperationInsert {
+				mutationParts++
+			}
+		}
 		if ref.Generation == snapshot.Generation {
 			activeParts++
-		}
-		if operation != ColumnPublishOperationInsert {
-			mutationParts++
 		}
 	}
 	for _, record := range records {
