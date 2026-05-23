@@ -352,10 +352,10 @@ func TestTypedStorageDebugRowsUseCanonicalVocabularyOnly(t *testing.T) {
 				},
 			},
 			want: []string{
-				"time_us -> typed_row_asset",
-				"embedding -> typed_column_part",
 				"* -> retained_document(remainder)",
 				"document_payload -> compatibility_duplicate",
+				"embedding -> typed_column_part",
+				"time_us -> typed_row_asset",
 			},
 		},
 		{
@@ -376,15 +376,14 @@ func TestTypedStorageDebugRowsUseCanonicalVocabularyOnly(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NormalizeTypedStorageLayout: %v", err)
 			}
-			rows := strings.Join(layout.FieldOwnerDebugRows(), "\n")
-			for _, want := range tc.want {
-				if !strings.Contains(rows, want) {
-					t.Fatalf("status/debug rows missing %q in:\n%s", want, rows)
-				}
+			rows := layout.FieldOwnerDebugRows()
+			if !reflect.DeepEqual(rows, tc.want) {
+				t.Fatalf("status/debug rows = %v, want exact canonical rows %v", rows, tc.want)
 			}
+			joinedRows := strings.Join(rows, "\n")
 			for _, legacyUmbrella := range []string{"column " + "store", "column-" + "store", "Column" + "Store"} {
-				if strings.Contains(rows, legacyUmbrella) {
-					t.Fatalf("status/debug rows contain legacy umbrella %q in:\n%s", legacyUmbrella, rows)
+				if strings.Contains(joinedRows, legacyUmbrella) {
+					t.Fatalf("status/debug rows contain legacy umbrella %q in:\n%s", legacyUmbrella, joinedRows)
 				}
 			}
 		})
