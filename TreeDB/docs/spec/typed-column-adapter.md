@@ -15,7 +15,7 @@ locator/typed-row asset. Existing `ColumnStoreConfig` metadata still resolves to
 `typed_row_asset` unless a column explicitly sets `Owner:
 typed_column_part`.
 
-#1755 remains scoped: it does not switch query planning or physical predicate
+Issue `#1755` remains scoped: it does not switch query planning or physical predicate
 scans to typed-column sections, does not publish vector/adjacency sections, and
 does not make derived accelerators authoritative.
 

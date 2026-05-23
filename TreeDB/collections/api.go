@@ -18495,6 +18495,11 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 	}
 	visibleRows := visible.Rows
 	visiblePos := 0
+	var typedColumnCache map[uint64][]typedColumnAdapterRow
+	if columnStoreHasTypedColumnPartOwners(columnStoreConfig) {
+		typedColumnCache = make(map[uint64][]typedColumnAdapterRow)
+	}
+	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
 	for _, record := range records {
 		for visiblePos < len(visibleRows) && bytes.Compare(visibleRows[visiblePos].ID, record.ID) < 0 {
 			visiblePos++
@@ -18502,7 +18507,15 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 		if visiblePos >= len(visibleRows) || !bytes.Equal(visibleRows[visiblePos].ID, record.ID) {
 			return false, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(record.ID))
 		}
-		reconstructed, err := reconstructColumnDocumentFromVisibleRow(columnStoreConfig, record.Document, visibleRows[visiblePos])
+		typedValues, err := c.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, columnStoreConfig, visibleRows[visiblePos], typedColumnCache)
+		if err != nil {
+			return false, err
+		}
+		fullValues, err := mergeColumnReconstructionValues(columnStoreConfig, visibleRows[visiblePos].Values, typedValues.Values)
+		if err != nil {
+			return false, err
+		}
+		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(columnStoreConfig, record.Document, visibleRows[visiblePos], fullValues)
 		if err != nil {
 			return false, err
 		}

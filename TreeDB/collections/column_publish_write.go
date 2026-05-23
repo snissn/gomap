@@ -86,7 +86,7 @@ func requireColumnStoreWriteOperationSupported(meta CollectionMeta, operation Co
 	}
 	layout, err := ResolveTypedStorageLayout(meta)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: column-store write collection=%q operation=%q: %v", backenddb.ErrCommandWALRejected, meta.Name, operation, err)
 	}
 	if err := layout.EnsurePublicationSupported(); err != nil {
 		return fmt.Errorf("%w: column-store write collection=%q operation=%q: %v", backenddb.ErrCommandWALRejected, meta.Name, operation, err)

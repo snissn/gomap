@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -121,6 +122,44 @@ func TestTypedColumnReconstructionHybridOwners(t *testing.T) {
 	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
 }
 
+func TestTypedColumnReconstructionScanHybridOwners(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnPartCollection1755(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true,"payload":"alpha"}`),
+		[]byte(`{"time_us":2,"kind":"post","score":3.5,"flag":false,"payload":"beta"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	records, truncated, err := reopenedCol.ScanDocuments(10)
+	if err != nil {
+		t.Fatalf("ScanDocuments: %v", err)
+	}
+	if truncated || len(records) != 2 {
+		t.Fatalf("ScanDocuments truncated=%v records=%d want 2", truncated, len(records))
+	}
+	assertJSONEqualM13C(t, records[0].Document, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true,"payload":"alpha"}`))
+	assertJSONEqualM13C(t, records[1].Document, []byte(`{"time_us":2,"kind":"post","score":3.5,"flag":false,"payload":"beta"}`))
+}
+
 func TestTypedColumnPublicationRejectsOverlappingOwners(t *testing.T) {
 	_, err := NormalizeTypedStorageLayout(TypedStorageLayout{
 		Collection: "events",
@@ -129,8 +168,8 @@ func TestTypedColumnPublicationRejectsOverlappingOwners(t *testing.T) {
 			{Name: "score_column", Path: "score", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueDouble},
 		},
 	})
-	if err == nil {
-		t.Fatal("NormalizeTypedStorageLayout accepted overlapping authoritative owners")
+	if err == nil || !strings.Contains(err.Error(), "overlapping authoritative typed-storage owners") {
+		t.Fatalf("NormalizeTypedStorageLayout error=%v want overlapping owners rejection", err)
 	}
 }
 
@@ -138,8 +177,8 @@ func TestTypedColumnPublicationMissingAssetFailsClosed(t *testing.T) {
 	d, col, typedRef := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
 	removeTypedColumnAssetPayload1755(t, d, col, typedRef)
-	if got, err := col.Get([]byte("e1")); err == nil || got != nil {
-		t.Fatalf("Get with missing typed-column asset got=%s err=%v, want fail-closed error", got, err)
+	if got, err := col.Get([]byte("e1")); err == nil || got != nil || !strings.Contains(err.Error(), "typed-column reconstruction") {
+		t.Fatalf("Get with missing typed-column asset got=%s err=%v, want typed-column fail-closed error", got, err)
 	}
 }
 
@@ -147,8 +186,8 @@ func TestTypedColumnPublicationCorruptAssetFailsClosed(t *testing.T) {
 	d, col, typedRef := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
 	corruptTypedColumnAssetPayload1755(t, d, typedRef)
-	if got, err := col.Get([]byte("e1")); err == nil || got != nil {
-		t.Fatalf("Get with corrupt typed-column asset got=%s err=%v, want fail-closed error", got, err)
+	if got, err := col.Get([]byte("e1")); err == nil || got != nil || !strings.Contains(err.Error(), "typed-column reconstruction") {
+		t.Fatalf("Get with corrupt typed-column asset got=%s err=%v, want typed-column fail-closed error", got, err)
 	}
 }
 
@@ -163,7 +202,12 @@ func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	wantRef := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))[0]
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(typedRefs) != 1 {
+		_ = d.Close()
+		t.Fatalf("typed refs=%+v want one", typedRefs)
+	}
+	wantRef := typedRefs[0]
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)
@@ -177,9 +221,9 @@ func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection reopened: %v", err)
 	}
-	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, reopened, reopenedCol))
-	if len(typedRefs) != 1 || typedRefs[0] != wantRef {
-		t.Fatalf("reopened typed refs=%+v want [%+v]", typedRefs, wantRef)
+	reopenedTypedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, reopened, reopenedCol))
+	if len(reopenedTypedRefs) != 1 || reopenedTypedRefs[0] != wantRef {
+		t.Fatalf("reopened typed refs=%+v want [%+v]", reopenedTypedRefs, wantRef)
 	}
 }
 
@@ -244,7 +288,11 @@ func TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) 
 	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`)}); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
-	typedRef := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))[0]
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(typedRefs) != 1 {
+		t.Fatalf("typed refs=%+v want one", typedRefs)
+	}
+	typedRef := typedRefs[0]
 	manager := mappedresource.NewManager()
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(d.ColumnAssetRootDir(), col.Meta().Options.ColumnStore.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
 	if err != nil {

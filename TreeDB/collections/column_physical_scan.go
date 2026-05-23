@@ -960,7 +960,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
-			if ref.Kind != ColumnAssetKindTCS1PartImage {
+			if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", ref.Kind)
 			}
 			if ref.Generation != keyGeneration {
@@ -973,23 +973,25 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if !ok {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
-			// Capability counts describe the refs a physical scan would read:
-			// all reachable lineage through the active generation. The header
-			// expected-parts check below is generation-local and intentionally
-			// only counts current-generation records.
-			if caps.PhysicalAssetCount == maxCollectionInt {
-				return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest physical asset count overflows int")
-			}
-			caps.PhysicalAssetCount++
-			if operation != ColumnPublishOperationInsert {
-				if caps.MutationParts == maxCollectionInt {
-					return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest mutation part count overflows int")
+			if ref.Kind == ColumnAssetKindTCS1PartImage {
+				// Capability counts describe the refs a physical scan would read:
+				// all reachable lineage through the active generation. The header
+				// expected-parts check below is generation-local and counts typed-row
+				// locator parts plus typed-column part records.
+				if caps.PhysicalAssetCount == maxCollectionInt {
+					return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest physical asset count overflows int")
 				}
-				caps.MutationParts++
+				caps.PhysicalAssetCount++
+				if operation != ColumnPublishOperationInsert {
+					if caps.MutationParts == maxCollectionInt {
+						return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest mutation part count overflows int")
+					}
+					caps.MutationParts++
+				}
+				livePartRows.add(ref.Generation, ref.PartID, rows)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
-			livePartRows.add(ref.Generation, ref.PartID, rows)
 			if keyGeneration == header.generation {
 				activeParts++
 			}

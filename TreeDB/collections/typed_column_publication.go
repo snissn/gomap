@@ -178,6 +178,9 @@ func typedColumnAdapterRowsFromDeclaredRows(allColumns []ColumnStoreColumn, fiel
 }
 
 func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow) ([]byte, int, error) {
+	if !columnStoreHasTypedColumnPartOwners(cfg) {
+		return nil, 0, nil
+	}
 	fields := columnStoreTypedColumnPartFields(cfg)
 	if len(fields) == 0 {
 		return nil, 0, nil
@@ -208,6 +211,13 @@ type typedColumnPartVisibleValues struct {
 }
 
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow) (typedColumnPartVisibleValues, error) {
+	return c.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, cfg, physicalRow, nil)
+}
+
+func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache map[uint64][]typedColumnAdapterRow) (typedColumnPartVisibleValues, error) {
+	if !columnStoreHasTypedColumnPartOwners(cfg) {
+		return typedColumnPartVisibleValues{}, nil
+	}
 	fields := columnStoreTypedColumnPartFields(cfg)
 	if len(fields) == 0 {
 		return typedColumnPartVisibleValues{}, nil
@@ -215,29 +225,38 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backendd
 	if physicalRow.Deleted {
 		return typedColumnPartVisibleValues{}, nil
 	}
-	ref, ok, err := c.typedColumnPartRefForGeneration(snap, manifestRootID, cfg, physicalRow.Generation)
-	if err != nil {
-		return typedColumnPartVisibleValues{}, err
-	}
+	rows, ok := cache[physicalRow.Generation]
 	if !ok {
-		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction missing typed_column_part asset for generation=%d", physicalRow.Generation)
-	}
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
-	if err != nil {
-		return typedColumnPartVisibleValues{}, err
-	}
-	defer func() { _ = readCache.close() }()
-	raw, err := readCache.read(ref.Ref, nil)
-	if err != nil {
-		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction read generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
-	}
-	part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
-	if err != nil {
-		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
-	}
-	rows, err := part.scanRows()
-	if err != nil {
-		return typedColumnPartVisibleValues{}, err
+		ref, found, err := c.typedColumnPartRefForGeneration(snap, manifestRootID, cfg, physicalRow.Generation)
+		if err != nil {
+			return typedColumnPartVisibleValues{}, err
+		}
+		if !found {
+			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction missing typed_column_part asset for generation=%d", physicalRow.Generation)
+		}
+		readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
+		if err != nil {
+			return typedColumnPartVisibleValues{}, err
+		}
+		raw, readErr := readCache.read(ref.Ref, nil)
+		closeErr := readCache.close()
+		if readErr != nil {
+			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction read generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, readErr)
+		}
+		if closeErr != nil {
+			return typedColumnPartVisibleValues{}, closeErr
+		}
+		part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
+		if err != nil {
+			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
+		}
+		rows, err = part.scanRows()
+		if err != nil {
+			return typedColumnPartVisibleValues{}, err
+		}
+		if cache != nil {
+			cache[physicalRow.Generation] = rows
+		}
 	}
 	if physicalRow.RowIndex < 0 || physicalRow.RowIndex >= len(rows) {
 		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside typed_column_part rows=%d", physicalRow.RowIndex, len(rows))

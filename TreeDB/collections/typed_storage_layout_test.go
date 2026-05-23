@@ -301,6 +301,9 @@ func TestTypedStorageCompatibilityConfigCanOptIntoColumnPartOwner(t *testing.T) 
 	if err := layout.EnsureReadSupported(); err != nil {
 		t.Fatalf("EnsureReadSupported: %v", err)
 	}
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		t.Fatalf("EnsurePublicationSupported: %v", err)
+	}
 }
 
 func TestTypedStorageStatusVocabulary(t *testing.T) {

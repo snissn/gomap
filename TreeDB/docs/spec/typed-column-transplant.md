@@ -59,6 +59,6 @@ this data plane into the existing typed-row physical asset format.
 
 `TreeDB/internal/typedcolumn` remains a data-plane package. Issue `#1754` added
 the narrow `typed_column_adapter.go` seam for metadata/resource adaptation, and
-#1755 routes scalar durable publication/reconstruction through that seam. Query
+Issue `#1755` routes scalar durable publication/reconstruction through that seam. Query
 planning, vector/adjacency sections, and predicate scan integration remain owned
 by later #1744 children.

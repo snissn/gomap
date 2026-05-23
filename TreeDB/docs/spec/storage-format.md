@@ -497,7 +497,7 @@ Writers emit version 2.
 
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
 images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
-#1755 scalar path represents bool, int64, float32, double/float64, and string
+Issue `#1755` scalar path represents bool, int64, float32, double/float64, and string
 fields; nullable/missing values, vector sections, and adjacency sections fail
 closed until later typed-storage issues extend the format.
 
