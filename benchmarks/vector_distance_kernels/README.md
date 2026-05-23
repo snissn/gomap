@@ -79,6 +79,23 @@ cd benchmarks/vector_distance_kernels
 GOWORK=off go test -bench 'BenchmarkDotProduct(768|Batch768)' -benchmem -count=5 | tee /tmp/dot768_bench.txt
 ```
 
+The `snissn/simd` fork has a merged amd64 AVX512 cross-row batch4
+`f32.DotProductBatch` implementation (https://github.com/snissn/simd/pull/1).
+To validate TreeDB-shaped kernels against that fork before it is released or
+upstreamed, use a temporary module replacement from this benchmark module:
+
+```sh
+mkdir -p ~/dev/snissn
+git clone https://github.com/snissn/simd ~/dev/snissn/simd || git -C ~/dev/snissn/simd pull --ff-only
+cd benchmarks/vector_distance_kernels
+GOWORK=off go mod edit -replace github.com/tphakala/simd=$HOME/dev/snissn/simd
+GOWORK=off go test -bench 'BenchmarkDotProduct(768|Batch768)' -benchmem -count=5 | tee /tmp/dot768_snissn_simd.txt
+GOWORK=off go mod edit -dropreplace github.com/tphakala/simd
+```
+
+On the 11th Gen Intel i5-11400F test host, the fork's true 128x768 batch path
+measured about 22-23 ns/dot versus about 31 ns/dot for a per-row loop.
+
 As of this benchmark, `go get github.com/ashvardanian/simsimd/golang@latest`
 fails because the latest `github.com/ashvardanian/simsimd` module does not
 contain a `golang` package. If that package becomes available, add it beside the
