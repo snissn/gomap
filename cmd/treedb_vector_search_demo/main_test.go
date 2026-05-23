@@ -242,6 +242,41 @@ func TestExecuteDatasetDirClampsValidateQueries(t *testing.T) {
 	}
 }
 
+func TestExecuteDatasetExactValidationSource(t *testing.T) {
+	datasetDir := writeDemoDataset(t, 96, 8, 4, 3)
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		datasetDir:            datasetDir,
+		validationExactSource: "dataset",
+		keepDir:               true,
+		docs:                  96,
+		dimensions:            8,
+		queries:               2,
+		searchConcurrency:     []int{2},
+		validateQueries:       4,
+		validateDocs:          2,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		disableExactFallback:  true,
+		vectorIndexStrategy:   collections.VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		t.Fatalf("execute with dataset exact validation: %v", err)
+	}
+	if res.ValidationExactSource != "dataset" || res.Validation.ExactSource != "dataset" {
+		t.Fatalf("validation exact source result=%q validation=%q, want dataset", res.ValidationExactSource, res.Validation.ExactSource)
+	}
+	if res.Validation.QueriesChecked != 4 || res.Validation.ExactTotal != 12 || res.Validation.ANNTotal != 12 || res.Validation.Recall < 0.5 {
+		t.Fatalf("unexpected dataset exact validation: %+v", res.Validation)
+	}
+}
+
 func TestRunJSONOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -631,6 +666,16 @@ func TestParseConfigRejectsInvalidValidationCombinations(t *testing.T) {
 			args: []string{"-validate-docs", "-1"},
 			want: "-validate-docs cannot be negative",
 		},
+		{
+			name: "dataset exact source requires dataset dir",
+			args: []string{"-validation-exact-source", "dataset"},
+			want: "requires -dataset-dir",
+		},
+		{
+			name: "unsupported exact source",
+			args: []string{"-validation-exact-source", "other"},
+			want: "unsupported -validation-exact-source",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := parseConfig(tc.args)
@@ -808,6 +853,7 @@ func TestRunTextOutput(t *testing.T) {
 		"format index_outer_leaves_in_vlog=",
 		"storage_domains index_db=",
 		"Memory",
+		"exact_source=treedb",
 		"avg=",
 		"Parallel Search Benchmark",
 	} {

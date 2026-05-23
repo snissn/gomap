@@ -12,6 +12,8 @@ DOCS="${DOCS:-10000}"
 DIMS="${DIMS:-64}"
 QUERIES="${QUERIES:-10000}"
 VALIDATE_QUERIES="${VALIDATE_QUERIES:-64}"
+VALIDATE_DOCS="${VALIDATE_DOCS:-16}"
+TREEDB_VALIDATION_EXACT_SOURCE="${TREEDB_VALIDATION_EXACT_SOURCE:-treedb}"
 TOP_K="${TOP_K:-10}"
 SEARCH_CONCURRENCY="${SEARCH_CONCURRENCY:-2,4,8,16,32,64,128}"
 M="${M:-16}"
@@ -155,6 +157,8 @@ cat >"$RUN_DIR/README.md" <<EOF
 - dims: \`$DIMS\`
 - queries: \`$QUERIES\`
 - validate queries: \`$VALIDATE_QUERIES\`
+- validate docs: \`$VALIDATE_DOCS\`
+- TreeDB validation exact source: \`$TREEDB_VALIDATION_EXACT_SOURCE\`
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
@@ -220,7 +224,8 @@ if contains_backend treedb; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
+		-validate-docs "$VALIDATE_DOCS" \
+		-validation-exact-source "$TREEDB_VALIDATION_EXACT_SOURCE" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \
@@ -243,7 +248,8 @@ if contains_backend treedb_column_graph; then
 		-queries "$QUERIES" \
 		-search-concurrency "$SEARCH_CONCURRENCY" \
 		-validate-queries "$VALIDATE_QUERIES" \
-		-validate-docs 16 \
+		-validate-docs "$VALIDATE_DOCS" \
+		-validation-exact-source "$TREEDB_VALIDATION_EXACT_SOURCE" \
 		-top-k "$TOP_K" \
 		-m "$M" \
 		-ef-construction "$EF_CONSTRUCTION" \

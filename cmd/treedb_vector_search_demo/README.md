@@ -97,4 +97,8 @@ Useful flags:
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
   queries; set `-min-recall=0` when disabling validation with
   `-validate-queries=0`.
+- `-validation-exact-source=dataset`: in `-dataset-dir` mode, compute the exact
+  recall baseline from exported `documents.f32` instead of TreeDB document
+  materialization. `validate-docs` still samples TreeDB document reads
+  separately.
 - `-json`: emit the full result object for scripts.
