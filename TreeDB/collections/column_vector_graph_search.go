@@ -102,7 +102,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 		frontierCap = topK
 	}
 	s.frontier = resizeColumnVectorGraphNativeCandidateScratch(s.frontier, frontierCap)
-	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, topK)
+	s.top = resizeColumnVectorGraphNativeCandidateScratch(s.top, frontierCap)
 	s.results = resizeColumnVectorGraphNativeResultScratch(s.results, topK)
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
@@ -265,13 +265,16 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	visitMarks := scratch.visitMarks
 	visitEpoch := scratch.visitEpoch
 	visitMarks[entryOrdinal] = visitEpoch
-	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, topK, scratch, &stats); err != nil {
+	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, efSearch, scratch, &stats); err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
-	for stats.Candidates < uint64(efSearch) {
+	for {
 		candidate, ok := scratch.popFrontier()
 		if !ok {
+			if len(scratch.top) >= efSearch {
+				break
+			}
 			for nextSeed < rowCount && scratch.visitMarks[nextSeed] == scratch.visitEpoch {
 				nextSeed++
 			}
@@ -279,19 +282,19 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				break
 			}
 			visitMarks[nextSeed] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, nextSeed, efSearch, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 			continue
+		}
+		if len(scratch.top) >= efSearch && candidate.score < scratch.top[len(scratch.top)-1].score {
+			break
 		}
 		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, &stats)
 		if err != nil {
 			return nil, stats, err
 		}
 		for i, neighbor := range adjacency {
-			if stats.Candidates >= uint64(efSearch) {
-				break
-			}
 			stats.Edges++
 			if uint64(neighbor) >= uint64(rowCount) {
 				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
@@ -301,7 +304,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				continue
 			}
 			visitMarks[neighborOrdinal] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, efSearch, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 		}
@@ -310,7 +313,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if len(scratch.top) == 0 {
 		return scratch.results, stats, nil
 	}
-	if err := r.fetchTopSearchResults(plan, singleBlockView, scratch, &stats); err != nil {
+	if err := r.fetchTopSearchResults(plan, singleBlockView, scratch, topK, &stats); err != nil {
 		return nil, stats, err
 	}
 	return scratch.results, stats, nil
@@ -356,8 +359,11 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 	return best, nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, scratch *columnVectorGraphNativeSearchScratch, topK int, stats *columnVectorGraphNativeSearchStats) error {
 	n := len(scratch.top)
+	if n > topK {
+		n = topK
+	}
 	scratch.resultOrder = scratch.resultOrder[:n]
 	scratch.resultOrdinals = scratch.resultOrdinals[:n]
 	for i := 0; i < n; i++ {
@@ -395,7 +401,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 	stats.BlockViewHits = plan.hits
 	stats.BlockViewMisses = plan.misses
 	stats.BlockViewBuilds = plan.builds
-	for i, candidate := range scratch.top {
+	for i, candidate := range scratch.top[:n] {
 		scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
 			Ordinal: candidate.ordinal,
 			ID:      scratch.idBuffers[i],
@@ -424,7 +430,7 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 	})
 }
 
-func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, candidateLimit int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	score, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
 	if err != nil {
 		return err
@@ -434,8 +440,20 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		ordinal: ordinal,
 		score:   score,
 	}
-	scratch.insertTop(topK, candidate)
-	scratch.pushFrontier(candidate)
+	if len(scratch.top) < candidateLimit {
+		scratch.insertTop(candidateLimit, candidate)
+		scratch.pushFrontier(candidate)
+		return nil
+	}
+	worstRetained := scratch.top[len(scratch.top)-1]
+	if columnVectorGraphSearchCandidateBetter(candidate, worstRetained) {
+		scratch.insertTop(candidateLimit, candidate)
+		scratch.pushFrontier(candidate)
+		return nil
+	}
+	if candidate.score >= worstRetained.score {
+		scratch.pushFrontier(candidate)
+	}
 	return nil
 }
 

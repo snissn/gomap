@@ -207,8 +207,8 @@ func TestExecuteColumnGraphRecallBenchmarkShape(t *testing.T) {
 	if res.Validation.Recall < 0.95 {
 		t.Fatalf("recall=%f want >=0.95", res.Validation.Recall)
 	}
-	if res.Search.AvgCandidates != 128 {
-		t.Fatalf("avg candidates=%f want ef_search=128", res.Search.AvgCandidates)
+	if res.Search.AvgCandidates < 128 {
+		t.Fatalf("avg candidates=%f want at least ef_search=128 scored candidates", res.Search.AvgCandidates)
 	}
 }
 
