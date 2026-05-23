@@ -409,8 +409,12 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesHeapFallba
 			_ = handle.Release()
 		}
 	}()
-	if !direct || scratchDecode || handle == nil || handle.Source() != mappedresource.SourceHeapCopy {
-		t.Fatalf("direct=%v scratchDecode=%v handle=%v source=%s want heap-copy direct fallback", direct, scratchDecode, handle != nil, handle.Source())
+	handleSource := mappedresource.Source("<nil>")
+	if handle != nil {
+		handleSource = handle.Source()
+	}
+	if !direct || scratchDecode || handle == nil || handleSource != mappedresource.SourceHeapCopy {
+		t.Fatalf("direct=%v scratchDecode=%v handle=%v source=%s want heap-copy direct fallback", direct, scratchDecode, handle != nil, handleSource)
 	}
 	if !float32SlicesEqual1782(values[:3], []float32{1, 0, 0}) || !float32SlicesEqual1782(values[3:], []float32{0, 1, 0}) {
 		t.Fatalf("values=%v want row-major typed vectors", values)
