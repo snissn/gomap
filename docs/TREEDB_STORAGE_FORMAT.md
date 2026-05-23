@@ -23,6 +23,7 @@ Operator-facing behavior is covered by:
 - Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
 - Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Production typed-row assets and opt-in scalar/vector typed-column parts live under the isolated typed asset manager namespace.
+- Typed-storage closeout evidence, naming-audit classification, and the #1736 COW-maintenance handoff are recorded in `TreeDB/docs/spec/typed-storage-closeout-1758.md`.
 
 ## Directory layout
 
