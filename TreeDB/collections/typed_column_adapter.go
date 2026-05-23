@@ -667,6 +667,125 @@ func (r typedColumnAdapterResourceReader) AcquireSection(section typedcolumn.Col
 	return mgr.AcquireBytes(key, scope, mappedresource.SourceHeapCopy, data, mappedresource.AcquireOptions{Reason: "typed-column adapter heap section read", ValidationMode: mappedresource.ValidationVerify})
 }
 
+func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, column string) (bool, error) {
+	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return false, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	return true, nil
+}
+
+func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
+	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if !ok {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
+	}
+	adapterPart, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: fields}, image)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	return adapterPart, adapterColumn, image.ManifestBytes, nil
+}
+
+func typedColumnInt64PredicateAdapterColumn(fields []TypedStorageField, column string) (typedColumnAdapterColumn, bool, error) {
+	columns, err := typedColumnAdapterColumnsForFields(fields)
+	if err != nil {
+		return typedColumnAdapterColumn{}, false, err
+	}
+	for _, adapterColumn := range columns {
+		if adapterColumn.Field.Name == column || adapterColumn.Field.Path == column || adapterColumn.Definition.Name == column {
+			return adapterColumn, true, nil
+		}
+	}
+	return typedColumnAdapterColumn{}, false, nil
+}
+
+func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, generation uint64, partID uint64, result *TypedColumnInt64PredicateScanResult) (bool, error) {
+	if part == nil {
+		return false, errors.New("nil typed-column part")
+	}
+	valueCol, ok := part.Columns[valueColumn]
+	if !ok {
+		return false, fmt.Errorf("missing value column %q", valueColumn)
+	}
+	idCol, ok := part.Columns[typedColumnAdapterPrimaryIDColumn]
+	if !ok {
+		return false, fmt.Errorf("missing primary id column %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	if valueCol.Definition.Type != typedcolumn.ColumnTypeInt64 || idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return false, fmt.Errorf("value or primary id column is not int64")
+	}
+	var reader typedcolumn.GranuleReader
+	var valueScratch []int64
+	var idScratch []int64
+	decodedAny := false
+	for _, block := range valueCol.Blocks {
+		result.Diagnostics.BlocksConsidered++
+		g := block.Granule
+		if g.HasMinMax && !typedColumnInt64PredicateMayMatch(req, g.Min, g.Max) {
+			result.Diagnostics.BlocksPruned++
+			continue
+		}
+		idBlock, ok := typedColumnFindAlignedBlock(idCol.Blocks, block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		if !ok {
+			return false, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		}
+		values, err := reader.DecodeInt64Into(valueScratch[:0], g)
+		if err != nil {
+			return false, err
+		}
+		valueScratch = values
+		ids, err := reader.DecodeInt64Into(idScratch[:0], idBlock.Granule)
+		if err != nil {
+			return false, err
+		}
+		idScratch = ids
+		if len(values) != block.Descriptor.RowCount || len(ids) != block.Descriptor.RowCount {
+			return false, fmt.Errorf("decoded rows value=%d ids=%d want %d", len(values), len(ids), block.Descriptor.RowCount)
+		}
+		decodedAny = true
+		result.Diagnostics.BlocksDecoded++
+		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes + idBlock.Granule.RawBytes)
+		result.Diagnostics.RowsScanned += len(values)
+		for i, v := range values {
+			if !typedColumnInt64PredicateMatches(req, v) {
+				continue
+			}
+			result.Rows = append(result.Rows, TypedColumnInt64PredicateScanRow{Generation: generation, PartID: partID, RowIndex: block.Descriptor.FirstRow + i, PrimaryID: ids[i], Value: v})
+			result.Diagnostics.RowsMatched++
+		}
+	}
+	return !decodedAny && len(valueCol.Blocks) != 0, nil
+}
+
+func typedColumnFindAlignedBlock(blocks []typedcolumn.ColumnBlock, firstRow, rows int) (typedcolumn.ColumnBlock, bool) {
+	for _, block := range blocks {
+		if block.Descriptor.FirstRow == firstRow && block.Descriptor.RowCount == rows {
+			return block, true
+		}
+	}
+	return typedcolumn.ColumnBlock{}, false
+}
+
 func typedColumnAdapterInt64View(mgr *mappedresource.Manager, h *mappedresource.Handle) ([]int64, error) {
 	return mgr.Int64View(h)
 }
