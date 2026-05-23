@@ -1288,6 +1288,9 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 	}
 	sections := i.sectionsByKind(ColumnPartImageSectionDictionaries)
 	if len(sections) == 0 {
+		if err := i.validateDictionariesForDescriptor(nil); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
 	if len(sections) != 1 {
@@ -1344,7 +1347,59 @@ func (i ColumnPartImage) Dictionaries() (map[string]map[string]int64, error) {
 	if err := dec.finish(); err != nil {
 		return nil, err
 	}
+	if err := i.validateDictionariesForDescriptor(out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+func (i ColumnPartImage) validateDictionariesForDescriptor(dictionaries map[string]map[string]int64) error {
+	descriptorSection, err := i.singleSection(ColumnPartImageSectionDescriptor)
+	if err != nil {
+		return err
+	}
+	_, columns, err := decodeColumnPartDescriptorSection(i.sectionBytes(descriptorSection))
+	if err != nil {
+		return fmt.Errorf("typedcolumn: decode descriptor for dictionaries: %w", err)
+	}
+	lowCardinality := make(map[string]uint32)
+	for name, column := range columns {
+		if column.Definition.Type != ColumnTypeLowCardinalityCode {
+			continue
+		}
+		cardinality, err := imageColumnCardinalityForDescriptor(ColumnPartColumnDescriptor{
+			Name: name,
+			Type: column.Definition.Type,
+		}, column)
+		if err != nil {
+			return err
+		}
+		lowCardinality[name] = cardinality
+	}
+	for name, values := range dictionaries {
+		cardinality, ok := lowCardinality[name]
+		if !ok {
+			continue
+		}
+		seen := make([]bool, int(cardinality))
+		for value, code := range values {
+			if code < 0 || uint64(code) >= uint64(cardinality) {
+				return fmt.Errorf("typedcolumn: dictionary %s value %q code %d outside cardinality %d", name, value, code, cardinality)
+			}
+			seen[int(code)] = true
+		}
+		for code, ok := range seen {
+			if !ok {
+				return fmt.Errorf("typedcolumn: missing dictionary code %d in %s", code, name)
+			}
+		}
+	}
+	for name := range lowCardinality {
+		if _, ok := dictionaries[name]; !ok {
+			return fmt.Errorf("typedcolumn: missing dictionary for low-cardinality column %s", name)
+		}
+	}
+	return nil
 }
 
 func decodeAggregateMetadataSections(image ColumnPartImage) (map[string]AggregateMetadata, error) {
