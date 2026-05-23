@@ -176,10 +176,9 @@ func (h *Handle) Release() error {
 		return nil
 	}
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.done {
-		err := h.err
-		h.mu.Unlock()
-		return err
+		return h.err
 	}
 	h.done = true
 	mgr := h.mgr
@@ -188,7 +187,6 @@ func (h *Handle) Release() error {
 	bytes := int64(len(h.bytes))
 	release := h.release
 	h.bytes = nil
-	h.mu.Unlock()
 
 	var err error
 	if release != nil {
@@ -197,9 +195,7 @@ func (h *Handle) Release() error {
 	if mgr != nil {
 		mgr.release(id, source, bytes, err)
 	}
-	h.mu.Lock()
 	h.err = err
-	h.mu.Unlock()
 	return err
 }
 

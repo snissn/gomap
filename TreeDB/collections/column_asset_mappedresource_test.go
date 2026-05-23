@@ -183,6 +183,70 @@ func TestColumnAssetReadCacheMappedResourceViewHandlesDoNotAccumulateGateA1736(t
 	}
 }
 
+func TestColumnAssetReadCacheIntegrityModesReportMappedResourceValidation(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payload := []byte("mapped-resource-integrity-mode-payload")
+	ref, err := writeColumnPhysicalAssetToManager(root, *normalized, payload, 7, 3)
+	if err != nil {
+		t.Fatalf("writeColumnPhysicalAssetToManager: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		integrity ColumnAssetReadIntegrity
+		wantMode  mappedresource.ValidationMode
+	}{
+		{name: "verify", integrity: ColumnAssetReadIntegrityVerify, wantMode: mappedresource.ValidationVerify},
+		{name: "cached_verify", integrity: ColumnAssetReadIntegrityCachedVerify, wantMode: mappedresource.ValidationCachedVerify},
+		{name: "skip_checksums", integrity: ColumnAssetReadIntegritySkipChecksums, wantMode: mappedresource.ValidationSkipChecksum},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := mappedresource.NewManager()
+			readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(root, normalized.AssetManager.Namespace, tt.integrity)
+			if err != nil {
+				t.Fatalf("new read cache: %v", err)
+			}
+			if err := readCache.useMappedResourceManager(manager, mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "snapshot-" + tt.name, Namespace: normalized.AssetManager.Namespace}, "integrity-mode-read"); err != nil {
+				t.Fatalf("useMappedResourceManager: %v", err)
+			}
+			raw, err := readCache.read(ref, nil)
+			if err != nil {
+				_ = readCache.close()
+				t.Fatalf("read: %v", err)
+			}
+			if !bytes.Equal(raw, payload) {
+				_ = readCache.close()
+				t.Fatalf("raw=%q want %q", raw, payload)
+			}
+			stats := readCache.mappedResourceStats()
+			if got := stats.ValidationModeReads[tt.wantMode]; got != 1 {
+				_ = readCache.close()
+				t.Fatalf("validation mode %q count=%d want 1 stats=%+v", tt.wantMode, got, stats)
+			}
+			if len(stats.ValidationModeReads) != 1 {
+				_ = readCache.close()
+				t.Fatalf("validation mode map=%+v want only %q", stats.ValidationModeReads, tt.wantMode)
+			}
+			if got := columnAssetReadIntegrityLabel(tt.integrity); got != string(tt.wantMode) {
+				_ = readCache.close()
+				t.Fatalf("integrity label=%q want mappedresource validation label %q", got, tt.wantMode)
+			}
+			if err := readCache.close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+			if stats := manager.Stats(); stats.ActiveHandles != 0 || stats.ActiveHeapCopyBytes != 0 || stats.TotalReleases != 1 {
+				t.Fatalf("mapped resource stats after close: %+v", stats)
+			}
+		})
+	}
+}
+
 func TestColumnAssetReadCacheMappedResourceScopeValidationGateA1736(t *testing.T) {
 	readCache := columnPhysicalAssetReadCache{namespace: "events"}
 	manager := mappedresource.NewManager()
