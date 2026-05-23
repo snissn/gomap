@@ -420,15 +420,15 @@ Encoding rules:
 - if compact encoding is not smaller than the raw page, TreeDB stores the raw
   page payload instead.
 
-### 7.3 Typed Asset Manager and TCPA Typed-Row Physical Assets
+### 7.3 Typed Asset Manager, TCPA Typed-Row Assets, and Typed-Column Parts
 
 Production typed-storage physical data is stored in typed asset manager segments
 under the compatibility `column_assets` directory. These assets are
 value-log-shaped durable payloads, but they are not ordinary row `value_vlog`
 values and they are not split-leaf `leaf_vlog` records. Manifest/control roots
-can live in B-tree/root metadata; typed-row payloads and derived accelerator
-payloads such as marks, dictionaries, locators, and aggregate metadata belong
-under the isolated typed asset manager namespace.
+can live in B-tree/root metadata; typed-row payloads, typed-column part payloads,
+and derived accelerator payloads such as marks, dictionaries, locators, and
+aggregate metadata belong under the isolated typed asset manager namespace.
 
 A collection namespace such as `events/column-assets` maps to:
 
@@ -443,11 +443,13 @@ Dir/maindb/column_assets/events/column-assets/
 
 Segment file names use `segment-%06d.tca`. Durable manifest records store
 typed `ColumnAssetRef` values containing kind, namespace, generation, part id,
-segment file id, offset, length, and checksum. GC/rewrite must enumerate these
-refs from manifest/control roots and snapshots; it must not scan row documents
-to discover column assets.
+segment file id, offset, length, and checksum. Current part refs may use
+`tcs1_part_image` for compatibility typed-row/TCPA assets or
+`tcs1_typed_column_part` for sectioned scalar typed-column parts. GC/rewrite
+must enumerate these refs from manifest/control roots and snapshots; it must not
+scan row documents to discover typed-storage assets.
 
-Current physical part payloads use the `TCPA` envelope:
+Compatibility typed-row physical part payloads use the `TCPA` envelope:
 
 ```text
 u32      Magic = "TCPA"
@@ -474,8 +476,12 @@ values   declared column values when Deleted=false
 ```
 
 Insert/update rows must have `Deleted=false` and exactly one value per declared
-column. Delete/tombstone rows must have `Deleted=true` and zero column values.
-Readers validate namespace, generation, part id, schema hash, declared column
+`typed_row_asset` column in the row asset. Delete/tombstone rows must have
+`Deleted=true` and zero column values. For layouts with `typed_column_part`
+owners, a `TCPA` row asset is still published for row IDs/tombstones and any
+row-owned fields; the matching `tcs1_typed_column_part` for the same generation
+contains authoritative scalar typed-column values keyed by row index. Readers
+validate namespace, generation, part id, schema hash, declared column
 descriptors, length, and checksum before accepting an asset ref.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
@@ -488,6 +494,12 @@ values   declared column values
 
 M12C and later decoders may read version 1 as `Deleted=false` for pre-v2 assets.
 Writers emit version 2.
+
+Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
+images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
+Issue `#1755` scalar path represents bool, int64, float32, double/float64, and string
+fields; nullable/missing values, vector sections, and adjacency sections fail
+closed until later typed-storage issues extend the format.
 
 ## 8. Commit-Log Segment Format
 

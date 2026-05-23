@@ -444,8 +444,8 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 
 func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	for idx, ref := range refs {
-		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values {
-			return fmt.Errorf("collections: column asset rewrite supports only physical part, aggregate metadata, dictionary code, or int64 value refs: ref %d kind %q", idx, ref.Kind)
+		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values {
+			return fmt.Errorf("collections: column asset rewrite supports only physical part, typed-column part, aggregate metadata, dictionary code, or int64 value refs: ref %d kind %q", idx, ref.Kind)
 		}
 	}
 	return nil
@@ -603,7 +603,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: trailing bytes in column manifest part record")
 	}
 	kind := ColumnAssetKind(string(kindBytes))
-	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes && kind != ColumnAssetKindTCS1Int64Values {
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1TypedColumnPart && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes && kind != ColumnAssetKindTCS1Int64Values {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {

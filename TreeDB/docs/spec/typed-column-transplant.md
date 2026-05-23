@@ -3,11 +3,12 @@
 Status: current implementation note for issue #1753 under parent tracker #1744.
 
 `TreeDB/internal/typedcolumn` is a copy/adapt transplant of the coherent
-`experiments/colgranule` typed-column data plane. It is intentionally
-**non-authoritative**: it can build, encode, decode, and scan typed-column part
-artifacts, but it does not publish production collection assets, register
-collection manifests, participate in WAL/recovery, change query planning, or
-make `typed_column_part` an authoritative field owner.
+`experiments/colgranule` typed-column data plane. Issue #1753 kept the package
+non-authoritative: it could build, encode, decode, and scan typed-column part
+artifacts without publishing production collection assets. Issue #1755 now uses
+that data plane through the `TreeDB/collections` adapter for opt-in durable
+scalar `typed_column_part` publication/reconstruction; the internal package
+itself remains a data-plane package, not a manifest/WAL/query owner.
 
 The package preserves the colgranule data-plane shape:
 
@@ -21,10 +22,10 @@ The package preserves the colgranule data-plane shape:
 - latest-visible base/delta/tombstone part-set logic over caller-owned parts;
 - a narrow `SectionReader` seam for #1754 mappedresource-backed byte access.
 
-Production control-plane adaptation is deferred to #1754/#1755. Any future byte
-access backed by production files should adapt `SectionReader` to the #1736
-mapped-resource handles rather than reshaping this data plane into the existing
-typed-row physical asset format.
+Production control-plane adaptation begins in #1755 for scalar publication and
+reconstruction. Future byte access backed by production files should continue to
+adapt `SectionReader` to the #1736 mapped-resource handles rather than reshaping
+this data plane into the existing typed-row physical asset format.
 
 ## Copy / Adapt / Defer Table
 
@@ -56,8 +57,8 @@ typed-row physical asset format.
 
 ## Boundary
 
-`TreeDB/internal/typedcolumn` remains a data-plane package. Issue `#1753`
-forbade production `TreeDB/collections` imports; issue `#1754` adds the narrow
-`typed_column_adapter.go` seam for metadata/resource adaptation. The adapter seam
-still must not publish manifests or change `ResolveTypedStorageLayout`
-fail-closed behavior for authoritative `typed_column_part` ownership.
+`TreeDB/internal/typedcolumn` remains a data-plane package. Issue `#1754` added
+the narrow `typed_column_adapter.go` seam for metadata/resource adaptation, and
+Issue `#1755` routes scalar durable publication/reconstruction through that seam. Query
+planning, vector/adjacency sections, and predicate scan integration remain owned
+by later #1744 children.

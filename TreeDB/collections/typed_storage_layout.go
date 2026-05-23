@@ -7,10 +7,9 @@ import (
 )
 
 // ErrTypedStorageColumnPartUnsupported is returned by fail-closed guards when a
-// normalized layout contains authoritative typed-column ownership. PR #1751 only
-// introduces the pure-metadata resolver; durable typed-column reads and
-// publication land in later #1744 children.
-var ErrTypedStorageColumnPartUnsupported = errors.New("collections: typed_column_part ownership is not supported yet")
+// normalized layout contains a typed_column_part owner/value-type combination
+// that the current durable typed-column publication path cannot represent.
+var ErrTypedStorageColumnPartUnsupported = errors.New("collections: typed_column_part ownership is unsupported for this field")
 
 // TypedStorageFieldOwner names the authoritative physical owner for one logical
 // field in a normalized typed-storage layout.
@@ -112,10 +111,14 @@ func ResolveTypedStorageLayout(meta CollectionMeta) (TypedStorageLayout, error) 
 	}
 	fields := make([]TypedStorageField, 0, len(cfg.Columns))
 	for _, col := range cfg.Columns {
+		owner, err := columnStoreColumnOwner(col)
+		if err != nil {
+			return TypedStorageLayout{}, fmt.Errorf("collections: invalid column %q owner: %w", col.Name, err)
+		}
 		fields = append(fields, TypedStorageField{
 			Name:               col.Name,
 			Path:               col.Path,
-			Owner:              TypedStorageOwnerRowAsset,
+			Owner:              owner,
 			ValueType:          col.ValueType,
 			Nullable:           col.Nullable,
 			Dictionary:         col.Dictionary,
@@ -343,12 +346,13 @@ func normalizeTypedStorageFieldOwner(owner TypedStorageFieldOwner) (TypedStorage
 func derivedAcceleratorsFromTypedStorageCompatibilityConfig(cfg ColumnStoreConfig) []TypedStorageDerivedAccelerator {
 	var out []TypedStorageDerivedAccelerator
 	for _, col := range cfg.Columns {
+		owner := columnStoreColumnOwnerOrRowAsset(col)
 		if col.Dictionary {
 			out = append(out, TypedStorageDerivedAccelerator{
 				Name:            col.Name + ":dictionary",
 				Class:           TypedStorageAssetClassDerivedAccelerator,
 				SourceFieldPath: col.Path,
-				SourceOwner:     TypedStorageOwnerRowAsset,
+				SourceOwner:     owner,
 			})
 		}
 		if col.ValueType == ColumnStoreValueInt64 && !col.Nullable {
@@ -356,7 +360,7 @@ func derivedAcceleratorsFromTypedStorageCompatibilityConfig(cfg ColumnStoreConfi
 				Name:            col.Name + ":int64_values",
 				Class:           TypedStorageAssetClassDerivedAccelerator,
 				SourceFieldPath: col.Path,
-				SourceOwner:     TypedStorageOwnerRowAsset,
+				SourceOwner:     owner,
 			})
 		}
 	}
@@ -368,7 +372,7 @@ func derivedAcceleratorsFromTypedStorageCompatibilityConfig(cfg ColumnStoreConfi
 		if aggregate.Column != "" {
 			if col, ok := typedStorageCompatibilityColumnByName(cfg.Columns, aggregate.Column); ok {
 				accel.SourceFieldPath = col.Path
-				accel.SourceOwner = TypedStorageOwnerRowAsset
+				accel.SourceOwner = columnStoreColumnOwnerOrRowAsset(col)
 			}
 		}
 		out = append(out, accel)
@@ -410,21 +414,34 @@ func (l TypedStorageLayout) HasTypedColumnPartOwners() bool {
 	return false
 }
 
-// EnsureReadSupported fails closed for layouts that mention typed_column_part
-// ownership before the production typed-column read path exists.
+// EnsureReadSupported fails closed for typed_column_part owners whose value
+// types are not represented by the current durable typed-column scalar path.
 func (l TypedStorageLayout) EnsureReadSupported() error {
-	if l.HasTypedColumnPartOwners() {
-		return ErrTypedStorageColumnPartUnsupported
-	}
-	return nil
+	return l.ensureTypedColumnPartSupported()
 }
 
-// EnsurePublicationSupported fails closed for layouts that mention
-// typed_column_part ownership before the production typed-column publication
-// path exists.
+// EnsurePublicationSupported fails closed for typed_column_part owners whose
+// value types are not represented by the current durable typed-column scalar
+// path.
 func (l TypedStorageLayout) EnsurePublicationSupported() error {
-	if l.HasTypedColumnPartOwners() {
-		return ErrTypedStorageColumnPartUnsupported
+	return l.ensureTypedColumnPartSupported()
+}
+
+func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
+	for _, field := range l.Fields {
+		if field.Owner != TypedStorageOwnerColumnPart {
+			continue
+		}
+		switch field.ValueType {
+		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+			return fmt.Errorf("%w: value_type %q for field %q is deferred", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+		default:
+			return fmt.Errorf("%w: value_type %q for field %q", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+		}
 	}
 	return nil
 }

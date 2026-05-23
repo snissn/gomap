@@ -275,6 +275,10 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID)
 }
 
+func writeTypedColumnPartAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID)
+}
+
 func writeColumnAggregateMetadataAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1AggregateMetadata, generation, partID)
 }
@@ -1102,8 +1106,12 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 }
 
 func mappedResourceKeyForColumnAssetRef(ref ColumnAssetRef) mappedresource.Key {
+	class := mappedresource.ClassTypedRowAsset
+	if ref.Kind == ColumnAssetKindTCS1TypedColumnPart {
+		class = mappedresource.ClassTypedColumnAsset
+	}
 	return mappedresource.Key{
-		Class:      mappedresource.ClassTypedRowAsset,
+		Class:      class,
 		Namespace:  ref.Namespace,
 		Kind:       string(ref.Kind),
 		Generation: ref.Generation,

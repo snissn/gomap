@@ -168,9 +168,12 @@ type ColumnStoreConfig struct {
 }
 
 type ColumnStoreColumn struct {
-	Name               string                   `json:"name"`
-	Path               string                   `json:"path"`
-	ValueType          ColumnStoreValueType     `json:"value_type"`
+	Name      string               `json:"name"`
+	Path      string               `json:"path"`
+	ValueType ColumnStoreValueType `json:"value_type"`
+	// Owner is typed-storage metadata. The zero value preserves compatibility and
+	// resolves to typed_row_asset; typed_column_part is opt-in/experimental.
+	Owner              TypedStorageFieldOwner   `json:"owner,omitempty"`
 	Nullable           bool                     `json:"nullable,omitempty"`
 	Dictionary         bool                     `json:"dictionary,omitempty"`
 	VectorDims         int                      `json:"vector_dims,omitempty"`
@@ -426,6 +429,13 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q value_type: %w", col.Name, err)
 		}
+		owner, err := columnStoreColumnOwner(col)
+		if err != nil {
+			return fmt.Errorf("collections: invalid column %q owner: %w", col.Name, err)
+		}
+		if owner != TypedStorageOwnerRowAsset && owner != TypedStorageOwnerColumnPart {
+			return fmt.Errorf("collections: invalid column %q owner: %s is not a typed asset owner", col.Name, owner)
+		}
 		fixedWidthEncoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: %w", col.Name, err)
@@ -595,6 +605,26 @@ func columnFixedWidthEncodingIsLittleEndian(encoding ColumnFixedWidthEncoding) (
 		return false, err
 	}
 	return normalized == ColumnFixedWidthEncodingLittleEndian, nil
+}
+
+func columnStoreColumnOwner(col ColumnStoreColumn) (TypedStorageFieldOwner, error) {
+	return normalizeTypedStorageFieldOwner(col.Owner)
+}
+
+func columnStoreColumnOwnerOrRowAsset(col ColumnStoreColumn) TypedStorageFieldOwner {
+	owner, err := columnStoreColumnOwner(col)
+	if err != nil || owner == "" {
+		return TypedStorageOwnerRowAsset
+	}
+	return owner
+}
+
+func columnStoreColumnIsTypedColumnPart(col ColumnStoreColumn) bool {
+	return columnStoreColumnOwnerOrRowAsset(col) == TypedStorageOwnerColumnPart
+}
+
+func columnStoreColumnIsTypedRowAsset(col ColumnStoreColumn) bool {
+	return columnStoreColumnOwnerOrRowAsset(col) == TypedStorageOwnerRowAsset
 }
 
 func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
@@ -960,6 +990,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, col.Name)
 		writeHashString(&d, col.Path)
 		writeHashString(&d, string(col.ValueType))
+		writeHashString(&d, string(columnStoreColumnOwnerOrRowAsset(col)))
 		writeHashUint64(&d, uint64(col.VectorDims))
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)

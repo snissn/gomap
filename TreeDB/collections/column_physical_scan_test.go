@@ -879,7 +879,7 @@ func TestColumnManifestSnapshotSidecarFilterStillValidatesSkippedRecordsM1634(t 
 	}
 	defer func() { _ = snap.Close() }()
 
-	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+	_, _, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
 		snap,
 		rootID,
 		*cfg,
@@ -972,7 +972,7 @@ func TestColumnManifestScanRejectsHugeExpectedPartsWithoutPreallocM1634(t *testi
 	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
 		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want huge part-count mismatch", err)
 	}
-	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+	_, _, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
 		snap,
 		rootID,
 		*cfg,

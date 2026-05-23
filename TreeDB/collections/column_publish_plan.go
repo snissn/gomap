@@ -38,8 +38,12 @@ const (
 type ColumnAssetKind string
 
 const (
-	// ColumnAssetKindTCS1PartImage references an immutable TCS1 part image.
+	// ColumnAssetKindTCS1PartImage references an immutable typed-row TCS1/TCPA
+	// part image retained for compatibility.
 	ColumnAssetKindTCS1PartImage ColumnAssetKind = "tcs1_part_image"
+	// ColumnAssetKindTCS1TypedColumnPart references an immutable sectioned
+	// typed-column TCS1 part image.
+	ColumnAssetKindTCS1TypedColumnPart ColumnAssetKind = "tcs1_typed_column_part"
 	// ColumnAssetKindTCS1AggregateMetadata references grouped aggregate metadata
 	// stored as a typed column asset beside physical part images.
 	ColumnAssetKindTCS1AggregateMetadata ColumnAssetKind = "tcs1_aggregate_metadata"
@@ -916,7 +920,7 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	switch ref.Kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
 	default:
 		if ref.Kind == "" {
 			return errors.New("collections: column asset ref kind is required")

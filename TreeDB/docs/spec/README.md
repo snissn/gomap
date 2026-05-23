@@ -162,9 +162,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     `TreeDB/internal/typedcolumn` data-plane transplant from
     `experiments/colgranule`.
 - `TreeDB/docs/spec/typed-column-adapter.md`
-  - issue #1754 implementation note for the non-authoritative adapter from
-    TreeDB typed-storage field metadata and #1736 mapped resources to the
-    transplanted typed-column data plane.
+  - issues #1754/#1755 implementation note for the adapter from TreeDB
+    typed-storage field metadata and #1736 mapped resources to the transplanted
+    typed-column data plane, including opt-in durable scalar publication and
+    reconstruction.
 
 ## Canonical Ownership
 
@@ -190,8 +191,8 @@ TreeDB-wide storage terms (`value log`, `leaf log`, `commit log`,
 Typed physical storage vocabulary (`typed storage`, `typed-row storage`,
 `typed-column storage`, `typed_row_asset`, `typed_column_part`,
 `retained_document`, `document_payload`, and `derived_accelerator`) is owned by
-`typed-storage-naming.md`; the #1753 non-authoritative typed-column transplant
-scope is recorded in `typed-column-transplant.md`, and the #1754 adapter seam is
+`typed-storage-naming.md`; the #1753 typed-column transplant scope is recorded
+in `typed-column-transplant.md`, and the #1754/#1755 adapter/publication seam is
 recorded in `typed-column-adapter.md`. User-command WAL lifecycle terms
 (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`, `WAL-rejected`,
 `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms

@@ -83,7 +83,7 @@ func TestTypedStorageLayoutNormalizeExistingColumnStoreConfigUsesTypedRowAsset(t
 	}
 }
 
-func TestTypedStorageLayoutTypedColumnPlaceholderFailsClosed(t *testing.T) {
+func TestTypedStorageLayoutTypedColumnScalarSupported(t *testing.T) {
 	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
 		Collection: "events",
 		Fields: []TypedStorageField{{
@@ -98,7 +98,29 @@ func TestTypedStorageLayoutTypedColumnPlaceholderFailsClosed(t *testing.T) {
 	}
 	requireTypedStorageOwner(t, layout, "score", TypedStorageOwnerColumnPart)
 	if !layout.HasTypedColumnPartOwners() {
-		t.Fatalf("typed-column placeholder not detected")
+		t.Fatalf("typed-column part owner not detected")
+	}
+	if err := layout.EnsureReadSupported(); err != nil {
+		t.Fatalf("EnsureReadSupported: %v", err)
+	}
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		t.Fatalf("EnsurePublicationSupported: %v", err)
+	}
+}
+
+func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) {
+	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection: "events",
+		Fields: []TypedStorageField{{
+			Name:       "embedding",
+			Path:       "embedding",
+			Owner:      TypedStorageOwnerColumnPart,
+			ValueType:  ColumnStoreValueFloat32Vector,
+			VectorDims: 3,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout: %v", err)
 	}
 	if err := layout.EnsureReadSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
 		t.Fatalf("EnsureReadSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
@@ -256,6 +278,32 @@ func TestTypedStorageCompatibilityAliases(t *testing.T) {
 		t.Fatalf("ResolveTypedStorageLayout with public compatibility config: %v", err)
 	}
 	requireTypedStorageOwner(t, layout, "compat_field", TypedStorageOwnerRowAsset)
+}
+
+func TestTypedStorageCompatibilityConfigCanOptIntoColumnPartOwner(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{{
+			Name:      "score",
+			Path:      "score",
+			ValueType: ColumnStoreValueDouble,
+			Owner:     TypedStorageOwnerColumnPart,
+		}},
+	}
+	layout, err := ResolveTypedStorageLayout(CollectionMeta{
+		Name:    "events",
+		Options: CollectionOptions{ColumnStore: &cfg},
+	})
+	if err != nil {
+		t.Fatalf("ResolveTypedStorageLayout with typed-column owner: %v", err)
+	}
+	requireTypedStorageOwner(t, layout, "score", TypedStorageOwnerColumnPart)
+	if err := layout.EnsureReadSupported(); err != nil {
+		t.Fatalf("EnsureReadSupported: %v", err)
+	}
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		t.Fatalf("EnsurePublicationSupported: %v", err)
+	}
 }
 
 func TestTypedStorageStatusVocabulary(t *testing.T) {
