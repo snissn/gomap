@@ -1,14 +1,16 @@
 package collections
 
 import (
+	"context"
 	"errors"
+	"os"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
-func TestTypedColumnPartDurablePublicationReopenAndReconstruction1755(t *testing.T) {
+func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
@@ -100,6 +102,137 @@ func TestTypedColumnPartDurablePublicationReopenAndReconstruction1755(t *testing
 	}
 }
 
+func TestTypedColumnReconstructionHybridOwners(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := createTypedColumnPartCollection1755(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":7,"kind":"like","score":9.25,"flag":true,"payload":"hybrid"}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	got, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":7,"kind":"like","score":9.25,"flag":true,"payload":"hybrid"}`))
+	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
+}
+
+func TestTypedColumnPublicationRejectsOverlappingOwners(t *testing.T) {
+	_, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection: "events",
+		Fields: []TypedStorageField{
+			{Name: "score_row", Path: "score", Owner: TypedStorageOwnerRowAsset, ValueType: ColumnStoreValueDouble},
+			{Name: "score_column", Path: "score", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueDouble},
+		},
+	})
+	if err == nil {
+		t.Fatal("NormalizeTypedStorageLayout accepted overlapping authoritative owners")
+	}
+}
+
+func TestTypedColumnPublicationMissingAssetFailsClosed(t *testing.T) {
+	d, col, typedRef := setupSingleTypedColumnPart1755(t)
+	defer func() { _ = d.Close() }()
+	removeTypedColumnAssetPayload1755(t, d, col, typedRef)
+	if got, err := col.Get([]byte("e1")); err == nil || got != nil {
+		t.Fatalf("Get with missing typed-column asset got=%s err=%v, want fail-closed error", got, err)
+	}
+}
+
+func TestTypedColumnPublicationCorruptAssetFailsClosed(t *testing.T) {
+	d, col, typedRef := setupSingleTypedColumnPart1755(t)
+	defer func() { _ = d.Close() }()
+	corruptTypedColumnAssetPayload1755(t, d, typedRef)
+	if got, err := col.Get([]byte("e1")); err == nil || got != nil {
+		t.Fatalf("Get with corrupt typed-column asset got=%s err=%v, want fail-closed error", got, err)
+	}
+}
+
+func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnPartCollection1755(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	wantRef := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))[0]
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, reopened, reopenedCol))
+	if len(typedRefs) != 1 || typedRefs[0] != wantRef {
+		t.Fatalf("reopened typed refs=%+v want [%+v]", typedRefs, wantRef)
+	}
+}
+
+func TestTypedColumnReachabilityRefsExposedForMaintenance(t *testing.T) {
+	d, col, typedRef := setupSingleTypedColumnPart1755(t)
+	defer func() { _ = d.Close() }()
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	for _, entry := range plan.Entries {
+		if entry.Ref == typedRef {
+			if entry.Status != ColumnAssetReachabilityProtected {
+				t.Fatalf("typed ref reachability status=%s want protected entry=%+v", entry.Status, entry)
+			}
+			return
+		}
+	}
+	t.Fatalf("typed ref %+v not exposed in reachability entries=%+v", typedRef, plan.Entries)
+}
+
+func TestTypedColumnPublicationExistingTypedRowCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: testColumnStoreConfig(nil)}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","did":"d1","payload":"row"}`)}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	if typedRefs := typedColumnPartRefs1755(refs); len(typedRefs) != 0 {
+		t.Fatalf("existing typed-row config published typed-column refs=%+v", typedRefs)
+	}
+	if physicalRefs := columnManifestPhysicalAssetRefsForTestM1634(refs); len(physicalRefs) != 1 {
+		t.Fatalf("physical refs=%+v want one", physicalRefs)
+	}
+	got, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","did":"d1","payload":"row"}`))
+}
+
 func TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -151,7 +284,7 @@ func TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) 
 	}
 }
 
-func TestTypedColumnPartUnsupportedValueFailsClosed1755(t *testing.T) {
+func TestTypedColumnPublicationUnsupportedValueFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
@@ -179,6 +312,66 @@ func TestTypedColumnPartUnsupportedValueFailsClosed1755(t *testing.T) {
 	_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"embedding":[1,2,3]}`)})
 	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
 		t.Fatalf("InsertBatch error=%v want ErrCommandWALRejected", err)
+	}
+}
+
+func setupSingleTypedColumnPart1755(t testing.TB) (*backenddb.DB, *Collection, ColumnAssetRef) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnPartCollection1755(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`)}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(typedRefs) != 1 {
+		_ = d.Close()
+		t.Fatalf("typed refs=%+v want one", typedRefs)
+	}
+	return d, col, typedRefs[0]
+}
+
+func removeTypedColumnAssetPayload1755(t testing.TB, d *backenddb.DB, col *Collection, typedRef ColumnAssetRef) {
+	t.Helper()
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), typedRef)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	for _, physicalRef := range columnManifestPhysicalAssetRefsForTestM1634(columnManifestAssetRefsForCollectionM12A(t, d, col)) {
+		if physicalRef.FileID == typedRef.FileID && physicalRef.Offset+physicalRef.Length > typedRef.Offset {
+			t.Fatalf("cannot remove typed payload without damaging physical row asset: physical=%+v typed=%+v", physicalRef, typedRef)
+		}
+	}
+	if err := os.Truncate(path, typedRef.Offset); err != nil {
+		t.Fatalf("truncate typed-column asset payload: %v", err)
+	}
+}
+
+func corruptTypedColumnAssetPayload1755(t testing.TB, d *backenddb.DB, typedRef ColumnAssetRef) {
+	t.Helper()
+	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), typedRef)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open typed-column asset segment: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	buf := []byte{0}
+	if _, err := f.ReadAt(buf, typedRef.Offset); err != nil {
+		t.Fatalf("read typed-column asset byte: %v", err)
+	}
+	buf[0] ^= 0xff
+	if _, err := f.WriteAt(buf, typedRef.Offset); err != nil {
+		t.Fatalf("corrupt typed-column asset byte: %v", err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync corrupt typed-column asset: %v", err)
 	}
 }
 
