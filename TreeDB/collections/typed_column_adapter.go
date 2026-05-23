@@ -13,7 +13,11 @@ import (
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
-const typedColumnAdapterPrimaryIDColumn = "__treedb_primary_id"
+const (
+	typedColumnAdapterPrimaryIDColumn       = "__treedb_primary_id"
+	typedColumnAdapterMetadataDictionary    = "__treedb_adapter_metadata"
+	typedColumnAdapterMetadataValueTypeMark = "value_type"
+)
 
 type typedColumnAdapterTypeStatus string
 
@@ -113,6 +117,9 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	}
 	if name == typedColumnAdapterPrimaryIDColumn || field.Path == typedColumnAdapterPrimaryIDColumn {
 		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q uses reserved primary-id column %q", field.Path, typedColumnAdapterPrimaryIDColumn)
+	}
+	if name == typedColumnAdapterMetadataDictionary || field.Path == typedColumnAdapterMetadataDictionary {
+		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q uses reserved metadata dictionary %q", field.Path, typedColumnAdapterMetadataDictionary)
 	}
 	def := typedcolumn.ColumnDefinition{
 		Name:           name,
@@ -249,6 +256,9 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 	}
 	dictionaries, err := image.Dictionaries()
 	if err != nil {
+		return nil, err
+	}
+	if err := validateTypedColumnAdapterMetadata(dictionaries, columns); err != nil {
 		return nil, err
 	}
 	for i := range columns {
@@ -429,12 +439,37 @@ func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string
 	return reverse
 }
 
+func typedColumnAdapterMetadataKey(column typedColumnAdapterColumn) string {
+	return column.Definition.Name + "\x00" + typedColumnAdapterMetadataValueTypeMark + "\x00" + string(column.Field.ValueType)
+}
+
+func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64, columns []typedColumnAdapterColumn) error {
+	if len(columns) == 0 {
+		return nil
+	}
+	metadata := dictionaries[typedColumnAdapterMetadataDictionary]
+	if len(metadata) == 0 {
+		return fmt.Errorf("collections: typed-column adapter image missing metadata dictionary %q", typedColumnAdapterMetadataDictionary)
+	}
+	for _, column := range columns {
+		if _, ok := metadata[typedColumnAdapterMetadataKey(column)]; !ok {
+			return fmt.Errorf("collections: typed-column adapter image value type metadata mismatch for column %q", column.Definition.Name)
+		}
+	}
+	return nil
+}
+
 func typedColumnAdapterDictionaries(columns []typedColumnAdapterColumn) map[string]map[string]int64 {
 	out := make(map[string]map[string]int64)
-	for _, column := range columns {
+	metadata := make(map[string]int64, len(columns))
+	for i, column := range columns {
+		metadata[typedColumnAdapterMetadataKey(column)] = int64(i + 1)
 		if len(column.Dictionary) != 0 {
 			out[column.Definition.Name] = column.Dictionary
 		}
+	}
+	if len(metadata) != 0 {
+		out[typedColumnAdapterMetadataDictionary] = metadata
 	}
 	if len(out) == 0 {
 		return nil

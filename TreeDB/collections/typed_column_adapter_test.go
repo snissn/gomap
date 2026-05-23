@@ -294,6 +294,11 @@ func TestTypedColumnAdapterReservedPrimaryIDFailsClosed(t *testing.T) {
 			t.Fatalf("build reserved field %+v err=%v want reserved primary-id column", field, err)
 		}
 	}
+	metadata := typedColumnAdapterField(typedColumnAdapterMetadataDictionary, ColumnStoreValueString)
+	_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{metadata}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "reserved metadata dictionary") {
+		t.Fatalf("build metadata-reserved field err=%v want reserved metadata dictionary", err)
+	}
 }
 
 func TestTypedColumnAdapterDuplicateOrAmbiguousFieldsFailClosed(t *testing.T) {
@@ -332,6 +337,19 @@ func TestTypedColumnAdapterImageSchemaMismatchFailsClosed(t *testing.T) {
 	mismatch := typedColumnAdapterField("count", ColumnStoreValueBool)
 	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
 		t.Fatalf("partFromImage schema mismatch err=%v want schema mismatch", err)
+	}
+}
+
+func TestTypedColumnAdapterImageValueTypeMetadataMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("score", ColumnStoreValueDouble)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueDouble, Present: true, Double: 42.5}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	mismatch := typedColumnAdapterField("score", ColumnStoreValueFloat32)
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "value type metadata mismatch") {
+		t.Fatalf("partFromImage value-type mismatch err=%v want value type metadata mismatch", err)
 	}
 }
 
