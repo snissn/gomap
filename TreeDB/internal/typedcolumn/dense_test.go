@@ -86,6 +86,49 @@ func TestTypedColumnAdjacencyMisalignedFallsBackOrFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnDenseDescriptorRejectsTruncatedRawBytes1756(t *testing.T) {
+	part := mustDenseVectorAdjacencyPart1756(t)
+	for _, tc := range []struct {
+		name               string
+		columnType         ColumnType
+		fixedWidthElements int
+	}{
+		{name: "embedding", columnType: ColumnTypeFloat32Vector, fixedWidthElements: 3},
+		{name: "neighbors", columnType: ColumnTypeAdjacencyList, fixedWidthElements: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			block := part.Columns[tc.name].Blocks[0].Descriptor
+			block.RawBytes -= 4
+			block.StoredBytes -= 4
+			err := validateDecodedColumnBlockDescriptor(part.Descriptor, tc.name, tc.columnType, 0, tc.fixedWidthElements, 0, block)
+			if err == nil || !strings.Contains(err.Error(), "dense raw bytes") {
+				t.Fatalf("validate truncated dense descriptor err=%v, want dense raw-bytes failure", err)
+			}
+		})
+	}
+}
+
+func TestTypedColumnDenseDescriptorRejectsCompressedBlocks1756(t *testing.T) {
+	part := mustDenseVectorAdjacencyPart1756(t)
+	for _, tc := range []struct {
+		name               string
+		columnType         ColumnType
+		fixedWidthElements int
+	}{
+		{name: "embedding", columnType: ColumnTypeFloat32Vector, fixedWidthElements: 3},
+		{name: "neighbors", columnType: ColumnTypeAdjacencyList, fixedWidthElements: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			block := part.Columns[tc.name].Blocks[0].Descriptor
+			block.Compression = CompressionSnappy
+			err := validateDecodedColumnBlockDescriptor(part.Descriptor, tc.name, tc.columnType, 0, tc.fixedWidthElements, 0, block)
+			if err == nil || !strings.Contains(err.Error(), "dense compression") {
+				t.Fatalf("validate compressed dense descriptor err=%v, want dense compression failure", err)
+			}
+		})
+	}
+}
+
 func TestTypedColumnVectorLogicalPrimaryKeyFailsClosed1756(t *testing.T) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -113,6 +156,56 @@ func TestTypedColumnVectorLogicalPrimaryKeyFailsClosed1756(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "logical primary key column embedding type=float32_vector is not scalar") {
 		t.Fatalf("BuildColumnPart err=%v, want vector logical primary key fail-closed", err)
+	}
+}
+
+func TestTypedColumnAggregateMetadataVectorPredicateFailsClosed1756(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("BuildColumnPart panicked for vector aggregate predicate: %v", r)
+		}
+	}()
+	_, err := BuildColumnPart(10, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "time_us", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "kind_code", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone, CompressionSet: true, Cardinality: 3},
+			{Name: "embedding", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 3},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+		AggregateMetadata: []AggregateMetadataDefinition{{
+			Name:      "kind_time",
+			Version:   AggregateMetadataDefinitionVersion,
+			Kind:      AggregateMetadataGroupMinMax,
+			Scope:     AggregateMetadataScopeGranule,
+			GroupKeys: []string{"kind_code"},
+			Measures: []AggregateMetadataMeasure{
+				{Op: AggregateMetadataMeasureCount},
+				{Op: AggregateMetadataMeasureMin, Column: "time_us"},
+				{Op: AggregateMetadataMeasureMax, Column: "time_us"},
+			},
+			Predicates:     []AggregateMetadataPredicate{{Column: "embedding", Op: AggregateMetadataPredicateEq, Value: 1}},
+			MaxBytesPerRow: 256,
+		}},
+	}, Batch{
+		Rows: 2,
+		Columns: map[string][]int64{
+			"id":        {10, 11},
+			"time_us":   {100, 200},
+			"kind_code": {1, 2},
+		},
+		Float32Vectors: map[string][]float32{"embedding": {1, 0.5, -0.25, 2, 3, 4}},
+	})
+	if err == nil {
+		t.Fatalf("BuildColumnPart err=nil for vector aggregate predicate")
+	}
+	if !strings.Contains(err.Error(), "aggregate metadata kind_time predicate column embedding type=float32_vector is not scalar") {
+		t.Fatalf("BuildColumnPart err=%v, want vector aggregate predicate fail-closed", err)
 	}
 }
 

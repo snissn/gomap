@@ -526,6 +526,14 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if block.RawBytes > maxRawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d raw bytes=%d exceed max=%d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 	}
+	if columnType == ColumnTypeFloat32Vector || columnType == ColumnTypeAdjacencyList {
+		if block.Compression != CompressionNone {
+			return fmt.Errorf("typedcolumn: descriptor column %s block %d dense compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
+		}
+		if block.RawBytes != maxRawBytes {
+			return fmt.Errorf("typedcolumn: descriptor column %s block %d dense raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
+		}
+	}
 	if block.Compression == CompressionNone && block.StoredBytes != block.RawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d uncompressed stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
