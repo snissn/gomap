@@ -104,7 +104,23 @@ func (p *ColumnPart) AggregateMetadataByName(name string) (AggregateMetadata, bo
 		return AggregateMetadata{}, false
 	}
 	metadata, ok := p.AggregateMetadata[name]
-	return metadata, ok
+	if !ok {
+		return AggregateMetadata{}, false
+	}
+	return cloneAggregateMetadata(metadata), true
+}
+
+func cloneAggregateMetadata(metadata AggregateMetadata) AggregateMetadata {
+	metadata.Definition = cloneAggregateMetadataDefinition(metadata.Definition)
+	if len(metadata.Granules) != 0 {
+		granules := make([]AggregateMetadataGranule, len(metadata.Granules))
+		for i, granule := range metadata.Granules {
+			granules[i] = granule
+			granules[i].Entries = append([]AggregateMetadataEntry(nil), granule.Entries...)
+		}
+		metadata.Granules = granules
+	}
+	return metadata
 }
 
 func normalizeAggregateMetadataDefinition(def AggregateMetadataDefinition, columns map[string]ColumnDefinition) (AggregateMetadataDefinition, error) {

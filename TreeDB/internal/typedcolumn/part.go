@@ -415,7 +415,10 @@ func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []
 	if rows[0] < 0 || rows[len(rows)-1] >= s.part.Descriptor.RowCount {
 		return nil, PartScanDiagnostics{}, fmt.Errorf("typedcolumn: visible row range [%d,%d] outside part rows=%d", rows[0], rows[len(rows)-1], s.part.Descriptor.RowCount)
 	}
-	out := dst
+	out := dst[:0]
+	if cap(out) < len(rows) {
+		out = make([]int64, 0, len(rows))
+	}
 	var diagnostics PartScanDiagnostics
 	rowIndex := 0
 	for _, block := range column.Blocks {
@@ -670,8 +673,10 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 	if batch.Columns == nil {
 		return 0, errors.New("typedcolumn: nil column batch")
 	}
+	declared := make(map[string]struct{}, len(defs))
 	rows := batch.Rows
 	for _, def := range defs {
+		declared[def.Name] = struct{}{}
 		values, ok := batch.Columns[def.Name]
 		if !ok {
 			return 0, fmt.Errorf("typedcolumn: missing column %s", def.Name)
@@ -681,6 +686,11 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 		}
 		if len(values) != rows {
 			return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+		}
+	}
+	for name := range batch.Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared column %s", name)
 		}
 	}
 	if rows <= 0 {

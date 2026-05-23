@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -267,6 +268,48 @@ func TestTypedColumnTransplantPredicateMetadataRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTypedColumnTransplantBuildRejectsUndeclaredBatchColumn(t *testing.T) {
+	batch := transplantTestBatch()
+	batch.Columns["extra"] = []int64{1, 2, 3, 4, 5, 6}
+	_, err := BuildColumnPart(204, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), batch)
+	if err == nil || !strings.Contains(err.Error(), "undeclared column extra") {
+		t.Fatalf("BuildColumnPart undeclared err=%v want undeclared column", err)
+	}
+}
+
+func TestTypedColumnTransplantEncodeInt64PayloadResetsDestination(t *testing.T) {
+	for _, encoding := range []Encoding{EncodingDeltaVarint, EncodingDoubleDeltaVarint} {
+		got, err := encodeInt64Payload([]byte{0xff, 0xff, 0xff}, []int64{1, 2, 3}, encoding)
+		if err != nil {
+			t.Fatalf("encodeInt64Payload(%s): %v", encoding, err)
+		}
+		if len(got) == 0 || got[0] == 0xff {
+			t.Fatalf("encodeInt64Payload(%s) kept stale destination prefix: %v", encoding, got)
+		}
+	}
+}
+
+func TestTypedColumnTransplantScanColumnRowsIntoResetsDestination(t *testing.T) {
+	part := mustTransplantPart(t, 205, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	scanner := part.NewScanner()
+	got, _, err := scanner.scanColumnRowsInto("value", []int64{999, 888}, []int{0, 2})
+	if err != nil {
+		t.Fatalf("scanColumnRowsInto: %v", err)
+	}
+	assertTransplantInt64s(t, "selected values", got, []int64{100, 300})
+}
+
+func TestTypedColumnTransplantBuildImageRejectsLocatorKeyMismatch(t *testing.T) {
+	part := clonePartWithLocators(mustTransplantPart(t, 206, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
+	locator := part.Locators[1]
+	locator.PrimaryID = 999
+	part.Locators[1] = locator
+	_, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err == nil || !strings.Contains(err.Error(), "row locator key 1 has primary id 999") {
+		t.Fatalf("BuildColumnPartImage locator mismatch err=%v want primary id mismatch", err)
+	}
+}
+
 func TestTypedColumnTransplantDictionaryAggregateDescriptorsRoundTrip(t *testing.T) {
 	opts := transplantTestOptions([]SortKeyColumn{{Column: "id"}})
 	opts.AggregateMetadata = []AggregateMetadataDefinition{transplantAggregateMetadataDefinition()}
@@ -299,6 +342,26 @@ func TestTypedColumnTransplantDictionaryAggregateDescriptorsRoundTrip(t *testing
 	}
 }
 
+func TestTypedColumnTransplantAggregateMetadataByNameReturnsDeepCopy(t *testing.T) {
+	opts := transplantTestOptions([]SortKeyColumn{{Column: "id"}})
+	opts.AggregateMetadata = []AggregateMetadataDefinition{transplantAggregateMetadataDefinition()}
+	part := mustTransplantPart(t, 109, opts, transplantTestBatch())
+	metadata, ok := part.AggregateMetadataByName("kind_time")
+	if !ok || len(metadata.Definition.GroupKeys) == 0 || len(metadata.Granules) == 0 || len(metadata.Granules[0].Entries) == 0 {
+		t.Fatalf("missing aggregate metadata shape: ok=%v metadata=%+v", ok, metadata)
+	}
+	metadata.Definition.GroupKeys[0] = "mutated"
+	metadata.Granules[0].Entries[0].Count = 999
+
+	again, ok := part.AggregateMetadataByName("kind_time")
+	if !ok {
+		t.Fatalf("missing aggregate metadata after mutation")
+	}
+	if again.Definition.GroupKeys[0] == "mutated" || again.Granules[0].Entries[0].Count == 999 {
+		t.Fatalf("AggregateMetadataByName returned mutable internals: %+v", again)
+	}
+}
+
 func TestTypedColumnTransplantFixedWidthSectionsAreAligned(t *testing.T) {
 	image := mustTransplantImage(t, mustTransplantPart(t, 108, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
 	for _, section := range image.Sections {
@@ -318,14 +381,13 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
-	matches, err := filepath.Glob(filepath.Join(collectionsDir, "*.go"))
-	if err != nil {
-		t.Fatalf("glob collections: %v", err)
-	}
 	fset := token.NewFileSet()
-	for _, path := range matches {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
+	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
 		}
 		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
 		if err != nil {
@@ -336,6 +398,10 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 				t.Fatalf("production collections import typedcolumn in %s; #1753 must not publish/control-plane integrate it", path)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk collections: %v", err)
 	}
 }
 

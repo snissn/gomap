@@ -349,6 +349,8 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 	case EncodingDeltaVarint:
 		if cap(dst) < len(values)*2 {
 			dst = make([]byte, 0, len(values)*2)
+		} else {
+			dst = dst[:0]
 		}
 		var buf [binary.MaxVarintLen64]byte
 		prev := int64(0)
@@ -365,6 +367,8 @@ func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, 
 	case EncodingDoubleDeltaVarint:
 		if cap(dst) < len(values)*2 {
 			dst = make([]byte, 0, len(values)*2)
+		} else {
+			dst = dst[:0]
 		}
 		var buf [binary.MaxVarintLen64]byte
 		prev := int64(0)

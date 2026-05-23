@@ -121,6 +121,10 @@ func (r *PartSetReader) LatestLocator(primaryID int64) (RowLocator, bool) {
 	return ref.Locator, true
 }
 
+// ScanLatestLocator recomputes latest-visible selection from the caller-owned
+// parts instead of reading the cached index. It is retained as a data-plane
+// cross-check and adapter seam for future lazy/mappedresource-backed readers;
+// immutable in-memory parts should match LatestLocator.
 func (r *PartSetReader) ScanLatestLocator(primaryID int64) (RowLocator, bool) {
 	ref, ok := r.scanLatestRowRef(primaryID)
 	if !ok {

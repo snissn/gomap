@@ -518,6 +518,9 @@ func (b *columnPartImageBuilder) addSortKeyMarksSection() error {
 }
 
 func (b *columnPartImageBuilder) addRowLocatorsSection() error {
+	if err := validateDecodedRowLocators(b.part.Descriptor, b.part.Descriptor.PartID, b.part.Locators); err != nil {
+		return err
+	}
 	primaryIDs := make([]int64, 0, len(b.part.Locators))
 	for primaryID := range b.part.Locators {
 		primaryIDs = append(primaryIDs, primaryID)
@@ -538,7 +541,7 @@ func (b *columnPartImageBuilder) addRowLocatorsSection() error {
 	enc.u32(uint32(len(primaryIDs)))
 	for _, primaryID := range primaryIDs {
 		locator := b.part.Locators[primaryID]
-		enc.i64(locator.PrimaryID)
+		enc.i64(primaryID)
 		enc.u64(locator.PartID)
 		enc.u32(uint32(locator.PartRow))
 		enc.u32(uint32(locator.GranuleOrdinal))

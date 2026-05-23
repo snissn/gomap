@@ -59,7 +59,10 @@ func EncodeTCS1ColumnPartImage(image ColumnPartImage) ([]byte, TCS1PartRecord, e
 		return nil, TCS1PartRecord{}, fmt.Errorf("typedcolumn: TCS1 encode image version=%d parsed image version=%d", image.Version, parsed.Version)
 	}
 	payloadBytes := len(image.Bytes)
-	totalBytes := tcs1HeaderBytes + payloadBytes
+	totalBytes, err := checkedAddInt(tcs1HeaderBytes, payloadBytes, "typedcolumn: TCS1 total bytes")
+	if err != nil {
+		return nil, TCS1PartRecord{}, err
+	}
 	out := make([]byte, totalBytes)
 	binary.LittleEndian.PutUint32(out[tcs1MagicOffset:tcs1VersionOffset], tcs1Magic)
 	binary.LittleEndian.PutUint16(out[tcs1VersionOffset:tcs1KindOffset], tcs1Version)
