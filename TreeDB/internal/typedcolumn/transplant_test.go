@@ -207,6 +207,40 @@ func TestTypedColumnTransplantPartSetLatestVisibleRows(t *testing.T) {
 	}
 }
 
+func TestTypedColumnTransplantPartSetRejectsMissingLocators(t *testing.T) {
+	part := mustTransplantPart(t, 203, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image := mustTransplantImage(t, part)
+	scanOnlyPart, err := ColumnPartFromImageWithOptions(image, ColumnPartImageReadOptions{})
+	if err != nil {
+		t.Fatalf("ColumnPartFromImageWithOptions(scan-only): %v", err)
+	}
+	if _, err := NewPartSetReader([]PartRef{{Role: PartRoleBase, GenerationID: 1, Part: scanOnlyPart}}, nil); err == nil || !strings.Contains(err.Error(), "row locator count=0") {
+		t.Fatalf("scan-only part set err=%v want missing row locator count", err)
+	}
+
+	partial := clonePartWithLocators(part)
+	delete(partial.Locators, int64(1))
+	if _, err := NewPartSetReader([]PartRef{{Role: PartRoleBase, GenerationID: 1, Part: partial}}, nil); err == nil || !strings.Contains(err.Error(), "row locator count=5") {
+		t.Fatalf("partial locator part set err=%v want partial row locator count", err)
+	}
+
+	duplicate := clonePartWithLocators(part)
+	first, ok := duplicate.LocatePrimaryID(1)
+	if !ok {
+		t.Fatalf("missing locator for id 1")
+	}
+	duplicate.Locators[2] = RowLocator{
+		PrimaryID:      2,
+		PartID:         first.PartID,
+		PartRow:        first.PartRow,
+		GranuleOrdinal: first.GranuleOrdinal,
+		RowInGranule:   first.RowInGranule,
+	}
+	if _, err := NewPartSetReader([]PartRef{{Role: PartRoleBase, GenerationID: 1, Part: duplicate}}, nil); err == nil || !strings.Contains(err.Error(), "duplicate row locator part row") {
+		t.Fatalf("duplicate locator part set err=%v want duplicate row locator", err)
+	}
+}
+
 func TestTypedColumnTransplantPredicateMetadataRoundTrip(t *testing.T) {
 	part := mustTransplantPart(t, 106, transplantTestOptions([]SortKeyColumn{{Column: "kind_code"}, {Column: "time_us"}}), transplantTestBatch())
 	image := mustTransplantImage(t, part)
@@ -367,6 +401,15 @@ func mustTransplantImage(t *testing.T, part *ColumnPart) ColumnPartImage {
 		t.Fatalf("BuildColumnPartImage: %v", err)
 	}
 	return image
+}
+
+func clonePartWithLocators(part *ColumnPart) *ColumnPart {
+	clone := *part
+	clone.Locators = make(map[int64]RowLocator, len(part.Locators))
+	for primaryID, locator := range part.Locators {
+		clone.Locators[primaryID] = locator
+	}
+	return &clone
 }
 
 func assertTransplantInt64s(t *testing.T, name string, got []int64, want []int64) {

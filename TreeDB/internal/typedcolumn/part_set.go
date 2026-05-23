@@ -167,6 +167,9 @@ func (r *PartSetReader) buildVisibility(tombstones []Tombstone) error {
 			stats.DeltaParts++
 		}
 		stats.InputRows += loaded.Part.Descriptor.RowCount
+		if err := validateDecodedRowLocators(loaded.Part.Descriptor, loaded.Part.Descriptor.PartID, loaded.Part.Locators); err != nil {
+			return fmt.Errorf("typedcolumn: part set part %d locators: %w", loaded.Part.Descriptor.PartID, err)
+		}
 		for primaryID, locator := range loaded.Part.Locators {
 			if locator.PartID != loaded.Part.Descriptor.PartID {
 				return fmt.Errorf("typedcolumn: part set locator part=%d want %d", locator.PartID, loaded.Part.Descriptor.PartID)
