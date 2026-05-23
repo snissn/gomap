@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -115,6 +117,96 @@ func TestColumnAssetReachabilityPlanClassifiesCandidateRefsAndPinsM15A(t *testin
 	}
 	if pinned.RewriteDebtBytes != 0 {
 		t.Fatalf("pinned rewrite debt=%d want 0", pinned.RewriteDebtBytes)
+	}
+}
+
+func TestMappedResourcePinnedRefsProtectColumnAssetReachability(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+	basePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability unpinned: %v", err)
+	}
+	if basePlan.Refs.Reclaimable != 1 {
+		t.Fatalf("unpinned ref stats=%+v want one reclaimable candidate", basePlan.Refs)
+	}
+
+	cfg := col.Meta().Options.ColumnStore
+	manager := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(d.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		t.Fatalf("new read cache: %v", err)
+	}
+	scope := mappedresource.Scope{
+		Kind:       mappedresource.ScopeSnapshot,
+		ID:         "snapshot-reachability-pin",
+		Namespace:  cfg.AssetManager.Namespace,
+		Collection: "events",
+		Generation: candidate.Generation,
+		Reason:     "reachability-test",
+	}
+	if err := readCache.useMappedResourceManager(manager, scope, "reachability-pinned-read"); err != nil {
+		_ = readCache.close()
+		t.Fatalf("useMappedResourceManager: %v", err)
+	}
+	raw, err := readCache.read(candidate, nil)
+	if err != nil {
+		_ = readCache.close()
+		t.Fatalf("read candidate: %v", err)
+	}
+	if int64(len(raw)) != candidate.Length {
+		_ = readCache.close()
+		t.Fatalf("candidate read bytes=%d want %d", len(raw), candidate.Length)
+	}
+	pinnedRefs := readCache.mappedResourcePinnedRefs()
+	if len(pinnedRefs) != 1 || pinnedRefs[0] != candidate {
+		_ = readCache.close()
+		t.Fatalf("mappedresource pinned refs=%+v want candidate %+v", pinnedRefs, candidate)
+	}
+
+	pinnedPlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+		PinnedRefs:    pinnedRefs,
+	})
+	if err != nil {
+		_ = readCache.close()
+		t.Fatalf("PlanColumnAssetReachability pinned: %v", err)
+	}
+	if pinnedPlan.Sources.PinnedRefs != 1 || pinnedPlan.Refs.Reclaimable != 0 || pinnedPlan.RewriteDebtBytes != 0 {
+		_ = readCache.close()
+		t.Fatalf("pinned plan stats=%+v sources=%+v rewriteDebt=%d", pinnedPlan.Refs, pinnedPlan.Sources, pinnedPlan.RewriteDebtBytes)
+	}
+	foundPinnedCandidate := false
+	for _, entry := range pinnedPlan.Entries {
+		if entry.Ref != candidate {
+			continue
+		}
+		foundPinnedCandidate = true
+		if entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePinnedSnapshot) {
+			_ = readCache.close()
+			t.Fatalf("pinned candidate entry=%+v want protected with pinned source", entry)
+		}
+	}
+	if !foundPinnedCandidate {
+		_ = readCache.close()
+		t.Fatal("missing pinned candidate entry")
+	}
+	if err := readCache.close(); err != nil {
+		t.Fatalf("close read cache: %v", err)
+	}
+	if pins := manager.PinSummary(); len(pins) != 0 {
+		t.Fatalf("pins after close=%d want 0", len(pins))
 	}
 }
 

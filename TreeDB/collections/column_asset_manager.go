@@ -915,6 +915,13 @@ func (c *columnPhysicalAssetReadCache) mappedResourcePins() []mappedresource.Pin
 	return c.resourceManager.PinSummary()
 }
 
+func (c *columnPhysicalAssetReadCache) mappedResourcePinnedRefs() []ColumnAssetRef {
+	if c == nil {
+		return nil
+	}
+	return columnAssetRefsForMappedResourcePins(c.mappedResourcePins(), c.namespace)
+}
+
 func (c *columnPhysicalAssetReadCache) releaseResourceHandles() error {
 	if c == nil || len(c.resourceHandles) == 0 {
 		return nil
@@ -1121,6 +1128,49 @@ func mappedResourceKeyForColumnAssetRef(ref ColumnAssetRef) mappedresource.Key {
 		Length:     ref.Length,
 		Checksum:   uint64(ref.Checksum),
 	}
+}
+
+func columnAssetRefsForMappedResourcePins(pins []mappedresource.Pin, namespace string) []ColumnAssetRef {
+	if len(pins) == 0 {
+		return nil
+	}
+	refs := make([]ColumnAssetRef, 0, len(pins))
+	for _, pin := range pins {
+		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
+		if !ok {
+			continue
+		}
+		if namespace != "" && ref.Namespace != namespace {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func columnAssetRefForMappedResourceKey(key mappedresource.Key) (ColumnAssetRef, bool) {
+	switch key.Class {
+	case mappedresource.ClassTypedRowAsset, mappedresource.ClassTypedColumnAsset:
+	default:
+		return ColumnAssetRef{}, false
+	}
+	if key.Checksum != uint64(uint32(key.Checksum)) {
+		return ColumnAssetRef{}, false
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKind(key.Kind),
+		Namespace:  key.Namespace,
+		Generation: key.Generation,
+		PartID:     key.PartID,
+		FileID:     key.FileID,
+		Offset:     key.Offset,
+		Length:     key.Length,
+		Checksum:   uint32(key.Checksum),
+	}
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return ColumnAssetRef{}, false
+	}
+	return ref, true
 }
 
 func mappedResourceValidationModeForColumnAssetIntegrity(integrity ColumnAssetReadIntegrity) mappedresource.ValidationMode {
