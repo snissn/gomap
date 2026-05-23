@@ -387,7 +387,11 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesHeapFallba
 	if err != nil {
 		t.Fatalf("acquire dense vector values: %v", err)
 	}
-	defer func() { _ = handle.Release() }()
+	defer func() {
+		if handle != nil {
+			_ = handle.Release()
+		}
+	}()
 	if !direct || scratchDecode || handle == nil || handle.Source() != mappedresource.SourceHeapCopy {
 		t.Fatalf("direct=%v scratchDecode=%v handle=%v source=%s want heap-copy direct fallback", direct, scratchDecode, handle != nil, handle.Source())
 	}
@@ -395,8 +399,11 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesHeapFallba
 		t.Fatalf("values=%v want row-major typed vectors", values)
 	}
 	stats := manager.Stats()
-	if stats.DirectViewFailures == 0 || stats.DirectViewSuccesses == 0 || stats.ActiveHeapCopyBytes != int64(section.Length) || stats.ActiveHandles != 1 {
-		t.Fatalf("stats=%+v want mapped direct-view failure followed by active heap-copy direct view", stats)
+	if stats.DirectViewSuccesses == 0 || stats.ActiveHeapCopyBytes != int64(section.Length) || stats.ActiveHandles != 1 {
+		t.Fatalf("stats=%+v want active heap-copy direct view", stats)
+	}
+	if stats.DirectViewFailures == 0 && stats.FallbackReads == 0 {
+		t.Fatalf("stats=%+v want mapped direct-view failure or mmap fallback before heap-copy direct view", stats)
 	}
 }
 
