@@ -300,6 +300,10 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 			if len(dict) == 0 {
 				return nil, fmt.Errorf("collections: typed-column adapter image missing dictionary for %q", columns[i].Definition.Name)
 			}
+			partColumn := part.Columns[columns[i].Definition.Name]
+			if err := validateTypedColumnAdapterStringDictionary(columns[i], partColumn.Definition.Cardinality, dict); err != nil {
+				return nil, err
+			}
 			columns[i].Dictionary = dict
 			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
 		}
@@ -317,6 +321,19 @@ func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns
 	}
 	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 || primary.Definition.Encoding != typedcolumn.EncodingRawInt64 {
 		return fmt.Errorf("collections: typed-column adapter image primary-id column %q type/encoding mismatch", typedColumnAdapterPrimaryIDColumn)
+	}
+	expected := make(map[string]struct{}, len(columns)+1)
+	expected[typedColumnAdapterPrimaryIDColumn] = struct{}{}
+	for _, column := range columns {
+		expected[column.Definition.Name] = struct{}{}
+	}
+	for name := range part.Columns {
+		if _, ok := expected[name]; !ok {
+			return fmt.Errorf("collections: typed-column adapter image unexpected column %q", name)
+		}
+	}
+	if len(part.Columns) != len(expected) {
+		return fmt.Errorf("collections: typed-column adapter image column count=%d want %d", len(part.Columns), len(expected))
 	}
 	for _, column := range columns {
 		got, ok := part.Columns[column.Definition.Name]
@@ -509,18 +526,19 @@ func decodeTypedColumnAdapterValue(column typedColumnAdapterColumn, raw int64) (
 }
 
 func typedColumnAdapterRowValue(row typedColumnAdapterRow, column typedColumnAdapterColumn) (columnDeclaredValue, bool, error) {
-	pathValue, pathOK := row.Values[column.Field.Path]
-	if column.Field.Name == "" || column.Field.Name == column.Field.Path {
+	pathKey := column.Field.Path
+	if pathKey == "" {
+		pathKey = column.Field.Name
+	}
+	pathValue, pathOK := row.Values[pathKey]
+	if column.Field.Name == "" || column.Field.Name == pathKey {
 		return pathValue, pathOK, nil
 	}
-	nameValue, nameOK := row.Values[column.Field.Name]
+	_, nameOK := row.Values[column.Field.Name]
 	if pathOK && nameOK {
-		return columnDeclaredValue{}, false, fmt.Errorf("ambiguous field keys %q and %q", column.Field.Path, column.Field.Name)
+		return columnDeclaredValue{}, false, fmt.Errorf("ambiguous field keys %q and %q", pathKey, column.Field.Name)
 	}
-	if pathOK {
-		return pathValue, true, nil
-	}
-	return nameValue, nameOK, nil
+	return pathValue, pathOK, nil
 }
 
 func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, rows []typedColumnAdapterRow) (map[string]int64, error) {
@@ -552,6 +570,31 @@ func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string
 		reverse[code] = value
 	}
 	return reverse
+}
+
+func validateTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, cardinality uint32, dict map[string]int64) error {
+	if cardinality == 0 {
+		return fmt.Errorf("collections: typed-column adapter image dictionary for %q has zero cardinality", column.Definition.Name)
+	}
+	if uint64(len(dict)) != uint64(cardinality) {
+		return fmt.Errorf("collections: typed-column adapter image dictionary cardinality mismatch for %q: got %d want %d", column.Definition.Name, len(dict), cardinality)
+	}
+	seen := make(map[int64]string, len(dict))
+	for value, code := range dict {
+		if code < 0 || uint64(code) >= uint64(cardinality) {
+			return fmt.Errorf("collections: typed-column adapter image dictionary code %d for %q outside cardinality %d", code, column.Definition.Name, cardinality)
+		}
+		if previous, ok := seen[code]; ok {
+			return fmt.Errorf("collections: typed-column adapter image dictionary duplicate code %d for %q values %q and %q", code, column.Definition.Name, previous, value)
+		}
+		seen[code] = value
+	}
+	for code := int64(0); code < int64(cardinality); code++ {
+		if _, ok := seen[code]; !ok {
+			return fmt.Errorf("collections: typed-column adapter image dictionary missing code %d for %q", code, column.Definition.Name)
+		}
+	}
+	return nil
 }
 
 func typedColumnAdapterMetadataKey(column typedColumnAdapterColumn) string {
