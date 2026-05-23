@@ -112,6 +112,9 @@ func (c *Collection) RunTypedColumnInt64PredicateScan(req TypedColumnInt64Predic
 		return TypedColumnInt64PredicateScanResult{}, fmt.Errorf("%w: typed-column int64 predicate column %q has type=%q nullable=%v", ErrColumnQueryPlanUnsupported, req.Column, col.ValueType, col.Nullable)
 	}
 	if !columnStoreColumnIsTypedColumnPart(col) {
+		if view.MutationParts != 0 {
+			return c.runTypedColumnInt64PredicateScanDocumentFallback(req, cfg, "mutation_visibility_requires_document_reconstruction", start)
+		}
 		return c.runTypedColumnInt64PredicateScanPhysicalFallback(view, req, cfg, "typed_column_not_selected", start)
 	}
 	if view.MutationParts != 0 {
@@ -237,7 +240,6 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	result.Diagnostics.MappedBytes = stats.TotalMappedBytes
 	result.Diagnostics.HeapCopyBytes = stats.TotalHeapCopyBytes
 	result.Diagnostics.FallbackReads = int(stats.FallbackReads)
-	result.Diagnostics.DecodedHeapCopyBytes += stats.TotalHeapCopyBytes
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, nil
 }
@@ -319,28 +321,33 @@ func (c *Collection) runTypedColumnInt64PredicateScanPhysicalFallback(view colum
 	result := TypedColumnInt64PredicateScanResult{Diagnostics: typedColumnInt64PredicateDiagnosticsFromView(view)}
 	result.Diagnostics.Fallback = true
 	result.Diagnostics.FallbackReason = reason
-	visible, err := c.scanColumnPhysicalVisibleRowsWithReadIntegrity([]string{req.Column}, req.ColumnAssetReadIntegrity)
+	scanDiag, err := c.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ProjectedColumns:  []string{req.Column},
+		RequireInsertOnly: true,
+		ReadIntegrity:     req.ColumnAssetReadIntegrity,
+		Visitor: func(row columnPhysicalScanRowView) error {
+			if row.Deleted || len(row.Values) == 0 {
+				return nil
+			}
+			value, err := columnPhysicalQueryInt64Value(row.Values[0])
+			if err != nil {
+				return err
+			}
+			result.Diagnostics.RowsScanned++
+			if typedColumnInt64PredicateMatches(req, value) {
+				result.Rows = append(result.Rows, TypedColumnInt64PredicateScanRow{Generation: row.Generation, PartID: row.PartID, RowIndex: row.RowIndex, DocumentID: bytes.Clone(row.ID), Value: value})
+				result.Diagnostics.RowsMatched++
+			}
+			return nil
+		},
+	})
 	result.Diagnostics.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
-	result.Diagnostics.FallbackReads = visible.Diagnostics.DecodedBlocks
-	result.Diagnostics.PhysicalBytesScanned = visible.Diagnostics.PhysicalBytesScanned
-	result.Diagnostics.SegmentFileCacheHits = visible.Diagnostics.SegmentFileCacheHits
-	result.Diagnostics.SegmentFileCacheMisses = visible.Diagnostics.SegmentFileCacheMisses
+	result.Diagnostics.FallbackReads = scanDiag.DecodedBlocks
+	result.Diagnostics.PhysicalBytesScanned = scanDiag.PhysicalBytesScanned
+	result.Diagnostics.SegmentFileCacheHits = scanDiag.SegmentFileCacheHits
+	result.Diagnostics.SegmentFileCacheMisses = scanDiag.SegmentFileCacheMisses
 	if err != nil {
 		return result, err
-	}
-	for _, row := range visible.Rows {
-		if row.Deleted || len(row.Values) == 0 {
-			continue
-		}
-		value, err := columnPhysicalQueryInt64Value(row.Values[0])
-		if err != nil {
-			return result, err
-		}
-		result.Diagnostics.RowsScanned++
-		if typedColumnInt64PredicateMatches(req, value) {
-			result.Rows = append(result.Rows, TypedColumnInt64PredicateScanRow{Generation: row.Generation, PartID: row.PartID, RowIndex: row.RowIndex, DocumentID: bytes.Clone(row.ID), Value: value})
-			result.Diagnostics.RowsMatched++
-		}
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	_ = cfg
