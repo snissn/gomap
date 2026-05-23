@@ -143,6 +143,11 @@ func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
 		t.Fatalf("reopened Get v2: %v", err)
 	}
 	assertJSONEqualM13C(t, reopenedGot, []byte(`{"embedding":[2,3,4],"payload":"beta"}`))
+	reopenedGot, err = reopenedCol.Get([]byte("v1"))
+	if err != nil {
+		t.Fatalf("reopened Get v1: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"embedding":[1,0.5,-0.25],"payload":"alpha"}`))
 }
 
 func TestTypedColumnReconstructionHybridOwners(t *testing.T) {

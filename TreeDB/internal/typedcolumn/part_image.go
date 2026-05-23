@@ -422,6 +422,16 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 		if column.FixedWidthElements < 0 || uint64(column.FixedWidthElements) > uint64(^uint32(0)) {
 			return fmt.Errorf("typedcolumn: descriptor column %s fixed-width elements=%d", column.Name, column.FixedWidthElements)
 		}
+		switch column.Type {
+		case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
+			if column.FixedWidthElements <= 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements", column.Name, column.Type)
+			}
+		default:
+			if column.FixedWidthElements != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
+			}
+		}
 		enc.u32(uint32(column.FixedWidthElements))
 		enc.u32(uint32(len(column.Blocks)))
 		for i, block := range column.Blocks {

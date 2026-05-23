@@ -727,12 +727,12 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   cache identity invalidation. Manifest generation and recovery LSN are not
   schema-hash inputs.
 
-Issue #1753 added `TreeDB/internal/typedcolumn` as the transplanted
-`experiments/colgranule` typed-column data plane. Issues #1754/#1755 connect it
-to production collection metadata for opt-in scalar `typed_column_part` owners;
-#1756 adds fixed-dimension `float32_vector` dense sections. The transplant and
-adapter boundaries are documented in `typed-column-transplant.md` and
-`typed-column-adapter.md`.
+Issue `#1753` added `TreeDB/internal/typedcolumn` as the transplanted
+`experiments/colgranule` typed-column data plane. Issues `#1754`/`#1755` connect
+it to production collection metadata for opt-in scalar `typed_column_part`
+owners; issue `#1756` adds fixed-dimension `float32_vector` dense sections. The
+transplant and adapter boundaries are documented in `typed-column-transplant.md`
+and `typed-column-adapter.md`.
 
 Readers must fail closed for a column-enabled collection when:
 

@@ -83,6 +83,6 @@ views; misaligned direct views fall back to heap/scratch decode or fail closed.
 The only production `TreeDB/collections` file that imports
 `TreeDB/internal/typedcolumn` is the adapter seam. Publication/reopen logic calls
 through that seam. Query/vector search integration remains deferred to later
-#1756/#1757 work; this PR publishes fixed-dimension `float32_vector` values but
-does not switch native vector graph search to typed-column parts. Adjacency list
-publication remains fail-closed.
+issues `#1756`/`#1757`; this PR publishes fixed-dimension `float32_vector`
+values but does not switch native vector graph search to typed-column parts.
+Adjacency list publication remains fail-closed.

@@ -30,9 +30,6 @@ func denseRowsForValues(values int, elementsPerRow int, name string) (int, error
 		return 0, fmt.Errorf("typedcolumn: dense column %s values=%d not divisible by fixed-width elements=%d", name, values, elementsPerRow)
 	}
 	rows := values / elementsPerRow
-	if err := validateGranuleDecodeRows(rows); err != nil {
-		return 0, err
-	}
 	return rows, nil
 }
 
