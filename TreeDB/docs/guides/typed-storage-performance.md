@@ -33,6 +33,7 @@ Recommended starting point for new performance work:
 | --- | --- | --- |
 | Non-nullable int64 predicate scan | Landed scoped MVP; explicit API, not broad planner routing. | `BenchmarkTypedColumnInt64PredicateScan` and aggregate benchmark below. |
 | Non-nullable int64 count/sum/avg aggregate | Landed benchmark/API path across no-filter, equality, tiny/range, wide range, all-pruned/all-match, tail, and clustered/reverse/partial/random/hotspot distributions; still allocation-heavy and not final. | `BenchmarkTypedColumnInt64PredicateAggregate`. |
+| Grouped min/max/span aggregate metadata over typed-column parts | Landed scoped MVP for insert-only string-group + int64-value aggregate metadata when both columns are `typed_column_part` owners; metadata is derived and generation/schema/part-bound. | `BenchmarkAggregateMetadataTypedColumnPart1786`. |
 | Dense fixed-dimension `float32_vector` typed-column sections | Landed durable publication/reconstruction and direct-view tests. | `BenchmarkTypedColumnVectorDense...` under `TreeDB/internal/typedcolumn`. |
 | Vector graph typed-column reads | Landed native-reader path for `column_graph`; adjacency remains derived graph data, not authoritative typed-column `adjacency_list`. | [#1782](https://github.com/snissn/gomap/issues/1782), `cmd/treedb_column_graph_demo`, and column graph benchmarks. |
 
@@ -43,7 +44,7 @@ Recommended starting point for new performance work:
 | Aggregate hot path | The scalar aggregate path avoids document/row materialization, but still allocates and spends time in per-scan asset lifecycle, full-asset mapping/checking, metadata/dictionary decode, and int64 decode buffers. | [#1806](https://github.com/snissn/gomap/issues/1806) |
 | Benchmark matrix | The aggregate benchmark matrix from #1808 is landed. Defaults cover `4096,65536` rows, `selective_range_1pct`, `all_pruned_no_match`, and `all_match` on `clustered_monotonic`; environment variables select no-filter/exact/tiny/wide/tail shapes, reverse/partial/random/hotspot distributions, optional fallback rows, and opt-in large rows. | [#1808](https://github.com/snissn/gomap/issues/1808) |
 | Dictionary/string predicates | String dictionary data exists, but production string predicate scan MVP is separate work. | [#1785](https://github.com/snissn/gomap/issues/1785) |
-| Aggregate metadata query integration | Aggregate metadata descriptors exist, but broader query integration is separate work. | [#1786](https://github.com/snissn/gomap/issues/1786) |
+| Aggregate metadata query integration | The #1786 MVP covers forced grouped min/max/span metadata queries for insert-only typed-column string+int64 parts. Broader aggregate planning, mixed-owner metadata, nullable semantics, and SQL-style aggregates remain follow-ups. | [#1786](https://github.com/snissn/gomap/issues/1786) |
 | Resource/lifetime substrate | Direct views must use mappedresource lifetime/range/endian/length/alignment validation; broad DB-owned adoption remains in the parent tracker. | [#1736](https://github.com/snissn/gomap/issues/1736) |
 | Row+column COW maintenance | Typed-row and typed-column asset GC/rewrite now use shared reachability, automatic active mappedresource pin protection, and fail-closed incomplete-plan checks. See the maintenance contract before running destructive cleanup. | [#1788](https://github.com/snissn/gomap/issues/1788), [typed asset maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Vector adjacency | `adjacency_list` authoritative typed-column publication remains fail-closed until a physical shape is specified. | [#1783](https://github.com/snissn/gomap/issues/1783) |
@@ -89,6 +90,26 @@ Read the typed-column row and fallback row separately. The direct typed-column
 row should show `document_materializations/op=0`, `row_materializations/op=0`,
 `physical_row_asset_reads/op=0`, `physical_row_id_lookups/op=0`, and
 `row_locator_decodes/op=0` for the aggregate path.
+
+### Typed-column aggregate metadata MVP benchmark
+
+Use this to measure the #1786 scoped metadata path for grouped min/max/span over
+`typed_column_part` string group and int64 value columns. The `prepared` variant
+separates setup/metadata decode from the warmed reduce loop and should remain
+`0 B/op`, `0 allocs/op`.
+
+```sh
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkAggregateMetadataTypedColumnPart1786$' \
+  -benchmem \
+  -benchtime=200ms \
+  -count=1
+```
+
+Key counters: `metadata_hits/op`, `metadata_decoded_bytes/op`,
+`mapped_bytes/op`, `heap_copy_bytes/op`, `rows_scanned/op`,
+`row_materializations/op`, and `reconstruction_rows/op`.
 
 ### Selecting #1808 matrix shapes and distributions
 
