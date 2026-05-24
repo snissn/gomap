@@ -392,6 +392,19 @@ Remaining COW maintenance work for #1736/#1788:
   aggregate query integration, multipart lifecycle/compaction, and full row+column
   COW cleanup as explicit follow-ups, not implied #1744 completions.
 
+## Post-closeout #1789 schema evolution policy
+
+Issue #1789 adds the current typed-column schema evolution and migration policy
+in `TreeDB/docs/spec/typed-column-schema-evolution.md`. The closeout facts above
+remain the implementation baseline, but typed-column image, descriptor, manifest,
+and schema formats are still pre-alpha: unsupported versions and schema/layout
+mismatches must fail closed rather than trigger implicit migration, cleanup, or
+rewrite. Benchmark and experiment directories should be rebuilt after typed-column
+format/schema changes until explicitly scoped migration tooling exists. Future
+hot-path format changes must report baseline-versus-final `B/op` and `allocs/op`
+and preserve 0-alloc/near-0-alloc direct decode/scan paths or document a
+benchmarked fallback.
+
 ## Post-closeout #1788 maintenance update
 
 Issue #1788 adds the current row+column typed-asset maintenance contract in

@@ -8,7 +8,9 @@ TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
 That disclaimer does not permit fail-open handling of acknowledged durable
 writes. Once a directory advertises a required storage feature such as
 `command_wal_v1`, unsupported binaries must fail closed instead of serving,
-cleaning, compacting, or rewriting the directory.
+cleaning, compacting, or rewriting the directory. Typed-column image,
+descriptor, manifest, and schema evolution follows the fail-closed policy in
+`typed-column-schema-evolution.md`.
 
 ## 1. Top-Level Storage Objects
 
@@ -796,6 +798,17 @@ Readers must fail closed for a column-enabled collection when:
 - the recovery-authoritative applied command LSN is zero while an active manifest
   is present, or
 - a durable-only column collection is opened under a relaxed durability mode.
+
+For typed-column parts specifically, readers and maintenance planners must reject
+unsupported image versions, descriptor versions, manifest identity versions,
+schema-hash drift, field-owner/value-type mismatches, `vector_dims` and
+fixed-width layout mismatches, and kind/generation/part/checksum/range mismatches
+from headers, descriptors, manifest identities, or refs whenever possible. They
+must fail closed before full payload decode or per-row allocation when those
+compact records already prove the format unsupported. Rebuild benchmark and
+experiment directories rather than relying on implicit migrations during the
+pre-alpha period; future migration tooling requirements are owned by
+`typed-column-schema-evolution.md`.
 
 `CollectionInsertBatchByIDV1` payload:
 

@@ -1,6 +1,8 @@
 # Typed-Column Adapter and Durable Vector Publication (#1754/#1755/#1756)
 
 Status: current implementation note for issues #1754, #1755, and #1756 under parent tracker #1744.
+Typed-column schema/version evolution and migration policy is defined in
+`typed-column-schema-evolution.md`.
 
 `TreeDB/collections/typed_column_adapter.go` adapts the transplanted
 `TreeDB/internal/typedcolumn` data plane to TreeDB typed-storage field metadata,
@@ -44,7 +46,11 @@ Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows
 are restored under `Path`; display-name-only input fails closed. Adapter images
 are fixed-schema: reads fail closed if the image contains unexpected columns or
-is missing any expected field column/primary-id column.
+is missing any expected field column/primary-id column. The adapter must reject
+schema hash, field ownership, value type, `vector_dims`, fixed-width metadata,
+image/descriptor version, and manifest ref mismatches from adapter descriptors,
+manifest identities, or refs before row materialization whenever those compact
+records are sufficient.
 
 ## Durable Publication / Reconstruction Seam (#1755)
 
@@ -119,8 +125,10 @@ allocations in touched functions, the PR must fix them or explicitly call out wh
 they are out of scope with a linked follow-up recommendation. Any remaining
 hot-path allocation requires baseline-versus-final `B/op`/`allocs/op` evidence
 and an allocation profile/top that names and justifies the source or defers it
-with rationale. These allocation targets do not relax checksum, lifetime, schema,
-or fail-closed validation.
+with rationale. Future typed-column format/schema changes must state whether
+they preserve 0-alloc/near-0-alloc decode and scan paths or introduce an explicit
+benchmarked fallback. These allocation targets do not relax checksum, lifetime,
+schema, or fail-closed validation.
 
 ## Boundary
 

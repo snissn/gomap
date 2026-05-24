@@ -342,7 +342,7 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 	if err != nil {
 		return nil, err
 	}
-	if err := validateTypedColumnAdapterImageSchema(part, columns); err != nil {
+	if err := validateTypedColumnAdapterImageSchema(part, columns, opts.SchemaVersion); err != nil {
 		return nil, err
 	}
 	dictionaries, err := image.Dictionaries()
@@ -369,9 +369,12 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: dictionaries}, nil
 }
 
-func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns []typedColumnAdapterColumn) error {
+func validateTypedColumnAdapterImageSchema(part *typedcolumn.ColumnPart, columns []typedColumnAdapterColumn, schemaVersion uint32) error {
 	if part == nil {
 		return errors.New("collections: typed-column adapter nil image part")
+	}
+	if schemaVersion != 0 && part.Descriptor.SchemaVersion != schemaVersion {
+		return fmt.Errorf("collections: typed-column adapter image schema_version=%d want %d", part.Descriptor.SchemaVersion, schemaVersion)
 	}
 	primary, ok := part.Columns[typedColumnAdapterPrimaryIDColumn]
 	if !ok {
@@ -951,7 +954,7 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part %s image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", operation, image.PartID, refPartID, image.Rows, typedRows, physicalRows)
 	}
-	adapterPart, err := decode(typedColumnAdapterOptions{Fields: fields}, image)
+	adapterPart, err := decode(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(schemaHash)}, image)
 	if err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}
