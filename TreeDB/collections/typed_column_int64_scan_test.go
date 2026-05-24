@@ -390,6 +390,31 @@ func TestTypedColumnInt64AggregateCorruptStaleMismatchFailClosed(t *testing.T) {
 	})
 }
 
+func TestTypedColumnInt64AggregateMissingPhysicalRefFailsClosed(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotViewWithSidecars: %v", err)
+	}
+	if len(view.AssetRefs) == 0 || len(view.TypedColumnPartRefs) == 0 {
+		t.Fatalf("view refs asset=%d typed=%d want both", len(view.AssetRefs), len(view.TypedColumnPartRefs))
+	}
+	cfg := view.FullConfig
+	if !cfg.Enabled {
+		cfg = view.Config
+	}
+	view.AssetRefs = nil
+	_, err = col.runTypedColumnInt64PredicateAggregateDirect(view, TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: 3}, cfg, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "missing physical row asset") {
+		t.Fatalf("runTypedColumnInt64PredicateAggregateDirect err=%v want missing physical row asset", err)
+	}
+}
+
 func TestTypedColumnInt64AggregateSumOverflowFails(t *testing.T) {
 	values := []int64{typedColumnInt64PredicateAggregateMaxSum, 1}
 	req := TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: typedColumnInt64PredicateAggregateMaxSum}

@@ -277,12 +277,22 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	if len(refsByGeneration) == 0 {
 		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate scan")
 	}
+	physicalRefsByGeneration := make(map[uint64]struct{}, len(view.AssetRefs))
 	for _, physical := range view.AssetRefs {
 		if physical.Reason != ColumnPublishOperationInsert {
 			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate scan requires insert-only physical refs, got %s", physical.Reason)
 		}
 		if _, ok := refsByGeneration[physical.Ref.Generation]; !ok {
 			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
+		}
+		if _, exists := physicalRefsByGeneration[physical.Ref.Generation]; exists {
+			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate physical row asset ref for generation=%d", physical.Ref.Generation)
+		}
+		physicalRefsByGeneration[physical.Ref.Generation] = struct{}{}
+	}
+	for generation := range refsByGeneration {
+		if _, ok := physicalRefsByGeneration[generation]; !ok {
+			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: missing physical row asset for typed_column_part generation=%d", generation)
 		}
 	}
 
@@ -387,12 +397,22 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	if len(refsByGeneration) == 0 {
 		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate aggregate")
 	}
+	physicalRefsByGeneration := make(map[uint64]struct{}, len(view.AssetRefs))
 	for _, physical := range view.AssetRefs {
 		if physical.Reason != ColumnPublishOperationInsert {
 			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate aggregate requires insert-only physical refs, got %s", physical.Reason)
 		}
 		if _, ok := refsByGeneration[physical.Ref.Generation]; !ok {
 			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
+		}
+		if _, exists := physicalRefsByGeneration[physical.Ref.Generation]; exists {
+			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate physical row asset ref for generation=%d", physical.Ref.Generation)
+		}
+		physicalRefsByGeneration[physical.Ref.Generation] = struct{}{}
+	}
+	for generation := range refsByGeneration {
+		if _, ok := physicalRefsByGeneration[generation]; !ok {
+			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: missing physical row asset for typed_column_part generation=%d", generation)
 		}
 	}
 
