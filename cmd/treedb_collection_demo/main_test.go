@@ -137,6 +137,12 @@ func TestExplicitDirMustBeFresh(t *testing.T) {
 	}
 }
 
+func TestValidateFreshDemoDirRejectsRawParentTraversal(t *testing.T) {
+	if _, err := validateFreshDemoDir("safe/../other"); err == nil {
+		t.Fatal("validateFreshDemoDir accepted raw parent traversal")
+	}
+}
+
 func TestValidateFreshDemoDirAllowsShortExplicitPath(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("absolute /tmp/db shape is Unix-specific")

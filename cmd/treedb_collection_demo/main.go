@@ -508,8 +508,12 @@ func prepareDemoDir(dir string, keep bool) (string, bool, func(), error) {
 }
 
 func validateFreshDemoDir(dir string) (string, error) {
-	cleanInput := filepath.Clean(strings.TrimSpace(dir))
-	if cleanInput == "" || cleanInput == "." || cleanInput == ".." || demoDirHasParentTraversal(cleanInput) {
+	rawInput := strings.TrimSpace(dir)
+	if rawInput == "" || demoDirHasParentTraversal(rawInput) {
+		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
+	}
+	cleanInput := filepath.Clean(rawInput)
+	if cleanInput == "." || cleanInput == ".." {
 		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
 	}
 	abs, err := filepath.Abs(cleanInput)
