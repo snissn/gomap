@@ -356,8 +356,43 @@ func typedColumnAdapterPartFromImageForStringPredicateScan(opts typedColumnAdapt
 	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
 }
 
-func typedColumnAdapterAggregatePartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
-	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+func typedColumnAdapterInt64AggregatePartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, adapterColumn typedColumnAdapterColumn) (*typedColumnAdapterPart, error) {
+	part, err := typedcolumn.ColumnPartFromImageWithOptions(image, typedcolumn.ColumnPartImageReadOptions{
+		IncludeRowLocators:       false,
+		ValidateRowLocators:      false,
+		IncludeAggregateMetadata: false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := validateTypedColumnAdapterInt64AggregateImage(part, adapterColumn, opts.SchemaVersion); err != nil {
+		return nil, err
+	}
+	return &typedColumnAdapterPart{Options: opts, Columns: []typedColumnAdapterColumn{adapterColumn}, Part: part}, nil
+}
+
+func validateTypedColumnAdapterInt64AggregateImage(part *typedcolumn.ColumnPart, adapterColumn typedColumnAdapterColumn, schemaVersion uint32) error {
+	if part == nil {
+		return errors.New("collections: typed-column int64 aggregate nil image part")
+	}
+	if schemaVersion != 0 && part.Descriptor.SchemaVersion != schemaVersion {
+		return fmt.Errorf("collections: typed-column adapter image schema_version=%d want %d", part.Descriptor.SchemaVersion, schemaVersion)
+	}
+	primary, ok := part.Columns[typedColumnAdapterPrimaryIDColumn]
+	if !ok {
+		return fmt.Errorf("collections: typed-column int64 aggregate image missing primary-id column %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	if primary.Definition.Type != typedcolumn.ColumnTypeInt64 || primary.Definition.Encoding != typedcolumn.EncodingRawInt64 || primary.Definition.Compression != typedcolumn.CompressionNone {
+		return fmt.Errorf("collections: typed-column int64 aggregate image primary-id column %q type=%s encoding=%s compression=%s want type=%s encoding=%s compression=%s", typedColumnAdapterPrimaryIDColumn, primary.Definition.Type, primary.Definition.Encoding, primary.Definition.Compression, typedcolumn.ColumnTypeInt64, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)
+	}
+	got, ok := part.Columns[adapterColumn.Definition.Name]
+	if !ok {
+		return fmt.Errorf("collections: typed-column int64 aggregate image missing column %q", adapterColumn.Definition.Name)
+	}
+	if got.Definition.Type != adapterColumn.Definition.Type || got.Definition.Encoding != adapterColumn.Definition.Encoding || got.Definition.Compression != adapterColumn.Definition.Compression || got.Definition.FixedWidthElements != adapterColumn.Definition.FixedWidthElements {
+		return fmt.Errorf("collections: typed-column int64 aggregate image column %q schema mismatch: got type=%s encoding=%s compression=%s fixed_width_elements=%d want type=%s encoding=%s compression=%s fixed_width_elements=%d", adapterColumn.Definition.Name, got.Definition.Type, got.Definition.Encoding, got.Definition.Compression, got.Definition.FixedWidthElements, adapterColumn.Definition.Type, adapterColumn.Definition.Encoding, adapterColumn.Definition.Compression, adapterColumn.Definition.FixedWidthElements)
+	}
+	return nil
 }
 
 func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) (*typedColumnAdapterPart, error) {
@@ -1075,7 +1110,31 @@ func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField,
 }
 
 func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
-	return typedColumnAdapterPrepareInt64PredicatePart(fields, raw, refPartID, typedRows, physicalRows, schemaHash, column, "aggregate", typedColumnAdapterAggregatePartFromImage)
+	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if !ok {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part aggregate image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
+	}
+	adapterPart, err := typedColumnAdapterInt64AggregatePartFromImage(typedColumnAdapterOptions{Fields: []TypedStorageField{adapterColumn.Field}, SchemaVersion: uint32(schemaHash)}, image, adapterColumn)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	return adapterPart, adapterColumn, image.ManifestBytes, nil
 }
 
 func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {

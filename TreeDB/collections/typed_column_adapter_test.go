@@ -1208,6 +1208,111 @@ func TestTypedColumnAdapterPrepareInt64SchemaHashMismatchFailsBeforeScan(t *test
 	}
 }
 
+func TestTypedColumnAdapterPrepareInt64AggregateSkipsDictionaryDecode(t *testing.T) {
+	countField := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	kindField := typedColumnAdapterField("kind", ColumnStoreValueString)
+	fields := []TypedStorageField{countField, kindField}
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 10}, "kind": {Type: ColumnStoreValueString, Present: true, String: "alpha"}}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 20}, "kind": {Type: ColumnStoreValueString, Present: true, String: "beta"}}},
+		{PrimaryID: 3, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 30}, "kind": {Type: ColumnStoreValueString, Present: true, String: "beta"}}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 77, RowsPerGranule: 2, Fields: fields}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	corruptRaw := bytes.Clone(image.Bytes)
+	dictSection := typedColumnAdapterFindSection(t, image, typedcolumn.ColumnPartImageSectionDictionaries)
+	if dictSection.Length < 4 {
+		t.Fatalf("dictionary section too short: %+v", dictSection)
+	}
+	binary.LittleEndian.PutUint32(corruptRaw[dictSection.Offset:dictSection.Offset+4], ^uint32(0))
+	corruptImage, err := typedcolumn.ParseColumnPartImage(corruptRaw)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage(corrupt dictionaries): %v", err)
+	}
+
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: fields}, corruptImage); err == nil || !strings.Contains(err.Error(), "dictionar") {
+		t.Fatalf("generic typedColumnAdapterPartFromImage err=%v want dictionary validation failure", err)
+	}
+	if _, err := typedColumnAdapterPrepareStringPredicateScanPart(fields, corruptRaw, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "kind", "beta"); err == nil || !strings.Contains(err.Error(), "dictionar") {
+		t.Fatalf("string predicate prepare err=%v want dictionary validation failure", err)
+	}
+
+	adapterPart, adapterColumn, manifestBytes, err := typedColumnAdapterPrepareInt64PredicateAggregatePart(fields, corruptRaw, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "count")
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPrepareInt64PredicateAggregatePart: %v", err)
+	}
+	if manifestBytes == 0 {
+		t.Fatalf("manifestBytes=0 want decoded manifest metadata")
+	}
+	var result TypedColumnInt64PredicateAggregateResult
+	partPruned, err := scanTypedColumnInt64PredicateAggregatePart(adapterPart.Part, adapterColumn.Definition.Name, TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateAll}, &result)
+	if err != nil {
+		t.Fatalf("scanTypedColumnInt64PredicateAggregatePart: %v", err)
+	}
+	if partPruned || result.Count != 3 || result.Sum != 60 || result.Diagnostics.RowsScanned != 3 || result.Diagnostics.RowsMatched != 3 {
+		t.Fatalf("partPruned=%v result=%+v diagnostics=%+v want aggregate over corrupt-dictionary image", partPruned, result, result.Diagnostics)
+	}
+}
+
+func TestTypedColumnAdapterPrepareInt64AggregateValidationFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	stringField := typedColumnAdapterField("count", ColumnStoreValueString)
+	stringPart := typedColumnAdapterBuildPart(t, stringField, []columnDeclaredValue{{Type: ColumnStoreValueString, Present: true, String: "ten"}})
+	stringImage, err := stringPart.buildImage()
+	if err != nil {
+		t.Fatalf("string buildImage: %v", err)
+	}
+	missingPrimary := typedColumnAdapterBuildCustomInt64AggregateImage(t, []typedcolumn.ColumnDefinition{
+		{Name: "id", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+	}, "id", 2)
+	primaryEncodingMismatch := typedColumnAdapterBuildCustomInt64AggregateImage(t, []typedcolumn.ColumnDefinition{
+		{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+	}, typedColumnAdapterPrimaryIDColumn, 2)
+	selectedEncodingMismatch := typedColumnAdapterBuildCustomInt64AggregateImage(t, []typedcolumn.ColumnDefinition{
+		{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+		{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true},
+	}, typedColumnAdapterPrimaryIDColumn, 2)
+	fields := []TypedStorageField{field}
+	for _, tc := range []struct {
+		name         string
+		raw          []byte
+		refPartID    uint64
+		typedRows    int
+		physicalRows int
+		schemaHash   uint64
+		wantErr      string
+	}{
+		{name: "schema_hash_mismatch", raw: image.Bytes, refPartID: image.PartID, typedRows: image.Rows, physicalRows: image.Rows, schemaHash: uint64(part.Part.Descriptor.SchemaVersion + 1), wantErr: "schema_version"},
+		{name: "part_id_mismatch", raw: image.Bytes, refPartID: image.PartID + 1, typedRows: image.Rows, physicalRows: image.Rows, schemaHash: uint64(part.Part.Descriptor.SchemaVersion), wantErr: "image/ref mismatch"},
+		{name: "typed_rows_mismatch", raw: image.Bytes, refPartID: image.PartID, typedRows: image.Rows + 1, physicalRows: image.Rows, schemaHash: uint64(part.Part.Descriptor.SchemaVersion), wantErr: "image/ref mismatch"},
+		{name: "physical_rows_mismatch", raw: image.Bytes, refPartID: image.PartID, typedRows: image.Rows, physicalRows: image.Rows + 1, schemaHash: uint64(part.Part.Descriptor.SchemaVersion), wantErr: "image/ref mismatch"},
+		{name: "column_schema_mismatch", raw: stringImage.Bytes, refPartID: stringImage.PartID, typedRows: stringImage.Rows, physicalRows: stringImage.Rows, schemaHash: uint64(stringPart.Part.Descriptor.SchemaVersion), wantErr: "schema mismatch"},
+		{name: "missing_primary_column", raw: missingPrimary.Bytes, refPartID: missingPrimary.PartID, typedRows: missingPrimary.Rows, physicalRows: missingPrimary.Rows, schemaHash: uint64(missingPrimary.PartID), wantErr: "missing primary-id column"},
+		{name: "primary_column_encoding_mismatch", raw: primaryEncodingMismatch.Bytes, refPartID: primaryEncodingMismatch.PartID, typedRows: primaryEncodingMismatch.Rows, physicalRows: primaryEncodingMismatch.Rows, schemaHash: uint64(primaryEncodingMismatch.PartID), wantErr: "primary-id column"},
+		{name: "selected_column_encoding_mismatch", raw: selectedEncodingMismatch.Bytes, refPartID: selectedEncodingMismatch.PartID, typedRows: selectedEncodingMismatch.Rows, physicalRows: selectedEncodingMismatch.Rows, schemaHash: uint64(selectedEncodingMismatch.PartID), wantErr: "schema mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := typedColumnAdapterPrepareInt64PredicateAggregatePart(fields, tc.raw, tc.refPartID, tc.typedRows, tc.physicalRows, tc.schemaHash, "count")
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("prepare aggregate err=%v want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestTypedColumnAdapterAmbiguousRowKeysFailClosed(t *testing.T) {
 	field := TypedStorageField{Name: "count", Path: "metrics.count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64}
 	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
@@ -1401,6 +1506,47 @@ func typedColumnAdapterBuildPart(t *testing.T, field TypedStorageField, values [
 		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
 	}
 	return part
+}
+
+func typedColumnAdapterBuildCustomInt64AggregateImage(t *testing.T, defs []typedcolumn.ColumnDefinition, primaryKey string, rows int) typedcolumn.ColumnPartImage {
+	t.Helper()
+	const partID = uint64(99)
+	batch := typedcolumn.Batch{Rows: rows, Columns: make(map[string][]int64, len(defs))}
+	for i := range defs {
+		if !defs[i].CompressionSet {
+			defs[i].Compression = typedcolumn.CompressionNone
+			defs[i].CompressionSet = true
+		}
+		values := make([]int64, rows)
+		for row := range values {
+			values[row] = int64(row + 1)
+			if defs[i].Name == "count" {
+				values[row] = int64((row + 1) * 10)
+			}
+		}
+		batch.Columns[defs[i].Name] = values
+	}
+	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
+		SchemaVersion: uint32(partID),
+		SchemaMode:    typedcolumn.ColumnSchemaFixed,
+		Columns:       defs,
+		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{
+			Columns: []string{primaryKey},
+		},
+		SortKey:    typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: primaryKey}}},
+		PartPolicy: typedcolumn.ColumnPartPolicy{RowsPerGranule: rows},
+		Compression: typedcolumn.ColumnCompressionPolicy{
+			Default: typedcolumn.CompressionNone,
+		},
+	}, batch)
+	if err != nil {
+		t.Fatalf("BuildColumnPart custom image: %v", err)
+	}
+	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage custom image: %v", err)
+	}
+	return image
 }
 
 func typedColumnAdapterFindColumnSection(t *testing.T, image typedcolumn.ColumnPartImage, column string) typedcolumn.ColumnPartImageSection {
