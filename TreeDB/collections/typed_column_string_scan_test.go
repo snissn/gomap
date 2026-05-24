@@ -118,7 +118,7 @@ func TestTypedColumnStringScanCorruptTypedColumnAssetFailsClosed1785(t *testing.
 	if err == nil || !strings.Contains(err.Error(), "checksum") {
 		t.Fatalf("RunTypedColumnStringPredicateScan corrupt err=%v want checksum failure", err)
 	}
-	if result.Diagnostics.Fallback || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentReconstructions != 0 || len(result.Rows) != 0 {
+	if result.Diagnostics.Fallback || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentMaterializations != 0 || result.Diagnostics.DocumentReconstructions != 0 || len(result.Rows) != 0 {
 		t.Fatalf("result=%+v want fail-closed without document fallback/materialization", result)
 	}
 }
