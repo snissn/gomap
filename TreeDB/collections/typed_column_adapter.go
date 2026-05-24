@@ -1100,7 +1100,7 @@ func scanTypedColumnStringEqualityPredicateCodes(part *typedcolumn.ColumnPart, v
 	for _, block := range valueCol.Blocks {
 		g := block.Granule
 		if g.HasMinMax {
-			if g.Min < 0 || g.Max < 0 || uint64(g.Max) >= uint64(cardinality) {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
 				return false, rowsScanned, rowsMatched, fmt.Errorf("value column %q block first_row=%d min/max [%d,%d] outside cardinality %d", valueColumn, block.Descriptor.FirstRow, g.Min, g.Max, cardinality)
 			}
 			if int64(queryCode) < g.Min || int64(queryCode) > g.Max {

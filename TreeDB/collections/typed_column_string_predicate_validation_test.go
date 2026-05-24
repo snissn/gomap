@@ -203,6 +203,10 @@ func TestTypedColumnStringPredicateProductionScanMinMaxFailsClosed(t *testing.T)
 	}
 	col.Blocks[0].Granule.Min = -1
 	prepared.AdapterPart.Part.Columns[prepared.Column.Definition.Name] = col
+	_, _, _, err = scanTypedColumnStringEqualityPredicateCodes(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, prepared.QueryCodeFound, nil)
+	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+		t.Fatalf("code scan min/max err=%v want outside cardinality", err)
+	}
 	result := TypedColumnStringPredicateScanResult{}
 	_, err = scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, "alpha", image.PartID, image.PartID, &result, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
