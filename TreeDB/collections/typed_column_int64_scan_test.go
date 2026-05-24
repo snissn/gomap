@@ -1264,6 +1264,9 @@ func runTypedColumnInt64AggregateBenchOneShotParallel(b *testing.B, col *Collect
 				continue
 			}
 			result, err := col.RunTypedColumnInt64PredicateAggregate(req)
+			if err == nil {
+				err = validateTypedColumnInt64AggregateBenchResult(result, expected)
+			}
 			if err != nil {
 				if stop.CompareAndSwap(false, true) {
 					firstErr.Store(err)
