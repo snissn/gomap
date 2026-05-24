@@ -149,6 +149,52 @@ func TestTypedStorageStorageFormatDocsMentionCompatibilityDirectory(t *testing.T
 	}
 }
 
+func TestDocs_NullableTypedColumnSemantics(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	storagePath := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")
+	storageData, err := os.ReadFile(storagePath)
+	if err != nil {
+		t.Fatalf("read storage-format doc: %v", err)
+	}
+	storageDoc := strings.Join(strings.Fields(string(storageData)), " ")
+	for _, want := range []string{
+		"Nullable scalar typed-column support uses nullable int64 carrier granules for bool, int64, float32, double/float64, and low-cardinality string fields",
+		"nullable scalar column uses the `nullable_int64` encoding",
+		"the null bitmap marks rows whose JSON path was present with an explicit `null`",
+		"the default/missing bitmap marks rows whose declared path was omitted",
+		"metadata, when present, covers only stored present/non-null carrier values",
+		"positive optimization expectation, not only a no-regression gate",
+		"actively remove existing avoidable allocations and obvious local overhead in the same touched path",
+		"target 0 allocs/op after setup when benchmarking the core typed-column loop separately from document materialization",
+		"Touched inner loops must be measurably no worse, and preferably better, on `B/op` and `allocs/op`",
+		"Checksum, lifetime, schema, null/missing, and fail-closed validation must not be weakened",
+		"Production `float32_vector` and `adjacency_list` nullable/missing support remains staged and fail-closed",
+	} {
+		if !strings.Contains(storageDoc, want) {
+			t.Fatalf("storage-format doc missing nullable typed-column wording %q", want)
+		}
+	}
+
+	adapterPath := filepath.Join(treeRoot, "docs", "spec", "typed-column-adapter.md")
+	adapterData, err := os.ReadFile(adapterPath)
+	if err != nil {
+		t.Fatalf("read typed-column adapter doc: %v", err)
+	}
+	adapterDoc := strings.Join(strings.Fields(string(adapterData)), " ")
+	for _, want := range []string{
+		"Nullable scalar adapter support uses `nullable_int64` as the carrier encoding for bool, int64, float32, double, and low-cardinality string fields",
+		"present/non-null rows write the declared path and value, explicit-null rows write the declared path with JSON null, and missing/default rows leave the declared path absent",
+		"the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not fall back to full-document reconstruction/materialization",
+		"Direct typed-column predicate paths must preserve hot-path allocation discipline and should actively remove existing avoidable allocations",
+		"Touched inner loops must be measurably no worse, and preferably better, on `B/op` and `allocs/op`",
+		"baseline-versus-final `B/op`/`allocs/op` evidence and an allocation profile/top",
+	} {
+		if !strings.Contains(adapterDoc, want) {
+			t.Fatalf("typed-column adapter doc missing nullable query/reconstruction wording %q", want)
+		}
+	}
+}
+
 func TestDocs_DurabilityMatrixSingleOwner(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	owner := filepath.Join(treeRoot, "docs", "spec", "write-path-and-durability.md")

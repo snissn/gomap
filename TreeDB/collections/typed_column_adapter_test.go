@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
+
+var typedColumnNullableBenchSink1784 int64
 
 func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 	want := map[ColumnStoreValueType]typedColumnAdapterTypeStatus{
@@ -343,6 +346,277 @@ func TestTypedColumnAdapterNullMissingTypeMismatchFailClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTypedColumnAdapterNullableScalarRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		field     TypedStorageField
+		nonNullA  columnDeclaredValue
+		nonNullB  columnDeclaredValue
+		checkRows func(t *testing.T, got []typedColumnAdapterRow)
+	}{
+		{
+			name:     "bool",
+			field:    typedColumnAdapterNullableField("flag", ColumnStoreValueBool),
+			nonNullA: columnDeclaredValue{Type: ColumnStoreValueBool, Present: true, Bool: true},
+			nonNullB: columnDeclaredValue{Type: ColumnStoreValueBool, Present: true, Bool: false},
+			checkRows: func(t *testing.T, got []typedColumnAdapterRow) {
+				if !got[0].Values["flag"].Bool || got[3].Values["flag"].Bool {
+					t.Fatalf("bool nullable rows=%+v", got)
+				}
+			},
+		},
+		{
+			name:     "int64",
+			field:    typedColumnAdapterNullableField("count", ColumnStoreValueInt64),
+			nonNullA: columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: math.MinInt64},
+			nonNullB: columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: math.MaxInt64},
+			checkRows: func(t *testing.T, got []typedColumnAdapterRow) {
+				if got[0].Values["count"].Int64 != math.MinInt64 || got[3].Values["count"].Int64 != math.MaxInt64 {
+					t.Fatalf("int64 nullable rows=%+v", got)
+				}
+			},
+		},
+		{
+			name:     "float32",
+			field:    typedColumnAdapterNullableField("score32", ColumnStoreValueFloat32),
+			nonNullA: columnDeclaredValue{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x80000000)},
+			nonNullB: columnDeclaredValue{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x7fc01234)},
+			checkRows: func(t *testing.T, got []typedColumnAdapterRow) {
+				if math.Float32bits(got[0].Values["score32"].Float32) != 0x80000000 || math.Float32bits(got[3].Values["score32"].Float32) != 0x7fc01234 {
+					t.Fatalf("float32 nullable rows=%+v", got)
+				}
+			},
+		},
+		{
+			name:     "double",
+			field:    typedColumnAdapterNullableField("ratio", ColumnStoreValueDouble),
+			nonNullA: columnDeclaredValue{Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x8000000000000000)},
+			nonNullB: columnDeclaredValue{Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x7ff8000000001234)},
+			checkRows: func(t *testing.T, got []typedColumnAdapterRow) {
+				if math.Float64bits(got[0].Values["ratio"].Double) != 0x8000000000000000 || math.Float64bits(got[3].Values["ratio"].Double) != 0x7ff8000000001234 {
+					t.Fatalf("float64 nullable rows=%+v", got)
+				}
+			},
+		},
+		{
+			name:     "string",
+			field:    typedColumnAdapterNullableField("kind", ColumnStoreValueString),
+			nonNullA: columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+			nonNullB: columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: "beta"},
+			checkRows: func(t *testing.T, got []typedColumnAdapterRow) {
+				if got[0].Values["kind"].String != "alpha" || got[3].Values["kind"].String != "beta" {
+					t.Fatalf("string nullable rows=%+v", got)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nullValue := columnDeclaredValue{Type: tc.field.ValueType, Present: true, Null: true}
+			rows := []typedColumnAdapterRow{
+				{PrimaryID: 1, Values: map[string]columnDeclaredValue{tc.field.Path: tc.nonNullA}},
+				{PrimaryID: 2, Values: map[string]columnDeclaredValue{tc.field.Path: nullValue}},
+				{PrimaryID: 3, Values: map[string]columnDeclaredValue{}},
+				{PrimaryID: 4, Values: map[string]columnDeclaredValue{tc.field.Path: tc.nonNullB}},
+			}
+			part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 11, RowsPerGranule: 4, Fields: []TypedStorageField{tc.field}}, rows)
+			if err != nil {
+				t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+			}
+			if got := part.Part.Columns[tc.field.Name].Definition.Encoding; got != typedcolumn.EncodingNullableInt64 {
+				t.Fatalf("encoding=%s want %s", got, typedcolumn.EncodingNullableInt64)
+			}
+			image, err := part.buildImage()
+			if err != nil {
+				t.Fatalf("buildImage: %v", err)
+			}
+			parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+			if err != nil {
+				t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+			}
+			gotRows, err := parsed.scanRows()
+			if err != nil {
+				t.Fatalf("scanRows: %v", err)
+			}
+			if gotRows[1].Values[tc.field.Path].Present != true || gotRows[1].Values[tc.field.Path].Null != true {
+				t.Fatalf("explicit null row=%+v", gotRows[1].Values[tc.field.Path])
+			}
+			if gotRows[2].Values[tc.field.Path].Present != false || gotRows[2].Values[tc.field.Path].Null != true {
+				t.Fatalf("missing row=%+v", gotRows[2].Values[tc.field.Path])
+			}
+			tc.checkRows(t, gotRows)
+		})
+	}
+}
+
+func TestTypedColumnAdapterNullableVectorAdjacencyFailClosed(t *testing.T) {
+	vector := typedColumnAdapterNullableField("embedding", ColumnStoreValueFloat32Vector)
+	vector.VectorDims = 3
+	if _, err := typedColumnAdapterMapField(vector); !errors.Is(err, errTypedColumnAdapterUnsupportedType) || !strings.Contains(err.Error(), "nullable float32_vector") {
+		t.Fatalf("nullable vector err=%v want unsupported nullable float32_vector", err)
+	}
+	adjacency := typedColumnAdapterNullableField("neighbors", ColumnStoreValueAdjacencyList)
+	if _, err := typedColumnAdapterMapField(adjacency); !errors.Is(err, errTypedColumnAdapterUnsupportedType) {
+		t.Fatalf("nullable adjacency err=%v want unsupported", err)
+	}
+}
+
+func TestTypedColumnAdapterNullableAbsentWithoutNullMarkerFailsClosed(t *testing.T) {
+	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"count": {Type: ColumnStoreValueInt64, Present: false},
+	}}}
+	_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows)
+	if err == nil || !strings.Contains(err.Error(), "absent nullable value is not marked null") {
+		t.Fatalf("build absent-without-null err=%v want absent nullable failure", err)
+	}
+}
+
+func TestTypedColumnAdapterNullableAllNullStringRoundTrip(t *testing.T) {
+	field := typedColumnAdapterNullableField("kind", ColumnStoreValueString)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, Null: true},
+		{Type: ColumnStoreValueString, Present: false, Null: true},
+	})
+	if got := part.Part.Columns["kind"].Definition.Cardinality; got != 0 {
+		t.Fatalf("all-null nullable string cardinality=%d want 0", got)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	got, err := parsed.scanColumnValues("kind")
+	if err != nil {
+		t.Fatalf("scanColumnValues: %v", err)
+	}
+	if len(got) != 2 || !got[0].Present || !got[0].Null || got[1].Present || !got[1].Null {
+		t.Fatalf("all-null nullable string values=%+v", got)
+	}
+}
+
+func TestTypedColumnAdapterNullableCorruptPayloadFailsClosed(t *testing.T) {
+	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 7}}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Null: true}}},
+		{PrimaryID: 3, Values: map[string]columnDeclaredValue{}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 12, RowsPerGranule: 3, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	section := typedColumnAdapterFindColumnSection(t, image, "count")
+	if section.Length < 23 {
+		t.Fatalf("nullable section too short: %+v", section)
+	}
+	corrupt := image
+	corrupt.Bytes = bytes.Clone(image.Bytes)
+	payload := corrupt.Bytes[section.Offset : section.Offset+section.Length]
+	nullMaskLen := int(binary.LittleEndian.Uint32(payload[13:17]))
+	defaultMaskStart := nullableInt64HeaderBytesForTest() + nullMaskLen
+	payload[defaultMaskStart] |= 1 << 1
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, corrupt)
+	if err != nil {
+		t.Fatalf("partFromImage corrupt nullable payload: %v", err)
+	}
+	if _, err := parsed.scanColumnValues("count"); err == nil || !strings.Contains(err.Error(), "both null and default") {
+		t.Fatalf("scan corrupt nullable err=%v want overlap failure", err)
+	}
+}
+
+func BenchmarkTypedColumnNullableDecodedValuesRowHotLoop1784(b *testing.B) {
+	fields := []TypedStorageField{
+		func() TypedStorageField {
+			f := typedColumnAdapterField("count", ColumnStoreValueInt64)
+			f.Nullable = true
+			return f
+		}(),
+		func() TypedStorageField {
+			f := typedColumnAdapterField("kind", ColumnStoreValueString)
+			f.Nullable = true
+			return f
+		}(),
+		func() TypedStorageField {
+			f := typedColumnAdapterField("flag", ColumnStoreValueBool)
+			f.Nullable = true
+			return f
+		}(),
+	}
+	const rowsN = 128
+	rows := make([]typedColumnAdapterRow, rowsN)
+	for i := range rows {
+		kind := columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: "alpha"}
+		count := columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}
+		flag := columnDeclaredValue{Type: ColumnStoreValueBool, Present: true, Bool: i%2 == 0}
+		if i%5 == 0 {
+			kind = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, Null: true}
+		}
+		if i%7 == 0 {
+			count = columnDeclaredValue{Type: ColumnStoreValueInt64, Present: false, Null: true}
+		}
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i), Values: map[string]columnDeclaredValue{
+			"count": count,
+			"kind":  kind,
+			"flag":  flag,
+		}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: fields}, rows)
+	if err != nil {
+		b.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	decoded, err := part.scanDecodedValues()
+	if err != nil {
+		b.Fatalf("scanDecodedValues: %v", err)
+	}
+	dst := make([]columnDeclaredValue, 0, len(fields))
+	var sink int64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		values, err := decoded.valuesForRowInto(i&(rowsN-1), dst)
+		if err != nil {
+			b.Fatalf("valuesForRowInto: %v", err)
+		}
+		sink += int64(len(values)) + values[0].Int64
+	}
+	typedColumnNullableBenchSink1784 += sink
+}
+
+func BenchmarkTypedColumnNullableMergeHotLoop1784(b *testing.B) {
+	cfg := ColumnStoreConfig{Columns: []ColumnStoreColumn{
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+		{Name: "score", Path: "score", ValueType: ColumnStoreValueDouble, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+		{Name: "flag", Path: "flag", ValueType: ColumnStoreValueBool, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+	}}
+	rowValues := []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 42}}
+	typedValues := []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, Null: true},
+		{Type: ColumnStoreValueDouble, Present: false, Null: true},
+		{Type: ColumnStoreValueBool, Present: true, Bool: true},
+	}
+	dst := make([]columnDeclaredValue, 0, len(cfg.Columns))
+	var sink int64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		values, err := mergeColumnReconstructionValuesInto(cfg, rowValues, typedValues, dst)
+		if err != nil {
+			b.Fatalf("mergeColumnReconstructionValuesInto: %v", err)
+		}
+		sink += int64(len(values)) + values[0].Int64
+	}
+	typedColumnNullableBenchSink1784 += sink
 }
 
 func TestTypedColumnAdapterStringDictionaryHighCardinalityStable(t *testing.T) {
@@ -776,9 +1050,77 @@ func TestTypedColumnAdapterUnsupportedTypeFailsClosed(t *testing.T) {
 	}
 }
 
+var typedColumnAdapterBenchmarkSink columnDeclaredValue
+
+func BenchmarkTypedColumnAdapterNullableScanValues(b *testing.B) {
+	const rowCount = 8192
+	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
+	rows := make([]typedColumnAdapterRow, rowCount)
+	for i := range rows {
+		value := columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: int64(i * 7)}
+		values := map[string]columnDeclaredValue{"count": value}
+		switch {
+		case i%17 == 0:
+			values["count"] = columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Null: true}
+		case i%19 == 0:
+			values = nil
+		}
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: values}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 77, RowsPerGranule: rowCount, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		b.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	column, ok := part.columnByName("count")
+	if !ok {
+		b.Fatalf("missing adapter column")
+	}
+	b.Run("materialize_baseline", func(b *testing.B) {
+		got, err := part.scanNullableColumnValues(column)
+		if err != nil {
+			b.Fatalf("warm scanNullableColumnValues: %v", err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			got, err = part.scanNullableColumnValues(column)
+			if err != nil {
+				b.Fatalf("scanNullableColumnValues: %v", err)
+			}
+		}
+		typedColumnAdapterBenchmarkSink = got[rowCount-1]
+	})
+
+	b.Run("scratch_final", func(b *testing.B) {
+		var scratch typedColumnAdapterNullableScanScratch
+		dst := make([]columnDeclaredValue, rowCount)
+		dst, err = part.scanNullableColumnValuesInto(column, dst[:0], &scratch)
+		if err != nil {
+			b.Fatalf("warm scanNullableColumnValuesInto: %v", err)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			dst, err = part.scanNullableColumnValuesInto(column, dst[:0], &scratch)
+			if err != nil {
+				b.Fatalf("scanNullableColumnValuesInto: %v", err)
+			}
+		}
+		typedColumnAdapterBenchmarkSink = dst[rowCount-1]
+	})
+}
+
 func typedColumnAdapterField(name string, valueType ColumnStoreValueType) TypedStorageField {
 	return TypedStorageField{Name: name, Path: name, Owner: TypedStorageOwnerColumnPart, ValueType: valueType}
 }
+
+func typedColumnAdapterNullableField(name string, valueType ColumnStoreValueType) TypedStorageField {
+	field := typedColumnAdapterField(name, valueType)
+	field.Nullable = true
+	return field
+}
+
+func nullableInt64HeaderBytesForTest() int { return 21 }
 
 func typedColumnAdapterRoundTrip(t *testing.T, field TypedStorageField, values []columnDeclaredValue) []columnDeclaredValue {
 	t.Helper()

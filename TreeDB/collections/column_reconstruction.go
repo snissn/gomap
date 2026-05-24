@@ -144,7 +144,16 @@ func reconstructColumnDocumentFromVisibleRowValues(cfg ColumnStoreConfig, retain
 }
 
 func mergeColumnReconstructionValues(cfg ColumnStoreConfig, rowValues, typedColumnValues []columnDeclaredValue) ([]columnDeclaredValue, error) {
-	values := make([]columnDeclaredValue, len(cfg.Columns))
+	return mergeColumnReconstructionValuesInto(cfg, rowValues, typedColumnValues, nil)
+}
+
+func mergeColumnReconstructionValuesInto(cfg ColumnStoreConfig, rowValues, typedColumnValues, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	var values []columnDeclaredValue
+	if cap(dst) < len(cfg.Columns) {
+		values = make([]columnDeclaredValue, len(cfg.Columns))
+	} else {
+		values = dst[:len(cfg.Columns)]
+	}
 	rowIdx := 0
 	typedIdx := 0
 	for i, col := range cfg.Columns {

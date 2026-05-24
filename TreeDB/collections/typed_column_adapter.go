@@ -63,6 +63,11 @@ type typedColumnAdapterPart struct {
 	Dictionary map[string]map[string]int64
 }
 
+type typedColumnPartDecodedValues struct {
+	PrimaryIDs []int64
+	Values     [][]columnDeclaredValue
+}
+
 type typedColumnAdapterResourceReader struct {
 	Manager       *mappedresource.Manager
 	Image         typedcolumn.ColumnPartImage
@@ -107,6 +112,16 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	mapping, err := typedColumnAdapterMappingForValueType(field.ValueType)
 	if err != nil {
 		return typedColumnAdapterColumn{}, err
+	}
+	if field.Nullable {
+		switch field.ValueType {
+		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
+			mapping.Encoding = typedcolumn.EncodingNullableInt64
+		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable %s typed-column fields are not supported", errTypedColumnAdapterUnsupportedType, field.ValueType)
+		default:
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable %s", errTypedColumnAdapterUnsupportedType, field.ValueType)
+		}
 	}
 	name := field.Name
 	if name == "" {
@@ -204,7 +219,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	for _, column := range columns {
 		defs = append(defs, column.Definition)
 	}
-	batch := typedcolumn.Batch{Rows: len(rows), Columns: make(map[string][]int64, len(defs))}
+	batch := typedcolumn.Batch{Rows: len(rows), Columns: make(map[string][]int64, len(defs)), Nulls: make(map[string][]bool), Defaults: make(map[string][]bool)}
 	batch.Columns[typedColumnAdapterPrimaryIDColumn] = make([]int64, len(rows))
 	for _, column := range columns {
 		switch column.Field.ValueType {
@@ -219,6 +234,10 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			batch.Float32Vectors[column.Definition.Name] = make([]float32, elements)
 		default:
 			batch.Columns[column.Definition.Name] = make([]int64, len(rows))
+			if column.Field.Nullable {
+				batch.Nulls[column.Definition.Name] = make([]bool, len(rows))
+				batch.Defaults[column.Definition.Name] = make([]bool, len(rows))
+			}
 		}
 	}
 	for rowIdx, row := range rows {
@@ -229,7 +248,10 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 				return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 			}
 			if !ok {
-				return nil, fmt.Errorf("collections: typed-column adapter row %d missing field %q", rowIdx, column.Field.Path)
+				if !column.Field.Nullable {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d missing field %q", rowIdx, column.Field.Path)
+				}
+				value = columnDeclaredValue{Type: column.Field.ValueType, Present: false, Null: true}
 			}
 			switch column.Field.ValueType {
 			case ColumnStoreValueFloat32Vector:
@@ -237,11 +259,15 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 			default:
-				encoded, err := encodeTypedColumnAdapterValue(column, value)
+				encoded, isNull, isDefault, err := encodeTypedColumnAdapterScalarValue(column, value)
 				if err != nil {
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 				batch.Columns[column.Definition.Name][rowIdx] = encoded
+				if column.Field.Nullable {
+					batch.Nulls[column.Definition.Name][rowIdx] = isNull
+					batch.Defaults[column.Definition.Name][rowIdx] = isDefault
+				}
 			}
 		}
 	}
@@ -275,20 +301,20 @@ func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte)
 	return typedColumnAdapterPartFromImage(opts, image)
 }
 
+func typedColumnAdapterPartFromBytesForReconstruction(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return nil, err
+	}
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+}
+
 func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
 	part, err := typedcolumn.ColumnPartFromImage(image)
 	if err != nil {
 		return nil, err
 	}
 	return typedColumnAdapterPartFromDecodedImage(opts, image, part)
-}
-
-func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
-	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
-}
-
-func typedColumnAdapterAggregatePartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
-	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
 }
 
 func typedColumnAdapterPartFromImageWithoutRowLocators(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
@@ -301,6 +327,14 @@ func typedColumnAdapterPartFromImageWithoutRowLocators(opts typedColumnAdapterOp
 		return nil, err
 	}
 	return typedColumnAdapterPartFromDecodedImage(opts, image, part)
+}
+
+func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+}
+
+func typedColumnAdapterAggregatePartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
 }
 
 func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) (*typedColumnAdapterPart, error) {
@@ -320,11 +354,11 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 	}
 	for i := range columns {
 		if columns[i].Field.ValueType == ColumnStoreValueString {
+			partColumn := part.Columns[columns[i].Definition.Name]
 			dict := dictionaries[columns[i].Definition.Name]
-			if len(dict) == 0 {
+			if len(dict) == 0 && !(columns[i].Field.Nullable && partColumn.Definition.Cardinality == 0) {
 				return nil, fmt.Errorf("collections: typed-column adapter image missing dictionary for %q", columns[i].Definition.Name)
 			}
-			partColumn := part.Columns[columns[i].Definition.Name]
 			if err := validateTypedColumnAdapterStringDictionary(columns[i], partColumn.Definition.Cardinality, dict); err != nil {
 				return nil, err
 			}
@@ -378,6 +412,57 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary})
 }
 
+func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValues, error) {
+	if p == nil || p.Part == nil {
+		return typedColumnPartDecodedValues{}, errors.New("collections: nil typed-column adapter part")
+	}
+	ids, err := p.scanInt64ColumnValues(typedColumnAdapterPrimaryIDColumn)
+	if err != nil {
+		return typedColumnPartDecodedValues{}, err
+	}
+	values := make([][]columnDeclaredValue, len(p.Columns))
+	for i, column := range p.Columns {
+		columnValues, err := p.scanColumnValues(column.Definition.Name)
+		if err != nil {
+			return typedColumnPartDecodedValues{}, err
+		}
+		if len(columnValues) != len(ids) {
+			return typedColumnPartDecodedValues{}, fmt.Errorf("collections: typed-column adapter column %q rows=%d want %d", column.Definition.Name, len(columnValues), len(ids))
+		}
+		values[i] = columnValues
+	}
+	return typedColumnPartDecodedValues{PrimaryIDs: ids, Values: values}, nil
+}
+
+func (d typedColumnPartDecodedValues) valuesForRowInto(rowIdx int, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	if rowIdx < 0 || rowIdx >= len(d.PrimaryIDs) {
+		return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside typed_column_part rows=%d", rowIdx, len(d.PrimaryIDs))
+	}
+	if d.PrimaryIDs[rowIdx] != int64(rowIdx) {
+		return nil, fmt.Errorf("collections: typed-column reconstruction locator=%d want row_index=%d", d.PrimaryIDs[rowIdx], rowIdx)
+	}
+	if cap(dst) < len(d.Values) {
+		dst = make([]columnDeclaredValue, len(d.Values))
+	} else {
+		dst = dst[:len(d.Values)]
+	}
+	for i := range d.Values {
+		if rowIdx >= len(d.Values[i]) {
+			return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside field[%d] rows=%d", rowIdx, i, len(d.Values[i]))
+		}
+		dst[i] = d.Values[i][rowIdx]
+	}
+	return dst, nil
+}
+
+func (p *typedColumnAdapterPart) scanInt64ColumnValues(columnName string) ([]int64, error) {
+	scan, err := p.Part.NewScanner().ScanProjected([]string{columnName})
+	if err != nil {
+		return nil, err
+	}
+	return scan.Columns[columnName], nil
+}
+
 func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDeclaredValue, error) {
 	if p == nil || p.Part == nil {
 		return nil, errors.New("collections: nil typed-column adapter part")
@@ -385,6 +470,9 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 	column, ok := p.columnByName(columnName)
 	if !ok {
 		return nil, fmt.Errorf("collections: typed-column adapter missing column %q", columnName)
+	}
+	if column.Field.Nullable {
+		return p.scanNullableColumnValues(column)
 	}
 	if column.Field.ValueType == ColumnStoreValueFloat32Vector {
 		matrix, err := p.Part.DenseFloat32VectorColumn(column.Definition.Name, nil)
@@ -410,6 +498,67 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 			return nil, fmt.Errorf("collections: typed-column adapter row %d column %q: %w", i, columnName, err)
 		}
 		out[i] = value
+	}
+	return out, nil
+}
+
+type typedColumnAdapterNullableScanScratch struct {
+	reader   typedcolumn.GranuleReader
+	values   []int64
+	nulls    []bool
+	defaults []bool
+}
+
+func (p *typedColumnAdapterPart) scanNullableColumnValues(column typedColumnAdapterColumn) ([]columnDeclaredValue, error) {
+	return p.scanNullableColumnValuesInto(column, nil, nil)
+}
+
+func (p *typedColumnAdapterPart) scanNullableColumnValuesInto(column typedColumnAdapterColumn, dst []columnDeclaredValue, scratch *typedColumnAdapterNullableScanScratch) ([]columnDeclaredValue, error) {
+	partColumn, ok := p.Part.Columns[column.Definition.Name]
+	if !ok {
+		return nil, fmt.Errorf("collections: typed-column adapter missing column %q", column.Definition.Name)
+	}
+	if partColumn.Definition.Encoding != typedcolumn.EncodingNullableInt64 {
+		return nil, fmt.Errorf("collections: typed-column adapter nullable column %q encoding=%s want %s", column.Definition.Name, partColumn.Definition.Encoding, typedcolumn.EncodingNullableInt64)
+	}
+	rows := p.Part.Descriptor.RowCount
+	out := dst[:0]
+	if cap(out) < rows {
+		out = make([]columnDeclaredValue, rows)
+	} else {
+		out = out[:rows]
+	}
+	if scratch == nil {
+		var local typedColumnAdapterNullableScanScratch
+		scratch = &local
+	}
+	for blockIdx, block := range partColumn.Blocks {
+		decodedValues, decodedNulls, decodedDefaults, err := scratch.reader.DecodeNullableInt64Into(scratch.values[:0], scratch.nulls[:0], scratch.defaults[:0], block.Granule)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column adapter nullable column %q block %d: %w", column.Definition.Name, blockIdx, err)
+		}
+		scratch.values, scratch.nulls, scratch.defaults = decodedValues, decodedNulls, decodedDefaults
+		if len(scratch.values) != block.Descriptor.RowCount || len(scratch.nulls) != block.Descriptor.RowCount || len(scratch.defaults) != block.Descriptor.RowCount {
+			return nil, fmt.Errorf("collections: typed-column adapter nullable column %q block %d decoded rows mismatch", column.Definition.Name, blockIdx)
+		}
+		for i, raw := range scratch.values {
+			row := block.Descriptor.FirstRow + i
+			if row < 0 || row >= len(out) {
+				return nil, fmt.Errorf("collections: typed-column adapter nullable column %q block %d row %d outside rows=%d", column.Definition.Name, blockIdx, row, len(out))
+			}
+			switch {
+			case scratch.nulls[i]:
+				out[row] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, Null: true}
+			case scratch.defaults[i]:
+				out[row] = columnDeclaredValue{Type: column.Field.ValueType, Present: false, Null: true}
+			default:
+				value, err := decodeTypedColumnAdapterValue(column, raw)
+				if err != nil {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d column %q: %w", row, column.Definition.Name, err)
+				}
+				out[row] = value
+			}
+		}
 	}
 	return out, nil
 }
@@ -452,6 +601,20 @@ func (p *typedColumnAdapterPart) columnByName(name string) (typedColumnAdapterCo
 		}
 	}
 	return typedColumnAdapterColumn{}, false
+}
+
+func encodeTypedColumnAdapterScalarValue(column typedColumnAdapterColumn, value columnDeclaredValue) (int64, bool, bool, error) {
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return 0, false, false, err
+	}
+	if !value.Present {
+		return 0, false, true, nil
+	}
+	if value.Null {
+		return 0, true, false, nil
+	}
+	encoded, err := encodeTypedColumnAdapterValue(column, value)
+	return encoded, false, false, err
 }
 
 func encodeTypedColumnAdapterValue(column typedColumnAdapterColumn, value columnDeclaredValue) (int64, error) {
@@ -521,6 +684,12 @@ func validateTypedColumnAdapterDeclaredValue(column typedColumnAdapterColumn, va
 		return fmt.Errorf("value type=%q want %q", value.Type, column.Field.ValueType)
 	}
 	if !value.Present || value.Null {
+		if column.Field.Nullable {
+			if !value.Present && !value.Null {
+				return fmt.Errorf("absent nullable value is not marked null")
+			}
+			return nil
+		}
 		return fmt.Errorf("null or missing values are not represented by the typed-column adapter")
 	}
 	return nil
@@ -530,10 +699,16 @@ func decodeTypedColumnAdapterValue(column typedColumnAdapterColumn, raw int64) (
 	value := columnDeclaredValue{Type: column.Field.ValueType, Present: true}
 	switch column.Field.ValueType {
 	case ColumnStoreValueBool:
+		if raw != 0 && raw != 1 {
+			return columnDeclaredValue{}, fmt.Errorf("bool encoded value %d outside 0/1", raw)
+		}
 		value.Bool = raw != 0
 	case ColumnStoreValueInt64:
 		value.Int64 = raw
 	case ColumnStoreValueFloat32:
+		if raw < 0 || raw > int64(^uint32(0)) {
+			return columnDeclaredValue{}, fmt.Errorf("float32 encoded bits %d outside uint32", raw)
+		}
 		value.Float32 = math.Float32frombits(uint32(raw))
 	case ColumnStoreValueDouble:
 		value.Double = math.Float64frombits(uint64(raw))
@@ -598,6 +773,9 @@ func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string
 
 func validateTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, cardinality uint32, dict map[string]int64) error {
 	if cardinality == 0 {
+		if column.Field.Nullable && len(dict) == 0 {
+			return nil
+		}
 		return fmt.Errorf("collections: typed-column adapter image dictionary for %q has zero cardinality", column.Definition.Name)
 	}
 	if uint64(len(dict)) != uint64(cardinality) {

@@ -433,12 +433,9 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 		}
 		switch field.ValueType {
 		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
-			if field.Nullable {
-				return fmt.Errorf("%w: nullable field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
-			}
 		case ColumnStoreValueFloat32Vector:
 			if field.Nullable {
-				return fmt.Errorf("%w: nullable field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
+				return fmt.Errorf("%w: nullable vector field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
 			}
 			if field.VectorDims <= 0 {
 				return fmt.Errorf("%w: float32_vector field %q requires vector_dims", ErrTypedStorageColumnPartUnsupported, field.Path)

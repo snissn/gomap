@@ -51,7 +51,7 @@ storage`; new durable column-major assets should say `typed-column` or
   publish durable dense row-major little-endian `float32` sections.
 - `adjacency_list` typed-column publication remains fail-closed; internal dense
   `uint32` sections exist only as validation groundwork.
-- Nullable/missing typed-column values remain fail-closed.
+- At #1758 closeout, nullable/missing typed-column values remained fail-closed; #1784 documents scalar nullable typed-column representation using the nullable-int64 carrier while vector/adjacency nullable support stays staged/fail-closed.
 - Retained-payload reconstruction composes retained document bytes, typed-row
   values, and typed-column values after checkpoint/reopen.
 - Direct typed views require #1736 `mappedresource` validation for lifetime,
@@ -75,7 +75,7 @@ storage`; new durable column-major assets should say `typed-column` or
 | #1757 / PR #1793 | Done for int64 predicate MVP | Explicit typed-column int64 equality/range scan with min/max pruning and fallback. |
 | #1782 | Deferred | Native vector graph switch to typed-column parts is not landed. |
 | Authoritative `adjacency_list` publication (#1783) | Deferred | Fixed-degree/CSR schema and lifecycle work remain. |
-| Nullable/missing typed-column values (#1784) | Deferred | Current typed-column publication fails closed. |
+| Nullable/missing typed-column values (#1784) | In progress after closeout | Scalar nullable int64 representation and retained-payload semantics are documented first; vector/adjacency nullable support remains staged/fail-closed. |
 | Dictionary/string predicate query integration (#1785) | Deferred | String data-plane/dictionary descriptors exist; production query MVP is not landed. |
 | Aggregate metadata query integration (#1786) | Deferred | Aggregate metadata descriptors exist; production query MVP is not landed. |
 | Multipart lifecycle/compaction (#1787) | Deferred to #1736/follow-ups | Current direct int64 MVP is insert-only for typed-column parts; mutation-bearing multipart fast path is deferred. |
@@ -385,6 +385,6 @@ Remaining COW maintenance work for #1736/#1788:
   stale checksums, unsupported versions, and mutation-bearing typed-column part
   fast paths until multipart latest-visible maintenance is implemented.
 - Keep #1782 native vector graph switching, authoritative adjacency publication,
-  nullable/missing typed-column values, dictionary/string query integration,
+  nullable vector/adjacency typed-column integration, dictionary/string query integration,
   aggregate query integration, multipart lifecycle/compaction, and full row+column
   COW cleanup as explicit follow-ups, not implied #1744 completions.

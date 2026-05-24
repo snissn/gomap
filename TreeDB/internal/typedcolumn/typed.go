@@ -75,7 +75,11 @@ func (b *GranuleBuilder) BuildNullableInt64(values []int64, nulls []bool, defaul
 	if err := validateGranuleDecodeRows(len(values)); err != nil {
 		return EncodedGranule{}, err
 	}
-	valueEncoding, err := nullableValueEncoding(b.cfg.Encoding)
+	valueEncoding := b.cfg.Encoding
+	if valueEncoding == EncodingNullableInt64 {
+		valueEncoding = EncodingRawInt64
+	}
+	valueEncoding, err := nullableValueEncoding(valueEncoding)
 	if err != nil {
 		return EncodedGranule{}, err
 	}
@@ -102,7 +106,6 @@ func (b *GranuleBuilder) BuildNullableInt64(values []int64, nulls []bool, defaul
 			nullCount++
 		case isDefault:
 			defaultCount++
-			min, max, hasMinMax = updateOptionalMinMax(min, max, hasMinMax, defaultValue)
 		default:
 			b.values64 = append(b.values64, v)
 			min, max, hasMinMax = updateOptionalMinMax(min, max, hasMinMax, v)
@@ -163,6 +166,23 @@ func (r *GranuleReader) DecodeNullableInt64Into(dst []int64, nulls []bool, defau
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	nullCount, defaultCount, overlap, err := nullableBitmapCounts(header.nullMask, header.defaultMask, g.Rows)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if overlap >= 0 {
+		return nil, nil, nil, fmt.Errorf("typedcolumn: nullable int64 row %d is both null and default", overlap)
+	}
+	if nullCount != g.NullCount {
+		return nil, nil, nil, fmt.Errorf("typedcolumn: nullable int64 null count=%d want metadata=%d", nullCount, g.NullCount)
+	}
+	if defaultCount != g.DefaultCount {
+		return nil, nil, nil, fmt.Errorf("typedcolumn: nullable int64 default count=%d want metadata=%d", defaultCount, g.DefaultCount)
+	}
+	wantStoredRows := g.Rows - nullCount - defaultCount
+	if header.storedRows != wantStoredRows {
+		return nil, nil, nil, fmt.Errorf("typedcolumn: nullable int64 stored rows=%d want=%d", header.storedRows, wantStoredRows)
+	}
 	storedGranule := EncodedGranule{
 		Rows:        header.storedRows,
 		HasMinMax:   false,
@@ -186,9 +206,6 @@ func (r *GranuleReader) DecodeNullableInt64Into(dst []int64, nulls []bool, defau
 	for i := 0; i < g.Rows; i++ {
 		isNull := bitmapBit(header.nullMask, i)
 		isDefault := bitmapBit(header.defaultMask, i)
-		if isNull && isDefault {
-			return nil, nil, nil, fmt.Errorf("typedcolumn: nullable int64 row %d is both null and default", i)
-		}
 		nullOut[i] = isNull
 		defaultOut[i] = isDefault
 		switch {
@@ -651,6 +668,45 @@ func validateBoolRLERuns(data []byte, rows int) error {
 		return errors.New("typedcolumn: trailing bool rle bytes")
 	}
 	return nil
+}
+
+func nullableBitmapCounts(nullMask []byte, defaultMask []byte, rows int) (int, int, int, error) {
+	if len(nullMask) != len(defaultMask) {
+		return 0, 0, -1, fmt.Errorf("typedcolumn: nullable int64 mask length mismatch null=%d default=%d", len(nullMask), len(defaultMask))
+	}
+	nulls := 0
+	defaults := 0
+	overlap := -1
+	fullBytes := rows / 8
+	for i := 0; i < fullBytes; i++ {
+		nullByte := nullMask[i]
+		defaultByte := defaultMask[i]
+		nulls += bits.OnesCount8(nullByte)
+		defaults += bits.OnesCount8(defaultByte)
+		if both := nullByte & defaultByte; both != 0 && overlap < 0 {
+			overlap = i*8 + bits.TrailingZeros8(both)
+		}
+	}
+	if rows%8 != 0 {
+		validBits := uint(rows % 8)
+		validMask := byte((1 << validBits) - 1)
+		nullByte := nullMask[fullBytes]
+		defaultByte := defaultMask[fullBytes]
+		if nullByte&^validMask != 0 {
+			return 0, 0, -1, errors.New("typedcolumn: null mask has non-zero padding bits")
+		}
+		if defaultByte&^validMask != 0 {
+			return 0, 0, -1, errors.New("typedcolumn: default mask has non-zero padding bits")
+		}
+		nullByte &= validMask
+		defaultByte &= validMask
+		nulls += bits.OnesCount8(nullByte)
+		defaults += bits.OnesCount8(defaultByte)
+		if both := nullByte & defaultByte; both != 0 && overlap < 0 {
+			overlap = fullBytes*8 + bits.TrailingZeros8(both)
+		}
+	}
+	return nulls, defaults, overlap, nil
 }
 
 func bitmapBit(mask []byte, row int) bool {
