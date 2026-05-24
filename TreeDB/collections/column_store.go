@@ -173,10 +173,13 @@ type ColumnStoreColumn struct {
 	ValueType ColumnStoreValueType `json:"value_type"`
 	// Owner is typed-storage metadata. The zero value preserves compatibility and
 	// resolves to typed_row_asset; typed_column_part is opt-in/experimental.
-	Owner              TypedStorageFieldOwner   `json:"owner,omitempty"`
-	Nullable           bool                     `json:"nullable,omitempty"`
-	Dictionary         bool                     `json:"dictionary,omitempty"`
-	VectorDims         int                      `json:"vector_dims,omitempty"`
+	Owner      TypedStorageFieldOwner `json:"owner,omitempty"`
+	Nullable   bool                   `json:"nullable,omitempty"`
+	Dictionary bool                   `json:"dictionary,omitempty"`
+	VectorDims int                    `json:"vector_dims,omitempty"`
+	// AdjacencyDegree is the fixed number of uint32 neighbors per row for
+	// adjacency_list typed_column_part storage.
+	AdjacencyDegree    int                      `json:"adjacency_degree,omitempty"`
 	FixedWidthEncoding ColumnFixedWidthEncoding `json:"fixed_width_encoding,omitempty"`
 }
 
@@ -449,6 +452,21 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			}
 		} else if col.VectorDims != 0 {
 			return fmt.Errorf("collections: invalid column %q vector_dims: only float32_vector columns may set vector_dims", col.Name)
+		}
+		if valueType == ColumnStoreValueAdjacencyList {
+			if col.AdjacencyDegree < 0 {
+				return fmt.Errorf("collections: invalid column %q adjacency_degree: must be non-negative", col.Name)
+			}
+			if owner == TypedStorageOwnerColumnPart {
+				if col.Nullable {
+					return fmt.Errorf("collections: invalid column %q nullable adjacency_list typed_column_part is unsupported", col.Name)
+				}
+				if col.AdjacencyDegree <= 0 {
+					return fmt.Errorf("collections: invalid column %q adjacency_degree: must be positive for adjacency_list typed_column_part", col.Name)
+				}
+			}
+		} else if col.AdjacencyDegree != 0 {
+			return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list columns may set adjacency_degree", col.Name)
 		}
 		if col.Dictionary && valueType != ColumnStoreValueString {
 			return fmt.Errorf("collections: invalid column %q dictionary: unsupported for value_type %q", col.Name, valueType)
@@ -992,6 +1010,7 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, string(col.ValueType))
 		writeHashString(&d, string(columnStoreColumnOwnerOrRowAsset(col)))
 		writeHashUint64(&d, uint64(col.VectorDims))
+		writeHashUint64(&d, uint64(col.AdjacencyDegree))
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)
 		if col.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {

@@ -17,7 +17,7 @@ changes.
 | Document title/body/source text | Retained document / residual payload | Usually needed only after top-k; keep flexible. |
 | Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
 | Vector graph/ANN data | `derived_accelerator` | It accelerates search but is not the authoritative owner of the embedding field. |
-| Adjacency list | Derived graph today; authoritative `adjacency_list` typed-column storage is deferred | Production `adjacency_list` publication remains fail-closed until [#1783](https://github.com/snissn/gomap/issues/1783). |
+| Fixed-degree adjacency list | `typed_column_part` `adjacency_list` with positive `adjacency_degree` when it is an authoritative field | Stored as dense row-major little-endian `uint32`; nullable/missing adjacency remains fail-closed. |
 
 Best practice: keep vector payloads out of retained JSON for search-heavy
 workloads when the typed-column vector section is the intended search data plane.

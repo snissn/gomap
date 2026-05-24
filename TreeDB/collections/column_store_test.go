@@ -348,6 +348,22 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "only float32_vector columns may set vector_dims",
 		},
 		{
+			name: "typed column adjacency requires degree",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart}},
+			},
+			want: "adjacency_degree",
+		},
+		{
+			name: "typed column adjacency rejects nullable",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, Nullable: true, AdjacencyDegree: 16}},
+			},
+			want: "nullable adjacency_list",
+		},
+		{
 			name: "float32 column rejects dims",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

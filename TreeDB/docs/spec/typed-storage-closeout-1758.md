@@ -49,8 +49,9 @@ storage`; new durable column-major assets should say `typed-column` or
   string fields.
 - Explicit fixed-dimension `float32_vector` `typed_column_part` owners can
   publish durable dense row-major little-endian `float32` sections.
-- `adjacency_list` typed-column publication remains fail-closed; internal dense
-  `uint32` sections exist only as validation groundwork.
+- After #1783, explicit non-nullable fixed-degree `adjacency_list`
+  `typed_column_part` owners with positive `adjacency_degree` can publish durable
+  dense row-major little-endian `uint32` sections.
 - At #1758 closeout, nullable/missing typed-column values remained fail-closed; #1784 documents scalar nullable typed-column representation using the nullable-int64 carrier while vector/adjacency nullable support stays staged/fail-closed.
 - Retained-payload reconstruction composes retained document bytes, typed-row
   values, and typed-column values after checkpoint/reopen.
@@ -74,7 +75,7 @@ storage`; new durable column-major assets should say `typed-column` or
 | #1781 / PR #1792 | Done | Perf guardrails for dense vector direct views and reconstruction generation cache. |
 | #1757 / PR #1793 | Done for int64 predicate MVP | Explicit typed-column int64 equality/range scan with min/max pruning and fallback. |
 | #1782 | Deferred | Native vector graph switch to typed-column parts is not landed. |
-| Authoritative `adjacency_list` publication (#1783) | Deferred | Fixed-degree/CSR schema and lifecycle work remain. |
+| Authoritative `adjacency_list` publication (#1783) | Done after closeout | Fixed-degree dense `uint32` schema via `adjacency_degree`; CSR/vector graph switch remains deferred. |
 | Nullable/missing typed-column values (#1784) | In progress after closeout | Scalar nullable int64 representation and retained-payload semantics are documented first; vector/adjacency nullable support remains staged/fail-closed. |
 | Dictionary/string predicate query integration (#1785) | Deferred | String data-plane/dictionary descriptors exist; production query MVP is not landed. |
 | Aggregate metadata query integration (#1786) | Deferred | Aggregate metadata descriptors exist; production query MVP is not landed. |

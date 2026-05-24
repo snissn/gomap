@@ -89,7 +89,7 @@ func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 		{ValueType: ColumnStoreValueDouble, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Reason: "stored as raw int64 float64 bit patterns until native float sections land"},
 		{ValueType: ColumnStoreValueString, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Reason: "stored as dictionary codes with dictionary section metadata"},
 		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Reason: "stored as fixed-dim dense little-endian float32 sections"},
-		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterFailClosed, Reason: "adjacency_list typed-column publication still lacks fixed-degree schema metadata"},
+		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections"},
 	}
 }
 
@@ -143,11 +143,17 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		Compression:    typedcolumn.CompressionNone,
 		CompressionSet: true,
 	}
-	if field.ValueType == ColumnStoreValueFloat32Vector {
+	switch field.ValueType {
+	case ColumnStoreValueFloat32Vector:
 		if field.VectorDims <= 0 {
 			return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q float32_vector requires positive vector_dims", field.Path)
 		}
 		def.FixedWidthElements = field.VectorDims
+	case ColumnStoreValueAdjacencyList:
+		if field.AdjacencyDegree <= 0 {
+			return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q adjacency_list requires positive adjacency_degree", field.Path)
+		}
+		def.FixedWidthElements = field.AdjacencyDegree
 	}
 	return typedColumnAdapterColumn{Field: field, Definition: def, FixedWidthEncoding: field.FixedWidthEncoding}, nil
 }
@@ -232,6 +238,15 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 				return nil, err
 			}
 			batch.Float32Vectors[column.Definition.Name] = make([]float32, elements)
+		case ColumnStoreValueAdjacencyList:
+			if batch.Uint32Vectors == nil {
+				batch.Uint32Vectors = make(map[string][]uint32)
+			}
+			elements, err := typedColumnAdapterDenseElements(len(rows), column.Definition.FixedWidthElements)
+			if err != nil {
+				return nil, err
+			}
+			batch.Uint32Vectors[column.Definition.Name] = make([]uint32, elements)
 		default:
 			batch.Columns[column.Definition.Name] = make([]int64, len(rows))
 			if column.Field.Nullable {
@@ -256,6 +271,10 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			switch column.Field.ValueType {
 			case ColumnStoreValueFloat32Vector:
 				if err := encodeTypedColumnAdapterFloat32VectorValue(batch.Float32Vectors[column.Definition.Name], rowIdx, column, value); err != nil {
+					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+				}
+			case ColumnStoreValueAdjacencyList:
+				if err := encodeTypedColumnAdapterAdjacencyListValue(batch.Uint32Vectors[column.Definition.Name], rowIdx, column, value); err != nil {
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 			default:
@@ -494,6 +513,18 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 		}
 		return out, nil
 	}
+	if column.Field.ValueType == ColumnStoreValueAdjacencyList {
+		matrix, err := p.Part.DenseUint32Column(column.Definition.Name, nil)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]columnDeclaredValue, matrix.Rows)
+		for i := 0; i < matrix.Rows; i++ {
+			start := i * matrix.ElementsPerRow
+			out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, AdjacencyList: append([]uint32(nil), matrix.Values[start:start+matrix.ElementsPerRow]...)}
+		}
+		return out, nil
+	}
 	scan, err := p.Part.NewScanner().ScanProjected([]string{column.Definition.Name})
 	if err != nil {
 		return nil, err
@@ -671,6 +702,28 @@ func encodeTypedColumnAdapterFloat32VectorValue(dst []float32, rowIdx int, colum
 		return fmt.Errorf("float32_vector row %d outside destination", rowIdx)
 	}
 	copy(dst[start:start+dims], value.Float32Vector)
+	return nil
+}
+
+func encodeTypedColumnAdapterAdjacencyListValue(dst []uint32, rowIdx int, column typedColumnAdapterColumn, value columnDeclaredValue) error {
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return err
+	}
+	degree := column.Definition.FixedWidthElements
+	if degree <= 0 {
+		return fmt.Errorf("adjacency_list fixed-width elements=%d", degree)
+	}
+	if len(value.AdjacencyList) != degree {
+		return fmt.Errorf("adjacency_list length=%d want adjacency_degree=%d", len(value.AdjacencyList), degree)
+	}
+	start, err := typedColumnAdapterDenseElements(rowIdx, degree)
+	if err != nil {
+		return err
+	}
+	if start > len(dst)-degree {
+		return fmt.Errorf("adjacency_list row %d outside destination", rowIdx)
+	}
+	copy(dst[start:start+degree], value.AdjacencyList)
 	return nil
 }
 
@@ -864,6 +917,70 @@ func (r typedColumnAdapterResourceReader) ReadSection(section typedcolumn.Column
 	}
 	defer h.Release()
 	return bytes.Clone(h.Bytes()), nil
+}
+
+type typedColumnAdapterDenseUint32ResourceView struct {
+	Rows           int
+	ElementsPerRow int
+	Values         []uint32
+	Handle         *mappedresource.Handle
+	Direct         bool
+}
+
+func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterResourceReader, column typedColumnAdapterColumn, rows int) (typedColumnAdapterDenseUint32ResourceView, error) {
+	if column.Field.ValueType != ColumnStoreValueAdjacencyList || column.Definition.Type != typedcolumn.ColumnTypeAdjacencyList || column.Definition.Encoding != typedcolumn.EncodingRawUint32Dense {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q is not dense adjacency_list", column.Definition.Name)
+	}
+	degree := column.Definition.FixedWidthElements
+	if degree <= 0 {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q adjacency_degree=%d", column.Definition.Name, degree)
+	}
+	if rows == 0 {
+		rows = reader.Image.Rows
+	}
+	expected, err := typedColumnAdapterDenseElements(rows, degree)
+	if err != nil {
+		return typedColumnAdapterDenseUint32ResourceView{}, err
+	}
+	var section typedcolumn.ColumnPartImageSection
+	found := false
+	for _, candidate := range reader.Image.Sections {
+		if candidate.Kind == typedcolumn.ColumnPartImageSectionColumnData && candidate.Column == column.Definition.Name {
+			section = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter image missing column data section %q", column.Definition.Name)
+	}
+	if section.Encoding != typedcolumn.EncodingRawUint32Dense || section.Compression != typedcolumn.CompressionNone {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q section encoding/compression mismatch", column.Definition.Name)
+	}
+	h, err := reader.AcquireSection(section)
+	if err != nil {
+		return typedColumnAdapterDenseUint32ResourceView{}, err
+	}
+	values, viewErr := typedColumnAdapterUint32View(reader.Manager, h)
+	if viewErr == nil {
+		if len(values) != expected {
+			_ = h.Release()
+			return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q dense uint32 values=%d want %d", column.Definition.Name, len(values), expected)
+		}
+		return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: values, Handle: h, Direct: true}, nil
+	}
+	decoded, decodeErr := typedcolumn.DecodeRawUint32DensePayload(nil, h.Bytes(), rows, degree)
+	releaseErr := h.Release()
+	if decodeErr != nil {
+		if releaseErr != nil {
+			decodeErr = errors.Join(decodeErr, releaseErr)
+		}
+		return typedColumnAdapterDenseUint32ResourceView{}, decodeErr
+	}
+	if releaseErr != nil {
+		return typedColumnAdapterDenseUint32ResourceView{}, releaseErr
+	}
+	return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: decoded, Direct: false}, nil
 }
 
 func (r typedColumnAdapterResourceReader) AcquireSection(section typedcolumn.ColumnPartImageSection) (*mappedresource.Handle, error) {

@@ -678,6 +678,10 @@ func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value colum
 		if len(value.Float32Vector) != col.VectorDims {
 			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), col.VectorDims)
 		}
+	case ColumnStoreValueAdjacencyList:
+		if col.AdjacencyDegree > 0 && len(value.AdjacencyList) != col.AdjacencyDegree {
+			return fmt.Errorf("adjacency_list length=%d want adjacency_degree=%d", len(value.AdjacencyList), col.AdjacencyDegree)
+		}
 	}
 	return nil
 }
