@@ -803,6 +803,15 @@ func TestTypedColumnPublicationManifestCorruptionMatrix(t *testing.T) {
 			want: "unsupported typed-column manifest reason",
 		},
 		{
+			name: "missing typed_row_asset ref",
+			records: func() []columnManifestRecord {
+				return []columnManifestRecord{
+					typedColumnManifestPartRecord1778(t, typed, 2, ColumnPublishOperationInsert, typed.Generation, typed.PartID),
+				}
+			},
+			want: "missing typed_row_asset ref for generation=1",
+		},
+		{
 			name: "row count mismatch",
 			records: func() []columnManifestRecord {
 				return []columnManifestRecord{
