@@ -275,7 +275,11 @@ func TestColumnAssetReachabilityIgnoresMappedResourcePinsFromOtherDBRoots1788(t 
 		t.Fatalf("Insert B: %v", err)
 	}
 
-	refA := columnManifestAssetRefsForCollectionM12A(t, dbA, colA)[0]
+	refsA := columnManifestAssetRefsForCollectionM12A(t, dbA, colA)
+	if len(refsA) == 0 {
+		t.Fatal("manifest refs empty for DB A")
+	}
+	refA := refsA[0]
 	mgr := mappedresource.NewManager()
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(dbA.ColumnAssetRootDir(), refA.Namespace, ColumnAssetReadIntegrityVerify)
 	if err != nil {
