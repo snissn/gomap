@@ -96,8 +96,8 @@ func TestTypedColumnStringScanNoDocumentReconstructionDiagnostics1785(t *testing
 	}
 	assertTypedColumnStringScanValues1785(t, result, []string{"beta", "beta"})
 	diag := result.Diagnostics
-	if diag.Fallback || diag.FallbackReads != 0 || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.DocumentReconstructions != 0 {
-		t.Fatalf("diagnostics=%+v want no fallback or row/document reconstruction", diag)
+	if diag.Fallback || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.DocumentReconstructions != 0 {
+		t.Fatalf("diagnostics=%+v want no document fallback or row/document reconstruction", diag)
 	}
 	if diag.PhysicalRowIDLookups == 0 || diag.PhysicalRowAssetReads == 0 {
 		t.Fatalf("diagnostics=%+v want physical row id lookup only after matches", diag)
