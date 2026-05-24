@@ -32,7 +32,7 @@ Recommended starting point for new performance work:
 | Path | Current status | Evidence command |
 | --- | --- | --- |
 | Non-nullable int64 predicate scan | Landed scoped MVP; explicit API, not broad planner routing. | `BenchmarkTypedColumnInt64PredicateScan` and aggregate benchmark below. |
-| Non-nullable int64 count/sum/avg aggregate matrix | Landed benchmark/API path for no-filter, equality, tiny/range, wide range, all-pruned, all-match, tail, and multiple value distributions; still allocation-heavy and not final. | `BenchmarkTypedColumnInt64PredicateAggregate` with `TREEDB_TYPED_COLUMN_BENCH_SHAPES` / `TREEDB_TYPED_COLUMN_BENCH_DISTS`. |
+| Non-nullable int64 count/sum/avg aggregate | Landed benchmark/API path across no-filter, equality, tiny/range, wide range, all-pruned/all-match, tail, and clustered/reverse/partial/random/hotspot distributions; still allocation-heavy and not final. | `BenchmarkTypedColumnInt64PredicateAggregate`. |
 | Dense fixed-dimension `float32_vector` typed-column sections | Landed durable publication/reconstruction and direct-view tests. | `BenchmarkTypedColumnVectorDense...` under `TreeDB/internal/typedcolumn`. |
 | Vector graph typed-column reads | Landed native-reader path for `column_graph`; adjacency remains derived graph data, not authoritative typed-column `adjacency_list`. | [#1782](https://github.com/snissn/gomap/issues/1782), `cmd/treedb_column_graph_demo`, and column graph benchmarks. |
 
@@ -41,7 +41,7 @@ Recommended starting point for new performance work:
 | Area | What to say today | Tracker |
 | --- | --- | --- |
 | Aggregate hot path | The scalar aggregate path avoids document/row materialization, but still allocates and spends time in per-scan asset lifecycle, full-asset mapping/checking, metadata/dictionary decode, and int64 decode buffers. | [#1806](https://github.com/snissn/gomap/issues/1806) |
-| Benchmark matrix | Expanded aggregate shapes and distributions have landed: no-filter, exact, tiny, 1% range, 10% range, all-pruned, all-match, tail, clustered, reverse, partially clustered, random, and hotspot/skew. Use the matrix to avoid overfitting; further production workload expansion may still add cases. | [#1808](https://github.com/snissn/gomap/issues/1808) |
+| Benchmark matrix | The aggregate benchmark matrix from #1808 is landed. Defaults cover `4096,65536` rows, `selective_range_1pct`, `all_pruned_no_match`, and `all_match` on `clustered_monotonic`; environment variables select no-filter/exact/tiny/wide/tail shapes, reverse/partial/random/hotspot distributions, optional fallback rows, and opt-in large rows. | [#1808](https://github.com/snissn/gomap/issues/1808) |
 | Dictionary/string predicates | String dictionary data exists, but production string predicate scan MVP is separate work. | [#1785](https://github.com/snissn/gomap/issues/1785) |
 | Aggregate metadata query integration | Aggregate metadata descriptors exist, but broader query integration is separate work. | [#1786](https://github.com/snissn/gomap/issues/1786) |
 | Resource/lifetime substrate | Direct views must use mappedresource lifetime/range/endian/length/alignment validation; broad DB-owned adoption remains in the parent tracker. | [#1736](https://github.com/snissn/gomap/issues/1736) |
@@ -53,8 +53,10 @@ Recommended starting point for new performance work:
 
 ### Default typed-column int64 aggregate benchmark
 
-Use this for a repeatable local signal. It runs default row counts and includes
-both the direct typed-column path and document fallback comparison.
+Use this for a repeatable local signal. It runs the landed #1808 default matrix:
+row counts `4096,65536`, distribution `clustered_monotonic`, shapes
+`selective_range_1pct`, `all_pruned_no_match`, and `all_match`, with document
+fallback rows included for the default row counts.
 
 ```sh
 go test -run '^$' \
@@ -79,8 +81,8 @@ go test -run '^$' \
 Expected output shape:
 
 ```text
-BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/typed_column_part/predicate_count_sum_avg-8 ... ns/op ... rows_scanned/op ... rows_matched/op ... blocks_pruned/op ... mapped_bytes/op ... decoded_bytes/op ... document_materializations/op ... B/op ... allocs/op
-BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/document_full_scan_fallback/predicate_count_sum_avg-8 ... document_materializations/op ... row_materializations/op ... B/op ... allocs/op
+BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg-8 ... dataset_rows ... setup_ns ... ns/op ... rows_scanned/op ... rows_matched/op ... blocks_pruned/op ... mapped_bytes/op ... decoded_bytes/op ... document_materializations/op ... B/op ... allocs/op
+BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/dist_clustered_monotonic/path_document_full_scan_fallback/shape_selective_range_1pct/predicate_count_sum_avg-8 ... document_materializations/op ... row_materializations/op ... B/op ... allocs/op
 ```
 
 Read the typed-column row and fallback row separately. The direct typed-column
@@ -88,12 +90,56 @@ row should show `document_materializations/op=0`, `row_materializations/op=0`,
 `physical_row_asset_reads/op=0`, `physical_row_id_lookups/op=0`, and
 `row_locator_decodes/op=0` for the aggregate path.
 
+### Selecting #1808 matrix shapes and distributions
+
+Use the benchmark environment variables to cover shapes beyond the default
+clustered selective/all-pruned/all-match signal:
+
+```sh
+TREEDB_TYPED_COLUMN_BENCH_ROWS=4096 \
+TREEDB_TYPED_COLUMN_BENCH_SHAPES=no_filter,exact,tiny,range_1pct,range_10pct,all_pruned,all_match,tail \
+TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered,reverse,partial_clustered,random,hotspot \
+TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
+go test -run '^$' \
+  -bench '^BenchmarkTypedColumnInt64PredicateAggregate$' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  ./TreeDB/collections
+```
+
+Canonical shape names in output are `no_filter_full_aggregate`, `exact_value`,
+`tiny_range`, `selective_range_1pct`, `wide_range_10pct`,
+`all_pruned_no_match`, `all_match`, and `tail_range`. Canonical distribution
+names are `clustered_monotonic`, `reverse_monotonic`, `partially_clustered`,
+`random_uniform`, and `hotspot_skewed`.
+
+Rows `10,000,000` and `50,000,000` are intentionally gated. Only use the large
+matrix when you have enough local time and disk space:
+
+```sh
+TREEDB_TYPED_COLUMN_BENCH_LARGE=true \
+TREEDB_TYPED_COLUMN_BENCH_ROWS=10000000,50000000 \
+TREEDB_TYPED_COLUMN_BENCH_SHAPES=range_1pct,all_match \
+TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered,random \
+TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
+go test -run '^$' \
+  -bench '^BenchmarkTypedColumnInt64PredicateAggregate$' \
+  -benchmem \
+  -benchtime=3x \
+  -count=1 \
+  ./TreeDB/collections
+```
+
 ### Medium 1M-row selective aggregate
 
 ```sh
 TREEDB_TYPED_COLUMN_BENCH_ROWS=1048576 \
+TREEDB_TYPED_COLUMN_BENCH_SHAPES=selective_range_1pct \
+TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered_monotonic \
+TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
 go test -run '^$' \
-  -bench '^BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/typed_column_part/predicate_count_sum_avg$' \
+  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg$' \
   -benchmem \
   -benchtime=20x \
   -count=3 \
@@ -103,7 +149,7 @@ go test -run '^$' \
 Current interpretation for this shape:
 
 - dataset rows: `1,048,576`;
-- query is a ~1% selective range, not a full aggregate;
+- query is a clustered ~1% selective range, not a full aggregate;
 - matches about `10,485` rows;
 - decodes/scans `16,384` candidate rows;
 - prunes `126/128` blocks on clustered data;
@@ -111,8 +157,9 @@ Current interpretation for this shape:
 - optimization is tracked by [#1806](https://github.com/snissn/gomap/issues/1806).
 
 Do not extrapolate production performance from only this clustered/selective
-shape. The [#1808](https://github.com/snissn/gomap/issues/1808) matrix is now
-landed; run additional shapes/distributions before claiming a general speedup.
+shape. Compare it with the landed matrix shapes and distributions above,
+especially `no_filter_full_aggregate`, `all_match`, `random_uniform`, and
+`hotspot_skewed`, before drawing conclusions.
 
 ### Focused aggregate CPU and allocation profile
 
@@ -122,8 +169,11 @@ measuring.
 
 ```sh
 TREEDB_TYPED_COLUMN_BENCH_ROWS=65536 \
+TREEDB_TYPED_COLUMN_BENCH_SHAPES=selective_range_1pct \
+TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered_monotonic \
+TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
 go test -run '^$' \
-  -bench '^BenchmarkTypedColumnInt64PredicateAggregate/rows_65536/typed_column_part/predicate_count_sum_avg$' \
+  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_65536/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg$' \
   -benchmem \
   -benchtime=30000x \
   -count=1 \
@@ -142,31 +192,8 @@ go tool pprof -top -sample_index=alloc_space /tmp/typedscan_aggregate_mem.pprof
 Expected current profile themes are per-scan asset read/open/fstat/checksum,
 metadata/dictionary decode, and int64 decode allocation. If a profile instead
 shows document materialization dominating the direct typed-column row, re-check
-that you are running the `typed_column_part` sub-benchmark and not the fallback.
-
-### Expanded aggregate matrix smoke
-
-Use the landed matrix controls when you need broader coverage than the default
-clustered selective/all-pruned/all-match set:
-
-```sh
-TREEDB_TYPED_COLUMN_BENCH_ROWS=65536 \
-TREEDB_TYPED_COLUMN_BENCH_SHAPES=no_filter,exact,tiny,range_1pct,range_10pct,all_pruned,all_match,tail \
-TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered,reverse,partial_random,random,hotspot \
-go test -run '^$' \
-  -bench '^BenchmarkTypedColumnInt64PredicateAggregate$' \
-  -benchmem \
-  -benchtime=1x \
-  -count=1 \
-  ./TreeDB/collections
-```
-
-Available shape aliases include `no_filter`, `exact`, `tiny`, `range_1pct`,
-`range_10pct`, `all_pruned`, `all_match`, and `tail`. Available distribution
-aliases include `clustered`, `reverse`, `partial_random`, `random`, and
-`hotspot`/`skew`. Keep the distribution in the benchmark name when comparing
-results: clustered and reverse data exercise pruning differently from random or
-hotspot data.
+that you are running the `path_typed_column_part` sub-benchmark and not the
+fallback.
 
 ### Dense vector typed-column smoke
 
@@ -252,6 +279,11 @@ $OUT/insights.html
 
 | Counter | Meaning | Best-practice interpretation |
 | --- | --- | --- |
+| `dataset_rows` | Rows loaded into the fixture before timing starts. | Use with benchmark name and env vars to compare like with like. |
+| `setup_batches` | Insert batches used to build the fixture. | Setup metric only; not part of query-loop timing. |
+| `setup_ns` | Fixture/load/setup duration before `ResetTimer`. | Keep separate from `ns/op`; useful for load-cost context, not hot-loop proof. |
+| `typed_column_asset_bytes` | Bytes under the typed-column asset directory for typed-column rows. | Compare with decoded/mapped bytes to understand storage footprint. |
+| `db_dir_bytes` | Total DB directory bytes for the fixture. | Includes more than typed-column payload; use for footprint context. |
 | `rows_scanned/op` | Candidate rows whose predicate/aggregate payload was scanned or decoded. | Compare with total rows and `rows_matched/op`; low is good for selective/pruned shapes. |
 | `rows_matched/op` | Rows satisfying the predicate. | Confirms selectivity; use with matches/sec. |
 | `parts_considered/op` | Typed-column parts inspected by the query. | High counts can mean many generations/parts. |
@@ -377,8 +409,8 @@ it a ceiling and keep verified/cached-verify evidence nearby.
 - **Expected counters:** record `ns/op`, `ops/sec`, `B/op`, `allocs/op`, rows/sec,
   matches/sec, mapped bytes, decoded bytes, and materialization counters.
 - **Why:** prevents overfitting to one favorable shape and keeps bottlenecks visible.
-- **When not:** if the branch lacks the benchmark shape, mark the command as
-  planned/illustrative instead of implying it was run.
+- **When not:** if you are on an older branch that lacks a benchmark shape,
+  mark the command as planned/illustrative instead of implying it was run.
 
 ## Troubleshooting
 
@@ -388,7 +420,7 @@ it a ceiling and keep verified/cached-verify evidence nearby.
 | `mapped_bytes/op` is much larger than `decoded_bytes/op` | Current read/validation path touches more asset data than the useful candidate payload. | Link to #1806; do not describe it as final optimized column-store performance. |
 | `blocks_pruned/op` is zero on random data | Min/max pruning is ineffective when every block overlaps the predicate. | Report distribution; do not optimize only for clustered/selective data. |
 | `allocs/op` remains high | Current metadata/decode/read lifecycle still allocates. | Capture allocation profile and identify whether decode, metadata, or materialization dominates. |
-| Benchmark output has no typed-column rows | Branch may not contain the landed benchmark, or regex is wrong. | Run `rg BenchmarkTypedColumnInt64PredicateAggregate TreeDB/collections`. |
+| Benchmark output has no typed-column rows | Regex may be matching the pre-#1808 sub-benchmark path or the branch may be stale. | Use `path_typed_column_part` in the regex and run `rg BenchmarkTypedColumnInt64PredicateAggregate TreeDB/collections`. |
 | Profile files are missing from unified-bench | `-profile-dir` requires `-path-label`; explicit profile flags can override defaults. | Use the exact unified-bench workflow above. |
 
 ## Glossary

@@ -284,12 +284,12 @@ go test -run '^$' \
   ./TreeDB/collections
 ```
 
-Expected output includes rows for `typed_column_part` and
-`document_full_scan_fallback`, with counters such as:
+Expected output includes landed #1808 matrix rows for `path_typed_column_part`
+and `path_document_full_scan_fallback`, with counters such as:
 
 ```text
-... rows_4096/typed_column_part/predicate_count_sum_avg ... rows_scanned/op ... rows_matched/op ... mapped_bytes/op ... decoded_bytes/op ... document_materializations/op ... row_materializations/op ... B/op ... allocs/op
-... rows_4096/document_full_scan_fallback/predicate_count_sum_avg ... document_materializations/op ... row_materializations/op ...
+... rows_4096/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg ... rows_scanned/op ... rows_matched/op ... mapped_bytes/op ... decoded_bytes/op ... document_materializations/op ... row_materializations/op ... B/op ... allocs/op
+... rows_4096/dist_clustered_monotonic/path_document_full_scan_fallback/shape_selective_range_1pct/predicate_count_sum_avg ... document_materializations/op ... row_materializations/op ...
 ```
 
 Use a longer command for less noisy numbers:
