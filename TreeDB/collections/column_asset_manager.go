@@ -845,6 +845,11 @@ type columnPhysicalAssetReadCache struct {
 	lastView       bool
 	hits           uint64
 	misses         uint64
+	// trustCachedVerifyFileIdentity lets explicit prepared lifetimes reuse the
+	// identity captured when the segment reader was opened. Default read caches
+	// keep refreshing identity so existing fail-closed tests and non-prepared
+	// readers retain their stricter cached-verify behavior.
+	trustCachedVerifyFileIdentity bool
 
 	resourceManager *mappedresource.Manager
 	resourceScope   mappedresource.Scope
@@ -1049,7 +1054,7 @@ func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref Column
 	var fileIdentity columnAssetVerifiedChecksumFileIdentity
 	if reader != nil {
 		fileIdentity = reader.identity
-		if c.readIntegrity == ColumnAssetReadIntegrityCachedVerify {
+		if c.readIntegrity == ColumnAssetReadIntegrityCachedVerify && !c.trustCachedVerifyFileIdentity {
 			fileIdentity = columnAssetVerifiedChecksumFileIdentityFromFile(reader.file)
 			reader.identity = fileIdentity
 		}

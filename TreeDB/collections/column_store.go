@@ -137,9 +137,10 @@ const (
 	ColumnAssetReadIntegrityVerify ColumnAssetReadIntegrity = "verify"
 	// ColumnAssetReadIntegrityCachedVerify verifies each immutable typed asset
 	// ref on first process read, then skips repeated hot-read CRC work for the
-	// same ref. It is a benchmark-relaxed mode: post-verification file
-	// corruption can be missed until the cache entry is evicted or the process
-	// restarts.
+	// same ref. Explicit prepared read sessions may also reuse the file identity
+	// captured when the segment reader was opened. It is a benchmark-relaxed mode:
+	// post-verification file corruption can be missed until the cache entry is
+	// evicted, the prepared session is closed, or the process restarts.
 	ColumnAssetReadIntegrityCachedVerify ColumnAssetReadIntegrity = "cached_verify"
 	// ColumnAssetReadIntegritySkipChecksums is an unsafe relaxed hot-read mode
 	// for benchmark/performance attribution. It skips per-read payload checksum
