@@ -595,7 +595,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       dictionary.ColumnName,
-				PartRole:     role,
 			})
 		}
 		int64Assets, err := buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
@@ -622,7 +621,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       values.ColumnName,
-				PartRole:     role,
 			})
 		}
 		for _, aggregate := range rowAssetConfig.AggregateMetadata {
@@ -652,7 +650,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       aggregate.Name,
-				PartRole:     role,
 			})
 		}
 	}

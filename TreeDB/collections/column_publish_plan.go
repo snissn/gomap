@@ -951,7 +951,7 @@ func validateColumnManifestPartRoleForAsset(role ColumnManifestPartRole, kind Co
 		}
 		operation, ok := columnPhysicalScanOperationFromBytes([]byte(reason))
 		if !ok {
-			return fmt.Errorf("collections: unsupported column manifest part reason %q", reason)
+			return nil
 		}
 		want := inferColumnManifestPartRole(kind, string(operation))
 		if role != want {
@@ -962,6 +962,10 @@ func validateColumnManifestPartRoleForAsset(role ColumnManifestPartRole, kind Co
 		}
 		if kind == ColumnAssetKindTCS1TypedColumnPart && role == ColumnManifestPartRoleTombstone {
 			return fmt.Errorf("collections: typed-column part cannot have tombstone role")
+		}
+	default:
+		if role != "" {
+			return fmt.Errorf("collections: column manifest part role=%q is not allowed for asset kind %s", role, kind)
 		}
 	}
 	return nil

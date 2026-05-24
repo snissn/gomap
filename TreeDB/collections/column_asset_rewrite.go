@@ -611,6 +611,9 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
 	if role == "" {
+		if version >= columnManifestRecordVersion && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+			return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
+		}
 		role = inferColumnManifestPartRole(kind, string(reason))
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {

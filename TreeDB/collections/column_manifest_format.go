@@ -664,6 +664,9 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		return columnManifestPartSnapshot{}, err
 	}
 	if role == "" {
+		if version >= columnManifestRecordVersion && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+			return columnManifestPartSnapshot{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
+		}
 		role = inferColumnManifestPartRole(kind, reason)
 	}
 	if fileID64 > uint64(math.MaxUint32) {
@@ -711,7 +714,6 @@ func isSupportedColumnManifestRecordVersion(version uint16) bool {
 }
 
 func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnManifestPartRole {
-	_ = kind
 	switch reason {
 	case string(ColumnPublishOperationDelete):
 		return ColumnManifestPartRoleTombstone
@@ -720,6 +722,9 @@ func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnMani
 	case string(ColumnPublishOperationInsert):
 		return ColumnManifestPartRoleBase
 	default:
+		if kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart {
+			return ColumnManifestPartRoleBase
+		}
 		return ""
 	}
 }

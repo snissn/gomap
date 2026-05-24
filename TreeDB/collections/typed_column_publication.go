@@ -380,7 +380,7 @@ func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifest
 	for generation, set := range sets {
 		ref, ok := set.primaryRef()
 		if !ok {
-			continue
+			return nil, fmt.Errorf("collections: typed-column manifest generation=%d missing primary typed_column_part ref part_id=%d", generation, typedColumnPartAssetPartID)
 		}
 		physicalRows, ok := physicalRowsByGeneration[generation]
 		if !ok {
