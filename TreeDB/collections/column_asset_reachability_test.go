@@ -342,15 +342,52 @@ func TestColumnAssetReachabilityMatchesMappedResourcePinsThroughSymlinkRoot1788(
 	}
 	defer func() { _ = readCache.close() }()
 
+	assertColumnAssetReachabilityMappedResourcePinProtectsCandidate1788(t, col, candidate, "symlink root")
+}
+
+func TestColumnAssetReachabilityMatchesMappedResourcePinsThroughSymlinkPath1788(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+	linkedRoot := filepath.Join(t.TempDir(), "column-assets-link")
+	if err := os.Symlink(d.ColumnAssetRootDir(), linkedRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	linkedNamespace, err := columnAssetManagerNamespaceForRoot(linkedRoot, candidate.Namespace)
+	if err != nil {
+		t.Fatalf("linked namespace: %v", err)
+	}
+	segmentPath := filepath.Join(linkedNamespace.SegmentDir, columnAssetSegmentFileName(candidate.FileID))
+	if _, err := os.Stat(segmentPath); err != nil {
+		t.Fatalf("stat symlink segment path: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "symlink-path-pin-1788", Namespace: candidate.Namespace, Collection: "events", Generation: candidate.Generation, Reason: "symlink path pin"}
+	handle, err := mgr.AcquireBytes(mappedResourceKeyForColumnAssetRef(candidate), scope, mappedresource.SourceHeapCopy, make([]byte, int(candidate.Length)), mappedresource.AcquireOptions{Reason: "symlink-path-pin", ResourcePath: segmentPath})
+	if err != nil {
+		t.Fatalf("AcquireBytes symlink path pin: %v", err)
+	}
+	defer func() { _ = handle.Release() }()
+
+	assertColumnAssetReachabilityMappedResourcePinProtectsCandidate1788(t, col, candidate, "symlink path")
+}
+
+func assertColumnAssetReachabilityMappedResourcePinProtectsCandidate1788(t *testing.T, col *Collection, candidate ColumnAssetRef, label string) {
+	t.Helper()
 	pinnedPlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true, CandidateRefs: []ColumnAssetRef{candidate}})
 	if err != nil {
-		t.Fatalf("PlanColumnAssetReachability symlink pinned: %v", err)
+		t.Fatalf("PlanColumnAssetReachability %s pinned: %v", label, err)
 	}
 	if !pinnedPlan.Complete || pinnedPlan.Sources.MappedResourcePins != 1 || pinnedPlan.MappedResources.ActiveHandles != 1 || pinnedPlan.MappedResources.PinnedRefs != 1 {
-		t.Fatalf("symlink pin stats: complete=%v sources=%+v mapped=%+v", pinnedPlan.Complete, pinnedPlan.Sources, pinnedPlan.MappedResources)
+		t.Fatalf("%s pin stats: complete=%v sources=%+v mapped=%+v", label, pinnedPlan.Complete, pinnedPlan.Sources, pinnedPlan.MappedResources)
 	}
 	if pinnedPlan.Refs.Reclaimable != 0 || pinnedPlan.RewriteDebtBytes != 0 {
-		t.Fatalf("symlink pinned ref stats=%+v rewriteDebt=%d want protected candidate", pinnedPlan.Refs, pinnedPlan.RewriteDebtBytes)
+		t.Fatalf("%s pinned ref stats=%+v rewriteDebt=%d want protected candidate", label, pinnedPlan.Refs, pinnedPlan.RewriteDebtBytes)
 	}
 	foundPinnedCandidate := false
 	for _, entry := range pinnedPlan.Entries {
@@ -359,11 +396,11 @@ func TestColumnAssetReachabilityMatchesMappedResourcePinsThroughSymlinkRoot1788(
 		}
 		foundPinnedCandidate = true
 		if entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourceMappedResourcePin) {
-			t.Fatalf("symlink pinned candidate entry=%+v want mappedresource protected", entry)
+			t.Fatalf("%s pinned candidate entry=%+v want mappedresource protected", label, entry)
 		}
 	}
 	if !foundPinnedCandidate {
-		t.Fatal("missing symlink pinned candidate entry")
+		t.Fatalf("missing %s pinned candidate entry", label)
 	}
 }
 
