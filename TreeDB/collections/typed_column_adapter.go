@@ -975,6 +975,10 @@ func typedColumnInt64PredicateAdapterColumn(fields []TypedStorageField, column s
 }
 
 func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, generation uint64, partID uint64, result *TypedColumnInt64PredicateScanResult) (bool, error) {
+	return scanTypedColumnInt64PredicatePartWithVisibility(part, valueColumn, req, generation, partID, result, nil)
+}
+
+func scanTypedColumnInt64PredicatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, generation uint64, partID uint64, result *TypedColumnInt64PredicateScanResult, visibility *typedColumnLatestPhysicalPart) (bool, error) {
 	if part == nil {
 		return false, errors.New("nil typed-column part")
 	}
@@ -989,10 +993,10 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 	if valueCol.Definition.Type != typedcolumn.ColumnTypeInt64 || idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("value or primary id column is not int64")
 	}
-	idBlocksByRange := typedColumnBlocksByRange(idCol.Blocks)
 	var reader typedcolumn.GranuleReader
 	var valueScratch []int64
 	var idScratch []int64
+	idBlockIndex := 0
 	decodedAny := false
 	for _, block := range valueCol.Blocks {
 		result.Diagnostics.BlocksConsidered++
@@ -1001,7 +1005,7 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 			result.Diagnostics.BlocksPruned++
 			continue
 		}
-		idBlock, ok := idBlocksByRange[typedColumnBlockRange{FirstRow: block.Descriptor.FirstRow, RowCount: block.Descriptor.RowCount}]
+		idBlock, ok := typedColumnAlignedBlock(idCol.Blocks, &idBlockIndex, block.Descriptor.FirstRow, block.Descriptor.RowCount)
 		if !ok {
 			return false, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
 		}
@@ -1023,10 +1027,20 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes + idBlock.Granule.RawBytes)
 		result.Diagnostics.RowsScanned += len(values)
 		for i, v := range values {
+			rowIndex := block.Descriptor.FirstRow + i
+			if visibility != nil && !visibility.rowVisible(rowIndex) {
+				continue
+			}
 			if !typedColumnInt64PredicateMatches(req, v) {
 				continue
 			}
-			result.Rows = append(result.Rows, TypedColumnInt64PredicateScanRow{Generation: generation, PartID: partID, RowIndex: block.Descriptor.FirstRow + i, PrimaryID: ids[i], Value: v})
+			row := TypedColumnInt64PredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: ids[i], Value: v}
+			if visibility != nil {
+				row.Generation = visibility.Ref.Generation
+				row.PartID = visibility.Ref.PartID
+				row.DocumentID = visibility.documentID(rowIndex)
+			}
+			result.Rows = append(result.Rows, row)
 			result.Diagnostics.RowsMatched++
 		}
 	}
@@ -1034,6 +1048,10 @@ func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn
 }
 
 func scanTypedColumnInt64PredicateAggregatePart(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult) (bool, error) {
+	return scanTypedColumnInt64PredicateAggregatePartWithVisibility(part, valueColumn, req, result, nil)
+}
+
+func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart) (bool, error) {
 	if part == nil {
 		return false, errors.New("nil typed-column part")
 	}
@@ -1066,7 +1084,11 @@ func scanTypedColumnInt64PredicateAggregatePart(part *typedcolumn.ColumnPart, va
 		result.Diagnostics.BlocksDecoded++
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes)
 		result.Diagnostics.RowsScanned += len(values)
-		for _, v := range values {
+		for i, v := range values {
+			rowIndex := block.Descriptor.FirstRow + i
+			if visibility != nil && !visibility.rowVisible(rowIndex) {
+				continue
+			}
 			if !typedColumnInt64PredicateMatches(req, v) {
 				continue
 			}
@@ -1079,17 +1101,25 @@ func scanTypedColumnInt64PredicateAggregatePart(part *typedcolumn.ColumnPart, va
 	return !decodedAny && len(valueCol.Blocks) != 0, nil
 }
 
-type typedColumnBlockRange struct {
-	FirstRow int
-	RowCount int
-}
-
-func typedColumnBlocksByRange(blocks []typedcolumn.ColumnBlock) map[typedColumnBlockRange]typedcolumn.ColumnBlock {
-	out := make(map[typedColumnBlockRange]typedcolumn.ColumnBlock, len(blocks))
-	for _, block := range blocks {
-		out[typedColumnBlockRange{FirstRow: block.Descriptor.FirstRow, RowCount: block.Descriptor.RowCount}] = block
+func typedColumnAlignedBlock(blocks []typedcolumn.ColumnBlock, cursor *int, firstRow, rowCount int) (typedcolumn.ColumnBlock, bool) {
+	idx := 0
+	if cursor != nil {
+		idx = *cursor
 	}
-	return out
+	for idx < len(blocks) && blocks[idx].Descriptor.FirstRow < firstRow {
+		idx++
+	}
+	if cursor != nil {
+		*cursor = idx
+	}
+	if idx >= len(blocks) {
+		return typedcolumn.ColumnBlock{}, false
+	}
+	block := blocks[idx]
+	if block.Descriptor.FirstRow != firstRow || block.Descriptor.RowCount != rowCount {
+		return typedcolumn.ColumnBlock{}, false
+	}
+	return block, true
 }
 
 func typedColumnAdapterInt64View(mgr *mappedresource.Manager, h *mappedresource.Handle) ([]int64, error) {

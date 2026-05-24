@@ -337,6 +337,119 @@ func TestTypedColumnInt64ScanReopen(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64ScanMultipartLatestVisibleUpdatesDeletes(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
+	col := createTypedColumnInt64ScanCollection(t, d)
+
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2"), []byte("e3")}, [][]byte{
+		[]byte(`{"time_us":10,"kind":"k1"}`),
+		[]byte(`{"time_us":20,"kind":"k2"}`),
+		[]byte(`{"time_us":30,"kind":"k3"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, changed, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":25,"kind":"k1b"}`), true, nil
+	}); err != nil || !changed {
+		t.Fatalf("Update e1 changed=%v err=%v", changed, err)
+	}
+	if _, changed, err := col.Update([]byte("e2"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":40,"kind":"k2b"}`), true, nil
+	}); err != nil || !changed {
+		t.Fatalf("Update e2 changed=%v err=%v", changed, err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("e3")); err != nil || !deleted {
+		t.Fatalf("DeleteDocument e3 deleted=%v err=%v", deleted, err)
+	}
+
+	result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: 100})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, result, []int64{25, 40})
+	if result.Diagnostics.Fallback || result.Diagnostics.MutationParts == 0 || result.Diagnostics.PhysicalRowAssetReads == 0 {
+		t.Fatalf("diagnostics=%+v want direct multipart latest-visible path", result.Diagnostics)
+	}
+	gotIDs := map[string]int64{}
+	for _, row := range result.Rows {
+		gotIDs[string(row.DocumentID)] = row.Value
+		if row.PartID != columnPhysicalRowAssetPartID {
+			t.Fatalf("row=%+v want physical row asset identity", row)
+		}
+	}
+	if gotIDs["e1"] != 25 || gotIDs["e2"] != 40 || gotIDs["e3"] != 0 || len(gotIDs) != 2 {
+		t.Fatalf("document IDs to values=%v want e1=25 e2=40 only", gotIDs)
+	}
+
+	agg, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: 100})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, agg, 2, 65)
+	if agg.Diagnostics.Fallback || agg.Diagnostics.MutationParts == 0 || agg.Diagnostics.PhysicalRowAssetReads == 0 {
+		t.Fatalf("aggregate diagnostics=%+v want direct multipart latest-visible path", agg.Diagnostics)
+	}
+
+	roles := typedColumnManifestPartRolesByGenerationForTest(t, d, col)
+	if roles[1] != ColumnManifestPartRoleBase || roles[2] != ColumnManifestPartRoleDelta || roles[3] != ColumnManifestPartRoleDelta || roles[4] != ColumnManifestPartRoleTombstone {
+		t.Fatalf("manifest roles=%v want base/delta/delta/tombstone", roles)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = openCollectionCommandWALDB(t, dir)
+	col, err = NewCollectionManager(d).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	reopened, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: 100})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan reopened: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, reopened, []int64{25, 40})
+	if reopened.Diagnostics.Fallback || reopened.Diagnostics.MutationParts == 0 || reopened.Diagnostics.PhysicalRowAssetReads == 0 {
+		t.Fatalf("reopened diagnostics=%+v want direct multipart latest-visible path", reopened.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64ScanIgnoresAuxiliaryMultipartTypedRefs(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{11, 12, 13})
+	extraRef := publishTypedColumnMultipartPartRef1787(t, d, col, 3)
+	if extraRef.PartID != 3 {
+		t.Fatalf("extra ref=%+v want part_id=3", extraRef)
+	}
+	result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 12})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, result, []int64{12})
+	if result.Diagnostics.Fallback {
+		t.Fatalf("diagnostics=%+v want direct typed-column scan", result.Diagnostics)
+	}
+	agg, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 11, High: 13})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, agg, 3, 36)
+	if agg.Diagnostics.Fallback {
+		t.Fatalf("aggregate diagnostics=%+v want direct typed-column aggregate", agg.Diagnostics)
+	}
+}
+
 func TestTypedColumnInt64AggregateEqualityPredicate(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
@@ -868,6 +981,86 @@ func TestTypedColumnInt64AggregateBenchShapeExpectedAggregates(t *testing.T) {
 				t.Fatalf("dist=%s shape=%s expected=%+v manual=%+v", dist.name, shape.name, expected, manual)
 			}
 		}
+	}
+}
+
+func BenchmarkTypedColumnMultipartLatestVisibleLookup(b *testing.B) {
+	d, col := setupTypedColumnInt64ScanCollection(b)
+	defer func() { _ = d.Close() }()
+	const rows = 1024
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		ids[i] = []byte(fmt.Sprintf("e%04d", i))
+		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":"k%d"}`, i, i%8))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		b.Fatalf("InsertBatch: %v", err)
+	}
+	for i := 0; i < rows; i += 16 {
+		id := append([]byte(nil), ids[i]...)
+		value := i + rows
+		if _, changed, err := col.Update(id, func(current []byte) ([]byte, bool, error) {
+			return []byte(fmt.Sprintf(`{"time_us":%d,"kind":"ku"}`, value)), true, nil
+		}); err != nil || !changed {
+			b.Fatalf("Update %s changed=%v err=%v", id, changed, err)
+		}
+	}
+	for i := 8; i < rows; i += 32 {
+		if deleted, err := col.DeleteDocument(ids[i]); err != nil || !deleted {
+			b.Fatalf("DeleteDocument %s deleted=%v err=%v", ids[i], deleted, err)
+		}
+	}
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		b.Fatalf("prepareColumnPhysicalScanSnapshotViewWithSidecars: %v", err)
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegrityCachedVerify)
+	if err != nil {
+		b.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity: %v", err)
+	}
+	defer func() { _ = readCache.close() }()
+	resolver, err := buildTypedColumnLatestRowResolver(view, &readCache, nil)
+	if err != nil {
+		b.Fatalf("buildTypedColumnLatestRowResolver: %v", err)
+	}
+	visibleRows := 0
+	for i := range resolver.parts {
+		part := &resolver.parts[i]
+		for row := 0; row < part.Rows; row++ {
+			if part.rowVisible(row) {
+				visibleRows++
+			}
+		}
+	}
+	if visibleRows == 0 {
+		b.Fatal("visible rows is zero")
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(visibleRows), "visible_rows/op")
+	b.ResetTimer()
+	var total int
+	for i := 0; i < b.N; i++ {
+		count := 0
+		for partIdx := range resolver.parts {
+			part := &resolver.parts[partIdx]
+			for row := 0; row < part.Rows; row++ {
+				if !part.rowVisible(row) {
+					continue
+				}
+				if len(part.documentID(row)) == 0 {
+					b.Fatalf("visible row without document id part=%d row=%d", partIdx, row)
+				}
+				count++
+			}
+		}
+		total += count
+	}
+	if total == 0 {
+		b.Fatal("total is zero")
 	}
 }
 
@@ -1548,6 +1741,42 @@ func insertTypedColumnInt64AggregateBenchRowsBatch(tb testing.TB, col *Collectio
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		tb.Fatalf("InsertBatch: %v", err)
 	}
+}
+
+func typedColumnManifestPartRolesByGenerationForTest(tb testing.TB, d *backenddb.DB, col *Collection) map[uint64]ColumnManifestPartRole {
+	tb.Helper()
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.ActiveManifest == nil {
+		tb.Fatal("missing column manifest")
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, col.Meta().Name)
+	if err != nil {
+		tb.Fatalf("loadCollectionCatalog: %v", err)
+	}
+	records, err := loadColumnManifestRecordsFromRoot(snap, catalog.rootID(collectionColumnManifestRootName(col.Meta().Name)))
+	if err != nil {
+		tb.Fatalf("loadColumnManifestRecordsFromRoot: %v", err)
+	}
+	roles := make(map[uint64]ColumnManifestPartRole)
+	for _, record := range records {
+		if !strings.HasPrefix(string(record.key), columnManifestPartRecordPrefix) {
+			continue
+		}
+		part, err := decodeColumnManifestPartRecord(record.value)
+		if err != nil {
+			tb.Fatalf("decodeColumnManifestPartRecord: %v", err)
+		}
+		if part.AssetRef.Kind != ColumnAssetKindTCS1PartImage || part.AssetRef.PartID != columnPhysicalRowAssetPartID {
+			continue
+		}
+		roles[part.AssetRef.Generation] = part.PartRole
+	}
+	return roles
 }
 
 func typedColumnInt64ScanIdentityStrings(result TypedColumnInt64PredicateScanResult) []string {

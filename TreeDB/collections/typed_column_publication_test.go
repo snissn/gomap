@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
@@ -72,6 +75,10 @@ func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
 		t.Fatalf("Get deleted e2 got=%s err=%v, want missing", got, err)
 	}
 	assertTypedColumnManifestShape1755(t, d, col, 3, 2)
+	assertTypedColumnMultipartRoles1787(t, col,
+		[]ColumnManifestPartRole{ColumnManifestPartRoleBase, ColumnManifestPartRoleDelta, ColumnManifestPartRoleTombstone},
+		[]ColumnManifestPartRole{ColumnManifestPartRoleBase, ColumnManifestPartRoleDelta},
+	)
 	got, err = col.Get([]byte("e1"))
 	if err != nil {
 		_ = d.Close()
@@ -773,16 +780,17 @@ func TestTypedColumnPublicationManifestCorruptionMatrix(t *testing.T) {
 			want: "key generation/part mismatch",
 		},
 		{
-			name: "wrong part id",
+			name: "duplicate multipart part id",
 			records: func() []columnManifestRecord {
 				bad := typed
 				bad.PartID = 99
 				return []columnManifestRecord{
 					typedColumnManifestPartRecord1778(t, physical, 2, ColumnPublishOperationInsert, physical.Generation, physical.PartID),
 					typedColumnManifestPartRecord1778(t, bad, 2, ColumnPublishOperationInsert, bad.Generation, bad.PartID),
+					typedColumnManifestPartRecord1778(t, bad, 2, ColumnPublishOperationInsert, bad.Generation, bad.PartID),
 				}
 			},
-			want: "unexpected part_id=99",
+			want: "duplicate typed-column manifest ref for generation=1 part_id=99",
 		},
 		{
 			name: "duplicate typed refs",
@@ -801,6 +809,26 @@ func TestTypedColumnPublicationManifestCorruptionMatrix(t *testing.T) {
 				}
 			},
 			want: "unsupported typed-column manifest reason",
+		},
+		{
+			name: "malformed role",
+			records: func() []columnManifestRecord {
+				return []columnManifestRecord{
+					typedColumnManifestPartRecord1778(t, physical, 2, ColumnPublishOperationInsert, physical.Generation, physical.PartID),
+					typedColumnManifestPartRecordWithRawRole1787(t, typed, 2, ColumnPublishOperationInsert, "future", typed.Generation, typed.PartID),
+				}
+			},
+			want: "unsupported column manifest part role",
+		},
+		{
+			name: "role operation mismatch",
+			records: func() []columnManifestRecord {
+				return []columnManifestRecord{
+					typedColumnManifestPartRecord1778(t, physical, 2, ColumnPublishOperationInsert, physical.Generation, physical.PartID),
+					typedColumnManifestPartRecordWithRawRole1787(t, typed, 2, ColumnPublishOperationUpdate, ColumnManifestPartRoleBase, typed.Generation, typed.PartID),
+				}
+			},
+			want: "does not match operation",
 		},
 		{
 			name: "missing typed_row_asset ref",
@@ -1079,6 +1107,110 @@ func BenchmarkTypedColumnReconstructionCache1781(b *testing.B) {
 	b.ReportMetric(float64(cacheMisses)/float64(b.N), "cache_misses/op")
 }
 
+func BenchmarkTypedColumnMultipartPartSetLookupReconstruction1787(b *testing.B) {
+	const generations = 64
+	const rowsPerPrimary = 128
+	const typedPartsPerSet = 4
+	namespace := "events/column-assets"
+	records := make([]columnManifestRecord, 0, generations*(1+typedPartsPerSet))
+	for generation := uint64(1); generation <= generations; generation++ {
+		records = append(records, encodeColumnManifestPartRecordForTest1787(b, ColumnPreparedAsset{
+			Ref:          ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: namespace, Generation: generation, PartID: columnPhysicalRowAssetPartID, FileID: uint32(generation), Length: 256, Checksum: uint32(1000 + generation)},
+			Rows:         rowsPerPrimary,
+			Bytes:        256,
+			PublishID:    generation,
+			GenerationID: generation,
+			Reason:       string(ColumnPublishOperationInsert),
+		}))
+		for part := uint64(0); part < typedPartsPerSet; part++ {
+			partID := typedColumnPartAssetPartID + part
+			rows := rowsPerPrimary
+			if partID != typedColumnPartAssetPartID {
+				rows = rowsPerPrimary / 4
+			}
+			records = append(records, encodeColumnManifestPartRecordForTest1787(b, ColumnPreparedAsset{
+				Ref:          ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespace, Generation: generation, PartID: partID, FileID: uint32(generation), Offset: int64(512 + part*128), Length: 128, Checksum: uint32(2000 + generation + part)},
+				Rows:         rows,
+				Bytes:        128,
+				PublishID:    generation,
+				GenerationID: generation,
+				Reason:       string(ColumnPublishOperationInsert),
+			}))
+		}
+	}
+
+	b.Run("manifest_part_set_lookup", func(b *testing.B) {
+		var refsSeen int64
+		sets, physicalRows, err := typedColumnPartSetsByGenerationFromManifestRecords(records, namespace)
+		if err != nil {
+			b.Fatalf("warm typedColumnPartSetsByGenerationFromManifestRecords: %v", err)
+		}
+		if len(sets) != generations || len(physicalRows) != generations {
+			b.Fatalf("warm sets=%d physicalRows=%d want %d", len(sets), len(physicalRows), generations)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		start := time.Now()
+		for i := 0; i < b.N; i++ {
+			sets, physicalRows, err = typedColumnPartSetsByGenerationFromManifestRecords(records, namespace)
+			if err != nil {
+				b.Fatalf("typedColumnPartSetsByGenerationFromManifestRecords: %v", err)
+			}
+			for generation, set := range sets {
+				if physicalRows[generation] != rowsPerPrimary {
+					b.Fatalf("generation=%d physicalRows=%d", generation, physicalRows[generation])
+				}
+				refsSeen += int64(len(set.Refs))
+			}
+		}
+		b.StopTimer()
+		elapsed := time.Since(start)
+		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "ops/s")
+		b.ReportMetric(float64(refsSeen)/float64(b.N), "typed_part_refs/op")
+	})
+
+	b.Run("decoded_row_reconstruction", func(b *testing.B) {
+		sets, _, err := typedColumnPartSetsByGenerationFromManifestRecords(records, namespace)
+		if err != nil {
+			b.Fatalf("typedColumnPartSetsByGenerationFromManifestRecords: %v", err)
+		}
+		decoded := make(map[uint64]typedColumnPartDecodedValues, generations)
+		for generation := uint64(1); generation <= generations; generation++ {
+			ids := make([]int64, rowsPerPrimary)
+			values := make([]columnDeclaredValue, rowsPerPrimary)
+			for row := 0; row < rowsPerPrimary; row++ {
+				ids[row] = int64(row)
+				values[row] = columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: int64(generation)*1000 + int64(row)}
+			}
+			decoded[generation] = typedColumnPartDecodedValues{PrimaryIDs: ids, Values: [][]columnDeclaredValue{values}}
+		}
+		dst := make([]columnDeclaredValue, 0, 1)
+		var reconstructed int64
+		b.ReportAllocs()
+		b.ResetTimer()
+		start := time.Now()
+		for i := 0; i < b.N; i++ {
+			generation := uint64(i%generations) + 1
+			set := sets[generation]
+			if _, ok := set.primaryRef(); !ok {
+				b.Fatalf("missing primary ref for generation=%d", generation)
+			}
+			rowIdx := i % rowsPerPrimary
+			values, err := decoded[generation].valuesForRowInto(rowIdx, dst[:0])
+			if err != nil {
+				b.Fatalf("valuesForRowInto: %v", err)
+			}
+			dst = values
+			typedColumnAdapterBenchmarkSink = values[0]
+			reconstructed++
+		}
+		b.StopTimer()
+		elapsed := time.Since(start)
+		b.ReportMetric(float64(reconstructed)/elapsed.Seconds(), "ops/s")
+		b.ReportMetric(float64(reconstructed)/float64(b.N), "rows/op")
+	})
+}
+
 func TestTypedColumnPublicationRejectsOverlappingOwners(t *testing.T) {
 	_, err := NormalizeTypedStorageLayout(TypedStorageLayout{
 		Collection: "events",
@@ -1192,33 +1324,147 @@ func TestTypedColumnManifestRecoveryRefsSurviveReopen(t *testing.T) {
 	}
 }
 
-func TestTypedColumnManifestRejectsUnexpectedTypedPartID1755(t *testing.T) {
-	asset := ColumnPreparedAsset{
-		Ref: ColumnAssetRef{
-			Kind:       ColumnAssetKindTCS1TypedColumnPart,
-			Namespace:  "events/column-assets",
-			Generation: 1,
-			PartID:     99,
-			FileID:     1,
-			Length:     64,
-			Checksum:   7,
-		},
-		Rows:         1,
-		Bytes:        64,
-		PublishID:    1,
-		GenerationID: 1,
-		Reason:       string(ColumnPublishOperationInsert),
+func TestTypedColumnManifestAcceptsMultipartPartSetRefs1787(t *testing.T) {
+	namespace := "events/column-assets"
+	records := []columnManifestRecord{
+		encodeColumnManifestPartRecordForTest1787(t, ColumnPreparedAsset{
+			Ref:          ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: namespace, Generation: 1, PartID: columnPhysicalRowAssetPartID, FileID: 1, Length: 64, Checksum: 7},
+			Rows:         3,
+			Bytes:        64,
+			PublishID:    1,
+			GenerationID: 1,
+			Reason:       string(ColumnPublishOperationInsert),
+		}),
+		encodeColumnManifestPartRecordForTest1787(t, ColumnPreparedAsset{
+			Ref:          ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespace, Generation: 1, PartID: typedColumnPartAssetPartID, FileID: 1, Offset: 64, Length: 64, Checksum: 8},
+			Rows:         3,
+			Bytes:        64,
+			PublishID:    1,
+			GenerationID: 1,
+			Reason:       string(ColumnPublishOperationInsert),
+		}),
+		encodeColumnManifestPartRecordForTest1787(t, ColumnPreparedAsset{
+			Ref:          ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespace, Generation: 1, PartID: 99, FileID: 1, Offset: 128, Length: 32, Checksum: 9},
+			Rows:         1,
+			Bytes:        32,
+			PublishID:    1,
+			GenerationID: 1,
+			Reason:       string(ColumnPublishOperationInsert),
+		}),
 	}
-	raw, err := encodeColumnManifestPartRecord(asset)
+	sets, physicalRows, err := typedColumnPartSetsByGenerationFromManifestRecords(records, namespace)
 	if err != nil {
-		t.Fatalf("encodeColumnManifestPartRecord: %v", err)
+		t.Fatalf("typedColumnPartSetsByGenerationFromManifestRecords: %v", err)
 	}
-	_, err = typedColumnPartRefsByGenerationFromManifestRecords([]columnManifestRecord{{
-		key:   columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID),
-		value: raw,
-	}}, asset.Ref.Namespace)
-	if err == nil || !strings.Contains(err.Error(), "unexpected part_id=99") {
-		t.Fatalf("typedColumnPartRefsByGenerationFromManifestRecords err=%v want unexpected part_id", err)
+	if physicalRows[1] != 3 || len(sets[1].Refs) != 2 {
+		t.Fatalf("physicalRows=%v sets=%+v want one physical row set and two typed refs", physicalRows, sets)
+	}
+	refs, err := typedColumnPartRefsByGenerationFromManifestRecords(records, namespace)
+	if err != nil {
+		t.Fatalf("typedColumnPartRefsByGenerationFromManifestRecords: %v", err)
+	}
+	if got, ok := refs[1]; !ok || got.Ref.PartID != typedColumnPartAssetPartID {
+		t.Fatalf("primary reconstruction ref=%+v ok=%v want part_id=%d", got, ok, typedColumnPartAssetPartID)
+	}
+}
+
+func TestTypedColumnMultipartPartSetRefsRetainedDuringGC1787(t *testing.T) {
+	d, col, _ := setupSingleTypedColumnPart1755(t)
+	defer func() { _ = d.Close() }()
+	extraRef := publishTypedColumnMultipartPartRef1787(t, d, col, 3)
+	unreferenced := writeTypedColumnAssetGCCandidateSegment1787(t, d.ColumnAssetRootDir(), col, 178, []byte("unreferenced-multipart-typed-column-asset"))
+	unreferencedPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), unreferenced)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+
+	stats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{extraRef, unreferenced},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC: %v", err)
+	}
+	if stats.SegmentsDeleted != 1 || stats.BytesDeleted != unreferenced.Length {
+		t.Fatalf("gc stats=%+v want one unreferenced multipart candidate deleted", stats)
+	}
+	if _, err := os.Stat(unreferencedPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unreferenced segment stat err=%v want not exist", err)
+	}
+	if _, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), extraRef); err != nil {
+		t.Fatalf("referenced multipart ref %+v unreadable after GC: %v", extraRef, err)
+	}
+	assertColumnAssetReachabilityEntry1755(t, stats.Plan, extraRef, ColumnAssetReachabilityProtected, false)
+}
+
+func TestTypedColumnMultipartPartSetRefsRewriteAndGCSafe1787(t *testing.T) {
+	d, col, _ := setupSingleTypedColumnPart1755(t)
+	dir := d.Dir()
+	dClosed := false
+	defer func() {
+		if !dClosed {
+			_ = d.Close()
+		}
+	}()
+	extraRef := publishTypedColumnMultipartPartRef1787(t, d, col, 3)
+	candidate := writeTypedColumnAssetCandidate1755(t, d, col, 1, 99)
+	if candidate.FileID != extraRef.FileID {
+		t.Fatalf("candidate file_id=%d extra file_id=%d; test requires mixed segment", candidate.FileID, extraRef.FileID)
+	}
+	oldSegmentPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+
+	rewrite, err := col.ColumnAssetRewrite(context.Background(), ColumnAssetRewriteOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetRewrite: %v", err)
+	}
+	if rewrite.SegmentsRewritten != 1 || !columnAssetRefsContain1755(rewrite.SupersededRefs, extraRef) {
+		t.Fatalf("rewrite stats=%+v want mixed segment rewrite superseding extra ref %+v", rewrite, extraRef)
+	}
+	afterExtra, ok := typedColumnMultipartPartRefByPartID1787(t, d, col, 3)
+	if !ok || afterExtra == extraRef {
+		t.Fatalf("after multipart ref=%+v ok=%v want remapped from %+v", afterExtra, ok, extraRef)
+	}
+	if got, err := col.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get after multipart rewrite: %v", err)
+	} else {
+		assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`))
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close after rewrite: %v", err)
+	}
+	dClosed = true
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	if _, ok := typedColumnMultipartPartRefByPartID1787(t, reopened, reopenedCol, 3); !ok {
+		t.Fatalf("reopened manifest lost multipart ref part_id=3")
+	}
+	gcStats, err := reopenedCol.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: append(append([]ColumnAssetRef(nil), rewrite.SupersededRefs...), candidate),
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after multipart rewrite: %v", err)
+	}
+	if gcStats.SegmentsDeleted != 1 || gcStats.BytesDeleted == 0 {
+		t.Fatalf("gc stats=%+v want old mixed segment deleted", gcStats)
+	}
+	if _, err := os.Stat(oldSegmentPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old segment stat err=%v want not exist", err)
+	}
+	if got, err := reopenedCol.Get([]byte("e1")); err != nil {
+		t.Fatalf("Get after multipart GC: %v", err)
+	} else {
+		assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`))
 	}
 }
 
@@ -1696,6 +1942,141 @@ func columnAssetReachabilitySourcesContain1755(sources []ColumnAssetReachability
 	return false
 }
 
+func encodeColumnManifestPartRecordForTest1787(t testing.TB, asset ColumnPreparedAsset) columnManifestRecord {
+	t.Helper()
+	raw, err := encodeColumnManifestPartRecord(asset)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestPartRecord: %v", err)
+	}
+	return columnManifestRecord{key: columnManifestPartRecordKey(asset.Ref.Generation, asset.Ref.PartID), value: raw}
+}
+
+func publishTypedColumnMultipartPartRef1787(t testing.TB, d *backenddb.DB, col *Collection, partID uint64) ColumnAssetRef {
+	t.Helper()
+	if partID == typedColumnPartAssetPartID || partID == columnPhysicalRowAssetPartID || partID == 0 {
+		t.Fatalf("test multipart part_id=%d must be distinct from v1 fixed parts", partID)
+	}
+	extraRef := writeTypedColumnAssetCandidate1755(t, d, col, 1, partID)
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	records := cloneColumnManifestRecords(state.records)
+	extraRecord := encodeColumnManifestPartRecordForTest1787(t, ColumnPreparedAsset{
+		Ref:          extraRef,
+		Rows:         1,
+		Bytes:        extraRef.Length,
+		PublishID:    1787,
+		GenerationID: extraRef.Generation,
+		Reason:       string(ColumnPublishOperationInsert),
+	})
+	records = append(records, extraRecord)
+	activeParts := 0
+	for _, record := range records {
+		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
+			continue
+		}
+		generation, _, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
+		if err != nil {
+			t.Fatalf("columnManifestPartKeyFromRecordKeyForScan: %v", err)
+		}
+		if generation == state.manifest.Generation {
+			activeParts++
+		}
+	}
+	prepared := ColumnPublishPreparedAssets{
+		Assets:             make([]ColumnPreparedAsset, activeParts),
+		RowCount:           state.manifest.RowCount,
+		CommandBytes:       state.manifest.CommandBytes,
+		RowRemainderBytes:  state.manifest.RowRemainderBytes,
+		ColumnPayloadBytes: state.manifest.ColumnPayloadBytes,
+	}
+	for i := range prepared.Assets {
+		prepared.Assets[i].Ref.Kind = ColumnAssetKindTCS1PartImage
+	}
+	header, err := encodeColumnManifestHeaderRecord(ColumnPublishManifestEncodeInput{
+		Collection:        state.manifest.Collection,
+		ColumnStore:       state.cfg,
+		Operation:         state.manifest.Operation,
+		AppliedCommandLSN: state.manifest.AppliedCommandLSN,
+		Prepared:          prepared,
+	}, state.manifest.Generation)
+	if err != nil {
+		t.Fatalf("encodeColumnManifestHeaderRecord: %v", err)
+	}
+	headerUpdated := false
+	for i := range records {
+		if bytes.Equal(records[i].key, columnManifestHeaderRecordKeyBytes) {
+			records[i].value = header
+			headerUpdated = true
+			break
+		}
+	}
+	if !headerUpdated {
+		t.Fatalf("manifest records missing header")
+	}
+	sortColumnManifestRecords(records)
+	updatedIdentity, err := columnAssetRewriteUpdatedIdentity(state, records)
+	if err != nil {
+		t.Fatalf("columnAssetRewriteUpdatedIdentity: %v", err)
+	}
+	updatedMeta, err := columnAssetRewriteUpdatedMeta(state.meta, updatedIdentity)
+	if err != nil {
+		t.Fatalf("columnAssetRewriteUpdatedMeta: %v", err)
+	}
+	newSystemRoot, rootIDs, err := col.publishColumnAssetRewriteManifestState(state, updatedMeta, updatedIdentity, records)
+	if err != nil {
+		t.Fatalf("publishColumnAssetRewriteManifestState: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("publish rootIDs=%v want one non-zero root", rootIDs)
+	}
+	nextCatalog := cloneCatalogWithRootUpdates(state.catalog, updatedMeta, []string{state.rootName}, rootIDs)
+	col.meta = updatedMeta
+	col.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
+	col.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
+	return extraRef
+}
+
+func writeTypedColumnAssetGCCandidateSegment1787(t testing.TB, rootDir string, col *Collection, fileID uint32, payload []byte) ColumnAssetRef {
+	t.Helper()
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.AssetManager == nil {
+		t.Fatalf("missing column store config: %+v", cfg)
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	segmentPath := filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID))
+	if err := os.WriteFile(segmentPath, payload, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	return ColumnAssetRef{
+		Kind:       ColumnAssetKindTCS1TypedColumnPart,
+		Namespace:  cfg.AssetManager.Namespace,
+		Generation: 1,
+		PartID:     uint64(fileID),
+		FileID:     fileID,
+		Length:     int64(len(payload)),
+		Checksum:   page.Checksum(payload),
+	}
+}
+
+func typedColumnMultipartPartRefByPartID1787(t testing.TB, d *backenddb.DB, col *Collection, partID uint64) (ColumnAssetRef, bool) {
+	t.Helper()
+	refs := columnManifestAssetRefsForCollectionM12A(t, d, col)
+	for _, ref := range refs {
+		if ref.Kind == ColumnAssetKindTCS1TypedColumnPart && ref.PartID == partID {
+			return ref, true
+		}
+	}
+	return ColumnAssetRef{}, false
+}
+
 func writeTypedColumnAssetCandidate1755(t testing.TB, d *backenddb.DB, col *Collection, generation, partID uint64) ColumnAssetRef {
 	t.Helper()
 	cfg := col.Meta().Options.ColumnStore
@@ -1948,18 +2329,33 @@ func typedColumnManifestPartRecord1778(t testing.TB, ref ColumnAssetRef, rows in
 
 func typedColumnManifestPartRecordWithReason1778(t testing.TB, ref ColumnAssetRef, rows int, reason string, keyGeneration, keyPartID uint64) columnManifestRecord {
 	t.Helper()
-	raw, err := encodeColumnManifestPartRecord(ColumnPreparedAsset{
-		Ref:          ref,
-		Rows:         rows,
-		Bytes:        ref.Length,
-		PublishID:    ref.Generation,
-		GenerationID: ref.Generation,
-		Reason:       reason,
-	})
-	if err != nil {
-		t.Fatalf("encodeColumnManifestPartRecord: %v", err)
+	operation, ok := columnPhysicalScanOperationFromBytes([]byte(reason))
+	if !ok {
+		return typedColumnManifestPartRecordWithRawRole1787(t, ref, rows, ColumnPublishOperation(reason), ColumnManifestPartRoleBase, keyGeneration, keyPartID)
 	}
-	return columnManifestRecord{key: columnManifestPartRecordKey(keyGeneration, keyPartID), value: raw}
+	return typedColumnManifestPartRecordWithRawRole1787(t, ref, rows, operation, inferColumnManifestPartRole(ref.Kind, string(operation)), keyGeneration, keyPartID)
+}
+
+func typedColumnManifestPartRecordWithRawRole1787(t testing.TB, ref ColumnAssetRef, rows int, operation ColumnPublishOperation, role ColumnManifestPartRole, keyGeneration, keyPartID uint64) columnManifestRecord {
+	t.Helper()
+	var b bytes.Buffer
+	writeManifestUint32(&b, columnManifestPartMagic)
+	writeManifestUint16(&b, columnManifestRecordVersion)
+	writeManifestString(&b, string(ref.Kind))
+	writeManifestString(&b, ref.Namespace)
+	writeManifestUint64(&b, ref.Generation)
+	writeManifestUint64(&b, ref.PartID)
+	writeManifestUint64(&b, uint64(ref.FileID))
+	writeManifestUint64(&b, uint64(ref.Offset))
+	writeManifestUint64(&b, uint64(ref.Length))
+	writeManifestUint64(&b, uint64(ref.Checksum))
+	writeManifestUint64(&b, uint64(rows))
+	writeManifestUint64(&b, uint64(ref.Length))
+	writeManifestUint64(&b, ref.Generation)
+	writeManifestUint64(&b, ref.Generation)
+	writeManifestString(&b, string(operation))
+	writeManifestString(&b, string(role))
+	return columnManifestRecord{key: columnManifestPartRecordKey(keyGeneration, keyPartID), value: b.Bytes()}
 }
 
 func createTypedColumnPartCollection1755(t testing.TB, d *backenddb.DB) *Collection {
@@ -2021,6 +2417,33 @@ func createTypedColumnVectorPartCollection1756(t testing.TB, d *backenddb.DB) *C
 		t.Fatalf("OpenCollection: %v", err)
 	}
 	return col
+}
+
+func assertTypedColumnMultipartRoles1787(t testing.TB, col *Collection, wantPhysical, wantTyped []ColumnManifestPartRole) {
+	t.Helper()
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotViewWithSidecars: %v", err)
+	}
+	if len(view.AssetRefs) != len(wantPhysical) {
+		t.Fatalf("physical role refs=%+v want roles=%v", view.AssetRefs, wantPhysical)
+	}
+	for i, want := range wantPhysical {
+		if got := view.AssetRefs[i].Role; got != want {
+			t.Fatalf("physical ref[%d] generation=%d role=%q want %q refs=%+v", i, view.AssetRefs[i].Ref.Generation, got, want, view.AssetRefs)
+		}
+	}
+	if len(view.TypedColumnPartRefs) != len(wantTyped) {
+		t.Fatalf("typed role refs=%+v want roles=%v", view.TypedColumnPartRefs, wantTyped)
+	}
+	for i, want := range wantTyped {
+		if got := view.TypedColumnPartRefs[i].Role; got != want {
+			t.Fatalf("typed ref[%d] generation=%d role=%q want %q refs=%+v", i, view.TypedColumnPartRefs[i].Ref.Generation, got, want, view.TypedColumnPartRefs)
+		}
+	}
 }
 
 func assertTypedColumnManifestShape1755(t testing.TB, d *backenddb.DB, col *Collection, wantGeneration uint64, wantTypedParts int) {

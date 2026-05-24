@@ -351,7 +351,10 @@ Actionable asset/ref facts now available for #1736:
   row IDs, tombstones, and any `typed_row_asset` field values.
 - `tcs1_typed_column_part` refs are durable sectioned typed-column part images.
   Current publication pairs one typed-column part with the same generation as
-  the typed-row locator asset for inserts/updates.
+  the typed-row locator asset for inserts/updates. Multipart lifecycle work adds
+  manifest `base`/`delta`/`tombstone` roles so latest-visible readers resolve
+  row identity through typed-row locator/tombstone assets before reading the
+  matching typed-column row.
 - `ColumnAssetRef` contains namespace, kind, generation, part id, segment file
   id, offset, length, and checksum. Maintenance must key reachability by these
   refs and fail closed on kind/generation/part/checksum mismatches.

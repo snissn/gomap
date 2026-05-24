@@ -76,6 +76,45 @@ func TestColumnManifestRecordDecodeAcceptsV1CompatibilityM1634(t *testing.T) {
 	}
 }
 
+func TestColumnManifestRecordDecodeSidecarOperationReasonDoesNotInferRole1787(t *testing.T) {
+	for _, version := range []uint16{columnManifestRecordVersionV2, columnManifestRecordVersion} {
+		t.Run("v"+string(rune('0'+version)), func(t *testing.T) {
+			asset := ColumnPreparedAsset{
+				Ref: ColumnAssetRef{
+					Kind:       ColumnAssetKindTCS1Int64Values,
+					Namespace:  "events_column_assets",
+					Generation: 7,
+					PartID:     4,
+					FileID:     1,
+					Offset:     16,
+					Length:     64,
+					Checksum:   99,
+				},
+				Rows:         42,
+				Bytes:        64,
+				PublishID:    11,
+				GenerationID: 7,
+				Reason:       string(ColumnPublishOperationInsert),
+			}
+			raw := mustEncodeColumnManifestPartRecordVersionM1634(t, asset, version)
+			decoded, err := decodeColumnManifestPartRecord(raw)
+			if err != nil {
+				t.Fatalf("decodeColumnManifestPartRecord v%d: %v", version, err)
+			}
+			if decoded.PartRole != "" {
+				t.Fatalf("decoded sidecar part role=%q want empty", decoded.PartRole)
+			}
+			rewriteRef, _, err := columnAssetRewriteManifestPartRefForPatch(raw, asset.Ref.Namespace)
+			if err != nil {
+				t.Fatalf("columnAssetRewriteManifestPartRefForPatch v%d: %v", version, err)
+			}
+			if rewriteRef != asset.Ref {
+				t.Fatalf("rewrite ref=%+v want %+v", rewriteRef, asset.Ref)
+			}
+		})
+	}
+}
+
 func mustEncodeColumnManifestHeaderRecordVersionM1634(t *testing.T, version uint16) []byte {
 	t.Helper()
 	var b bytes.Buffer
@@ -107,12 +146,15 @@ func mustEncodeColumnManifestPartRecordVersionM1634(t *testing.T, asset ColumnPr
 	writeManifestUint64(&b, uint64(asset.Ref.Offset))
 	writeManifestUint64(&b, uint64(asset.Ref.Length))
 	writeManifestUint64(&b, uint64(asset.Ref.Checksum))
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		writeManifestUint64(&b, uint64(asset.Rows))
 	}
 	writeManifestUint64(&b, uint64(asset.Bytes))
 	writeManifestUint64(&b, asset.PublishID)
 	writeManifestUint64(&b, asset.GenerationID)
 	writeManifestString(&b, asset.Reason)
+	if version >= columnManifestRecordVersion {
+		writeManifestString(&b, string(asset.PartRole))
+	}
 	return b.Bytes()
 }

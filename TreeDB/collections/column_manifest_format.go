@@ -25,7 +25,8 @@ const (
 	columnManifestHeaderMagic     = uint32(0x54434d48) // TCMH
 	columnManifestPartMagic       = uint32(0x54434d50) // TCMP
 	columnManifestRecordVersionV1 = uint16(1)
-	columnManifestRecordVersion   = uint16(2)
+	columnManifestRecordVersionV2 = uint16(2)
+	columnManifestRecordVersion   = uint16(3)
 )
 
 var (
@@ -66,6 +67,7 @@ type columnManifestPartSnapshot struct {
 	PublishID    uint64
 	GenerationID uint64
 	Reason       string
+	PartRole     ColumnManifestPartRole
 }
 
 type columnManifestAggregateMetadataSnapshot struct {
@@ -337,6 +339,9 @@ func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
 }
 
 func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
+	if asset.PartRole == "" {
+		asset.PartRole = inferColumnManifestPartRole(asset.Ref.Kind, asset.Reason)
+	}
 	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
 		return nil, err
 	}
@@ -356,6 +361,7 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 	writeManifestUint64(&b, asset.PublishID)
 	writeManifestUint64(&b, asset.GenerationID)
 	writeManifestString(&b, asset.Reason)
+	writeManifestString(&b, string(asset.PartRole))
 	return b.Bytes(), nil
 }
 
@@ -586,7 +592,7 @@ func decodeColumnManifestHeaderRecord(raw []byte) (columnManifestSnapshot, error
 	if magic := cur.u32(); magic != columnManifestHeaderMagic {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: bad column manifest header magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if version := cur.u16(); !isSupportedColumnManifestRecordVersion(version) {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: unsupported column manifest header version=%d", version)
 	}
 	collection := cur.string()
@@ -631,7 +637,7 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if !isSupportedColumnManifestRecordVersion(version) {
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kind := ColumnAssetKind(cur.string())
@@ -643,15 +649,25 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	length64 := cur.u64()
 	checksum64 := cur.u64()
 	rows64 := uint64(0)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		rows64 = cur.u64()
 	}
 	bytes64 := cur.u64()
 	publishID := cur.u64()
 	generationID := cur.u64()
 	reason := cur.string()
+	role := ColumnManifestPartRole("")
+	if version >= columnManifestRecordVersion {
+		role = ColumnManifestPartRole(cur.string())
+	}
 	if err := cur.err; err != nil {
 		return columnManifestPartSnapshot{}, err
+	}
+	if role == "" {
+		if version >= columnManifestRecordVersion && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+			return columnManifestPartSnapshot{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
+		}
+		role = inferColumnManifestPartRole(kind, reason)
 	}
 	if fileID64 > uint64(math.MaxUint32) {
 		return columnManifestPartSnapshot{}, errors.New("collections: column manifest part file_id overflows uint32")
@@ -678,7 +694,7 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason}
+	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason, PartRole: role}
 	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
 		return columnManifestPartSnapshot{}, err
 	}
@@ -689,7 +705,28 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		PublishID:    publishID,
 		GenerationID: generationID,
 		Reason:       reason,
+		PartRole:     role,
 	}, nil
+}
+
+func isSupportedColumnManifestRecordVersion(version uint16) bool {
+	return version == columnManifestRecordVersion || version == columnManifestRecordVersionV2 || version == columnManifestRecordVersionV1
+}
+
+func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnManifestPartRole {
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1TypedColumnPart {
+		return ""
+	}
+	switch reason {
+	case string(ColumnPublishOperationDelete):
+		return ColumnManifestPartRoleTombstone
+	case string(ColumnPublishOperationUpdate):
+		return ColumnManifestPartRoleDelta
+	case string(ColumnPublishOperationInsert):
+		return ColumnManifestPartRoleBase
+	default:
+		return ""
+	}
 }
 
 func decodeColumnManifestPartRecordKey(key []byte) (uint64, uint64, error) {

@@ -443,11 +443,15 @@ Dir/maindb/column_assets/events/column-assets/
 
 Segment file names use `segment-%06d.tca`. Durable manifest records store
 typed `ColumnAssetRef` values containing kind, namespace, generation, part id,
-segment file id, offset, length, and checksum. Current part refs may use
-`tcs1_part_image` for compatibility typed-row/TCPA assets or
-`tcs1_typed_column_part` for sectioned scalar typed-column parts. GC/rewrite
-must enumerate these refs from manifest/control roots and snapshots; it must not
-scan row documents to discover typed-storage assets.
+segment file id, offset, length, and checksum. Part records also carry a
+`part_role` lifecycle value: `base`, `delta`, or `tombstone`. Current part refs
+may use `tcs1_part_image` for compatibility typed-row/TCPA assets or
+`tcs1_typed_column_part` for sectioned scalar typed-column parts. `base` parts
+are complete insert/base spans, `delta` parts carry update rows layered over the
+older visible set, and `tombstone` parts are typed-row delete assets with no
+matching typed-column payload. GC/rewrite must enumerate these refs from
+manifest/control roots and snapshots; it must not scan row documents to discover
+typed-storage assets.
 
 Compatibility typed-row physical part payloads use the `TCPA` envelope:
 
@@ -479,11 +483,13 @@ Insert/update rows must have `Deleted=false` and exactly one value per declared
 `typed_row_asset` column in the row asset. Delete/tombstone rows must have
 `Deleted=true` and zero column values. For layouts with `typed_column_part`
 owners, a `TCPA` row asset is still published for row IDs/tombstones and any
-row-owned fields; the matching `tcs1_typed_column_part` for the same generation
-contains authoritative scalar and fixed-dimension `float32_vector` typed-column
-values keyed by row index. Readers validate namespace, generation, part id,
-schema hash, declared column descriptors, length, and checksum before accepting
-an asset ref.
+row-owned fields; the matching `tcs1_typed_column_part` for the same non-delete
+generation contains authoritative scalar and fixed-dimension `float32_vector`
+typed-column values keyed by row index. Latest-visible readers resolve document
+identity from the typed-row row/tombstone assets first, then read the typed-column
+part for the winning non-deleted generation+row. Readers validate namespace,
+generation, part id, schema hash, declared column descriptors, length, role,
+operation, and checksum before accepting an asset ref.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:

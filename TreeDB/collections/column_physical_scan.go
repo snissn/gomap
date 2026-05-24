@@ -91,6 +91,7 @@ type columnPhysicalAssetScanHeader struct {
 type columnManifestAssetRefForScan struct {
 	Ref    ColumnAssetRef
 	Reason ColumnPublishOperation
+	Role   ColumnManifestPartRole
 	Rows   int
 }
 
@@ -705,14 +706,18 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			if !ok {
 				return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 			}
+			role, err := decodeColumnManifestPartRoleForScan(value, ref, reason)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
+			}
 			if ref.Kind == ColumnAssetKindTCS1PartImage {
 				livePartRows.add(ref.Generation, ref.PartID, rows)
-				refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
-				if operation != ColumnPublishOperationInsert {
+				refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+				if role != ColumnManifestPartRoleBase {
 					mutationParts++
 				}
 			} else {
-				typedColumnPartRefs = append(typedColumnPartRefs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
+				typedColumnPartRefs = append(typedColumnPartRefs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
 			}
 			if ref.Generation == snapshot.Generation {
 				activeParts++
@@ -971,9 +976,13 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if ref.PartID != keyPartID {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: column manifest part key part_id=%d does not match ref part_id=%d", keyPartID, ref.PartID)
 			}
-			operation, ok := columnPhysicalScanOperationFromBytes(reason)
+			_, ok := columnPhysicalScanOperationFromBytes(reason)
 			if !ok {
 				return columnManifestPlannerCapabilitiesForScan{}, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
+			}
+			role, err := decodeColumnManifestPartRoleForScan(value, ref, reason)
+			if err != nil {
+				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
 			if ref.Kind == ColumnAssetKindTCS1PartImage {
 				// Capability counts describe the refs a physical scan would read:
@@ -984,7 +993,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 					return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest physical asset count overflows int")
 				}
 				caps.PhysicalAssetCount++
-				if operation != ColumnPublishOperationInsert {
+				if role != ColumnManifestPartRoleBase {
 					if caps.MutationParts == maxCollectionInt {
 						return columnManifestPlannerCapabilitiesForScan{}, errors.New("collections: column manifest mutation part count overflows int")
 					}
@@ -1080,7 +1089,7 @@ func decodeColumnManifestHeaderRecordForScan(raw []byte) (columnManifestHeaderRe
 	if magic := cur.u32(); magic != columnManifestHeaderMagic {
 		return columnManifestHeaderRecordForScan{}, fmt.Errorf("collections: bad column manifest header magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if version := cur.u16(); !isSupportedColumnManifestRecordVersion(version) {
 		return columnManifestHeaderRecordForScan{}, fmt.Errorf("collections: unsupported column manifest header version=%d", version)
 	}
 	header := columnManifestHeaderRecordForScan{
@@ -1323,10 +1332,14 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 		if !ok {
 			return columnManifestSnapshot{}, nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
+		role, err := decodeColumnManifestPartRoleForScan(record.value, ref, reason)
+		if err != nil {
+			return columnManifestSnapshot{}, nil, 0, err
+		}
 		if ref.Kind == ColumnAssetKindTCS1PartImage {
 			livePartRows.add(ref.Generation, ref.PartID, rows)
-			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
-			if operation != ColumnPublishOperationInsert {
+			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+			if role != ColumnManifestPartRoleBase {
 				mutationParts++
 			}
 		}
@@ -1656,8 +1669,12 @@ func columnManifestAssetRefsFromRecordsForScan(records []columnManifestRecord, a
 		if !ok {
 			return nil, 0, fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
 		}
-		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows})
-		if operation != ColumnPublishOperationInsert {
+		role, err := decodeColumnManifestPartRoleForScan(record.value, ref, reason)
+		if err != nil {
+			return nil, 0, err
+		}
+		refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+		if role != ColumnManifestPartRoleBase {
 			mutationParts++
 		}
 	}
@@ -1681,7 +1698,7 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if !isSupportedColumnManifestRecordVersion(version) {
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kindBytes := cur.stringBytes()
@@ -1693,13 +1710,16 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 	length64 := cur.u64()
 	checksum64 := cur.u64()
 	rows64 := uint64(0)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		rows64 = cur.u64()
 	}
 	bytes64 := cur.u64()
 	publishID := cur.u64()
 	generationID := cur.u64()
 	reason := cur.stringBytes()
+	if version >= columnManifestRecordVersion {
+		_ = cur.stringBytes()
+	}
 	if err := cur.err; err != nil {
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, err
 	}
@@ -1745,6 +1765,104 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: column prepared asset bytes=%d does not match ref length=%d", bytes64, ref.Length)
 	}
 	return ref, int(rows64), int64(bytes64), publishID, generationID, reason, nil
+}
+
+func decodeColumnManifestPartRoleForScan(raw []byte, ref ColumnAssetRef, reason []byte) (ColumnManifestPartRole, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestPartMagic {
+		return "", fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	if !isSupportedColumnManifestRecordVersion(version) {
+		return "", fmt.Errorf("collections: unsupported column manifest part version=%d", version)
+	}
+	_ = cur.stringBytes()
+	_ = cur.stringBytes()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	if version >= columnManifestRecordVersionV2 {
+		_ = cur.u64()
+	}
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.stringBytes()
+	role := ColumnManifestPartRole("")
+	if version >= columnManifestRecordVersion {
+		roleBytes := cur.stringBytes()
+		var ok bool
+		role, ok = columnManifestPartRoleFromBytesForScan(roleBytes)
+		if !ok {
+			return "", fmt.Errorf("collections: unsupported column manifest part role %q", string(roleBytes))
+		}
+	}
+	if err := cur.err; err != nil {
+		return "", err
+	}
+	if cur.pos != len(raw) {
+		return "", errors.New("collections: trailing bytes in column manifest part record")
+	}
+	if role == "" {
+		role = inferColumnManifestPartRoleForScan(ref.Kind, reason)
+	}
+	if err := validateColumnManifestPartRoleForScan(role, ref.Kind, reason); err != nil {
+		return "", err
+	}
+	return role, nil
+}
+
+func columnManifestPartRoleFromBytesForScan(raw []byte) (ColumnManifestPartRole, bool) {
+	switch {
+	case columnPhysicalBytesEqualString(raw, string(ColumnManifestPartRoleBase)):
+		return ColumnManifestPartRoleBase, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnManifestPartRoleDelta)):
+		return ColumnManifestPartRoleDelta, true
+	case columnPhysicalBytesEqualString(raw, string(ColumnManifestPartRoleTombstone)):
+		return ColumnManifestPartRoleTombstone, true
+	default:
+		return "", false
+	}
+}
+
+func inferColumnManifestPartRoleForScan(kind ColumnAssetKind, reason []byte) ColumnManifestPartRole {
+	_ = kind
+	switch {
+	case columnPhysicalBytesEqualString(reason, string(ColumnPublishOperationDelete)):
+		return ColumnManifestPartRoleTombstone
+	case columnPhysicalBytesEqualString(reason, string(ColumnPublishOperationUpdate)):
+		return ColumnManifestPartRoleDelta
+	case columnPhysicalBytesEqualString(reason, string(ColumnPublishOperationInsert)):
+		return ColumnManifestPartRoleBase
+	default:
+		return ""
+	}
+}
+
+func validateColumnManifestPartRoleForScan(role ColumnManifestPartRole, kind ColumnAssetKind, reason []byte) error {
+	switch role {
+	case ColumnManifestPartRoleBase, ColumnManifestPartRoleDelta, ColumnManifestPartRoleTombstone:
+	default:
+		return fmt.Errorf("collections: unsupported column manifest part role %q", role)
+	}
+	operation, ok := columnPhysicalScanOperationFromBytes(reason)
+	if !ok {
+		return fmt.Errorf("collections: unsupported column manifest part reason %q", string(reason))
+	}
+	want := inferColumnManifestPartRoleForScan(kind, reason)
+	if role != want {
+		return fmt.Errorf("collections: column manifest part role=%q does not match operation=%q want role=%q", role, operation, want)
+	}
+	if role == ColumnManifestPartRoleTombstone && kind != ColumnAssetKindTCS1PartImage {
+		return fmt.Errorf("collections: column manifest tombstone role requires %s ref, got %s", ColumnAssetKindTCS1PartImage, kind)
+	}
+	if role == ColumnManifestPartRoleTombstone && !columnPhysicalBytesEqualString(reason, string(ColumnPublishOperationDelete)) {
+		return fmt.Errorf("collections: column manifest tombstone role requires delete reason, got %q", string(reason))
+	}
+	return nil
 }
 
 func columnAssetKindFromBytesForScan(raw []byte) (ColumnAssetKind, bool) {

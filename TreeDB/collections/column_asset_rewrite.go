@@ -573,7 +573,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if !isSupportedColumnManifestRecordVersion(version) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kindBytes := cur.stringBytes()
@@ -589,13 +589,17 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	offsets.checksum = cur.pos
 	checksum64 := cur.u64()
 	rows64 := uint64(0)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		rows64 = cur.u64()
 	}
 	bytes64 := cur.u64()
 	_ = cur.u64() // publish_id; rewrite preserves the original field bytes.
 	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
-	_ = cur.stringBytes()
+	reason := cur.stringBytes()
+	role := ColumnManifestPartRole("")
+	if version >= columnManifestRecordVersion {
+		role = ColumnManifestPartRole(string(cur.stringBytes()))
+	}
 	if err := cur.err; err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
 	}
@@ -605,6 +609,12 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	kind := ColumnAssetKind(string(kindBytes))
 	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1TypedColumnPart && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes && kind != ColumnAssetKindTCS1Int64Values {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+	}
+	if role == "" {
+		if version >= columnManifestRecordVersion && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+			return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
+		}
+		role = inferColumnManifestPartRole(kind, string(reason))
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: column manifest part namespace=%q want %q", string(namespaceBytes), expectedNamespace)
@@ -631,7 +641,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64)}); err != nil {
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), Reason: string(reason), PartRole: role}); err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
 	}
 	return ref, offsets, nil
@@ -715,8 +725,11 @@ func columnVectorGraphManifestAssetRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rowCount64), Bytes: int64(assetBytes64)}); err != nil {
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, err
+	}
+	if assetBytes64 == 0 {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest asset bytes=0 must be positive")
 	}
 	if ref.Length != int64(assetBytes64) {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: column vector graph manifest asset bytes=%d does not match ref length=%d", assetBytes64, ref.Length)
