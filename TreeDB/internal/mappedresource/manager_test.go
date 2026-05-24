@@ -60,13 +60,17 @@ func TestAcquireBytesReleaseUpdatesAccountingAndPins(t *testing.T) {
 func TestGlobalPinSummaryAndStatsTrackActiveHandles(t *testing.T) {
 	mgr := NewManager()
 	key := testKey()
-	h, err := mgr.AcquireBytes(key, testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{Reason: "global-unit", ValidationMode: ValidationVerify})
+	h, err := mgr.AcquireBytes(key, testScope(), SourceHeapCopy, []byte("0123456789abcdef"), AcquireOptions{Reason: "global-unit", ValidationMode: ValidationVerify, ResourceRoot: "root-A", ResourcePath: "root-A/asset.bin"})
 	if err != nil {
 		t.Fatalf("AcquireBytes: %v", err)
 	}
 	found := false
 	for _, pin := range GlobalPinSummary() {
 		if pin.Key.Equal(key) && pin.Reason == "global-unit" {
+			if pin.Root != "root-A" || pin.Path != "root-A/asset.bin" {
+				_ = h.Release()
+				t.Fatalf("global pin root/path=(%q,%q), want ResourceRoot/ResourcePath", pin.Root, pin.Path)
+			}
 			found = true
 			break
 		}
@@ -174,6 +178,13 @@ func TestAcquireFileRangeMappedAndHeapReturnIdenticalBytes(t *testing.T) {
 	if err != nil {
 		_ = mapped.Release()
 		t.Fatalf("AcquireFileRange heap: %v", err)
+	}
+	for _, pin := range mgr.PinSummary() {
+		if pin.Path != path {
+			_ = mapped.Release()
+			_ = heap.Release()
+			t.Fatalf("AcquireFileRange pin path=%q want %q", pin.Path, path)
+		}
 	}
 	if !bytes.Equal(mapped.Bytes(), heap.Bytes()) {
 		t.Fatalf("mapped bytes %q != heap bytes %q", string(mapped.Bytes()), string(heap.Bytes()))
