@@ -26,5 +26,6 @@ directories when moving between branches.
 - [Typed-storage naming](../spec/typed-storage-naming.md)
 - [Typed-column adapter and durable publication](../spec/typed-column-adapter.md)
 - [Typed-storage closeout evidence](../spec/typed-storage-closeout-1758.md)
+- [Typed asset maintenance contract](../spec/typed-asset-maintenance-1788.md)
 - [Storage format](../spec/storage-format.md)
 - [Column graph native vector search](../spec/column-graph-native-vector-search.md)

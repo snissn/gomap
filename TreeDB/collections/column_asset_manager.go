@@ -1104,6 +1104,7 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 		Reason:         reason,
 		ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity),
 		FallbackReason: fallback,
+		ResourceRoot:   c.rootDir,
 	})
 	if err != nil {
 		return err

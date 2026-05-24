@@ -183,6 +183,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1758 closeout evidence for the typed-storage stack through #1757/#1781,
     including child-ticket status, benchmark/test evidence, naming audit
     classification, and the #1736 COW-maintenance handoff facts.
+- `TreeDB/docs/spec/typed-asset-maintenance-1788.md`
+  - issue #1788 implementation contract for typed-row plus typed-column COW
+    reachability, active mappedresource pin protection, GC, and rewrite.
 
 ## Canonical Ownership
 
@@ -210,8 +213,10 @@ Typed physical storage vocabulary (`typed storage`, `typed-row storage`,
 `retained_document`, `document_payload`, and `derived_accelerator`) is owned by
 `typed-storage-naming.md`; the #1753 typed-column transplant scope is recorded
 in `typed-column-transplant.md`, the #1754/#1755 adapter/publication seam is
-recorded in `typed-column-adapter.md`, and the #1758 closeout evidence/handoff is
-recorded in `typed-storage-closeout-1758.md`. User-command WAL lifecycle terms
+recorded in `typed-column-adapter.md`, the #1758 closeout evidence/handoff is
+recorded in `typed-storage-closeout-1758.md`, and current typed-row plus
+typed-column maintenance behavior is recorded in
+`typed-asset-maintenance-1788.md`. User-command WAL lifecycle terms
 (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`, `WAL-rejected`,
 `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
@@ -229,8 +234,8 @@ blocking questions live:
   `native-query-raft-roadmap.md`.
 - Typed-storage persistence and historical roadmap questions:
   `typed-storage-naming.md`, `typed-column-transplant.md`,
-  `typed-column-adapter.md`, `typed-storage-closeout-1758.md`, and
-  `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
+  `typed-column-adapter.md`, `typed-storage-closeout-1758.md`,
+  `typed-asset-maintenance-1788.md`, and `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
 
 A blocking implementation question must be listed in this index and in its
 owner document. Non-blocking future-extension questions must be labeled as

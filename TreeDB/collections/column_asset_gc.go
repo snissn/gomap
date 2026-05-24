@@ -100,7 +100,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		if opts.DryRun {
 			return stats, nil
 		}
-		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d",
+		return stats, fmt.Errorf("%w: collection=%q namespace=%q uncertain_refs=%d unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
 			plan.Namespace,
@@ -108,6 +108,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 			plan.Segments.Unknown,
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,
+			plan.MappedResources.UnconvertiblePins,
 		)
 	}
 	if opts.DryRun && !needSegmentEntries {
