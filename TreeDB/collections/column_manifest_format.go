@@ -714,6 +714,9 @@ func isSupportedColumnManifestRecordVersion(version uint16) bool {
 }
 
 func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnManifestPartRole {
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1TypedColumnPart {
+		return ""
+	}
 	switch reason {
 	case string(ColumnPublishOperationDelete):
 		return ColumnManifestPartRoleTombstone
@@ -722,10 +725,7 @@ func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnMani
 	case string(ColumnPublishOperationInsert):
 		return ColumnManifestPartRoleBase
 	default:
-		if kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart {
-			return ColumnManifestPartRoleBase
-		}
-		return ""
+		return ColumnManifestPartRoleBase
 	}
 }
 
