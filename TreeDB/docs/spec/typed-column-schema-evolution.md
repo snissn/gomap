@@ -40,8 +40,8 @@ Current and future typed-column code must fail closed on at least these classes:
   generation. A field expected to be `typed_column_part` must not be read from a
   typed-row asset, retained document payload, or derived accelerator as a silent
   substitute, and overlapping authoritative owners must be rejected.
-- **Value type:** declared `ColumnStoreValueType` / typed-storage value type must
-  match the typed-column column descriptor. Unsupported value types such as
+- **Value type:** declared typed-storage value type must match the typed-column
+  column descriptor. Unsupported value types such as
   authoritative `adjacency_list` remain fail-closed until their format is
   specified.
 - **Vector dimensions:** `float32_vector` fields must have positive
@@ -118,9 +118,9 @@ current 0-alloc or near-0-alloc decode/scan path after setup. If it cannot, the
 change must define an explicit, benchmarked fallback and explain why the fallback
 is acceptable.
 
-PRs that touch typed-column or column-store hot paths must report baseline versus
-final `B/op` and `allocs/op` for the affected benchmark(s). If a profile exposes
-new hot-path allocation, the PR must remove it or document a bounded follow-up
+PRs that touch typed-column or typed-storage hot paths must report baseline
+versus final `B/op` and `allocs/op` for the affected benchmark(s). If a profile
+exposes new hot-path allocation, the PR must remove it or document a bounded follow-up
 with allocation profile/top evidence. Policy or migration work must not bless
 full-document reconstruction on direct typed-column scan paths, per-row heap
 wrappers, maps, interface boxes, closures, or string/byte conversions in inner
