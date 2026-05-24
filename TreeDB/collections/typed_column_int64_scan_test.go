@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -733,8 +735,24 @@ func TestTypedColumnInt64AggregateDirectDiagnosticsNoMaterialization(t *testing.
 	}
 	assertTypedColumnInt64Aggregate(t, result, 2, 40)
 	diag := result.Diagnostics
-	if diag.Fallback || diag.DirectTypedColumnAssetReads == 0 || diag.RowLocatorDecodes != 0 || diag.PhysicalRowIDLookups != 0 || diag.PhysicalRowAssetReads != 0 || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.DocumentReconstructions != 0 {
-		t.Fatalf("diagnostics=%+v want direct aggregate with zero row/document materialization", diag)
+	if diag.Fallback {
+		t.Fatalf("diagnostics=%+v want direct aggregate path", diag)
+	}
+	if diag.DirectTypedColumnAssetReads == 0 {
+		t.Fatalf("diagnostics=%+v want typed-column asset reads", diag)
+	}
+	zeroDiagnostics := map[string]int{
+		"document_materializations": diag.DocumentMaterializations,
+		"document_reconstructions":  diag.DocumentReconstructions,
+		"row_materializations":      diag.RowMaterializations,
+		"row_locator_decodes":       diag.RowLocatorDecodes,
+		"physical_row_asset_reads":  diag.PhysicalRowAssetReads,
+		"physical_row_id_lookups":   diag.PhysicalRowIDLookups,
+	}
+	for name, got := range zeroDiagnostics {
+		if got != 0 {
+			t.Fatalf("diagnostics=%+v %s=%d want 0 for insert-only typed-column aggregate path", diag, name, got)
+		}
 	}
 }
 
@@ -891,6 +909,45 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		}
 		if !typedColumnInt64AggregateBenchIncludeFallback("true", 1048576) || typedColumnInt64AggregateBenchIncludeFallback("false", 4096) {
 			t.Fatalf("fallback explicit override failed")
+		}
+	})
+
+	t.Run("read_integrity", func(t *testing.T) {
+		got, err := parseTypedColumnInt64AggregateBenchReadIntegrities("")
+		if err != nil {
+			t.Fatalf("default read integrity: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchReadIntegrityNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"cached_verify"}) {
+			t.Fatalf("default read integrity=%v", gotNames)
+		}
+		got, err = parseTypedColumnInt64AggregateBenchReadIntegrities("cached_verify,skip_checksums")
+		if err != nil {
+			t.Fatalf("explicit read integrity: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchReadIntegrityNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"cached_verify", "unsafe_skip_checksums_ceiling"}) {
+			t.Fatalf("explicit read integrity=%v", gotNames)
+		}
+		if _, err := parseTypedColumnInt64AggregateBenchReadIntegrities("verify"); err == nil || !strings.Contains(err.Error(), "invalid read integrity") {
+			t.Fatalf("invalid read integrity err=%v", err)
+		}
+		if _, err := parseTypedColumnInt64AggregateBenchReadIntegrities("not_applicable"); err == nil || !strings.Contains(err.Error(), "invalid read integrity") {
+			t.Fatalf("not_applicable should be reserved for fallback labels, err=%v", err)
+		}
+	})
+
+	t.Run("sub_benchmark_names", func(t *testing.T) {
+		name := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "typed_column_part", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityByName("cached_verify"), typedColumnInt64AggregateBenchExecutionModeByName("serial"))
+		want := "rows_256/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg"
+		if name != want {
+			t.Fatalf("serial sub-benchmark name=%q want %q", name, want)
+		}
+		parallelUnsafe := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "typed_column_part", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityByName("skip_checksums"), typedColumnInt64AggregateBenchExecutionModeByName("parallel_contention"))
+		if !strings.Contains(parallelUnsafe, "/timed_one_shot_api/read_integrity_unsafe_skip_checksums_ceiling/execution_parallel_contention/") {
+			t.Fatalf("parallel unsafe sub-benchmark name=%q missing timed boundary/read integrity/execution labels", parallelUnsafe)
+		}
+		fallback := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "document_full_scan_fallback", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityNotApplicable(), typedColumnInt64AggregateBenchExecutionModeByName("serial"))
+		if !strings.Contains(fallback, "/path_document_full_scan_fallback/") || !strings.Contains(fallback, "/read_integrity_not_applicable/") {
+			t.Fatalf("fallback sub-benchmark name=%q missing fallback/not-applicable labels", fallback)
 		}
 	})
 }
@@ -1081,6 +1138,10 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 	if err != nil {
 		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_DISTS: %v", err)
 	}
+	readIntegrities, err := parseTypedColumnInt64AggregateBenchReadIntegrities(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY"))
+	if err != nil {
+		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY: %v", err)
+	}
 	includeFallbackEnv := os.Getenv("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK")
 	if strings.TrimSpace(includeFallbackEnv) != "" {
 		if _, err := parseTypedColumnInt64AggregateBenchBool("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK", includeFallbackEnv, false); err != nil {
@@ -1096,9 +1157,12 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 				shape := shape
 				req := shape.request(rows)
 				expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
-				runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, true)
+				for _, readIntegrity := range readIntegrities {
+					readIntegrity := readIntegrity
+					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, true, readIntegrity)
+				}
 				if typedColumnInt64AggregateBenchIncludeFallback(includeFallbackEnv, rows) {
-					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false)
+					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false, typedColumnInt64AggregateBenchReadIntegrityNotApplicable())
 				}
 			}
 		}
@@ -1121,44 +1185,108 @@ type typedColumnInt64AggregateBenchExpected struct {
 	avg   float64
 }
 
+type typedColumnInt64AggregateBenchReadIntegrity struct {
+	name      string
+	integrity ColumnAssetReadIntegrity
+}
+
+type typedColumnInt64AggregateBenchExecutionMode struct {
+	name string
+	// runOneShotAPI intentionally measures the current public one-shot API only.
+	// Future prepared/session aggregate APIs should add a separate timed boundary
+	// instead of reusing this runner.
+	runOneShotAPI func(*testing.B, *Collection, TypedColumnInt64PredicateAggregateRequest, typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error)
+}
+
 const typedColumnInt64AggregateBenchBatchRows = 32768
 
-func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedColumnInt64AggregateBenchDistribution, shape typedColumnInt64AggregateBenchShape, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected, typedPath bool) {
+func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedColumnInt64AggregateBenchDistribution, shape typedColumnInt64AggregateBenchShape, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected, typedPath bool, readIntegrity typedColumnInt64AggregateBenchReadIntegrity) {
 	pathName := "document_full_scan_fallback"
 	if typedPath {
 		pathName = "typed_column_part"
 	}
-	b.Run(fmt.Sprintf("rows_%d/dist_%s/path_%s/shape_%s/predicate_count_sum_avg", rows, dist.name, pathName, shape.name), func(b *testing.B) {
-		setupStart := time.Now()
-		d, col := setupTypedColumnInt64AggregateBenchCollection(b, typedPath)
-		defer func() { _ = d.Close() }()
-		batches := insertTypedColumnInt64AggregateBenchRows(b, col, rows, dist)
-		setupDuration := time.Since(setupStart)
-		setupMetrics := collectTypedColumnInt64AggregateBenchSetupMetrics(rows, batches, d, typedPath, setupDuration)
+	for _, execution := range typedColumnInt64AggregateBenchExecutionModes() {
+		execution := execution
+		b.Run(typedColumnInt64AggregateBenchSubBenchmarkName(rows, dist, pathName, shape, readIntegrity, execution), func(b *testing.B) {
+			setupStart := time.Now()
+			d, col := setupTypedColumnInt64AggregateBenchCollection(b, typedPath)
+			defer func() { _ = d.Close() }()
+			batches := insertTypedColumnInt64AggregateBenchRows(b, col, rows, dist)
+			setupDuration := time.Since(setupStart)
+			setupMetrics := collectTypedColumnInt64AggregateBenchSetupMetrics(rows, batches, d, typedPath, setupDuration)
 
-		req.Column = "time_us"
-		if typedPath {
-			req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
+			req.Column = "time_us"
+			req.ColumnAssetReadIntegrity = readIntegrity.integrity
+			b.StopTimer()
+			b.ReportAllocs()
+			b.ResetTimer()
+			reportTypedColumnInt64AggregateBenchSetupMetrics(b, setupMetrics)
+			b.StartTimer()
+			result, runErr := execution.runOneShotAPI(b, col, req, expected)
+			b.StopTimer()
+			if runErr != nil {
+				b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", runErr)
+			}
+			if err := validateTypedColumnInt64AggregateBenchResult(result, expected); err != nil {
+				b.Fatal(err)
+			}
+			reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, b.Elapsed(), b.N)
+		})
+	}
+}
+
+func typedColumnInt64AggregateBenchSubBenchmarkName(rows int, dist typedColumnInt64AggregateBenchDistribution, pathName string, shape typedColumnInt64AggregateBenchShape, readIntegrity typedColumnInt64AggregateBenchReadIntegrity, execution typedColumnInt64AggregateBenchExecutionMode) string {
+	return fmt.Sprintf("rows_%d/dist_%s/path_%s/shape_%s/timed_one_shot_api/read_integrity_%s/execution_%s/predicate_count_sum_avg", rows, dist.name, pathName, shape.name, readIntegrity.name, execution.name)
+}
+
+func runTypedColumnInt64AggregateBenchOneShotSerial(b *testing.B, col *Collection, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
+	b.Helper()
+	var result TypedColumnInt64PredicateAggregateResult
+	for i := 0; i < b.N; i++ {
+		var err error
+		result, err = col.RunTypedColumnInt64PredicateAggregate(req)
+		if err != nil {
+			return result, err
 		}
-		b.StopTimer()
-		b.ReportAllocs()
-		b.ResetTimer()
-		reportTypedColumnInt64AggregateBenchSetupMetrics(b, setupMetrics)
-		b.StartTimer()
-		var result TypedColumnInt64PredicateAggregateResult
-		var runErr error
-		for i := 0; i < b.N; i++ {
-			result, runErr = col.RunTypedColumnInt64PredicateAggregate(req)
+	}
+	return result, nil
+}
+
+func runTypedColumnInt64AggregateBenchOneShotParallel(b *testing.B, col *Collection, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
+	b.Helper()
+	var firstResult TypedColumnInt64PredicateAggregateResult
+	var firstResultOnce sync.Once
+	var firstErr atomic.Value
+	var stop atomic.Bool
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			if stop.Load() {
+				continue
+			}
+			result, err := col.RunTypedColumnInt64PredicateAggregate(req)
+			if err == nil {
+				err = validateTypedColumnInt64AggregateBenchResult(result, expected)
+			}
+			if err != nil {
+				if stop.CompareAndSwap(false, true) {
+					firstErr.Store(err)
+				}
+				continue
+			}
+			firstResultOnce.Do(func() { firstResult = result })
 		}
-		b.StopTimer()
-		if runErr != nil {
-			b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", runErr)
-		}
-		if result.Count != expected.count || result.Sum != expected.sum || result.Avg != expected.avg {
-			b.Fatalf("aggregate count=%d sum=%d avg=%f want count=%d sum=%d avg=%f diagnostics=%+v", result.Count, result.Sum, result.Avg, expected.count, expected.sum, expected.avg, result.Diagnostics)
-		}
-		reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, b.Elapsed(), b.N)
 	})
+	if errValue := firstErr.Load(); errValue != nil {
+		return firstResult, errValue.(error)
+	}
+	return firstResult, nil
+}
+
+func validateTypedColumnInt64AggregateBenchResult(result TypedColumnInt64PredicateAggregateResult, expected typedColumnInt64AggregateBenchExpected) error {
+	if result.Count != expected.count || result.Sum != expected.sum || result.Avg != expected.avg {
+		return fmt.Errorf("aggregate count=%d sum=%d avg=%f want count=%d sum=%d avg=%f diagnostics=%+v", result.Count, result.Sum, result.Avg, expected.count, expected.sum, expected.avg, result.Diagnostics)
+	}
+	return nil
 }
 
 func setupTypedColumnInt64AggregateBenchCollection(tb testing.TB, typedPath bool) (*backenddb.DB, *Collection) {
@@ -1277,6 +1405,74 @@ func parseTypedColumnInt64AggregateBenchBool(name, env string, def bool) (bool, 
 		return false, nil
 	default:
 		return false, fmt.Errorf("%s: invalid boolean %q", name, env)
+	}
+}
+
+func parseTypedColumnInt64AggregateBenchReadIntegrities(env string) ([]typedColumnInt64AggregateBenchReadIntegrity, error) {
+	if strings.TrimSpace(env) == "" {
+		return []typedColumnInt64AggregateBenchReadIntegrity{typedColumnInt64AggregateBenchReadIntegrityByName("cached_verify")}, nil
+	}
+	parts := strings.Split(env, ",")
+	out := make([]typedColumnInt64AggregateBenchReadIntegrity, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("empty read integrity")
+		}
+		if strings.EqualFold(name, "all") {
+			out = append(out, typedColumnInt64AggregateBenchReadIntegrityByName("cached_verify"), typedColumnInt64AggregateBenchReadIntegrityByName("skip_checksums"))
+			continue
+		}
+		readIntegrity := typedColumnInt64AggregateBenchReadIntegrityByName(name)
+		if readIntegrity.name == "" {
+			return nil, fmt.Errorf("invalid read integrity %q (available: cached_verify,skip_checksums,all)", name)
+		}
+		out = append(out, readIntegrity)
+	}
+	return out, nil
+}
+
+func typedColumnInt64AggregateBenchReadIntegrityByName(name string) typedColumnInt64AggregateBenchReadIntegrity {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "cached", "cached_verify":
+		return typedColumnInt64AggregateBenchReadIntegrity{name: "cached_verify", integrity: ColumnAssetReadIntegrityCachedVerify}
+	case "skip", "skip_checksums", "unsafe_skip_checksums", "unsafe_skip_checksums_ceiling":
+		// Unsafe checksum-skipping is benchmark-only ceiling coverage. It is not
+		// the default and must be explicitly requested with
+		// TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY.
+		return typedColumnInt64AggregateBenchReadIntegrity{name: "unsafe_skip_checksums_ceiling", integrity: ColumnAssetReadIntegritySkipChecksums}
+	default:
+		return typedColumnInt64AggregateBenchReadIntegrity{}
+	}
+}
+
+func typedColumnInt64AggregateBenchReadIntegrityNotApplicable() typedColumnInt64AggregateBenchReadIntegrity {
+	return typedColumnInt64AggregateBenchReadIntegrity{name: "not_applicable"}
+}
+
+func typedColumnInt64AggregateBenchReadIntegrityNames(readIntegrities []typedColumnInt64AggregateBenchReadIntegrity) []string {
+	names := make([]string, len(readIntegrities))
+	for i, readIntegrity := range readIntegrities {
+		names[i] = readIntegrity.name
+	}
+	return names
+}
+
+func typedColumnInt64AggregateBenchExecutionModes() []typedColumnInt64AggregateBenchExecutionMode {
+	return []typedColumnInt64AggregateBenchExecutionMode{
+		typedColumnInt64AggregateBenchExecutionModeByName("serial"),
+		typedColumnInt64AggregateBenchExecutionModeByName("parallel_contention"),
+	}
+}
+
+func typedColumnInt64AggregateBenchExecutionModeByName(name string) typedColumnInt64AggregateBenchExecutionMode {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "serial":
+		return typedColumnInt64AggregateBenchExecutionMode{name: "serial", runOneShotAPI: runTypedColumnInt64AggregateBenchOneShotSerial}
+	case "parallel", "parallel_contention", "runparallel":
+		return typedColumnInt64AggregateBenchExecutionMode{name: "parallel_contention", runOneShotAPI: runTypedColumnInt64AggregateBenchOneShotParallel}
+	default:
+		return typedColumnInt64AggregateBenchExecutionMode{}
 	}
 }
 
