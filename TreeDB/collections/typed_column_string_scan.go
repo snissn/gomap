@@ -193,6 +193,10 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 		result.Diagnostics.DecodedMetadataBytes += uint64(prepared.ManifestBytes)
 		result.Diagnostics.DictionaryBytesDecoded += uint64(prepared.DictionaryBytes)
 		if !prepared.QueryCodeFound {
+			if valueCol, ok := prepared.AdapterPart.Part.Columns[prepared.Column.Definition.Name]; ok {
+				result.Diagnostics.BlocksConsidered += len(valueCol.Blocks)
+				result.Diagnostics.BlocksPruned += len(valueCol.Blocks)
+			}
 			result.Diagnostics.PartsPruned++
 			continue
 		}

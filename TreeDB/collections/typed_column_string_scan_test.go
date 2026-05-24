@@ -104,6 +104,54 @@ func TestTypedColumnStringScanNoDocumentReconstructionDiagnostics1785(t *testing
 	}
 }
 
+func TestTypedColumnStringScanReopen1785(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart},
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	insertTypedColumnStringScanRows1785(t, col, []string{"alpha", "beta", "gamma", "beta"})
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	result, err := reopenedCol.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Value: "beta"})
+	if err != nil {
+		t.Fatalf("RunTypedColumnStringPredicateScan reopened: %v", err)
+	}
+	assertTypedColumnStringScanValues1785(t, result, []string{"beta", "beta"})
+	if result.Diagnostics.DirectTypedColumnAssetReads == 0 || result.Diagnostics.DictionaryBytesDecoded == 0 || result.Diagnostics.MappedBytes+result.Diagnostics.HeapCopyBytes == 0 {
+		t.Fatalf("diagnostics=%+v want durable typed_column_part dictionary reads after reopen", result.Diagnostics)
+	}
+}
+
 func setupTypedColumnStringScanCollection1785(tb testing.TB) (*backenddb.DB, *Collection) {
 	tb.Helper()
 	d := openTypedColumnInt64ScanDB(tb)
