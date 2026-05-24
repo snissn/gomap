@@ -509,7 +509,9 @@ images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
 Issue `#1755` scalar path represents bool, int64, float32, double/float64, and
 string fields. Issue `#1756` adds fixed-dimension `float32_vector` fields as
 uncompressed row-major little-endian dense `float32` sections whose element count
-per row is `vector_dims`.
+per row is `vector_dims`. Issue `#1783` adds fixed-degree `adjacency_list`
+fields as uncompressed row-major little-endian dense `uint32` sections whose
+element count per row is `adjacency_degree`.
 
 Nullable scalar typed-column support uses nullable int64 carrier granules for
 bool, int64, float32, double/float64, and low-cardinality string fields. A
@@ -557,8 +559,10 @@ schema, null/missing, and fail-closed validation must not be weakened to meet th
 allocation budget.
 
 Production `float32_vector` and `adjacency_list` nullable/missing support remains
-staged and fail-closed. Internal dense `uint32` adjacency sections are validated
-for the future vector graph path but are not authoritative collection fields yet.
+staged and fail-closed. Authoritative `adjacency_list` typed-column fields must
+be non-nullable, must declare positive `adjacency_degree`, and must fail closed
+when any source row length, schema descriptor, or asset payload length disagrees
+with that fixed degree.
 
 ## 8. Commit-Log Segment Format
 

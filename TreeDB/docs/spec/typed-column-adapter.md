@@ -1,6 +1,6 @@
-# Typed-Column Adapter and Durable Vector Publication (#1754/#1755/#1756)
+# Typed-Column Adapter and Durable Vector/Adjacency Publication (#1754/#1755/#1756/#1783)
 
-Status: current implementation note for issues #1754, #1755, and #1756 under parent tracker #1744.
+Status: current implementation note for issues #1754, #1755, #1756, and #1783 under parent tracker #1744.
 Typed-column schema/version evolution and migration policy is defined in
 `typed-column-schema-evolution.md`.
 
@@ -18,8 +18,9 @@ locator/typed-row asset. Existing `ColumnStoreConfig` metadata still resolves to
 typed_column_part`.
 
 Issue `#1756` extends that path with fixed-dimension `float32_vector` dense
-sections. It still does not switch query planning or physical predicate scans to
-typed-column sections, does not publish adjacency sections, and does not make
+sections. Issue `#1783` adds authoritative fixed-degree `adjacency_list` dense
+sections for columns that declare positive `adjacency_degree`. These issues do
+not switch vector graph/search planning to typed-column sections and do not make
 derived accelerators authoritative.
 
 ## Type Matrix
@@ -32,36 +33,37 @@ derived accelerators authoritative.
 | `double` / `float64` | represented | Raw int64 column carrying `math.Float64bits`. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row. |
-| `adjacency_list` | fail closed | Internal dense `uint32` sections exist for #1756 validation, but production publication remains closed until fixed-degree adjacency schema metadata exists. |
+| `adjacency_list` | represented | Fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. |
 
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit
 JSON null maps to null bitmap rows, omitted paths map to default/missing bitmap
 rows, and present values map to the encoded carrier payload (`0/1` bools,
 int64s, float bit patterns, or string dictionary codes). Vector and adjacency
-nullable/missing support remains staged/fail-closed. Adjacency publication
-remains staged after issue `#1756`.
+nullable/missing support remains staged/fail-closed; `adjacency_list`
+`typed_column_part` owners must declare positive `adjacency_degree` and each
+present row must contain exactly that many uint32 neighbors.
 
 Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows
 are restored under `Path`; display-name-only input fails closed. Adapter images
 are fixed-schema: reads fail closed if the image contains unexpected columns or
 is missing any expected field column/primary-id column. The adapter must reject
-schema hash, field ownership, value type, `vector_dims`, fixed-width metadata,
+schema hash, field ownership, value type, `vector_dims`, `adjacency_degree`, fixed-width metadata,
 image/descriptor version, and manifest ref mismatches from adapter descriptors,
 manifest identities, or refs before row materialization whenever those compact
 records are sufficient.
 
 ## Durable Publication / Reconstruction Seam (#1755)
 
-For inserts and updates with scalar or fixed-dimension vector
-`typed_column_part` owners, TreeDB writes:
+For inserts and updates with scalar, fixed-dimension vector, or fixed-degree
+adjacency `typed_column_part` owners, TreeDB writes:
 
 - a compatibility `tcs1_part_image`/`TCPA` typed-row asset containing row IDs,
   tombstones, and any `typed_row_asset` owned fields;
-- a `tcs1_typed_column_part` asset containing the authoritative scalar and
-  fixed-dimension `float32_vector` `typed_column_part` values for the same
-  generation.
+- a `tcs1_typed_column_part` asset containing the authoritative scalar,
+  fixed-dimension `float32_vector`, and fixed-degree `adjacency_list`
+  `typed_column_part` values for the same generation.
 
 Manifest part records classify these assets as `base`, `delta`, or `tombstone`.
 Insert/base spans use `base`; updates use `delta`; deletes publish only a
@@ -94,7 +96,9 @@ production retained-payload behavior.
 ## Dense Section Safety (#1756)
 
 `float32_vector` typed-column data is stored as uncompressed raw little-endian
-`float32` payloads. The `typedcolumn` image builder keeps all sections aligned to
+`float32` payloads. `adjacency_list` typed-column data is stored as uncompressed
+raw little-endian `uint32` payloads with exactly `adjacency_degree` elements per
+row. The `typedcolumn` image builder keeps all sections aligned to
 8-byte boundaries, which is sufficient for `float32` and `uint32` mappedresource
 direct views. Readers must validate lifetime, range, length, endian mode, and
 alignment through #1736 `mappedresource` handles before exposing direct typed
@@ -135,6 +139,6 @@ schema, or fail-closed validation.
 The only production `TreeDB/collections` file that imports
 `TreeDB/internal/typedcolumn` is the adapter seam. Publication/reopen logic calls
 through that seam. Query/vector search integration remains deferred to later
-issues `#1756`/`#1757`; this PR publishes fixed-dimension `float32_vector`
-values but does not switch native vector graph search to typed-column parts.
-Adjacency list publication remains fail-closed.
+issues `#1757`/`#1782`/`#1790`; this path publishes fixed-dimension
+`float32_vector` and fixed-degree `adjacency_list` values but does not switch
+native vector graph search to typed-column parts or add SIMD acceleration.

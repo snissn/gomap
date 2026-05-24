@@ -50,6 +50,7 @@ type TypedStorageField struct {
 	Nullable           bool                     `json:"nullable,omitempty"`
 	Dictionary         bool                     `json:"dictionary,omitempty"`
 	VectorDims         int                      `json:"vector_dims,omitempty"`
+	AdjacencyDegree    int                      `json:"adjacency_degree,omitempty"`
 	FixedWidthEncoding ColumnFixedWidthEncoding `json:"fixed_width_encoding,omitempty"`
 }
 
@@ -123,6 +124,7 @@ func ResolveTypedStorageLayout(meta CollectionMeta) (TypedStorageLayout, error) 
 			Nullable:           col.Nullable,
 			Dictionary:         col.Dictionary,
 			VectorDims:         col.VectorDims,
+			AdjacencyDegree:    col.AdjacencyDegree,
 			FixedWidthEncoding: col.FixedWidthEncoding,
 		})
 	}
@@ -210,6 +212,37 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 					name = field.Path
 				}
 				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q vector_dims: only float32_vector fields may set vector_dims", name)
+			}
+			if valueType == ColumnStoreValueAdjacencyList {
+				if field.AdjacencyDegree < 0 {
+					name := field.Name
+					if name == "" {
+						name = field.Path
+					}
+					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: must be non-negative", name)
+				}
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				if field.Owner != TypedStorageOwnerColumnPart {
+					if field.AdjacencyDegree != 0 {
+						return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: only adjacency_list typed_column_part fields may set adjacency_degree", name)
+					}
+				} else {
+					if field.Nullable {
+						return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable adjacency_list typed_column_part is unsupported", name)
+					}
+					if field.AdjacencyDegree <= 0 {
+						return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: must be positive for adjacency_list typed_column_part", name)
+					}
+				}
+			} else if field.AdjacencyDegree != 0 {
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: only adjacency_list fields may set adjacency_degree", name)
 			}
 			if field.Dictionary && valueType != ColumnStoreValueString {
 				name := field.Name
@@ -441,7 +474,12 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 				return fmt.Errorf("%w: float32_vector field %q requires vector_dims", ErrTypedStorageColumnPartUnsupported, field.Path)
 			}
 		case ColumnStoreValueAdjacencyList:
-			return fmt.Errorf("%w: value_type %q for field %q is deferred until fixed-degree adjacency metadata exists", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
+			if field.Nullable {
+				return fmt.Errorf("%w: nullable adjacency_list field %q", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
+			if field.AdjacencyDegree <= 0 {
+				return fmt.Errorf("%w: adjacency_list field %q requires adjacency_degree", ErrTypedStorageColumnPartUnsupported, field.Path)
+			}
 		default:
 			return fmt.Errorf("%w: value_type %q for field %q", ErrTypedStorageColumnPartUnsupported, field.ValueType, field.Path)
 		}

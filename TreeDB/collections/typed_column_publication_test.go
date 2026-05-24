@@ -159,6 +159,70 @@ func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
 	assertJSONEqualM13C(t, reopenedGot, []byte(`{"embedding":[1,0.5,-0.25],"payload":"alpha"}`))
 }
 
+func TestTypedColumnAdjacencyPublicationCheckpointReopen(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnAdjacencyPartCollection1783(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("n1"), []byte("n2")}, [][]byte{
+		[]byte(`{"neighbors":[1,2,3],"payload":"alpha"}`),
+		[]byte(`{"neighbors":[4,5,6],"payload":"beta"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
+	got, err := col.Get([]byte("n1"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get n1: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"neighbors":[1,2,3],"payload":"alpha"}`))
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("adjacency_events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, reopened, reopenedCol, 1, 1)
+	reopenedGot, err := reopenedCol.Get([]byte("n1"))
+	if err != nil {
+		t.Fatalf("reopened Get n1: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"neighbors":[1,2,3],"payload":"alpha"}`))
+	reopenedGot, err = reopenedCol.Get([]byte("n2"))
+	if err != nil {
+		t.Fatalf("reopened Get n2: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"neighbors":[4,5,6],"payload":"beta"}`))
+}
+
+func TestTypedColumnAdjacencyPublicationRejectsWrongDocumentLength(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := createTypedColumnAdjacencyPartCollection1783(t, d)
+	_, err := col.InsertBatch([][]byte{[]byte("n1")}, [][]byte{[]byte(`{"neighbors":[1,2],"payload":"bad"}`)})
+	if err == nil || !strings.Contains(err.Error(), "adjacency_degree") {
+		t.Fatalf("InsertBatch error=%v want fail-closed adjacency_degree", err)
+	}
+	if got, err := col.Get([]byte("n1")); err != nil || got != nil {
+		t.Fatalf("Get rejected row got=%s err=%v want nil", got, err)
+	}
+}
+
 func TestTypedColumnPublicationCommandWALReopenWithoutCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -1818,7 +1882,7 @@ func TestTypedColumnPartMappedResourceReadUsesColumnPartClass1755(t *testing.T) 
 	}
 }
 
-func TestTypedColumnPublicationUnsupportedValueFailsClosed(t *testing.T) {
+func TestTypedColumnPublicationAdjacencyMissingDegreeFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
@@ -1835,16 +1899,9 @@ func TestTypedColumnPublicationUnsupportedValueFailsClosed(t *testing.T) {
 	cfg.SortKey = nil
 	cfg.AggregateMetadata = nil
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
-		t.Fatalf("CreateCollection: %v", err)
-	}
-	col, err := mgr.OpenCollection("events")
-	if err != nil {
-		t.Fatalf("OpenCollection: %v", err)
-	}
-	_, err = col.InsertBatch([][]byte{[]byte("e1")}, [][]byte{[]byte(`{"embedding_neighbors":[1,2,3]}`)})
-	if !errors.Is(err, backenddb.ErrCommandWALRejected) {
-		t.Fatalf("InsertBatch error=%v want ErrCommandWALRejected", err)
+	_, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err == nil || !strings.Contains(err.Error(), "adjacency_degree") {
+		t.Fatalf("CreateCollection error=%v want adjacency_degree fail closed", err)
 	}
 }
 
@@ -2413,6 +2470,23 @@ func createTypedColumnVectorPartCollection1756(t testing.TB, d *backenddb.DB) *C
 		t.Fatalf("CreateCollection: %v", err)
 	}
 	col, err := mgr.OpenCollection("vectors")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return col
+}
+
+func createTypedColumnAdjacencyPartCollection1783(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, AdjacencyDegree: 3}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "adjacency_events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("adjacency_events")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}

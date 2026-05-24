@@ -3,7 +3,6 @@ package collections
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -155,27 +154,42 @@ func TestTypedStorageLayoutTypedColumnNullableVectorFailsClosed(t *testing.T) {
 	}
 }
 
-func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) {
-	for _, nullable := range []bool{false, true} {
-		t.Run(fmt.Sprintf("adjacency_nullable_%t", nullable), func(t *testing.T) {
-			layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
-				Collection: "events",
-				Fields: []TypedStorageField{{
-					Name:      "embedding_neighbors",
-					Path:      "embedding_neighbors",
-					Owner:     TypedStorageOwnerColumnPart,
-					ValueType: ColumnStoreValueAdjacencyList,
-					Nullable:  nullable,
-				}},
-			})
-			if err != nil {
-				t.Fatalf("NormalizeTypedStorageLayout: %v", err)
-			}
-			if err := layout.EnsureReadSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
-				t.Fatalf("EnsureReadSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
-			}
-			if err := layout.EnsurePublicationSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
-				t.Fatalf("EnsurePublicationSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
+func TestTypedStorageLayoutTypedColumnAdjacencySupportedWithDegree(t *testing.T) {
+	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection: "events",
+		Fields: []TypedStorageField{{
+			Name:            "embedding_neighbors",
+			Path:            "embedding_neighbors",
+			Owner:           TypedStorageOwnerColumnPart,
+			ValueType:       ColumnStoreValueAdjacencyList,
+			AdjacencyDegree: 16,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+	}
+	if err := layout.EnsureReadSupported(); err != nil {
+		t.Fatalf("EnsureReadSupported: %v", err)
+	}
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		t.Fatalf("EnsurePublicationSupported: %v", err)
+	}
+}
+
+func TestTypedStorageLayoutTypedColumnAdjacencyRequiresDegreeAndNonNullable(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field TypedStorageField
+		want  string
+	}{
+		{name: "missing_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList}, want: "adjacency_degree"},
+		{name: "row_asset_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 16}, want: "only adjacency_list typed_column_part fields may set adjacency_degree"},
+		{name: "nullable", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, Nullable: true, AdjacencyDegree: 16}, want: "nullable adjacency_list"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NormalizeTypedStorageLayout(TypedStorageLayout{Collection: "events", Fields: []TypedStorageField{tc.field}})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("NormalizeTypedStorageLayout error=%v want containing %q", err, tc.want)
 			}
 		})
 	}

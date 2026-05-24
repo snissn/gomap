@@ -28,7 +28,7 @@ func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 		ColumnStoreValueDouble:        typedColumnAdapterRepresented,
 		ColumnStoreValueString:        typedColumnAdapterRepresented,
 		ColumnStoreValueFloat32Vector: typedColumnAdapterRepresented,
-		ColumnStoreValueAdjacencyList: typedColumnAdapterFailClosed,
+		ColumnStoreValueAdjacencyList: typedColumnAdapterRepresented,
 	}
 	got := make(map[ColumnStoreValueType]typedColumnAdapterTypeStatus)
 	for _, mapping := range typedColumnAdapterTypeMatrix() {
@@ -115,6 +115,36 @@ func TestTypedColumnAdapterRoundTripFloat32Vector(t *testing.T) {
 		if !slices.Equal(got[i].Float32Vector, want[i]) {
 			t.Fatalf("vector[%d]=%v want %v all=%+v", i, got[i].Float32Vector, want[i], got)
 		}
+	}
+}
+
+func TestTypedColumnAdapterRoundTripAdjacencyList(t *testing.T) {
+	want := [][]uint32{{1, 2, 3}, {4, 5, 6}}
+	values := make([]columnDeclaredValue, len(want))
+	for i, v := range want {
+		values[i] = columnDeclaredValue{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: v}
+	}
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyDegree = 3
+	got := typedColumnAdapterRoundTrip(t, field, values)
+	for i := range want {
+		if !slices.Equal(got[i].AdjacencyList, want[i]) {
+			t.Fatalf("adjacency[%d]=%v want %v all=%+v", i, got[i].AdjacencyList, want[i], got)
+		}
+	}
+}
+
+func TestTypedColumnAdapterAdjacencyRequiresDegreeAndLength(t *testing.T) {
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	if _, err := typedColumnAdapterMapField(field); err == nil || !strings.Contains(err.Error(), "adjacency_degree") {
+		t.Fatalf("map adjacency without degree err=%v want adjacency_degree", err)
+	}
+	field.AdjacencyDegree = 3
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"neighbors": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2}},
+	}}}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows); err == nil || !strings.Contains(err.Error(), "adjacency_list length=2 want adjacency_degree=3") {
+		t.Fatalf("build mismatched adjacency err=%v want degree length failure", err)
 	}
 }
 
@@ -458,8 +488,9 @@ func TestTypedColumnAdapterNullableVectorAdjacencyFailClosed(t *testing.T) {
 		t.Fatalf("nullable vector err=%v want unsupported nullable float32_vector", err)
 	}
 	adjacency := typedColumnAdapterNullableField("neighbors", ColumnStoreValueAdjacencyList)
-	if _, err := typedColumnAdapterMapField(adjacency); !errors.Is(err, errTypedColumnAdapterUnsupportedType) {
-		t.Fatalf("nullable adjacency err=%v want unsupported", err)
+	adjacency.AdjacencyDegree = 3
+	if _, err := typedColumnAdapterMapField(adjacency); !errors.Is(err, errTypedColumnAdapterUnsupportedType) || !strings.Contains(err.Error(), "nullable adjacency_list") {
+		t.Fatalf("nullable adjacency err=%v want unsupported nullable adjacency_list", err)
 	}
 }
 
@@ -786,7 +817,7 @@ func TestTypedColumnAdapterResourceReaderLifecycleErrors(t *testing.T) {
 	assertTypedColumnAdapterNoActive(t, mgr)
 }
 
-func TestTypedColumnAdapterVectorRepresentedAdjacencyFailsClosed(t *testing.T) {
+func TestTypedColumnAdapterVectorAdjacencyRepresented(t *testing.T) {
 	mapping, err := typedColumnAdapterMappingForValueType(ColumnStoreValueFloat32Vector)
 	if err != nil {
 		t.Fatalf("float32_vector mapping err=%v", err)
@@ -796,11 +827,11 @@ func TestTypedColumnAdapterVectorRepresentedAdjacencyFailsClosed(t *testing.T) {
 	}
 
 	mapping, err = typedColumnAdapterMappingForValueType(ColumnStoreValueAdjacencyList)
-	if !errors.Is(err, errTypedColumnAdapterUnsupportedType) {
-		t.Fatalf("adjacency_list err=%v want errTypedColumnAdapterUnsupportedType", err)
+	if err != nil {
+		t.Fatalf("adjacency_list mapping err=%v", err)
 	}
-	if mapping.Status != typedColumnAdapterFailClosed || mapping.Reason == "" {
-		t.Fatalf("adjacency_list mapping=%+v want fail-closed reason", mapping)
+	if mapping.Status != typedColumnAdapterRepresented || mapping.ColumnType != typedcolumn.ColumnTypeAdjacencyList || mapping.Encoding != typedcolumn.EncodingRawUint32Dense {
+		t.Fatalf("adjacency_list mapping=%+v want dense uint32 represented", mapping)
 	}
 }
 
@@ -895,6 +926,43 @@ func TestTypedColumnAdapterMappedResourceMmapHeapParity(t *testing.T) {
 	if !slices.Equal(mappedBytes, want) || !slices.Equal(heapBytes, want) {
 		t.Fatalf("section parity mapped=%x heap=%x want=%x", mappedBytes, heapBytes, want)
 	}
+}
+
+func TestTypedColumnAdapterAdjacencyDenseDirectViewAndFallback(t *testing.T) {
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyDegree = 3
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2, 3}},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{4, 5, 6}},
+	})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	column, ok := part.columnByName("neighbors")
+	if !ok {
+		t.Fatalf("missing adapter column")
+	}
+	path := filepath.Join(t.TempDir(), "part.tcs1")
+	if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-adjacency", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: true}
+	view, err := typedColumnAdapterAcquireDenseUint32ColumnView(reader, column, image.Rows)
+	if err != nil {
+		t.Fatalf("AcquireDenseUint32ColumnView: %v", err)
+	}
+	if !view.Direct || view.Handle == nil || !slices.Equal(view.Values, []uint32{1, 2, 3, 4, 5, 6}) {
+		if view.Handle != nil {
+			_ = view.Handle.Release()
+		}
+		t.Fatalf("direct view=%+v want direct dense values", view)
+	}
+	if err := view.Handle.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
 }
 
 func TestTypedColumnAdapterTypedViewsValidateFixedWidth(t *testing.T) {
@@ -1065,6 +1133,50 @@ func TestTypedColumnAdapterImageValueTypeMetadataMismatchFailsClosed(t *testing.
 	}
 }
 
+func TestTypedColumnAdapterImageAdjacencyDegreeMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyDegree = 3
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2, 3}},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{4, 5, 6}},
+	})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	mismatch := field
+	mismatch.AdjacencyDegree = 2
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "fixed_width_elements=3 want") {
+		t.Fatalf("partFromImage adjacency_degree mismatch err=%v want fixed_width_elements schema mismatch", err)
+	}
+}
+
+func TestTypedColumnAdapterImageAdjacencyTruncatedFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyDegree = 3
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2, 3}}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	section := typedColumnAdapterFindColumnSection(t, image, "neighbors")
+	corrupt := image
+	corrupt.Bytes = bytes.Clone(image.Bytes[:len(image.Bytes)-4])
+	corrupt.Sections = append([]typedcolumn.ColumnPartImageSection(nil), corrupt.Sections...)
+	for i := range corrupt.Sections {
+		if corrupt.Sections[i].Kind == typedcolumn.ColumnPartImageSectionColumnData && corrupt.Sections[i].Column == "neighbors" {
+			if corrupt.Sections[i].Offset+corrupt.Sections[i].Length != len(image.Bytes) {
+				t.Fatalf("neighbors section is not final: %+v total=%d", section, len(image.Bytes))
+			}
+			corrupt.Sections[i].Length -= 4
+			break
+		}
+	}
+	if _, err := typedColumnAdapterPartFromImage(part.Options, corrupt); err == nil || !strings.Contains(err.Error(), "outside section") {
+		t.Fatalf("partFromImage truncated adjacency err=%v want outside section failure", err)
+	}
+}
+
 func TestTypedColumnAdapterImageVectorDimsMismatchFailsClosed(t *testing.T) {
 	field := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
 	field.VectorDims = 3
@@ -1130,6 +1242,65 @@ func TestTypedColumnAdapterUnsupportedTypeFailsClosed(t *testing.T) {
 }
 
 var typedColumnAdapterBenchmarkSink columnDeclaredValue
+var typedColumnAdapterAdjacencyBenchSink uint64
+
+func BenchmarkTypedColumnAdjacencyDenseDirectViewScan(b *testing.B) {
+	const rowsN = 8192
+	const degree = 16
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyDegree = degree
+	rows := make([]typedColumnAdapterRow, rowsN)
+	for i := range rows {
+		neighbors := make([]uint32, degree)
+		for j := range neighbors {
+			neighbors[j] = uint32((i + j) & 0xffff)
+		}
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{
+			"neighbors": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: neighbors},
+		}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 77, RowsPerGranule: rowsN, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		b.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		b.Fatalf("buildImage: %v", err)
+	}
+	path := filepath.Join(b.TempDir(), "part.tcs1")
+	if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
+		b.Fatalf("write image: %v", err)
+	}
+	column, ok := part.columnByName("neighbors")
+	if !ok {
+		b.Fatalf("missing adapter column")
+	}
+	mgr := mappedresource.NewManager()
+	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adjacency-bench", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: true}
+	view, err := typedColumnAdapterAcquireDenseUint32ColumnView(reader, column, image.Rows)
+	if err != nil {
+		b.Fatalf("AcquireDenseUint32ColumnView: %v", err)
+	}
+	if view.Handle != nil {
+		defer view.Handle.Release()
+	}
+	if !view.Direct || view.Handle == nil {
+		b.Fatalf("expected direct mapped view")
+	}
+	values := view.Values
+	var sink uint64
+	b.ReportAllocs()
+	b.SetBytes(int64(len(values) * 4))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var sum uint64
+		for _, value := range values {
+			sum += uint64(value)
+		}
+		sink += sum
+	}
+	typedColumnAdapterAdjacencyBenchSink = sink
+}
 
 func BenchmarkTypedColumnAdapterNullableScanValues(b *testing.B) {
 	const rowCount = 8192

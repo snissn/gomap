@@ -41,13 +41,13 @@ Current and future typed-column code must fail closed on at least these classes:
   typed-row asset, retained document payload, or derived accelerator as a silent
   substitute, and overlapping authoritative owners must be rejected.
 - **Value type:** declared typed-storage value type must match the typed-column
-  column descriptor. Unsupported value types such as
-  authoritative `adjacency_list` remain fail-closed until their format is
-  specified.
-- **Vector dimensions:** `float32_vector` fields must have positive
-  `vector_dims`, and descriptor fixed-width element counts must match the
-  declared dimensions. Nullable/missing vector and adjacency payloads remain
-  staged and fail-closed.
+  column descriptor. Authoritative `adjacency_list` is supported only in the
+  fixed-degree dense `uint32` shape described by `adjacency_degree`.
+- **Vector dimensions / adjacency degree:** `float32_vector` fields must have positive
+  `vector_dims`; `adjacency_list` `typed_column_part` fields must be non-nullable
+  and have positive `adjacency_degree`. Descriptor fixed-width element counts
+  must match the declared dimensions/degree. Nullable/missing vector and
+  adjacency payloads remain staged and fail-closed.
 - **Fixed-width metadata and layout:** fixed-width column descriptors must match
   type, encoding, compression, element width/count, byte length, row count,
   endian mode, section range, and alignment before exposing direct typed views.
