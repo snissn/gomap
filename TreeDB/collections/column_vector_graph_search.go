@@ -31,19 +31,27 @@ type columnVectorGraphNativeSearchOptions struct {
 }
 
 type columnVectorGraphNativeSearchStats struct {
-	Candidates              uint64
-	Edges                   uint64
-	CandidateFetches        uint64
-	ExpansionFetches        uint64
-	ResultFetches           uint64
-	ScoreBatches            uint64
-	OrdinalsGrouped         uint64
-	BlockViewHits           uint64
-	BlockViewMisses         uint64
-	BlockViewBuilds         uint64
-	AdjacencyExpansions     uint64
-	AdjacencyScratchDecodes uint64
-	AdjacencyDirectViews    uint64
+	Candidates                 uint64
+	Edges                      uint64
+	CandidateFetches           uint64
+	ExpansionFetches           uint64
+	ResultFetches              uint64
+	ScoreBatches               uint64
+	OrdinalsGrouped            uint64
+	BlockViewHits              uint64
+	BlockViewMisses            uint64
+	BlockViewBuilds            uint64
+	AdjacencyExpansions        uint64
+	AdjacencyScratchDecodes    uint64
+	AdjacencyDirectViews       uint64
+	VectorDirectViews          uint64
+	VectorScratchDecodes       uint64
+	TypedColumnMappedBytes     uint64
+	TypedColumnHeapCopyBytes   uint64
+	TypedColumnDecodedBytes    uint64
+	TypedColumnActiveHandles   int64
+	TypedColumnDeniedResources uint64
+	TypedColumnFallbacks       uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -193,7 +201,7 @@ func columnVectorGraphNativeScratchCapOversized(capacity, target int) bool {
 // reader. It fetches only graph rows: document materialization stays outside
 // this kernel. Returned results and result IDs alias scratch-owned buffers and
 // must be copied before the next SearchCosine call with the same scratch.
-func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) (results []columnVectorGraphNativeSearchResult, stats columnVectorGraphNativeSearchStats, err error) {
 	if r == nil || r.reader == nil {
 		return nil, columnVectorGraphNativeSearchStats{}, errNilColumnVectorGraphPhysicalRowReader
 	}
@@ -239,7 +247,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 
-	var stats columnVectorGraphNativeSearchStats
+	defer r.populateTypedColumnVectorSearchStats(&stats)
 	plan, err := scratch.prepareSearchPlan(r)
 	if err != nil {
 		return nil, stats, err
@@ -457,9 +465,25 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 		stats.BlockViewMisses = plan.misses
 		stats.BlockViewBuilds = plan.builds
 	}
-	scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
-	vector, vectorScratch := view.vectorUnchecked(rowIndex, scratch.scoreScratch.Float32Values)
-	scratch.scoreScratch.Float32Values = vectorScratch
+	var vector []float32
+	if typedVector, direct, ok := r.typedVectorForOrdinal(ordinal); ok {
+		vector = typedVector
+		if stats != nil {
+			if direct {
+				stats.VectorDirectViews++
+			} else {
+				stats.VectorScratchDecodes++
+			}
+		}
+	} else {
+		scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
+		var vectorScratch []float32
+		vector, vectorScratch = view.vectorUnchecked(rowIndex, scratch.scoreScratch.Float32Values)
+		scratch.scoreScratch.Float32Values = vectorScratch
+		if stats != nil {
+			stats.VectorScratchDecodes++
+		}
+	}
 	invNorm := view.invNormUnchecked(rowIndex)
 	if stats != nil {
 		stats.CandidateFetches++

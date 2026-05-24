@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"unsafe"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
@@ -22,6 +24,7 @@ type columnVectorGraphNativeSearchBenchShapeV3 struct {
 	efSearch            int
 	queryOrdinal        int
 	directPhysicalAsset bool
+	typedColumnVector   bool
 }
 
 func columnVectorGraphNativeSearchSmallBenchShapeV3() columnVectorGraphNativeSearchBenchShapeV3 {
@@ -663,6 +666,24 @@ func BenchmarkColumnVectorGraphNativeSearchCosineProductionSweepV3(b *testing.B)
 	}
 }
 
+func BenchmarkColumnVectorGraphNativeSearchCosineRebuildProduction8192V3(b *testing.B) {
+	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
+	shape.directPhysicalAsset = false
+	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3(b *testing.B) {
+	shape := columnVectorGraphNativeSearchSmallBenchShapeV3()
+	shape.typedColumnVector = true
+	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnProduction8192V3(b *testing.B) {
+	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
+	shape.typedColumnVector = true
+	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+}
+
 func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
 	b.Helper()
 	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(b, shape)
@@ -703,6 +724,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.AdjacencyExpansions += stats.AdjacencyExpansions
 		searchStats.AdjacencyScratchDecodes += stats.AdjacencyScratchDecodes
 		searchStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
+		searchStats.VectorDirectViews += stats.VectorDirectViews
+		searchStats.VectorScratchDecodes += stats.VectorScratchDecodes
+		searchStats.TypedColumnMappedBytes = stats.TypedColumnMappedBytes
+		searchStats.TypedColumnHeapCopyBytes = stats.TypedColumnHeapCopyBytes
+		searchStats.TypedColumnDecodedBytes = stats.TypedColumnDecodedBytes
+		searchStats.TypedColumnActiveHandles = stats.TypedColumnActiveHandles
+		searchStats.TypedColumnDeniedResources = stats.TypedColumnDeniedResources
 	}
 	b.StopTimer()
 	stats := reader.Stats()
@@ -781,6 +809,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalAdjacencyExpansions atomic.Uint64
 	var totalAdjacencyScratchDecodes atomic.Uint64
 	var totalAdjacencyDirectViews atomic.Uint64
+	var totalVectorDirectViews atomic.Uint64
+	var totalVectorScratchDecodes atomic.Uint64
+	var totalTypedColumnMappedBytes atomic.Uint64
+	var totalTypedColumnHeapCopyBytes atomic.Uint64
+	var totalTypedColumnDecodedBytes atomic.Uint64
+	var totalTypedColumnActiveHandles atomic.Int64
+	var totalTypedColumnDeniedResources atomic.Uint64
 	var nextWorker atomic.Uint64
 	b.SetParallelism(1) // Keep one prewarmed reader/scratch per RunParallel worker.
 	b.ReportAllocs()
@@ -823,6 +858,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.AdjacencyExpansions += stats.AdjacencyExpansions
 			localStats.AdjacencyScratchDecodes += stats.AdjacencyScratchDecodes
 			localStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
+			localStats.VectorDirectViews += stats.VectorDirectViews
+			localStats.VectorScratchDecodes += stats.VectorScratchDecodes
+			localStats.TypedColumnMappedBytes = stats.TypedColumnMappedBytes
+			localStats.TypedColumnHeapCopyBytes = stats.TypedColumnHeapCopyBytes
+			localStats.TypedColumnDecodedBytes = stats.TypedColumnDecodedBytes
+			localStats.TypedColumnActiveHandles = stats.TypedColumnActiveHandles
+			localStats.TypedColumnDeniedResources = stats.TypedColumnDeniedResources
 		}
 		sink.Add(localSink)
 		totalCandidates.Add(localStats.Candidates)
@@ -838,6 +880,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalAdjacencyExpansions.Add(localStats.AdjacencyExpansions)
 		totalAdjacencyScratchDecodes.Add(localStats.AdjacencyScratchDecodes)
 		totalAdjacencyDirectViews.Add(localStats.AdjacencyDirectViews)
+		totalVectorDirectViews.Add(localStats.VectorDirectViews)
+		totalVectorScratchDecodes.Add(localStats.VectorScratchDecodes)
+		totalTypedColumnMappedBytes.Add(localStats.TypedColumnMappedBytes)
+		totalTypedColumnHeapCopyBytes.Add(localStats.TypedColumnHeapCopyBytes)
+		totalTypedColumnDecodedBytes.Add(localStats.TypedColumnDecodedBytes)
+		totalTypedColumnActiveHandles.Add(localStats.TypedColumnActiveHandles)
+		totalTypedColumnDeniedResources.Add(localStats.TypedColumnDeniedResources)
 	})
 	b.StopTimer()
 	reportColumnGraphNativeSearchBenchShapeMetricsV3(b, shape)
@@ -851,19 +900,26 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		stats = addColumnPhysicalRowReaderStatsV3(stats, worker.reader.Stats())
 	}
 	reportColumnGraphNativeSearchBenchMetricsV3(b, b.N, baseStats, stats, columnVectorGraphNativeSearchStats{
-		Candidates:              totalCandidates.Load(),
-		Edges:                   totalEdges.Load(),
-		CandidateFetches:        totalCandidateFetches.Load(),
-		ExpansionFetches:        totalExpansionFetches.Load(),
-		ResultFetches:           totalResultFetches.Load(),
-		ScoreBatches:            totalScoreBatches.Load(),
-		OrdinalsGrouped:         totalOrdinalsGrouped.Load(),
-		BlockViewHits:           totalBlockViewHits.Load(),
-		BlockViewMisses:         totalBlockViewMisses.Load(),
-		BlockViewBuilds:         totalBlockViewBuilds.Load(),
-		AdjacencyExpansions:     totalAdjacencyExpansions.Load(),
-		AdjacencyScratchDecodes: totalAdjacencyScratchDecodes.Load(),
-		AdjacencyDirectViews:    totalAdjacencyDirectViews.Load(),
+		Candidates:                 totalCandidates.Load(),
+		Edges:                      totalEdges.Load(),
+		CandidateFetches:           totalCandidateFetches.Load(),
+		ExpansionFetches:           totalExpansionFetches.Load(),
+		ResultFetches:              totalResultFetches.Load(),
+		ScoreBatches:               totalScoreBatches.Load(),
+		OrdinalsGrouped:            totalOrdinalsGrouped.Load(),
+		BlockViewHits:              totalBlockViewHits.Load(),
+		BlockViewMisses:            totalBlockViewMisses.Load(),
+		BlockViewBuilds:            totalBlockViewBuilds.Load(),
+		AdjacencyExpansions:        totalAdjacencyExpansions.Load(),
+		AdjacencyScratchDecodes:    totalAdjacencyScratchDecodes.Load(),
+		AdjacencyDirectViews:       totalAdjacencyDirectViews.Load(),
+		VectorDirectViews:          totalVectorDirectViews.Load(),
+		VectorScratchDecodes:       totalVectorScratchDecodes.Load(),
+		TypedColumnMappedBytes:     totalTypedColumnMappedBytes.Load(),
+		TypedColumnHeapCopyBytes:   totalTypedColumnHeapCopyBytes.Load(),
+		TypedColumnDecodedBytes:    totalTypedColumnDecodedBytes.Load(),
+		TypedColumnActiveHandles:   totalTypedColumnActiveHandles.Load(),
+		TypedColumnDeniedResources: totalTypedColumnDeniedResources.Load(),
 	})
 }
 
@@ -874,6 +930,9 @@ func reportColumnGraphNativeSearchBenchShapeMetricsV3(b *testing.B, shape column
 	b.ReportMetric(float64(shape.m), "degree")
 	b.ReportMetric(float64(shape.topK), "top_k")
 	b.ReportMetric(float64(shape.efSearch), "ef_search")
+	if shape.typedColumnVector {
+		b.ReportMetric(1, "typed_column_vector")
+	}
 }
 
 func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) (func(), *Collection, VectorIndexDefinition, []float32) {
@@ -881,14 +940,21 @@ func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnV
 	if shape.queryOrdinal < 0 || shape.queryOrdinal >= shape.rows {
 		b.Fatalf("query ordinal=%d out of range rows=%d", shape.queryOrdinal, shape.rows)
 	}
-	if shape.directPhysicalAsset {
+	if shape.directPhysicalAsset && !shape.typedColumnVector {
 		rows := columnVectorGraphNativeSearchBenchAssetRowsV3(b, shape.rows, shape.dims, shape.m)
 		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(b, shape.dims, shape.m, rows)
 		query := append([]float32(nil), rows[shape.queryOrdinal].Vector...)
 		return func() { _ = d.Close() }, col, def, query
 	}
 	input := columnGraphRebuildSyntheticRowsV2A(shape.rows, shape.dims)
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, shape.dims, shape.m, input)
+	var d *backenddb.DB
+	var col *Collection
+	var def VectorIndexDefinition
+	if shape.typedColumnVector {
+		_, d, col, def = openColumnGraphTypedColumnVectorTestCollection1782(b, shape.dims, shape.m, input)
+	} else {
+		_, d, col, def = openColumnGraphRebuildTestCollectionV2A(b, shape.dims, shape.m, input)
+	}
 	status, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		_ = d.Close()
@@ -1038,6 +1104,13 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.AdjacencyExpansions)/float64(n), "adjacency_expansions/search")
 	b.ReportMetric(float64(searchStats.AdjacencyScratchDecodes)/float64(n), "adjacency_scratch_decodes/search")
 	b.ReportMetric(float64(searchStats.AdjacencyDirectViews)/float64(n), "adjacency_direct_views/search")
+	b.ReportMetric(float64(searchStats.VectorDirectViews)/float64(n), "vector_direct_views/search")
+	b.ReportMetric(float64(searchStats.VectorScratchDecodes)/float64(n), "vector_scratch_decodes/search")
+	b.ReportMetric(float64(searchStats.TypedColumnMappedBytes), "mapped_B")
+	b.ReportMetric(float64(searchStats.TypedColumnHeapCopyBytes), "heap_copy_B")
+	b.ReportMetric(float64(searchStats.TypedColumnDecodedBytes), "decoded_derived_B")
+	b.ReportMetric(float64(searchStats.TypedColumnActiveHandles), "active_handles")
+	b.ReportMetric(float64(searchStats.TypedColumnDeniedResources), "denied_resources")
 	b.ReportMetric(float64(searchStats.ExpansionFetches)/float64(n), "expansion_fetches/search")
 	b.ReportMetric(float64(searchStats.ResultFetches)/float64(n), "result_fetches/search")
 	b.ReportMetric(float64(deltaColumnGraphNativeBenchCounterV3(stats.CacheHits, baseStats.CacheHits))/float64(n), "cache_hits/search")
