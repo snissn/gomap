@@ -1312,6 +1312,19 @@ func validateTypedColumnAdapterInt64AggregateTargetedSections(image typedcolumn.
 		if section.Blocks != 0 && section.Blocks != len(column.Blocks) {
 			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section blocks=%d want %d", section.Column, section.Blocks, len(column.Blocks))
 		}
+		expectedBytes := 0
+		for i, block := range column.Blocks {
+			if block.Descriptor.StoredBytes < 0 {
+				return fmt.Errorf("collections: typed-column int64 aggregate image column %q block %d stored_bytes=%d", section.Column, i, block.Descriptor.StoredBytes)
+			}
+			if expectedBytes > maxCollectionInt-block.Descriptor.StoredBytes {
+				return fmt.Errorf("collections: typed-column int64 aggregate image column %q stored bytes overflow", section.Column)
+			}
+			expectedBytes += block.Descriptor.StoredBytes
+		}
+		if section.Length != expectedBytes {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section length=%d want %d", section.Column, section.Length, expectedBytes)
+		}
 		sectionsByColumn[section.Column] = section
 	}
 	for name := range part.Columns {

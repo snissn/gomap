@@ -869,46 +869,6 @@ func TestTypedColumnInt64AggregatePreparedSessionHotScanUsesTargetedRanges(t *te
 	}
 }
 
-func TestTypedColumnInt64AggregatePreparedSessionPrunedPayloadCorruptionAfterBoundary(t *testing.T) {
-	const rows = 65536
-	d, col := setupTypedColumnInt64ScanCollection(t)
-	defer func() { _ = d.Close() }()
-	dist := typedColumnInt64AggregateBenchDistributionByName("clustered")
-	insertTypedColumnInt64AggregateBenchRows(t, col, rows, dist)
-	req := typedColumnInt64AggregateBenchShapeByName("range_1pct").request(rows)
-	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
-	expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
-
-	session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
-	if err != nil {
-		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
-	}
-	defer func() { _ = session.Close() }()
-	if warmup, err := session.Run(); err != nil {
-		t.Fatalf("warmup Run: %v", err)
-	} else if err := validateTypedColumnInt64AggregateBenchResult(warmup, expected); err != nil {
-		t.Fatal(err)
-	}
-
-	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
-	ref, block := typedColumnInt64AggregateFindPrunedBlockRange(t, d, typedRefs, req)
-	corruptColumnAssetByteAtRelativeOffset(t, d, ref, int64(block.offset))
-
-	hot, err := session.Run()
-	if err != nil {
-		t.Fatalf("hot Run after pruned payload corruption inside validated cached-verify session: %v", err)
-	}
-	if err := validateTypedColumnInt64AggregateBenchResult(hot, expected); err != nil {
-		t.Fatal(err)
-	}
-	if hot.Diagnostics.FullAssetBytes != 0 || hot.Diagnostics.BlocksPruned == 0 || hot.Diagnostics.BlocksDecoded == 0 {
-		t.Fatalf("hot diagnostics=%+v want pruned corrupt range left unread after session validation boundary", hot.Diagnostics)
-	}
-	if hot.Diagnostics.RangeBytesRead >= uint64(block.columnSectionLength) {
-		t.Fatalf("hot diagnostics=%+v pruned_block=%+v want candidate range bytes below full selected column section", hot.Diagnostics, block)
-	}
-}
-
 func TestTypedColumnInt64AggregatePreparedSessionIntegrityFailClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -2141,6 +2101,7 @@ func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64P
 	if elapsed > 0 && iterations > 0 {
 		b.ReportMetric(float64(iterations)/elapsed.Seconds(), "ops/sec")
 	}
+	b.ReportMetric(float64(diag.FullAssetReads), "full_asset_reads/op")
 	b.ReportMetric(float64(diag.FullAssetBytes), "full_asset_bytes/op")
 	b.ReportMetric(float64(diag.SectionBytesRead), "section_bytes_read/op")
 	b.ReportMetric(float64(diag.RangeBytesRead), "range_bytes_read/op")

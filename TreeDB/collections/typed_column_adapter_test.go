@@ -1353,6 +1353,94 @@ func TestTypedColumnAdapterPrepareInt64AggregateTargetedMetadataSectionsFailClos
 	if err == nil || !strings.Contains(err.Error(), "unexpected column data section") {
 		t.Fatalf("targeted aggregate unexpected column-data section err=%v want fail-closed unexpected section", err)
 	}
+
+	badLength := image
+	badLength.Sections = append([]typedcolumn.ColumnPartImageSection(nil), image.Sections...)
+	for i := range badLength.Sections {
+		if badLength.Sections[i].Kind == typedcolumn.ColumnPartImageSectionColumnData && badLength.Sections[i].Column == "kind" {
+			badLength.Sections[i].Length++
+			break
+		}
+	}
+	_, err = typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fields, badLength, descriptorRaw, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "count", TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateAll})
+	if err == nil || !strings.Contains(err.Error(), "section length") {
+		t.Fatalf("targeted aggregate bad non-selected column-data length err=%v want fail-closed length mismatch", err)
+	}
+}
+
+func TestTypedColumnAdapterPrepareInt64AggregateTargetedSkipsCorruptPrunedPayload(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	fields := []TypedStorageField{field}
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 1}}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 2}}},
+		{PrimaryID: 3, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 100}}},
+		{PrimaryID: 4, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 101}}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 79, RowsPerGranule: 2, Fields: fields}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	req := TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateRange, Low: 1, High: 2}
+	raw := bytes.Clone(image.Bytes)
+	readRange := func(data []byte, corruptOffset int) typedColumnInt64AggregateRangeReader {
+		return func(offset int, length int, section bool) ([]byte, error) {
+			if offset < 0 || length <= 0 || offset+length > len(data) {
+				return nil, fmt.Errorf("range offset=%d length=%d outside bytes=%d", offset, length, len(data))
+			}
+			if !section && corruptOffset >= 0 && offset <= corruptOffset && corruptOffset < offset+length {
+				return nil, fmt.Errorf("pruned payload range was read offset=%d length=%d corrupt_offset=%d", offset, length, corruptOffset)
+			}
+			return data[offset : offset+length], nil
+		}
+	}
+	targeted, err := typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromRanges(fields, int64(len(raw)), image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "count", req, readRange(raw, -1))
+	if err != nil {
+		t.Fatalf("prepare targeted metadata: %v", err)
+	}
+	section := typedColumnAdapterFindColumnSection(t, image, "count")
+	candidate := make([]bool, section.Length)
+	for _, blockRange := range targeted.blockRanges {
+		for off := blockRange.offset; off < blockRange.offset+blockRange.length; off++ {
+			if off >= section.Offset && off < section.Offset+section.Length {
+				candidate[off-section.Offset] = true
+			}
+		}
+	}
+	corruptOffset := -1
+	for i, isCandidate := range candidate {
+		if !isCandidate {
+			corruptOffset = section.Offset + i
+			break
+		}
+	}
+	if corruptOffset < 0 {
+		t.Fatalf("no pruned byte found section=%+v block_ranges=%+v", section, targeted.blockRanges)
+	}
+	corruptRaw := bytes.Clone(raw)
+	corruptRaw[corruptOffset] ^= 0xff
+	targeted, err = typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromRanges(fields, int64(len(corruptRaw)), image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "count", req, readRange(corruptRaw, corruptOffset))
+	if err != nil {
+		t.Fatalf("prepare targeted metadata with corrupt pruned payload: %v", err)
+	}
+	adapterPart, adapterColumn, err := targeted.instantiate(func(offset int, length int) ([]byte, error) {
+		return readRange(corruptRaw, corruptOffset)(offset, length, false)
+	})
+	if err != nil {
+		t.Fatalf("instantiate targeted part: %v", err)
+	}
+	var result TypedColumnInt64PredicateAggregateResult
+	partPruned, err := scanTypedColumnInt64PredicateAggregatePart(adapterPart.Part, adapterColumn.Definition.Name, req, &result)
+	if err != nil {
+		t.Fatalf("scan targeted part: %v", err)
+	}
+	if partPruned || result.Count != 2 || result.Sum != 3 || result.Diagnostics.BlocksPruned == 0 || result.Diagnostics.BlocksDecoded == 0 {
+		t.Fatalf("partPruned=%v result=%+v diagnostics=%+v want corrupt pruned payload skipped", partPruned, result, result.Diagnostics)
+	}
 }
 
 func TestTypedColumnAdapterAmbiguousRowKeysFailClosed(t *testing.T) {
