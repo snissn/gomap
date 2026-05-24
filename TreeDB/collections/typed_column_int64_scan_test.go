@@ -3,6 +3,7 @@ package collections
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -293,6 +294,22 @@ func TestTypedColumnInt64AggregateRangePredicate(t *testing.T) {
 	assertTypedColumnInt64Aggregate(t, result, 3, 45)
 	if result.Diagnostics.BlocksDecoded == 0 || result.Diagnostics.DecodedHeapCopyBytes == 0 || result.Diagnostics.DecodedMetadataBytes == 0 {
 		t.Fatalf("diagnostics=%+v want decoded block and metadata bytes", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64AggregateAllPredicate(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{5, 10, 15})
+	insertTypedColumnInt64ScanRows(t, col, []int64{20, 25})
+
+	result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate all: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 5, 75)
+	if result.Diagnostics.RowsScanned != 5 || result.Diagnostics.RowsMatched != 5 || result.Diagnostics.PartsPruned != 0 {
+		t.Fatalf("diagnostics=%+v want full aggregate over all rows", result.Diagnostics)
 	}
 }
 
@@ -592,114 +609,309 @@ func TestTypedColumnInt64AggregateFallbackDiagnostics(t *testing.T) {
 	})
 }
 
-func TestTypedColumnInt64AggregateBenchRowCountParser(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		input   string
-		want    []int
-		wantErr bool
-	}{
-		{name: "empty_defaults", input: "", want: []int{4096, 65536}},
-		{name: "list", input: "16, 32,64", want: []int{16, 32, 64}},
-		{name: "bad", input: "16,nope", wantErr: true},
-		{name: "non_positive", input: "0", wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseTypedColumnInt64AggregateBenchRows(tc.input)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("parseTypedColumnInt64AggregateBenchRows(%q) err=nil", tc.input)
+func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
+	t.Run("rows", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			input   string
+			large   bool
+			want    []int
+			wantErr string
+		}{
+			{name: "empty_defaults", input: "", want: []int{4096, 65536}},
+			{name: "list", input: "16, 32,64", want: []int{16, 32, 64}},
+			{name: "bad", input: "16,nope", wantErr: "invalid row count"},
+			{name: "non_positive", input: "0", wantErr: "must be positive"},
+			{name: "large_blocked", input: "10000000", wantErr: "TREEDB_TYPED_COLUMN_BENCH_LARGE=true"},
+			{name: "large_allowed", input: "10000000,50000000", large: true, want: []int{10000000, 50000000}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got, err := parseTypedColumnInt64AggregateBenchRows(tc.input, tc.large)
+				if tc.wantErr != "" {
+					if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+						t.Fatalf("parseTypedColumnInt64AggregateBenchRows(%q) err=%v want %q", tc.input, err, tc.wantErr)
+					}
+					return
 				}
-				return
+				if err != nil {
+					t.Fatalf("parseTypedColumnInt64AggregateBenchRows(%q): %v", tc.input, err)
+				}
+				if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+					t.Fatalf("rows=%v want %v", got, tc.want)
+				}
+			})
+		}
+	})
+
+	t.Run("shapes", func(t *testing.T) {
+		got, err := parseTypedColumnInt64AggregateBenchShapes("")
+		if err != nil {
+			t.Fatalf("default shapes: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchShapeNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"selective_range_1pct", "all_pruned_no_match", "all_match"}) {
+			t.Fatalf("default shapes=%v", gotNames)
+		}
+		got, err = parseTypedColumnInt64AggregateBenchShapes("no_filter_full_aggregate, exact_value,tail_range")
+		if err != nil {
+			t.Fatalf("explicit shapes: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchShapeNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"no_filter_full_aggregate", "exact_value", "tail_range"}) {
+			t.Fatalf("explicit shapes=%v", gotNames)
+		}
+		if _, err := parseTypedColumnInt64AggregateBenchShapes("selective_range_1pct,nope"); err == nil || !strings.Contains(err.Error(), "invalid shape") {
+			t.Fatalf("invalid shape err=%v", err)
+		}
+	})
+
+	t.Run("distributions", func(t *testing.T) {
+		got, err := parseTypedColumnInt64AggregateBenchDistributions("")
+		if err != nil {
+			t.Fatalf("default dists: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchDistributionNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"clustered_monotonic"}) {
+			t.Fatalf("default dists=%v", gotNames)
+		}
+		got, err = parseTypedColumnInt64AggregateBenchDistributions("reverse_monotonic,random_uniform,hotspot_skewed")
+		if err != nil {
+			t.Fatalf("explicit dists: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchDistributionNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"reverse_monotonic", "random_uniform", "hotspot_skewed"}) {
+			t.Fatalf("explicit dists=%v", gotNames)
+		}
+		if _, err := parseTypedColumnInt64AggregateBenchDistributions("clustered_monotonic,nope"); err == nil || !strings.Contains(err.Error(), "invalid distribution") {
+			t.Fatalf("invalid dist err=%v", err)
+		}
+	})
+
+	t.Run("booleans_and_fallback_default", func(t *testing.T) {
+		for _, tc := range []struct {
+			input   string
+			def     bool
+			want    bool
+			wantErr bool
+		}{
+			{input: "", def: true, want: true},
+			{input: "false", def: true, want: false},
+			{input: "true", want: true},
+			{input: "not-bool", wantErr: true},
+		} {
+			got, err := parseTypedColumnInt64AggregateBenchBool("TEST_BOOL", tc.input, tc.def)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "TEST_BOOL") {
+					t.Fatalf("parse bool input=%q err=%v", tc.input, err)
+				}
+				continue
 			}
-			if err != nil {
-				t.Fatalf("parseTypedColumnInt64AggregateBenchRows(%q): %v", tc.input, err)
+			if err != nil || got != tc.want {
+				t.Fatalf("parse bool input=%q got=%v err=%v want=%v", tc.input, got, err, tc.want)
 			}
-			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
-				t.Fatalf("rows=%v want %v", got, tc.want)
+		}
+		if !typedColumnInt64AggregateBenchIncludeFallback("", 4096) || !typedColumnInt64AggregateBenchIncludeFallback("", 65536) || typedColumnInt64AggregateBenchIncludeFallback("", 1048576) {
+			t.Fatalf("fallback default should include only default rows")
+		}
+		if !typedColumnInt64AggregateBenchIncludeFallback("true", 1048576) || typedColumnInt64AggregateBenchIncludeFallback("false", 4096) {
+			t.Fatalf("fallback explicit override failed")
+		}
+	})
+}
+
+func TestTypedColumnInt64AggregateBenchDistributionDeterminism(t *testing.T) {
+	const rows = 257
+	for _, dist := range typedColumnInt64AggregateBenchAllDistributions() {
+		t.Run(dist.name, func(t *testing.T) {
+			first := typedColumnInt64AggregateBenchValues(rows, dist)
+			second := typedColumnInt64AggregateBenchValues(rows, dist)
+			if fmt.Sprint(first) != fmt.Sprint(second) {
+				t.Fatalf("distribution is not deterministic")
+			}
+			for i, value := range first {
+				if value < 0 || value >= rows {
+					t.Fatalf("value[%d]=%d outside [0,%d)", i, value, rows)
+				}
 			}
 		})
+	}
+}
+
+func TestTypedColumnInt64AggregateBenchShapeExpectedAggregates(t *testing.T) {
+	const rows = 1000
+	values := typedColumnInt64AggregateBenchValues(rows, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"))
+	for _, tc := range []struct {
+		shape     string
+		wantCount int64
+		wantSum   int64
+	}{
+		{shape: "no_filter_full_aggregate", wantCount: 1000, wantSum: 499500},
+		{shape: "exact_value", wantCount: 1, wantSum: 250},
+		{shape: "tiny_range", wantCount: 10, wantSum: 2545},
+		{shape: "selective_range_1pct", wantCount: 10, wantSum: 2545},
+		{shape: "wide_range_10pct", wantCount: 100, wantSum: 29950},
+		{shape: "all_pruned_no_match", wantCount: 0, wantSum: 0},
+		{shape: "all_match", wantCount: 1000, wantSum: 499500},
+		{shape: "tail_range", wantCount: 10, wantSum: 9945},
+	} {
+		t.Run(tc.shape, func(t *testing.T) {
+			shape := typedColumnInt64AggregateBenchShapeByName(tc.shape)
+			req := shape.request(rows)
+			got := expectedTypedColumnInt64AggregateBenchResult(values, req)
+			if got.count != tc.wantCount || got.sum != tc.wantSum {
+				t.Fatalf("expected count=%d sum=%d want count=%d sum=%d req=%+v", got.count, got.sum, tc.wantCount, tc.wantSum, req)
+			}
+		})
+	}
+
+	for _, dist := range typedColumnInt64AggregateBenchAllDistributions() {
+		values := typedColumnInt64AggregateBenchValues(rows, dist)
+		for _, shape := range typedColumnInt64AggregateBenchAllShapes() {
+			req := shape.request(rows)
+			expected := expectedTypedColumnInt64AggregateBenchResult(values, req)
+			var manual typedColumnInt64AggregateBenchExpected
+			for _, value := range values {
+				if typedColumnInt64PredicateMatches(typedColumnInt64PredicateAggregateScanRequest(req), value) {
+					manual.count++
+					manual.sum += value
+				}
+			}
+			manual.finish()
+			if expected != manual {
+				t.Fatalf("dist=%s shape=%s expected=%+v manual=%+v", dist.name, shape.name, expected, manual)
+			}
+		}
 	}
 }
 
 func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
-	rowCounts, err := parseTypedColumnInt64AggregateBenchRows(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_ROWS"))
+	large, err := parseTypedColumnInt64AggregateBenchBool("TREEDB_TYPED_COLUMN_BENCH_LARGE", os.Getenv("TREEDB_TYPED_COLUMN_BENCH_LARGE"), false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rowCounts, err := parseTypedColumnInt64AggregateBenchRows(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_ROWS"), large)
 	if err != nil {
 		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_ROWS: %v", err)
 	}
+	shapes, err := parseTypedColumnInt64AggregateBenchShapes(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_SHAPES"))
+	if err != nil {
+		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_SHAPES: %v", err)
+	}
+	dists, err := parseTypedColumnInt64AggregateBenchDistributions(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_DISTS"))
+	if err != nil {
+		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_DISTS: %v", err)
+	}
+	includeFallbackEnv := os.Getenv("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK")
+	if strings.TrimSpace(includeFallbackEnv) != "" {
+		if _, err := parseTypedColumnInt64AggregateBenchBool("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK", includeFallbackEnv, false); err != nil {
+			b.Fatal(err)
+		}
+	}
+
 	for _, rows := range rowCounts {
 		rows := rows
-		values := make([]int64, rows)
-		for i := range values {
-			values[i] = int64(i)
+		for _, dist := range dists {
+			dist := dist
+			for _, shape := range shapes {
+				shape := shape
+				req := shape.request(rows)
+				expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
+				runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, true)
+				if typedColumnInt64AggregateBenchIncludeFallback(includeFallbackEnv, rows) {
+					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false)
+				}
+			}
 		}
-		low := rows / 4
-		matchCount := maxIntForTypedColumnInt64AggregateBench(1, rows/100)
-		high := low + matchCount - 1
-		if high >= rows {
-			high = rows - 1
-			matchCount = high - low + 1
-		}
-		wantCount := int64(matchCount)
-		wantSum := int64(low+high) * wantCount / 2
-		b.Run(fmt.Sprintf("rows_%d/typed_column_part/predicate_count_sum_avg", rows), func(b *testing.B) {
-			d, col := setupTypedColumnInt64ScanCollection(b)
-			defer func() { _ = d.Close() }()
-			mid := rows / 2
-			insertTypedColumnInt64ScanRows(b, col, values[:mid])
-			insertTypedColumnInt64ScanRows(b, col, values[mid:])
-			b.ReportAllocs()
-			b.ResetTimer()
-			benchStart := time.Now()
-			for i := 0; i < b.N; i++ {
-				result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(high), ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
-				if err != nil {
-					b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
-				}
-				if result.Count != wantCount || result.Sum != wantSum {
-					b.Fatalf("aggregate count=%d sum=%d want count=%d sum=%d diagnostics=%+v", result.Count, result.Sum, wantCount, wantSum, result.Diagnostics)
-				}
-				if i == b.N-1 {
-					reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
-				}
-			}
-			b.StopTimer()
-		})
-		b.Run(fmt.Sprintf("rows_%d/document_full_scan_fallback/predicate_count_sum_avg", rows), func(b *testing.B) {
-			d := openTypedColumnInt64ScanDB(b)
-			defer func() { _ = d.Close() }()
-			mgr := NewCollectionManager(d)
-			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
-				b.Fatalf("CreateCollection: %v", err)
-			}
-			col, err := mgr.OpenCollection("events")
-			if err != nil {
-				b.Fatalf("OpenCollection: %v", err)
-			}
-			mid := rows / 2
-			insertTypedColumnInt64ScanRows(b, col, values[:mid])
-			insertTypedColumnInt64ScanRows(b, col, values[mid:])
-			b.ReportAllocs()
-			b.ResetTimer()
-			benchStart := time.Now()
-			for i := 0; i < b.N; i++ {
-				result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(high)})
-				if err != nil {
-					b.Fatalf("RunTypedColumnInt64PredicateAggregate fallback: %v", err)
-				}
-				if result.Count != wantCount || result.Sum != wantSum {
-					b.Fatalf("aggregate count=%d sum=%d want count=%d sum=%d diagnostics=%+v", result.Count, result.Sum, wantCount, wantSum, result.Diagnostics)
-				}
-				if i == b.N-1 {
-					reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
-				}
-			}
-			b.StopTimer()
-		})
 	}
 }
 
-func parseTypedColumnInt64AggregateBenchRows(env string) ([]int, error) {
+type typedColumnInt64AggregateBenchDistribution struct {
+	name    string
+	valueAt func(row, rows int) int64
+}
+
+type typedColumnInt64AggregateBenchShape struct {
+	name    string
+	request func(rows int) TypedColumnInt64PredicateAggregateRequest
+}
+
+type typedColumnInt64AggregateBenchExpected struct {
+	count int64
+	sum   int64
+	avg   float64
+}
+
+const typedColumnInt64AggregateBenchBatchRows = 32768
+
+func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedColumnInt64AggregateBenchDistribution, shape typedColumnInt64AggregateBenchShape, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected, typedPath bool) {
+	pathName := "document_full_scan_fallback"
+	if typedPath {
+		pathName = "typed_column_part"
+	}
+	b.Run(fmt.Sprintf("rows_%d/dist_%s/path_%s/shape_%s/predicate_count_sum_avg", rows, dist.name, pathName, shape.name), func(b *testing.B) {
+		setupStart := time.Now()
+		d, col := setupTypedColumnInt64AggregateBenchCollection(b, typedPath)
+		defer func() { _ = d.Close() }()
+		batches := insertTypedColumnInt64AggregateBenchRows(b, col, rows, dist)
+		setupDuration := time.Since(setupStart)
+		setupMetrics := collectTypedColumnInt64AggregateBenchSetupMetrics(rows, batches, d, typedPath, setupDuration)
+
+		req.Column = "time_us"
+		if typedPath {
+			req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		reportTypedColumnInt64AggregateBenchSetupMetrics(b, setupMetrics)
+		benchStart := time.Now()
+		for i := 0; i < b.N; i++ {
+			result, err := col.RunTypedColumnInt64PredicateAggregate(req)
+			if err != nil {
+				b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+			}
+			if result.Count != expected.count || result.Sum != expected.sum || result.Avg != expected.avg {
+				b.Fatalf("aggregate count=%d sum=%d avg=%f want count=%d sum=%d avg=%f diagnostics=%+v", result.Count, result.Sum, result.Avg, expected.count, expected.sum, expected.avg, result.Diagnostics)
+			}
+			if i == b.N-1 {
+				reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
+			}
+		}
+		b.StopTimer()
+	})
+}
+
+func setupTypedColumnInt64AggregateBenchCollection(tb testing.TB, typedPath bool) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	if typedPath {
+		return setupTypedColumnInt64ScanCollection(tb)
+	}
+	d := openTypedColumnInt64ScanDB(tb)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	return d, col
+}
+
+func insertTypedColumnInt64AggregateBenchRows(tb testing.TB, col *Collection, rows int, dist typedColumnInt64AggregateBenchDistribution) int {
+	tb.Helper()
+	batches := 0
+	for start := 0; start < rows; start += typedColumnInt64AggregateBenchBatchRows {
+		end := start + typedColumnInt64AggregateBenchBatchRows
+		if end > rows {
+			end = rows
+		}
+		values := make([]int64, end-start)
+		for i := range values {
+			values[i] = dist.valueAt(start+i, rows)
+		}
+		insertTypedColumnInt64AggregateBenchRowsBatch(tb, col, start, values)
+		batches++
+	}
+	return batches
+}
+
+func parseTypedColumnInt64AggregateBenchRows(env string, large bool) ([]int, error) {
 	if strings.TrimSpace(env) == "" {
 		return []int{4096, 65536}, nil
 	}
@@ -717,9 +929,259 @@ func parseTypedColumnInt64AggregateBenchRows(env string) ([]int, error) {
 		if rows <= 0 {
 			return nil, fmt.Errorf("row count %d must be positive", rows)
 		}
+		if rows >= 10000000 && !large {
+			return nil, fmt.Errorf("row count %d requires TREEDB_TYPED_COLUMN_BENCH_LARGE=true", rows)
+		}
 		out = append(out, rows)
 	}
 	return out, nil
+}
+
+func parseTypedColumnInt64AggregateBenchShapes(env string) ([]typedColumnInt64AggregateBenchShape, error) {
+	if strings.TrimSpace(env) == "" {
+		return []typedColumnInt64AggregateBenchShape{
+			typedColumnInt64AggregateBenchShapeByName("selective_range_1pct"),
+			typedColumnInt64AggregateBenchShapeByName("all_pruned_no_match"),
+			typedColumnInt64AggregateBenchShapeByName("all_match"),
+		}, nil
+	}
+	parts := strings.Split(env, ",")
+	out := make([]typedColumnInt64AggregateBenchShape, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("empty shape")
+		}
+		shape := typedColumnInt64AggregateBenchShapeByName(name)
+		if shape.name == "" {
+			return nil, fmt.Errorf("invalid shape %q (available: %s)", name, strings.Join(typedColumnInt64AggregateBenchShapeNames(typedColumnInt64AggregateBenchAllShapes()), ","))
+		}
+		out = append(out, shape)
+	}
+	return out, nil
+}
+
+func parseTypedColumnInt64AggregateBenchDistributions(env string) ([]typedColumnInt64AggregateBenchDistribution, error) {
+	if strings.TrimSpace(env) == "" {
+		return []typedColumnInt64AggregateBenchDistribution{typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic")}, nil
+	}
+	parts := strings.Split(env, ",")
+	out := make([]typedColumnInt64AggregateBenchDistribution, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("empty distribution")
+		}
+		dist := typedColumnInt64AggregateBenchDistributionByName(name)
+		if dist.name == "" {
+			return nil, fmt.Errorf("invalid distribution %q (available: %s)", name, strings.Join(typedColumnInt64AggregateBenchDistributionNames(typedColumnInt64AggregateBenchAllDistributions()), ","))
+		}
+		out = append(out, dist)
+	}
+	return out, nil
+}
+
+func parseTypedColumnInt64AggregateBenchBool(name, env string, def bool) (bool, error) {
+	if strings.TrimSpace(env) == "" {
+		return def, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "1", "t", "true", "yes", "y", "on":
+		return true, nil
+	case "0", "f", "false", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s: invalid boolean %q", name, env)
+	}
+}
+
+func typedColumnInt64AggregateBenchIncludeFallback(env string, rows int) bool {
+	include, err := parseTypedColumnInt64AggregateBenchBool("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK", env, rows == 4096 || rows == 65536)
+	return err == nil && include
+}
+
+func typedColumnInt64AggregateBenchAllShapes() []typedColumnInt64AggregateBenchShape {
+	return []typedColumnInt64AggregateBenchShape{
+		{name: "no_filter_full_aggregate", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll}
+		}},
+		{name: "exact_value", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: int64(rows / 4)}
+		}},
+		{name: "tiny_range", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			low := rows / 4
+			width := clampIntForTypedColumnInt64AggregateBench(rows/1000, 10, 100)
+			if width > rows-low {
+				width = rows - low
+			}
+			if width < 1 {
+				width = 1
+			}
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(low + width - 1)}
+		}},
+		{name: "selective_range_1pct", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			low := rows / 4
+			width := maxIntForTypedColumnInt64AggregateBench(1, rows/100)
+			if width > rows-low {
+				width = rows - low
+			}
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(low + width - 1)}
+		}},
+		{name: "wide_range_10pct", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			low := rows / 4
+			width := maxIntForTypedColumnInt64AggregateBench(1, rows/10)
+			if width > rows-low {
+				width = rows - low
+			}
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(low + width - 1)}
+		}},
+		{name: "all_pruned_no_match", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: int64(rows)}
+		}},
+		{name: "all_match", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 0, High: int64(rows - 1)}
+		}},
+		{name: "tail_range", request: func(rows int) TypedColumnInt64PredicateAggregateRequest {
+			width := maxIntForTypedColumnInt64AggregateBench(1, rows/100)
+			if width > rows {
+				width = rows
+			}
+			return TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(rows - width), High: int64(rows - 1)}
+		}},
+	}
+}
+
+func typedColumnInt64AggregateBenchShapeByName(name string) typedColumnInt64AggregateBenchShape {
+	name = strings.TrimSpace(name)
+	for _, shape := range typedColumnInt64AggregateBenchAllShapes() {
+		if shape.name == name {
+			return shape
+		}
+	}
+	return typedColumnInt64AggregateBenchShape{}
+}
+
+func typedColumnInt64AggregateBenchAllDistributions() []typedColumnInt64AggregateBenchDistribution {
+	return []typedColumnInt64AggregateBenchDistribution{
+		{name: "clustered_monotonic", valueAt: func(row, rows int) int64 { return int64(row) }},
+		{name: "reverse_monotonic", valueAt: func(row, rows int) int64 { return int64(rows - row - 1) }},
+		{name: "partially_clustered", valueAt: func(row, rows int) int64 {
+			const chunk = 256
+			start := row / chunk * chunk
+			end := start + chunk
+			if end > rows {
+				end = rows
+			}
+			return int64(start + (end - start - 1 - (row - start)))
+		}},
+		{name: "random_uniform", valueAt: func(row, rows int) int64 {
+			if rows <= 1 {
+				return 0
+			}
+			mul := randomUniformMultiplierForTypedColumnInt64AggregateBench(rows)
+			offset := rows/3 + 17
+			return int64((row*mul + offset) % rows)
+		}},
+		{name: "hotspot_skewed", valueAt: func(row, rows int) int64 {
+			if rows <= 1 {
+				return 0
+			}
+			span := minIntForTypedColumnInt64AggregateBench(8, rows)
+			base := rows/2 - span/2
+			if row%5 == 0 {
+				return int64(row)
+			}
+			return int64(base + row%span)
+		}},
+	}
+}
+
+func typedColumnInt64AggregateBenchDistributionByName(name string) typedColumnInt64AggregateBenchDistribution {
+	name = strings.TrimSpace(name)
+	for _, dist := range typedColumnInt64AggregateBenchAllDistributions() {
+		if dist.name == name {
+			return dist
+		}
+	}
+	return typedColumnInt64AggregateBenchDistribution{}
+}
+
+func typedColumnInt64AggregateBenchShapeNames(shapes []typedColumnInt64AggregateBenchShape) []string {
+	out := make([]string, len(shapes))
+	for i, shape := range shapes {
+		out[i] = shape.name
+	}
+	return out
+}
+
+func typedColumnInt64AggregateBenchDistributionNames(dists []typedColumnInt64AggregateBenchDistribution) []string {
+	out := make([]string, len(dists))
+	for i, dist := range dists {
+		out[i] = dist.name
+	}
+	return out
+}
+
+func typedColumnInt64AggregateBenchValues(rows int, dist typedColumnInt64AggregateBenchDistribution) []int64 {
+	values := make([]int64, rows)
+	for i := range values {
+		values[i] = dist.valueAt(i, rows)
+	}
+	return values
+}
+
+func expectedTypedColumnInt64AggregateBenchResult(values []int64, req TypedColumnInt64PredicateAggregateRequest) typedColumnInt64AggregateBenchExpected {
+	var out typedColumnInt64AggregateBenchExpected
+	scanReq := typedColumnInt64PredicateAggregateScanRequest(req)
+	for _, value := range values {
+		if typedColumnInt64PredicateMatches(scanReq, value) {
+			out.count++
+			out.sum += value
+		}
+	}
+	out.finish()
+	return out
+}
+
+func expectedTypedColumnInt64AggregateBenchResultForDistribution(rows int, dist typedColumnInt64AggregateBenchDistribution, req TypedColumnInt64PredicateAggregateRequest) typedColumnInt64AggregateBenchExpected {
+	var out typedColumnInt64AggregateBenchExpected
+	scanReq := typedColumnInt64PredicateAggregateScanRequest(req)
+	for row := 0; row < rows; row++ {
+		value := dist.valueAt(row, rows)
+		if typedColumnInt64PredicateMatches(scanReq, value) {
+			out.count++
+			out.sum += value
+		}
+	}
+	out.finish()
+	return out
+}
+
+func (e *typedColumnInt64AggregateBenchExpected) finish() {
+	if e.count != 0 {
+		e.avg = float64(e.sum) / float64(e.count)
+	}
+}
+
+func randomUniformMultiplierForTypedColumnInt64AggregateBench(rows int) int {
+	mul := rows/2*2 + 1
+	for gcdIntForTypedColumnInt64AggregateBench(mul, rows) != 1 {
+		mul += 2
+	}
+	return mul
+}
+
+func gcdIntForTypedColumnInt64AggregateBench(a, b int) int {
+	if a < 0 {
+		a = -a
+	}
+	if b < 0 {
+		b = -b
+	}
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 func maxIntForTypedColumnInt64AggregateBench(a, b int) int {
@@ -727,6 +1189,71 @@ func maxIntForTypedColumnInt64AggregateBench(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func minIntForTypedColumnInt64AggregateBench(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func clampIntForTypedColumnInt64AggregateBench(v, low, high int) int {
+	if v < low {
+		return low
+	}
+	if v > high {
+		return high
+	}
+	return v
+}
+
+type typedColumnInt64AggregateBenchSetupMetrics struct {
+	rows                  int
+	batches               int
+	setupNanos            int64
+	typedColumnAssetBytes int64
+	dbDirBytes            int64
+}
+
+func collectTypedColumnInt64AggregateBenchSetupMetrics(rows, batches int, d *backenddb.DB, typedPath bool, setupDuration time.Duration) typedColumnInt64AggregateBenchSetupMetrics {
+	metrics := typedColumnInt64AggregateBenchSetupMetrics{
+		rows:       rows,
+		batches:    batches,
+		setupNanos: setupDuration.Nanoseconds(),
+		dbDirBytes: directorySizeForTypedColumnInt64AggregateBench(d.Dir()),
+	}
+	if typedPath {
+		metrics.typedColumnAssetBytes = directorySizeForTypedColumnInt64AggregateBench(d.ColumnAssetRootDir())
+	}
+	return metrics
+}
+
+func reportTypedColumnInt64AggregateBenchSetupMetrics(b *testing.B, metrics typedColumnInt64AggregateBenchSetupMetrics) {
+	b.Helper()
+	b.ReportMetric(float64(metrics.rows), "dataset_rows")
+	b.ReportMetric(float64(metrics.batches), "setup_batches")
+	b.ReportMetric(float64(metrics.setupNanos), "setup_ns")
+	if metrics.typedColumnAssetBytes != 0 {
+		b.ReportMetric(float64(metrics.typedColumnAssetBytes), "typed_column_asset_bytes")
+	}
+	b.ReportMetric(float64(metrics.dbDirBytes), "db_dir_bytes")
+}
+
+func directorySizeForTypedColumnInt64AggregateBench(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry == nil || entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		total += info.Size()
+		return nil
+	})
+	return total
 }
 
 func BenchmarkTypedColumnInt64PredicateScan(b *testing.B) {
@@ -864,6 +1391,20 @@ func insertTypedColumnInt64ScanRows(tb testing.TB, col *Collection, values []int
 	docs := make([][]byte, len(values))
 	for i, value := range values {
 		ids[i] = []byte(fmt.Sprintf("e%06d_%d", value, i))
+		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":"k%d"}`, value, value%8))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		tb.Fatalf("InsertBatch: %v", err)
+	}
+}
+
+func insertTypedColumnInt64AggregateBenchRowsBatch(tb testing.TB, col *Collection, globalStart int, values []int64) {
+	tb.Helper()
+	ids := make([][]byte, len(values))
+	docs := make([][]byte, len(values))
+	for i, value := range values {
+		row := globalStart + i
+		ids[i] = []byte(fmt.Sprintf("bench_e%012d_%d", row, value))
 		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":"k%d"}`, value, value%8))
 	}
 	if _, err := col.InsertBatch(ids, docs); err != nil {
