@@ -351,7 +351,7 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 func TestLoadCollectionWorkloadMetadata(t *testing.T) {
 	dir := t.TempDir()
 	js := []byte(`{"runs":[{"keys":8,"collection_workloads":[` +
-		`{"suite":"collection_storage","mode":"typed_column_part","workload":"aggregate","rows":8,"semantic_equivalent":true,"correctness_validated":true,"rows_per_second":123,"queries_per_second":4,"ns_per_op":250,"typed_column_asset_bytes":99,"counters":{"mapped_bytes":9007199254740993,"typed_column_parts_decoded":7}},` +
+		`{"suite":"collection_storage","mode":"typed_column_part","workload":"aggregate","rows":8,"semantic_equivalent":true,"correctness_validated":true,"rows_per_second":123,"queries_per_second":4,"ns_per_op":250,"typed_column_asset_bytes":99,"counters":{"mapped_bytes":9007199254740993,"typed_column_parts_decoded":7,"vector_edges":11,"vector_documents_fetched":3}},` +
 		`{"suite":"collection_storage","mode":"document_only","workload":"aggregate","rows":8,"semantic_equivalent":true,"correctness_validated":true,"rows_per_second":23,"queries_per_second":2,"ns_per_op":500}` +
 		`] }]}`)
 	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
@@ -373,6 +373,12 @@ func TestLoadCollectionWorkloadMetadata(t *testing.T) {
 	}
 	if got, want := workloads[1].Counters.TypedColumnPartsDecoded, int64(7); got != want {
 		t.Fatalf("typed_column_parts_decoded=%d want %d", got, want)
+	}
+	if got, want := workloads[1].Counters.VectorEdges, uint64(11); got != want {
+		t.Fatalf("vector_edges=%d want %d", got, want)
+	}
+	if got, want := workloads[1].Counters.VectorDocumentsFetched, uint64(3); got != want {
+		t.Fatalf("vector_documents_fetched=%d want %d", got, want)
 	}
 	md := renderMarkdown(report{GeneratedAt: "now", ProfilesDir: dir, CollectionWorkloads: workloads})
 	if !strings.Contains(md, "## Collection Workload Metadata") || !strings.Contains(md, "typed_column_part") || !strings.Contains(md, "row asset bytes") {

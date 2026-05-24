@@ -161,31 +161,33 @@ type benchprofCollectionWorkload struct {
 }
 
 type benchprofCollectionWorkloadCounters struct {
-	MappedBytes                 uint64 `json:"mapped_bytes,omitempty"`
-	HeapCopyBytes               uint64 `json:"heap_copy_bytes,omitempty"`
-	DecodedBytes                uint64 `json:"decoded_bytes,omitempty"`
-	DocumentMaterializations    int64  `json:"document_materializations,omitempty"`
-	DocumentReconstructions     int64  `json:"document_reconstructions,omitempty"`
-	RowMaterializations         int64  `json:"row_materializations,omitempty"`
-	RowLocatorDecodes           int64  `json:"row_locator_decodes,omitempty"`
-	PhysicalRowAssetReads       int64  `json:"physical_row_asset_reads,omitempty"`
-	PhysicalRowIDLookups        int64  `json:"physical_row_id_lookups,omitempty"`
-	TypedColumnPartsConsidered  int64  `json:"typed_column_parts_considered,omitempty"`
-	TypedColumnPartsPruned      int64  `json:"typed_column_parts_pruned,omitempty"`
-	TypedColumnPartsDecoded     int64  `json:"typed_column_parts_decoded,omitempty"`
-	TypedColumnBlocksConsidered int64  `json:"typed_column_blocks_considered,omitempty"`
-	TypedColumnBlocksPruned     int64  `json:"typed_column_blocks_pruned,omitempty"`
-	TypedColumnBlocksDecoded    int64  `json:"typed_column_blocks_decoded,omitempty"`
-	DirectTypedColumnAssetReads int64  `json:"direct_typed_column_asset_reads,omitempty"`
-	AssetOpenMapChecksumReads   int64  `json:"asset_open_map_checksum_reads,omitempty"`
-	SegmentFileCacheHits        uint64 `json:"segment_file_cache_hits,omitempty"`
-	SegmentFileCacheMisses      uint64 `json:"segment_file_cache_misses,omitempty"`
-	VectorCandidates            uint64 `json:"vector_candidates,omitempty"`
-	VectorEdgesVisited          uint64 `json:"vector_edges_visited,omitempty"`
-	VectorDocumentFetches       uint64 `json:"vector_document_fetches,omitempty"`
-	VectorFinalFetchIncluded    bool   `json:"vector_final_fetch_included,omitempty"`
-	ChecksumVerifications       uint64 `json:"checksum_verifications,omitempty"`
-	ChecksumSkippedReads        uint64 `json:"checksum_skipped_reads,omitempty"`
+	MappedBytes                  uint64 `json:"mapped_bytes,omitempty"`
+	HeapCopyBytes                uint64 `json:"heap_copy_bytes,omitempty"`
+	DecodedBytes                 uint64 `json:"decoded_bytes,omitempty"`
+	DocumentMaterializations     int64  `json:"document_materializations,omitempty"`
+	DocumentReconstructions      int64  `json:"document_reconstructions,omitempty"`
+	RowMaterializations          int64  `json:"row_materializations,omitempty"`
+	RowLocatorDecodes            int64  `json:"row_locator_decodes,omitempty"`
+	PhysicalRowAssetReads        int64  `json:"physical_row_asset_reads,omitempty"`
+	PhysicalRowIDLookups         int64  `json:"physical_row_id_lookups,omitempty"`
+	TypedColumnPartsConsidered   int64  `json:"typed_column_parts_considered,omitempty"`
+	TypedColumnPartsPruned       int64  `json:"typed_column_parts_pruned,omitempty"`
+	TypedColumnPartsDecoded      int64  `json:"typed_column_parts_decoded,omitempty"`
+	TypedColumnBlocksConsidered  int64  `json:"typed_column_blocks_considered,omitempty"`
+	TypedColumnBlocksPruned      int64  `json:"typed_column_blocks_pruned,omitempty"`
+	TypedColumnBlocksDecoded     int64  `json:"typed_column_blocks_decoded,omitempty"`
+	DirectTypedColumnAssetReads  int64  `json:"direct_typed_column_asset_reads,omitempty"`
+	AssetOpenMapChecksumReads    int64  `json:"asset_open_map_checksum_reads,omitempty"`
+	SegmentFileCacheHits         uint64 `json:"segment_file_cache_hits,omitempty"`
+	SegmentFileCacheMisses       uint64 `json:"segment_file_cache_misses,omitempty"`
+	VectorCandidates             uint64 `json:"vector_candidates,omitempty"`
+	VectorEdges                  uint64 `json:"vector_edges,omitempty"`
+	VectorDirectViews            uint64 `json:"vector_direct_views,omitempty"`
+	VectorScratchDecodes         uint64 `json:"vector_scratch_decodes,omitempty"`
+	VectorDocumentsFetched       uint64 `json:"vector_documents_fetched,omitempty"`
+	VectorTypedColumnMappedBytes uint64 `json:"vector_typed_column_mapped_bytes,omitempty"`
+	VectorTypedColumnHeapBytes   uint64 `json:"vector_typed_column_heap_copy_bytes,omitempty"`
+	VectorTypedColumnDecoded     uint64 `json:"vector_typed_column_decoded_bytes,omitempty"`
 }
 
 func RunFromProfilesDir(profilesDir string) error {
