@@ -926,6 +926,17 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	return true, nil
 }
 
+func typedColumnAdapterHasStringPredicateColumn(fields []TypedStorageField, column string) (bool, error) {
+	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueString || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return false, fmt.Errorf("%w: typed-column string predicate column %q is not encoded as low-cardinality uint32 codes", ErrColumnQueryPlanUnsupported, column)
+	}
+	return true, nil
+}
+
 type typedColumnAdapterPartImageDecoder func(typedColumnAdapterOptions, typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error)
 
 func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
@@ -934,6 +945,38 @@ func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField,
 
 func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
 	return typedColumnAdapterPrepareInt64PredicatePart(fields, raw, refPartID, typedRows, physicalRows, schemaHash, column, "aggregate", typedColumnAdapterAggregatePartFromImage)
+}
+
+func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, int, error) {
+	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, 0, err
+	}
+	if !ok {
+		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed-column string predicate scan column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueString || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("%w: typed-column string predicate scan column %q is not encoded as low-cardinality uint32 codes", ErrColumnQueryPlanUnsupported, column)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, 0, err
+	}
+	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
+		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed_column_part string scan image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
+	}
+	adapterPart, err := typedColumnAdapterPartFromImageForInt64PredicateScan(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(schemaHash)}, image)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, 0, err
+	}
+	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
+		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	adapterColumn, ok = adapterPart.columnByName(column)
+	if !ok {
+		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed-column string predicate scan column %q missing after decode", column)
+	}
+	return adapterPart, adapterColumn, image.ManifestBytes, image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDictionaries), nil
 }
 
 func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
@@ -1099,6 +1142,76 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 				return false, err
 			}
 			result.Diagnostics.RowsMatched++
+		}
+	}
+	return !decodedAny && len(valueCol.Blocks) != 0, nil
+}
+
+func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, code uint32, value string, generation uint64, partID uint64, result *TypedColumnStringPredicateScanResult, visibility *typedColumnLatestPhysicalPart) (bool, error) {
+	if part == nil {
+		return false, errors.New("nil typed-column part")
+	}
+	valueCol, ok := part.Columns[valueColumn]
+	if !ok {
+		return false, fmt.Errorf("missing value column %q", valueColumn)
+	}
+	idCol, ok := part.Columns[typedColumnAdapterPrimaryIDColumn]
+	if !ok {
+		return false, fmt.Errorf("missing primary id column %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	if valueCol.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || valueCol.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return false, fmt.Errorf("value column is not low-cardinality uint32 or primary id column is not int64")
+	}
+	var reader typedcolumn.GranuleReader
+	var codeScratch []uint32
+	var idScratch []int64
+	idBlockIndex := 0
+	decodedAny := false
+	for _, block := range valueCol.Blocks {
+		result.Diagnostics.BlocksConsidered++
+		g := block.Granule
+		if g.HasMinMax && (uint64(code) < uint64(g.Min) || uint64(code) > uint64(g.Max)) {
+			result.Diagnostics.BlocksPruned++
+			continue
+		}
+		idBlock, ok := typedColumnAlignedBlock(idCol.Blocks, &idBlockIndex, block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		if !ok {
+			return false, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		}
+		codes, err := reader.DecodeUint32CodesInto(codeScratch[:0], g)
+		if err != nil {
+			return false, err
+		}
+		codeScratch = codes
+		ids, err := reader.DecodeInt64Into(idScratch[:0], idBlock.Granule)
+		if err != nil {
+			return false, err
+		}
+		idScratch = ids
+		if len(codes) != block.Descriptor.RowCount || len(ids) != block.Descriptor.RowCount {
+			return false, fmt.Errorf("decoded rows codes=%d ids=%d want %d", len(codes), len(ids), block.Descriptor.RowCount)
+		}
+		decodedAny = true
+		result.Diagnostics.BlocksDecoded++
+		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes + idBlock.Granule.RawBytes)
+		result.Diagnostics.RowsScanned += len(codes)
+		for i, got := range codes {
+			rowIndex := block.Descriptor.FirstRow + i
+			if visibility != nil && !visibility.rowVisible(rowIndex) {
+				continue
+			}
+			if got != code {
+				continue
+			}
+			row := TypedColumnStringPredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: ids[i], Value: value}
+			if visibility != nil {
+				row.Generation = visibility.Ref.Generation
+				row.PartID = visibility.Ref.PartID
+				row.DocumentID = visibility.documentID(rowIndex)
+			}
+			result.Rows = append(result.Rows, row)
+			result.Diagnostics.RowsMatched++
+			result.Diagnostics.CodesMatched++
 		}
 	}
 	return !decodedAny && len(valueCol.Blocks) != 0, nil

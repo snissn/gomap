@@ -65,6 +65,8 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 
 	DirectTypedColumnAssetReads int
 	FallbackReads               int
+	CodesMatched                int
+	DictionaryBytesDecoded      uint64
 	MappedBytes                 uint64
 	HeapCopyBytes               uint64
 	DecodedMetadataBytes        uint64
