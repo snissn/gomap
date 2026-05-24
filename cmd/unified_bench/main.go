@@ -30,6 +30,7 @@ import (
 	"unicode"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/collections"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/cmd/internal/treedbstats"
 	"github.com/snissn/gomap/internal/benchprof"
@@ -207,6 +208,7 @@ type BenchRun struct {
 	TreeDBPerf          map[string]map[string]treeDBPerfMetrics
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
+	CollectionWorkloads []benchprofCollectionWorkload
 }
 
 type treeDBPerfMetrics struct {
@@ -250,12 +252,13 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys          int                                     `json:"keys"`
-	Profile       string                                  `json:"profile,omitempty"`
-	ExecutionPath string                                  `json:"execution_path,omitempty"`
-	Results       map[string]map[string]float64           `json:"results,omitempty"`
-	TreeDBPerf    map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
-	TreeDBStats   map[string]map[string]string            `json:"treedb_stats,omitempty"`
+	Keys                int                                     `json:"keys"`
+	Profile             string                                  `json:"profile,omitempty"`
+	ExecutionPath       string                                  `json:"execution_path,omitempty"`
+	Results             map[string]map[string]float64           `json:"results,omitempty"`
+	TreeDBPerf          map[string]map[string]treeDBPerfMetrics `json:"treedb_perf,omitempty"`
+	TreeDBStats         map[string]map[string]string            `json:"treedb_stats,omitempty"`
+	CollectionWorkloads []benchprofCollectionWorkload           `json:"collection_workloads,omitempty"`
 }
 
 type scanDiag struct {
@@ -684,6 +687,29 @@ func main() {
 			})
 			if err != nil {
 				log.Fatalf("column_store suite: %v", err)
+			}
+			fmt.Print(out)
+		case "collection_storage", "collection-storage":
+			out, err := runCollectionStorageSuite(baseCfg, collectionStorageSuiteOptions{
+				ProfileDir:               strings.TrimSpace(*profileDir),
+				ExecutionPath:            strings.TrimSpace(*pathLabel),
+				ModesArg:                 strings.TrimSpace(*collectionStorageModesArg),
+				WorkloadsArg:             strings.TrimSpace(*collectionStorageWorkloadsArg),
+				QueryCount:               *collectionStorageQueryCountArg,
+				PointGetCount:            *collectionStoragePointGetCountArg,
+				FieldCount:               *collectionStorageFieldCountArg,
+				PayloadSize:              *collectionStoragePayloadSizeArg,
+				Cardinality:              *collectionStorageCardinalityArg,
+				Selectivity:              *collectionStorageSelectivityArg,
+				VectorDims:               *collectionStorageVectorDimsArg,
+				VectorTopK:               *collectionStorageVectorTopKArg,
+				IncludeFinalFetch:        *collectionStorageIncludeFinalFetchArg,
+				CheckpointReopen:         *collectionStorageCheckpointReopenArg,
+				ColumnAssetReadIntegrity: collections.ColumnAssetReadIntegrity(strings.TrimSpace(*collectionStorageAssetReadIntegrityArg)),
+				RunBenchprof:             true,
+			})
+			if err != nil {
+				log.Fatalf("collection_storage suite: %v", err)
 			}
 			fmt.Print(out)
 		default:
@@ -1240,12 +1266,13 @@ func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:          run.Config.Keys,
-			Profile:       strings.TrimSpace(run.Config.Profile),
-			ExecutionPath: executionPath,
-			Results:       run.Results,
-			TreeDBPerf:    run.TreeDBPerf,
-			TreeDBStats:   selectedBenchprofTreeDBStats(run.TreeDBStats),
+			Keys:                run.Config.Keys,
+			Profile:             strings.TrimSpace(run.Config.Profile),
+			ExecutionPath:       executionPath,
+			Results:             run.Results,
+			TreeDBPerf:          run.TreeDBPerf,
+			TreeDBStats:         selectedBenchprofTreeDBStats(run.TreeDBStats),
+			CollectionWorkloads: run.CollectionWorkloads,
 		})
 	}
 

@@ -29,6 +29,7 @@ func markdownDocs(t *testing.T) []string {
 		filepath.Join(treeRoot, "AGENTS.md"),
 		filepath.Join(treeRoot, "AUDIT_TRACKING.md"),
 		filepath.Join(treeRoot, "docs", "spec"),
+		filepath.Join(treeRoot, "docs", "guides"),
 		filepath.Join(repoRoot, "docs"),
 	}
 
@@ -83,6 +84,11 @@ func TestDocs_NoTreeDBSlabTerminology(t *testing.T) {
 		t.Fatalf("glob spec docs: %v", err)
 	}
 	paths = append(paths, specPaths...)
+	guidePaths, err := filepath.Glob(filepath.Join(treeRoot, "docs", "guides", "*.md"))
+	if err != nil {
+		t.Fatalf("glob guide docs: %v", err)
+	}
+	paths = append(paths, guidePaths...)
 	allowedLegacyFields := regexp.MustCompile(`\b(activeslabid|activeslabtail)\b`)
 
 	for _, p := range paths {

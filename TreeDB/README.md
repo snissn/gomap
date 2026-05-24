@@ -8,7 +8,7 @@ The canonical TreeDB specification now lives under:
 
 - `TreeDB/docs/spec/README.md`
 
-Use that folder for architecture, format, durability, recovery, lifecycle, and verification requirements. The root `docs/TREEDB_*.md` files remain supporting material.
+Use that folder for architecture, format, durability, recovery, lifecycle, and verification requirements. Practical typed-storage quickstarts and benchmark-adjacent guides live under `TreeDB/docs/guides/`. The root `docs/TREEDB_*.md` files remain supporting material.
 
 ## Features
 
