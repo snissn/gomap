@@ -445,6 +445,9 @@ func TestTypedColumnInt64ScanIgnoresAuxiliaryMultipartTypedRefs(t *testing.T) {
 		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, agg, 3, 36)
+	if agg.Diagnostics.Fallback {
+		t.Fatalf("aggregate diagnostics=%+v want direct typed-column aggregate", agg.Diagnostics)
+	}
 }
 
 func TestTypedColumnInt64AggregateEqualityPredicate(t *testing.T) {
