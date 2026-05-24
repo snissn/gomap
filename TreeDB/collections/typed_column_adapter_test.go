@@ -1260,6 +1260,47 @@ func TestTypedColumnAdapterPrepareInt64AggregateSkipsDictionaryDecode(t *testing
 	}
 }
 
+func TestTypedColumnAdapterInt64AggregateScratchReusedAcrossScans(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 1}}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 2}}},
+		{PrimaryID: 3, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 3}}},
+		{PrimaryID: 4, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 4}}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 78, RowsPerGranule: 2, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	var scratch typedColumnInt64PredicateAggregateScanScratch
+	req := TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateAll}
+	var first TypedColumnInt64PredicateAggregateResult
+	partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part.Part, "count", req, &first, nil, &scratch)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if partPruned || first.Count != 4 || first.Sum != 10 || first.Diagnostics.BlocksDecoded != 2 {
+		t.Fatalf("first partPruned=%v result=%+v diagnostics=%+v", partPruned, first, first.Diagnostics)
+	}
+	if len(scratch.values) == 0 {
+		t.Fatal("first scan left empty scratch values")
+	}
+	firstPtr := &scratch.values[0]
+	firstCap := cap(scratch.values)
+
+	var second TypedColumnInt64PredicateAggregateResult
+	partPruned, err = scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part.Part, "count", req, &second, nil, &scratch)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if partPruned || second.Count != first.Count || second.Sum != first.Sum || second.Diagnostics.BlocksDecoded != first.Diagnostics.BlocksDecoded {
+		t.Fatalf("second partPruned=%v result=%+v diagnostics=%+v want first=%+v", partPruned, second, second.Diagnostics, first)
+	}
+	if got := &scratch.values[0]; got != firstPtr || cap(scratch.values) != firstCap {
+		t.Fatalf("scratch reallocated: ptr %p -> %p cap %d -> %d", firstPtr, got, firstCap, cap(scratch.values))
+	}
+}
+
 func TestTypedColumnAdapterPrepareInt64AggregateValidationFailsClosed(t *testing.T) {
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})

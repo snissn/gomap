@@ -118,6 +118,7 @@ type TypedColumnInt64PredicateAggregateSession struct {
 	refsByGeneration   map[uint64]columnManifestAssetRefForScan
 	validatedRefs      map[ColumnAssetRef]struct{}
 	targetedPartCache  map[ColumnAssetRef]*typedColumnInt64AggregateTargetedPart
+	aggregateScratch   typedColumnInt64PredicateAggregateScanScratch
 	readCache          columnPhysicalAssetReadCache
 	resourceManager    *mappedresource.Manager
 	resolver           *typedColumnLatestRowResolver
@@ -657,6 +658,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.aggregateScratch = typedColumnInt64PredicateAggregateScanScratch{}
 	var closeErr error
 	if err := s.readCache.close(); err != nil {
 		closeErr = err
@@ -872,7 +874,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregatePart(ty
 			return fmt.Errorf("collections: typed-column int64 predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
 		}
 	}
-	partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(s.req), result, visibility)
+	partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(s.req), result, visibility, &s.aggregateScratch)
 	if err != nil {
 		return fmt.Errorf("collections: typed-column int64 predicate aggregate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 	}

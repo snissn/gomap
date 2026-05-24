@@ -1670,6 +1670,17 @@ func scanTypedColumnInt64PredicateAggregatePart(part *typedcolumn.ColumnPart, va
 }
 
 func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart) (bool, error) {
+	return scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part, valueColumn, req, result, visibility, nil)
+}
+
+type typedColumnInt64PredicateAggregateScanScratch struct {
+	// GranuleReader only retains decode/decompression scratch and is safe to
+	// reuse across immutable typed-column parts within the session lifetime.
+	reader typedcolumn.GranuleReader
+	values []int64
+}
+
+func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {
 	if part == nil {
 		return false, errors.New("nil typed-column part")
 	}
@@ -1680,8 +1691,10 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 	if valueCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("value column is not int64")
 	}
-	var reader typedcolumn.GranuleReader
-	var valueScratch []int64
+	if scratch == nil {
+		var localScratch typedColumnInt64PredicateAggregateScanScratch
+		scratch = &localScratch
+	}
 	decodedAny := false
 	for _, block := range valueCol.Blocks {
 		result.Diagnostics.BlocksConsidered++
@@ -1690,11 +1703,11 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 			result.Diagnostics.BlocksPruned++
 			continue
 		}
-		values, err := reader.DecodeInt64Into(valueScratch[:0], g)
+		values, err := scratch.reader.DecodeInt64Into(scratch.values[:0], g)
 		if err != nil {
 			return false, err
 		}
-		valueScratch = values
+		scratch.values = values
 		if len(values) != block.Descriptor.RowCount {
 			return false, fmt.Errorf("decoded rows value=%d want %d", len(values), block.Descriptor.RowCount)
 		}

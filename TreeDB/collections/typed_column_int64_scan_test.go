@@ -869,6 +869,55 @@ func TestTypedColumnInt64AggregatePreparedSessionHotScanUsesTargetedRanges(t *te
 	}
 }
 
+func TestTypedColumnInt64AggregatePreparedSessionReusesDecodeScratch(t *testing.T) {
+	const rows = 65536
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	dist := typedColumnInt64AggregateBenchDistributionByName("clustered")
+	insertTypedColumnInt64AggregateBenchRows(t, col, rows, dist)
+	req := typedColumnInt64AggregateBenchShapeByName("range_1pct").request(rows)
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
+
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	first, err := session.Run()
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if err := validateTypedColumnInt64AggregateBenchResult(first, expected); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.aggregateScratch.values) == 0 {
+		t.Fatalf("first diagnostics=%+v left empty aggregate decode scratch", first.Diagnostics)
+	}
+	firstPtr := &session.aggregateScratch.values[0]
+	firstCap := cap(session.aggregateScratch.values)
+
+	second, err := session.Run()
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if err := validateTypedColumnInt64AggregateBenchResult(second, expected); err != nil {
+		t.Fatal(err)
+	}
+	if len(session.aggregateScratch.values) == 0 {
+		t.Fatalf("second diagnostics=%+v left empty aggregate decode scratch", second.Diagnostics)
+	}
+	if got := &session.aggregateScratch.values[0]; got != firstPtr || cap(session.aggregateScratch.values) != firstCap {
+		t.Fatalf("aggregate decode scratch reallocated between hot runs: ptr %p -> %p cap %d -> %d", firstPtr, got, firstCap, cap(session.aggregateScratch.values))
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if session.aggregateScratch.values != nil {
+		t.Fatalf("Close retained aggregate decode scratch len=%d cap=%d", len(session.aggregateScratch.values), cap(session.aggregateScratch.values))
+	}
+}
+
 func TestTypedColumnInt64AggregatePreparedSessionIntegrityFailClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
