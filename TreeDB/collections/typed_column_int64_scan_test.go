@@ -930,6 +930,9 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		if _, err := parseTypedColumnInt64AggregateBenchReadIntegrities("verify"); err == nil || !strings.Contains(err.Error(), "invalid read integrity") {
 			t.Fatalf("invalid read integrity err=%v", err)
 		}
+		if _, err := parseTypedColumnInt64AggregateBenchReadIntegrities("not_applicable"); err == nil || !strings.Contains(err.Error(), "invalid read integrity") {
+			t.Fatalf("not_applicable should be reserved for fallback labels, err=%v", err)
+		}
 	})
 
 	t.Run("sub_benchmark_names", func(t *testing.T) {
@@ -941,6 +944,10 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		parallelUnsafe := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "typed_column_part", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityByName("skip_checksums"), typedColumnInt64AggregateBenchExecutionModeByName("parallel_contention"))
 		if !strings.Contains(parallelUnsafe, "/timed_one_shot_api/read_integrity_unsafe_skip_checksums_ceiling/execution_parallel_contention/") {
 			t.Fatalf("parallel unsafe sub-benchmark name=%q missing timed boundary/read integrity/execution labels", parallelUnsafe)
+		}
+		fallback := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "document_full_scan_fallback", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityNotApplicable(), typedColumnInt64AggregateBenchExecutionModeByName("serial"))
+		if !strings.Contains(fallback, "/path_document_full_scan_fallback/") || !strings.Contains(fallback, "/read_integrity_not_applicable/") {
+			t.Fatalf("fallback sub-benchmark name=%q missing fallback/not-applicable labels", fallback)
 		}
 	})
 }
@@ -1155,7 +1162,7 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, true, readIntegrity)
 				}
 				if typedColumnInt64AggregateBenchIncludeFallback(includeFallbackEnv, rows) {
-					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false, typedColumnInt64AggregateBenchReadIntegrityByName("cached_verify"))
+					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false, typedColumnInt64AggregateBenchReadIntegrityNotApplicable())
 				}
 			}
 		}
@@ -1220,6 +1227,9 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 			if runErr != nil {
 				b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", runErr)
 			}
+			if err := validateTypedColumnInt64AggregateBenchResult(result, expected); err != nil {
+				b.Fatal(err)
+			}
 			reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, b.Elapsed(), b.N)
 		})
 	}
@@ -1238,9 +1248,6 @@ func runTypedColumnInt64AggregateBenchOneShotSerial(b *testing.B, col *Collectio
 		if err != nil {
 			return result, err
 		}
-		if err := validateTypedColumnInt64AggregateBenchResult(result, expected); err != nil {
-			return result, err
-		}
 	}
 	return result, nil
 }
@@ -1257,9 +1264,6 @@ func runTypedColumnInt64AggregateBenchOneShotParallel(b *testing.B, col *Collect
 				continue
 			}
 			result, err := col.RunTypedColumnInt64PredicateAggregate(req)
-			if err == nil {
-				err = validateTypedColumnInt64AggregateBenchResult(result, expected)
-			}
 			if err != nil {
 				if stop.CompareAndSwap(false, true) {
 					firstErr.Store(err)
@@ -1437,6 +1441,10 @@ func typedColumnInt64AggregateBenchReadIntegrityByName(name string) typedColumnI
 	default:
 		return typedColumnInt64AggregateBenchReadIntegrity{}
 	}
+}
+
+func typedColumnInt64AggregateBenchReadIntegrityNotApplicable() typedColumnInt64AggregateBenchReadIntegrity {
+	return typedColumnInt64AggregateBenchReadIntegrity{name: "not_applicable"}
 }
 
 func typedColumnInt64AggregateBenchReadIntegrityNames(readIntegrities []typedColumnInt64AggregateBenchReadIntegrity) []string {
