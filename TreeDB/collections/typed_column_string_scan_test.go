@@ -104,6 +104,25 @@ func TestTypedColumnStringScanNoDocumentReconstructionDiagnostics1785(t *testing
 	}
 }
 
+func TestTypedColumnStringScanCorruptTypedColumnAssetFailsClosed1785(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"alpha", "beta", "beta"})
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		t.Fatalf("typed refs=%+v want one", refs)
+	}
+	corruptTypedColumnAssetPayload1755(t, d, refs[0])
+
+	result, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Value: "beta"})
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("RunTypedColumnStringPredicateScan corrupt err=%v want checksum failure", err)
+	}
+	if result.Diagnostics.Fallback || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentReconstructions != 0 || len(result.Rows) != 0 {
+		t.Fatalf("result=%+v want fail-closed without document fallback/materialization", result)
+	}
+}
+
 func TestTypedColumnStringScanReopen1785(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
