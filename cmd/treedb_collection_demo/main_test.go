@@ -82,6 +82,26 @@ func TestReopenReadSmoke(t *testing.T) {
 	}
 }
 
+func TestInsertWorkloadReportsSetupThroughput(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.Mode = modeTypedColumn
+	cfg.Workload = workloadInsert
+	cfg.Rows = 32
+	cfg.BatchSize = 16
+	cfg.PayloadBytes = 8
+	cfg.Dir = filepath.Join(t.TempDir(), "db")
+	got, err := runDemo(cfg)
+	if err != nil {
+		t.Fatalf("runDemo insert: %v", err)
+	}
+	if got.Ops != int64(cfg.Rows) || got.OpsSec <= 0 || got.RowsSec <= 0 {
+		t.Fatalf("insert counters not populated from setup timing: %+v", got)
+	}
+	if got.QueryMS < 0 {
+		t.Fatalf("query_ms should not be negative: %+v", got)
+	}
+}
+
 func TestExplicitDirMustBeFresh(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600); err != nil {

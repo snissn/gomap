@@ -403,14 +403,18 @@ func runDemo(cfg config) (summary, error) {
 		Matches: result.Matches, Aggregate: result.Aggregate, Materialization: result.Materialization,
 		Diagnostics: result.Diagnostics, DBDir: cfg.Dir, ProfileDir: cfg.ProfileDir, KeptDir: kept,
 	}
-	if queryDur > 0 && result.Ops > 0 {
-		out.OpsSec = float64(result.Ops) / queryDur.Seconds()
-	}
-	if queryDur > 0 {
-		out.RowsSec = float64(cfg.Rows) / queryDur.Seconds()
-	}
-	if cfg.Workload == workloadInsert && setupDur > 0 {
-		out.RowsSec = float64(cfg.Rows) / setupDur.Seconds()
+	if cfg.Workload == workloadInsert {
+		if setupDur > 0 {
+			out.OpsSec = float64(result.Ops) / setupDur.Seconds()
+			out.RowsSec = float64(cfg.Rows) / setupDur.Seconds()
+		}
+	} else {
+		if queryDur > 0 && result.Ops > 0 {
+			out.OpsSec = float64(result.Ops) / queryDur.Seconds()
+		}
+		if queryDur > 0 {
+			out.RowsSec = float64(cfg.Rows) / queryDur.Seconds()
+		}
 	}
 	if err := prof.writeSummary(out); err != nil {
 		return summary{}, err
