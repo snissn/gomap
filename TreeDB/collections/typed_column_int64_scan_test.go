@@ -1198,9 +1198,21 @@ func (e *typedColumnInt64AggregateBenchExpected) finish() {
 }
 
 func randomUniformMultiplierForTypedColumnInt64AggregateBench(rows int) int {
-	mul := rows/2*2 + 1
+	if rows <= 2 {
+		return 1
+	}
+	mul := int(uint64(6364136223846793005) % uint64(rows))
+	if mul == 0 {
+		mul = 1
+	}
+	if mul%2 == 0 {
+		mul++
+	}
 	for gcdIntForTypedColumnInt64AggregateBench(mul, rows) != 1 {
 		mul += 2
+		if mul >= rows {
+			mul = 1
+		}
 	}
 	return mul
 }
