@@ -1,6 +1,7 @@
 package vectorops
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -24,7 +25,7 @@ func TestDotFloat32ParityWithScalar1790(t *testing.T) {
 			name  string
 			left  []float32
 			right []float32
-		}{name: "dims", left: dotTestVector1790(dims, 3), right: dotTestVector1790(dims, 5)})
+		}{name: fmt.Sprintf("dims_%d", dims), left: dotTestVector1790(dims, 3), right: dotTestVector1790(dims, 5)})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

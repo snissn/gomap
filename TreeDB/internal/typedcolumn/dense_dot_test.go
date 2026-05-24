@@ -1,6 +1,7 @@
 package typedcolumn
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -8,20 +9,23 @@ import (
 )
 
 func TestTypedColumnDenseFloat32DotDirectViewParity1790(t *testing.T) {
-	const rows = 8
-	const dims = 17
-	view, release := mustDenseDotFloat32View1790(t, rows, dims)
-	defer release()
-	for i := 0; i < rows; i++ {
-		left := view[i*dims : (i+1)*dims]
-		for j := 0; j < rows; j++ {
-			right := view[j*dims : (j+1)*dims]
-			got := DenseFloat32Dot(left, right)
-			want := DenseFloat32DotScalar(left, right)
-			if !dotFloat32Close1790(got, want) {
-				t.Fatalf("row %d dot row %d = %v want scalar %v implementation=%s", i, j, got, want, DenseFloat32DotImplementation())
+	for _, dims := range []int{1, 2, 3, 4, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129} {
+		t.Run(fmt.Sprintf("dims_%d", dims), func(t *testing.T) {
+			const rows = 8
+			view, release := mustDenseDotFloat32View1790(t, rows, dims)
+			defer release()
+			for i := 0; i < rows; i++ {
+				left := view[i*dims : (i+1)*dims]
+				for j := 0; j < rows; j++ {
+					right := view[j*dims : (j+1)*dims]
+					got := DenseFloat32Dot(left, right)
+					want := DenseFloat32DotScalar(left, right)
+					if !dotFloat32Close1790(got, want) {
+						t.Fatalf("row %d dot row %d = %v want scalar %v implementation=%s", i, j, got, want, DenseFloat32DotImplementation())
+					}
+				}
 			}
-		}
+		})
 	}
 }
 
@@ -77,12 +81,12 @@ func BenchmarkTypedColumnDenseFloat32Dot1790(b *testing.B) {
 		b.ReportMetric(float64(b.N)/elapsed, "ops/s")
 		b.ReportMetric(float64(b.N*rows)/elapsed, "rows/s")
 		b.ReportMetric(float64(b.N*rows*dims)/elapsed, "elements/s")
-		b.ReportMetric(1, implementation+"/implementation")
+		_ = implementation // implementation is encoded in the sub-benchmark name.
 	}
-	b.Run("optimized", func(b *testing.B) {
+	b.Run("optimized_"+DenseFloat32DotImplementation(), func(b *testing.B) {
 		run(b, DenseFloat32DotImplementation(), DenseFloat32Dot)
 	})
-	b.Run("scalar", func(b *testing.B) {
+	b.Run("scalar_portable", func(b *testing.B) {
 		run(b, "scalar", DenseFloat32DotScalar)
 	})
 }
