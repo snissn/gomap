@@ -3,6 +3,8 @@ package collections
 import (
 	"fmt"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 type columnAggregateMetadataRunnerEntry struct {
@@ -14,6 +16,9 @@ type columnAggregateMetadataRunnerEntry struct {
 type columnAggregateMetadataRunner struct {
 	kind                     ColumnPhysicalQueryKind
 	assetBytes               int64
+	decodedMetadataBytes     uint64
+	mappedBytes              uint64
+	heapCopyBytes            uint64
 	metadataHits             int
 	rows                     int
 	scheduledGranules        int
@@ -33,13 +38,17 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 	if readCache == nil {
 		return nil, fmt.Errorf("collections: prepared aggregate metadata query requires read cache")
 	}
-	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.Config, req)
+	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.FullConfig, req)
 	if !ok {
 		return nil, fmt.Errorf("%w: aggregate metadata %q does not match physical query shape", ErrColumnQueryPlanUnsupported, req.AggregateMetadataName)
 	}
 	refs := columnPhysicalQueryAggregateMetadataRefs(view.AggregateMetadata, aggregate.Name)
 	if len(refs) == 0 {
 		return nil, nil
+	}
+	mgr := mappedresource.NewManager()
+	if err := readCache.useMappedResourceManager(mgr, mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "column-aggregate-metadata-runner-prepare", Collection: view.CollectionName, Namespace: view.AssetNamespace, Generation: view.Diagnostics.ManifestGeneration, Reason: "prepared column aggregate metadata query"}, "prepared column aggregate metadata query"); err != nil {
+		return nil, err
 	}
 	runner := &columnAggregateMetadataRunner{
 		kind:                     req.Kind,
@@ -55,7 +64,8 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		}
 		rawScratch = raw
 		runner.assetBytes += int64(len(raw))
-		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.Config, view.CollectionName, aggregate.Name)
+		runner.decodedMetadataBytes += uint64(len(raw))
+		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.FullConfig, view.CollectionName, aggregate.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -83,6 +93,9 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 	runner.mins = make([]int64, groupCount)
 	runner.maxs = make([]int64, groupCount)
 	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, groupCount)
+	stats := readCache.mappedResourceStats()
+	runner.mappedBytes = stats.TotalMappedBytes
+	runner.heapCopyBytes = stats.TotalHeapCopyBytes
 	return runner, nil
 }
 
@@ -129,6 +142,9 @@ func (r *columnAggregateMetadataRunner) run(view columnPhysicalScanSnapshotView,
 	diag.MetadataHits = r.metadataHits
 	diag.ScheduledGranules = r.scheduledGranules
 	diag.PhysicalBytesScanned = r.assetBytes
+	diag.DecodedMetadataBytes = r.decodedMetadataBytes
+	diag.MappedBytes = r.mappedBytes
+	diag.HeapCopyBytes = r.heapCopyBytes
 	diag.ReduceRows = r.rows
 	diag.ResultGroups = len(r.resultGroups)
 	diag.ColumnAssetReadIntegrity = r.columnAssetReadIntegrity

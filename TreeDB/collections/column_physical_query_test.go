@@ -604,14 +604,43 @@ func TestColumnPhysicalScanRejectsRemainderWithoutModuloM14B(t *testing.T) {
 }
 
 func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t *testing.T) {
-	left := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 1, SegmentFileCacheHits: 2, SegmentFileCacheMisses: 3}
-	right := ColumnPhysicalQueryDiagnostics{MutationParts: 2, DecodedBlocks: 3, SegmentFileCacheHits: 5, SegmentFileCacheMisses: 7}
+	left := ColumnPhysicalQueryDiagnostics{
+		MutationParts: 2, DecodedBlocks: 1, MetadataMisses: 1, FallbackReads: 2,
+		RowMaterializations: 3, DocumentMaterializations: 4, DecodedMetadataBytes: 5,
+		MappedBytes: 6, HeapCopyBytes: 7, SegmentFileCacheHits: 2, SegmentFileCacheMisses: 3,
+	}
+	right := ColumnPhysicalQueryDiagnostics{
+		MutationParts: 2, DecodedBlocks: 3, MetadataMisses: 10, FallbackReads: 20,
+		RowMaterializations: 30, DocumentMaterializations: 40, DecodedMetadataBytes: 50,
+		MappedBytes: 60, HeapCopyBytes: 70, SegmentFileCacheHits: 5, SegmentFileCacheMisses: 7,
+	}
 	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
 	if got, want := merged.MutationParts, 2; got != want {
 		t.Fatalf("mutation parts=%d want view-level max %d", got, want)
 	}
 	if got, want := merged.DecodedBlocks, 4; got != want {
 		t.Fatalf("decoded blocks=%d want summed work %d", got, want)
+	}
+	if got, want := merged.MetadataMisses, 11; got != want {
+		t.Fatalf("metadata misses=%d want summed %d", got, want)
+	}
+	if got, want := merged.FallbackReads, 22; got != want {
+		t.Fatalf("fallback reads=%d want summed %d", got, want)
+	}
+	if got, want := merged.RowMaterializations, 33; got != want {
+		t.Fatalf("row materializations=%d want summed %d", got, want)
+	}
+	if got, want := merged.DocumentMaterializations, 44; got != want {
+		t.Fatalf("document materializations=%d want summed %d", got, want)
+	}
+	if got, want := merged.DecodedMetadataBytes, uint64(55); got != want {
+		t.Fatalf("decoded metadata bytes=%d want summed %d", got, want)
+	}
+	if got, want := merged.MappedBytes, uint64(66); got != want {
+		t.Fatalf("mapped bytes=%d want summed %d", got, want)
+	}
+	if got, want := merged.HeapCopyBytes, uint64(77); got != want {
+		t.Fatalf("heap copy bytes=%d want summed %d", got, want)
 	}
 	if got, want := merged.SegmentFileCacheHits, uint64(7); got != want {
 		t.Fatalf("cache hits=%d want summed %d", got, want)

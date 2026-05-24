@@ -102,6 +102,27 @@ func filterColumnAggregateMetadataForColumns(aggregates []ColumnAggregateMetadat
 	return out
 }
 
+func columnStoreTypedColumnPartAggregateMetadata(cfg ColumnStoreConfig) []ColumnAggregateMetadata {
+	if len(cfg.AggregateMetadata) == 0 || !columnStoreHasTypedColumnPartOwners(cfg) {
+		return nil
+	}
+	ownerByColumn := make(map[string]TypedStorageFieldOwner, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		ownerByColumn[col.Name] = columnStoreColumnOwnerOrRowAsset(col)
+	}
+	out := make([]ColumnAggregateMetadata, 0, len(cfg.AggregateMetadata))
+	for _, aggregate := range cfg.AggregateMetadata {
+		if aggregate.Column == "" || aggregate.GroupColumn == "" {
+			continue
+		}
+		if ownerByColumn[aggregate.Column] != TypedStorageOwnerColumnPart || ownerByColumn[aggregate.GroupColumn] != TypedStorageOwnerColumnPart {
+			continue
+		}
+		out = append(out, aggregate)
+	}
+	return out
+}
+
 func columnStoreColumnNameSet(columns []ColumnStoreColumn) map[string]struct{} {
 	present := make(map[string]struct{}, len(columns))
 	for _, col := range columns {
