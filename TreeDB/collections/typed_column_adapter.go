@@ -1674,6 +1674,8 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 }
 
 type typedColumnInt64PredicateAggregateScanScratch struct {
+	// GranuleReader only retains decode/decompression scratch and is safe to
+	// reuse across immutable typed-column parts within the session lifetime.
 	reader typedcolumn.GranuleReader
 	values []int64
 }

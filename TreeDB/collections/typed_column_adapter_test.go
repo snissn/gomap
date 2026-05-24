@@ -1285,7 +1285,7 @@ func TestTypedColumnAdapterInt64AggregateScratchReusedAcrossScans(t *testing.T) 
 	if len(scratch.values) == 0 {
 		t.Fatal("first scan left empty scratch values")
 	}
-	firstPtr := unsafe.Pointer(unsafe.SliceData(scratch.values))
+	firstPtr := &scratch.values[0]
 	firstCap := cap(scratch.values)
 
 	var second TypedColumnInt64PredicateAggregateResult
@@ -1296,7 +1296,7 @@ func TestTypedColumnAdapterInt64AggregateScratchReusedAcrossScans(t *testing.T) 
 	if partPruned || second.Count != first.Count || second.Sum != first.Sum || second.Diagnostics.BlocksDecoded != first.Diagnostics.BlocksDecoded {
 		t.Fatalf("second partPruned=%v result=%+v diagnostics=%+v want first=%+v", partPruned, second, second.Diagnostics, first)
 	}
-	if got := unsafe.Pointer(unsafe.SliceData(scratch.values)); got != firstPtr || cap(scratch.values) != firstCap {
+	if got := &scratch.values[0]; got != firstPtr || cap(scratch.values) != firstCap {
 		t.Fatalf("scratch reallocated: ptr %p -> %p cap %d -> %d", firstPtr, got, firstCap, cap(scratch.values))
 	}
 }
