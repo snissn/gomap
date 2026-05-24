@@ -46,6 +46,25 @@ func TestCollectionStorageEffectiveModesAndWorkloads(t *testing.T) {
 	}
 }
 
+func TestBuildCollectionStorageFixtureHonorsFieldCount(t *testing.T) {
+	rows, bytesTotal := buildCollectionStorageFixture(1, 4, 2, 3, 6, 1)
+	if len(rows) != 1 || bytesTotal <= 0 {
+		t.Fatalf("fixture rows=%d bytes=%d", len(rows), bytesTotal)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(rows[0].Document, &decoded); err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	for _, key := range []string{"extra_0", "extra_1", "extra_2"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("fixture missing %s in %s", key, rows[0].Document)
+		}
+	}
+	if _, ok := decoded["extra_3"]; ok {
+		t.Fatalf("fixture emitted too many extra fields: %s", rows[0].Document)
+	}
+}
+
 func TestCollectionStorageSuiteSmoke(t *testing.T) {
 	withExplicitFlag(t, "keys")
 	out, err := runCollectionStorageSuite(BenchConfig{

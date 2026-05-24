@@ -422,11 +422,11 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 		return "", fmt.Errorf("collection_storage: invalid vector topK %d", vectorTopK)
 	}
 	includeFinalFetch := opts.IncludeFinalFetch
-	if !includeFinalFetch && !flagExplicit("collection-storage-include-final-fetch") && !opts.IncludeFinalFetch {
+	if !includeFinalFetch && !flagExplicit("collection-storage-include-final-fetch") {
 		includeFinalFetch = *collectionStorageIncludeFinalFetchArg
 	}
 	checkpointReopen := opts.CheckpointReopen
-	if !checkpointReopen && !flagExplicit("collection-storage-checkpoint-reopen") && !opts.CheckpointReopen {
+	if !checkpointReopen && !flagExplicit("collection-storage-checkpoint-reopen") {
 		checkpointReopen = *collectionStorageCheckpointReopenArg
 	}
 	assetReadIntegrity, err := collectionStorageEffectiveAssetReadIntegrity(opts.ColumnAssetReadIntegrity)
@@ -461,7 +461,7 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 	allocBasePath := ""
 
 	fixtureStart := time.Now()
-	fixture, sourceBytes := buildCollectionStorageFixture(rows, payloadSize, cardinality, vectorDims, seed)
+	fixture, sourceBytes := buildCollectionStorageFixture(rows, payloadSize, cardinality, vectorDims, fieldCount, seed)
 	stages := []collectionStorageStageMetric{collectionStorageStage("", "fixture_generate", fixtureStart, rows, sourceBytes)}
 
 	queryRange := collectionStorageRangeForSelectivity(fixture, selectivity)
@@ -501,6 +501,9 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 			}
 			rt.VectorRebuildDuration = time.Since(start)
 			stages = append(stages, collectionStorageStageFromDuration(mode, "vector_rebuild", rt.VectorRebuildDuration, rows, int64(status.NativeRootBytes)))
+			if err := refreshCollectionStorageModeStorage(rt); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -832,7 +835,7 @@ func validateCollectionStorageExecutionPath(profileDir, executionPath string) er
 	return nil
 }
 
-func buildCollectionStorageFixture(rows, payloadSize, cardinality, vectorDims int, seed int64) ([]collectionStorageFixtureRow, int64) {
+func buildCollectionStorageFixture(rows, payloadSize, cardinality, vectorDims, fieldCount int, seed int64) ([]collectionStorageFixtureRow, int64) {
 	out := make([]collectionStorageFixtureRow, rows)
 	payload := strings.Repeat("x", payloadSize)
 	var bytesTotal int64
@@ -846,14 +849,14 @@ func buildCollectionStorageFixture(rows, payloadSize, cardinality, vectorDims in
 		for d := range vec {
 			vec[d] = float32(((i+1)*(d+3))%17+1) / 17
 		}
-		doc := collectionStorageJSONDocument(timeUS, score, kind, payload, vec, i)
+		doc := collectionStorageJSONDocument(timeUS, score, kind, payload, vec, i, max(0, fieldCount-3))
 		out[i] = collectionStorageFixtureRow{ID: []byte(id), IDString: id, TimeUS: timeUS, Score: score, Kind: kind, Payload: payload, Embedding: vec, Document: doc}
 		bytesTotal += int64(len(doc))
 	}
 	return out, bytesTotal
 }
 
-func collectionStorageJSONDocument(timeUS, score int64, kind, payload string, embedding []float32, ordinal int) []byte {
+func collectionStorageJSONDocument(timeUS, score int64, kind, payload string, embedding []float32, ordinal, extraFieldCount int) []byte {
 	var sb strings.Builder
 	sb.WriteString(`{"time_us":`)
 	sb.WriteString(fmt.Sprintf("%d", timeUS))
@@ -865,8 +868,12 @@ func collectionStorageJSONDocument(timeUS, score int64, kind, payload string, em
 	sb.WriteString(`,"payload":`)
 	payloadJSON, _ := json.Marshal(payload)
 	sb.Write(payloadJSON)
-	sb.WriteString(`,"extra_0":`)
-	sb.WriteString(fmt.Sprintf("%d", ordinal%11))
+	for i := 0; i < extraFieldCount; i++ {
+		sb.WriteString(`,"extra_`)
+		sb.WriteString(fmt.Sprintf("%d", i))
+		sb.WriteString(`":`)
+		sb.WriteString(fmt.Sprintf("%d", (ordinal+i)%11))
+	}
 	sb.WriteString(`,"embedding":[`)
 	for i, v := range embedding {
 		if i > 0 {
@@ -1132,6 +1139,23 @@ func collectionStorageCollectionMeta(mode string, vectorDims int) (*collections.
 	}
 	meta.Options.ColumnStore = cfg
 	return meta, sem, nil
+}
+
+func refreshCollectionStorageModeStorage(rt *collectionStorageModeRuntime) error {
+	if rt == nil {
+		return nil
+	}
+	totalBytes, totalFiles, err := columnStoreSuiteDirUsage(rt.Dir)
+	if err != nil {
+		return fmt.Errorf("collection_storage: mode %s DB byte accounting refresh: %w", rt.Mode, err)
+	}
+	rt.DBTotalBytes = uint64(totalBytes)
+	rt.DBTotalFiles = totalFiles
+	rt.TypedRowAssetBytes, rt.TypedColumnAssetBytes = collectionStorageAssetByteBreakdown(rt.Collection)
+	if rt.DB != nil {
+		rt.TreeDBStats = rt.DB.Stats()
+	}
+	return nil
 }
 
 func collectionStorageAssetByteBreakdown(col *collections.Collection) (rowBytes, columnBytes int64) {
@@ -1532,41 +1556,6 @@ func collectionStorageScaleCounters(c *collectionStorageWorkloadCounters, n int6
 	c.AssetOpenMapChecksumReads *= n
 	c.SegmentFileCacheHits *= uint64(n)
 	c.SegmentFileCacheMisses *= uint64(n)
-}
-
-func exactCollectionStorageNearestID(rows []collectionStorageFixtureRow, query []float32) string {
-	best := ""
-	bestScore := math.Inf(-1)
-	for _, row := range rows {
-		score := collectionStorageCosine(query, row.Embedding)
-		if score > bestScore || (score == bestScore && row.IDString < best) {
-			bestScore = score
-			best = row.IDString
-		}
-	}
-	return best
-}
-
-func collectionStorageCosine(a, b []float32) float64 {
-	var dot, an, bn float64
-	for i := 0; i < len(a) && i < len(b); i++ {
-		af := float64(a[i])
-		bf := float64(b[i])
-		dot += af * bf
-		an += af * af
-		bn += bf * bf
-	}
-	if an == 0 || bn == 0 {
-		return math.Inf(-1)
-	}
-	return dot / (math.Sqrt(an) * math.Sqrt(bn))
-}
-
-func collectionStorageResultID(results []collections.VectorIndexSearchResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	return string(results[0].ID)
 }
 
 func readCollectionStorageMemStats() runtime.MemStats {

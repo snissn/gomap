@@ -135,7 +135,9 @@ func TestCollectionStorageProfileArtifactPaths(t *testing.T) {
 	want := map[string]string{
 		"collection_json":         filepath.Join(dir, "collection_storage_results.json"),
 		"collection_markdown":     filepath.Join(dir, "collection_storage_results.md"),
+		"collection_html":         filepath.Join(dir, "collection_storage_results.html"),
 		"benchprof_json":          filepath.Join(dir, "benchprof_results.json"),
+		"benchprof_markdown":      filepath.Join(dir, "benchprof_results.md"),
 		"cpu":                     filepath.Join(dir, "cpu_collection_storage_treedb_collection_storage.pprof"),
 		"allocs":                  filepath.Join(dir, "allocs_collection_storage_treedb_collection_storage.pprof"),
 		"checkpoint_cpu":          filepath.Join(dir, "checkpoint_cpu_checkpoint_collection_storage_treedb_collection_storage.pprof"),
@@ -144,11 +146,14 @@ func TestCollectionStorageProfileArtifactPaths(t *testing.T) {
 		"trace":                   filepath.Join(dir, "trace.out"),
 		"benchprof_insights_md":   filepath.Join(dir, "insights.md"),
 		"benchprof_insights_json": filepath.Join(dir, "insights.json"),
+		"benchprof_insights_html": filepath.Join(dir, "insights.html"),
 	}
 	got := map[string]string{
 		"collection_json":         paths.CollectionJSON,
 		"collection_markdown":     paths.CollectionMarkdown,
+		"collection_html":         paths.CollectionHTML,
 		"benchprof_json":          paths.BenchprofJSON,
+		"benchprof_markdown":      paths.BenchprofMarkdown,
 		"cpu":                     paths.CPUProfile,
 		"allocs":                  paths.AllocsProfile,
 		"checkpoint_cpu":          paths.CheckpointCPUProfile,
@@ -157,6 +162,7 @@ func TestCollectionStorageProfileArtifactPaths(t *testing.T) {
 		"trace":                   paths.TraceProfile,
 		"benchprof_insights_md":   paths.InsightsMarkdown,
 		"benchprof_insights_json": paths.InsightsJSON,
+		"benchprof_insights_html": paths.InsightsHTML,
 	}
 	for key, wantPath := range want {
 		if got[key] != wantPath {

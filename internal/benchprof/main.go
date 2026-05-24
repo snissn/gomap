@@ -1841,16 +1841,16 @@ func renderMarkdown(rep report) string {
 			if w.SemanticEquivalent {
 				semantic = "yes"
 			}
-			sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` | %.3f | %.3f | %.3f | %.1f | %.1f | %.3f | %d | %d | %s | %s | %s |\n",
+			sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %d | %d | %s | %s | %s |\n",
 				w.Suite,
 				w.Mode,
 				w.Workload,
-				w.RowsPerSecond,
-				w.QueriesPerSecond,
-				w.MatchesPerSecond,
-				w.NsPerOp,
-				w.BytesPerOp,
-				w.AllocsPerOp,
+				formatOptionalMetric(w.RowsPerSecond, 3),
+				formatOptionalMetric(w.QueriesPerSecond, 3),
+				formatOptionalMetric(w.MatchesPerSecond, 3),
+				formatOptionalMetric(w.NsPerOp, 1),
+				formatOptionalMetric(w.BytesPerOp, 1),
+				formatOptionalMetric(w.AllocsPerOp, 3),
 				w.TypedRowAssetBytes,
 				w.TypedColumnAssetBytes,
 				correctness,
@@ -1937,6 +1937,13 @@ func escapePipe(s string) string {
 		return ""
 	}
 	return strings.ReplaceAll(s, "|", "\\|")
+}
+
+func formatOptionalMetric(v float64, precision int) string {
+	if v <= 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return "-"
+	}
+	return strconv.FormatFloat(v, 'f', precision, 64)
 }
 
 func formatOps(v float64) string {
