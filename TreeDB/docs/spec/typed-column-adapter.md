@@ -38,7 +38,7 @@ JSON null maps to null bitmap rows, omitted paths map to default/missing bitmap
 rows, and present values map to the encoded carrier payload (`0/1` bools,
 int64s, float bit patterns, or string dictionary codes). Vector and adjacency
 nullable/missing support remains staged/fail-closed. Adjacency publication
-remains staged after #1756.
+remains staged after issue `#1756`.
 
 Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows

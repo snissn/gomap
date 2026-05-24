@@ -271,12 +271,14 @@ func (p *ColumnPart) NewScanner() *ColumnPartScanner {
 }
 
 type ColumnPartScanner struct {
-	part    *ColumnPart
-	reader  GranuleReader
-	values  []int64
-	codes   []uint32
-	bools   []bool
-	scratch []int64
+	part     *ColumnPart
+	reader   GranuleReader
+	values   []int64
+	codes    []uint32
+	bools    []bool
+	nulls    []bool
+	defaults []bool
+	scratch  []int64
 }
 
 type ProjectedScanResult struct {
@@ -504,6 +506,14 @@ func countGranulesCoveredByBlocks(blocks []ColumnBlock) (int, error) {
 }
 
 func (s *ColumnPartScanner) decodeBlock(columnType ColumnType, g EncodedGranule) ([]int64, error) {
+	if g.Encoding == EncodingNullableInt64 {
+		values, nulls, defaults, err := s.reader.DecodeNullableInt64Into(s.values[:0], s.nulls[:0], s.defaults[:0], g)
+		if err != nil {
+			return nil, err
+		}
+		s.values, s.nulls, s.defaults = values, nulls, defaults
+		return values, validateNullableDecodedCarrierValues(columnType, values)
+	}
 	switch columnType {
 	case ColumnTypeInt64:
 		values, err := s.reader.DecodeInt64Into(s.values[:0], g)
@@ -993,27 +1003,19 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 	if def.Encoding == EncodingNullableInt64 {
 		b.nulls = gatherOptionalBools(b.nulls[:0], batch.Nulls[def.Name], b.order, start, end)
 		b.defaults = gatherOptionalBools(b.defaults[:0], batch.Defaults[def.Name], b.order, start, end)
-		if def.Type == ColumnTypeLowCardinalityCode {
-			for i, v := range b.values64 {
-				if boolAt(b.nulls, i) || boolAt(b.defaults, i) {
-					continue
-				}
-				if v < 0 || v > math.MaxUint32 {
-					return EncodedGranule{}, fmt.Errorf("typedcolumn: code value %d outside uint32 for %s", v, def.Name)
-				}
+		defaultValue, hasDefaultValue := batch.DefaultValues[def.Name]
+		if err := validateNullableInt64DefaultValue(def, defaultValue, hasDefaultValue); err != nil {
+			return EncodedGranule{}, err
+		}
+		for i, v := range b.values64 {
+			if boolAt(b.nulls, i) || boolAt(b.defaults, i) {
+				continue
+			}
+			if err := validateNullableCarrierValue(def.Type, def.Name, v); err != nil {
+				return EncodedGranule{}, err
 			}
 		}
-		if def.Type == ColumnTypeBool {
-			for i, v := range b.values64 {
-				if boolAt(b.nulls, i) || boolAt(b.defaults, i) {
-					continue
-				}
-				if v != 0 && v != 1 {
-					return EncodedGranule{}, fmt.Errorf("typedcolumn: bool value %d outside 0/1 for %s", v, def.Name)
-				}
-			}
-		}
-		return b.builder.BuildNullableInt64(b.values64, b.nulls, b.defaults, batch.DefaultValues[def.Name])
+		return b.builder.BuildNullableInt64(b.values64, b.nulls, b.defaults, defaultValue)
 	}
 	switch def.Type {
 	case ColumnTypeInt64:
@@ -1050,6 +1052,36 @@ func gatherOptionalBools(dst []bool, source []bool, order []int, start int, end 
 		out[row-start] = source[order[row]]
 	}
 	return out
+}
+
+func validateNullableInt64DefaultValue(def ColumnDefinition, defaultValue int64, ok bool) error {
+	if !ok {
+		return nil
+	}
+	return validateNullableCarrierValue(def.Type, def.Name, defaultValue)
+}
+
+func validateNullableDecodedCarrierValues(columnType ColumnType, values []int64) error {
+	for _, value := range values {
+		if err := validateNullableCarrierValue(columnType, "scan", value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateNullableCarrierValue(columnType ColumnType, name string, value int64) error {
+	switch columnType {
+	case ColumnTypeLowCardinalityCode:
+		if value < 0 || value > math.MaxUint32 {
+			return fmt.Errorf("typedcolumn: code value %d outside uint32 for %s", value, name)
+		}
+	case ColumnTypeBool:
+		if value != 0 && value != 1 {
+			return fmt.Errorf("typedcolumn: bool value %d outside 0/1 for %s", value, name)
+		}
+	}
+	return nil
 }
 
 func exclusiveInt64Upper(v int64) int64 {

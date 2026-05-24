@@ -2,6 +2,7 @@ package typedcolumn
 
 import (
 	"encoding/binary"
+	"math"
 	"strings"
 	"testing"
 )
@@ -118,6 +119,109 @@ func TestBuildColumnPartRejectsNullableMetadataForNonNullableColumn(t *testing.T
 			_, err := BuildColumnPart(1, opts, batch)
 			if err == nil || !strings.Contains(err.Error(), "nullable metadata supplied for non-nullable column value") {
 				t.Fatalf("BuildColumnPart err=%v want non-nullable nullable metadata failure", err)
+			}
+		})
+	}
+}
+
+func TestColumnPartScannerReadsNullableInt64Encoding(t *testing.T) {
+	opts := Options{
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, CompressionSet: true},
+			{Name: "value", Type: ColumnTypeInt64, Encoding: EncodingNullableInt64, CompressionSet: true},
+			{Name: "flag", Type: ColumnTypeBool, Encoding: EncodingNullableInt64, CompressionSet: true},
+			{Name: "code", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Cardinality: 3, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+	}
+	part, err := BuildColumnPart(2, opts, Batch{
+		Rows: 3,
+		Columns: map[string][]int64{
+			"id":    {0, 1, 2},
+			"value": {10, 20, 30},
+			"flag":  {1, 0, 1},
+			"code":  {2, 1, 0},
+		},
+		Nulls: map[string][]bool{
+			"value": {false, true, false},
+			"flag":  {false, false, true},
+			"code":  {false, false, false},
+		},
+		Defaults: map[string][]bool{
+			"value": {false, false, true},
+			"flag":  {false, true, false},
+			"code":  {false, true, false},
+		},
+		DefaultValues: map[string]int64{"value": 99, "flag": 0, "code": 1},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	scan, err := part.NewScanner().ScanProjected([]string{"value", "flag", "code"})
+	if err != nil {
+		t.Fatalf("ScanProjected: %v", err)
+	}
+	if got := scan.Columns["value"]; got[0] != 10 || got[1] != 0 || got[2] != 99 {
+		t.Fatalf("value scan=%v", got)
+	}
+	if got := scan.Columns["flag"]; got[0] != 1 || got[1] != 0 || got[2] != 0 {
+		t.Fatalf("flag scan=%v", got)
+	}
+	if got := scan.Columns["code"]; got[0] != 2 || got[1] != 1 || got[2] != 0 {
+		t.Fatalf("code scan=%v", got)
+	}
+}
+
+func TestBuildColumnPartRejectsInvalidNullableDefaultValue(t *testing.T) {
+	cases := []struct {
+		name         string
+		def          ColumnDefinition
+		values       []int64
+		defaultValue int64
+		want         string
+	}{
+		{
+			name:         "bool",
+			def:          ColumnDefinition{Name: "value", Type: ColumnTypeBool, Encoding: EncodingNullableInt64, CompressionSet: true},
+			values:       []int64{1, 0},
+			defaultValue: 2,
+			want:         "bool value 2 outside 0/1",
+		},
+		{
+			name:         "low_cardinality_negative",
+			def:          ColumnDefinition{Name: "value", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Cardinality: 3, CompressionSet: true},
+			values:       []int64{0, 2},
+			defaultValue: -1,
+			want:         "code value -1 outside uint32",
+		},
+		{
+			name:         "low_cardinality_overflow",
+			def:          ColumnDefinition{Name: "value", Type: ColumnTypeLowCardinalityCode, Encoding: EncodingNullableInt64, Cardinality: 3, CompressionSet: true},
+			values:       []int64{0, 2},
+			defaultValue: int64(math.MaxUint32) + 1,
+			want:         "code value 4294967296 outside uint32",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := Options{
+				Columns: []ColumnDefinition{
+					{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, CompressionSet: true},
+					tc.def,
+				},
+				LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+			}
+			_, err := BuildColumnPart(3, opts, Batch{
+				Rows: 2,
+				Columns: map[string][]int64{
+					"id":    {0, 1},
+					"value": tc.values,
+				},
+				Defaults:      map[string][]bool{"value": {false, true}},
+				DefaultValues: map[string]int64{"value": tc.defaultValue},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("BuildColumnPart err=%v want containing %q", err, tc.want)
 			}
 		})
 	}
