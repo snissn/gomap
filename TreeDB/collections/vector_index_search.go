@@ -99,6 +99,23 @@ type VectorIndexSearchStats struct {
 	OpenGranulesRead uint64 `json:"open_granules_read,omitempty"`
 	// OpenPhysicalBytesRead is the absolute physical byte count read while opening the bound reader.
 	OpenPhysicalBytesRead int64 `json:"open_physical_bytes_read,omitempty"`
+
+	// VectorDirectViews is the per-search count of candidate vectors served from validated typed-column direct views.
+	VectorDirectViews uint64 `json:"vector_direct_views,omitempty"`
+	// VectorScratchDecodes is the per-search count of candidate vectors served from scratch/fallback decoded vectors.
+	VectorScratchDecodes uint64 `json:"vector_scratch_decodes,omitempty"`
+	// TypedColumnMappedBytes is the typed-column mapped-resource mapped byte total backing the bound vector source.
+	TypedColumnMappedBytes uint64 `json:"typed_column_mapped_bytes,omitempty"`
+	// TypedColumnHeapCopyBytes is the typed-column mapped-resource heap-copy byte total backing the bound vector source.
+	TypedColumnHeapCopyBytes uint64 `json:"typed_column_heap_copy_bytes,omitempty"`
+	// TypedColumnDecodedBytes is decoded/derived typed-column metadata or fallback vector bytes for the bound vector source.
+	TypedColumnDecodedBytes uint64 `json:"typed_column_decoded_bytes,omitempty"`
+	// TypedColumnActiveHandles is the current active mappedresource handle count for direct typed-column vector views.
+	TypedColumnActiveHandles int64 `json:"typed_column_active_handles,omitempty"`
+	// TypedColumnDeniedResources is the total denied mappedresource acquisition count for the typed-column vector source.
+	TypedColumnDeniedResources uint64 `json:"typed_column_denied_resources,omitempty"`
+	// TypedColumnFallbacks reports that typed-column vector ownership was selected but the reader fell back to graph row vectors.
+	TypedColumnFallbacks uint64 `json:"typed_column_fallbacks,omitempty"`
 }
 
 // VectorIndexSearchResponse is returned by public vector-index search APIs.
@@ -500,21 +517,29 @@ func deltaInt64(before, after int64) int64 {
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
 	return VectorIndexSearchStats{
-		Candidates:            searchStats.Candidates,
-		Edges:                 searchStats.Edges,
-		CandidateFetches:      searchStats.CandidateFetches,
-		ExpansionFetches:      searchStats.ExpansionFetches,
-		ResultFetches:         searchStats.ResultFetches,
-		RowFetches:            readerStats.RowFetches,
-		BatchFetches:          readerStats.BatchFetches,
-		RowsFetched:           readerStats.RowsFetched,
-		CacheHits:             readerStats.CacheHits,
-		CacheMisses:           readerStats.CacheMisses,
-		DecodedBlocks:         readerStats.DecodedBlocks,
-		GranulesTouched:       readerStats.GranulesTouched,
-		PhysicalBytesRead:     readerStats.PhysicalBytesRead,
-		MaxResidentBytes:      readerStats.MaxResidentBytes,
-		OpenGranulesRead:      uint64(readerStats.OpenGranulesRead),
-		OpenPhysicalBytesRead: readerStats.OpenPhysicalBytesRead,
+		Candidates:                 searchStats.Candidates,
+		Edges:                      searchStats.Edges,
+		CandidateFetches:           searchStats.CandidateFetches,
+		ExpansionFetches:           searchStats.ExpansionFetches,
+		ResultFetches:              searchStats.ResultFetches,
+		RowFetches:                 readerStats.RowFetches,
+		BatchFetches:               readerStats.BatchFetches,
+		RowsFetched:                readerStats.RowsFetched,
+		CacheHits:                  readerStats.CacheHits,
+		CacheMisses:                readerStats.CacheMisses,
+		DecodedBlocks:              readerStats.DecodedBlocks,
+		GranulesTouched:            readerStats.GranulesTouched,
+		PhysicalBytesRead:          readerStats.PhysicalBytesRead,
+		MaxResidentBytes:           readerStats.MaxResidentBytes,
+		OpenGranulesRead:           uint64(readerStats.OpenGranulesRead),
+		OpenPhysicalBytesRead:      readerStats.OpenPhysicalBytesRead,
+		VectorDirectViews:          searchStats.VectorDirectViews,
+		VectorScratchDecodes:       searchStats.VectorScratchDecodes,
+		TypedColumnMappedBytes:     searchStats.TypedColumnMappedBytes,
+		TypedColumnHeapCopyBytes:   searchStats.TypedColumnHeapCopyBytes,
+		TypedColumnDecodedBytes:    searchStats.TypedColumnDecodedBytes,
+		TypedColumnActiveHandles:   searchStats.TypedColumnActiveHandles,
+		TypedColumnDeniedResources: searchStats.TypedColumnDeniedResources,
+		TypedColumnFallbacks:       searchStats.TypedColumnFallbacks,
 	}
 }

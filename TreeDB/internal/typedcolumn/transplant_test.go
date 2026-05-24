@@ -381,7 +381,12 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	}
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
-	allowedAdapter := filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go"))
+	allowedImports := map[string]struct{}{
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},
+		// #1782 is the scoped production vector graph reader that consumes
+		// validated typed-column dense vector sections through mappedresource.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_typed_column.go")): {},
+	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -398,10 +403,10 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if strings.Trim(imp.Path.Value, "\"") != "github.com/snissn/gomap/TreeDB/internal/typedcolumn" {
 				continue
 			}
-			if filepath.Clean(path) == allowedAdapter {
+			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in the #1754 adapter seam", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph)", path)
 		}
 		return nil
 	})
