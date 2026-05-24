@@ -849,12 +849,16 @@ func TestTypedColumnInt64AggregatePreparedSessionIntegrityFailClosed(t *testing.
 			corruptTypedColumnAssetPayload1755(t, d, typedRefs[0])
 			assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), typedRefs[0])
 			if err != nil {
-				_ = session.Close()
+				if session != nil {
+					_ = session.Close()
+				}
 				t.Fatalf("columnAssetSegmentPath: %v", err)
 			}
 			changedModTime := time.Now().Add(2 * time.Hour).Round(0)
 			if err := os.Chtimes(assetPath, changedModTime, changedModTime); err != nil {
-				_ = session.Close()
+				if session != nil {
+					_ = session.Close()
+				}
 				t.Fatalf("Chtimes corrupt typed-column asset: %v", err)
 			}
 			if tc.integrity == ColumnAssetReadIntegrityCachedVerify {
