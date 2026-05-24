@@ -343,6 +343,9 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			continue
 		}
+		if ref.Ref.PartID != typedColumnPartAssetPartID {
+			continue
+		}
 		if ref.Role == ColumnManifestPartRoleTombstone || ref.Reason == ColumnPublishOperationDelete {
 			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate scan got tombstone typed ref generation=%d", ref.Ref.Generation)
 		}
@@ -472,6 +475,9 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	refsByGeneration := make(map[uint64]columnManifestAssetRefForScan, len(view.TypedColumnPartRefs))
 	for _, ref := range view.TypedColumnPartRefs {
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
+			continue
+		}
+		if ref.Ref.PartID != typedColumnPartAssetPartID {
 			continue
 		}
 		if ref.Role == ColumnManifestPartRoleTombstone || ref.Reason == ColumnPublishOperationDelete {

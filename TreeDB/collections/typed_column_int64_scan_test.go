@@ -424,6 +424,29 @@ func TestTypedColumnInt64ScanMultipartLatestVisibleUpdatesDeletes(t *testing.T) 
 	}
 }
 
+func TestTypedColumnInt64ScanIgnoresAuxiliaryMultipartTypedRefs(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{11, 12, 13})
+	extraRef := publishTypedColumnMultipartPartRef1787(t, d, col, 3)
+	if extraRef.PartID != 3 {
+		t.Fatalf("extra ref=%+v want part_id=3", extraRef)
+	}
+	result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 12})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, result, []int64{12})
+	if result.Diagnostics.Fallback {
+		t.Fatalf("diagnostics=%+v want direct typed-column scan", result.Diagnostics)
+	}
+	agg, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 11, High: 13})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, agg, 3, 36)
+}
+
 func TestTypedColumnInt64AggregateEqualityPredicate(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
