@@ -179,6 +179,35 @@ func TestTypedColumnStringPredicatePayloadCodeOutsideCardinalityFailsClosed(t *t
 	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
 		t.Fatalf("scan corrupt code err=%v want outside cardinality", err)
 	}
+	result := TypedColumnStringPredicateScanResult{}
+	_, err = scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, "alpha", corrupt.PartID, corrupt.PartID, &result, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+		t.Fatalf("production scan corrupt code err=%v want outside cardinality", err)
+	}
+}
+
+func TestTypedColumnStringPredicateProductionScanMinMaxFailsClosed(t *testing.T) {
+	field := typedColumnStringPredicateField(false)
+	part := typedColumnStringPredicateBuildPart(t, field, []string{"alpha", "beta", "gamma"})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	prepared, err := typedColumnAdapterPrepareStringPredicateScanPart([]TypedStorageField{field}, image.Bytes, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "kind", "alpha")
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	col := prepared.AdapterPart.Part.Columns[prepared.Column.Definition.Name]
+	if len(col.Blocks) == 0 || !col.Blocks[0].Granule.HasMinMax {
+		t.Fatalf("prepared column blocks=%+v want min/max block", col.Blocks)
+	}
+	col.Blocks[0].Granule.Min = -1
+	prepared.AdapterPart.Part.Columns[prepared.Column.Definition.Name] = col
+	result := TypedColumnStringPredicateScanResult{}
+	_, err = scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, "alpha", image.PartID, image.PartID, &result, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+		t.Fatalf("production scan min/max err=%v want outside cardinality", err)
+	}
 }
 
 func TestTypedColumnStringPredicateDurableValidationFailsClosed(t *testing.T) {

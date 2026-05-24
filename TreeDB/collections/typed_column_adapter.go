@@ -1292,6 +1292,10 @@ func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPa
 	if valueCol.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || valueCol.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("value column is not low-cardinality uint32 or primary id column is not int64")
 	}
+	cardinality := valueCol.Definition.Cardinality
+	if cardinality == 0 || code >= cardinality {
+		return false, fmt.Errorf("typed-column string predicate query code %d outside cardinality %d", code, cardinality)
+	}
 	if scratch == nil {
 		scratch = &typedColumnStringPredicateScanScratch{}
 	}
@@ -1300,9 +1304,14 @@ func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPa
 	for _, block := range valueCol.Blocks {
 		result.Diagnostics.BlocksConsidered++
 		g := block.Granule
-		if g.HasMinMax && (uint64(code) < uint64(g.Min) || uint64(code) > uint64(g.Max)) {
-			result.Diagnostics.BlocksPruned++
-			continue
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return false, fmt.Errorf("value column %q block first_row=%d min/max [%d,%d] outside cardinality %d", valueColumn, block.Descriptor.FirstRow, g.Min, g.Max, cardinality)
+			}
+			if int64(code) < g.Min || int64(code) > g.Max {
+				result.Diagnostics.BlocksPruned++
+				continue
+			}
 		}
 		idBlock, ok := typedColumnAlignedBlock(idCol.Blocks, &idBlockIndex, block.Descriptor.FirstRow, block.Descriptor.RowCount)
 		if !ok {
@@ -1326,6 +1335,9 @@ func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPa
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes + idBlock.Granule.RawBytes)
 		result.Diagnostics.RowsScanned += len(codes)
 		for i, got := range codes {
+			if got >= cardinality {
+				return false, fmt.Errorf("typed-column string predicate code %d outside cardinality %d", got, cardinality)
+			}
 			rowIndex := block.Descriptor.FirstRow + i
 			if visibility != nil && !visibility.rowVisible(rowIndex) {
 				continue
