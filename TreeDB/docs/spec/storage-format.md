@@ -501,10 +501,54 @@ images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
 Issue `#1755` scalar path represents bool, int64, float32, double/float64, and
 string fields. Issue `#1756` adds fixed-dimension `float32_vector` fields as
 uncompressed row-major little-endian dense `float32` sections whose element count
-per row is `vector_dims`. Nullable/missing values and production
-`adjacency_list` publication fail closed until later typed-storage issues extend
-the format; internal dense `uint32` adjacency sections are validated for the
-future vector graph path but are not authoritative collection fields yet.
+per row is `vector_dims`.
+
+Nullable scalar typed-column support starts with nullable int64 granules. A
+nullable int64 column uses the `nullable_int64` encoding. Each granule payload
+contains a fixed header, the encoded non-null/non-default int64 values, and two
+row-aligned bitmaps:
+
+- the null bitmap marks rows whose JSON path was present with an explicit
+  `null`; these rows have no stored int64 payload value and reconstruct as
+  explicit JSON null;
+- the default/missing bitmap marks rows whose declared path was omitted from the
+  source document; these rows have no stored int64 payload value and reconstruct
+  by omitting that path from the retained-payload document; and
+- rows with neither bit set are present/non-null and consume one encoded int64
+  payload value in row order.
+
+Null and default/missing bits are mutually exclusive. Granule metadata stores
+`NullCount` and `DefaultCount`; the two counts must be non-negative and must not
+exceed the row count (`DefaultCount <= Rows-NullCount`). Decoders must fail
+closed on invalid count metadata, truncated or incorrectly-sized bitmaps, rows
+marked both null and default/missing, or stored-value underflow/overflow. Min/max
+metadata, when present, covers only present logical values: stored non-null int64
+values plus the configured default value for default/missing rows; all-null
+blocks omit min/max. Other nullable scalar encodings may reuse the same
+explicit-null versus missing bitmap model only after their per-type payload
+format is specified.
+
+Nullable/missing typed-column codecs are allocation-budgeted hot paths and carry
+a positive optimization expectation, not only a no-regression gate. When changing
+encoding, decode, scan, or reconstruction merge loops, implementations should
+actively remove existing avoidable allocations and obvious local overhead in the
+same touched path when the cleanup is bounded, testable, and evidenced. These
+loops must use compact bitmaps/default metadata plus caller-owned scratch and
+must target 0 allocs/op after setup when benchmarking the core typed-column loop
+separately from document materialization. Touched inner loops must be measurably
+no worse, and preferably better, on `B/op` and `allocs/op`. Implementations must
+not add per-row heap wrappers, maps, interface values, closures, or string/byte
+conversions in these loops; if benchmarks or profiles expose allocations in
+touched functions, the PR must fix them or explicitly list why they are out of
+scope with a linked follow-up recommendation. Any remaining allocation requires
+baseline-versus-final `B/op` and `allocs/op` evidence plus allocation profile/top
+evidence before it is accepted or explicitly deferred. Checksum, lifetime,
+schema, null/missing, and fail-closed validation must not be weakened to meet the
+allocation budget.
+
+Production `float32_vector` and `adjacency_list` nullable/missing support remains
+staged and fail-closed. Internal dense `uint32` adjacency sections are validated
+for the future vector graph path but are not authoritative collection fields yet.
 
 ## 8. Commit-Log Segment Format
 

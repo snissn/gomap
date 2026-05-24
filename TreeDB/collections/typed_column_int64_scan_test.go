@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,6 +153,31 @@ func TestTypedColumnInt64ScanFallbackWhenTypedColumnUnsupported(t *testing.T) {
 	assertTypedColumnInt64ScanValues(t, result, []int64{8, 9})
 	if !result.Diagnostics.Fallback || result.Diagnostics.FallbackReason != "typed_column_not_selected" || result.Diagnostics.DirectTypedColumnAssetReads != 0 {
 		t.Fatalf("diagnostics=%+v want typed-row fallback", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64ScanNullableTypedColumnUnsupportedFailsClosed(t *testing.T) {
+	d := openTypedColumnInt64ScanDB(t)
+	defer func() { _ = d.Close() }()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Nullable: true, Owner: TypedStorageOwnerColumnPart}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 0})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "nullable=true") {
+		t.Fatalf("RunTypedColumnInt64PredicateScan err=%v want unsupported nullable typed-column int64", err)
+	}
+	if result.Diagnostics.Fallback || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.FallbackReads != 0 || len(result.Rows) != 0 {
+		t.Fatalf("result=%+v want fail-closed without document fallback/materialization", result)
 	}
 }
 

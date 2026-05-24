@@ -89,7 +89,10 @@ func (c *Collection) RunTypedColumnInt64PredicateScan(req TypedColumnInt64Predic
 	if hintErr != nil {
 		return TypedColumnInt64PredicateScanResult{}, hintErr
 	}
-	hintTypedColumnOwner := hintDeclared && hintColumn.ValueType == ColumnStoreValueInt64 && !hintColumn.Nullable && columnStoreColumnIsTypedColumnPart(hintColumn)
+	if hintDeclared && columnStoreColumnIsTypedColumnPart(hintColumn) && (hintColumn.ValueType != ColumnStoreValueInt64 || hintColumn.Nullable) {
+		return TypedColumnInt64PredicateScanResult{}, typedColumnInt64PredicateUnsupportedColumnError(req.Column, hintColumn)
+	}
+	hintTypedColumnOwner := hintDeclared && hintColumn.ValueType == ColumnStoreValueInt64 && columnStoreColumnIsTypedColumnPart(hintColumn)
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
 	if closeView != nil {
 		defer closeView()
@@ -109,7 +112,7 @@ func (c *Collection) RunTypedColumnInt64PredicateScan(req TypedColumnInt64Predic
 		return c.runTypedColumnInt64PredicateScanDocumentFallback(req, cfg, "undeclared_column", start)
 	}
 	if col.ValueType != ColumnStoreValueInt64 || col.Nullable {
-		return TypedColumnInt64PredicateScanResult{}, fmt.Errorf("%w: typed-column int64 predicate column %q has type=%q nullable=%v", ErrColumnQueryPlanUnsupported, req.Column, col.ValueType, col.Nullable)
+		return TypedColumnInt64PredicateScanResult{}, typedColumnInt64PredicateUnsupportedColumnError(req.Column, col)
 	}
 	if !columnStoreColumnIsTypedColumnPart(col) {
 		if view.MutationParts != 0 {
@@ -121,6 +124,10 @@ func (c *Collection) RunTypedColumnInt64PredicateScan(req TypedColumnInt64Predic
 		return c.runTypedColumnInt64PredicateScanDocumentFallback(req, cfg, "mutation_visibility_requires_document_reconstruction", start)
 	}
 	return c.runTypedColumnInt64PredicateScanDirect(view, req, cfg, start)
+}
+
+func typedColumnInt64PredicateUnsupportedColumnError(column string, col ColumnStoreColumn) error {
+	return fmt.Errorf("%w: typed-column int64 predicate column %q has type=%q nullable=%v", ErrColumnQueryPlanUnsupported, column, col.ValueType, col.Nullable)
 }
 
 func validateTypedColumnInt64PredicateScanRequest(req TypedColumnInt64PredicateScanRequest) error {

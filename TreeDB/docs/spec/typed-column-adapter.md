@@ -32,9 +32,13 @@ derived accelerators authoritative.
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row. |
 | `adjacency_list` | fail closed | Internal dense `uint32` sections exist for #1756 validation, but production publication remains closed until fixed-degree adjacency schema metadata exists. |
 
-Nullable/missing adapter values still fail closed because the transplanted part
-builder does not yet have a TreeDB nullable typed-column representation.
-Adjacency publication remains staged after #1756.
+Nullable scalar adapter support starts with int64: explicit JSON null maps to
+`nullable_int64` null bitmap rows, omitted paths map to its default/missing
+bitmap rows, and present values map to the encoded int64 payload. Nullable bool,
+float, double, and string column-part publication remains staged until their
+per-type encodings are specified. Vector and adjacency nullable/missing support
+also remains staged/fail-closed. Adjacency publication remains staged after
+#1756.
 
 Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows
@@ -56,9 +60,13 @@ For inserts and updates with scalar or fixed-dimension vector
 Deletes publish only a typed-row tombstone asset. Retained-payload
 reconstruction finds the latest visible typed-row locator for a document ID and,
 when that locator's generation has typed-column fields, reads the matching
-`typed_column_part` by row index. Reopen/recovery uses the manifest refs and
-existing typed asset manager paths; typed-column refs participate in reachability
-and rewrite/GC eligibility as durable typed-storage assets.
+`typed_column_part` by row index. For nullable typed-column fields, reconstruction
+must preserve source-document intent: present/non-null rows write the declared
+path and value, explicit-null rows write the declared path with JSON null, and
+missing/default rows leave the declared path absent from the retained-payload
+reconstruction. Reopen/recovery uses the manifest refs and existing typed asset
+manager paths; typed-column refs participate in reachability and rewrite/GC
+eligibility as durable typed-storage assets.
 
 ## Resource Seam
 
@@ -83,6 +91,34 @@ production retained-payload behavior.
 direct views. Readers must validate lifetime, range, length, endian mode, and
 alignment through #1736 `mappedresource` handles before exposing direct typed
 views; misaligned direct views fall back to heap/scratch decode or fail closed.
+
+## Query, Predicate, and Allocation Boundary
+
+The explicit typed-column int64 predicate scan supports only non-nullable int64
+`typed_column_part` fields today. If the requested typed-column field is
+nullable, or if nullable metadata is observed on the direct typed-column int64
+path, the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not
+fall back to full-document reconstruction/materialization, and it must not treat
+null or missing rows as integer zero. Broader optimizer routing, string predicate
+expansion, aggregate integration, and vector/adjacency nullable scans are
+deferred to follow-up issues.
+
+Direct typed-column predicate paths must preserve hot-path allocation discipline
+and should actively remove existing avoidable allocations or obvious local
+overhead in the touched path when that cleanup is bounded and testable. Use
+typed-column sections, decoder scratch, setup-time decoder/metadata construction,
+direct validated views, and pre-sized output buffers rather than per-row maps,
+wrappers, interface values, closures, or string conversions. Nullable/missing
+codec, scan, and reconstruction merge benchmarks must time the core typed-column
+hot loop separately from public document materialization and target 0 allocs/op
+after setup. Touched inner loops must be measurably no worse, and preferably
+better, on `B/op` and `allocs/op`; if benchmarks or allocation profiles expose
+allocations in touched functions, the PR must fix them or explicitly call out why
+they are out of scope with a linked follow-up recommendation. Any remaining
+hot-path allocation requires baseline-versus-final `B/op`/`allocs/op` evidence
+and an allocation profile/top that names and justifies the source or defers it
+with rationale. These allocation targets do not relax checksum, lifetime, schema,
+or fail-closed validation.
 
 ## Boundary
 
