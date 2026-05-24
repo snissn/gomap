@@ -248,6 +248,52 @@ func validateTypedColumnInt64PredicateScanRequest(req TypedColumnInt64PredicateS
 	return nil
 }
 
+type typedColumnPhysicalAssetPairingReasonError struct {
+	reason ColumnPublishOperation
+}
+
+func (e typedColumnPhysicalAssetPairingReasonError) Error() string {
+	return fmt.Sprintf("collections: typed-column physical asset pairing requires insert-only physical refs, got %s", e.reason)
+}
+
+func validateTypedColumnPhysicalAssetPairing(refsByGeneration map[uint64]columnManifestAssetRefForScan, assetRefs []columnManifestAssetRefForScan) (map[uint64]struct{}, error) {
+	physicalRefsByGeneration := make(map[uint64]struct{}, len(assetRefs))
+	for _, physical := range assetRefs {
+		if physical.Reason != ColumnPublishOperationInsert {
+			return nil, typedColumnPhysicalAssetPairingReasonError{reason: physical.Reason}
+		}
+		if _, ok := refsByGeneration[physical.Ref.Generation]; !ok {
+			return nil, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
+		}
+		if _, exists := physicalRefsByGeneration[physical.Ref.Generation]; exists {
+			return nil, fmt.Errorf("collections: duplicate physical row asset ref for generation=%d", physical.Ref.Generation)
+		}
+		physicalRefsByGeneration[physical.Ref.Generation] = struct{}{}
+	}
+	for generation := range refsByGeneration {
+		if _, ok := physicalRefsByGeneration[generation]; !ok {
+			return nil, fmt.Errorf("collections: missing physical row asset for typed_column_part generation=%d", generation)
+		}
+	}
+	return physicalRefsByGeneration, nil
+}
+
+func typedColumnPhysicalAssetPairingScanError(err error) error {
+	var reasonErr typedColumnPhysicalAssetPairingReasonError
+	if errors.As(err, &reasonErr) {
+		return fmt.Errorf("collections: typed-column int64 predicate scan requires insert-only physical refs, got %s", reasonErr.reason)
+	}
+	return err
+}
+
+func typedColumnPhysicalAssetPairingAggregateError(err error) error {
+	var reasonErr typedColumnPhysicalAssetPairingReasonError
+	if errors.As(err, &reasonErr) {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate requires insert-only physical refs, got %s", reasonErr.reason)
+	}
+	return err
+}
+
 func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalScanSnapshotView, req TypedColumnInt64PredicateScanRequest, cfg ColumnStoreConfig, start time.Time) (TypedColumnInt64PredicateScanResult, error) {
 	diag := typedColumnInt64PredicateDiagnosticsFromView(view)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
@@ -277,23 +323,8 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	if len(refsByGeneration) == 0 {
 		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate scan")
 	}
-	physicalRefsByGeneration := make(map[uint64]struct{}, len(view.AssetRefs))
-	for _, physical := range view.AssetRefs {
-		if physical.Reason != ColumnPublishOperationInsert {
-			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate scan requires insert-only physical refs, got %s", physical.Reason)
-		}
-		if _, ok := refsByGeneration[physical.Ref.Generation]; !ok {
-			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
-		}
-		if _, exists := physicalRefsByGeneration[physical.Ref.Generation]; exists {
-			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate physical row asset ref for generation=%d", physical.Ref.Generation)
-		}
-		physicalRefsByGeneration[physical.Ref.Generation] = struct{}{}
-	}
-	for generation := range refsByGeneration {
-		if _, ok := physicalRefsByGeneration[generation]; !ok {
-			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: missing physical row asset for typed_column_part generation=%d", generation)
-		}
+	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingScanError(err)
 	}
 
 	mgr := mappedresource.NewManager()
@@ -397,23 +428,8 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	if len(refsByGeneration) == 0 {
 		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate aggregate")
 	}
-	physicalRefsByGeneration := make(map[uint64]struct{}, len(view.AssetRefs))
-	for _, physical := range view.AssetRefs {
-		if physical.Reason != ColumnPublishOperationInsert {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate aggregate requires insert-only physical refs, got %s", physical.Reason)
-		}
-		if _, ok := refsByGeneration[physical.Ref.Generation]; !ok {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
-		}
-		if _, exists := physicalRefsByGeneration[physical.Ref.Generation]; exists {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate physical row asset ref for generation=%d", physical.Ref.Generation)
-		}
-		physicalRefsByGeneration[physical.Ref.Generation] = struct{}{}
-	}
-	for generation := range refsByGeneration {
-		if _, ok := physicalRefsByGeneration[generation]; !ok {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: missing physical row asset for typed_column_part generation=%d", generation)
-		}
+	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingAggregateError(err)
 	}
 
 	mgr := mappedresource.NewManager()

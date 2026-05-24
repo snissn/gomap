@@ -390,6 +390,85 @@ func TestTypedColumnInt64AggregateCorruptStaleMismatchFailClosed(t *testing.T) {
 	})
 }
 
+func TestValidateTypedColumnPhysicalAssetPairing(t *testing.T) {
+	typedRefs := func(generations ...uint64) map[uint64]columnManifestAssetRefForScan {
+		refs := make(map[uint64]columnManifestAssetRefForScan, len(generations))
+		for _, generation := range generations {
+			refs[generation] = columnManifestAssetRefForScan{
+				Ref:    ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Generation: generation, PartID: typedColumnPartAssetPartID},
+				Reason: ColumnPublishOperationInsert,
+			}
+		}
+		return refs
+	}
+	physicalRef := func(generation uint64, reason ColumnPublishOperation) columnManifestAssetRefForScan {
+		return columnManifestAssetRefForScan{
+			Ref:    ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: columnPhysicalRowAssetPartID},
+			Reason: reason,
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		typed     map[uint64]columnManifestAssetRefForScan
+		physical  []columnManifestAssetRefForScan
+		want      []uint64
+		wantError string
+	}{
+		{
+			name:     "paired_generations",
+			typed:    typedRefs(1, 2),
+			physical: []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert), physicalRef(2, ColumnPublishOperationInsert)},
+			want:     []uint64{1, 2},
+		},
+		{
+			name:      "rejects_non_insert_physical_ref",
+			typed:     typedRefs(1),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationUpdate)},
+			wantError: "insert-only physical refs, got update",
+		},
+		{
+			name:      "rejects_missing_typed_ref",
+			typed:     typedRefs(1),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert), physicalRef(2, ColumnPublishOperationInsert)},
+			wantError: "missing typed_column_part asset for generation=2",
+		},
+		{
+			name:      "rejects_duplicate_physical_ref",
+			typed:     typedRefs(1),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert), physicalRef(1, ColumnPublishOperationInsert)},
+			wantError: "duplicate physical row asset ref for generation=1",
+		},
+		{
+			name:      "rejects_missing_physical_ref",
+			typed:     typedRefs(1, 2),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert)},
+			wantError: "missing physical row asset for typed_column_part generation=2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validateTypedColumnPhysicalAssetPairing(tc.typed, tc.physical)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("validateTypedColumnPhysicalAssetPairing err=%v want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateTypedColumnPhysicalAssetPairing: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("physical refs by generation=%v want %v", got, tc.want)
+			}
+			for _, generation := range tc.want {
+				if _, ok := got[generation]; !ok {
+					t.Fatalf("physical refs by generation=%v missing %d", got, generation)
+				}
+			}
+		})
+	}
+}
+
 func TestTypedColumnInt64AggregateMissingPhysicalRefFailsClosed(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
