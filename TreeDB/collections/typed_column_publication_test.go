@@ -229,6 +229,77 @@ func TestTypedColumnReconstructionHybridOwners(t *testing.T) {
 	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
 }
 
+func TestTypedColumnReconstructionNullableScalarHybridOwnersCheckpointReopen(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnNullableScalarPartCollection1784(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2"), []byte("e3")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":null,"score":2.5,"flag":true,"payload":"explicit-null"}`),
+		[]byte(`{"time_us":2,"kind":"post","flag":false,"payload":"missing-score"}`),
+		[]byte(`{"time_us":3,"score":null,"flag":null,"payload":"mixed-null"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, d, col, 1, 1)
+	assertTypedColumnNullableRows1784(t, d, col, 1)
+
+	got, err := col.Get([]byte("e1"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get e1: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":1,"kind":null,"score":2.5,"flag":true,"payload":"explicit-null"}`))
+	got, err = col.Get([]byte("e2"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get e2: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":2,"kind":"post","flag":false,"payload":"missing-score"}`))
+	got, err = col.Get([]byte("e3"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get e3: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"time_us":3,"score":null,"flag":null,"payload":"mixed-null"}`))
+
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("nullable_events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	assertTypedColumnManifestShape1755(t, reopened, reopenedCol, 1, 1)
+	for _, tc := range []struct {
+		id   string
+		want []byte
+	}{
+		{id: "e1", want: []byte(`{"time_us":1,"kind":null,"score":2.5,"flag":true,"payload":"explicit-null"}`)},
+		{id: "e2", want: []byte(`{"time_us":2,"kind":"post","flag":false,"payload":"missing-score"}`)},
+		{id: "e3", want: []byte(`{"time_us":3,"score":null,"flag":null,"payload":"mixed-null"}`)},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			got, err := reopenedCol.Get([]byte(tc.id))
+			if err != nil {
+				t.Fatalf("reopened Get %s: %v", tc.id, err)
+			}
+			assertJSONEqualM13C(t, got, tc.want)
+		})
+	}
+}
+
 func TestTypedColumnReconstructionScanHybridOwners(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -270,15 +341,18 @@ func TestTypedColumnReconstructionScanHybridOwners(t *testing.T) {
 func TestTypedColumnReconstructionCacheDecodesOncePerGeneration1781(t *testing.T) {
 	const rows = 8
 	col, snap, visibleRows, cfg, manifestRootID := typedColumnReconstructionCacheFixture1781(t, rows)
-	cache := &typedColumnPartReconstructionCache{Rows: make(map[uint64][]typedColumnAdapterRow, 1)}
+	typedFields := columnStoreTypedColumnPartFields(cfg)
+	cache := &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues, 1), Fields: typedFields}
+	typedScratch := make([]columnDeclaredValue, 0, len(typedFields))
+	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
 	for _, row := range visibleRows {
-		typedValues, err := col.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, cfg, row, cache)
+		typedValues, err := col.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(snap, manifestRootID, cfg, row, cache, typedScratch)
 		if err != nil {
-			t.Fatalf("typedColumnPartValuesForVisibleRowAtSnapshotWithCache: %v", err)
+			t.Fatalf("typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache: %v", err)
 		}
-		fullValues, err := mergeColumnReconstructionValues(cfg, row.Values, typedValues.Values)
+		fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
 		if err != nil {
-			t.Fatalf("mergeColumnReconstructionValues: %v", err)
+			t.Fatalf("mergeColumnReconstructionValuesInto: %v", err)
 		}
 		if len(fullValues) != len(cfg.Columns) {
 			t.Fatalf("full values=%d want columns=%d", len(fullValues), len(cfg.Columns))
@@ -292,20 +366,23 @@ func TestTypedColumnReconstructionCacheDecodesOncePerGeneration1781(t *testing.T
 func BenchmarkTypedColumnReconstructionCache1781(b *testing.B) {
 	const rows = 128
 	col, snap, visibleRows, cfg, manifestRootID := typedColumnReconstructionCacheFixture1781(b, rows)
+	typedFields := columnStoreTypedColumnPartFields(cfg)
 	b.ReportAllocs()
 	b.ResetTimer()
 	var reconstructedRows int64
 	var partLoads, typedPartDecodes, cacheHits, cacheMisses uint64
 	for i := 0; i < b.N; i++ {
-		cache := &typedColumnPartReconstructionCache{Rows: make(map[uint64][]typedColumnAdapterRow, 1)}
+		cache := &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues, 1), Fields: typedFields}
+		typedScratch := make([]columnDeclaredValue, 0, len(typedFields))
+		mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
 		for _, row := range visibleRows {
-			typedValues, err := col.typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap, manifestRootID, cfg, row, cache)
+			typedValues, err := col.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(snap, manifestRootID, cfg, row, cache, typedScratch)
 			if err != nil {
-				b.Fatalf("typedColumnPartValuesForVisibleRowAtSnapshotWithCache: %v", err)
+				b.Fatalf("typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache: %v", err)
 			}
-			fullValues, err := mergeColumnReconstructionValues(cfg, row.Values, typedValues.Values)
+			fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
 			if err != nil {
-				b.Fatalf("mergeColumnReconstructionValues: %v", err)
+				b.Fatalf("mergeColumnReconstructionValuesInto: %v", err)
 			}
 			if len(fullValues) == 0 {
 				b.Fatal("empty reconstruction values")
@@ -1050,6 +1127,28 @@ func createTypedColumnPartCollection1755(t testing.TB, d *backenddb.DB) *Collect
 	return col
 }
 
+func createTypedColumnNullableScalarPartCollection1784(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+		{Name: "score", Path: "score", ValueType: ColumnStoreValueDouble, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+		{Name: "flag", Path: "flag", ValueType: ColumnStoreValueBool, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "nullable_events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("nullable_events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return col
+}
+
 func createTypedColumnVectorPartCollection1756(t testing.TB, d *backenddb.DB) *Collection {
 	t.Helper()
 	cfg := testColumnStoreConfig(nil)
@@ -1123,6 +1222,46 @@ func assertTypedColumnLatestRows1755(t testing.TB, d *backenddb.DB, col *Collect
 		if kind.String != want[i].Kind || score.Double != want[i].Score || flag.Bool != want[i].Flag {
 			t.Fatalf("row[%d] values kind=%+v score=%+v flag=%+v want %+v", i, kind, score, flag, want[i])
 		}
+	}
+}
+
+func assertTypedColumnNullableRows1784(t testing.TB, d *backenddb.DB, col *Collection, generation uint64) {
+	t.Helper()
+	var ref ColumnAssetRef
+	found := false
+	for _, candidate := range typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col)) {
+		if candidate.Generation == generation {
+			ref = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing typed-column part for generation=%d", generation)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatalf("read typed-column part: %v", err)
+	}
+	part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(*col.Meta().Options.ColumnStore)}, raw)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromBytes: %v", err)
+	}
+	rows, err := part.scanRows()
+	if err != nil {
+		t.Fatalf("scanRows: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("typed nullable rows=%d want 3", len(rows))
+	}
+	if kind := rows[0].Values["kind"]; !kind.Present || !kind.Null {
+		t.Fatalf("row0 kind=%+v want explicit null", kind)
+	}
+	if score := rows[1].Values["score"]; score.Present || !score.Null {
+		t.Fatalf("row1 score=%+v want missing/null marker", score)
+	}
+	if flag := rows[2].Values["flag"]; !flag.Present || !flag.Null {
+		t.Fatalf("row2 flag=%+v want explicit null", flag)
 	}
 }
 

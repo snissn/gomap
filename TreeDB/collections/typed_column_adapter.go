@@ -63,6 +63,11 @@ type typedColumnAdapterPart struct {
 	Dictionary map[string]map[string]int64
 }
 
+type typedColumnPartDecodedValues struct {
+	PrimaryIDs []int64
+	Values     [][]columnDeclaredValue
+}
+
 type typedColumnAdapterResourceReader struct {
 	Manager       *mappedresource.Manager
 	Image         typedcolumn.ColumnPartImage
@@ -373,6 +378,57 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 		return typedcolumn.ColumnPartImage{}, errors.New("collections: nil typed-column adapter part")
 	}
 	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary})
+}
+
+func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValues, error) {
+	if p == nil || p.Part == nil {
+		return typedColumnPartDecodedValues{}, errors.New("collections: nil typed-column adapter part")
+	}
+	ids, err := p.scanInt64ColumnValues(typedColumnAdapterPrimaryIDColumn)
+	if err != nil {
+		return typedColumnPartDecodedValues{}, err
+	}
+	values := make([][]columnDeclaredValue, len(p.Columns))
+	for i, column := range p.Columns {
+		columnValues, err := p.scanColumnValues(column.Definition.Name)
+		if err != nil {
+			return typedColumnPartDecodedValues{}, err
+		}
+		if len(columnValues) != len(ids) {
+			return typedColumnPartDecodedValues{}, fmt.Errorf("collections: typed-column adapter column %q rows=%d want %d", column.Definition.Name, len(columnValues), len(ids))
+		}
+		values[i] = columnValues
+	}
+	return typedColumnPartDecodedValues{PrimaryIDs: ids, Values: values}, nil
+}
+
+func (d typedColumnPartDecodedValues) valuesForRowInto(rowIdx int, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	if rowIdx < 0 || rowIdx >= len(d.PrimaryIDs) {
+		return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside typed_column_part rows=%d", rowIdx, len(d.PrimaryIDs))
+	}
+	if d.PrimaryIDs[rowIdx] != int64(rowIdx) {
+		return nil, fmt.Errorf("collections: typed-column reconstruction locator=%d want row_index=%d", d.PrimaryIDs[rowIdx], rowIdx)
+	}
+	if cap(dst) < len(d.Values) {
+		dst = make([]columnDeclaredValue, len(d.Values))
+	} else {
+		dst = dst[:len(d.Values)]
+	}
+	for i := range d.Values {
+		if rowIdx >= len(d.Values[i]) {
+			return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside field[%d] rows=%d", rowIdx, i, len(d.Values[i]))
+		}
+		dst[i] = d.Values[i][rowIdx]
+	}
+	return dst, nil
+}
+
+func (p *typedColumnAdapterPart) scanInt64ColumnValues(columnName string) ([]int64, error) {
+	scan, err := p.Part.NewScanner().ScanProjected([]string{columnName})
+	if err != nil {
+		return nil, err
+	}
+	return scan.Columns[columnName], nil
 }
 
 func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDeclaredValue, error) {

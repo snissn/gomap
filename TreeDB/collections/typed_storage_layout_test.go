@@ -3,6 +3,7 @@ package collections
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -131,14 +132,16 @@ func TestTypedStorageLayoutTypedColumnVectorSupported(t *testing.T) {
 	}
 }
 
-func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) {
+func TestTypedStorageLayoutTypedColumnNullableVectorFailsClosed(t *testing.T) {
 	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
 		Collection: "events",
 		Fields: []TypedStorageField{{
-			Name:      "embedding_neighbors",
-			Path:      "embedding_neighbors",
-			Owner:     TypedStorageOwnerColumnPart,
-			ValueType: ColumnStoreValueAdjacencyList,
+			Name:       "embedding",
+			Path:       "embedding",
+			Owner:      TypedStorageOwnerColumnPart,
+			ValueType:  ColumnStoreValueFloat32Vector,
+			VectorDims: 3,
+			Nullable:   true,
 		}},
 	})
 	if err != nil {
@@ -149,6 +152,32 @@ func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) 
 	}
 	if err := layout.EnsurePublicationSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
 		t.Fatalf("EnsurePublicationSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
+	}
+}
+
+func TestTypedStorageLayoutTypedColumnUnsupportedValueFailsClosed(t *testing.T) {
+	for _, nullable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("adjacency_nullable_%t", nullable), func(t *testing.T) {
+			layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+				Collection: "events",
+				Fields: []TypedStorageField{{
+					Name:      "embedding_neighbors",
+					Path:      "embedding_neighbors",
+					Owner:     TypedStorageOwnerColumnPart,
+					ValueType: ColumnStoreValueAdjacencyList,
+					Nullable:  nullable,
+				}},
+			})
+			if err != nil {
+				t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+			}
+			if err := layout.EnsureReadSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
+				t.Fatalf("EnsureReadSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
+			}
+			if err := layout.EnsurePublicationSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
+				t.Fatalf("EnsurePublicationSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
+			}
+		})
 	}
 }
 

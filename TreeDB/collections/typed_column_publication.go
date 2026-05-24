@@ -211,7 +211,8 @@ type typedColumnPartVisibleValues struct {
 }
 
 type typedColumnPartReconstructionCache struct {
-	Rows       map[uint64][]typedColumnAdapterRow
+	Parts      map[uint64]typedColumnPartDecodedValues
+	Fields     []TypedStorageField
 	Refs       map[uint64]columnManifestAssetRefForScan
 	RefsLoaded bool
 
@@ -226,20 +227,32 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshot(snap *backendd
 }
 
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache *typedColumnPartReconstructionCache) (typedColumnPartVisibleValues, error) {
+	return c.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(snap, manifestRootID, cfg, physicalRow, cache, nil)
+}
+
+func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache *typedColumnPartReconstructionCache, dst []columnDeclaredValue) (typedColumnPartVisibleValues, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
 		return typedColumnPartVisibleValues{}, nil
 	}
-	fields := columnStoreTypedColumnPartFields(cfg)
+	var fields []TypedStorageField
+	if cache != nil && cache.Fields != nil {
+		fields = cache.Fields
+	} else {
+		fields = columnStoreTypedColumnPartFields(cfg)
+		if cache != nil {
+			cache.Fields = fields
+		}
+	}
 	if len(fields) == 0 {
 		return typedColumnPartVisibleValues{}, nil
 	}
 	if physicalRow.Deleted {
 		return typedColumnPartVisibleValues{}, nil
 	}
-	var rows []typedColumnAdapterRow
+	var decoded typedColumnPartDecodedValues
 	var ok bool
-	if cache != nil && cache.Rows != nil {
-		rows, ok = cache.Rows[physicalRow.Generation]
+	if cache != nil && cache.Parts != nil {
+		decoded, ok = cache.Parts[physicalRow.Generation]
 	}
 	if ok {
 		cache.CacheHits++
@@ -275,7 +288,7 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
-		rows, err = part.scanRows()
+		decoded, err = part.scanDecodedValues()
 		closeErr := readCache.close()
 		if err != nil {
 			if closeErr != nil {
@@ -290,26 +303,18 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 			cache.TypedPartDecodes++
 		}
 		if cache != nil {
-			if cache.Rows == nil {
-				cache.Rows = make(map[uint64][]typedColumnAdapterRow)
+			if cache.Parts == nil {
+				cache.Parts = make(map[uint64]typedColumnPartDecodedValues)
 			}
-			cache.Rows[physicalRow.Generation] = rows
+			cache.Parts[physicalRow.Generation] = decoded
 		}
 	}
-	if physicalRow.RowIndex < 0 || physicalRow.RowIndex >= len(rows) {
-		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside typed_column_part rows=%d", physicalRow.RowIndex, len(rows))
+	if len(decoded.Values) != len(fields) {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decoded fields=%d want %d", len(decoded.Values), len(fields))
 	}
-	row := rows[physicalRow.RowIndex]
-	if row.PrimaryID != int64(physicalRow.RowIndex) {
-		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction locator=%d want row_index=%d", row.PrimaryID, physicalRow.RowIndex)
-	}
-	values := make([]columnDeclaredValue, len(fields))
-	for i, field := range fields {
-		value, ok := row.Values[field.Path]
-		if !ok {
-			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction missing field %q", field.Path)
-		}
-		values[i] = value
+	values, err := decoded.valuesForRowInto(physicalRow.RowIndex, dst)
+	if err != nil {
+		return typedColumnPartVisibleValues{}, err
 	}
 	return typedColumnPartVisibleValues{Values: values}, nil
 }

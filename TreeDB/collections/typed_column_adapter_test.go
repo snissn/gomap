@@ -18,6 +18,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
+var typedColumnNullableBenchSink1784 int64
+
 func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 	want := map[ColumnStoreValueType]typedColumnAdapterTypeStatus{
 		ColumnStoreValueBool:          typedColumnAdapterRepresented,
@@ -493,6 +495,91 @@ func TestTypedColumnAdapterNullableCorruptPayloadFailsClosed(t *testing.T) {
 	if _, err := parsed.scanColumnValues("count"); err == nil || !strings.Contains(err.Error(), "both null and default") {
 		t.Fatalf("scan corrupt nullable err=%v want overlap failure", err)
 	}
+}
+
+func BenchmarkTypedColumnNullableDecodedValuesRowHotLoop1784(b *testing.B) {
+	fields := []TypedStorageField{
+		func() TypedStorageField {
+			f := typedColumnAdapterField("count", ColumnStoreValueInt64)
+			f.Nullable = true
+			return f
+		}(),
+		func() TypedStorageField {
+			f := typedColumnAdapterField("kind", ColumnStoreValueString)
+			f.Nullable = true
+			return f
+		}(),
+		func() TypedStorageField {
+			f := typedColumnAdapterField("flag", ColumnStoreValueBool)
+			f.Nullable = true
+			return f
+		}(),
+	}
+	const rowsN = 128
+	rows := make([]typedColumnAdapterRow, rowsN)
+	for i := range rows {
+		kind := columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: "alpha"}
+		count := columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: int64(i)}
+		flag := columnDeclaredValue{Type: ColumnStoreValueBool, Present: true, Bool: i%2 == 0}
+		if i%5 == 0 {
+			kind = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, Null: true}
+		}
+		if i%7 == 0 {
+			count = columnDeclaredValue{Type: ColumnStoreValueInt64, Present: false, Null: true}
+		}
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i), Values: map[string]columnDeclaredValue{
+			"count": count,
+			"kind":  kind,
+			"flag":  flag,
+		}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: fields}, rows)
+	if err != nil {
+		b.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	decoded, err := part.scanDecodedValues()
+	if err != nil {
+		b.Fatalf("scanDecodedValues: %v", err)
+	}
+	dst := make([]columnDeclaredValue, 0, len(fields))
+	var sink int64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		values, err := decoded.valuesForRowInto(i&(rowsN-1), dst)
+		if err != nil {
+			b.Fatalf("valuesForRowInto: %v", err)
+		}
+		sink += int64(len(values)) + values[0].Int64
+	}
+	typedColumnNullableBenchSink1784 += sink
+}
+
+func BenchmarkTypedColumnNullableMergeHotLoop1784(b *testing.B) {
+	cfg := ColumnStoreConfig{Columns: []ColumnStoreColumn{
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+		{Name: "score", Path: "score", ValueType: ColumnStoreValueDouble, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+		{Name: "flag", Path: "flag", ValueType: ColumnStoreValueBool, Owner: TypedStorageOwnerColumnPart, Nullable: true},
+	}}
+	rowValues := []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 42}}
+	typedValues := []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, Null: true},
+		{Type: ColumnStoreValueDouble, Present: false, Null: true},
+		{Type: ColumnStoreValueBool, Present: true, Bool: true},
+	}
+	dst := make([]columnDeclaredValue, 0, len(cfg.Columns))
+	var sink int64
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		values, err := mergeColumnReconstructionValuesInto(cfg, rowValues, typedValues, dst)
+		if err != nil {
+			b.Fatalf("mergeColumnReconstructionValuesInto: %v", err)
+		}
+		sink += int64(len(values)) + values[0].Int64
+	}
+	typedColumnNullableBenchSink1784 += sink
 }
 
 func TestTypedColumnAdapterStringDictionaryHighCardinalityStable(t *testing.T) {
