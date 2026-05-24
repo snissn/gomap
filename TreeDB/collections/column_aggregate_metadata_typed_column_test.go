@@ -314,6 +314,97 @@ func BenchmarkAggregateMetadataTypedColumnPart1786(b *testing.B) {
 		}
 		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
 	})
+	b.Run("document_full_scan_reconstruction", func(b *testing.B) {
+		d, col := openAggregateMetadataDocumentFixture1786(b, events)
+		defer func() { _ = d.Close() }()
+		preview, err := runAggregateMetadataDocumentFullScan1786(col)
+		if err != nil {
+			b.Fatalf("preview document scan: %v", err)
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		for i := 0; i < b.N; i++ {
+			result, err := runAggregateMetadataDocumentFullScan1786(col)
+			if err != nil {
+				b.Fatalf("document scan: %v", err)
+			}
+			last = result.Diagnostics
+		}
+		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
+	})
+}
+
+func openAggregateMetadataDocumentFixture1786(tb testing.TB, events []columnPhysicalQueryEventM13B) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	d := openTypedColumnInt64ScanDB(tb)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+		tb.Fatalf("CreateCollection document fixture: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		tb.Fatalf("OpenCollection document fixture: %v", err)
+	}
+	insertAggregateMetadataEvents1786(tb, col, events)
+	return d, col
+}
+
+func runAggregateMetadataDocumentFullScan1786(col *Collection) (ColumnPhysicalQueryResult, error) {
+	fallbackCfg := ColumnStoreConfig{Columns: []ColumnStoreColumn{
+		{Name: "did", Path: "did", ValueType: ColumnStoreValueString},
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+	}}
+	spans := make(map[string]columnPhysicalQuerySpan)
+	result := ColumnPhysicalQueryResult{}
+	_, err := col.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
+		result.Diagnostics.RowMaterializations++
+		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.FallbackReads++
+		result.Diagnostics.PhysicalBytesScanned += int64(len(record.Document))
+		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
+		if err != nil {
+			return false, err
+		}
+		if len(rows) != 1 || len(rows[0].Values) != 2 {
+			return false, errors.New("collections: document fallback failed to extract aggregate columns")
+		}
+		groupValue := rows[0].Values[0]
+		valueValue := rows[0].Values[1]
+		if groupValue.Type != ColumnStoreValueString || valueValue.Type != ColumnStoreValueInt64 || groupValue.Null || valueValue.Null {
+			return false, fmt.Errorf("%w: document aggregate fallback encountered incompatible values", ErrColumnQueryPlanUnsupported)
+		}
+		group := groupValue.String
+		if group == "" && groupValue.StringBytes != nil {
+			group = string(groupValue.StringBytes)
+		}
+		cur, ok := spans[group]
+		if !ok {
+			spans[group] = columnPhysicalQuerySpan{min: valueValue.Int64, max: valueValue.Int64}
+		} else {
+			if valueValue.Int64 < cur.min {
+				cur.min = valueValue.Int64
+			}
+			if valueValue.Int64 > cur.max {
+				cur.max = valueValue.Int64
+			}
+			spans[group] = cur
+		}
+		result.Diagnostics.RowsScanned++
+		result.Diagnostics.ReduceRows++
+		return true, nil
+	})
+	if err != nil {
+		return result, err
+	}
+	result.Groups = make([]ColumnPhysicalQueryGroup, 0, len(spans))
+	for key, span := range spans {
+		result.Groups = append(result.Groups, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+	}
+	sortColumnPhysicalQueryGroupsByKey(result.Groups)
+	result.Diagnostics.ResultGroups = len(result.Groups)
+	return result, nil
 }
 
 func reportAggregateMetadataPhysicalQueryBench1786(b *testing.B, diag ColumnPhysicalQueryDiagnostics, rows int) {
@@ -335,8 +426,10 @@ func reportAggregateMetadataPhysicalQueryBench1786(b *testing.B, diag ColumnPhys
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
 	b.ReportMetric(float64(diag.PhysicalBytesScanned), "physical_bytes_scanned/op")
 	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
+	b.ReportMetric(float64(diag.FallbackReads), "fallback_reads/op")
 	b.ReportMetric(float64(diag.DecodedBlocks), "decoded_blocks/op")
 	b.ReportMetric(float64(diag.RowMaterializations), "row_materializations/op")
+	b.ReportMetric(float64(diag.DocumentMaterializations), "document_materializations/op")
 	b.ReportMetric(float64(diag.ReconstructionRows), "reconstruction_rows/op")
 }
 
@@ -345,7 +438,7 @@ func assertAggregateMetadataTypedColumnDiagnostics1786(t testing.TB, diag Column
 	if diag.MetadataHits == 0 || diag.MetadataMisses != 0 || diag.DecodedMetadataBytes == 0 {
 		t.Fatalf("metadata diagnostics=%+v want hits and decoded bytes", diag)
 	}
-	if diag.RowsScanned != 0 || diag.DecodedBlocks != 0 || diag.RowMaterializations != 0 || diag.ReconstructionRows != 0 {
+	if diag.RowsScanned != 0 || diag.DecodedBlocks != 0 || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.ReconstructionRows != 0 {
 		t.Fatalf("typed-column aggregate metadata materialized/scanned rows: %+v", diag)
 	}
 	if diag.ReduceRows != wantRows || diag.ResultGroups == 0 {

@@ -109,7 +109,8 @@ go test ./TreeDB/collections \
 
 Key counters: `metadata_hits/op`, `metadata_decoded_bytes/op`,
 `mapped_bytes/op`, `heap_copy_bytes/op`, `rows_scanned/op`,
-`row_materializations/op`, and `reconstruction_rows/op`.
+`row_materializations/op`, `document_materializations/op`, and
+`reconstruction_rows/op`.
 
 ### Selecting #1808 matrix shapes and distributions
 

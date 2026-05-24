@@ -69,7 +69,9 @@ type ColumnPhysicalQueryDiagnostics struct {
 	RowsScanned                int
 	DeletedRows                int
 	ProjectedColumns           int
+	FallbackReads              int
 	RowMaterializations        int
+	DocumentMaterializations   int
 	PhysicalBytesScanned       int64
 	DecodedMetadataBytes       uint64
 	MappedBytes                uint64
