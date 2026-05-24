@@ -163,6 +163,7 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 	defer func() { _ = readCache.close() }()
 
 	result := TypedColumnStringPredicateScanResult{Diagnostics: diag}
+	var scanScratch typedColumnStringPredicateScanScratch
 	var resolver *typedColumnLatestRowResolver
 	if view.MutationParts != 0 {
 		resolver, err = buildTypedColumnLatestRowResolver(view, &readCache, &result.Diagnostics)
@@ -209,7 +210,7 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 				return result, fmt.Errorf("collections: typed-column string predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
-		partPruned, err := scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, req.Value, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility)
+		partPruned, err := scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, req.Value, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility, &scanScratch)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column string predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}

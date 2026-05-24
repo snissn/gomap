@@ -1271,7 +1271,13 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 	return !decodedAny && len(valueCol.Blocks) != 0, nil
 }
 
-func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, code uint32, value string, generation uint64, partID uint64, result *TypedColumnStringPredicateScanResult, visibility *typedColumnLatestPhysicalPart) (bool, error) {
+type typedColumnStringPredicateScanScratch struct {
+	reader typedcolumn.GranuleReader
+	codes  []uint32
+	ids    []int64
+}
+
+func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, code uint32, value string, generation uint64, partID uint64, result *TypedColumnStringPredicateScanResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnStringPredicateScanScratch) (bool, error) {
 	if part == nil {
 		return false, errors.New("nil typed-column part")
 	}
@@ -1286,9 +1292,9 @@ func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPa
 	if valueCol.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || valueCol.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("value column is not low-cardinality uint32 or primary id column is not int64")
 	}
-	var reader typedcolumn.GranuleReader
-	var codeScratch []uint32
-	var idScratch []int64
+	if scratch == nil {
+		scratch = &typedColumnStringPredicateScanScratch{}
+	}
 	idBlockIndex := 0
 	decodedAny := false
 	for _, block := range valueCol.Blocks {
@@ -1302,16 +1308,16 @@ func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPa
 		if !ok {
 			return false, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
 		}
-		codes, err := reader.DecodeUint32CodesInto(codeScratch[:0], g)
+		codes, err := scratch.reader.DecodeUint32CodesInto(scratch.codes[:0], g)
 		if err != nil {
 			return false, err
 		}
-		codeScratch = codes
-		ids, err := reader.DecodeInt64Into(idScratch[:0], idBlock.Granule)
+		scratch.codes = codes
+		ids, err := scratch.reader.DecodeInt64Into(scratch.ids[:0], idBlock.Granule)
 		if err != nil {
 			return false, err
 		}
-		idScratch = ids
+		scratch.ids = ids
 		if len(codes) != block.Descriptor.RowCount || len(ids) != block.Descriptor.RowCount {
 			return false, fmt.Errorf("decoded rows codes=%d ids=%d want %d", len(codes), len(ids), block.Descriptor.RowCount)
 		}
