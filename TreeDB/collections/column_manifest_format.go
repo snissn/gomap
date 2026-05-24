@@ -725,7 +725,7 @@ func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnMani
 	case string(ColumnPublishOperationInsert):
 		return ColumnManifestPartRoleBase
 	default:
-		return ColumnManifestPartRoleBase
+		return ""
 	}
 }
 

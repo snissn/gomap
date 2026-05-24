@@ -131,6 +131,20 @@ func TestColumnPublishPlanAllowsZeroAssetChecksumM12A(t *testing.T) {
 	}
 }
 
+func TestColumnPublishPlanRejectsUnsupportedTypedStoragePartReason1787(t *testing.T) {
+	for _, kind := range []ColumnAssetKind{ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart} {
+		t.Run(string(kind), func(t *testing.T) {
+			asset := testColumnPublishPreparedAssetM10A()
+			asset.Ref.Kind = kind
+			asset.Reason = "udpate"
+			asset.PartRole = ColumnManifestPartRoleDelta
+			if err := validateColumnPreparedAssetForPlan(asset); err == nil || !strings.Contains(err.Error(), "unsupported column manifest part reason") {
+				t.Fatalf("validateColumnPreparedAssetForPlan err=%v want unsupported reason", err)
+			}
+		})
+	}
+}
+
 func TestColumnPublishPlanBuildsDurabilityClosureM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
@@ -636,9 +650,9 @@ func TestColumnPublishPlanAllowsReorderedClosurePreparedAssetsM10A(t *testing.T)
 
 func TestColumnPublishPlanAllowsClosurePreparedAssetReasonMismatchM10A(t *testing.T) {
 	asset := testColumnPublishPreparedAssetM10A()
-	asset.Reason = "manifest builder"
+	asset.Reason = string(ColumnPublishOperationInsert)
 	closureAsset := asset
-	closureAsset.Reason = "closure validator"
+	closureAsset.Reason = string(ColumnPublishOperationUpdate)
 	identity := ColumnManifestIdentity{Generation: 7, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0xfeedbeef}
 	input := testColumnPublishPlanInputM10A(identity, asset)
 	input.Hooks.ValidateClosure = func(ColumnPublishClosureValidationInput) (ColumnPublishDurabilityClosure, error) {
@@ -1894,6 +1908,6 @@ func testColumnPublishPreparedAssetM10A() ColumnPreparedAsset {
 		Bytes:        8192,
 		PublishID:    3,
 		GenerationID: 7,
-		Reason:       "m10a-test",
+		Reason:       string(ColumnPublishOperationInsert),
 	}
 }

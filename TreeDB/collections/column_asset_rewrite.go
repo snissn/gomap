@@ -725,8 +725,11 @@ func columnVectorGraphManifestAssetRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rowCount64), Bytes: int64(assetBytes64)}); err != nil {
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, err
+	}
+	if assetBytes64 == 0 {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest asset bytes=0 must be positive")
 	}
 	if ref.Length != int64(assetBytes64) {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: column vector graph manifest asset bytes=%d does not match ref length=%d", assetBytes64, ref.Length)
