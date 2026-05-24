@@ -731,6 +731,7 @@ func validateCompression(compression Compression) error {
 
 func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 	declared := make(map[string]struct{}, len(defs))
+	nullableDeclared := make(map[string]struct{}, len(defs))
 	rows := batch.Rows
 	for _, def := range defs {
 		declared[def.Name] = struct{}{}
@@ -777,11 +778,18 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
 			}
 			if def.Encoding != EncodingNullableInt64 {
-				if len(batch.Nulls[def.Name]) != 0 || len(batch.Defaults[def.Name]) != 0 {
+				if _, ok := batch.Nulls[def.Name]; ok {
+					return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", def.Name)
+				}
+				if _, ok := batch.Defaults[def.Name]; ok {
+					return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", def.Name)
+				}
+				if _, ok := batch.DefaultValues[def.Name]; ok {
 					return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", def.Name)
 				}
 				continue
 			}
+			nullableDeclared[def.Name] = struct{}{}
 			if err := validateOptionalBoolRows("nulls for "+def.Name, rows, batch.Nulls[def.Name]); err != nil {
 				return 0, err
 			}
@@ -799,15 +807,24 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared nullable nulls column %s", name)
 		}
+		if _, ok := nullableDeclared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", name)
+		}
 	}
 	for name := range batch.Defaults {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared nullable defaults column %s", name)
 		}
+		if _, ok := nullableDeclared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", name)
+		}
 	}
 	for name := range batch.DefaultValues {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared nullable default value column %s", name)
+		}
+		if _, ok := nullableDeclared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", name)
 		}
 	}
 	for name := range batch.Float32Vectors {

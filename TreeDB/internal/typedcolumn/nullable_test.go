@@ -91,6 +91,38 @@ func TestNullableInt64RoundTripAndFailClosedMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildColumnPartRejectsNullableMetadataForNonNullableColumn(t *testing.T) {
+	opts := Options{
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, CompressionSet: true},
+			{Name: "value", Type: ColumnTypeInt64, Encoding: EncodingDeltaVarint, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+	}
+	base := Batch{Rows: 2, Columns: map[string][]int64{
+		"id":    {0, 1},
+		"value": {10, 20},
+	}}
+	cases := []struct {
+		name string
+		mut  func(*Batch)
+	}{
+		{name: "nulls", mut: func(b *Batch) { b.Nulls = map[string][]bool{"value": nil} }},
+		{name: "defaults", mut: func(b *Batch) { b.Defaults = map[string][]bool{"value": nil} }},
+		{name: "default_value", mut: func(b *Batch) { b.DefaultValues = map[string]int64{"value": 7} }},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			batch := base
+			tt.mut(&batch)
+			_, err := BuildColumnPart(1, opts, batch)
+			if err == nil || !strings.Contains(err.Error(), "nullable metadata supplied for non-nullable column value") {
+				t.Fatalf("BuildColumnPart err=%v want non-nullable nullable metadata failure", err)
+			}
+		})
+	}
+}
+
 func BenchmarkNullableInt64Build(b *testing.B) {
 	const rows = 8192
 	input := make([]int64, rows)
