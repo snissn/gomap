@@ -174,6 +174,7 @@ Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
   - `column_store` — native TreeDB column-store benchmark/artifact suite; writes stage-separated throughput, parity, byte-accounting, manifest/recovery, `column_store_results.{json,md,html}`, `benchprof_results.{json,md}`, and `insights.{md,json,html}` when `-profile-dir` is set
+  - `collection_storage` — TreeDB collection storage-mode comparison suite across retained-document, typed-row-asset, typed-column-part, hybrid, and vector-typed-column layouts; writes semantic-comparability metadata, per-workload correctness/telemetry, `collection_storage_results.{json,md,html}`, `benchprof_results.{json,md}`, and `insights.{md,json,html}` when `-profile-dir` is set
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 
 ## Standard Profile Workflow (`benchprof`)
@@ -208,7 +209,85 @@ This writes:
 
 For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
 under `runs[].treedb_stats`, including ordered-root/root-apply and cache
-counters used by raw-engine review gates.
+counters used by raw-engine review gates. The `collection_storage` suite also
+adds `runs[].collection_workloads` entries with stable mode/workload names,
+semantic-equivalence flags, correctness-validation status, asset-byte splits,
+and materialization / typed-column / vector counters for `benchprof` rendering.
+
+## Collection Storage Suite
+
+Use `collection_storage` to compare logical TreeDB collection workloads across
+first-class storage layouts without relying on ad-hoc collection benchmarks. The
+suite builds the same deterministic JSON document fixture for every mode,
+optionally checkpoints and reopens each DB before reads, then times only the
+selected workload loops after a correctness pass. `-profile balanced` is accepted
+as a durable alias; unsafe profiles are rejected because the suite is intended as
+a comparable storage-mode gate.
+
+Stable mode names:
+
+- `document_only` — full retained JSON document, no typed-storage owners.
+- `typed_row_asset` — declared scalar fields owned by typed row assets.
+- `typed_column_part` — declared scalar fields owned by typed column parts.
+- `hybrid_document_row`, `hybrid_document_column`, `hybrid_row_column`,
+  `hybrid_document_row_column` — explicit hybrid retained-payload/typed-owner
+  layouts.
+- `vector_typed_column` — scalar row owners plus a typed-column float32 vector
+  field and column-graph vector index.
+
+Stable workload names:
+
+- `insert_batch`, `point_get`, `predicate_scan`, `aggregate`,
+  `vector_search_smoke`, `mixed`.
+
+Unsupported combinations fail closed in the report: for example,
+`vector_search_smoke` is marked unsupported for scalar-only modes instead of
+silently comparing a different workload shape. If a selected workload has no
+supported selected mode (for example `-collection-storage-modes document_only
+-collection-storage-workloads vector_search_smoke`), the command exits with a
+clear semantic error.
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_collection_storage_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -suite collection_storage \
+  -dbs treedb \
+  -profile durable \
+  -keys 10000 \
+  -batchsize 1000 \
+  -collection-storage-modes all \
+  -collection-storage-workloads all \
+  -profile-dir "$OUT" \
+  -path-label native-fastpath \
+  -progress=false
+```
+
+Collection-storage flags:
+
+- `-collection-storage-modes` CSV mode subset (`all` by default).
+- `-collection-storage-workloads` CSV workload subset (`all` by default).
+- `-collection-storage-query-count`, `-collection-storage-point-get-count`.
+- `-collection-storage-selectivity`, `-collection-storage-cardinality`,
+  `-collection-storage-payload-size`, `-collection-storage-field-count`.
+- `-collection-storage-vector-dims`, `-collection-storage-vector-top-k`,
+  `-collection-storage-include-final-fetch`.
+- `-collection-storage-checkpoint-reopen` to include the durability/recovery
+  boundary before read workloads (default true).
+- `-collection-storage-asset-read-integrity` (`verify|cached_verify|skip_checksums`;
+  relaxed modes require `-treedb-allow-unsafe`).
+
+The suite writes:
+
+- `collection_storage_results.json`, `collection_storage_results.md`,
+  `collection_storage_results.html`
+- `benchprof_results.json`, `benchprof_results.md`
+- `insights.md`, `insights.json`, `insights.html`
+- configured runtime profiles, including
+  `cpu_collection_storage_treedb_collection_storage.pprof`,
+  `allocs_collection_storage_treedb_collection_storage.pprof`,
+  `checkpoint_cpu_checkpoint_collection_storage_treedb_collection_storage.pprof`,
+  `block.pprof`, `mutex.pprof`, and `trace.out`
 
 ## Column Store Suite
 
