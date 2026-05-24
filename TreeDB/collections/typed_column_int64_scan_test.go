@@ -733,6 +733,30 @@ func TestTypedColumnInt64AggregateBenchDistributionDeterminism(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64AggregateBenchRandomUniformScattersPowerOfTwoRows(t *testing.T) {
+	const rows = 1024
+	values := typedColumnInt64AggregateBenchValues(rows, typedColumnInt64AggregateBenchDistributionByName("random_uniform"))
+	seen := make(map[int64]struct{}, rows)
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	if len(seen) != rows {
+		t.Fatalf("random_uniform produced %d unique values, want permutation of %d rows", len(seen), rows)
+	}
+	minValue, maxValue := values[0], values[0]
+	for _, value := range values[:32] {
+		if value < minValue {
+			minValue = value
+		}
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	if maxValue-minValue < int64(rows/2) {
+		t.Fatalf("first random_uniform window min=%d max=%d does not scatter enough for pruning benchmark", minValue, maxValue)
+	}
+}
+
 func TestTypedColumnInt64AggregateBenchShapeExpectedAggregates(t *testing.T) {
 	const rows = 1000
 	values := typedColumnInt64AggregateBenchValues(rows, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"))
