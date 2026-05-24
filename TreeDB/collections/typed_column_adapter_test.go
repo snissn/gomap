@@ -463,6 +463,17 @@ func TestTypedColumnAdapterNullableVectorAdjacencyFailClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterNullableAbsentWithoutNullMarkerFailsClosed(t *testing.T) {
+	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"count": {Type: ColumnStoreValueInt64, Present: false},
+	}}}
+	_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows)
+	if err == nil || !strings.Contains(err.Error(), "absent nullable value is not marked null") {
+		t.Fatalf("build absent-without-null err=%v want absent nullable failure", err)
+	}
+}
+
 func TestTypedColumnAdapterNullableCorruptPayloadFailsClosed(t *testing.T) {
 	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
 	rows := []typedColumnAdapterRow{

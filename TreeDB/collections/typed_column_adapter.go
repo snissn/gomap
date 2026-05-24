@@ -653,6 +653,9 @@ func validateTypedColumnAdapterDeclaredValue(column typedColumnAdapterColumn, va
 	}
 	if !value.Present || value.Null {
 		if column.Field.Nullable {
+			if !value.Present && !value.Null {
+				return fmt.Errorf("absent nullable value is not marked null")
+			}
 			return nil
 		}
 		return fmt.Errorf("null or missing values are not represented by the typed-column adapter")
