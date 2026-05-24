@@ -170,6 +170,12 @@ func TestExecuteMetadataFilterCountsFilteredVectors(t *testing.T) {
 	if res.ScoredVectors != wantScored {
 		t.Fatalf("scored_vectors=%d want %d", res.ScoredVectors, wantScored)
 	}
+	if res.Candidates != wantScored {
+		t.Fatalf("candidates=%d want %d", res.Candidates, wantScored)
+	}
+	if res.CandidatesPerSearch != float64(64/8) {
+		t.Fatalf("candidates_per_search=%f want %f", res.CandidatesPerSearch, float64(64/8))
+	}
 }
 
 func TestExplicitDirMustBeFresh(t *testing.T) {

@@ -550,6 +550,7 @@ func runExactFilteredQueries(col *collections.Collection, rows []vectorRow, quer
 		if len(hits) == 0 {
 			return fmt.Errorf("query %s returned no exact filtered results", q.Name)
 		}
+		res.Candidates += uint64(filteredRows)
 		res.ScoredVectors += uint64(filteredRows)
 		if i == 0 {
 			res.FirstResults = hits
@@ -569,6 +570,7 @@ func runExactFilteredQueries(col *collections.Collection, rows []vectorRow, quer
 	}
 	searchElapsed := time.Since(searchStart) - fetchElapsed
 	setSearchTiming(res, cfg.Queries, searchElapsed, fetchElapsed)
+	res.CandidatesPerSearch = float64(res.Candidates) / float64(cfg.Queries)
 	return nil
 }
 
