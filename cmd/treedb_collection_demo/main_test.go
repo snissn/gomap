@@ -40,6 +40,16 @@ func TestGenerateFixtureRowsDeterministic(t *testing.T) {
 	}
 }
 
+func TestDeterministicPayloadHandlesNegativeSeed(t *testing.T) {
+	got := deterministicPayload(64, -99, 3)
+	if len(got) != 64 {
+		t.Fatalf("payload len=%d want 64", len(got))
+	}
+	if got != deterministicPayload(64, -99, 3) {
+		t.Fatalf("negative-seed payload is not deterministic")
+	}
+}
+
 func TestAggregateParityAcrossModes(t *testing.T) {
 	modes := []string{modeDocument, modeTypedRow, modeTypedColumn, modeHybridDocumentRow, modeHybridDocumentCol, modeHybridRowColumn}
 	var wantCount, wantSum int64

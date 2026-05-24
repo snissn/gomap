@@ -644,11 +644,22 @@ func deterministicPayload(n int, seed int64, row int) string {
 	alphabet := "abcdefghijklmnopqrstuvwxyz0123456789"
 	var b strings.Builder
 	b.Grow(n)
-	start := int((seed + int64(row*13)) % int64(len(alphabet)))
+	start := positiveModulo(seed+int64(row*13), len(alphabet))
 	for b.Len() < n {
 		b.WriteByte(alphabet[(start+b.Len())%len(alphabet)])
 	}
 	return b.String()
+}
+
+func positiveModulo(value int64, mod int) int {
+	if mod <= 0 {
+		return 0
+	}
+	out := value % int64(mod)
+	if out < 0 {
+		out += int64(mod)
+	}
+	return int(out)
 }
 
 func encodeFixtureDoc(row fixtureRow, extraFields int) []byte {
