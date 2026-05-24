@@ -297,7 +297,6 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 			return result, fmt.Errorf("collections: typed-column int64 predicate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		result.Diagnostics.DecodedMetadataBytes += uint64(manifestBytes)
-		result.Diagnostics.RowLocatorDecodes++
 		matchedStart := len(result.Rows)
 		partPruned, err := scanTypedColumnInt64PredicatePart(adapterPart.Part, adapterColumn.Definition.Name, req, typedRef.Ref.Generation, typedRef.Ref.PartID, &result)
 		if err != nil {

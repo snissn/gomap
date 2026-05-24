@@ -283,7 +283,15 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 	return typedColumnAdapterPartFromDecodedImage(opts, image, part)
 }
 
+func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+}
+
 func typedColumnAdapterAggregatePartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+}
+
+func typedColumnAdapterPartFromImageWithoutRowLocators(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
 	part, err := typedcolumn.ColumnPartFromImageWithOptions(image, typedcolumn.ColumnPartImageReadOptions{
 		IncludeRowLocators:       false,
 		ValidateRowLocators:      false,
@@ -755,7 +763,7 @@ func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField,
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
 	}
-	adapterPart, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: fields}, image)
+	adapterPart, err := typedColumnAdapterPartFromImageForInt64PredicateScan(typedColumnAdapterOptions{Fields: fields}, image)
 	if err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}

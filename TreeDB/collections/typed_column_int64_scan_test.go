@@ -30,6 +30,55 @@ func TestTypedColumnInt64ScanEqualityPredicate(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64ScanEqualityPredicateSkipsRowLocators(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	values := []int64{10, 20, 30, 20}
+	insertTypedColumnInt64ScanRows(t, col, values)
+
+	runResult, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, runResult, []int64{20, 20})
+	if runResult.Diagnostics.Fallback {
+		t.Fatalf("diagnostics=%+v want direct typed-column path", runResult.Diagnostics)
+	}
+
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(typedRefs) != 1 {
+		t.Fatalf("typed refs=%+v want one", typedRefs)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), typedRefs[0])
+	if err != nil {
+		t.Fatalf("read typed-column part: %v", err)
+	}
+	fields := []TypedStorageField{{Name: "time_us", Path: "time_us", ValueType: "int64", Owner: TypedStorageOwnerColumnPart}}
+	generic, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromBytes: %v", err)
+	}
+	if got := len(generic.Part.Locators); got != len(values) {
+		t.Fatalf("generic locator count=%d want %d", got, len(values))
+	}
+	prepared, adapterColumn, _, err := typedColumnAdapterPrepareInt64PredicateScanPart(fields, raw, typedRefs[0].PartID, len(values), len(values), uint64(generic.Part.Descriptor.SchemaVersion), "time_us")
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPrepareInt64PredicateScanPart: %v", err)
+	}
+	if prepared.Part.Locators != nil {
+		t.Fatalf("int64 predicate scan locators loaded: len=%d want nil", len(prepared.Part.Locators))
+	}
+	var scanResult TypedColumnInt64PredicateScanResult
+	partPruned, err := scanTypedColumnInt64PredicatePart(prepared.Part, adapterColumn.Definition.Name, TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20}, typedRefs[0].Generation, typedRefs[0].PartID, &scanResult)
+	if err != nil {
+		t.Fatalf("scanTypedColumnInt64PredicatePart: %v", err)
+	}
+	if partPruned {
+		t.Fatalf("partPruned=true want decoded matches")
+	}
+	assertTypedColumnInt64ScanValues(t, scanResult, []int64{20, 20})
+}
+
 func TestTypedColumnInt64ScanRangePredicate(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
