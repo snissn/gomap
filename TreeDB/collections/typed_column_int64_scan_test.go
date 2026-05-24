@@ -742,6 +742,11 @@ func TestTypedColumnInt64AggregateDirectDiagnosticsNoMaterialization(t *testing.
 	if diag.DirectTypedColumnAssetReads == 0 {
 		t.Fatalf("diagnostics=%+v want typed-column asset reads", diag)
 	}
+	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, diag, "insert-only typed-column aggregate path")
+}
+
+func assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t *testing.T, diag TypedColumnInt64PredicateScanDiagnostics, context string) {
+	t.Helper()
 	zeroDiagnostics := map[string]int{
 		"document_materializations": diag.DocumentMaterializations,
 		"document_reconstructions":  diag.DocumentReconstructions,
@@ -752,7 +757,7 @@ func TestTypedColumnInt64AggregateDirectDiagnosticsNoMaterialization(t *testing.
 	}
 	for name, got := range zeroDiagnostics {
 		if got != 0 {
-			t.Fatalf("diagnostics=%+v %s=%d want 0 for insert-only typed-column aggregate path", diag, name, got)
+			t.Fatalf("diagnostics=%+v %s=%d want 0 for %s", diag, name, got, context)
 		}
 	}
 }
@@ -847,6 +852,7 @@ func TestTypedColumnInt64AggregatePreparedSessionHotScanUsesTargetedRanges(t *te
 		t.Fatal(err)
 	}
 	diag := hot.Diagnostics
+	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, diag, "prepared typed-column aggregate hot scan")
 	if diag.FullAssetBytes != 0 || diag.FullAssetReads != 0 {
 		t.Fatalf("hot diagnostics=%+v want no per-run full-asset validation bytes after cached-verify session boundary", diag)
 	}
