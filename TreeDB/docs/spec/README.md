@@ -186,6 +186,11 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/typed-asset-maintenance-1788.md`
   - issue #1788 implementation contract for typed-row plus typed-column COW
     reachability, active mappedresource pin protection, GC, and rewrite.
+- `TreeDB/docs/spec/typed-column-schema-evolution.md`
+  - issue #1789 pre-alpha policy for typed-column image/descriptor/manifest
+    schema evolution, fail-closed mismatch handling, rebuild-vs-migrate
+    decisions, future migration tooling requirements, and allocation/performance
+    evidence for format changes.
 
 ## Canonical Ownership
 
@@ -216,9 +221,10 @@ in `typed-column-transplant.md`, the #1754/#1755 adapter/publication seam is
 recorded in `typed-column-adapter.md`, the #1758 closeout evidence/handoff is
 recorded in `typed-storage-closeout-1758.md`, and current typed-row plus
 typed-column maintenance behavior is recorded in
-`typed-asset-maintenance-1788.md`. User-command WAL lifecycle terms
-(`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`, `WAL-rejected`,
-`WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
+`typed-asset-maintenance-1788.md`, and typed-column schema/version evolution
+policy is owned by `typed-column-schema-evolution.md`. User-command WAL
+lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`,
+`WAL-rejected`, `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
 `collection-wal-durability-plan.md` for historical design context only.
 
@@ -235,7 +241,8 @@ blocking questions live:
 - Typed-storage persistence and historical roadmap questions:
   `typed-storage-naming.md`, `typed-column-transplant.md`,
   `typed-column-adapter.md`, `typed-storage-closeout-1758.md`,
-  `typed-asset-maintenance-1788.md`, and `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
+  `typed-asset-maintenance-1788.md`, `typed-column-schema-evolution.md`, and
+  `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
 
 A blocking implementation question must be listed in this index and in its
 owner document. Non-blocking future-extension questions must be labeled as
@@ -252,6 +259,7 @@ Docs lint treats this list as a manifest:
 - `TreeDB/docs/spec/write-path-and-durability.md`
 - `TreeDB/docs/spec/recovery.md`
 - `TreeDB/docs/spec/verification.md`
+- `TreeDB/docs/spec/typed-column-schema-evolution.md`
 
 ## Relationship to Existing Docs
 
