@@ -348,6 +348,54 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 	}
 }
 
+func TestLoadCollectionWorkloadMetadata(t *testing.T) {
+	dir := t.TempDir()
+	payload := benchprofResultsFile{Runs: []benchprofResultsRun{{Keys: 8, CollectionWorkloads: []benchprofCollectionWorkload{
+		{Suite: "collection_storage", Mode: "typed_column_part", Workload: "aggregate", Rows: 8, SemanticEquivalent: true, CorrectnessValidated: true, RowsPerSecond: 123, QueriesPerSecond: 4, NsPerOp: 250, TypedColumnAssetBytes: 99},
+		{Suite: "collection_storage", Mode: "document_only", Workload: "aggregate", Rows: 8, SemanticEquivalent: true, CorrectnessValidated: true, RowsPerSecond: 23, QueriesPerSecond: 2, NsPerOp: 500},
+	}}}}
+	js, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	workloads, err := loadCollectionWorkloadMetadata(dir)
+	if err != nil {
+		t.Fatalf("loadCollectionWorkloadMetadata: %v", err)
+	}
+	if len(workloads) != 2 {
+		t.Fatalf("workloads=%d want 2: %+v", len(workloads), workloads)
+	}
+	if workloads[0].Mode != "document_only" || workloads[1].Mode != "typed_column_part" {
+		t.Fatalf("workloads not sorted by mode: %+v", workloads)
+	}
+	md := renderMarkdown(report{GeneratedAt: "now", ProfilesDir: dir, CollectionWorkloads: workloads})
+	if !strings.Contains(md, "## Collection Workload Metadata") || !strings.Contains(md, "typed_column_part") || !strings.Contains(md, "row asset bytes") {
+		t.Fatalf("markdown missing collection workload metadata:\n%s", md)
+	}
+}
+
+func TestLoadCollectionWorkloadMetadataMissingAndDirectory(t *testing.T) {
+	missing, err := loadCollectionWorkloadMetadata(t.TempDir())
+	if err != nil {
+		t.Fatalf("missing metadata err=%v", err)
+	}
+	if missing != nil {
+		t.Fatalf("missing metadata workloads=%v want nil", missing)
+	}
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "benchprof_results.json"), 0o755); err != nil {
+		t.Fatalf("mkdir metadata path: %v", err)
+	}
+	if _, err := loadCollectionWorkloadMetadata(dir); err == nil {
+		t.Fatal("directory metadata path returned nil error")
+	}
+}
+
 func TestLoadTreeDBStatsMetadataMissingAndDirectory(t *testing.T) {
 	missingStats, err := loadTreeDBStatsMetadata(t.TempDir())
 	if err != nil {

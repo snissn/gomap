@@ -121,6 +121,50 @@ func TestApplyProfileArtifactDir_RespectsExplicitFlags(t *testing.T) {
 	}
 }
 
+func TestCollectionStorageProfileArtifactPaths(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	cfg := BenchConfig{
+		CPUProfile:           filepath.Join(dir, "cpu"),
+		AllocsProfile:        filepath.Join(dir, "allocs"),
+		CheckpointCPUProfile: filepath.Join(dir, "checkpoint_cpu"),
+		BlockProfile:         filepath.Join(dir, "block.pprof"),
+		MutexProfile:         filepath.Join(dir, "mutex.pprof"),
+		TraceProfile:         filepath.Join(dir, "trace.out"),
+	}
+	paths := collectionStorageArtifactPathsForProfileDir(dir, cfg, true)
+	want := map[string]string{
+		"collection_json":         filepath.Join(dir, "collection_storage_results.json"),
+		"collection_markdown":     filepath.Join(dir, "collection_storage_results.md"),
+		"benchprof_json":          filepath.Join(dir, "benchprof_results.json"),
+		"cpu":                     filepath.Join(dir, "cpu_collection_storage_treedb_collection_storage.pprof"),
+		"allocs":                  filepath.Join(dir, "allocs_collection_storage_treedb_collection_storage.pprof"),
+		"checkpoint_cpu":          filepath.Join(dir, "checkpoint_cpu_checkpoint_collection_storage_treedb_collection_storage.pprof"),
+		"block":                   filepath.Join(dir, "block.pprof"),
+		"mutex":                   filepath.Join(dir, "mutex.pprof"),
+		"trace":                   filepath.Join(dir, "trace.out"),
+		"benchprof_insights_md":   filepath.Join(dir, "insights.md"),
+		"benchprof_insights_json": filepath.Join(dir, "insights.json"),
+	}
+	got := map[string]string{
+		"collection_json":         paths.CollectionJSON,
+		"collection_markdown":     paths.CollectionMarkdown,
+		"benchprof_json":          paths.BenchprofJSON,
+		"cpu":                     paths.CPUProfile,
+		"allocs":                  paths.AllocsProfile,
+		"checkpoint_cpu":          paths.CheckpointCPUProfile,
+		"block":                   paths.BlockProfile,
+		"mutex":                   paths.MutexProfile,
+		"trace":                   paths.TraceProfile,
+		"benchprof_insights_md":   paths.InsightsMarkdown,
+		"benchprof_insights_json": paths.InsightsJSON,
+	}
+	for key, wantPath := range want {
+		if got[key] != wantPath {
+			t.Fatalf("%s path=%q want %q", key, got[key], wantPath)
+		}
+	}
+}
+
 func TestContentionProfilePath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "run")
 	got := contentionProfilePath(filepath.Join(dir, "block.pprof"), "block", "random_read_batch", "TreeDB (vlog=off)")

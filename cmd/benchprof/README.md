@@ -47,7 +47,10 @@ Outputs:
 - `/tmp/scan-profiles/insights.json`
 - `/tmp/scan-profiles/insights.html`
 
-`insights.html` is always generated.
+`insights.html` is always generated. For `unified-bench -suite collection_storage`,
+the same command also renders the suite's `runs[].collection_workloads` metadata
+(mode/workload names, correctness and semantic-equivalence flags, asset-byte
+splits, and per-workload counters) into a "Collection Workload Metadata" table.
 
 ## Notes
 
@@ -64,6 +67,11 @@ Outputs:
 - `benchprof_results.json` preserves selected TreeDB stats under
   `runs[].treedb_stats` when the benchmark exposes them. This is the raw
   counter metadata used for TreeDB root-apply/cache review artifacts.
+- `benchprof_results.json` also preserves collection-storage suite metadata
+  under `runs[].collection_workloads` when `unified-bench -suite
+  collection_storage` is used. `benchprof` keeps those stable mode/workload names
+  and semantic comparability fields in `insights.{md,json,html}` alongside the
+  CPU/allocation profile summaries.
 - Optional flags:
   - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)
   - `-run-md` to force a specific markdown log file for ops/sec parsing

@@ -37,16 +37,17 @@ type report struct {
 	Binary      string `json:"binary"`
 	OpsSource   string `json:"ops_source,omitempty"`
 
-	OpsRows       []opsRow         `json:"ops_rows,omitempty"`
-	CPUProfiles   []pprofSummary   `json:"cpu_profiles,omitempty"`
-	AllocSpace    []pprofSummary   `json:"alloc_space_profiles,omitempty"`
-	AllocObjects  []pprofSummary   `json:"alloc_object_profiles,omitempty"`
-	BlockProfiles []pprofSummary   `json:"block_profiles,omitempty"`
-	MutexProfiles []pprofSummary   `json:"mutex_profiles,omitempty"`
-	Comparisons   []scanComparison `json:"comparisons,omitempty"`
-	BlockProfile  *pprofSummary    `json:"block_profile,omitempty"`
-	MutexProfile  *pprofSummary    `json:"mutex_profile,omitempty"`
-	TreeDBStats   []treeDBStatsRun `json:"treedb_stats,omitempty"`
+	OpsRows             []opsRow                      `json:"ops_rows,omitempty"`
+	CPUProfiles         []pprofSummary                `json:"cpu_profiles,omitempty"`
+	AllocSpace          []pprofSummary                `json:"alloc_space_profiles,omitempty"`
+	AllocObjects        []pprofSummary                `json:"alloc_object_profiles,omitempty"`
+	BlockProfiles       []pprofSummary                `json:"block_profiles,omitempty"`
+	MutexProfiles       []pprofSummary                `json:"mutex_profiles,omitempty"`
+	Comparisons         []scanComparison              `json:"comparisons,omitempty"`
+	BlockProfile        *pprofSummary                 `json:"block_profile,omitempty"`
+	MutexProfile        *pprofSummary                 `json:"mutex_profile,omitempty"`
+	TreeDBStats         []treeDBStatsRun              `json:"treedb_stats,omitempty"`
+	CollectionWorkloads []benchprofCollectionWorkload `json:"collection_workloads,omitempty"`
 
 	Insights []string `json:"insights,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
@@ -132,9 +133,31 @@ type benchprofResultsFile struct {
 }
 
 type benchprofResultsRun struct {
-	Keys        int                           `json:"keys"`
-	Results     map[string]map[string]float64 `json:"results"`
-	TreeDBStats map[string]map[string]string  `json:"treedb_stats,omitempty"`
+	Keys                int                           `json:"keys"`
+	Results             map[string]map[string]float64 `json:"results"`
+	TreeDBStats         map[string]map[string]string  `json:"treedb_stats,omitempty"`
+	CollectionWorkloads []benchprofCollectionWorkload `json:"collection_workloads,omitempty"`
+}
+
+type benchprofCollectionWorkload struct {
+	Suite                 string         `json:"suite"`
+	Mode                  string         `json:"mode"`
+	Workload              string         `json:"workload"`
+	Rows                  int            `json:"rows"`
+	SemanticEquivalent    bool           `json:"semantic_equivalent"`
+	SemanticNote          string         `json:"semantic_note,omitempty"`
+	CorrectnessValidated  bool           `json:"correctness_validated"`
+	RowsPerSecond         float64        `json:"rows_per_second,omitempty"`
+	QueriesPerSecond      float64        `json:"queries_per_second,omitempty"`
+	MatchesPerSecond      float64        `json:"matches_per_second,omitempty"`
+	OpsPerSecond          float64        `json:"ops_per_second,omitempty"`
+	NsPerOp               float64        `json:"ns_per_op,omitempty"`
+	BytesPerOp            float64        `json:"bytes_per_op,omitempty"`
+	AllocsPerOp           float64        `json:"allocs_per_op,omitempty"`
+	DBTotalBytes          uint64         `json:"db_total_bytes,omitempty"`
+	TypedRowAssetBytes    int64          `json:"typed_row_asset_bytes,omitempty"`
+	TypedColumnAssetBytes int64          `json:"typed_column_asset_bytes,omitempty"`
+	Counters              map[string]any `json:"counters,omitempty"`
 }
 
 func RunFromProfilesDir(profilesDir string) error {
@@ -281,6 +304,11 @@ func buildReport(cfg config) (report, error) {
 		rep.Warnings = append(rep.Warnings, err.Error())
 	} else {
 		rep.TreeDBStats = stats
+	}
+	if workloads, err := loadCollectionWorkloadMetadata(cfg.profilesDir); err != nil {
+		rep.Warnings = append(rep.Warnings, err.Error())
+	} else {
+		rep.CollectionWorkloads = workloads
 	}
 
 	rep.CPUProfiles, rep.Warnings = appendCPUProfiles(rep.CPUProfiles, rep.Warnings, cfg, files)
@@ -579,6 +607,45 @@ func loadKnownTests(profilesDir string) map[string]struct{} {
 		}
 	}
 	return tests
+}
+
+func loadCollectionWorkloadMetadata(profilesDir string) ([]benchprofCollectionWorkload, error) {
+	path := filepath.Join(strings.TrimSpace(profilesDir), "benchprof_results.json")
+	st, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat %q: %w", path, err)
+	}
+	if st.IsDir() {
+		return nil, fmt.Errorf("stat %q: expected file, got directory", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %q: %w", path, err)
+	}
+	var parsed benchprofResultsFile
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("parse %q: %w", path, err)
+	}
+	var out []benchprofCollectionWorkload
+	for _, run := range parsed.Runs {
+		out = append(out, run.CollectionWorkloads...)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Suite != out[j].Suite {
+			return out[i].Suite < out[j].Suite
+		}
+		if out[i].Mode != out[j].Mode {
+			return out[i].Mode < out[j].Mode
+		}
+		return out[i].Workload < out[j].Workload
+	})
+	return out, nil
 }
 
 func loadTreeDBStatsMetadata(profilesDir string) ([]treeDBStatsRun, error) {
@@ -1759,6 +1826,39 @@ func renderMarkdown(rep report) string {
 			}
 			sb.WriteString("\n")
 		}
+	}
+
+	if len(rep.CollectionWorkloads) > 0 {
+		sb.WriteString("## Collection Workload Metadata\n\n")
+		sb.WriteString("| suite | mode | workload | rows/s | queries/s | matches/s | ns/op | B/op | allocs/op | row asset bytes | column asset bytes | correctness | semantic | note |\n")
+		sb.WriteString("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
+		for _, w := range rep.CollectionWorkloads {
+			correctness := "no"
+			if w.CorrectnessValidated {
+				correctness = "yes"
+			}
+			semantic := "no"
+			if w.SemanticEquivalent {
+				semantic = "yes"
+			}
+			sb.WriteString(fmt.Sprintf("| `%s` | `%s` | `%s` | %.3f | %.3f | %.3f | %.1f | %.1f | %.3f | %d | %d | %s | %s | %s |\n",
+				w.Suite,
+				w.Mode,
+				w.Workload,
+				w.RowsPerSecond,
+				w.QueriesPerSecond,
+				w.MatchesPerSecond,
+				w.NsPerOp,
+				w.BytesPerOp,
+				w.AllocsPerOp,
+				w.TypedRowAssetBytes,
+				w.TypedColumnAssetBytes,
+				correctness,
+				semantic,
+				escapePipe(w.SemanticNote),
+			))
+		}
+		sb.WriteString("\n")
 	}
 
 	if len(rep.Insights) > 0 {
