@@ -475,14 +475,60 @@ func columnAssetMappedResourcePinMatchesRoot(pin mappedresource.Pin, rootDir str
 	if rootDir == "" {
 		return true
 	}
-	root := filepath.Clean(rootDir)
-	if pin.Root != "" && filepath.Clean(pin.Root) == root {
-		return true
+	root := columnAssetPathForRootCompare(rootDir)
+	canonicalRoot, canonicalRootOK := columnAssetCanonicalPathForRootCompare(rootDir)
+	if pin.Root != "" {
+		pinRoot := columnAssetPathForRootCompare(pin.Root)
+		if pinRoot == root {
+			return true
+		}
+		if canonicalRootOK {
+			if canonicalPinRoot, ok := columnAssetCanonicalPathForRootCompare(pin.Root); ok && canonicalPinRoot == canonicalRoot {
+				return true
+			}
+		}
 	}
 	if pin.Path == "" {
 		return false
 	}
-	path := filepath.Clean(pin.Path)
+	path := columnAssetPathForRootCompare(pin.Path)
+	if columnAssetPathWithinRootForCompare(path, root) {
+		return true
+	}
+	if canonicalRootOK {
+		if canonicalPath, ok := columnAssetCanonicalPathForRootCompare(pin.Path); ok && columnAssetPathWithinRootForCompare(canonicalPath, canonicalRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func columnAssetPathForRootCompare(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
+}
+
+func columnAssetCanonicalPathForRootCompare(path string) (string, bool) {
+	path = columnAssetPathForRootCompare(path)
+	if path == "" {
+		return "", false
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	return columnAssetPathForRootCompare(canonical), true
+}
+
+func columnAssetPathWithinRootForCompare(path, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
 	if path == root {
 		return true
 	}

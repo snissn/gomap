@@ -305,6 +305,68 @@ func TestColumnAssetReachabilityIgnoresMappedResourcePinsFromOtherDBRoots1788(t 
 	}
 }
 
+func TestColumnAssetReachabilityMatchesMappedResourcePinsThroughSymlinkRoot1788(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, col, 2, 99)
+	basePlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true, CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability unpinned: %v", err)
+	}
+	if basePlan.Refs.Reclaimable != 1 {
+		t.Fatalf("unpinned ref stats=%+v want one reclaimable candidate", basePlan.Refs)
+	}
+
+	linkedRoot := filepath.Join(t.TempDir(), "column-assets-link")
+	if err := os.Symlink(d.ColumnAssetRootDir(), linkedRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(linkedRoot, candidate.Namespace, ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		t.Fatalf("new symlink read cache: %v", err)
+	}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "symlink-root-pin-1788", Namespace: candidate.Namespace, Collection: "events", Generation: candidate.Generation, Reason: "symlink root pin"}
+	if err := readCache.useMappedResourceManager(mgr, scope, "symlink-root-pin"); err != nil {
+		_ = readCache.close()
+		t.Fatalf("useMappedResourceManager symlink: %v", err)
+	}
+	if _, err := readCache.read(candidate, nil); err != nil {
+		_ = readCache.close()
+		t.Fatalf("read symlink candidate: %v", err)
+	}
+	defer func() { _ = readCache.close() }()
+
+	pinnedPlan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true, CandidateRefs: []ColumnAssetRef{candidate}})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability symlink pinned: %v", err)
+	}
+	if !pinnedPlan.Complete || pinnedPlan.Sources.MappedResourcePins != 1 || pinnedPlan.MappedResources.ActiveHandles != 1 || pinnedPlan.MappedResources.PinnedRefs != 1 {
+		t.Fatalf("symlink pin stats: complete=%v sources=%+v mapped=%+v", pinnedPlan.Complete, pinnedPlan.Sources, pinnedPlan.MappedResources)
+	}
+	if pinnedPlan.Refs.Reclaimable != 0 || pinnedPlan.RewriteDebtBytes != 0 {
+		t.Fatalf("symlink pinned ref stats=%+v rewriteDebt=%d want protected candidate", pinnedPlan.Refs, pinnedPlan.RewriteDebtBytes)
+	}
+	foundPinnedCandidate := false
+	for _, entry := range pinnedPlan.Entries {
+		if entry.Ref != candidate {
+			continue
+		}
+		foundPinnedCandidate = true
+		if entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourceMappedResourcePin) {
+			t.Fatalf("symlink pinned candidate entry=%+v want mappedresource protected", entry)
+		}
+	}
+	if !foundPinnedCandidate {
+		t.Fatal("missing symlink pinned candidate entry")
+	}
+}
+
 func TestColumnAssetReachabilityPlanProtectsPendingPreparedRefsM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
