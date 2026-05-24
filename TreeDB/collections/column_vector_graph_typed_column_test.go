@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -303,6 +304,49 @@ func TestColumnVectorGraphTypedColumnVectorRowCountMismatchFailsClosed1782(t *te
 	part, _, err := col.loadColumnVectorGraphTypedColumnVectorPart("docs", cfg, typedRef, typedRef.Rows+1, field, adapterColumn, mappedresource.NewManager())
 	if err == nil || part != nil {
 		t.Fatalf("load row-count mismatched typed_column_part part=%v err=%v want fail-closed error", part, err)
+	}
+}
+
+func TestColumnVectorGraphTypedColumnVectorMultiplePhysicalPartsFailsClosed1782(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := col.catalogForSnapshot(snap)
+	if err != nil {
+		t.Fatalf("catalogForSnapshot: %v", err)
+	}
+	cfg := *catalog.meta.Options.ColumnStore
+	rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+	if err != nil {
+		t.Fatalf("loadColumnManifestRecordsFromRoot: %v", err)
+	}
+	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	physicalRefs, mutationParts, err := columnManifestAssetRefsFromRecordsForScan(records, manifest.Generation, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan: %v", err)
+	}
+	if mutationParts != 0 || len(physicalRefs) == 0 {
+		t.Fatalf("physical refs=%d mutationParts=%d want insert physical refs", len(physicalRefs), mutationParts)
+	}
+	physicalRefs = append(append([]columnManifestAssetRefForScan(nil), physicalRefs[0]), physicalRefs[0])
+	locations, rowsByGeneration, err := col.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
+	if err == nil || !strings.Contains(err.Error(), "multiple physical row parts") {
+		t.Fatalf("locations=%v rowsByGeneration=%v err=%v want multipart fail-closed error", locations, rowsByGeneration, err)
 	}
 }
 
