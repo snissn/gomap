@@ -233,7 +233,7 @@ func TestColumnAssetReachabilityFailClosedOnUnconvertibleMappedResourcePin1788(t
 		Checksum:   7,
 	}
 	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "unconvertible-pin-1788", Namespace: cfg.AssetManager.Namespace, Collection: "events", Generation: 1}
-	handle, err := mgr.AcquireBytes(key, scope, mappedresource.SourceHeapCopy, []byte("pin!"), mappedresource.AcquireOptions{Reason: "unconvertible-pin"})
+	handle, err := mgr.AcquireBytes(key, scope, mappedresource.SourceHeapCopy, []byte("pin!"), mappedresource.AcquireOptions{Reason: "unconvertible-pin", ResourceRoot: d.ColumnAssetRootDir()})
 	if err != nil {
 		t.Fatalf("AcquireBytes: %v", err)
 	}
@@ -255,6 +255,49 @@ func TestColumnAssetReachabilityFailClosedOnUnconvertibleMappedResourcePin1788(t
 	}
 	if gcStats.SegmentsDeleted != 0 || gcStats.Plan.MappedResources.UnconvertiblePins != 1 {
 		t.Fatalf("GC stats=%+v plan mapped=%+v want fail-closed unconvertible pin", gcStats, gcStats.Plan.MappedResources)
+	}
+}
+
+func TestColumnAssetReachabilityIgnoresMappedResourcePinsFromOtherDBRoots1788(t *testing.T) {
+	dirA := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	dbA := openCollectionCommandWALDB(t, dirA)
+	defer func() { _ = dbA.Close() }()
+	colA := openColumnStoreCollectionM10B(t, dbA)
+	if _, err := colA.Insert([]byte("a1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert A: %v", err)
+	}
+
+	dirB := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	dbB := openCollectionCommandWALDB(t, dirB)
+	defer func() { _ = dbB.Close() }()
+	colB := openColumnStoreCollectionM10B(t, dbB)
+	if _, err := colB.Insert([]byte("b1"), []byte(`{"time_us":2,"kind":"post","did":"d2"}`)); err != nil {
+		t.Fatalf("Insert B: %v", err)
+	}
+
+	refA := columnManifestAssetRefsForCollectionM12A(t, dbA, colA)[0]
+	mgr := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(dbA.ColumnAssetRootDir(), refA.Namespace, ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		t.Fatalf("new read cache A: %v", err)
+	}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "foreign-root-pin-1788", Namespace: refA.Namespace, Collection: "events", Generation: refA.Generation, Reason: "foreign root pin"}
+	if err := readCache.useMappedResourceManager(mgr, scope, "foreign-root-pin"); err != nil {
+		_ = readCache.close()
+		t.Fatalf("useMappedResourceManager A: %v", err)
+	}
+	if _, err := readCache.read(refA, nil); err != nil {
+		_ = readCache.close()
+		t.Fatalf("read foreign ref: %v", err)
+	}
+	defer func() { _ = readCache.close() }()
+
+	plan, err := colB.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability B: %v", err)
+	}
+	if !plan.Complete || plan.Sources.MappedResourcePins != 0 || plan.MappedResources.ActiveHandles != 0 || plan.MappedResources.UnconvertiblePins != 0 {
+		t.Fatalf("plan for DB B imported DB A pin: complete=%v sources=%+v mapped=%+v", plan.Complete, plan.Sources, plan.MappedResources)
 	}
 }
 

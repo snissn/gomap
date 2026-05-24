@@ -31,11 +31,15 @@ active pin makes the plan incomplete and destructive maintenance fails closed.
 
 Every `mappedresource.Manager` contributes to a process-wide active pin summary.
 `PlanColumnAssetReachability`, `ColumnAssetGC`, and `ColumnAssetRewrite` filter
-that summary by typed asset namespace and automatically add convertible
-`typed_row_asset` / `typed_column_asset` keys as pinned refs. A pin whose typed
-asset class and namespace are relevant but whose key cannot be converted to a
-`ColumnAssetRef` is not ignored: it sets `MappedResources.UnconvertiblePins` and
-marks the plan incomplete.
+that summary by the collection's column-asset root and typed asset namespace,
+then automatically add convertible `typed_row_asset` / `typed_column_asset` keys
+as pinned refs. File-backed pins must carry either `ResourceRoot` or
+`ResourcePath`; `AcquireFileRange` fills `ResourcePath` from the opened path, and
+the column-asset read cache fills `ResourceRoot` for bytes it registers. Pins
+from another DB root are ignored even when namespaces are reused in the same
+process. A pin whose typed asset class, root, and namespace are relevant but
+whose key cannot be converted to a `ColumnAssetRef` is not ignored: it sets
+`MappedResources.UnconvertiblePins` and marks the plan incomplete.
 
 The maintenance plan reports active handle accounting:
 

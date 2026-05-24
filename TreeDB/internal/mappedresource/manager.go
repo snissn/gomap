@@ -74,7 +74,9 @@ type Stats struct {
 	ValidationModeReads map[ValidationMode]uint64
 }
 
-// Pin describes one active handle visible to maintenance planning.
+// Pin describes one active handle visible to maintenance planning. Root and
+// Path carry storage identity for DB-local filtering; AcquireFileRange fills
+// Path from the opened file path when callers leave ResourcePath empty.
 type Pin struct {
 	ID     uint64
 	Key    Key
@@ -82,6 +84,8 @@ type Pin struct {
 	Source Source
 	Bytes  int64
 	Reason string
+	Root   string
+	Path   string
 }
 
 // Manager tracks resource handles and accounting. It intentionally does not
@@ -110,13 +114,17 @@ func NewManager() *Manager {
 	return &Manager{active: make(map[uint64]Pin)}
 }
 
-// AcquireOptions controls resource acquisition and accounting labels.
+// AcquireOptions controls resource acquisition and accounting labels. ResourceRoot
+// and ResourcePath identify the durable storage root/path for maintenance
+// filtering when the handle protects file-backed resources.
 type AcquireOptions struct {
 	Reason         string
 	ValidationMode ValidationMode
 	PreferMapped   bool
 	AllowHeapCopy  bool
 	FallbackReason FallbackReason
+	ResourceRoot   string
+	ResourcePath   string
 }
 
 // Handle owns a live resource view. Bytes are valid until Release. Release is
@@ -280,6 +288,7 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 				m.recordClose()
 				return err
 			}
+			opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, path)
 			return m.acquireRegistered(key, scope, SourceMapped, view, release, opts), nil
 		}
 		if !opts.AllowHeapCopy {
@@ -330,7 +339,15 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 		m.recordError()
 		return nil, closeErr
 	}
+	opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, path)
 	return m.acquireRegistered(key, scope, SourceHeapCopy, raw, nil, opts), nil
+}
+
+func mappedResourceOptionPath(explicit, fallback string) string {
+	if explicit != "" {
+		return explicit
+	}
+	return fallback
 }
 
 func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []byte, release func() error, opts AcquireOptions) *Handle {
@@ -359,7 +376,7 @@ func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []
 		m.stats.ActiveDerivedMetadataBytes += bytes
 		m.stats.TotalDerivedMetadataBytes += uint64(bytes)
 	}
-	pin := Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason}
+	pin := Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason, Root: opts.ResourceRoot, Path: opts.ResourcePath}
 	m.active[id] = pin
 	globalRegisterPin(m, id, pin, opts.ValidationMode, opts.FallbackReason)
 	return &Handle{mgr: m, id: id, key: key, scope: scope, source: source, bytes: data, release: release}

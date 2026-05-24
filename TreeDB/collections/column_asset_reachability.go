@@ -374,7 +374,7 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addRefs(ctx, opts.PreparedRefs, ColumnAssetReachabilitySourcePreparedAsset); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
-	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.namespace)
+	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
 	input.mappedResources = mappedResourceStats
 	if mappedResourceStats.UnconvertiblePins != 0 {
 		input.pinStateIncomplete = true
@@ -419,7 +419,7 @@ func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapsho
 	return input
 }
 
-func columnAssetReachabilityMappedResourcePins(namespace string) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats) {
+func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats) {
 	globalStats := mappedresource.GlobalStats()
 	stats := ColumnAssetReachabilityMappedResourceStats{
 		DeniedResources: sumMappedResourceDenied(globalStats.DeniedByReason),
@@ -431,7 +431,7 @@ func columnAssetReachabilityMappedResourcePins(namespace string) ([]ColumnAssetR
 	}
 	refs := make([]ColumnAssetRef, 0, len(pins))
 	for _, pin := range pins {
-		if !columnAssetMappedResourcePinMatchesNamespace(pin, namespace) {
+		if !columnAssetMappedResourcePinMatchesNamespace(pin, namespace) || !columnAssetMappedResourcePinMatchesRoot(pin, rootDir) {
 			continue
 		}
 		stats.ActiveHandles++
@@ -469,6 +469,28 @@ func columnAssetMappedResourcePinMatchesNamespace(pin mappedresource.Pin, namesp
 		return true
 	}
 	return pin.Key.Namespace == namespace || pin.Scope.Namespace == namespace
+}
+
+func columnAssetMappedResourcePinMatchesRoot(pin mappedresource.Pin, rootDir string) bool {
+	if rootDir == "" {
+		return true
+	}
+	root := filepath.Clean(rootDir)
+	if pin.Root != "" && filepath.Clean(pin.Root) == root {
+		return true
+	}
+	if pin.Path == "" {
+		return false
+	}
+	path := filepath.Clean(pin.Path)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
 }
 
 func sumMappedResourceDenied(in map[mappedresource.DenyReason]uint64) uint64 {
