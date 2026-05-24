@@ -474,6 +474,32 @@ func TestTypedColumnAdapterNullableAbsentWithoutNullMarkerFailsClosed(t *testing
 	}
 }
 
+func TestTypedColumnAdapterNullableAllNullStringRoundTrip(t *testing.T) {
+	field := typedColumnAdapterNullableField("kind", ColumnStoreValueString)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, Null: true},
+		{Type: ColumnStoreValueString, Present: false, Null: true},
+	})
+	if got := part.Part.Columns["kind"].Definition.Cardinality; got != 0 {
+		t.Fatalf("all-null nullable string cardinality=%d want 0", got)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	got, err := parsed.scanColumnValues("kind")
+	if err != nil {
+		t.Fatalf("scanColumnValues: %v", err)
+	}
+	if len(got) != 2 || !got[0].Present || !got[0].Null || got[1].Present || !got[1].Null {
+		t.Fatalf("all-null nullable string values=%+v", got)
+	}
+}
+
 func TestTypedColumnAdapterNullableCorruptPayloadFailsClosed(t *testing.T) {
 	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
 	rows := []typedColumnAdapterRow{

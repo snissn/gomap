@@ -248,7 +248,7 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 		}
 		def := column.Definition
 		if def.Type == ColumnTypeLowCardinalityCode {
-			if def.Cardinality == 0 || def.Cardinality > maxCodeCardinality {
+			if def.Cardinality > maxCodeCardinality || (def.Cardinality == 0 && def.Encoding != EncodingNullableInt64) {
 				return nil, fmt.Errorf("typedcolumn: invalid low-cardinality cardinality %d for %s", def.Cardinality, def.Name)
 			}
 			column.Definition = def
