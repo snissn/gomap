@@ -3,7 +3,9 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -293,6 +295,466 @@ func TestTypedColumnInt64ScanReopen(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64AggregateEqualityPredicate(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30, 20})
+
+	result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 2, 40)
+}
+
+func TestTypedColumnInt64AggregateRangePredicate(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{5, 10, 15, 20, 25})
+
+	result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 10, High: 20})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 3, 45)
+	if result.Diagnostics.BlocksDecoded == 0 || result.Diagnostics.DecodedHeapCopyBytes == 0 || result.Diagnostics.DecodedMetadataBytes == 0 {
+		t.Fatalf("diagnostics=%+v want decoded block and metadata bytes", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64AggregateAllPrunedZero(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 11, 12})
+
+	result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 99})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 0, 0)
+	if result.Diagnostics.RowsScanned != 0 || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.PartsPruned != 2 || result.Diagnostics.BlocksDecoded != 0 {
+		t.Fatalf("diagnostics=%+v want all pruned zero aggregate", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64AggregateReopenDurable(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnInt64ScanCollection(t, d)
+	insertTypedColumnInt64ScanRows(t, col, []int64{11, 12, 13})
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	result, err := reopenedCol.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 12, High: 13})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate reopened: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 2, 25)
+	if result.Diagnostics.DirectTypedColumnAssetReads == 0 || result.Diagnostics.MappedBytes+result.Diagnostics.HeapCopyBytes == 0 {
+		t.Fatalf("diagnostics=%+v want durable typed_column_part asset reads after reopen", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64AggregateCorruptStaleMismatchFailClosed(t *testing.T) {
+	t.Run("corrupt_asset", func(t *testing.T) {
+		d, col := setupTypedColumnInt64ScanCollection(t)
+		defer func() { _ = d.Close() }()
+		insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+		typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+		if len(typedRefs) != 1 {
+			t.Fatalf("typed refs=%+v want one", typedRefs)
+		}
+		corruptTypedColumnAssetPayload1755(t, d, typedRefs[0])
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2}); err == nil {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate err=nil want fail-closed corrupt asset")
+		}
+	})
+	t.Run("manifest_setup_mismatch", func(t *testing.T) {
+		d, col := setupTypedColumnInt64ScanCollection(t)
+		defer func() { _ = d.Close() }()
+		insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+		col.catalogMu.Lock()
+		if col.catalog == nil || col.catalog.meta.Options.ColumnStore == nil || col.catalog.meta.Options.ColumnStore.RecoveryAuthoritativeManifest == nil {
+			col.catalogMu.Unlock()
+			t.Fatalf("missing cached recovery-authoritative manifest")
+		}
+		col.catalog.meta.Options.ColumnStore.RecoveryAuthoritativeManifest.Checksum++
+		col.catalogMu.Unlock()
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2}); err == nil {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate err=nil want fail-closed manifest mismatch")
+		}
+	})
+	t.Run("schema_mismatch", func(t *testing.T) {
+		d, col := setupTypedColumnInt64ScanCollection(t)
+		defer func() { _ = d.Close() }()
+		insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+		col.catalogMu.Lock()
+		if col.catalog == nil || col.catalog.meta.Options.ColumnStore == nil {
+			col.catalogMu.Unlock()
+			t.Fatalf("missing cached column store config")
+		}
+		col.catalog.meta.Options.ColumnStore.SchemaHash++
+		col.catalogMu.Unlock()
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2}); err == nil {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate err=nil want fail-closed schema mismatch")
+		}
+	})
+}
+
+func TestValidateTypedColumnPhysicalAssetPairing(t *testing.T) {
+	typedRefs := func(generations ...uint64) map[uint64]columnManifestAssetRefForScan {
+		refs := make(map[uint64]columnManifestAssetRefForScan, len(generations))
+		for _, generation := range generations {
+			refs[generation] = columnManifestAssetRefForScan{
+				Ref:    ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Generation: generation, PartID: typedColumnPartAssetPartID},
+				Reason: ColumnPublishOperationInsert,
+			}
+		}
+		return refs
+	}
+	physicalRef := func(generation uint64, reason ColumnPublishOperation) columnManifestAssetRefForScan {
+		return columnManifestAssetRefForScan{
+			Ref:    ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Generation: generation, PartID: columnPhysicalRowAssetPartID},
+			Reason: reason,
+		}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		typed     map[uint64]columnManifestAssetRefForScan
+		physical  []columnManifestAssetRefForScan
+		want      []uint64
+		wantError string
+	}{
+		{
+			name:     "paired_generations",
+			typed:    typedRefs(1, 2),
+			physical: []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert), physicalRef(2, ColumnPublishOperationInsert)},
+			want:     []uint64{1, 2},
+		},
+		{
+			name:      "rejects_non_insert_physical_ref",
+			typed:     typedRefs(1),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationUpdate)},
+			wantError: "insert-only physical refs, got update",
+		},
+		{
+			name:      "rejects_missing_typed_ref",
+			typed:     typedRefs(1),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert), physicalRef(2, ColumnPublishOperationInsert)},
+			wantError: "missing typed_column_part asset for generation=2",
+		},
+		{
+			name:      "rejects_duplicate_physical_ref",
+			typed:     typedRefs(1),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert), physicalRef(1, ColumnPublishOperationInsert)},
+			wantError: "duplicate physical row asset ref for generation=1",
+		},
+		{
+			name:      "rejects_missing_physical_ref",
+			typed:     typedRefs(1, 2),
+			physical:  []columnManifestAssetRefForScan{physicalRef(1, ColumnPublishOperationInsert)},
+			wantError: "missing physical row asset for typed_column_part generation=2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := validateTypedColumnPhysicalAssetPairing(tc.typed, tc.physical)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("validateTypedColumnPhysicalAssetPairing err=%v want %q", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateTypedColumnPhysicalAssetPairing: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("physical refs by generation=%v want %v", got, tc.want)
+			}
+			for _, generation := range tc.want {
+				if _, ok := got[generation]; !ok {
+					t.Fatalf("physical refs by generation=%v missing %d", got, generation)
+				}
+			}
+		})
+	}
+}
+
+func TestTypedColumnInt64AggregateMissingPhysicalRefFailsClosed(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
+	if closeView != nil {
+		defer closeView()
+	}
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotViewWithSidecars: %v", err)
+	}
+	if len(view.AssetRefs) == 0 || len(view.TypedColumnPartRefs) == 0 {
+		t.Fatalf("view refs asset=%d typed=%d want both", len(view.AssetRefs), len(view.TypedColumnPartRefs))
+	}
+	cfg := view.FullConfig
+	if !cfg.Enabled {
+		cfg = view.Config
+	}
+	view.AssetRefs = nil
+	_, err = col.runTypedColumnInt64PredicateAggregateDirect(view, TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: 3}, cfg, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "missing physical row asset") {
+		t.Fatalf("runTypedColumnInt64PredicateAggregateDirect err=%v want missing physical row asset", err)
+	}
+}
+
+func TestTypedColumnInt64AggregateSumOverflowFails(t *testing.T) {
+	values := []int64{typedColumnInt64PredicateAggregateMaxSum, 1}
+	req := TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: typedColumnInt64PredicateAggregateMaxSum}
+
+	t.Run("typed_column_part", func(t *testing.T) {
+		d, col := setupTypedColumnInt64ScanCollection(t)
+		defer func() { _ = d.Close() }()
+		insertTypedColumnInt64ScanRows(t, col, values)
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(req); err == nil || !strings.Contains(err.Error(), "sum overflow") {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate err=%v want sum overflow", err)
+		}
+	})
+
+	t.Run("document_full_scan_fallback", func(t *testing.T) {
+		d := openTypedColumnInt64ScanDB(t)
+		defer func() { _ = d.Close() }()
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		col, err := mgr.OpenCollection("events")
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		insertTypedColumnInt64ScanRows(t, col, values)
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(req); err == nil || !strings.Contains(err.Error(), "sum overflow") {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate fallback err=%v want sum overflow", err)
+		}
+	})
+}
+
+func TestTypedColumnInt64AggregateDirectDiagnosticsNoMaterialization(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30, 20})
+
+	result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 2, 40)
+	diag := result.Diagnostics
+	if diag.Fallback || diag.DirectTypedColumnAssetReads == 0 || diag.RowLocatorDecodes != 0 || diag.PhysicalRowIDLookups != 0 || diag.PhysicalRowAssetReads != 0 || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.DocumentReconstructions != 0 {
+		t.Fatalf("diagnostics=%+v want direct aggregate with zero row/document materialization", diag)
+	}
+}
+
+func TestTypedColumnInt64AggregateFallbackDiagnostics(t *testing.T) {
+	t.Run("row_asset_owner", func(t *testing.T) {
+		d := openTypedColumnInt64ScanDB(t)
+		defer func() { _ = d.Close() }()
+		cfg := testColumnStoreConfig(nil)
+		cfg.Columns = []ColumnStoreColumn{{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset}}
+		cfg.SortKey = nil
+		cfg.AggregateMetadata = nil
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		col, err := mgr.OpenCollection("events")
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		insertTypedColumnInt64ScanRows(t, col, []int64{7, 8, 9})
+
+		result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 8, High: 9})
+		if err != nil {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate fallback: %v", err)
+		}
+		assertTypedColumnInt64Aggregate(t, result, 2, 17)
+		if !result.Diagnostics.Fallback || result.Diagnostics.FallbackReason != "typed_column_not_selected" || result.Diagnostics.DirectTypedColumnAssetReads != 0 || result.Diagnostics.DocumentMaterializations == 0 {
+			t.Fatalf("diagnostics=%+v want document fallback diagnostics", result.Diagnostics)
+		}
+	})
+	t.Run("no_column_store", func(t *testing.T) {
+		d := openTypedColumnInt64ScanDB(t)
+		defer func() { _ = d.Close() }()
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		col, err := mgr.OpenCollection("events")
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		insertTypedColumnInt64ScanRows(t, col, []int64{7, 8, 9})
+
+		result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 8, High: 9})
+		if err != nil {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate fallback: %v", err)
+		}
+		assertTypedColumnInt64Aggregate(t, result, 2, 17)
+		if !result.Diagnostics.Fallback || result.Diagnostics.FallbackReason != "column_store_unavailable" || result.Diagnostics.DirectTypedColumnAssetReads != 0 || result.Diagnostics.DocumentMaterializations == 0 {
+			t.Fatalf("diagnostics=%+v want no-column-store document fallback diagnostics", result.Diagnostics)
+		}
+	})
+}
+
+func TestTypedColumnInt64AggregateBenchRowCountParser(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		want    []int
+		wantErr bool
+	}{
+		{name: "empty_defaults", input: "", want: []int{4096, 65536}},
+		{name: "list", input: "16, 32,64", want: []int{16, 32, 64}},
+		{name: "bad", input: "16,nope", wantErr: true},
+		{name: "non_positive", input: "0", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseTypedColumnInt64AggregateBenchRows(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseTypedColumnInt64AggregateBenchRows(%q) err=nil", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseTypedColumnInt64AggregateBenchRows(%q): %v", tc.input, err)
+			}
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("rows=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
+	rowCounts, err := parseTypedColumnInt64AggregateBenchRows(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_ROWS"))
+	if err != nil {
+		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_ROWS: %v", err)
+	}
+	for _, rows := range rowCounts {
+		rows := rows
+		values := make([]int64, rows)
+		for i := range values {
+			values[i] = int64(i)
+		}
+		low := rows / 4
+		matchCount := maxIntForTypedColumnInt64AggregateBench(1, rows/100)
+		high := low + matchCount - 1
+		if high >= rows {
+			high = rows - 1
+			matchCount = high - low + 1
+		}
+		wantCount := int64(matchCount)
+		wantSum := int64(low+high) * wantCount / 2
+		b.Run(fmt.Sprintf("rows_%d/typed_column_part/predicate_count_sum_avg", rows), func(b *testing.B) {
+			d, col := setupTypedColumnInt64ScanCollection(b)
+			defer func() { _ = d.Close() }()
+			mid := rows / 2
+			insertTypedColumnInt64ScanRows(b, col, values[:mid])
+			insertTypedColumnInt64ScanRows(b, col, values[mid:])
+			b.ReportAllocs()
+			b.ResetTimer()
+			benchStart := time.Now()
+			for i := 0; i < b.N; i++ {
+				result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(high), ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+				if err != nil {
+					b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
+				}
+				if result.Count != wantCount || result.Sum != wantSum {
+					b.Fatalf("aggregate count=%d sum=%d want count=%d sum=%d diagnostics=%+v", result.Count, result.Sum, wantCount, wantSum, result.Diagnostics)
+				}
+				if i == b.N-1 {
+					reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
+				}
+			}
+			b.StopTimer()
+		})
+		b.Run(fmt.Sprintf("rows_%d/document_full_scan_fallback/predicate_count_sum_avg", rows), func(b *testing.B) {
+			d := openTypedColumnInt64ScanDB(b)
+			defer func() { _ = d.Close() }()
+			mgr := NewCollectionManager(d)
+			if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+				b.Fatalf("CreateCollection: %v", err)
+			}
+			col, err := mgr.OpenCollection("events")
+			if err != nil {
+				b.Fatalf("OpenCollection: %v", err)
+			}
+			mid := rows / 2
+			insertTypedColumnInt64ScanRows(b, col, values[:mid])
+			insertTypedColumnInt64ScanRows(b, col, values[mid:])
+			b.ReportAllocs()
+			b.ResetTimer()
+			benchStart := time.Now()
+			for i := 0; i < b.N; i++ {
+				result, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(low), High: int64(high)})
+				if err != nil {
+					b.Fatalf("RunTypedColumnInt64PredicateAggregate fallback: %v", err)
+				}
+				if result.Count != wantCount || result.Sum != wantSum {
+					b.Fatalf("aggregate count=%d sum=%d want count=%d sum=%d diagnostics=%+v", result.Count, result.Sum, wantCount, wantSum, result.Diagnostics)
+				}
+				if i == b.N-1 {
+					reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
+				}
+			}
+			b.StopTimer()
+		})
+	}
+}
+
+func parseTypedColumnInt64AggregateBenchRows(env string) ([]int, error) {
+	if strings.TrimSpace(env) == "" {
+		return []int{4096, 65536}, nil
+	}
+	parts := strings.Split(env, ",")
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("empty row count")
+		}
+		rows, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid row count %q: %w", part, err)
+		}
+		if rows <= 0 {
+			return nil, fmt.Errorf("row count %d must be positive", rows)
+		}
+		out = append(out, rows)
+	}
+	return out, nil
+}
+
+func maxIntForTypedColumnInt64AggregateBench(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func BenchmarkTypedColumnInt64PredicateScan(b *testing.B) {
 	const rows = 4096
 	valuesHot := make([]int64, rows)
@@ -345,6 +807,33 @@ func BenchmarkTypedColumnInt64PredicateScan(b *testing.B) {
 			}
 		}
 	})
+}
+
+func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, diag TypedColumnInt64PredicateScanDiagnostics, elapsed time.Duration, iterations int) {
+	b.Helper()
+	if elapsed > 0 && iterations > 0 {
+		b.ReportMetric(float64(iterations)/elapsed.Seconds(), "ops/sec")
+		b.ReportMetric(float64(totalRows*iterations)/elapsed.Seconds(), "rows/sec")
+		b.ReportMetric(float64(diag.RowsMatched*iterations)/elapsed.Seconds(), "matches/sec")
+	}
+	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
+	b.ReportMetric(float64(diag.RowsMatched), "rows_matched/op")
+	b.ReportMetric(float64(diag.PartsConsidered), "parts_considered/op")
+	b.ReportMetric(float64(diag.PartsPruned), "parts_pruned/op")
+	b.ReportMetric(float64(diag.PartsDecoded), "parts_decoded/op")
+	b.ReportMetric(float64(diag.BlocksConsidered), "blocks_considered/op")
+	b.ReportMetric(float64(diag.BlocksPruned), "blocks_pruned/op")
+	b.ReportMetric(float64(diag.BlocksDecoded), "blocks_decoded/op")
+	b.ReportMetric(float64(diag.MappedBytes), "mapped_bytes/op")
+	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
+	b.ReportMetric(float64(diag.DecodedHeapCopyBytes), "decoded_bytes/op")
+	b.ReportMetric(float64(diag.PhysicalBytesScanned), "physical_bytes_scanned/op")
+	b.ReportMetric(float64(diag.RowLocatorDecodes), "row_locator_decodes/op")
+	b.ReportMetric(float64(diag.PhysicalRowIDLookups), "physical_row_id_lookups/op")
+	b.ReportMetric(float64(diag.PhysicalRowAssetReads), "physical_row_asset_reads/op")
+	b.ReportMetric(float64(diag.RowMaterializations), "row_materializations/op")
+	b.ReportMetric(float64(diag.DocumentMaterializations), "document_materializations/op")
+	b.ReportMetric(float64(diag.DocumentReconstructions), "document_reconstructions/op")
 }
 
 func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64PredicateScanDiagnostics, elapsed time.Duration, iterations int) {
@@ -415,6 +904,23 @@ func typedColumnInt64ScanIdentityStrings(result TypedColumnInt64PredicateScanRes
 	}
 	sort.Strings(out)
 	return out
+}
+
+func assertTypedColumnInt64Aggregate(t *testing.T, result TypedColumnInt64PredicateAggregateResult, wantCount int64, wantSum int64) {
+	t.Helper()
+	if result.Count != wantCount || result.Sum != wantSum {
+		t.Fatalf("aggregate count=%d sum=%d want count=%d sum=%d diagnostics=%+v", result.Count, result.Sum, wantCount, wantSum, result.Diagnostics)
+	}
+	if wantCount == 0 {
+		if result.Avg != 0 {
+			t.Fatalf("aggregate avg=%f want zero diagnostics=%+v", result.Avg, result.Diagnostics)
+		}
+		return
+	}
+	wantAvg := float64(wantSum) / float64(wantCount)
+	if result.Avg != wantAvg {
+		t.Fatalf("aggregate avg=%f want %f diagnostics=%+v", result.Avg, wantAvg, result.Diagnostics)
+	}
 }
 
 func assertTypedColumnInt64ScanValues(t *testing.T, result TypedColumnInt64PredicateScanResult, want []int64) {
