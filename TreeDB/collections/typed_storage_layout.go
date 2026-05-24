@@ -221,11 +221,15 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 					}
 					return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: must be non-negative", name)
 				}
-				if field.Owner == TypedStorageOwnerColumnPart {
-					name := field.Name
-					if name == "" {
-						name = field.Path
+				name := field.Name
+				if name == "" {
+					name = field.Path
+				}
+				if field.Owner != TypedStorageOwnerColumnPart {
+					if field.AdjacencyDegree != 0 {
+						return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q adjacency_degree: only adjacency_list typed_column_part fields may set adjacency_degree", name)
 					}
+				} else {
 					if field.Nullable {
 						return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q nullable adjacency_list typed_column_part is unsupported", name)
 					}

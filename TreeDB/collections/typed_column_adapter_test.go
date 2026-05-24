@@ -954,7 +954,9 @@ func TestTypedColumnAdapterAdjacencyDenseDirectViewAndFallback(t *testing.T) {
 		t.Fatalf("AcquireDenseUint32ColumnView: %v", err)
 	}
 	if !view.Direct || view.Handle == nil || !slices.Equal(view.Values, []uint32{1, 2, 3, 4, 5, 6}) {
-		_ = view.Handle.Release()
+		if view.Handle != nil {
+			_ = view.Handle.Release()
+		}
 		t.Fatalf("direct view=%+v want direct dense values", view)
 	}
 	if err := view.Handle.Release(); err != nil {
@@ -1279,8 +1281,10 @@ func BenchmarkTypedColumnAdjacencyDenseDirectViewScan(b *testing.B) {
 	if err != nil {
 		b.Fatalf("AcquireDenseUint32ColumnView: %v", err)
 	}
-	defer view.Handle.Release()
-	if !view.Direct {
+	if view.Handle != nil {
+		defer view.Handle.Release()
+	}
+	if !view.Direct || view.Handle == nil {
 		b.Fatalf("expected direct mapped view")
 	}
 	values := view.Values

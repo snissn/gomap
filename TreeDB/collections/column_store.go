@@ -457,7 +457,11 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			if col.AdjacencyDegree < 0 {
 				return fmt.Errorf("collections: invalid column %q adjacency_degree: must be non-negative", col.Name)
 			}
-			if owner == TypedStorageOwnerColumnPart {
+			if owner != TypedStorageOwnerColumnPart {
+				if col.AdjacencyDegree != 0 {
+					return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list typed_column_part columns may set adjacency_degree", col.Name)
+				}
+			} else {
 				if col.Nullable {
 					return fmt.Errorf("collections: invalid column %q nullable adjacency_list typed_column_part is unsupported", col.Name)
 				}

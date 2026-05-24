@@ -356,6 +356,14 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "adjacency_degree",
 		},
 		{
+			name: "typed row adjacency rejects degree",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 16}},
+			},
+			want: "only adjacency_list typed_column_part columns may set adjacency_degree",
+		},
+		{
 			name: "typed column adjacency rejects nullable",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

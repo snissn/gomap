@@ -388,10 +388,11 @@ Remaining COW maintenance work for #1736/#1788:
 - Preserve fail-closed behavior for incomplete protection state, corrupt refs,
   stale checksums, unsupported versions, and mutation-bearing typed-column part
   fast paths until multipart latest-visible maintenance is implemented.
-- Keep #1782 native vector graph switching, authoritative adjacency publication,
-  nullable vector/adjacency typed-column integration, dictionary/string query integration,
-  aggregate query integration, multipart lifecycle/compaction, and full row+column
-  COW cleanup as explicit follow-ups, not implied #1744 completions.
+- Keep #1782 native vector graph switching, nullable vector/adjacency typed-column
+  integration, dictionary/string query integration, aggregate query integration,
+  multipart lifecycle/compaction, and full row+column COW cleanup as explicit
+  follow-ups, not implied #1744 completions. Authoritative fixed-degree
+  adjacency publication is tracked as done in the status table above.
 
 ## Post-closeout #1789 schema evolution policy
 

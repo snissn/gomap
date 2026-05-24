@@ -169,7 +169,7 @@ counters.
 | Limitation | Status/link |
 | --- | --- |
 | Native vector graph reads from typed-column dense sections are landed for the current `column_graph` path, but broader vector product tuning remains pre-alpha. | [#1782](https://github.com/snissn/gomap/issues/1782), [column graph native vector search spec](../spec/column-graph-native-vector-search.md). |
-| Authoritative `adjacency_list` typed-column storage is not landed. Existing graph adjacency is a derived accelerator boundary. | [#1783](https://github.com/snissn/gomap/issues/1783) |
+| Authoritative fixed-degree `adjacency_list` typed-column storage is landed for explicit `typed_column_part` owners with positive `adjacency_degree`; graph adjacency remains derived unless schema ownership promotes it. | [#1783](https://github.com/snissn/gomap/issues/1783) |
 | SIMD/vectorized dense-section kernels are follow-up optimization work. | [#1790](https://github.com/snissn/gomap/issues/1790) |
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
@@ -198,4 +198,4 @@ counters.
 | `docs_fetched` is non-zero in a search-only comparison | You included final document materialization. | Drop `-include-docs` or move document fetch into a separate benchmark row. |
 | Search benchmark allocates heavily | You may be timing setup/open, public document materialization, or fallback decode. | Compare reusable-searcher vs one-shot names and inspect allocation profiles. |
 | Results differ across branches | On-disk formats/APIs are pre-alpha. | Rebuild DB directories and rerun with the same rows/dims/degree/top-k/seed. |
-| Adjacency typed-column ownership is needed | Not supported as authoritative storage today. | Track [#1783](https://github.com/snissn/gomap/issues/1783); keep adjacency as derived graph data for current docs. |
+| Adjacency typed-column ownership is needed | Fixed-degree dense row-major little-endian `uint32` is supported for explicit non-nullable `typed_column_part` owners with positive `adjacency_degree`; nullable/missing adjacency still fails closed. | Configure `adjacency_degree` on the authoritative field; keep graph/search sidecars derived unless the schema owns the field. |

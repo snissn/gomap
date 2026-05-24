@@ -193,7 +193,13 @@ func TestTypedColumnAdjacencyPublicationCheckpointReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection reopened: %v", err)
 	}
-	reopenedGot, err := reopenedCol.Get([]byte("n2"))
+	assertTypedColumnManifestShape1755(t, reopened, reopenedCol, 1, 1)
+	reopenedGot, err := reopenedCol.Get([]byte("n1"))
+	if err != nil {
+		t.Fatalf("reopened Get n1: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"neighbors":[1,2,3],"payload":"alpha"}`))
+	reopenedGot, err = reopenedCol.Get([]byte("n2"))
 	if err != nil {
 		t.Fatalf("reopened Get n2: %v", err)
 	}

@@ -183,6 +183,7 @@ func TestTypedStorageLayoutTypedColumnAdjacencyRequiresDegreeAndNonNullable(t *t
 		want  string
 	}{
 		{name: "missing_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList}, want: "adjacency_degree"},
+		{name: "row_asset_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 16}, want: "only adjacency_list typed_column_part fields may set adjacency_degree"},
 		{name: "nullable", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, Nullable: true, AdjacencyDegree: 16}, want: "nullable adjacency_list"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
