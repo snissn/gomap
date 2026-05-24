@@ -333,6 +333,10 @@ func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapte
 	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
 }
 
+func typedColumnAdapterPartFromImageForStringPredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+}
+
 func typedColumnAdapterAggregatePartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
 	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
 }
@@ -362,6 +366,7 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 			if err := validateTypedColumnAdapterStringDictionary(columns[i], partColumn.Definition.Cardinality, dict); err != nil {
 				return nil, err
 			}
+			columns[i].Definition.Cardinality = partColumn.Definition.Cardinality
 			columns[i].Dictionary = dict
 			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
 		}
@@ -939,44 +944,21 @@ func typedColumnAdapterHasStringPredicateColumn(fields []TypedStorageField, colu
 
 type typedColumnAdapterPartImageDecoder func(typedColumnAdapterOptions, typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error)
 
+type typedColumnStringPredicatePreparedPart struct {
+	AdapterPart     *typedColumnAdapterPart
+	Column          typedColumnAdapterColumn
+	QueryCode       uint32
+	QueryCodeFound  bool
+	ManifestBytes   int
+	DictionaryBytes int
+}
+
 func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
 	return typedColumnAdapterPrepareInt64PredicatePart(fields, raw, refPartID, typedRows, physicalRows, schemaHash, column, "scan", typedColumnAdapterPartFromImageForInt64PredicateScan)
 }
 
 func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
 	return typedColumnAdapterPrepareInt64PredicatePart(fields, raw, refPartID, typedRows, physicalRows, schemaHash, column, "aggregate", typedColumnAdapterAggregatePartFromImage)
-}
-
-func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, int, error) {
-	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
-	if err != nil {
-		return nil, typedColumnAdapterColumn{}, 0, 0, err
-	}
-	if !ok {
-		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed-column string predicate scan column %q is not owned by typed_column_part", column)
-	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueString || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
-		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("%w: typed-column string predicate scan column %q is not encoded as low-cardinality uint32 codes", ErrColumnQueryPlanUnsupported, column)
-	}
-	image, err := typedcolumn.ParseColumnPartImage(raw)
-	if err != nil {
-		return nil, typedColumnAdapterColumn{}, 0, 0, err
-	}
-	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
-		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed_column_part string scan image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
-	}
-	adapterPart, err := typedColumnAdapterPartFromImageForInt64PredicateScan(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(schemaHash)}, image)
-	if err != nil {
-		return nil, typedColumnAdapterColumn{}, 0, 0, err
-	}
-	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
-		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
-	}
-	adapterColumn, ok = adapterPart.columnByName(column)
-	if !ok {
-		return nil, typedColumnAdapterColumn{}, 0, 0, fmt.Errorf("collections: typed-column string predicate scan column %q missing after decode", column)
-	}
-	return adapterPart, adapterColumn, image.ManifestBytes, image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDictionaries), nil
 }
 
 func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
@@ -1007,6 +989,69 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	return adapterPart, adapterColumn, image.ManifestBytes, nil
 }
 
+// typedColumnAdapterPrepareStringPredicateScanPart decodes and validates durable
+// typed-column dictionary metadata before any string predicate row loop can run.
+func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, value string) (typedColumnStringPredicatePreparedPart, error) {
+	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, column)
+	if err != nil {
+		return typedColumnStringPredicatePreparedPart{}, err
+	}
+	if !ok {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed-column string predicate scan column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueString || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("%w: typed-column string predicate scan column %q is not encoded as low-cardinality string", ErrColumnQueryPlanUnsupported, column)
+	}
+	if adapterColumn.Field.Nullable {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("%w: typed-column string predicate scan column %q nullable=true is unsupported", ErrColumnQueryPlanUnsupported, column)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return typedColumnStringPredicatePreparedPart{}, err
+	}
+	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed_column_part string predicate scan image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
+	}
+	adapterPart, err := typedColumnAdapterPartFromImageForStringPredicateScan(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(schemaHash)}, image)
+	if err != nil {
+		return typedColumnStringPredicatePreparedPart{}, err
+	}
+	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	partColumn, ok := adapterPart.Part.Columns[adapterColumn.Definition.Name]
+	if !ok {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed-column string predicate scan missing column %q", adapterColumn.Definition.Name)
+	}
+	if partColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || partColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("%w: typed-column string predicate scan column %q type=%s encoding=%s", ErrColumnQueryPlanUnsupported, column, partColumn.Definition.Type, partColumn.Definition.Encoding)
+	}
+	dict := adapterPart.Dictionary[adapterColumn.Definition.Name]
+	code, found := dict[value]
+	prepared := typedColumnStringPredicatePreparedPart{AdapterPart: adapterPart, Column: adapterColumn, QueryCodeFound: found, ManifestBytes: image.ManifestBytes, DictionaryBytes: image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDictionaries)}
+	if !found {
+		return prepared, nil
+	}
+	if code < 0 || uint64(code) >= uint64(partColumn.Definition.Cardinality) || uint64(code) > uint64(^uint32(0)) {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed-column string predicate scan dictionary code %d for column %q outside cardinality %d", code, adapterColumn.Definition.Name, partColumn.Definition.Cardinality)
+	}
+	prepared.QueryCode = uint32(code)
+	return prepared, nil
+}
+
+func typedColumnStringPredicateAdapterColumn(fields []TypedStorageField, column string) (typedColumnAdapterColumn, bool, error) {
+	columns, err := typedColumnAdapterColumnsForFields(fields)
+	if err != nil {
+		return typedColumnAdapterColumn{}, false, err
+	}
+	for _, adapterColumn := range columns {
+		if adapterColumn.Field.Name == column || adapterColumn.Field.Path == column || adapterColumn.Definition.Name == column {
+			return adapterColumn, true, nil
+		}
+	}
+	return typedColumnAdapterColumn{}, false, nil
+}
+
 func typedColumnInt64PredicateAdapterColumn(fields []TypedStorageField, column string) (typedColumnAdapterColumn, bool, error) {
 	columns, err := typedColumnAdapterColumnsForFields(fields)
 	if err != nil {
@@ -1018,6 +1063,85 @@ func typedColumnInt64PredicateAdapterColumn(fields []TypedStorageField, column s
 		}
 	}
 	return typedColumnAdapterColumn{}, false, nil
+}
+
+func scanTypedColumnStringEqualityPredicateCodes(part *typedcolumn.ColumnPart, valueColumn string, queryCode uint32, queryCodeFound bool, visit func(rowIndex int, primaryID int64) error) (bool, int, int, error) {
+	if part == nil {
+		return false, 0, 0, errors.New("nil typed-column part")
+	}
+	if !queryCodeFound {
+		return true, 0, 0, nil
+	}
+	valueCol, ok := part.Columns[valueColumn]
+	if !ok {
+		return false, 0, 0, fmt.Errorf("missing value column %q", valueColumn)
+	}
+	idCol, ok := part.Columns[typedColumnAdapterPrimaryIDColumn]
+	if !ok {
+		return false, 0, 0, fmt.Errorf("missing primary id column %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	if valueCol.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || valueCol.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return false, 0, 0, fmt.Errorf("value column %q is not low-cardinality uint32", valueColumn)
+	}
+	if idCol.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return false, 0, 0, fmt.Errorf("primary id column %q is not int64", typedColumnAdapterPrimaryIDColumn)
+	}
+	cardinality := valueCol.Definition.Cardinality
+	if cardinality == 0 || queryCode >= cardinality {
+		return false, 0, 0, fmt.Errorf("query code %d outside cardinality %d", queryCode, cardinality)
+	}
+	var reader typedcolumn.GranuleReader
+	var codeScratch []uint32
+	var idScratch []int64
+	idBlockIndex := 0
+	decodedAny := false
+	rowsScanned := 0
+	rowsMatched := 0
+	for _, block := range valueCol.Blocks {
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || uint64(g.Max) >= uint64(cardinality) {
+				return false, rowsScanned, rowsMatched, fmt.Errorf("value column %q block first_row=%d min/max [%d,%d] outside cardinality %d", valueColumn, block.Descriptor.FirstRow, g.Min, g.Max, cardinality)
+			}
+			if int64(queryCode) < g.Min || int64(queryCode) > g.Max {
+				continue
+			}
+		}
+		idBlock, ok := typedColumnAlignedBlock(idCol.Blocks, &idBlockIndex, block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		if !ok {
+			return false, rowsScanned, rowsMatched, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		}
+		codes, err := reader.DecodeUint32CodesInto(codeScratch[:0], g)
+		if err != nil {
+			return false, rowsScanned, rowsMatched, err
+		}
+		codeScratch = codes
+		ids, err := reader.DecodeInt64Into(idScratch[:0], idBlock.Granule)
+		if err != nil {
+			return false, rowsScanned, rowsMatched, err
+		}
+		idScratch = ids
+		if len(codes) != block.Descriptor.RowCount || len(ids) != block.Descriptor.RowCount {
+			return false, rowsScanned, rowsMatched, fmt.Errorf("decoded rows codes=%d ids=%d want %d", len(codes), len(ids), block.Descriptor.RowCount)
+		}
+		decodedAny = true
+		rowsScanned += len(codes)
+		for i, code := range codes {
+			if code >= cardinality {
+				return false, rowsScanned, rowsMatched, fmt.Errorf("typed-column string predicate code %d outside cardinality %d", code, cardinality)
+			}
+			if code != queryCode {
+				continue
+			}
+			rowsMatched++
+			if visit != nil {
+				if err := visit(block.Descriptor.FirstRow+i, ids[i]); err != nil {
+					return false, rowsScanned, rowsMatched, err
+				}
+			}
+		}
+	}
+	return !decodedAny && len(valueCol.Blocks) != 0, rowsScanned, rowsMatched, nil
 }
 
 func scanTypedColumnInt64PredicatePart(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, generation uint64, partID uint64, result *TypedColumnInt64PredicateScanResult) (bool, error) {

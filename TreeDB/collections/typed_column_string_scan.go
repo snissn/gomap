@@ -186,19 +186,15 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 		rawScratch = raw
 		result.Diagnostics.DirectTypedColumnAssetReads++
 		result.Diagnostics.PhysicalBytesScanned += int64(len(raw))
-		adapterPart, adapterColumn, manifestBytes, dictionaryBytes, err := typedColumnAdapterPrepareStringPredicateScanPart(fields, raw, typedRef.Ref.PartID, typedRef.Rows, physical.Rows, cfg.SchemaHash, req.Column)
+		prepared, err := typedColumnAdapterPrepareStringPredicateScanPart(fields, raw, typedRef.Ref.PartID, typedRef.Rows, physical.Rows, cfg.SchemaHash, req.Column, req.Value)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column string predicate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
-		result.Diagnostics.DecodedMetadataBytes += uint64(manifestBytes)
-		result.Diagnostics.DictionaryBytesDecoded += uint64(dictionaryBytes)
-		code64, ok := adapterColumn.Dictionary[req.Value]
-		if !ok {
+		result.Diagnostics.DecodedMetadataBytes += uint64(prepared.ManifestBytes)
+		result.Diagnostics.DictionaryBytesDecoded += uint64(prepared.DictionaryBytes)
+		if !prepared.QueryCodeFound {
 			result.Diagnostics.PartsPruned++
 			continue
-		}
-		if code64 < 0 || code64 > int64(^uint32(0)) {
-			return result, fmt.Errorf("collections: typed-column string predicate dictionary code %d outside uint32", code64)
 		}
 		matchedStart := len(result.Rows)
 		var visibility *typedColumnLatestPhysicalPart
@@ -209,7 +205,7 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 				return result, fmt.Errorf("collections: typed-column string predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
-		partPruned, err := scanTypedColumnStringPredicatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, uint32(code64), req.Value, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility)
+		partPruned, err := scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, req.Value, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column string predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
