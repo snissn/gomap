@@ -745,53 +745,35 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	return true, nil
 }
 
+type typedColumnAdapterPartImageDecoder func(typedColumnAdapterOptions, typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error)
+
 func typedColumnAdapterPrepareInt64PredicateScanPart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
-	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
-	if err != nil {
-		return nil, typedColumnAdapterColumn{}, 0, err
-	}
-	if !ok {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate column %q is not owned by typed_column_part", column)
-	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
-	}
-	image, err := typedcolumn.ParseColumnPartImage(raw)
-	if err != nil {
-		return nil, typedColumnAdapterColumn{}, 0, err
-	}
-	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
-	}
-	adapterPart, err := typedColumnAdapterPartFromImageForInt64PredicateScan(typedColumnAdapterOptions{Fields: fields}, image)
-	if err != nil {
-		return nil, typedColumnAdapterColumn{}, 0, err
-	}
-	if adapterPart.Part.Descriptor.SchemaVersion != uint32(schemaHash) {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(schemaHash))
-	}
-	return adapterPart, adapterColumn, image.ManifestBytes, nil
+	return typedColumnAdapterPrepareInt64PredicatePart(fields, raw, refPartID, typedRows, physicalRows, schemaHash, column, "scan", typedColumnAdapterPartFromImageForInt64PredicateScan)
 }
 
 func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
+	return typedColumnAdapterPrepareInt64PredicatePart(fields, raw, refPartID, typedRows, physicalRows, schemaHash, column, "aggregate", typedColumnAdapterAggregatePartFromImage)
+}
+
+func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
 	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
 	if err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}
 	if !ok {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate %s column %q is not owned by typed_column_part", operation, column)
 	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, operation, column)
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part aggregate image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed_column_part %s image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", operation, image.PartID, refPartID, image.Rows, typedRows, physicalRows)
 	}
-	adapterPart, err := typedColumnAdapterAggregatePartFromImage(typedColumnAdapterOptions{Fields: fields}, image)
+	adapterPart, err := decode(typedColumnAdapterOptions{Fields: fields}, image)
 	if err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}
@@ -910,8 +892,9 @@ func scanTypedColumnInt64PredicateAggregatePart(part *typedcolumn.ColumnPart, va
 			if !typedColumnInt64PredicateMatches(req, v) {
 				continue
 			}
-			result.Count++
-			result.Sum += v
+			if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+				return false, err
+			}
 			result.Diagnostics.RowsMatched++
 		}
 	}

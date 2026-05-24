@@ -95,6 +95,26 @@ type TypedColumnInt64PredicateAggregateResult struct {
 	Diagnostics TypedColumnInt64PredicateScanDiagnostics
 }
 
+const (
+	typedColumnInt64PredicateAggregateMaxSum = int64(1<<63 - 1)
+	typedColumnInt64PredicateAggregateMinSum = -typedColumnInt64PredicateAggregateMaxSum - 1
+)
+
+func addTypedColumnInt64PredicateAggregateValue(result *TypedColumnInt64PredicateAggregateResult, value int64) error {
+	if result == nil {
+		return errors.New("collections: nil typed-column int64 predicate aggregate result")
+	}
+	if value > 0 && result.Sum > typedColumnInt64PredicateAggregateMaxSum-value {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, value)
+	}
+	if value < 0 && result.Sum < typedColumnInt64PredicateAggregateMinSum-value {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, value)
+	}
+	result.Count++
+	result.Sum += value
+	return nil
+}
+
 // RunTypedColumnInt64PredicateScan executes the scoped #1757 scalar predicate MVP.
 // When the requested int64 field is owned by typed_column_part, the predicate is
 // evaluated directly over durable typed_column_part assets and fails closed if
@@ -566,8 +586,9 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDocumentFallback(req T
 		}
 		result.Diagnostics.RowsScanned++
 		if typedColumnInt64PredicateMatches(typedColumnInt64PredicateAggregateScanRequest(req), value) {
-			result.Count++
-			result.Sum += value
+			if err := addTypedColumnInt64PredicateAggregateValue(&result, value); err != nil {
+				return false, err
+			}
 			result.Diagnostics.RowsMatched++
 		}
 		return true, nil

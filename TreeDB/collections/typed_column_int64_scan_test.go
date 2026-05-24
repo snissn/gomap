@@ -390,6 +390,37 @@ func TestTypedColumnInt64AggregateCorruptStaleMismatchFailClosed(t *testing.T) {
 	})
 }
 
+func TestTypedColumnInt64AggregateSumOverflowFails(t *testing.T) {
+	values := []int64{typedColumnInt64PredicateAggregateMaxSum, 1}
+	req := TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 1, High: typedColumnInt64PredicateAggregateMaxSum}
+
+	t.Run("typed_column_part", func(t *testing.T) {
+		d, col := setupTypedColumnInt64ScanCollection(t)
+		defer func() { _ = d.Close() }()
+		insertTypedColumnInt64ScanRows(t, col, values)
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(req); err == nil || !strings.Contains(err.Error(), "sum overflow") {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate err=%v want sum overflow", err)
+		}
+	})
+
+	t.Run("document_full_scan_fallback", func(t *testing.T) {
+		d := openTypedColumnInt64ScanDB(t)
+		defer func() { _ = d.Close() }()
+		mgr := NewCollectionManager(d)
+		if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events"}); err != nil {
+			t.Fatalf("CreateCollection: %v", err)
+		}
+		col, err := mgr.OpenCollection("events")
+		if err != nil {
+			t.Fatalf("OpenCollection: %v", err)
+		}
+		insertTypedColumnInt64ScanRows(t, col, values)
+		if _, err := col.RunTypedColumnInt64PredicateAggregate(req); err == nil || !strings.Contains(err.Error(), "sum overflow") {
+			t.Fatalf("RunTypedColumnInt64PredicateAggregate fallback err=%v want sum overflow", err)
+		}
+	})
+}
+
 func TestTypedColumnInt64AggregateDirectDiagnosticsNoMaterialization(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
