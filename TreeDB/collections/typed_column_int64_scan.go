@@ -161,9 +161,6 @@ func (c *Collection) RunTypedColumnInt64PredicateScan(req TypedColumnInt64Predic
 		}
 		return c.runTypedColumnInt64PredicateScanPhysicalFallback(view, req, cfg, "typed_column_not_selected", start)
 	}
-	if view.MutationParts != 0 {
-		return c.runTypedColumnInt64PredicateScanDocumentFallback(req, cfg, "mutation_visibility_requires_document_reconstruction", start)
-	}
 	return c.runTypedColumnInt64PredicateScanDirect(view, req, cfg, start)
 }
 
@@ -214,9 +211,6 @@ func (c *Collection) RunTypedColumnInt64PredicateAggregate(req TypedColumnInt64P
 	}
 	if !columnStoreColumnIsTypedColumnPart(col) {
 		return c.runTypedColumnInt64PredicateAggregateDocumentFallback(req, cfg, "typed_column_not_selected", start)
-	}
-	if view.MutationParts != 0 {
-		return c.runTypedColumnInt64PredicateAggregateDocumentFallback(req, cfg, "mutation_visibility_requires_document_reconstruction", start)
 	}
 	return c.runTypedColumnInt64PredicateAggregateDirect(view, req, cfg, start)
 }
@@ -288,6 +282,35 @@ func validateTypedColumnPhysicalAssetPairing(refsByGeneration map[uint64]columnM
 	return physicalRefsByGeneration, nil
 }
 
+func validateTypedColumnMultipartAssetPairing(refsByGeneration map[uint64]columnManifestAssetRefForScan, assetRefs []columnManifestAssetRefForScan) error {
+	physicalRefsByGeneration := make(map[uint64]struct{}, len(assetRefs))
+	for _, physical := range assetRefs {
+		if physical.Ref.Kind != ColumnAssetKindTCS1PartImage {
+			return fmt.Errorf("collections: typed-column physical asset pairing requires typed-row physical refs, got %s", physical.Ref.Kind)
+		}
+		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
+			continue
+		}
+		typedRef, ok := refsByGeneration[physical.Ref.Generation]
+		if !ok {
+			return fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
+		}
+		if typedRef.Rows != physical.Rows {
+			return fmt.Errorf("collections: typed_column_part rows=%d do not match physical rows=%d for generation=%d", typedRef.Rows, physical.Rows, physical.Ref.Generation)
+		}
+		if _, exists := physicalRefsByGeneration[physical.Ref.Generation]; exists {
+			return fmt.Errorf("collections: duplicate physical row asset ref for generation=%d", physical.Ref.Generation)
+		}
+		physicalRefsByGeneration[physical.Ref.Generation] = struct{}{}
+	}
+	for generation := range refsByGeneration {
+		if _, ok := physicalRefsByGeneration[generation]; !ok {
+			return fmt.Errorf("collections: missing physical row asset for typed_column_part generation=%d", generation)
+		}
+	}
+	return nil
+}
+
 func typedColumnPhysicalAssetPairingScanError(err error) error {
 	var reasonErr typedColumnPhysicalAssetPairingReasonError
 	if errors.As(err, &reasonErr) {
@@ -318,8 +341,8 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			continue
 		}
-		if ref.Reason != ColumnPublishOperationInsert {
-			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate scan requires insert-only typed refs, got %s", ref.Reason)
+		if ref.Role == ColumnManifestPartRoleTombstone || ref.Reason == ColumnPublishOperationDelete {
+			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate scan got tombstone typed ref generation=%d", ref.Ref.Generation)
 		}
 		// Current durable typed-column publication emits one typed_column_part
 		// locator per generation (part_id=2) paired with that generation's
@@ -333,8 +356,12 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	if len(refsByGeneration) == 0 {
 		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate scan")
 	}
-	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
-		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingScanError(err)
+	if view.MutationParts == 0 {
+		if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+			return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingScanError(err)
+		}
+	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, err
 	}
 
 	mgr := mappedresource.NewManager()
@@ -350,8 +377,18 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	defer func() { _ = readCache.close() }()
 
 	result := TypedColumnInt64PredicateScanResult{Diagnostics: diag}
+	var resolver *typedColumnLatestRowResolver
+	if view.MutationParts != 0 {
+		resolver, err = buildTypedColumnLatestRowResolver(view, &readCache, &result.Diagnostics)
+		if err != nil {
+			return result, err
+		}
+	}
 	var rawScratch []byte
 	for _, physical := range view.AssetRefs {
+		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
+			continue
+		}
 		typedRef := refsByGeneration[physical.Ref.Generation]
 		result.Diagnostics.PartsConsidered++
 		raw, err := readCache.read(typedRef.Ref, rawScratch)
@@ -369,7 +406,15 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		}
 		result.Diagnostics.DecodedMetadataBytes += uint64(manifestBytes)
 		matchedStart := len(result.Rows)
-		partPruned, err := scanTypedColumnInt64PredicatePart(adapterPart.Part, adapterColumn.Definition.Name, req, typedRef.Ref.Generation, typedRef.Ref.PartID, &result)
+		var visibility *typedColumnLatestPhysicalPart
+		if resolver != nil {
+			var ok bool
+			visibility, ok = resolver.partForGeneration(physical.Ref.Generation)
+			if !ok {
+				return result, fmt.Errorf("collections: typed-column int64 predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
+			}
+		}
+		partPruned, err := scanTypedColumnInt64PredicatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, req, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
@@ -378,7 +423,7 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		} else {
 			result.Diagnostics.PartsDecoded++
 		}
-		if len(result.Rows) > matchedStart {
+		if resolver == nil && len(result.Rows) > matchedStart {
 			result.Diagnostics.PhysicalRowAssetReads++
 			physicalRaw, err := readCache.read(physical.Ref, rawScratch)
 			result.Diagnostics.SegmentFileCacheHits = readCache.hits
@@ -427,8 +472,8 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			continue
 		}
-		if ref.Reason != ColumnPublishOperationInsert {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate aggregate requires insert-only typed refs, got %s", ref.Reason)
+		if ref.Role == ColumnManifestPartRoleTombstone || ref.Reason == ColumnPublishOperationDelete {
+			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate aggregate got tombstone typed ref generation=%d", ref.Ref.Generation)
 		}
 		if _, exists := refsByGeneration[ref.Ref.Generation]; exists {
 			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate typed_column_part ref for generation=%d", ref.Ref.Generation)
@@ -438,8 +483,12 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	if len(refsByGeneration) == 0 {
 		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate aggregate")
 	}
-	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingAggregateError(err)
+	if view.MutationParts == 0 {
+		if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingAggregateError(err)
+		}
+	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
 	}
 
 	mgr := mappedresource.NewManager()
@@ -455,8 +504,18 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	defer func() { _ = readCache.close() }()
 
 	result := TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}
+	var resolver *typedColumnLatestRowResolver
+	if view.MutationParts != 0 {
+		resolver, err = buildTypedColumnLatestRowResolver(view, &readCache, &result.Diagnostics)
+		if err != nil {
+			return result, err
+		}
+	}
 	var rawScratch []byte
 	for _, physical := range view.AssetRefs {
+		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
+			continue
+		}
 		typedRef := refsByGeneration[physical.Ref.Generation]
 		result.Diagnostics.PartsConsidered++
 		raw, err := readCache.read(typedRef.Ref, rawScratch)
@@ -473,7 +532,15 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 			return result, fmt.Errorf("collections: typed-column int64 predicate aggregate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		result.Diagnostics.DecodedMetadataBytes += uint64(manifestBytes)
-		partPruned, err := scanTypedColumnInt64PredicateAggregatePart(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(req), &result)
+		var visibility *typedColumnLatestPhysicalPart
+		if resolver != nil {
+			var ok bool
+			visibility, ok = resolver.partForGeneration(physical.Ref.Generation)
+			if !ok {
+				return result, fmt.Errorf("collections: typed-column int64 predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
+			}
+		}
+		partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(req), &result, visibility)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate aggregate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}

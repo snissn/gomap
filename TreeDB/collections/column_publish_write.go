@@ -503,6 +503,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if hookInput.CurrentManifest != nil {
 		generation = hookInput.CurrentManifest.Generation + 1
 	}
+	role := columnManifestPartRoleForPublish(hookInput.Operation)
 	rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
 	rowAssetRows, err := projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
 	if err != nil {
@@ -541,6 +542,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		PublishID:    hookInput.AppliedCommandLSN,
 		GenerationID: generation,
 		Reason:       string(input.operation),
+		PartRole:     role,
 	}}
 	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
 		typedColumnImage, typedColumnRows, err := buildTypedColumnPartImageForDeclaredRows(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
@@ -563,6 +565,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       string(input.operation),
+				PartRole:     role,
 			}
 			prepared.Assets = append(prepared.Assets, prepped)
 		}
@@ -592,6 +595,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       dictionary.ColumnName,
+				PartRole:     role,
 			})
 		}
 		int64Assets, err := buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
@@ -618,6 +622,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       values.ColumnName,
+				PartRole:     role,
 			})
 		}
 		for _, aggregate := range rowAssetConfig.AggregateMetadata {
@@ -647,10 +652,24 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       aggregate.Name,
+				PartRole:     role,
 			})
 		}
 	}
 	return prepared, nil
+}
+
+func columnManifestPartRoleForPublish(operation ColumnPublishOperation) ColumnManifestPartRole {
+	switch operation {
+	case ColumnPublishOperationDelete:
+		return ColumnManifestPartRoleTombstone
+	case ColumnPublishOperationInsert:
+		return ColumnManifestPartRoleBase
+	case ColumnPublishOperationUpdate:
+		return ColumnManifestPartRoleDelta
+	default:
+		return ColumnManifestPartRoleDelta
+	}
 }
 
 func validateColumnPhysicalAssetPreparedRefForManifest(ref ColumnAssetRef, cfg ColumnStoreConfig, generation, partID uint64, payloadLen int) error {

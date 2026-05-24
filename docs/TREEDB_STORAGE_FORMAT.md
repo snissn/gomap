@@ -65,8 +65,13 @@ Column manifest records stored in B-tree/root metadata hold durable
 `ColumnAssetRef` values: kind, namespace, generation, part id, segment file id,
 offset, length, and checksum. `tcs1_part_image` refs identify compatibility
 `TCPA` typed-row assets; `tcs1_typed_column_part` refs identify sectioned
-scalar and fixed-dimension vector typed-column parts. GC/rewrite must enumerate
-those refs from manifest/control roots, not by scanning row documents.
+scalar and fixed-dimension vector typed-column parts. `TCMP` manifest part
+records version 3 also persist multipart roles: `base`, `delta`, and
+`tombstone`. Readers fail closed on malformed key/ref/checksum/role/operation
+combinations; typed-column part refs must pair with the same generation's
+row-locator `TCPA` asset and row count, while delete/tombstone generations have
+only the row-locator/tombstone part. GC/rewrite must enumerate those refs from
+manifest/control roots, not by scanning row documents.
 
 The typed-row physical part payload uses the `TCPA` envelope, version 3:
 

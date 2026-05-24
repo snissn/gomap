@@ -107,12 +107,15 @@ func mustEncodeColumnManifestPartRecordVersionM1634(t *testing.T, asset ColumnPr
 	writeManifestUint64(&b, uint64(asset.Ref.Offset))
 	writeManifestUint64(&b, uint64(asset.Ref.Length))
 	writeManifestUint64(&b, uint64(asset.Ref.Checksum))
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		writeManifestUint64(&b, uint64(asset.Rows))
 	}
 	writeManifestUint64(&b, uint64(asset.Bytes))
 	writeManifestUint64(&b, asset.PublishID)
 	writeManifestUint64(&b, asset.GenerationID)
 	writeManifestString(&b, asset.Reason)
+	if version >= columnManifestRecordVersion {
+		writeManifestString(&b, string(asset.PartRole))
+	}
 	return b.Bytes()
 }

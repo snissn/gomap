@@ -57,10 +57,12 @@ For inserts and updates with scalar or fixed-dimension vector
   fixed-dimension `float32_vector` `typed_column_part` values for the same
   generation.
 
-Deletes publish only a typed-row tombstone asset. Retained-payload
-reconstruction finds the latest visible typed-row locator for a document ID and,
-when that locator's generation has typed-column fields, reads the matching
-`typed_column_part` by row index. For nullable typed-column fields, reconstruction
+Manifest part records classify these assets as `base`, `delta`, or `tombstone`.
+Insert/base spans use `base`; updates use `delta`; deletes publish only a
+`tombstone` typed-row asset. Retained-payload reconstruction and direct typed
+int64 scans resolve latest-visible identity from the typed-row base/delta/
+tombstone lineage, then read the matching typed-column part by row index for the
+winning non-deleted generation. For nullable typed-column fields, reconstruction
 must preserve source-document intent: present/non-null rows write the declared
 path and value, explicit-null rows write the declared path with JSON null, and
 missing/default rows leave the declared path absent from the retained-payload

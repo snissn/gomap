@@ -210,6 +210,20 @@ type typedColumnPartVisibleValues struct {
 	Values []columnDeclaredValue
 }
 
+type typedColumnPartSet struct {
+	Generation uint64
+	Refs       []columnManifestAssetRefForScan
+}
+
+func (set typedColumnPartSet) primaryRef() (columnManifestAssetRefForScan, bool) {
+	for _, ref := range set.Refs {
+		if ref.Ref.PartID == typedColumnPartAssetPartID {
+			return ref, true
+		}
+	}
+	return columnManifestAssetRefForScan{}, false
+}
+
 type typedColumnPartReconstructionCache struct {
 	Parts      map[uint64]typedColumnPartDecodedValues
 	Fields     []TypedStorageField
@@ -358,24 +372,48 @@ func (c *Collection) typedColumnPartRefsByGeneration(snap *backenddb.Snapshot, r
 }
 
 func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifestRecord, expectedNamespace string) (map[uint64]columnManifestAssetRefForScan, error) {
-	refs := make(map[uint64]columnManifestAssetRefForScan)
-	physicalRowsByGeneration := make(map[uint64]int)
+	sets, physicalRowsByGeneration, err := typedColumnPartSetsByGenerationFromManifestRecords(records, expectedNamespace)
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[uint64]columnManifestAssetRefForScan, len(sets))
+	for generation, set := range sets {
+		ref, ok := set.primaryRef()
+		if !ok {
+			continue
+		}
+		physicalRows, ok := physicalRowsByGeneration[generation]
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column manifest missing typed_row_asset ref for generation=%d", generation)
+		}
+		if ref.Rows != physicalRows {
+			return nil, fmt.Errorf("collections: typed-column manifest rows=%d does not match physical rows=%d for generation=%d", ref.Rows, physicalRows, generation)
+		}
+		refs[generation] = ref
+	}
+	return refs, nil
+}
+
+func typedColumnPartSetsByGenerationFromManifestRecords(records []columnManifestRecord, expectedNamespace string) (map[uint64]typedColumnPartSet, map[uint64]int, error) {
+	sets := make(map[uint64]typedColumnPartSet, len(records)/2)
+	seenPartIDs := make(map[[2]uint64]struct{}, len(records)/2)
+	physicalRowsByGeneration := make(map[uint64]int, len(records)/2)
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
 		}
 		keyGeneration, keyPartID, err := columnManifestPartKeyFromRecordKeyForScan(record.key)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		ref, rows, _, _, _, reason, err := decodeColumnManifestPartFieldsForScan(record.value, expectedNamespace)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		switch ref.Kind {
 		case ColumnAssetKindTCS1PartImage:
 			if ref.Generation != keyGeneration || ref.PartID != keyPartID {
-				return nil, fmt.Errorf("collections: typed-row manifest key generation/part mismatch")
+				return nil, nil, fmt.Errorf("collections: typed-row manifest key generation/part mismatch")
 			}
 			if ref.PartID == columnPhysicalRowAssetPartID {
 				physicalRowsByGeneration[ref.Generation] = rows
@@ -386,28 +424,31 @@ func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifest
 			continue
 		}
 		if ref.Generation != keyGeneration || ref.PartID != keyPartID {
-			return nil, fmt.Errorf("collections: typed-column manifest key generation/part mismatch")
-		}
-		if ref.PartID != typedColumnPartAssetPartID {
-			return nil, fmt.Errorf("collections: typed-column manifest unexpected part_id=%d", ref.PartID)
+			return nil, nil, fmt.Errorf("collections: typed-column manifest key generation/part mismatch")
 		}
 		operation, ok := columnPhysicalScanOperationFromBytes(reason)
 		if !ok {
-			return nil, fmt.Errorf("collections: unsupported typed-column manifest reason %q", string(reason))
+			return nil, nil, fmt.Errorf("collections: unsupported typed-column manifest reason %q", string(reason))
 		}
-		if _, exists := refs[ref.Generation]; exists {
-			return nil, fmt.Errorf("collections: duplicate typed-column manifest ref for generation=%d", ref.Generation)
+		role, err := decodeColumnManifestPartRoleForScan(record.value, ref, reason)
+		if err != nil {
+			return nil, nil, err
 		}
-		refs[ref.Generation] = columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows}
+		if role == ColumnManifestPartRoleTombstone {
+			return nil, nil, fmt.Errorf("collections: typed-column manifest ref generation=%d part_id=%d cannot be tombstone role", ref.Generation, ref.PartID)
+		}
+		partKey := [2]uint64{ref.Generation, ref.PartID}
+		if _, exists := seenPartIDs[partKey]; exists {
+			return nil, nil, fmt.Errorf("collections: duplicate typed-column manifest ref for generation=%d part_id=%d", ref.Generation, ref.PartID)
+		}
+		seenPartIDs[partKey] = struct{}{}
+		set := sets[ref.Generation]
+		if set.Generation == 0 {
+			set.Generation = ref.Generation
+			set.Refs = make([]columnManifestAssetRefForScan, 0, 4)
+		}
+		set.Refs = append(set.Refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+		sets[ref.Generation] = set
 	}
-	for generation, ref := range refs {
-		physicalRows, ok := physicalRowsByGeneration[generation]
-		if !ok {
-			return nil, fmt.Errorf("collections: typed-column manifest missing typed_row_asset ref for generation=%d", generation)
-		}
-		if ref.Rows != physicalRows {
-			return nil, fmt.Errorf("collections: typed-column manifest rows=%d does not match physical rows=%d for generation=%d", ref.Rows, physicalRows, generation)
-		}
-	}
-	return refs, nil
+	return sets, physicalRowsByGeneration, nil
 }
