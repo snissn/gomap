@@ -55,6 +55,19 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Document Map
 
+### Practical guides (non-normative)
+
+- `TreeDB/docs/guides/README.md`
+  - index for typed-storage quickstarts, performance profiling, and vector typed-column guidance.
+- `TreeDB/docs/guides/collections-quickstart.md`
+  - runnable hybrid collection smoke plus document-only, typed-row, typed-column, and hybrid layout examples.
+- `TreeDB/docs/guides/typed-storage-performance.md`
+  - storage-mode decision guide, aggregate benchmark/profile commands, counter interpretation, troubleshooting, and playbooks.
+- `TreeDB/docs/guides/vector-search-typed-column.md`
+  - dense vector typed-column placement, column graph demo/benchmarks, search-vs-fetch timing boundaries, and caveats.
+
+### Canonical specs
+
 - `TreeDB/docs/spec/architecture.md`
   - system model, components, directory layout, side stores, lock model.
 - `TreeDB/docs/spec/contracts.md`
