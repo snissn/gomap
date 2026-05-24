@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -133,6 +134,19 @@ func TestExplicitDirMustBeFresh(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(dir, "keep.txt")); err != nil || string(got) != "keep" {
 		t.Fatalf("sentinel changed: got=%q err=%v", got, err)
+	}
+}
+
+func TestValidateFreshDemoDirAllowsShortExplicitPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("absolute /tmp/db shape is Unix-specific")
+	}
+	got, err := validateFreshDemoDir("/tmp/db")
+	if err != nil {
+		t.Fatalf("validateFreshDemoDir rejected short explicit path: %v", err)
+	}
+	if got != "/tmp/db" {
+		t.Fatalf("path=%q want /tmp/db", got)
 	}
 }
 

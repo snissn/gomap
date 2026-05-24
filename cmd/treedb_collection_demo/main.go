@@ -43,7 +43,6 @@ const (
 	defaultStringCardinality = 16
 	defaultExtraFields       = 2
 	defaultSeed              = int64(1)
-	minFreshDemoDirBytes     = 8
 )
 
 type config struct {
@@ -519,7 +518,7 @@ func validateFreshDemoDir(dir string) (string, error) {
 	}
 	abs = filepath.Clean(abs)
 	root := filepath.VolumeName(abs) + string(os.PathSeparator)
-	if abs == root || len(abs) < minFreshDemoDirBytes || abs == filepath.Clean(os.TempDir()) {
+	if abs == root || abs == filepath.Clean(os.TempDir()) {
 		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
 	}
 	return abs, nil
