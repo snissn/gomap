@@ -391,3 +391,16 @@ Remaining COW maintenance work for #1736/#1788:
   nullable vector/adjacency typed-column integration, dictionary/string query integration,
   aggregate query integration, multipart lifecycle/compaction, and full row+column
   COW cleanup as explicit follow-ups, not implied #1744 completions.
+
+## Post-closeout #1788 maintenance update
+
+Issue #1788 adds the current row+column typed-asset maintenance contract in
+`TreeDB/docs/spec/typed-asset-maintenance-1788.md`. The implementation keeps the
+handoff boundaries above, but the destructive maintenance path now has shared
+reachability for typed-row `tcs1_part_image`, typed-column
+`tcs1_typed_column_part`, aggregate metadata, dictionary-code, int64-value, and
+vector graph derived refs. `ColumnAssetGC` and `ColumnAssetRewrite` automatically
+fold active process-local `mappedresource` pins into their plans, report mapped
+bytes, heap-copy bytes, active handles, pinned bytes, fallbacks, and denied
+resources, and fail closed on unconvertible active pins or incomplete segment/ref
+classification.

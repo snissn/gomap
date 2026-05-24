@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 // ColumnAssetReachabilityOptions controls protect-only reachability planning.
@@ -58,13 +60,14 @@ const (
 type ColumnAssetReachabilitySource string
 
 const (
-	ColumnAssetReachabilitySourceActiveManifest   ColumnAssetReachabilitySource = "active_manifest"
-	ColumnAssetReachabilitySourceRecoveryManifest ColumnAssetReachabilitySource = "recovery_manifest"
-	ColumnAssetReachabilitySourceCandidate        ColumnAssetReachabilitySource = "candidate"
-	ColumnAssetReachabilitySourcePinnedSnapshot   ColumnAssetReachabilitySource = "pinned_snapshot"
-	ColumnAssetReachabilitySourcePendingPublish   ColumnAssetReachabilitySource = "pending_publish"
-	ColumnAssetReachabilitySourcePreparedAsset    ColumnAssetReachabilitySource = "prepared_asset"
-	columnAssetReachabilitySourceUnknown          ColumnAssetReachabilitySource = "unknown"
+	ColumnAssetReachabilitySourceActiveManifest    ColumnAssetReachabilitySource = "active_manifest"
+	ColumnAssetReachabilitySourceRecoveryManifest  ColumnAssetReachabilitySource = "recovery_manifest"
+	ColumnAssetReachabilitySourceCandidate         ColumnAssetReachabilitySource = "candidate"
+	ColumnAssetReachabilitySourcePinnedSnapshot    ColumnAssetReachabilitySource = "pinned_snapshot"
+	ColumnAssetReachabilitySourcePendingPublish    ColumnAssetReachabilitySource = "pending_publish"
+	ColumnAssetReachabilitySourcePreparedAsset     ColumnAssetReachabilitySource = "prepared_asset"
+	ColumnAssetReachabilitySourceMappedResourcePin ColumnAssetReachabilitySource = "mappedresource_pin"
+	columnAssetReachabilitySourceUnknown           ColumnAssetReachabilitySource = "unknown"
 )
 
 type ColumnAssetReachabilityPlan struct {
@@ -77,6 +80,7 @@ type ColumnAssetReachabilityPlan struct {
 	Sources                    ColumnAssetReachabilitySourceStats
 	Refs                       ColumnAssetReachabilityRefStats
 	Segments                   ColumnAssetReachabilitySegmentStats
+	MappedResources            ColumnAssetReachabilityMappedResourceStats
 	RewriteDebtBytes           int64
 	Entries                    []ColumnAssetReachabilityRefEntry
 	SegmentEntries             []ColumnAssetReachabilitySegmentEntry
@@ -96,6 +100,7 @@ type ColumnAssetReachabilitySourceStats struct {
 	PendingRefs          int
 	PreparedRefs         int
 	PinnedRefs           int
+	MappedResourcePins   int
 }
 
 type ColumnAssetReachabilityRefStats struct {
@@ -122,6 +127,22 @@ type ColumnAssetReachabilitySegmentStats struct {
 	BytesReclaimable      int64
 	BytesWholeReclaimable int64
 	BytesUnknown          int64
+}
+
+// ColumnAssetReachabilityMappedResourceStats summarizes active #1736
+// mappedresource handles observed while building a maintenance plan. The byte
+// counters are active process-local handle bytes, not heap allocations by the
+// planner itself.
+type ColumnAssetReachabilityMappedResourceStats struct {
+	ActiveHandles              int
+	ActiveMappedBytes          int64
+	ActiveHeapCopyBytes        int64
+	ActiveDerivedMetadataBytes int64
+	PinnedRefs                 int
+	PinnedBytes                int64
+	UnconvertiblePins          int
+	DeniedResources            uint64
+	FallbackReads              uint64
 }
 
 type ColumnAssetReachabilityRefEntry struct {
@@ -156,6 +177,7 @@ const (
 	columnAssetReachabilitySourcePinnedSnapshotMask
 	columnAssetReachabilitySourcePendingPublishMask
 	columnAssetReachabilitySourcePreparedAssetMask
+	columnAssetReachabilitySourceMappedResourcePinMask
 	columnAssetReachabilitySourceUnknownMask
 )
 
@@ -163,7 +185,8 @@ const columnAssetReachabilityProtectedSourceMask = columnAssetReachabilitySource
 	columnAssetReachabilitySourceRecoveryManifestMask |
 	columnAssetReachabilitySourcePinnedSnapshotMask |
 	columnAssetReachabilitySourcePendingPublishMask |
-	columnAssetReachabilitySourcePreparedAssetMask
+	columnAssetReachabilitySourcePreparedAssetMask |
+	columnAssetReachabilitySourceMappedResourcePinMask
 
 var columnAssetReachabilitySourceBits = [...]struct {
 	source ColumnAssetReachabilitySource
@@ -175,6 +198,7 @@ var columnAssetReachabilitySourceBits = [...]struct {
 	{ColumnAssetReachabilitySourcePinnedSnapshot, columnAssetReachabilitySourcePinnedSnapshotMask},
 	{ColumnAssetReachabilitySourcePendingPublish, columnAssetReachabilitySourcePendingPublishMask},
 	{ColumnAssetReachabilitySourcePreparedAsset, columnAssetReachabilitySourcePreparedAssetMask},
+	{ColumnAssetReachabilitySourceMappedResourcePin, columnAssetReachabilitySourceMappedResourcePinMask},
 	{columnAssetReachabilitySourceUnknown, columnAssetReachabilitySourceUnknownMask},
 }
 
@@ -350,6 +374,14 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addRefs(ctx, opts.PreparedRefs, ColumnAssetReachabilitySourcePreparedAsset); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
+	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.namespace)
+	input.mappedResources = mappedResourceStats
+	if mappedResourceStats.UnconvertiblePins != 0 {
+		input.pinStateIncomplete = true
+	}
+	if err := input.addRefs(ctx, activePinnedRefs, ColumnAssetReachabilitySourceMappedResourcePin); err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
 	if err := input.addRefs(ctx, opts.PinnedRefs, ColumnAssetReachabilitySourcePinnedSnapshot); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -387,22 +419,84 @@ func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapsho
 	return input
 }
 
+func columnAssetReachabilityMappedResourcePins(namespace string) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats) {
+	globalStats := mappedresource.GlobalStats()
+	stats := ColumnAssetReachabilityMappedResourceStats{
+		DeniedResources: sumMappedResourceDenied(globalStats.DeniedByReason),
+		FallbackReads:   globalStats.FallbackReads,
+	}
+	pins := mappedresource.GlobalPinSummary()
+	if len(pins) == 0 {
+		return nil, stats
+	}
+	refs := make([]ColumnAssetRef, 0, len(pins))
+	for _, pin := range pins {
+		if !columnAssetMappedResourcePinMatchesNamespace(pin, namespace) {
+			continue
+		}
+		stats.ActiveHandles++
+		stats.PinnedBytes = addColumnAssetReachabilityBytes(stats.PinnedBytes, pin.Bytes)
+		switch pin.Source {
+		case mappedresource.SourceMapped:
+			stats.ActiveMappedBytes = addColumnAssetReachabilityBytes(stats.ActiveMappedBytes, pin.Bytes)
+		case mappedresource.SourceHeapCopy:
+			stats.ActiveHeapCopyBytes = addColumnAssetReachabilityBytes(stats.ActiveHeapCopyBytes, pin.Bytes)
+		case mappedresource.SourceDerivedMetadata:
+			stats.ActiveDerivedMetadataBytes = addColumnAssetReachabilityBytes(stats.ActiveDerivedMetadataBytes, pin.Bytes)
+		}
+		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
+		if !ok {
+			stats.UnconvertiblePins++
+			continue
+		}
+		if namespace != "" && ref.Namespace != namespace {
+			stats.UnconvertiblePins++
+			continue
+		}
+		refs = append(refs, ref)
+		stats.PinnedRefs++
+	}
+	return refs, stats
+}
+
+func columnAssetMappedResourcePinMatchesNamespace(pin mappedresource.Pin, namespace string) bool {
+	switch pin.Key.Class {
+	case mappedresource.ClassTypedRowAsset, mappedresource.ClassTypedColumnAsset:
+	default:
+		return false
+	}
+	if namespace == "" {
+		return true
+	}
+	return pin.Key.Namespace == namespace || pin.Scope.Namespace == namespace
+}
+
+func sumMappedResourceDenied(in map[mappedresource.DenyReason]uint64) uint64 {
+	var total uint64
+	for _, count := range in {
+		total += count
+	}
+	return total
+}
+
 type columnAssetReachabilityInput struct {
-	rootDir        string
-	collection     string
-	namespace      string
-	activeGen      uint64
-	recoveryGen    uint64
-	manifestRecs   int
-	activeRefs     int
-	recoveryRefs   int
-	detailed       bool
-	segmentDetails bool
-	omitSources    bool
-	omitSort       bool
-	refs           map[ColumnAssetRef]columnAssetReachabilitySourceMask
-	unknownSources map[ColumnAssetRef][]ColumnAssetReachabilitySource
-	sourceCounts   ColumnAssetReachabilitySourceStats
+	rootDir            string
+	collection         string
+	namespace          string
+	activeGen          uint64
+	recoveryGen        uint64
+	manifestRecs       int
+	activeRefs         int
+	recoveryRefs       int
+	detailed           bool
+	segmentDetails     bool
+	omitSources        bool
+	omitSort           bool
+	refs               map[ColumnAssetRef]columnAssetReachabilitySourceMask
+	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
+	sourceCounts       ColumnAssetReachabilitySourceStats
+	mappedResources    ColumnAssetReachabilityMappedResourceStats
+	pinStateIncomplete bool
 }
 
 func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []ColumnAssetRef, source ColumnAssetReachabilitySource) error {
@@ -432,6 +526,8 @@ func (in *columnAssetReachabilityInput) incrementSourceCount(source ColumnAssetR
 		in.sourceCounts.PreparedRefs++
 	case ColumnAssetReachabilitySourcePinnedSnapshot:
 		in.sourceCounts.PinnedRefs++
+	case ColumnAssetReachabilitySourceMappedResourcePin:
+		in.sourceCounts.MappedResourcePins++
 	}
 }
 
@@ -709,13 +805,14 @@ func columnAssetReachabilityPlanIdentity(input columnAssetReachabilityInput) Col
 		Namespace:                  input.namespace,
 		ActiveManifestGeneration:   input.activeGen,
 		RecoveryManifestGeneration: input.recoveryGen,
+		MappedResources:            input.mappedResources,
 	}
 }
 
 func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) ColumnAssetReachabilityPlan {
 	return ColumnAssetReachabilityPlan{
 		ProtectOnly:                true,
-		Complete:                   true,
+		Complete:                   !input.pinStateIncomplete,
 		Collection:                 input.collection,
 		Namespace:                  input.namespace,
 		ActiveManifestGeneration:   input.activeGen,
@@ -729,7 +826,9 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 			PendingRefs:          input.sourceCounts.PendingRefs,
 			PreparedRefs:         input.sourceCounts.PreparedRefs,
 			PinnedRefs:           input.sourceCounts.PinnedRefs,
+			MappedResourcePins:   input.sourceCounts.MappedResourcePins,
 		},
+		MappedResources: input.mappedResources,
 	}
 }
 

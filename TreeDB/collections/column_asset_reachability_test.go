@@ -210,6 +210,54 @@ func TestMappedResourcePinnedRefsProtectColumnAssetReachability(t *testing.T) {
 	}
 }
 
+func TestColumnAssetReachabilityFailClosedOnUnconvertibleMappedResourcePin1788(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	cfg := col.Meta().Options.ColumnStore
+	mgr := mappedresource.NewManager()
+	key := mappedresource.Key{
+		Class:      mappedresource.ClassTypedColumnAsset,
+		Namespace:  cfg.AssetManager.Namespace,
+		Kind:       "unexpected_section_only_kind",
+		Generation: 1,
+		PartID:     1,
+		FileID:     1,
+		Offset:     0,
+		Length:     4,
+		Checksum:   7,
+	}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "unconvertible-pin-1788", Namespace: cfg.AssetManager.Namespace, Collection: "events", Generation: 1}
+	handle, err := mgr.AcquireBytes(key, scope, mappedresource.SourceHeapCopy, []byte("pin!"), mappedresource.AcquireOptions{Reason: "unconvertible-pin"})
+	if err != nil {
+		t.Fatalf("AcquireBytes: %v", err)
+	}
+	defer func() { _ = handle.Release() }()
+
+	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetReachability: %v", err)
+	}
+	if plan.Complete {
+		t.Fatalf("plan complete with unconvertible mappedresource pin: %+v", plan.MappedResources)
+	}
+	if plan.MappedResources.ActiveHandles == 0 || plan.MappedResources.UnconvertiblePins != 1 || plan.MappedResources.PinnedRefs != 0 {
+		t.Fatalf("mappedresource stats=%+v want one unconvertible active pin", plan.MappedResources)
+	}
+	gcStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+	if !errors.Is(err, ErrColumnAssetReachabilityIncomplete) {
+		t.Fatalf("ColumnAssetGC error=%v want ErrColumnAssetReachabilityIncomplete", err)
+	}
+	if gcStats.SegmentsDeleted != 0 || gcStats.Plan.MappedResources.UnconvertiblePins != 1 {
+		t.Fatalf("GC stats=%+v plan mapped=%+v want fail-closed unconvertible pin", gcStats, gcStats.Plan.MappedResources)
+	}
+}
+
 func TestColumnAssetReachabilityPlanProtectsPendingPreparedRefsM15A(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

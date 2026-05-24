@@ -45,7 +45,7 @@ Recommended starting point for new performance work:
 | Dictionary/string predicates | String dictionary data exists, but production string predicate scan MVP is separate work. | [#1785](https://github.com/snissn/gomap/issues/1785) |
 | Aggregate metadata query integration | Aggregate metadata descriptors exist, but broader query integration is separate work. | [#1786](https://github.com/snissn/gomap/issues/1786) |
 | Resource/lifetime substrate | Direct views must use mappedresource lifetime/range/endian/length/alignment validation; broad DB-owned adoption remains in the parent tracker. | [#1736](https://github.com/snissn/gomap/issues/1736) |
-| Row+column COW maintenance | Full destructive maintenance over typed-row and typed-column assets is not complete. Do not assume unsafe delete/rewrite of pinned assets is allowed. | [#1788](https://github.com/snissn/gomap/issues/1788) |
+| Row+column COW maintenance | Typed-row and typed-column asset GC/rewrite now use shared reachability, automatic active mappedresource pin protection, and fail-closed incomplete-plan checks. See the maintenance contract before running destructive cleanup. | [#1788](https://github.com/snissn/gomap/issues/1788), [typed asset maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Vector adjacency | `adjacency_list` authoritative typed-column publication remains fail-closed until a physical shape is specified. | [#1783](https://github.com/snissn/gomap/issues/1783) |
 | Vector kernels | SIMD/vectorized dense-section kernels are future optimization work, not a current requirement. | [#1790](https://github.com/snissn/gomap/issues/1790) |
 

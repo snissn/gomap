@@ -94,6 +94,17 @@ type Manager struct {
 	active map[uint64]Pin
 }
 
+type globalPinKey struct {
+	manager *Manager
+	id      uint64
+}
+
+var globalResourceState = struct {
+	mu     sync.Mutex
+	stats  Stats
+	active map[globalPinKey]Pin
+}{active: make(map[globalPinKey]Pin)}
+
 // NewManager constructs an empty manager.
 func NewManager() *Manager {
 	return &Manager{active: make(map[uint64]Pin)}
@@ -350,6 +361,7 @@ func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []
 	}
 	pin := Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason}
 	m.active[id] = pin
+	globalRegisterPin(m, id, pin, opts.ValidationMode, opts.FallbackReason)
 	return &Handle{mgr: m, id: id, key: key, scope: scope, source: source, bytes: data, release: release}
 }
 
@@ -361,6 +373,7 @@ func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr erro
 		delete(m.active, id)
 	} else {
 		ensureDeniedMap(&m.stats)[DenyReleaseMismatch]++
+		globalRecordDenied(DenyReleaseMismatch)
 	}
 	m.stats.TotalReleases++
 	if releaseErr != nil {
@@ -369,6 +382,7 @@ func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr erro
 	if !ok {
 		return
 	}
+	globalReleasePin(m, id, source, bytes, releaseErr)
 	if m.stats.ActiveHandles > 0 {
 		m.stats.ActiveHandles--
 	}
@@ -406,6 +420,28 @@ func (m *Manager) PinSummary() []Pin {
 	return out
 }
 
+// GlobalStats returns process-wide resource accounting across mappedresource
+// managers. It is intended for maintenance diagnostics; subsystem-local Stats
+// remains the precise per-manager view.
+func GlobalStats() Stats {
+	globalResourceState.mu.Lock()
+	defer globalResourceState.mu.Unlock()
+	return cloneStats(globalResourceState.stats)
+}
+
+// GlobalPinSummary returns all active process-local resource handles visible to
+// destructive maintenance. Callers must still filter by resource class,
+// namespace, and subsystem-specific identity before acting.
+func GlobalPinSummary() []Pin {
+	globalResourceState.mu.Lock()
+	defer globalResourceState.mu.Unlock()
+	out := make([]Pin, 0, len(globalResourceState.active))
+	for _, pin := range globalResourceState.active {
+		out = append(out, pin)
+	}
+	return out
+}
+
 // RecordHit records an adapter cache hit.
 func (m *Manager) RecordHit() {
 	if m == nil {
@@ -437,12 +473,14 @@ func (m *Manager) recordDirectView(err error) {
 		m.stats.DirectViewSuccesses++
 	}
 	m.mu.Unlock()
+	globalRecordDirectView(err)
 }
 
 func (m *Manager) recordDenied(reason DenyReason) {
 	m.mu.Lock()
 	ensureDeniedMap(&m.stats)[reason]++
 	m.mu.Unlock()
+	globalRecordDenied(reason)
 }
 
 func (m *Manager) recordFallback(reason FallbackReason) {
@@ -450,24 +488,120 @@ func (m *Manager) recordFallback(reason FallbackReason) {
 	ensureFallbackMap(&m.stats)[reason]++
 	m.stats.FallbackReads++
 	m.mu.Unlock()
+	globalRecordFallback(reason)
 }
 
 func (m *Manager) recordOpen() {
 	m.mu.Lock()
 	m.stats.Opens++
 	m.mu.Unlock()
+	globalRecordOpen()
 }
 
 func (m *Manager) recordClose() {
 	m.mu.Lock()
 	m.stats.Closes++
 	m.mu.Unlock()
+	globalRecordClose()
 }
 
 func (m *Manager) recordError() {
 	m.mu.Lock()
 	m.stats.Errors++
 	m.mu.Unlock()
+	globalRecordError()
+}
+
+func globalRegisterPin(manager *Manager, id uint64, pin Pin, validation ValidationMode, fallback FallbackReason) {
+	globalResourceState.mu.Lock()
+	defer globalResourceState.mu.Unlock()
+	bytes := pin.Bytes
+	globalResourceState.stats.ActiveHandles++
+	globalResourceState.stats.TotalAcquires++
+	if validation != "" {
+		ensureValidationMap(&globalResourceState.stats)[validation]++
+	}
+	if fallback != "" {
+		ensureFallbackMap(&globalResourceState.stats)[fallback]++
+		globalResourceState.stats.FallbackReads++
+	}
+	switch pin.Source {
+	case SourceMapped:
+		globalResourceState.stats.ActiveMappedBytes += bytes
+		globalResourceState.stats.TotalMappedBytes += uint64(bytes)
+	case SourceHeapCopy:
+		globalResourceState.stats.ActiveHeapCopyBytes += bytes
+		globalResourceState.stats.TotalHeapCopyBytes += uint64(bytes)
+	case SourceDerivedMetadata:
+		globalResourceState.stats.ActiveDerivedMetadataBytes += bytes
+		globalResourceState.stats.TotalDerivedMetadataBytes += uint64(bytes)
+	}
+	globalResourceState.active[globalPinKey{manager: manager, id: id}] = pin
+}
+
+func globalReleasePin(manager *Manager, id uint64, source Source, bytes int64, releaseErr error) {
+	globalResourceState.mu.Lock()
+	defer globalResourceState.mu.Unlock()
+	key := globalPinKey{manager: manager, id: id}
+	if _, ok := globalResourceState.active[key]; ok {
+		delete(globalResourceState.active, key)
+	}
+	globalResourceState.stats.TotalReleases++
+	if releaseErr != nil {
+		globalResourceState.stats.Errors++
+	}
+	if globalResourceState.stats.ActiveHandles > 0 {
+		globalResourceState.stats.ActiveHandles--
+	}
+	switch source {
+	case SourceMapped:
+		globalResourceState.stats.ActiveMappedBytes -= bytes
+	case SourceHeapCopy:
+		globalResourceState.stats.ActiveHeapCopyBytes -= bytes
+	case SourceDerivedMetadata:
+		globalResourceState.stats.ActiveDerivedMetadataBytes -= bytes
+	}
+}
+
+func globalRecordDirectView(err error) {
+	globalResourceState.mu.Lock()
+	if err != nil {
+		globalResourceState.stats.DirectViewFailures++
+	} else {
+		globalResourceState.stats.DirectViewSuccesses++
+	}
+	globalResourceState.mu.Unlock()
+}
+
+func globalRecordDenied(reason DenyReason) {
+	globalResourceState.mu.Lock()
+	ensureDeniedMap(&globalResourceState.stats)[reason]++
+	globalResourceState.mu.Unlock()
+}
+
+func globalRecordFallback(reason FallbackReason) {
+	globalResourceState.mu.Lock()
+	ensureFallbackMap(&globalResourceState.stats)[reason]++
+	globalResourceState.stats.FallbackReads++
+	globalResourceState.mu.Unlock()
+}
+
+func globalRecordOpen() {
+	globalResourceState.mu.Lock()
+	globalResourceState.stats.Opens++
+	globalResourceState.mu.Unlock()
+}
+
+func globalRecordClose() {
+	globalResourceState.mu.Lock()
+	globalResourceState.stats.Closes++
+	globalResourceState.mu.Unlock()
+}
+
+func globalRecordError() {
+	globalResourceState.mu.Lock()
+	globalResourceState.stats.Errors++
+	globalResourceState.mu.Unlock()
 }
 
 func classifyValidationDeny(err error) DenyReason {
