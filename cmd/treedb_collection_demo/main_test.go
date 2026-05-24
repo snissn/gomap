@@ -82,6 +82,22 @@ func TestReopenReadSmoke(t *testing.T) {
 	}
 }
 
+func TestExplicitDirMustBeFresh(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	cfg := defaultConfig()
+	cfg.Rows = 8
+	cfg.Dir = dir
+	if _, err := runDemo(cfg); err == nil {
+		t.Fatal("runDemo accepted non-empty explicit dir")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "keep.txt")); err != nil || string(got) != "keep" {
+		t.Fatalf("sentinel changed: got=%q err=%v", got, err)
+	}
+}
+
 func TestProfileArtifactsCreated(t *testing.T) {
 	profileDir := t.TempDir()
 	cfg := defaultConfig()

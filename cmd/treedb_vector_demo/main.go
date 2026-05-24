@@ -587,10 +587,7 @@ func prepareFreshDir(dir string, keep bool) (string, bool, func(), error) {
 	if err != nil {
 		return "", false, nil, err
 	}
-	if err := os.RemoveAll(abs); err != nil {
-		return "", false, nil, err
-	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	if err := ensureFreshDemoDir(abs); err != nil {
 		return "", false, nil, err
 	}
 	return abs, true, func() {}, nil
@@ -598,7 +595,7 @@ func prepareFreshDir(dir string, keep bool) (string, bool, func(), error) {
 
 func validateFreshDemoDir(dir string) (string, error) {
 	cleanInput := filepath.Clean(strings.TrimSpace(dir))
-	if cleanInput == "" || cleanInput == "." || cleanInput == ".." || strings.Contains(cleanInput, ".."+string(os.PathSeparator)) {
+	if cleanInput == "" || cleanInput == "." || cleanInput == ".." || demoDirHasParentTraversal(cleanInput) {
 		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
 	}
 	abs, err := filepath.Abs(cleanInput)
@@ -611,6 +608,36 @@ func validateFreshDemoDir(dir string) (string, error) {
 		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
 	}
 	return abs, nil
+}
+
+func demoDirHasParentTraversal(path string) bool {
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureFreshDemoDir(abs string) error {
+	info, err := os.Stat(abs)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("-dir %q exists and is not a directory", abs)
+		}
+		entries, err := os.ReadDir(abs)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("-dir %q already exists and is not empty; choose a fresh directory", abs)
+		}
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return os.MkdirAll(abs, 0o755)
+	}
+	return err
 }
 
 func writeProfileArtifacts(dir string, res *result) error {

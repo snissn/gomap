@@ -8,12 +8,65 @@ runs unless a command explicitly documents reuse.
 
 | Persona | Use case | Recommended demo/layout today |
 | --- | --- | --- |
-| Document application developer | Flexible JSON documents, point gets, simple scans | Use retained JSON document collections; collection demo coverage is being added under issue #1811. |
-| Operational/event analytics developer | Timestamp filters and count/sum/avg over declared scalar fields | Use typed-column scalar fields for optimized int64 predicate/aggregate shapes; see TreeDB collection benchmark docs while the standalone collection demo lands. |
+| Document application developer | Flexible JSON documents, point gets, simple scans | `cmd/treedb_collection_demo -mode document`; retained JSON payload is the primary model. |
+| Operational/event analytics developer | Timestamp filters and count/sum/avg over declared scalar fields | `cmd/treedb_collection_demo -mode typed-column -workload range-aggregate`; typed-column scalar fields exercise the optimized int64 predicate/aggregate shape. |
 | Schema-aware application developer | Declared scalar fields plus predictable point reads | Use typed-row assets with retained payloads for flexible fields. |
 | Hybrid product workload | Retained JSON payload plus typed metadata/metrics; separate final document fetch from scan/search | Use retained document + typed-row metadata + typed-column metrics/vectors, and time final fetch separately. |
 | Vector search/RAG-style developer | Embeddings with metadata and optional final document fetch | `cmd/treedb_vector_demo` with `-vectors typed-column -metadata typed-row` or `-metadata document`. |
 | Operations/performance engineer | Reproducible smoke/profile runs with counters and pprof artifacts | `cmd/treedb_vector_demo -preset perf-engineer -profile-dir ...` and the benchmark harnesses in `cmd/unified_bench`. |
+
+## Collection storage quickstart
+
+`cmd/treedb_collection_demo` creates a fresh TreeDB directory, declares a
+collection layout, loads deterministic JSON fixtures with `InsertBatch`, and
+runs one workload with setup time reported separately from query time.
+
+Document aggregate smoke:
+
+```sh
+go run ./cmd/treedb_collection_demo \
+  -mode document \
+  -rows 1000 \
+  -workload range-aggregate
+```
+
+Typed-column aggregate smoke:
+
+```sh
+go run ./cmd/treedb_collection_demo \
+  -mode typed-column \
+  -rows 1000 \
+  -workload range-aggregate
+```
+
+Profile smoke:
+
+```sh
+OUT=$(mktemp -d /tmp/treedb_collection_demo_profiles_XXXXXX)
+go run ./cmd/treedb_collection_demo \
+  -mode typed-column \
+  -rows 10000 \
+  -workload range-aggregate \
+  -profile-dir "$OUT"
+```
+
+Profile artifacts:
+
+- `cpu.pprof`
+- `allocs.pprof`
+- `summary.json`
+- `summary.md`
+
+Modes: `document`, `typed-row`, `typed-column`, `hybrid-document-row`,
+`hybrid-document-column`, and `hybrid-row-column`. Workloads: `insert`,
+`point-get`, `range-filter`, `range-aggregate`, `full-aggregate`, `mixed-read`,
+and `reopen-read`. Presets: `document-app`, `event-analytics`, `schema-aware`,
+`hybrid-product`, and `perf-engineer`.
+
+The typed-column aggregate path reports diagnostics such as materialization
+counts, mapped bytes, decoded bytes, pruning counters, and read-integrity mode.
+If the requested layout is not the direct typed-column shape, fallback counters
+make that visible instead of implying the optimized path was used.
 
 ## Vector/RAG quickstart
 

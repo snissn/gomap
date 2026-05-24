@@ -320,27 +320,12 @@ func validateConfig(cfg config) (config, error) {
 }
 
 func runDemo(cfg config) (summary, error) {
-	var err error
-	if cfg.Dir == "" {
-		cfg.Dir, err = os.MkdirTemp("", "treedb_collection_demo_")
-		if err != nil {
-			return summary{}, err
-		}
-	} else {
-		cfg.Dir, err = filepath.Abs(cfg.Dir)
-		if err != nil {
-			return summary{}, err
-		}
-		if err := os.RemoveAll(cfg.Dir); err != nil {
-			return summary{}, err
-		}
-		if err := os.MkdirAll(cfg.Dir, 0o755); err != nil {
-			return summary{}, err
-		}
+	dir, kept, dirCleanup, err := prepareDemoDir(cfg.Dir, cfg.KeepDir)
+	if err != nil {
+		return summary{}, err
 	}
-	if !cfg.KeepDir {
-		defer os.RemoveAll(cfg.Dir)
-	}
+	cfg.Dir = dir
+	defer dirCleanup()
 
 	prof, err := startProfiles(cfg.ProfileDir)
 	if err != nil {
@@ -349,7 +334,7 @@ func runDemo(cfg config) (summary, error) {
 	defer prof.stop()
 
 	rows := generateFixtureRows(cfg)
-	backend, cleanup, err := openDemoBackend(cfg.Dir)
+	backend, backendCleanup, err := openDemoBackend(cfg.Dir)
 	if err != nil {
 		return summary{}, err
 	}
@@ -359,7 +344,7 @@ func runDemo(cfg config) (summary, error) {
 			return nil
 		}
 		cleanupCalled = true
-		return cleanup()
+		return backendCleanup()
 	}
 	defer closeBackend()
 
@@ -391,7 +376,7 @@ func runDemo(cfg config) (summary, error) {
 		if err := closeBackend(); err != nil {
 			return summary{}, err
 		}
-		backend, cleanup, err = openDemoBackend(cfg.Dir)
+		backend, backendCleanup, err = openDemoBackend(cfg.Dir)
 		if err != nil {
 			return summary{}, err
 		}
@@ -416,7 +401,7 @@ func runDemo(cfg config) (summary, error) {
 		StringCardinality: cfg.StringCardinality, ExtraFields: cfg.ExtraFields,
 		SetupMS: durationMS(setupDur), QueryMS: durationMS(queryDur), Ops: result.Ops,
 		Matches: result.Matches, Aggregate: result.Aggregate, Materialization: result.Materialization,
-		Diagnostics: result.Diagnostics, DBDir: cfg.Dir, ProfileDir: cfg.ProfileDir, KeptDir: cfg.KeepDir,
+		Diagnostics: result.Diagnostics, DBDir: cfg.Dir, ProfileDir: cfg.ProfileDir, KeptDir: kept,
 	}
 	if queryDur > 0 && result.Ops > 0 {
 		out.OpsSec = float64(result.Ops) / queryDur.Seconds()
@@ -492,6 +477,74 @@ func (p *profileRun) writeSummary(out summary) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(p.dir, "summary.md"), []byte(markdownSummary(out)), 0o644)
+}
+
+func prepareDemoDir(dir string, keep bool) (string, bool, func(), error) {
+	if strings.TrimSpace(dir) == "" {
+		tmp, err := os.MkdirTemp("", "treedb_collection_demo_")
+		if err != nil {
+			return "", false, nil, err
+		}
+		if keep {
+			return tmp, true, func() {}, nil
+		}
+		return tmp, false, func() { _ = os.RemoveAll(tmp) }, nil
+	}
+	abs, err := validateFreshDemoDir(dir)
+	if err != nil {
+		return "", false, nil, err
+	}
+	if err := ensureFreshDemoDir(abs); err != nil {
+		return "", false, nil, err
+	}
+	return abs, true, func() {}, nil
+}
+
+func validateFreshDemoDir(dir string) (string, error) {
+	cleanInput := filepath.Clean(strings.TrimSpace(dir))
+	if cleanInput == "" || cleanInput == "." || cleanInput == ".." || demoDirHasParentTraversal(cleanInput) {
+		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
+	}
+	abs, err := filepath.Abs(cleanInput)
+	if err != nil {
+		return "", err
+	}
+	abs = filepath.Clean(abs)
+	root := filepath.VolumeName(abs) + string(os.PathSeparator)
+	if abs == root || len(abs) < 8 || abs == filepath.Clean(os.TempDir()) {
+		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
+	}
+	return abs, nil
+}
+
+func demoDirHasParentTraversal(path string) bool {
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureFreshDemoDir(abs string) error {
+	info, err := os.Stat(abs)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("-dir %q exists and is not a directory", abs)
+		}
+		entries, err := os.ReadDir(abs)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("-dir %q already exists and is not empty; choose a fresh directory", abs)
+		}
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return os.MkdirAll(abs, 0o755)
+	}
+	return err
 }
 
 func openDemoBackend(dir string) (*backenddb.DB, func() error, error) {

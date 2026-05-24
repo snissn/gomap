@@ -117,6 +117,20 @@ func TestExecuteColumnGraphTopKSmoke(t *testing.T) {
 	}
 }
 
+func TestExplicitDirMustBeFresh(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	_, _, _, err := prepareFreshDir(dir, false)
+	if err == nil {
+		t.Fatal("prepareFreshDir accepted non-empty explicit dir")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "keep.txt")); err != nil || string(got) != "keep" {
+		t.Fatalf("sentinel changed: got=%q err=%v", got, err)
+	}
+}
+
 func TestRunProfileArtifacts(t *testing.T) {
 	profileDir := filepath.Join(t.TempDir(), "profiles")
 	var stdout, stderr bytes.Buffer
