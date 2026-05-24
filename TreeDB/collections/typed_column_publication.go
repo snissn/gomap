@@ -281,7 +281,7 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(s
 		if cache != nil {
 			cache.PartLoads++
 		}
-		part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: fields}, raw)
+		part, err := typedColumnAdapterPartFromBytesForReconstruction(typedColumnAdapterOptions{Fields: fields}, raw)
 		if err != nil {
 			if closeErr := readCache.close(); closeErr != nil {
 				err = errors.Join(err, closeErr)

@@ -301,6 +301,14 @@ func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte)
 	return typedColumnAdapterPartFromImage(opts, image)
 }
 
+func typedColumnAdapterPartFromBytesForReconstruction(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return nil, err
+	}
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+}
+
 func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
 	part, err := typedcolumn.ColumnPartFromImage(image)
 	if err != nil {
@@ -309,7 +317,7 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 	return typedColumnAdapterPartFromDecodedImage(opts, image, part)
 }
 
-func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+func typedColumnAdapterPartFromImageWithoutRowLocators(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
 	part, err := typedcolumn.ColumnPartFromImageWithOptions(image, typedcolumn.ColumnPartImageReadOptions{
 		IncludeRowLocators:       false,
 		ValidateRowLocators:      false,
@@ -319,6 +327,10 @@ func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapte
 		return nil, err
 	}
 	return typedColumnAdapterPartFromDecodedImage(opts, image, part)
+}
+
+func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
 }
 
 func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) (*typedColumnAdapterPart, error) {
