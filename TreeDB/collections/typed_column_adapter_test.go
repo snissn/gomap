@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -142,6 +143,373 @@ func TestTypedColumnAdapterRoundTripString(t *testing.T) {
 			t.Fatalf("string[%d]=%q want %q all=%+v", i, got[i].String, want[i], got)
 		}
 	}
+}
+
+func TestTypedColumnAdapterScalarExtremes(t *testing.T) {
+	t.Run("int64", func(t *testing.T) {
+		want := []int64{math.MinInt64, -1, 0, math.MaxInt64}
+		values := make([]columnDeclaredValue, len(want))
+		for i, v := range want {
+			values[i] = columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: v}
+		}
+		got := typedColumnAdapterRoundTrip(t, typedColumnAdapterField("count", ColumnStoreValueInt64), values)
+		for i := range want {
+			if got[i].Int64 != want[i] {
+				t.Fatalf("int64[%d]=%d want %d all=%+v", i, got[i].Int64, want[i], got)
+			}
+		}
+	})
+
+	t.Run("float32", func(t *testing.T) {
+		wantBits := []uint32{
+			0,
+			0x80000000, // negative zero
+			0x00800000, // smallest positive normal
+			0x80800000, // negative smallest normal
+			math.Float32bits(math.MaxFloat32),
+			math.Float32bits(-math.MaxFloat32),
+			0x7fc01234, // quiet NaN payload
+		}
+		values := make([]columnDeclaredValue, len(wantBits))
+		for i, bits := range wantBits {
+			values[i] = columnDeclaredValue{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(bits)}
+		}
+		got := typedColumnAdapterRoundTrip(t, typedColumnAdapterField("score", ColumnStoreValueFloat32), values)
+		for i, bits := range wantBits {
+			if gotBits := math.Float32bits(got[i].Float32); gotBits != bits {
+				t.Fatalf("float32[%d] bits=0x%08x want 0x%08x all=%+v", i, gotBits, bits, got)
+			}
+		}
+	})
+
+	t.Run("float64", func(t *testing.T) {
+		wantBits := []uint64{
+			0,
+			0x8000000000000000, // negative zero
+			0x0010000000000000, // smallest positive normal
+			0x8010000000000000, // negative smallest normal
+			math.Float64bits(math.MaxFloat64),
+			math.Float64bits(-math.MaxFloat64),
+			0x7ff8000000001234, // quiet NaN payload
+		}
+		values := make([]columnDeclaredValue, len(wantBits))
+		for i, bits := range wantBits {
+			values[i] = columnDeclaredValue{Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(bits)}
+		}
+		got := typedColumnAdapterRoundTrip(t, typedColumnAdapterField("ratio", ColumnStoreValueDouble), values)
+		for i, bits := range wantBits {
+			if gotBits := math.Float64bits(got[i].Double); gotBits != bits {
+				t.Fatalf("float64[%d] bits=0x%016x want 0x%016x all=%+v", i, gotBits, bits, got)
+			}
+		}
+	})
+
+	t.Run("string", func(t *testing.T) {
+		want := []string{"", "こんにちは🌲", strings.Repeat("tree-db-", 256)}
+		values := make([]columnDeclaredValue, len(want))
+		for i, v := range want {
+			values[i] = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: v}
+		}
+		got := typedColumnAdapterRoundTrip(t, typedColumnAdapterField("label", ColumnStoreValueString), values)
+		for i := range want {
+			if got[i].String != want[i] {
+				t.Fatalf("string[%d]=%q want %q all=%+v", i, got[i].String, want[i], got)
+			}
+		}
+	})
+}
+
+func TestTypedColumnAdapterMixedColumnsRoundTrip(t *testing.T) {
+	fields := []TypedStorageField{
+		typedColumnAdapterField("flag", ColumnStoreValueBool),
+		typedColumnAdapterField("count", ColumnStoreValueInt64),
+		typedColumnAdapterField("score", ColumnStoreValueFloat32),
+		typedColumnAdapterField("ratio", ColumnStoreValueDouble),
+		typedColumnAdapterField("kind", ColumnStoreValueString),
+	}
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 101, Values: map[string]columnDeclaredValue{
+			"flag":  {Type: ColumnStoreValueBool, Present: true, Bool: true},
+			"count": {Type: ColumnStoreValueInt64, Present: true, Int64: math.MinInt64},
+			"score": {Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x80000000)},
+			"ratio": {Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x7ff8000000001234)},
+			"kind":  {Type: ColumnStoreValueString, Present: true, String: "beta"},
+		}},
+		{PrimaryID: 102, Values: map[string]columnDeclaredValue{
+			"flag":  {Type: ColumnStoreValueBool, Present: true, Bool: false},
+			"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 0},
+			"score": {Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x00800000)},
+			"ratio": {Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x8000000000000000)},
+			"kind":  {Type: ColumnStoreValueString, Present: true, String: "alpha"},
+		}},
+		{PrimaryID: 103, Values: map[string]columnDeclaredValue{
+			"flag":  {Type: ColumnStoreValueBool, Present: true, Bool: true},
+			"count": {Type: ColumnStoreValueInt64, Present: true, Int64: math.MaxInt64},
+			"score": {Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x7fc01234)},
+			"ratio": {Type: ColumnStoreValueDouble, Present: true, Double: math.MaxFloat64},
+			"kind":  {Type: ColumnStoreValueString, Present: true, String: "beta"},
+		}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 7, RowsPerGranule: 2, Fields: fields}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	gotRows, err := parsed.scanRows()
+	if err != nil {
+		t.Fatalf("scanRows: %v", err)
+	}
+	if len(gotRows) != len(rows) {
+		t.Fatalf("rows=%d want %d", len(gotRows), len(rows))
+	}
+	for i, row := range gotRows {
+		if row.PrimaryID != rows[i].PrimaryID {
+			t.Fatalf("row[%d] primary_id=%d want %d", i, row.PrimaryID, rows[i].PrimaryID)
+		}
+		want := rows[i].Values
+		got := row.Values
+		if got["flag"].Bool != want["flag"].Bool || got["count"].Int64 != want["count"].Int64 || got["kind"].String != want["kind"].String {
+			t.Fatalf("row[%d] scalar values=%+v want %+v", i, got, want)
+		}
+		if math.Float32bits(got["score"].Float32) != math.Float32bits(want["score"].Float32) {
+			t.Fatalf("row[%d] score bits=0x%08x want 0x%08x", i, math.Float32bits(got["score"].Float32), math.Float32bits(want["score"].Float32))
+		}
+		if math.Float64bits(got["ratio"].Double) != math.Float64bits(want["ratio"].Double) {
+			t.Fatalf("row[%d] ratio bits=0x%016x want 0x%016x", i, math.Float64bits(got["ratio"].Double), math.Float64bits(want["ratio"].Double))
+		}
+	}
+}
+
+func TestTypedColumnAdapterNestedPathNameRoundTrip(t *testing.T) {
+	field := TypedStorageField{Name: "display_score", Path: "metrics.score", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64}
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"metrics.score": {Type: ColumnStoreValueInt64, Present: true, Int64: 42},
+	}}}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart path-keyed: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	gotRows, err := parsed.scanRows()
+	if err != nil {
+		t.Fatalf("scanRows: %v", err)
+	}
+	if gotRows[0].Values["metrics.score"].Int64 != 42 {
+		t.Fatalf("nested path value=%+v", gotRows[0].Values)
+	}
+	if _, ok := gotRows[0].Values["display_score"]; ok {
+		t.Fatalf("scanRows keyed value by display name: %+v", gotRows[0].Values)
+	}
+
+	nameOnly := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"display_score": {Type: ColumnStoreValueInt64, Present: true, Int64: 42},
+	}}}
+	if _, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, nameOnly); err == nil || !strings.Contains(err.Error(), "missing field \"metrics.score\"") {
+		t.Fatalf("build display-name-keyed row err=%v want missing path field", err)
+	}
+}
+
+func TestTypedColumnAdapterNullMissingTypeMismatchFailClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	tests := []struct {
+		name  string
+		value columnDeclaredValue
+		want  string
+	}{
+		{name: "missing", value: columnDeclaredValue{Type: ColumnStoreValueInt64, Present: false, Int64: 1}, want: "null or missing values"},
+		{name: "null", value: columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Null: true, Int64: 1}, want: "null or missing values"},
+		{name: "type_mismatch", value: columnDeclaredValue{Type: ColumnStoreValueDouble, Present: true, Double: 1}, want: "value type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": tt.value}}}
+			_, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{field}}, rows)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("build err=%v want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestTypedColumnAdapterStringDictionaryHighCardinalityStable(t *testing.T) {
+	const unique = 96
+	values := make([]columnDeclaredValue, unique*2)
+	for i := range values {
+		idx := (i * 37) % unique
+		values[i] = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: fmt.Sprintf("value-%03d", idx)}
+	}
+	field := typedColumnAdapterField("kind", ColumnStoreValueString)
+	part := typedColumnAdapterBuildPart(t, field, values)
+	dict := part.Dictionary["kind"]
+	if len(dict) != unique {
+		t.Fatalf("dictionary len=%d want %d", len(dict), unique)
+	}
+	for i := 0; i < unique; i++ {
+		label := fmt.Sprintf("value-%03d", i)
+		if got := dict[label]; got != int64(i) {
+			t.Fatalf("dictionary[%q]=%d want %d dict=%+v", label, got, i, dict)
+		}
+	}
+	again := typedColumnAdapterBuildPart(t, field, values)
+	for label, code := range dict {
+		if again.Dictionary["kind"][label] != code {
+			t.Fatalf("dictionary unstable for %q: got %d want %d", label, again.Dictionary["kind"][label], code)
+		}
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	got, err := parsed.scanColumnValues("kind")
+	if err != nil {
+		t.Fatalf("scanColumnValues(kind): %v", err)
+	}
+	for i := range values {
+		if got[i].String != values[i].String {
+			t.Fatalf("string[%d]=%q want %q", i, got[i].String, values[i].String)
+		}
+	}
+}
+
+func TestTypedColumnAdapterCorruptDictionaryCodeFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("kind", ColumnStoreValueString)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+		{Type: ColumnStoreValueString, Present: true, String: "beta"},
+		{Type: ColumnStoreValueString, Present: true, String: "gamma"},
+	})
+	corrupt := make(map[string]map[string]int64, len(part.Dictionary))
+	for name, dict := range part.Dictionary {
+		clone := make(map[string]int64, len(dict))
+		for value, code := range dict {
+			clone[value] = code
+		}
+		corrupt[name] = clone
+	}
+	delete(corrupt["kind"], "gamma")
+	part.Dictionary = corrupt
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage corrupt dictionary: %v", err)
+	}
+	_, err = typedColumnAdapterPartFromImage(part.Options, image)
+	if err == nil || !strings.Contains(err.Error(), "missing dictionary code") {
+		t.Fatalf("partFromImage corrupt dictionary err=%v want missing dictionary code", err)
+	}
+}
+
+func TestTypedColumnAdapterUnexpectedExtraColumnPolicy(t *testing.T) {
+	count := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	extra := typedColumnAdapterField("debug", ColumnStoreValueBool)
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+		"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 7},
+		"debug": {Type: ColumnStoreValueBool, Present: true, Bool: true},
+	}}}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{count, extra}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart with extra: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	_, err = typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{count}}, image)
+	if err == nil || !strings.Contains(err.Error(), "unexpected column \"debug\"") {
+		t.Fatalf("partFromImage extra column err=%v want unexpected column", err)
+	}
+}
+
+func TestTypedColumnAdapterResourceReaderLifecycleErrors(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 7}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	section := typedColumnAdapterFindColumnSection(t, image, "count")
+	want, err := image.SectionBytes(section)
+	if err != nil {
+		t.Fatalf("SectionBytes: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Namespace: "typed-column-adapter-lifecycle", PartID: image.PartID, FileID: 9, AllowHeapCopy: true}
+
+	h, err := reader.AcquireSection(section)
+	if err != nil {
+		t.Fatalf("AcquireSection: %v", err)
+	}
+	if stats := mgr.Stats(); stats.ActiveHandles != 1 || stats.ActiveHeapCopyBytes != int64(len(want)) {
+		t.Fatalf("active stats after acquire=%+v want one heap pin", stats)
+	}
+	if pins := mgr.PinSummary(); len(pins) != 1 || pins[0].Key.Namespace != "typed-column-adapter-lifecycle" {
+		t.Fatalf("pins after acquire=%+v", pins)
+	}
+	if !slices.Equal(h.Bytes(), want) {
+		t.Fatalf("handle bytes=%x want %x", h.Bytes(), want)
+	}
+	if err := h.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
+
+	readBytes, err := reader.ReadSection(section)
+	if err != nil {
+		t.Fatalf("ReadSection: %v", err)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
+	if !slices.Equal(readBytes, want) {
+		t.Fatalf("ReadSection bytes=%x want %x", readBytes, want)
+	}
+	if len(readBytes) != 0 {
+		originalFirst := want[0]
+		readBytes[0] ^= 0xff
+		fresh, err := image.SectionBytes(section)
+		if err != nil {
+			t.Fatalf("fresh SectionBytes: %v", err)
+		}
+		if fresh[0] != originalFirst {
+			t.Fatalf("ReadSection returned an alias into image bytes")
+		}
+	}
+
+	oob := section
+	oob.Offset = len(image.Bytes) + 1
+	if _, err := reader.ReadSection(oob); err == nil {
+		t.Fatalf("ReadSection OOB err=nil, want failure")
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
+
+	mismatch := reader
+	mismatch.Scope = mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "mismatch", Namespace: "other"}
+	if _, err := mismatch.AcquireSection(section); err == nil || !strings.Contains(err.Error(), "does not match key namespace") {
+		t.Fatalf("AcquireSection namespace mismatch err=%v want namespace mismatch", err)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
+
+	nilReader := reader
+	nilReader.Manager = nil
+	if _, err := nilReader.ReadSection(section); err == nil || !strings.Contains(err.Error(), "requires manager") {
+		t.Fatalf("ReadSection nil manager err=%v want requires manager", err)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
 }
 
 func TestTypedColumnAdapterVectorRepresentedAdjacencyFailsClosed(t *testing.T) {
@@ -462,6 +830,17 @@ func typedColumnAdapterAcquireBytes(t *testing.T, mgr *mappedresource.Manager, s
 		t.Fatalf("AcquireBytes(%s): %v", kind, err)
 	}
 	return h
+}
+
+func assertTypedColumnAdapterNoActive(t testing.TB, mgr *mappedresource.Manager) {
+	t.Helper()
+	stats := mgr.Stats()
+	if stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 || stats.ActiveDerivedMetadataBytes != 0 {
+		t.Fatalf("mappedresource active stats=%+v", stats)
+	}
+	if pins := mgr.PinSummary(); len(pins) != 0 {
+		t.Fatalf("mappedresource active pins=%+v", pins)
+	}
 }
 
 func typedColumnAdapterAlignedBytes(size int, align int) []byte {

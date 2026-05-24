@@ -36,6 +36,12 @@ Nullable/missing adapter values still fail closed because the transplanted part
 builder does not yet have a TreeDB nullable typed-column representation.
 Adjacency publication remains staged after #1756.
 
+Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
+When `Name != Path`, the physical column name may use `Name`, but decoded rows
+are restored under `Path`; display-name-only input fails closed. Adapter images
+are fixed-schema: reads fail closed if the image contains unexpected columns or
+is missing any expected field column/primary-id column.
+
 ## Durable Publication / Reconstruction Seam (#1755)
 
 For inserts and updates with scalar or fixed-dimension vector
