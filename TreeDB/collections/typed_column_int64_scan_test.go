@@ -651,11 +651,11 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		if gotNames := typedColumnInt64AggregateBenchShapeNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"selective_range_1pct", "all_pruned_no_match", "all_match"}) {
 			t.Fatalf("default shapes=%v", gotNames)
 		}
-		got, err = parseTypedColumnInt64AggregateBenchShapes("no_filter_full_aggregate, exact_value,tail_range")
+		got, err = parseTypedColumnInt64AggregateBenchShapes("no_filter, exact,range_1pct,range_10pct,all_pruned,tail")
 		if err != nil {
 			t.Fatalf("explicit shapes: %v", err)
 		}
-		if gotNames := typedColumnInt64AggregateBenchShapeNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"no_filter_full_aggregate", "exact_value", "tail_range"}) {
+		if gotNames := typedColumnInt64AggregateBenchShapeNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"no_filter_full_aggregate", "exact_value", "selective_range_1pct", "wide_range_10pct", "all_pruned_no_match", "tail_range"}) {
 			t.Fatalf("explicit shapes=%v", gotNames)
 		}
 		if _, err := parseTypedColumnInt64AggregateBenchShapes("selective_range_1pct,nope"); err == nil || !strings.Contains(err.Error(), "invalid shape") {
@@ -671,11 +671,11 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		if gotNames := typedColumnInt64AggregateBenchDistributionNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"clustered_monotonic"}) {
 			t.Fatalf("default dists=%v", gotNames)
 		}
-		got, err = parseTypedColumnInt64AggregateBenchDistributions("reverse_monotonic,random_uniform,hotspot_skewed")
+		got, err = parseTypedColumnInt64AggregateBenchDistributions("clustered,reverse,partial_random,random,hotspot")
 		if err != nil {
 			t.Fatalf("explicit dists: %v", err)
 		}
-		if gotNames := typedColumnInt64AggregateBenchDistributionNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"reverse_monotonic", "random_uniform", "hotspot_skewed"}) {
+		if gotNames := typedColumnInt64AggregateBenchDistributionNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"clustered_monotonic", "reverse_monotonic", "partially_clustered", "random_uniform", "hotspot_skewed"}) {
 			t.Fatalf("explicit dists=%v", gotNames)
 		}
 		if _, err := parseTypedColumnInt64AggregateBenchDistributions("clustered_monotonic,nope"); err == nil || !strings.Contains(err.Error(), "invalid distribution") {
@@ -1052,7 +1052,23 @@ func typedColumnInt64AggregateBenchAllShapes() []typedColumnInt64AggregateBenchS
 }
 
 func typedColumnInt64AggregateBenchShapeByName(name string) typedColumnInt64AggregateBenchShape {
-	name = strings.TrimSpace(name)
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "no_filter":
+		name = "no_filter_full_aggregate"
+	case "exact", "equality", "equal":
+		name = "exact_value"
+	case "tiny":
+		name = "tiny_range"
+	case "range_1pct", "selective_1pct":
+		name = "selective_range_1pct"
+	case "range_10pct", "wide_10pct":
+		name = "wide_range_10pct"
+	case "all_pruned", "no_match":
+		name = "all_pruned_no_match"
+	case "tail", "latest_window":
+		name = "tail_range"
+	}
 	for _, shape := range typedColumnInt64AggregateBenchAllShapes() {
 		if shape.name == name {
 			return shape
@@ -1087,7 +1103,13 @@ func typedColumnInt64AggregateBenchAllDistributions() []typedColumnInt64Aggregat
 				return 0
 			}
 			span := minIntForTypedColumnInt64AggregateBench(8, rows)
-			base := rows/2 - span/2
+			base := rows/4 - span/2
+			if base < 0 {
+				base = 0
+			}
+			if base+span > rows {
+				base = rows - span
+			}
 			if row%5 == 0 {
 				return int64(row)
 			}
@@ -1097,7 +1119,19 @@ func typedColumnInt64AggregateBenchAllDistributions() []typedColumnInt64Aggregat
 }
 
 func typedColumnInt64AggregateBenchDistributionByName(name string) typedColumnInt64AggregateBenchDistribution {
-	name = strings.TrimSpace(name)
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "clustered":
+		name = "clustered_monotonic"
+	case "reverse":
+		name = "reverse_monotonic"
+	case "partial_random", "partially_random", "partial_clustered":
+		name = "partially_clustered"
+	case "random":
+		name = "random_uniform"
+	case "hotspot", "skew", "skewed":
+		name = "hotspot_skewed"
+	}
 	for _, dist := range typedColumnInt64AggregateBenchAllDistributions() {
 		if dist.name == name {
 			return dist
