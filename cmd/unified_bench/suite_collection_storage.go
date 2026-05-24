@@ -1435,8 +1435,8 @@ func validateCollectionStorageVectorResults(mode string, results []collections.V
 		if _, ok := known[id]; !ok {
 			return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness returned unknown id %q", mode, id)
 		}
-		if math.IsNaN(float64(result.Score)) {
-			return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness returned NaN score for id %q", mode, id)
+		if math.IsNaN(float64(result.Score)) || math.IsInf(float64(result.Score), 0) {
+			return fmt.Errorf("collection_storage: mode %s vector_search_smoke correctness returned non-finite score for id %q", mode, id)
 		}
 		if includeFinalFetch {
 			if len(result.Document) == 0 {

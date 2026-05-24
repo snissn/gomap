@@ -350,14 +350,10 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 
 func TestLoadCollectionWorkloadMetadata(t *testing.T) {
 	dir := t.TempDir()
-	payload := benchprofResultsFile{Runs: []benchprofResultsRun{{Keys: 8, CollectionWorkloads: []benchprofCollectionWorkload{
-		{Suite: "collection_storage", Mode: "typed_column_part", Workload: "aggregate", Rows: 8, SemanticEquivalent: true, CorrectnessValidated: true, RowsPerSecond: 123, QueriesPerSecond: 4, NsPerOp: 250, TypedColumnAssetBytes: 99},
-		{Suite: "collection_storage", Mode: "document_only", Workload: "aggregate", Rows: 8, SemanticEquivalent: true, CorrectnessValidated: true, RowsPerSecond: 23, QueriesPerSecond: 2, NsPerOp: 500},
-	}}}}
-	js, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	js := []byte(`{"runs":[{"keys":8,"collection_workloads":[` +
+		`{"suite":"collection_storage","mode":"typed_column_part","workload":"aggregate","rows":8,"semantic_equivalent":true,"correctness_validated":true,"rows_per_second":123,"queries_per_second":4,"ns_per_op":250,"typed_column_asset_bytes":99,"counters":{"mapped_bytes":9007199254740993,"typed_column_parts_decoded":7}},` +
+		`{"suite":"collection_storage","mode":"document_only","workload":"aggregate","rows":8,"semantic_equivalent":true,"correctness_validated":true,"rows_per_second":23,"queries_per_second":2,"ns_per_op":500}` +
+		`] }]}`)
 	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.json"), js, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -371,6 +367,12 @@ func TestLoadCollectionWorkloadMetadata(t *testing.T) {
 	}
 	if workloads[0].Mode != "document_only" || workloads[1].Mode != "typed_column_part" {
 		t.Fatalf("workloads not sorted by mode: %+v", workloads)
+	}
+	if got, want := workloads[1].Counters.MappedBytes, uint64(9007199254740993); got != want {
+		t.Fatalf("mapped_bytes=%d want %d", got, want)
+	}
+	if got, want := workloads[1].Counters.TypedColumnPartsDecoded, int64(7); got != want {
+		t.Fatalf("typed_column_parts_decoded=%d want %d", got, want)
 	}
 	md := renderMarkdown(report{GeneratedAt: "now", ProfilesDir: dir, CollectionWorkloads: workloads})
 	if !strings.Contains(md, "## Collection Workload Metadata") || !strings.Contains(md, "typed_column_part") || !strings.Contains(md, "row asset bytes") {

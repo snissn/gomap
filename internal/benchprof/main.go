@@ -140,24 +140,52 @@ type benchprofResultsRun struct {
 }
 
 type benchprofCollectionWorkload struct {
-	Suite                 string         `json:"suite"`
-	Mode                  string         `json:"mode"`
-	Workload              string         `json:"workload"`
-	Rows                  int            `json:"rows"`
-	SemanticEquivalent    bool           `json:"semantic_equivalent"`
-	SemanticNote          string         `json:"semantic_note,omitempty"`
-	CorrectnessValidated  bool           `json:"correctness_validated"`
-	RowsPerSecond         float64        `json:"rows_per_second,omitempty"`
-	QueriesPerSecond      float64        `json:"queries_per_second,omitempty"`
-	MatchesPerSecond      float64        `json:"matches_per_second,omitempty"`
-	OpsPerSecond          float64        `json:"ops_per_second,omitempty"`
-	NsPerOp               float64        `json:"ns_per_op,omitempty"`
-	BytesPerOp            float64        `json:"bytes_per_op,omitempty"`
-	AllocsPerOp           float64        `json:"allocs_per_op,omitempty"`
-	DBTotalBytes          uint64         `json:"db_total_bytes,omitempty"`
-	TypedRowAssetBytes    int64          `json:"typed_row_asset_bytes,omitempty"`
-	TypedColumnAssetBytes int64          `json:"typed_column_asset_bytes,omitempty"`
-	Counters              map[string]any `json:"counters,omitempty"`
+	Suite                 string                              `json:"suite"`
+	Mode                  string                              `json:"mode"`
+	Workload              string                              `json:"workload"`
+	Rows                  int                                 `json:"rows"`
+	SemanticEquivalent    bool                                `json:"semantic_equivalent"`
+	SemanticNote          string                              `json:"semantic_note,omitempty"`
+	CorrectnessValidated  bool                                `json:"correctness_validated"`
+	RowsPerSecond         float64                             `json:"rows_per_second,omitempty"`
+	QueriesPerSecond      float64                             `json:"queries_per_second,omitempty"`
+	MatchesPerSecond      float64                             `json:"matches_per_second,omitempty"`
+	OpsPerSecond          float64                             `json:"ops_per_second,omitempty"`
+	NsPerOp               float64                             `json:"ns_per_op,omitempty"`
+	BytesPerOp            float64                             `json:"bytes_per_op,omitempty"`
+	AllocsPerOp           float64                             `json:"allocs_per_op,omitempty"`
+	DBTotalBytes          uint64                              `json:"db_total_bytes,omitempty"`
+	TypedRowAssetBytes    int64                               `json:"typed_row_asset_bytes,omitempty"`
+	TypedColumnAssetBytes int64                               `json:"typed_column_asset_bytes,omitempty"`
+	Counters              benchprofCollectionWorkloadCounters `json:"counters,omitempty"`
+}
+
+type benchprofCollectionWorkloadCounters struct {
+	MappedBytes                 uint64 `json:"mapped_bytes,omitempty"`
+	HeapCopyBytes               uint64 `json:"heap_copy_bytes,omitempty"`
+	DecodedBytes                uint64 `json:"decoded_bytes,omitempty"`
+	DocumentMaterializations    int64  `json:"document_materializations,omitempty"`
+	DocumentReconstructions     int64  `json:"document_reconstructions,omitempty"`
+	RowMaterializations         int64  `json:"row_materializations,omitempty"`
+	RowLocatorDecodes           int64  `json:"row_locator_decodes,omitempty"`
+	PhysicalRowAssetReads       int64  `json:"physical_row_asset_reads,omitempty"`
+	PhysicalRowIDLookups        int64  `json:"physical_row_id_lookups,omitempty"`
+	TypedColumnPartsConsidered  int64  `json:"typed_column_parts_considered,omitempty"`
+	TypedColumnPartsPruned      int64  `json:"typed_column_parts_pruned,omitempty"`
+	TypedColumnPartsDecoded     int64  `json:"typed_column_parts_decoded,omitempty"`
+	TypedColumnBlocksConsidered int64  `json:"typed_column_blocks_considered,omitempty"`
+	TypedColumnBlocksPruned     int64  `json:"typed_column_blocks_pruned,omitempty"`
+	TypedColumnBlocksDecoded    int64  `json:"typed_column_blocks_decoded,omitempty"`
+	DirectTypedColumnAssetReads int64  `json:"direct_typed_column_asset_reads,omitempty"`
+	AssetOpenMapChecksumReads   int64  `json:"asset_open_map_checksum_reads,omitempty"`
+	SegmentFileCacheHits        uint64 `json:"segment_file_cache_hits,omitempty"`
+	SegmentFileCacheMisses      uint64 `json:"segment_file_cache_misses,omitempty"`
+	VectorCandidates            uint64 `json:"vector_candidates,omitempty"`
+	VectorEdgesVisited          uint64 `json:"vector_edges_visited,omitempty"`
+	VectorDocumentFetches       uint64 `json:"vector_document_fetches,omitempty"`
+	VectorFinalFetchIncluded    bool   `json:"vector_final_fetch_included,omitempty"`
+	ChecksumVerifications       uint64 `json:"checksum_verifications,omitempty"`
+	ChecksumSkippedReads        uint64 `json:"checksum_skipped_reads,omitempty"`
 }
 
 func RunFromProfilesDir(profilesDir string) error {
