@@ -584,6 +584,7 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 					reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
 				}
 			}
+			b.StopTimer()
 		})
 		b.Run(fmt.Sprintf("rows_%d/document_full_scan_fallback/predicate_count_sum_avg", rows), func(b *testing.B) {
 			d := openTypedColumnInt64ScanDB(b)
@@ -614,6 +615,7 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 					reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
 				}
 			}
+			b.StopTimer()
 		})
 	}
 }
