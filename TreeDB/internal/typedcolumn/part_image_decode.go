@@ -9,7 +9,62 @@ import (
 
 const maxColumnPartImageStringBytes = 1 << 20
 
+const ColumnPartImageManifestHeaderBytes = 32
+
 func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
+	return parseColumnPartImage(data, len(data))
+}
+
+func ParseColumnPartImageManifest(data []byte, totalBytes int) (ColumnPartImage, error) {
+	if totalBytes < 0 {
+		return ColumnPartImage{}, fmt.Errorf("typedcolumn: negative image total bytes %d", totalBytes)
+	}
+	return parseColumnPartImage(data, totalBytes)
+}
+
+func ColumnPartImageManifestLength(header []byte) (int, error) {
+	if len(header) < ColumnPartImageManifestHeaderBytes {
+		return 0, fmt.Errorf("typedcolumn: manifest header bytes=%d want at least %d", len(header), ColumnPartImageManifestHeaderBytes)
+	}
+	dec := columnPartImageDecoder{data: header[:ColumnPartImageManifestHeaderBytes]}
+	magic, err := dec.u32()
+	if err != nil {
+		return 0, err
+	}
+	if magic != columnPartImageMagic {
+		return 0, fmt.Errorf("typedcolumn: invalid part image magic 0x%x", magic)
+	}
+	version, err := dec.u16()
+	if err != nil {
+		return 0, err
+	}
+	if version != columnPartImageVersion {
+		return 0, fmt.Errorf("typedcolumn: unsupported part image version %d", version)
+	}
+	if _, err := dec.u16(); err != nil {
+		return 0, err
+	}
+	if _, err := dec.u64(); err != nil {
+		return 0, err
+	}
+	if _, err := dec.i64(); err != nil {
+		return 0, err
+	}
+	manifestBytes, err := dec.u32()
+	if err != nil {
+		return 0, err
+	}
+	if uint64(int(manifestBytes)) != uint64(manifestBytes) {
+		return 0, fmt.Errorf("typedcolumn: manifest bytes=%d exceed host int", manifestBytes)
+	}
+	manifestLength := int(manifestBytes)
+	if manifestLength < ColumnPartImageManifestHeaderBytes {
+		return 0, fmt.Errorf("typedcolumn: manifest bytes=%d shorter than header=%d", manifestBytes, ColumnPartImageManifestHeaderBytes)
+	}
+	return manifestLength, nil
+}
+
+func parseColumnPartImage(data []byte, totalBytes int) (ColumnPartImage, error) {
 	dec := columnPartImageDecoder{data: data}
 	magic, err := dec.u32()
 	if err != nil {
@@ -52,7 +107,10 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	}
 	manifestLength := int(manifestBytes)
 	if manifestLength > len(data) {
-		return ColumnPartImage{}, fmt.Errorf("typedcolumn: manifest bytes=%d exceed image bytes=%d", manifestBytes, len(data))
+		return ColumnPartImage{}, fmt.Errorf("typedcolumn: manifest bytes=%d exceed provided bytes=%d", manifestBytes, len(data))
+	}
+	if manifestLength > totalBytes {
+		return ColumnPartImage{}, fmt.Errorf("typedcolumn: manifest bytes=%d exceed image bytes=%d", manifestBytes, totalBytes)
 	}
 	sectionCount, err := dec.u32()
 	if err != nil {
@@ -146,7 +204,7 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 			Encoding:    Encoding(encoding),
 			Compression: Compression(compression),
 		}
-		if err := validateImageSectionBounds(section, int(manifestBytes), len(data)); err != nil {
+		if err := validateImageSectionBounds(section, int(manifestBytes), totalBytes); err != nil {
 			return ColumnPartImage{}, err
 		}
 		sections = append(sections, section)
@@ -154,7 +212,7 @@ func ParseColumnPartImage(data []byte) (ColumnPartImage, error) {
 	if dec.offset != manifestLength {
 		return ColumnPartImage{}, fmt.Errorf("typedcolumn: manifest bytes=%d decoded=%d", manifestBytes, dec.offset)
 	}
-	if err := validateImageSectionLayout(sections, manifestLength, len(data)); err != nil {
+	if err := validateImageSectionLayout(sections, manifestLength, totalBytes); err != nil {
 		return ColumnPartImage{}, err
 	}
 	if err := validateImageSectionMultiplicity(sections); err != nil {
@@ -294,6 +352,10 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 		AggregateMetadata: aggregateMetadata,
 	}
 	return part, nil
+}
+
+func DecodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[string]ColumnPartColumn, error) {
+	return decodeColumnPartDescriptorSection(data)
 }
 
 func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[string]ColumnPartColumn, error) {

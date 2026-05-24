@@ -14,6 +14,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func TestTypedColumnInt64ScanEqualityPredicate(t *testing.T) {
@@ -809,6 +810,62 @@ func TestTypedColumnInt64AggregatePreparedSessionLifecycle(t *testing.T) {
 	}
 	if _, err := session.Run(); !errors.Is(err, errTypedColumnInt64PredicateAggregateSessionClosed) {
 		t.Fatalf("session Run after Close err=%v want closed-session error", err)
+	}
+}
+
+func TestTypedColumnInt64AggregatePreparedSessionHotScanUsesTargetedRanges(t *testing.T) {
+	const rows = 65536
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	dist := typedColumnInt64AggregateBenchDistributionByName("clustered")
+	insertTypedColumnInt64AggregateBenchRows(t, col, rows, dist)
+	req := typedColumnInt64AggregateBenchShapeByName("range_1pct").request(rows)
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
+	expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
+
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	warmup, err := session.Run()
+	if err != nil {
+		t.Fatalf("warmup Run: %v", err)
+	}
+	if err := validateTypedColumnInt64AggregateBenchResult(warmup, expected); err != nil {
+		t.Fatal(err)
+	}
+	if warmup.Diagnostics.FullAssetBytes == 0 || warmup.Diagnostics.RangeBytesRead == 0 || warmup.Diagnostics.SectionBytesRead == 0 {
+		t.Fatalf("warmup diagnostics=%+v want one-time full validation plus section/range reads", warmup.Diagnostics)
+	}
+
+	hot, err := session.Run()
+	if err != nil {
+		t.Fatalf("hot Run: %v", err)
+	}
+	if err := validateTypedColumnInt64AggregateBenchResult(hot, expected); err != nil {
+		t.Fatal(err)
+	}
+	diag := hot.Diagnostics
+	if diag.FullAssetBytes != 0 || diag.FullAssetReads != 0 {
+		t.Fatalf("hot diagnostics=%+v want no per-run full-asset validation bytes after cached-verify session boundary", diag)
+	}
+	if diag.SectionBytesRead != 0 || diag.DecodedMetadataBytes != 0 || diag.RangeBytesRead == 0 {
+		t.Fatalf("hot diagnostics=%+v want cached section metadata and candidate range bytes only", diag)
+	}
+	if diag.PhysicalBytesScanned != int64(diag.RangeBytesRead) {
+		t.Fatalf("hot diagnostics=%+v want physical bytes to equal candidate range bytes without full asset bytes", diag)
+	}
+	if diag.BlocksPruned == 0 || diag.BlocksDecoded == 0 || diag.RowsScanned >= rows {
+		t.Fatalf("hot diagnostics=%+v want pruned selective scan", diag)
+	}
+	typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	var totalTypedBytes int64
+	for _, ref := range typedRefs {
+		totalTypedBytes += ref.Length
+	}
+	if diag.PhysicalBytesScanned >= totalTypedBytes {
+		t.Fatalf("hot diagnostics=%+v total_typed_bytes=%d want touched bytes below full typed-column assets", diag, totalTypedBytes)
 	}
 }
 
@@ -2023,6 +2080,10 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.BlocksConsidered), "blocks_considered/op")
 	b.ReportMetric(float64(diag.BlocksPruned), "blocks_pruned/op")
 	b.ReportMetric(float64(diag.BlocksDecoded), "blocks_decoded/op")
+	b.ReportMetric(float64(diag.FullAssetReads), "full_asset_reads/op")
+	b.ReportMetric(float64(diag.FullAssetBytes), "full_asset_bytes/op")
+	b.ReportMetric(float64(diag.SectionBytesRead), "section_bytes_read/op")
+	b.ReportMetric(float64(diag.RangeBytesRead), "range_bytes_read/op")
 	b.ReportMetric(float64(diag.MappedBytes), "mapped_bytes/op")
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
 	b.ReportMetric(float64(diag.DecodedHeapCopyBytes), "decoded_bytes/op")
@@ -2040,12 +2101,104 @@ func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64P
 	if elapsed > 0 && iterations > 0 {
 		b.ReportMetric(float64(iterations)/elapsed.Seconds(), "ops/sec")
 	}
+	b.ReportMetric(float64(diag.FullAssetReads), "full_asset_reads/op")
+	b.ReportMetric(float64(diag.FullAssetBytes), "full_asset_bytes/op")
+	b.ReportMetric(float64(diag.SectionBytesRead), "section_bytes_read/op")
+	b.ReportMetric(float64(diag.RangeBytesRead), "range_bytes_read/op")
 	b.ReportMetric(float64(diag.MappedBytes), "mapped_bytes/op")
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
 	b.ReportMetric(float64(diag.DecodedHeapCopyBytes), "decoded_bytes/op")
 	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
 	b.ReportMetric(float64(diag.PartsPruned), "parts_pruned/op")
 	b.ReportMetric(float64(diag.BlocksPruned), "blocks_pruned/op")
+}
+
+type typedColumnInt64AggregateTestBlockRange struct {
+	offset              int
+	length              int
+	columnSectionLength int
+	min                 int64
+	max                 int64
+	hasMinMax           bool
+}
+
+func typedColumnInt64AggregateFindPrunedBlockRange(tb testing.TB, d *backenddb.DB, refs []ColumnAssetRef, req TypedColumnInt64PredicateAggregateRequest) (ColumnAssetRef, typedColumnInt64AggregateTestBlockRange) {
+	tb.Helper()
+	scanReq := typedColumnInt64PredicateAggregateScanRequest(req)
+	for _, ref := range refs {
+		blocks := typedColumnInt64AggregateTestBlockRanges(tb, d, ref, req.Column)
+		for _, block := range blocks {
+			if block.hasMinMax && !typedColumnInt64PredicateMayMatch(scanReq, block.min, block.max) {
+				return ref, block
+			}
+		}
+	}
+	tb.Fatalf("no pruned block found for req=%+v refs=%+v", req, refs)
+	return ColumnAssetRef{}, typedColumnInt64AggregateTestBlockRange{}
+}
+
+func typedColumnInt64AggregateTestBlockRanges(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef, column string) []typedColumnInt64AggregateTestBlockRange {
+	tb.Helper()
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		tb.Fatalf("read typed-column part: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		tb.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	descriptor, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDescriptor)
+	if err != nil {
+		tb.Fatalf("descriptor section: %v", err)
+	}
+	_, columns, err := typedcolumn.DecodeColumnPartDescriptorSection(image.Bytes[descriptor.Offset : descriptor.Offset+descriptor.Length])
+	if err != nil {
+		tb.Fatalf("DecodeColumnPartDescriptorSection: %v", err)
+	}
+	valueCol, ok := columns[column]
+	if !ok {
+		tb.Fatalf("missing column %q in descriptor", column)
+	}
+	section, ok := typedColumnAdapterColumnDataSection(image, column)
+	if !ok {
+		tb.Fatalf("missing column data section %q", column)
+	}
+	out := make([]typedColumnInt64AggregateTestBlockRange, 0, len(valueCol.Blocks))
+	offset := section.Offset
+	for _, block := range valueCol.Blocks {
+		length := block.Descriptor.StoredBytes
+		if length <= 0 || offset > section.Offset+section.Length || length > section.Offset+section.Length-offset {
+			tb.Fatalf("block length=%d offset=%d outside section=%+v", length, offset, section)
+		}
+		out = append(out, typedColumnInt64AggregateTestBlockRange{offset: offset, length: length, columnSectionLength: section.Length, min: block.Granule.Min, max: block.Granule.Max, hasMinMax: block.Granule.HasMinMax})
+		offset += length
+	}
+	if offset != section.Offset+section.Length {
+		tb.Fatalf("column data consumed=%d section=%d", offset-section.Offset, section.Length)
+	}
+	return out
+}
+
+func corruptColumnAssetByteAtRelativeOffset(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef, relativeOffset int64) {
+	tb.Helper()
+	assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		tb.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
+	if err != nil {
+		tb.Fatalf("OpenFile asset: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	absoluteOffset := ref.Offset + relativeOffset
+	var one [1]byte
+	if _, err := file.ReadAt(one[:], absoluteOffset); err != nil {
+		tb.Fatalf("ReadAt corrupt byte: %v", err)
+	}
+	one[0] ^= 0xff
+	if _, err := file.WriteAt(one[:], absoluteOffset); err != nil {
+		tb.Fatalf("WriteAt corrupt byte: %v", err)
+	}
 }
 
 func setupTypedColumnInt64ScanCollection(tb testing.TB) (*backenddb.DB, *Collection) {
