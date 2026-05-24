@@ -1313,6 +1313,48 @@ func TestTypedColumnAdapterPrepareInt64AggregateValidationFailsClosed(t *testing
 	}
 }
 
+func TestTypedColumnAdapterPrepareInt64AggregateTargetedMetadataSectionsFailClosed(t *testing.T) {
+	countField := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	kindField := typedColumnAdapterField("kind", ColumnStoreValueString)
+	fields := []TypedStorageField{countField, kindField}
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 10}, "kind": {Type: ColumnStoreValueString, Present: true, String: "alpha"}}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 20}, "kind": {Type: ColumnStoreValueString, Present: true, String: "beta"}}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 78, RowsPerGranule: 2, Fields: fields}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	descriptor := typedColumnAdapterFindSection(t, image, typedcolumn.ColumnPartImageSectionDescriptor)
+	descriptorRaw := image.Bytes[descriptor.Offset : descriptor.Offset+descriptor.Length]
+	missingKindSection := image
+	missingKindSection.Sections = make([]typedcolumn.ColumnPartImageSection, 0, len(image.Sections))
+	for _, section := range image.Sections {
+		if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Column == "kind" {
+			continue
+		}
+		missingKindSection.Sections = append(missingKindSection.Sections, section)
+	}
+	_, err = typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fields, missingKindSection, descriptorRaw, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "count", TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateAll})
+	if err == nil || !strings.Contains(err.Error(), "missing column data section") {
+		t.Fatalf("targeted aggregate missing unrelated column-data section err=%v want fail-closed missing section", err)
+	}
+
+	unexpectedSection := image
+	unexpectedSection.Sections = append([]typedcolumn.ColumnPartImageSection(nil), image.Sections...)
+	ghost := typedColumnAdapterFindColumnSection(t, image, "count")
+	ghost.Column = "ghost"
+	unexpectedSection.Sections = append(unexpectedSection.Sections, ghost)
+	_, err = typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fields, unexpectedSection, descriptorRaw, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion), "count", TypedColumnInt64PredicateScanRequest{Kind: TypedColumnInt64PredicateAll})
+	if err == nil || !strings.Contains(err.Error(), "unexpected column data section") {
+		t.Fatalf("targeted aggregate unexpected column-data section err=%v want fail-closed unexpected section", err)
+	}
+}
+
 func TestTypedColumnAdapterAmbiguousRowKeysFailClosed(t *testing.T) {
 	field := TypedStorageField{Name: "count", Path: "metrics.count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64}
 	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{

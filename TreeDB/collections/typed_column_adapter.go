@@ -1137,6 +1137,265 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 	return adapterPart, adapterColumn, image.ManifestBytes, nil
 }
 
+type typedColumnInt64AggregateRangeReader func(offset int, length int, section bool) ([]byte, error)
+type typedColumnInt64AggregatePayloadReader func(offset int, length int) ([]byte, error)
+
+type typedColumnInt64AggregateBlockRange struct {
+	index  int
+	offset int
+	length int
+}
+
+type typedColumnInt64AggregateTargetedPart struct {
+	adapterPart   *typedColumnAdapterPart
+	adapterColumn typedColumnAdapterColumn
+	manifestBytes int
+	blockRanges   []typedColumnInt64AggregateBlockRange
+}
+
+func typedColumnAdapterPrepareInt64PredicateAggregatePartFromRanges(fields []TypedStorageField, refLength int64, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, req TypedColumnInt64PredicateScanRequest, readRange typedColumnInt64AggregateRangeReader) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
+	targeted, err := typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromRanges(fields, refLength, refPartID, typedRows, physicalRows, schemaHash, column, req, readRange)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	readPayload := func(offset int, length int) ([]byte, error) {
+		return readRange(offset, length, false)
+	}
+	adapterPart, adapterColumn, err := targeted.instantiate(readPayload)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	return adapterPart, adapterColumn, targeted.manifestBytes, nil
+}
+
+func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromRanges(fields []TypedStorageField, refLength int64, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, req TypedColumnInt64PredicateScanRequest, readRange typedColumnInt64AggregateRangeReader) (*typedColumnInt64AggregateTargetedPart, error) {
+	if readRange == nil {
+		return nil, errors.New("collections: typed-column int64 aggregate targeted prepare requires range reader")
+	}
+	if refLength > int64(maxCollectionInt) {
+		return nil, fmt.Errorf("collections: typed-column part length=%d overflows int", refLength)
+	}
+	header, err := readRange(0, typedcolumn.ColumnPartImageManifestHeaderBytes, true)
+	if err != nil {
+		return nil, err
+	}
+	manifestBytes, err := typedcolumn.ColumnPartImageManifestLength(header)
+	if err != nil {
+		return nil, err
+	}
+	if manifestBytes > int(refLength) {
+		return nil, fmt.Errorf("collections: typed-column part manifest bytes=%d exceed ref length=%d", manifestBytes, refLength)
+	}
+	manifest := make([]byte, manifestBytes)
+	copy(manifest, header)
+	if manifestBytes > len(header) {
+		tail, err := readRange(len(header), manifestBytes-len(header), true)
+		if err != nil {
+			return nil, err
+		}
+		copy(manifest[len(header):], tail)
+	}
+	image, err := typedcolumn.ParseColumnPartImageManifest(manifest, int(refLength))
+	if err != nil {
+		return nil, err
+	}
+	descriptorSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDescriptor)
+	if err != nil {
+		return nil, err
+	}
+	descriptorRaw, err := readRange(descriptorSection.Offset, descriptorSection.Length, true)
+	if err != nil {
+		return nil, err
+	}
+	return typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fields, image, descriptorRaw, refPartID, typedRows, physicalRows, schemaHash, column, req)
+}
+
+func typedColumnAdapterPrepareInt64PredicateAggregatePartFromSections(fields []TypedStorageField, image typedcolumn.ColumnPartImage, descriptorRaw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, req TypedColumnInt64PredicateScanRequest, readPayload typedColumnInt64AggregatePayloadReader) (*typedColumnAdapterPart, typedColumnAdapterColumn, error) {
+	targeted, err := typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fields, image, descriptorRaw, refPartID, typedRows, physicalRows, schemaHash, column, req)
+	if err != nil {
+		return nil, typedColumnAdapterColumn{}, err
+	}
+	return targeted.instantiate(readPayload)
+}
+
+func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fields []TypedStorageField, image typedcolumn.ColumnPartImage, descriptorRaw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, req TypedColumnInt64PredicateScanRequest) (*typedColumnInt64AggregateTargetedPart, error) {
+	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
+		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
+		return nil, fmt.Errorf("collections: typed_column_part aggregate image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
+	}
+	desc, columns, err := typedcolumn.DecodeColumnPartDescriptorSection(descriptorRaw)
+	if err != nil {
+		return nil, err
+	}
+	part := &typedcolumn.ColumnPart{Descriptor: desc, Columns: columns}
+	if err := validateTypedColumnAdapterInt64AggregateImage(part, adapterColumn, uint32(schemaHash)); err != nil {
+		return nil, err
+	}
+	if part.Descriptor.PartID != image.PartID || part.Descriptor.RowCount != image.Rows {
+		return nil, fmt.Errorf("collections: typed_column_part aggregate descriptor/image mismatch descriptor_part=%d image_part=%d descriptor_rows=%d image_rows=%d", part.Descriptor.PartID, image.PartID, part.Descriptor.RowCount, image.Rows)
+	}
+	if part.Descriptor.SchemaVersion != uint32(schemaHash) {
+		return nil, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", part.Descriptor.SchemaVersion, uint32(schemaHash))
+	}
+	if err := validateTypedColumnAdapterInt64AggregateTargetedSections(image, part); err != nil {
+		return nil, err
+	}
+	section, ok := typedColumnAdapterColumnDataSection(image, adapterColumn.Definition.Name)
+	if !ok {
+		return nil, fmt.Errorf("collections: typed-column int64 aggregate image missing column data section %q", adapterColumn.Definition.Name)
+	}
+	if section.Encoding != adapterColumn.Definition.Encoding || section.Compression != adapterColumn.Definition.Compression {
+		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section encoding=%s compression=%s want encoding=%s compression=%s", adapterColumn.Definition.Name, section.Encoding, section.Compression, adapterColumn.Definition.Encoding, adapterColumn.Definition.Compression)
+	}
+	valueCol := part.Columns[adapterColumn.Definition.Name]
+	if section.Blocks != 0 && section.Blocks != len(valueCol.Blocks) {
+		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section blocks=%d want %d", adapterColumn.Definition.Name, section.Blocks, len(valueCol.Blocks))
+	}
+	if section.Rows != 0 && section.Rows != image.Rows {
+		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q section rows=%d want %d", adapterColumn.Definition.Name, section.Rows, image.Rows)
+	}
+	blockRanges := make([]typedColumnInt64AggregateBlockRange, 0, len(valueCol.Blocks))
+	offset := section.Offset
+	sectionEnd := section.Offset + section.Length
+	for i := range valueCol.Blocks {
+		block := &valueCol.Blocks[i]
+		length := block.Descriptor.StoredBytes
+		if length <= 0 || offset > sectionEnd || length > sectionEnd-offset {
+			return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q block %d length=%d outside section", adapterColumn.Definition.Name, i, length)
+		}
+		blockOffset := offset
+		offset += length
+		if block.Granule.HasMinMax && !typedColumnInt64PredicateMayMatch(req, block.Granule.Min, block.Granule.Max) {
+			continue
+		}
+		blockRanges = append(blockRanges, typedColumnInt64AggregateBlockRange{index: i, offset: blockOffset, length: length})
+	}
+	if offset != sectionEnd {
+		return nil, fmt.Errorf("collections: typed-column int64 aggregate column %q consumed=%d section=%d", adapterColumn.Definition.Name, offset-section.Offset, section.Length)
+	}
+	part.Columns[adapterColumn.Definition.Name] = valueCol
+	adapterPart := &typedColumnAdapterPart{Options: typedColumnAdapterOptions{Fields: []TypedStorageField{adapterColumn.Field}, SchemaVersion: uint32(schemaHash)}, Columns: []typedColumnAdapterColumn{adapterColumn}, Part: part}
+	return &typedColumnInt64AggregateTargetedPart{adapterPart: adapterPart, adapterColumn: adapterColumn, manifestBytes: image.ManifestBytes, blockRanges: blockRanges}, nil
+}
+
+func validateTypedColumnAdapterInt64AggregateTargetedSections(image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) error {
+	if part == nil {
+		return errors.New("collections: typed-column int64 aggregate targeted nil image part")
+	}
+	sectionsByColumn := make(map[string]typedcolumn.ColumnPartImageSection, len(part.Columns))
+	for _, section := range image.Sections {
+		if section.Kind != typedcolumn.ColumnPartImageSectionColumnData {
+			continue
+		}
+		column, ok := part.Columns[section.Column]
+		if !ok {
+			return fmt.Errorf("collections: typed-column int64 aggregate image unexpected column data section %q", section.Column)
+		}
+		if _, exists := sectionsByColumn[section.Column]; exists {
+			return fmt.Errorf("collections: typed-column int64 aggregate image duplicate column data section %q", section.Column)
+		}
+		if section.Encoding != column.Definition.Encoding || section.Compression != column.Definition.Compression {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section encoding=%s compression=%s want encoding=%s compression=%s", section.Column, section.Encoding, section.Compression, column.Definition.Encoding, column.Definition.Compression)
+		}
+		if section.Rows != 0 && section.Rows != part.Descriptor.RowCount {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section rows=%d want %d", section.Column, section.Rows, part.Descriptor.RowCount)
+		}
+		if section.Blocks != 0 && section.Blocks != len(column.Blocks) {
+			return fmt.Errorf("collections: typed-column int64 aggregate image column %q section blocks=%d want %d", section.Column, section.Blocks, len(column.Blocks))
+		}
+		sectionsByColumn[section.Column] = section
+	}
+	for name := range part.Columns {
+		if _, ok := sectionsByColumn[name]; !ok {
+			return fmt.Errorf("collections: typed-column int64 aggregate image missing column data section %q", name)
+		}
+	}
+	return nil
+}
+
+func (p *typedColumnInt64AggregateTargetedPart) instantiate(readPayload typedColumnInt64AggregatePayloadReader) (*typedColumnAdapterPart, typedColumnAdapterColumn, error) {
+	if p == nil || p.adapterPart == nil || p.adapterPart.Part == nil {
+		return nil, typedColumnAdapterColumn{}, errors.New("collections: typed-column int64 aggregate targeted metadata is missing")
+	}
+	if len(p.blockRanges) != 0 && readPayload == nil {
+		return nil, typedColumnAdapterColumn{}, errors.New("collections: typed-column int64 aggregate targeted prepare requires payload reader")
+	}
+	basePart := p.adapterPart.Part
+	partCopy := *basePart
+	columns := make(map[string]typedcolumn.ColumnPartColumn, len(basePart.Columns))
+	for name, column := range basePart.Columns {
+		columnCopy := column
+		if len(column.Blocks) != 0 {
+			columnCopy.Blocks = append([]typedcolumn.ColumnBlock(nil), column.Blocks...)
+		}
+		columns[name] = columnCopy
+	}
+	partCopy.Columns = columns
+	adapterPartCopy := *p.adapterPart
+	if len(p.adapterPart.Columns) != 0 {
+		adapterPartCopy.Columns = append([]typedColumnAdapterColumn(nil), p.adapterPart.Columns...)
+	}
+	adapterPartCopy.Part = &partCopy
+	valueCol, ok := partCopy.Columns[p.adapterColumn.Definition.Name]
+	if !ok {
+		return nil, typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column int64 aggregate cached metadata missing column %q", p.adapterColumn.Definition.Name)
+	}
+	for _, blockRange := range p.blockRanges {
+		if blockRange.index < 0 || blockRange.index >= len(valueCol.Blocks) {
+			return nil, typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column int64 aggregate cached block index=%d out of bounds", blockRange.index)
+		}
+		payload, err := readPayload(blockRange.offset, blockRange.length)
+		if err != nil {
+			return nil, typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column int64 aggregate read column %q block %d payload: %w", p.adapterColumn.Definition.Name, blockRange.index, err)
+		}
+		if len(payload) != blockRange.length {
+			return nil, typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column int64 aggregate column %q block %d payload bytes=%d want %d", p.adapterColumn.Definition.Name, blockRange.index, len(payload), blockRange.length)
+		}
+		block := &valueCol.Blocks[blockRange.index]
+		block.Granule.Payload = payload
+		block.Granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: blockRange.length}
+	}
+	partCopy.Columns[p.adapterColumn.Definition.Name] = valueCol
+	return &adapterPartCopy, p.adapterColumn, nil
+}
+
+func typedColumnAdapterImageSingleSection(image typedcolumn.ColumnPartImage, kind typedcolumn.ColumnPartImageSectionKind) (typedcolumn.ColumnPartImageSection, error) {
+	var out typedcolumn.ColumnPartImageSection
+	found := false
+	for _, section := range image.Sections {
+		if section.Kind != kind {
+			continue
+		}
+		if found {
+			return typedcolumn.ColumnPartImageSection{}, fmt.Errorf("duplicate %s section", kind)
+		}
+		out = section
+		found = true
+	}
+	if !found {
+		return typedcolumn.ColumnPartImageSection{}, fmt.Errorf("missing %s section", kind)
+	}
+	return out, nil
+}
+
+func typedColumnAdapterColumnDataSection(image typedcolumn.ColumnPartImage, column string) (typedcolumn.ColumnPartImageSection, bool) {
+	for _, section := range image.Sections {
+		if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Column == column {
+			return section, true
+		}
+	}
+	return typedcolumn.ColumnPartImageSection{}, false
+}
+
 func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {
 	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
 	if err != nil {

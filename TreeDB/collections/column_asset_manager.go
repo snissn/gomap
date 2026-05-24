@@ -1047,6 +1047,95 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	return raw, nil
 }
 
+func (c *columnPhysicalAssetReadCache) validateFullRef(ref ColumnAssetRef) (int, error) {
+	if c == nil {
+		return 0, errors.New("collections: nil column physical asset read cache")
+	}
+	if ref.Namespace != c.namespace {
+		return 0, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
+	}
+	reader, err := c.fileForRef(ref)
+	if err != nil {
+		return 0, err
+	}
+	if c.returnViews {
+		if raw, ok, err := reader.readView(ref); err != nil {
+			return 0, err
+		} else if ok {
+			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+				return 0, err
+			}
+			return len(raw), nil
+		}
+	}
+	raw, err := readColumnPhysicalAssetFromFileWithChecksum(reader.file, ref, nil, false)
+	if err != nil {
+		return 0, err
+	}
+	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+		return 0, err
+	}
+	return len(raw), nil
+}
+
+func (c *columnPhysicalAssetReadCache) readRange(ref ColumnAssetRef, relativeOffset int64, length int64) ([]byte, error) {
+	if c == nil {
+		return nil, errors.New("collections: nil column physical asset read cache")
+	}
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return nil, err
+	}
+	if ref.Namespace != c.namespace {
+		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
+	}
+	if relativeOffset < 0 || length <= 0 {
+		return nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d is invalid", relativeOffset, length)
+	}
+	end := relativeOffset + length
+	if end < relativeOffset || end > ref.Length {
+		return nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d outside ref length=%d", relativeOffset, length, ref.Length)
+	}
+	if ref.Offset > int64(^uint64(0)>>1)-relativeOffset {
+		return nil, fmt.Errorf("collections: column physical asset range base offset=%d relative=%d overflows", ref.Offset, relativeOffset)
+	}
+	rangeRef := ref
+	rangeRef.Offset = ref.Offset + relativeOffset
+	rangeRef.Length = length
+	reader, err := c.fileForRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	if c.lastView {
+		c.lastView = false
+	}
+	if c.returnViews {
+		if raw, ok, err := reader.readView(rangeRef); err != nil {
+			return nil, err
+		} else if ok {
+			if err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceMapped, ""); err != nil {
+				return nil, err
+			}
+			c.lastView = true
+			return raw, nil
+		}
+	}
+	if length > int64(maxCollectionInt) {
+		return nil, fmt.Errorf("collections: column physical asset range length=%d overflows int", length)
+	}
+	raw, err := readColumnPhysicalAssetFromFileWithChecksum(reader.file, rangeRef, make([]byte, int(length)), false)
+	if err != nil {
+		return nil, err
+	}
+	var fallback mappedresource.FallbackReason
+	if c.returnViews {
+		fallback = mappedresource.FallbackReadAt
+	}
+	if err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) error {
 	if c == nil {
 		return errors.New("collections: nil column physical asset read cache")

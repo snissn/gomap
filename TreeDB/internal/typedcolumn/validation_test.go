@@ -30,6 +30,27 @@ func TestTypedColumnValidationUnsupportedImageVersionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnManifestOnlyParseRejectsOutOfBoundsSection(t *testing.T) {
+	part := mustTransplantPart(t, 178905, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+	image := mustTransplantImage(t, part)
+	sections := append([]ColumnPartImageSection(nil), image.Sections...)
+	if len(sections) == 0 {
+		t.Fatal("image has no sections")
+	}
+	sections[0].Offset = alignColumnPartImageOffset(len(image.Bytes))
+	sections[0].Length = columnPartImageSectionAlignment
+	manifest, err := encodeColumnPartImageManifest(part, sections, image.ManifestBytes)
+	if err != nil {
+		t.Fatalf("encodeColumnPartImageManifest: %v", err)
+	}
+	if len(manifest) != image.ManifestBytes {
+		t.Fatalf("manifest bytes=%d want stable original %d", len(manifest), image.ManifestBytes)
+	}
+	if _, err := ParseColumnPartImageManifest(manifest, len(image.Bytes)); err == nil || !strings.Contains(err.Error(), "exceeds image bytes") {
+		t.Fatalf("ParseColumnPartImageManifest out-of-bounds err=%v want fail-closed exceeds-image error", err)
+	}
+}
+
 func TestTypedColumnValidationUnsupportedDescriptorVersionFailsClosed(t *testing.T) {
 	image := mustTransplantImage(t, mustTransplantPart(t, 178902, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch()))
 	corrupt := cloneColumnPartImageBytes(image)
