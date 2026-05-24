@@ -526,11 +526,11 @@ func TestTypedStorageLayoutColumnPartSupportedScalarMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NormalizeTypedStorageLayout: %v", err)
 			}
-			if err := layout.EnsureReadSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
-				t.Fatalf("EnsureReadSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
+			if err := layout.EnsureReadSupported(); err != nil {
+				t.Fatalf("EnsureReadSupported nullable scalar: %v", err)
 			}
-			if err := layout.EnsurePublicationSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) {
-				t.Fatalf("EnsurePublicationSupported error=%v want %v", err, ErrTypedStorageColumnPartUnsupported)
+			if err := layout.EnsurePublicationSupported(); err != nil {
+				t.Fatalf("EnsurePublicationSupported nullable scalar: %v", err)
 			}
 		})
 	}

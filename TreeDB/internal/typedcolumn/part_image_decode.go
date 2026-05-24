@@ -390,7 +390,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			return ColumnPartDescriptor{}, nil, err
 		}
 		if columnType == ColumnTypeLowCardinalityCode {
-			if cardinality == 0 || cardinality > maxCodeCardinality {
+			if cardinality > maxCodeCardinality {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: invalid low-cardinality cardinality %d for %s", cardinality, name)
 			}
 		} else if cardinality != 0 {
@@ -457,6 +457,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		}
 		if expectedFirstRow != desc.RowCount {
 			return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: descriptor column %s covers %d rows, want %d", name, expectedFirstRow, desc.RowCount)
+		}
+		if columnType == ColumnTypeLowCardinalityCode && cardinality == 0 && (len(column.Blocks) == 0 || column.Definition.Encoding != EncodingNullableInt64) {
+			return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: invalid low-cardinality cardinality %d for %s", cardinality, name)
 		}
 		desc.Columns = append(desc.Columns, columnDesc)
 		columns[name] = column
@@ -600,10 +603,15 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 			return checkedMulInt(rows, 8, "raw int64 bytes")
 		case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 			return checkedMulInt(rows, binary.MaxVarintLen64, "varint bytes")
+		case EncodingNullableInt64:
+			return maxNullableInt64RawBytes(rows, binary.MaxVarintLen64)
 		default:
 			return 0, fmt.Errorf("unsupported int64 encoding %d", encoding)
 		}
 	case ColumnTypeLowCardinalityCode:
+		if encoding == EncodingNullableInt64 {
+			return maxNullableInt64RawBytes(rows, 8)
+		}
 		if encoding != EncodingLowCardinalityUint32 {
 			return 0, fmt.Errorf("unsupported low-cardinality encoding %d", encoding)
 		}
@@ -616,6 +624,9 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 		}
 		return checkedAddInt(1+binary.MaxVarintLen64, codeBytes, "low-cardinality raw bytes")
 	case ColumnTypeBool:
+		if encoding == EncodingNullableInt64 {
+			return maxNullableInt64RawBytes(rows, 8)
+		}
 		if encoding != EncodingBoolBitpackRLE {
 			return 0, fmt.Errorf("unsupported bool encoding %d", encoding)
 		}
@@ -645,6 +656,23 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 	default:
 		return 0, fmt.Errorf("unsupported column type %s", columnType)
 	}
+}
+
+func maxNullableInt64RawBytes(rows int, valueBytesPerRow int) (int, error) {
+	valueBytes, err := checkedMulInt(rows, valueBytesPerRow, "nullable int64 value bytes")
+	if err != nil {
+		return 0, err
+	}
+	maskBytes := (rows + 7) / 8
+	masks, err := checkedMulInt(maskBytes, 2, "nullable int64 mask bytes")
+	if err != nil {
+		return 0, err
+	}
+	withMasks, err := checkedAddInt(nullableInt64HeaderBytes, masks, "nullable int64 raw bytes")
+	if err != nil {
+		return 0, err
+	}
+	return checkedAddInt(withMasks, valueBytes, "nullable int64 raw bytes")
 }
 
 func checkedMulInt(a int, b int, field string) (int, error) {
@@ -1373,6 +1401,9 @@ func (i ColumnPartImage) validateDictionariesForDescriptor(dictionaries map[stri
 		}, column)
 		if err != nil {
 			return err
+		}
+		if cardinality == 0 && column.Definition.Encoding == EncodingNullableInt64 {
+			continue
 		}
 		lowCardinality[name] = cardinality
 	}

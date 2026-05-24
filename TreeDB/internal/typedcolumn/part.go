@@ -89,6 +89,9 @@ type ColumnDefinition struct {
 type Batch struct {
 	Rows           int
 	Columns        map[string][]int64
+	Nulls          map[string][]bool
+	Defaults       map[string][]bool
+	DefaultValues  map[string]int64
 	Float32Vectors map[string][]float32
 	Uint32Vectors  map[string][]uint32
 }
@@ -168,6 +171,8 @@ type ColumnPartBuilder struct {
 	values64 []int64
 	codes32  []uint32
 	bools    []bool
+	nulls    []bool
+	defaults []bool
 	float32s []float32
 	u32dense []uint32
 	builder  *GranuleBuilder
@@ -663,13 +668,23 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Encoding == 0 {
 			def.Encoding = EncodingDeltaVarint
 		}
-		if def.Encoding != EncodingRawInt64 && def.Encoding != EncodingDeltaVarint && def.Encoding != EncodingDoubleDeltaVarint {
+		if def.Encoding != EncodingRawInt64 && def.Encoding != EncodingDeltaVarint && def.Encoding != EncodingDoubleDeltaVarint && def.Encoding != EncodingNullableInt64 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported int64 encoding %s for %s", def.Encoding, def.Name)
 		}
 	case ColumnTypeLowCardinalityCode:
-		def.Encoding = EncodingLowCardinalityUint32
+		if def.Encoding == 0 {
+			def.Encoding = EncodingLowCardinalityUint32
+		}
+		if def.Encoding != EncodingLowCardinalityUint32 && def.Encoding != EncodingNullableInt64 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported low-cardinality encoding %s for %s", def.Encoding, def.Name)
+		}
 	case ColumnTypeBool:
-		def.Encoding = EncodingBoolBitpackRLE
+		if def.Encoding == 0 {
+			def.Encoding = EncodingBoolBitpackRLE
+		}
+		if def.Encoding != EncodingBoolBitpackRLE && def.Encoding != EncodingNullableInt64 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported bool encoding %s for %s", def.Encoding, def.Name)
+		}
 	case ColumnTypeFloat32Vector:
 		if def.FixedWidthElements <= 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires positive fixed-width elements", def.Name)
@@ -761,11 +776,38 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			if len(values) != rows {
 				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
 			}
+			if def.Encoding != EncodingNullableInt64 {
+				if len(batch.Nulls[def.Name]) != 0 || len(batch.Defaults[def.Name]) != 0 {
+					return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", def.Name)
+				}
+				continue
+			}
+			if err := validateOptionalBoolRows("nulls for "+def.Name, rows, batch.Nulls[def.Name]); err != nil {
+				return 0, err
+			}
+			if err := validateOptionalBoolRows("defaults for "+def.Name, rows, batch.Defaults[def.Name]); err != nil {
+				return 0, err
+			}
 		}
 	}
 	for name := range batch.Columns {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared column %s", name)
+		}
+	}
+	for name := range batch.Nulls {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared nullable nulls column %s", name)
+		}
+	}
+	for name := range batch.Defaults {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared nullable defaults column %s", name)
+		}
+	}
+	for name := range batch.DefaultValues {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared nullable default value column %s", name)
 		}
 	}
 	for name := range batch.Float32Vectors {
@@ -931,6 +973,31 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 	for row := start; row < end; row++ {
 		b.values64[row-start] = sourceValues[b.order[row]]
 	}
+	if def.Encoding == EncodingNullableInt64 {
+		b.nulls = gatherOptionalBools(b.nulls[:0], batch.Nulls[def.Name], b.order, start, end)
+		b.defaults = gatherOptionalBools(b.defaults[:0], batch.Defaults[def.Name], b.order, start, end)
+		if def.Type == ColumnTypeLowCardinalityCode {
+			for i, v := range b.values64 {
+				if boolAt(b.nulls, i) || boolAt(b.defaults, i) {
+					continue
+				}
+				if v < 0 || v > math.MaxUint32 {
+					return EncodedGranule{}, fmt.Errorf("typedcolumn: code value %d outside uint32 for %s", v, def.Name)
+				}
+			}
+		}
+		if def.Type == ColumnTypeBool {
+			for i, v := range b.values64 {
+				if boolAt(b.nulls, i) || boolAt(b.defaults, i) {
+					continue
+				}
+				if v != 0 && v != 1 {
+					return EncodedGranule{}, fmt.Errorf("typedcolumn: bool value %d outside 0/1 for %s", v, def.Name)
+				}
+			}
+		}
+		return b.builder.BuildNullableInt64(b.values64, b.nulls, b.defaults, batch.DefaultValues[def.Name])
+	}
 	switch def.Type {
 	case ColumnTypeInt64:
 		return b.builder.BuildInt64(b.values64)
@@ -955,6 +1022,17 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 	default:
 		return EncodedGranule{}, fmt.Errorf("typedcolumn: unsupported column type %s", def.Type)
 	}
+}
+
+func gatherOptionalBools(dst []bool, source []bool, order []int, start int, end int) []bool {
+	if len(source) == 0 {
+		return nil
+	}
+	out := ensureBoolLen(dst, end-start)
+	for row := start; row < end; row++ {
+		out[row-start] = source[order[row]]
+	}
+	return out
 }
 
 func exclusiveInt64Upper(v int64) int64 {

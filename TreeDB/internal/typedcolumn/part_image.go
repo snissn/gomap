@@ -486,7 +486,7 @@ func imageColumnCardinalityForDescriptor(column ColumnPartColumnDescriptor, part
 			cardinality = uint32(needed)
 		}
 	}
-	if cardinality == 0 {
+	if cardinality == 0 && (len(partColumn.Blocks) == 0 || partColumn.Definition.Encoding != EncodingNullableInt64) {
 		return 0, fmt.Errorf("typedcolumn: descriptor column %s has zero low-cardinality cardinality", column.Name)
 	}
 	return cardinality, nil
