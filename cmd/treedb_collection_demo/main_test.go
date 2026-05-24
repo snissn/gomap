@@ -4,8 +4,16 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestParseConfigRejectsPositionals(t *testing.T) {
+	_, err := parseConfig([]string{"unexpected"})
+	if err == nil || !strings.Contains(err.Error(), "unexpected positional arguments") {
+		t.Fatalf("err=%v want unexpected positional rejection", err)
+	}
+}
 
 func TestParseConfigPresetOverride(t *testing.T) {
 	cfg, err := parseConfig([]string{"-preset", "event-analytics", "-rows", "123", "-batch-size", "7", "-mode", "document"})

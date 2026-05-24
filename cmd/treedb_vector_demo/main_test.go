@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,14 @@ func TestDeterministicVectorFixture(t *testing.T) {
 	}
 }
 
+func TestSetSearchTimingAvoidsNonFiniteOps(t *testing.T) {
+	var res result
+	setSearchTiming(&res, 2, 0, 0)
+	if res.OpsPerSecond <= 0 || math.IsInf(res.OpsPerSecond, 0) || math.IsNaN(res.OpsPerSecond) {
+		t.Fatalf("ops/sec=%v want finite positive", res.OpsPerSecond)
+	}
+}
+
 func TestExactTopKShape(t *testing.T) {
 	rows := generateRows(32, 8, 1)
 	query := append([]float32(nil), rows[0].Vector...)
@@ -135,6 +144,31 @@ func TestExecuteColumnGraphTopKSmoke(t *testing.T) {
 	}
 	if res.VectorDirectViews == 0 || res.TypedColumnFallbacks != 0 {
 		t.Fatalf("typed-column vector counters missing/fallback: %+v", res)
+	}
+}
+
+func TestExecuteMetadataFilterCountsFilteredVectors(t *testing.T) {
+	res, err := execute(context.Background(), config{
+		Rows:           64,
+		Dims:           8,
+		VectorMode:     "typed-column",
+		MetadataMode:   "typed-row",
+		Queries:        2,
+		TopK:           3,
+		MetadataFilter: true,
+		Dir:            filepath.Join(t.TempDir(), "db"),
+		Seed:           1,
+		Preset:         "vector-rag",
+		EfSearch:       32,
+		MaxDecoded:     1,
+	})
+	if err != nil {
+		t.Fatalf("execute metadata filter: %v", err)
+	}
+	// The fixture has eight tenants, so tenant-00 appears rows/8 times.
+	wantScored := uint64((64 / 8) * 2)
+	if res.ScoredVectors != wantScored {
+		t.Fatalf("scored_vectors=%d want %d", res.ScoredVectors, wantScored)
 	}
 }
 

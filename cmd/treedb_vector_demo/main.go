@@ -530,15 +530,19 @@ func runColumnGraphQueries(col *collections.Collection, queries []queryFixture, 
 		}
 	}
 	searchElapsed := time.Since(searchStart) - fetchElapsed
-	res.SearchMillis = millis(searchElapsed)
-	res.FetchMillis = millis(fetchElapsed)
-	res.OpsPerSecond = float64(cfg.Queries) / searchElapsed.Seconds()
+	setSearchTiming(res, cfg.Queries, searchElapsed, fetchElapsed)
 	res.CandidatesPerSearch = float64(res.Candidates) / float64(cfg.Queries)
 	return nil
 }
 
 func runExactFilteredQueries(col *collections.Collection, rows []vectorRow, queries []queryFixture, cfg config, res *result) error {
 	res.SearchPath = "exact_scoring_metadata_filter"
+	filteredRows := 0
+	for _, row := range rows {
+		if row.Tenant == defaultFilterTenant {
+			filteredRows++
+		}
+	}
 	var fetchElapsed time.Duration
 	searchStart := time.Now()
 	for i, q := range queries {
@@ -546,7 +550,7 @@ func runExactFilteredQueries(col *collections.Collection, rows []vectorRow, quer
 		if len(hits) == 0 {
 			return fmt.Errorf("query %s returned no exact filtered results", q.Name)
 		}
-		res.ScoredVectors += uint64(len(rows))
+		res.ScoredVectors += uint64(filteredRows)
 		if i == 0 {
 			res.FirstResults = hits
 		}
@@ -564,10 +568,19 @@ func runExactFilteredQueries(col *collections.Collection, rows []vectorRow, quer
 		}
 	}
 	searchElapsed := time.Since(searchStart) - fetchElapsed
+	setSearchTiming(res, cfg.Queries, searchElapsed, fetchElapsed)
+	return nil
+}
+
+func setSearchTiming(res *result, queries int, searchElapsed, fetchElapsed time.Duration) {
+	if searchElapsed <= 0 {
+		searchElapsed = time.Nanosecond
+	}
 	res.SearchMillis = millis(searchElapsed)
 	res.FetchMillis = millis(fetchElapsed)
-	res.OpsPerSecond = float64(cfg.Queries) / searchElapsed.Seconds()
-	return nil
+	if queries > 0 {
+		res.OpsPerSecond = float64(queries) / searchElapsed.Seconds()
+	}
 }
 
 func exactTopK(rows []vectorRow, query []float32, topK int, filter func(vectorRow) bool) []searchHit {

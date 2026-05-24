@@ -183,6 +183,9 @@ func parseConfig(args []string) (config, error) {
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
 	}
+	if fs.NArg() != 0 {
+		return config{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
 	visited := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 
@@ -823,7 +826,23 @@ func queryRange(rows []fixtureRow, full bool) (int64, int64) {
 func modeHasTypedStorage(mode string) bool { return mode != modeDocument }
 
 func diagnosticsFrom(d collections.TypedColumnInt64PredicateScanDiagnostics) diagnosticSummary {
-	return diagnosticSummary{Fallback: d.Fallback, FallbackReason: d.FallbackReason, RowsScanned: d.RowsScanned, RowsMatched: d.RowsMatched, PartsConsidered: d.PartsConsidered, PartsPruned: d.PartsPruned, BlocksDecoded: d.BlocksDecoded, MappedBytes: d.MappedBytes, DecodedBytes: d.DecodedMetadataBytes + d.DecodedHeapCopyBytes, HeapCopyBytes: d.HeapCopyBytes, DecodedMetadataBytes: d.DecodedMetadataBytes, ReadIntegrity: d.ColumnAssetReadIntegrity}
+	// TypedColumnInt64PredicateScanDiagnostics exposes decoded metadata and decoded
+	// candidate payload bytes separately. The demo's decoded_bytes output is the
+	// total decoded byte budget for the query.
+	return diagnosticSummary{
+		Fallback:             d.Fallback,
+		FallbackReason:       d.FallbackReason,
+		RowsScanned:          d.RowsScanned,
+		RowsMatched:          d.RowsMatched,
+		PartsConsidered:      d.PartsConsidered,
+		PartsPruned:          d.PartsPruned,
+		BlocksDecoded:        d.BlocksDecoded,
+		MappedBytes:          d.MappedBytes,
+		DecodedBytes:         d.DecodedMetadataBytes + d.DecodedHeapCopyBytes,
+		HeapCopyBytes:        d.HeapCopyBytes,
+		DecodedMetadataBytes: d.DecodedMetadataBytes,
+		ReadIntegrity:        d.ColumnAssetReadIntegrity,
+	}
 }
 
 func materializationFrom(d collections.TypedColumnInt64PredicateScanDiagnostics) materializationSummary {
