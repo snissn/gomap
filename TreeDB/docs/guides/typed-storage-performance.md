@@ -32,7 +32,7 @@ Recommended starting point for new performance work:
 | Path | Current status | Evidence command |
 | --- | --- | --- |
 | Non-nullable int64 predicate scan | Landed scoped MVP; explicit API, not broad planner routing. | `BenchmarkTypedColumnInt64PredicateScan` and aggregate benchmark below. |
-| Non-nullable int64 count/sum/avg with range/equality predicate | Landed benchmark/API path; still allocation-heavy and not final. | `BenchmarkTypedColumnInt64PredicateAggregate`. |
+| Non-nullable int64 count/sum/avg aggregate matrix | Landed benchmark/API path for no-filter, equality, tiny/range, wide range, all-pruned, all-match, tail, and multiple value distributions; still allocation-heavy and not final. | `BenchmarkTypedColumnInt64PredicateAggregate` with `TREEDB_TYPED_COLUMN_BENCH_SHAPES` / `TREEDB_TYPED_COLUMN_BENCH_DISTS`. |
 | Dense fixed-dimension `float32_vector` typed-column sections | Landed durable publication/reconstruction and direct-view tests. | `BenchmarkTypedColumnVectorDense...` under `TreeDB/internal/typedcolumn`. |
 | Vector graph typed-column reads | Landed native-reader path for `column_graph`; adjacency remains derived graph data, not authoritative typed-column `adjacency_list`. | [#1782](https://github.com/snissn/gomap/issues/1782), `cmd/treedb_column_graph_demo`, and column graph benchmarks. |
 
@@ -41,7 +41,7 @@ Recommended starting point for new performance work:
 | Area | What to say today | Tracker |
 | --- | --- | --- |
 | Aggregate hot path | The scalar aggregate path avoids document/row materialization, but still allocates and spends time in per-scan asset lifecycle, full-asset mapping/checking, metadata/dictionary decode, and int64 decode buffers. | [#1806](https://github.com/snissn/gomap/issues/1806) |
-| Benchmark matrix | The original aggregate benchmark is a favorable clustered ~1% selective range; broader no-filter/exact/tiny/wide/all-pruned/all-match/tail/random/skew shapes are tracked separately. | [#1808](https://github.com/snissn/gomap/issues/1808) |
+| Benchmark matrix | Expanded aggregate shapes and distributions have landed: no-filter, exact, tiny, 1% range, 10% range, all-pruned, all-match, tail, clustered, reverse, partially clustered, random, and hotspot/skew. Use the matrix to avoid overfitting; further production workload expansion may still add cases. | [#1808](https://github.com/snissn/gomap/issues/1808) |
 | Dictionary/string predicates | String dictionary data exists, but production string predicate scan MVP is separate work. | [#1785](https://github.com/snissn/gomap/issues/1785) |
 | Aggregate metadata query integration | Aggregate metadata descriptors exist, but broader query integration is separate work. | [#1786](https://github.com/snissn/gomap/issues/1786) |
 | Resource/lifetime substrate | Direct views must use mappedresource lifetime/range/endian/length/alignment validation; broad DB-owned adoption remains in the parent tracker. | [#1736](https://github.com/snissn/gomap/issues/1736) |
@@ -111,8 +111,8 @@ Current interpretation for this shape:
 - optimization is tracked by [#1806](https://github.com/snissn/gomap/issues/1806).
 
 Do not extrapolate production performance from only this clustered/selective
-shape. Use [#1808](https://github.com/snissn/gomap/issues/1808) matrix shapes
-when that benchmark coverage is present in your branch.
+shape. The [#1808](https://github.com/snissn/gomap/issues/1808) matrix is now
+landed; run additional shapes/distributions before claiming a general speedup.
 
 ### Focused aggregate CPU and allocation profile
 
@@ -143,6 +143,30 @@ Expected current profile themes are per-scan asset read/open/fstat/checksum,
 metadata/dictionary decode, and int64 decode allocation. If a profile instead
 shows document materialization dominating the direct typed-column row, re-check
 that you are running the `typed_column_part` sub-benchmark and not the fallback.
+
+### Expanded aggregate matrix smoke
+
+Use the landed matrix controls when you need broader coverage than the default
+clustered selective/all-pruned/all-match set:
+
+```sh
+TREEDB_TYPED_COLUMN_BENCH_ROWS=65536 \
+TREEDB_TYPED_COLUMN_BENCH_SHAPES=no_filter,exact,tiny,range_1pct,range_10pct,all_pruned,all_match,tail \
+TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered,reverse,partial_random,random,hotspot \
+go test -run '^$' \
+  -bench '^BenchmarkTypedColumnInt64PredicateAggregate$' \
+  -benchmem \
+  -benchtime=1x \
+  -count=1 \
+  ./TreeDB/collections
+```
+
+Available shape aliases include `no_filter`, `exact`, `tiny`, `range_1pct`,
+`range_10pct`, `all_pruned`, `all_match`, and `tail`. Available distribution
+aliases include `clustered`, `reverse`, `partial_random`, `random`, and
+`hotspot`/`skew`. Keep the distribution in the benchmark name when comparing
+results: clustered and reverse data exercise pruning differently from random or
+hotspot data.
 
 ### Dense vector typed-column smoke
 
