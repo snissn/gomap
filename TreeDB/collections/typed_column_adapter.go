@@ -1690,7 +1690,8 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *ty
 		return false, fmt.Errorf("value column is not int64")
 	}
 	if scratch == nil {
-		scratch = &typedColumnInt64PredicateAggregateScanScratch{}
+		var localScratch typedColumnInt64PredicateAggregateScanScratch
+		scratch = &localScratch
 	}
 	decodedAny := false
 	for _, block := range valueCol.Blocks {
