@@ -187,7 +187,10 @@ func (c *Collection) RunTypedColumnInt64PredicateAggregate(req TypedColumnInt64P
 	if hintErr != nil {
 		return TypedColumnInt64PredicateAggregateResult{}, hintErr
 	}
-	hintTypedColumnOwner := hintDeclared && hintColumn.ValueType == ColumnStoreValueInt64 && !hintColumn.Nullable && columnStoreColumnIsTypedColumnPart(hintColumn)
+	if hintDeclared && columnStoreColumnIsTypedColumnPart(hintColumn) && (hintColumn.ValueType != ColumnStoreValueInt64 || hintColumn.Nullable) {
+		return TypedColumnInt64PredicateAggregateResult{}, typedColumnInt64PredicateUnsupportedColumnError(req.Column, hintColumn)
+	}
+	hintTypedColumnOwner := hintDeclared && hintColumn.ValueType == ColumnStoreValueInt64 && columnStoreColumnIsTypedColumnPart(hintColumn)
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
 	if closeView != nil {
 		defer closeView()
@@ -207,7 +210,7 @@ func (c *Collection) RunTypedColumnInt64PredicateAggregate(req TypedColumnInt64P
 		return c.runTypedColumnInt64PredicateAggregateDocumentFallback(req, cfg, "undeclared_column", start)
 	}
 	if col.ValueType != ColumnStoreValueInt64 || col.Nullable {
-		return TypedColumnInt64PredicateAggregateResult{}, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q has type=%q nullable=%v", ErrColumnQueryPlanUnsupported, req.Column, col.ValueType, col.Nullable)
+		return TypedColumnInt64PredicateAggregateResult{}, typedColumnInt64PredicateUnsupportedColumnError(req.Column, col)
 	}
 	if !columnStoreColumnIsTypedColumnPart(col) {
 		return c.runTypedColumnInt64PredicateAggregateDocumentFallback(req, cfg, "typed_column_not_selected", start)
