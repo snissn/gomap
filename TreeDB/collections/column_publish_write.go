@@ -571,6 +571,35 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
+		for _, aggregate := range columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore) {
+			metadata, ok, err := buildColumnAggregateMetadataAsset(hookInput.ColumnStore, rows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if !ok {
+				continue
+			}
+			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			metadataRef, err := writeColumnAggregateMetadataAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedMetadata, generation, typedColumnPartAssetPartID)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
+			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
+				metadataRef.Generation != generation || metadataRef.PartID != typedColumnPartAssetPartID || metadataRef.Length != int64(len(encodedMetadata)) {
+				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column aggregate metadata asset ref %+v", metadataRef)
+			}
+			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
+				Ref:          metadataRef,
+				Rows:         len(rows),
+				Bytes:        metadataRef.Length,
+				PublishID:    hookInput.AppliedCommandLSN,
+				GenerationID: generation,
+				Reason:       aggregate.Name,
+			})
+		}
 		dictionaryAssets, err := buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err

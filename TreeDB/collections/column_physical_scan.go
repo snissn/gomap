@@ -710,8 +710,8 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			if err != nil {
 				return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
 			}
+			livePartRows.add(ref.Generation, ref.PartID, rows)
 			if ref.Kind == ColumnAssetKindTCS1PartImage {
-				livePartRows.add(ref.Generation, ref.PartID, rows)
 				refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
 				if role != ColumnManifestPartRoleBase {
 					mutationParts++
@@ -984,6 +984,7 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 			if err != nil {
 				return columnManifestPlannerCapabilitiesForScan{}, err
 			}
+			livePartRows.add(ref.Generation, ref.PartID, rows)
 			if ref.Kind == ColumnAssetKindTCS1PartImage {
 				// Capability counts describe the refs a physical scan would read:
 				// all reachable lineage through the active generation. The header
@@ -999,7 +1000,6 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 					}
 					caps.MutationParts++
 				}
-				livePartRows.add(ref.Generation, ref.PartID, rows)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
@@ -1336,8 +1336,8 @@ func decodeColumnManifestSnapshotViewForScan(records []columnManifestRecord, exp
 		if err != nil {
 			return columnManifestSnapshot{}, nil, 0, err
 		}
+		livePartRows.add(ref.Generation, ref.PartID, rows)
 		if ref.Kind == ColumnAssetKindTCS1PartImage {
-			livePartRows.add(ref.Generation, ref.PartID, rows)
 			refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
 			if role != ColumnManifestPartRoleBase {
 				mutationParts++

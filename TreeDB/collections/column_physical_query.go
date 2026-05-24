@@ -61,6 +61,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	DecodedBlocks              int
 	DirectReduceBlocks         int
 	MetadataHits               int
+	MetadataMisses             int
 	DictionaryCodeHits         int
 	Int64ValueHits             int
 	ScheduledGranules          int
@@ -70,6 +71,9 @@ type ColumnPhysicalQueryDiagnostics struct {
 	ProjectedColumns           int
 	RowMaterializations        int
 	PhysicalBytesScanned       int64
+	DecodedMetadataBytes       uint64
+	MappedBytes                uint64
+	HeapCopyBytes              uint64
 	ReduceRows                 int
 	VisibilityRows             int
 	ReconstructionRows         int
@@ -307,7 +311,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	if view.MutationParts != 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 	}
-	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.Config, req)
+	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.FullConfig, req)
 	if !ok {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata %q does not match physical query shape", ErrColumnQueryPlanUnsupported, req.AggregateMetadataName)
 	}
@@ -334,12 +338,20 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 		diag.SegmentFileCacheHits = readCache.hits
 		diag.SegmentFileCacheMisses = readCache.misses
 		if err != nil {
+			diag.MetadataMisses++
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: aggregate metadata read %q generation=%d part_id=%d: %w", metadataRef.Name, metadataRef.AssetRef.Generation, metadataRef.AssetRef.PartID, err)
 		}
 		rawScratch = raw
 		diag.PhysicalBytesScanned += int64(len(raw))
-		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.Config, view.CollectionName, aggregate.Name)
+		diag.DecodedMetadataBytes += uint64(len(raw))
+		if readCache.lastView {
+			diag.MappedBytes += uint64(len(raw))
+		} else {
+			diag.HeapCopyBytes += uint64(len(raw))
+		}
+		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.FullConfig, view.CollectionName, aggregate.Name)
 		if err != nil {
+			diag.MetadataMisses++
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 		}
 		if asset.GroupColumn != req.GroupColumn || asset.ValueColumn != req.ValueColumn {
