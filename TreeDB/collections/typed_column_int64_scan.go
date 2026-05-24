@@ -12,6 +12,7 @@ import (
 type TypedColumnInt64PredicateScanKind string
 
 const (
+	TypedColumnInt64PredicateAll   TypedColumnInt64PredicateScanKind = "all"
 	TypedColumnInt64PredicateEqual TypedColumnInt64PredicateScanKind = "equal"
 	TypedColumnInt64PredicateRange TypedColumnInt64PredicateScanKind = "range"
 )
@@ -247,6 +248,7 @@ func validateTypedColumnInt64PredicateScanRequest(req TypedColumnInt64PredicateS
 		return errors.New("collections: typed-column int64 predicate scan requires column")
 	}
 	switch req.Kind {
+	case TypedColumnInt64PredicateAll:
 	case TypedColumnInt64PredicateEqual:
 	case TypedColumnInt64PredicateRange:
 		if req.Low > req.High {
@@ -547,6 +549,8 @@ func typedColumnInt64PredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, col
 
 func typedColumnInt64PredicateMayMatch(req TypedColumnInt64PredicateScanRequest, minValue, maxValue int64) bool {
 	switch req.Kind {
+	case TypedColumnInt64PredicateAll:
+		return true
 	case TypedColumnInt64PredicateEqual:
 		return req.Value >= minValue && req.Value <= maxValue
 	case TypedColumnInt64PredicateRange:
@@ -558,6 +562,8 @@ func typedColumnInt64PredicateMayMatch(req TypedColumnInt64PredicateScanRequest,
 
 func typedColumnInt64PredicateMatches(req TypedColumnInt64PredicateScanRequest, value int64) bool {
 	switch req.Kind {
+	case TypedColumnInt64PredicateAll:
+		return true
 	case TypedColumnInt64PredicateEqual:
 		return value == req.Value
 	case TypedColumnInt64PredicateRange:
