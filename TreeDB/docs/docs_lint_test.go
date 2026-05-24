@@ -158,9 +158,11 @@ func TestDocs_NullableTypedColumnSemantics(t *testing.T) {
 	}
 	storageDoc := strings.Join(strings.Fields(string(storageData)), " ")
 	for _, want := range []string{
-		"nullable int64 column uses the `nullable_int64` encoding",
+		"Nullable scalar typed-column support uses nullable int64 carrier granules for bool, int64, float32, double/float64, and low-cardinality string fields",
+		"nullable scalar column uses the `nullable_int64` encoding",
 		"the null bitmap marks rows whose JSON path was present with an explicit `null`",
 		"the default/missing bitmap marks rows whose declared path was omitted",
+		"metadata, when present, covers only stored present/non-null carrier values",
 		"positive optimization expectation, not only a no-regression gate",
 		"actively remove existing avoidable allocations and obvious local overhead in the same touched path",
 		"target 0 allocs/op after setup when benchmarking the core typed-column loop separately from document materialization",
@@ -180,6 +182,7 @@ func TestDocs_NullableTypedColumnSemantics(t *testing.T) {
 	}
 	adapterDoc := strings.Join(strings.Fields(string(adapterData)), " ")
 	for _, want := range []string{
+		"Nullable scalar adapter support uses `nullable_int64` as the carrier encoding for bool, int64, float32, double, and low-cardinality string fields",
 		"present/non-null rows write the declared path and value, explicit-null rows write the declared path with JSON null, and missing/default rows leave the declared path absent",
 		"the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not fall back to full-document reconstruction/materialization",
 		"Direct typed-column predicate paths must preserve hot-path allocation discipline and should actively remove existing avoidable allocations",

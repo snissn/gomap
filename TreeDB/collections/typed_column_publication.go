@@ -359,6 +359,7 @@ func (c *Collection) typedColumnPartRefsByGeneration(snap *backenddb.Snapshot, r
 
 func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifestRecord, expectedNamespace string) (map[uint64]columnManifestAssetRefForScan, error) {
 	refs := make(map[uint64]columnManifestAssetRefForScan)
+	physicalRowsByGeneration := make(map[uint64]int)
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
@@ -371,7 +372,17 @@ func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifest
 		if err != nil {
 			return nil, err
 		}
-		if ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
+		switch ref.Kind {
+		case ColumnAssetKindTCS1PartImage:
+			if ref.Generation != keyGeneration || ref.PartID != keyPartID {
+				return nil, fmt.Errorf("collections: typed-row manifest key generation/part mismatch")
+			}
+			if ref.PartID == columnPhysicalRowAssetPartID {
+				physicalRowsByGeneration[ref.Generation] = rows
+			}
+			continue
+		case ColumnAssetKindTCS1TypedColumnPart:
+		default:
 			continue
 		}
 		if ref.Generation != keyGeneration || ref.PartID != keyPartID {
@@ -388,6 +399,15 @@ func typedColumnPartRefsByGenerationFromManifestRecords(records []columnManifest
 			return nil, fmt.Errorf("collections: duplicate typed-column manifest ref for generation=%d", ref.Generation)
 		}
 		refs[ref.Generation] = columnManifestAssetRefForScan{Ref: ref, Reason: operation, Rows: rows}
+	}
+	for generation, ref := range refs {
+		physicalRows, ok := physicalRowsByGeneration[generation]
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column manifest missing typed_row_asset ref for generation=%d", generation)
+		}
+		if ref.Rows != physicalRows {
+			return nil, fmt.Errorf("collections: typed-column manifest rows=%d does not match physical rows=%d for generation=%d", ref.Rows, physicalRows, generation)
+		}
 	}
 	return refs, nil
 }

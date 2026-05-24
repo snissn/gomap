@@ -51,7 +51,7 @@ storage`; new durable column-major assets should say `typed-column` or
   publish durable dense row-major little-endian `float32` sections.
 - `adjacency_list` typed-column publication remains fail-closed; internal dense
   `uint32` sections exist only as validation groundwork.
-- At #1758 closeout, nullable/missing typed-column values remained fail-closed; #1784 documents scalar nullable int64 as the first nullable typed-column representation while vector/adjacency nullable support stays staged/fail-closed.
+- At #1758 closeout, nullable/missing typed-column values remained fail-closed; #1784 documents scalar nullable typed-column representation using the nullable-int64 carrier while vector/adjacency nullable support stays staged/fail-closed.
 - Retained-payload reconstruction composes retained document bytes, typed-row
   values, and typed-column values after checkpoint/reopen.
 - Direct typed views require #1736 `mappedresource` validation for lifetime,
@@ -385,6 +385,6 @@ Remaining COW maintenance work for #1736/#1788:
   stale checksums, unsupported versions, and mutation-bearing typed-column part
   fast paths until multipart latest-visible maintenance is implemented.
 - Keep #1782 native vector graph switching, authoritative adjacency publication,
-  full production nullable/missing typed-column integration beyond scalar int64 docs, dictionary/string query integration,
+  nullable vector/adjacency typed-column integration, dictionary/string query integration,
   aggregate query integration, multipart lifecycle/compaction, and full row+column
   COW cleanup as explicit follow-ups, not implied #1744 completions.

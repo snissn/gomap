@@ -503,10 +503,11 @@ string fields. Issue `#1756` adds fixed-dimension `float32_vector` fields as
 uncompressed row-major little-endian dense `float32` sections whose element count
 per row is `vector_dims`.
 
-Nullable scalar typed-column support starts with nullable int64 granules. A
-nullable int64 column uses the `nullable_int64` encoding. Each granule payload
-contains a fixed header, the encoded non-null/non-default int64 values, and two
-row-aligned bitmaps:
+Nullable scalar typed-column support uses nullable int64 carrier granules for
+bool, int64, float32, double/float64, and low-cardinality string fields. A
+nullable scalar column uses the `nullable_int64` encoding. Each granule payload
+contains a fixed header, the encoded non-null/non-default carrier values, and
+two row-aligned bitmaps:
 
 - the null bitmap marks rows whose JSON path was present with an explicit
   `null`; these rows have no stored int64 payload value and reconstruct as
@@ -514,17 +515,18 @@ row-aligned bitmaps:
 - the default/missing bitmap marks rows whose declared path was omitted from the
   source document; these rows have no stored int64 payload value and reconstruct
   by omitting that path from the retained-payload document; and
-- rows with neither bit set are present/non-null and consume one encoded int64
-  payload value in row order.
+- rows with neither bit set are present/non-null and consume one encoded carrier
+  payload value in row order (`0/1` bools, int64s, float bit patterns, or string
+  dictionary codes).
 
 Null and default/missing bits are mutually exclusive. Granule metadata stores
 `NullCount` and `DefaultCount`; the two counts must be non-negative and must not
 exceed the row count (`DefaultCount <= Rows-NullCount`). Decoders must fail
 closed on invalid count metadata, truncated or incorrectly-sized bitmaps, rows
 marked both null and default/missing, or stored-value underflow/overflow. Min/max
-metadata, when present, covers only present logical values: stored non-null int64
-values plus the configured default value for default/missing rows; all-null
-blocks omit min/max. Other nullable scalar encodings may reuse the same
+metadata, when present, covers only stored present/non-null carrier values; null
+and default/missing rows contribute no value, and all-null/all-missing blocks
+omit min/max. Future native nullable scalar encodings may reuse the same
 explicit-null versus missing bitmap model only after their per-type payload
 format is specified.
 

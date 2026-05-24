@@ -32,13 +32,13 @@ derived accelerators authoritative.
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row. |
 | `adjacency_list` | fail closed | Internal dense `uint32` sections exist for #1756 validation, but production publication remains closed until fixed-degree adjacency schema metadata exists. |
 
-Nullable scalar adapter support starts with int64: explicit JSON null maps to
-`nullable_int64` null bitmap rows, omitted paths map to its default/missing
-bitmap rows, and present values map to the encoded int64 payload. Nullable bool,
-float, double, and string column-part publication remains staged until their
-per-type encodings are specified. Vector and adjacency nullable/missing support
-also remains staged/fail-closed. Adjacency publication remains staged after
-#1756.
+Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
+for bool, int64, float32, double, and low-cardinality string fields: explicit
+JSON null maps to null bitmap rows, omitted paths map to default/missing bitmap
+rows, and present values map to the encoded carrier payload (`0/1` bools,
+int64s, float bit patterns, or string dictionary codes). Vector and adjacency
+nullable/missing support remains staged/fail-closed. Adjacency publication
+remains staged after #1756.
 
 Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows
