@@ -1,0 +1,15 @@
+//go:build purego || (!amd64 && !arm64)
+
+package vectorops
+
+const dotFloat32Implementation = "scalar"
+
+// DotFloat32 returns the float32 dot product over the shared prefix of left and
+// right using the portable scalar implementation. Callers must pass validated
+// []float32 slices; this kernel does not reinterpret raw bytes.
+func DotFloat32(left, right []float32) float32 {
+	return DotFloat32Scalar(left, right)
+}
+
+// DotFloat32Implementation identifies the active DotFloat32 implementation.
+func DotFloat32Implementation() string { return dotFloat32Implementation }
