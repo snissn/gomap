@@ -22,11 +22,12 @@ import (
 )
 
 const (
-	vectorIndexName      = "embedding_graph"
-	collectionName       = "docs"
-	defaultPreset        = "vector-rag"
-	defaultFilterTenant  = "tenant-00"
-	minFreshDemoDirBytes = 8
+	vectorIndexName        = "embedding_graph"
+	collectionName         = "docs"
+	defaultPreset          = "vector-rag"
+	defaultFilterTenant    = "tenant-00"
+	defaultVectorBatchSize = 512
+	minFreshDemoDirBytes   = 8
 )
 
 type config struct {
@@ -36,6 +37,7 @@ type config struct {
 	MetadataMode   string
 	Queries        int
 	TopK           int
+	BatchSize      int
 	MetadataFilter bool
 	FinalFetch     bool
 	Dir            string
@@ -75,6 +77,7 @@ type result struct {
 	Dims                      int         `json:"dims"`
 	Queries                   int         `json:"queries"`
 	TopK                      int         `json:"top_k"`
+	BatchSize                 int         `json:"batch_size"`
 	VectorMode                string      `json:"vector_mode"`
 	MetadataMode              string      `json:"metadata_mode"`
 	MetadataFilter            bool        `json:"metadata_filter"`
@@ -90,9 +93,9 @@ type result struct {
 	ScoredVectors             uint64      `json:"scored_vectors"`
 	DocsFetched               uint64      `json:"docs_fetched"`
 	DocumentBytes             uint64      `json:"document_bytes"`
-	MappedBytes               uint64      `json:"mapped_bytes"`
-	HeapCopyBytes             uint64      `json:"heap_copy_bytes"`
-	DecodedBytes              uint64      `json:"decoded_bytes"`
+	MappedBytesPeak           uint64      `json:"mapped_bytes_peak"`
+	HeapCopyBytesPeak         uint64      `json:"heap_copy_bytes_peak"`
+	DecodedBytesPeak          uint64      `json:"decoded_bytes_peak"`
 	PhysicalBytesRead         int64       `json:"physical_bytes_read"`
 	VectorDirectViews         uint64      `json:"vector_direct_views"`
 	VectorScratchDecodes      uint64      `json:"vector_scratch_decodes"`
@@ -170,6 +173,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.MetadataMode, "metadata", cfg.MetadataMode, "metadata storage mode: document, typed-row, typed-column")
 	fs.IntVar(&cfg.Queries, "queries", cfg.Queries, "number of vector queries to run")
 	fs.IntVar(&cfg.TopK, "top-k", cfg.TopK, "nearest neighbors per query")
+	fs.IntVar(&cfg.BatchSize, "batch-size", cfg.BatchSize, "documents per InsertBatch call")
 	fs.BoolVar(&cfg.MetadataFilter, "metadata-filter", cfg.MetadataFilter, "restrict scoring/search output to a deterministic tenant filter when supported")
 	fs.BoolVar(&cfg.FinalFetch, "final-fetch", cfg.FinalFetch, "fetch full documents after top-k selection and time that separately")
 	fs.StringVar(&cfg.Dir, "dir", cfg.Dir, "TreeDB directory; empty uses a temporary directory")
@@ -200,8 +204,19 @@ func scanPreset(args []string) (string, error) {
 			i++
 			continue
 		}
+		if arg == "--preset" {
+			if i+1 >= len(args) {
+				return "", errors.New("missing value for --preset")
+			}
+			preset = args[i+1]
+			i++
+			continue
+		}
 		if strings.HasPrefix(arg, "-preset=") {
 			preset = strings.TrimPrefix(arg, "-preset=")
+		}
+		if strings.HasPrefix(arg, "--preset=") {
+			preset = strings.TrimPrefix(arg, "--preset=")
 		}
 	}
 	return preset, nil
@@ -210,9 +225,9 @@ func scanPreset(args []string) (string, error) {
 func presetConfig(preset string) (config, error) {
 	switch preset {
 	case "", "vector-rag":
-		return config{Rows: 1000, Dims: 128, VectorMode: "typed-column", MetadataMode: "typed-row", Queries: 10, TopK: 10, Seed: 1, Preset: "vector-rag", EfSearch: 128, MaxDecoded: 4}, nil
+		return config{Rows: 1000, Dims: 128, VectorMode: "typed-column", MetadataMode: "typed-row", Queries: 10, TopK: 10, BatchSize: defaultVectorBatchSize, Seed: 1, Preset: "vector-rag", EfSearch: 128, MaxDecoded: 4}, nil
 	case "perf-engineer":
-		return config{Rows: 10000, Dims: 128, VectorMode: "typed-column", MetadataMode: "typed-row", Queries: 100, TopK: 10, Seed: 1, Preset: "perf-engineer", EfSearch: 128, MaxDecoded: 8}, nil
+		return config{Rows: 10000, Dims: 128, VectorMode: "typed-column", MetadataMode: "typed-row", Queries: 100, TopK: 10, BatchSize: defaultVectorBatchSize, Seed: 1, Preset: "perf-engineer", EfSearch: 128, MaxDecoded: 8}, nil
 	default:
 		return config{}, fmt.Errorf("unsupported preset %q (supported: vector-rag, perf-engineer)", preset)
 	}
@@ -234,6 +249,9 @@ func validateConfig(cfg config) error {
 	if cfg.TopK > cfg.Rows {
 		return errors.New("top-k cannot exceed rows")
 	}
+	if cfg.BatchSize <= 0 {
+		return errors.New("batch-size must be positive")
+	}
 	if cfg.EfSearch < 0 || cfg.MaxDecoded < 0 {
 		return errors.New("ef-search and max-decoded-blocks must be non-negative")
 	}
@@ -253,6 +271,9 @@ func validateConfig(cfg config) error {
 func execute(ctx context.Context, cfg config) (result, error) {
 	if err := ctx.Err(); err != nil {
 		return result{}, err
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = defaultVectorBatchSize
 	}
 	dir, kept, cleanup, err := prepareFreshDir(cfg.Dir, cfg.KeepDir)
 	if err != nil {
@@ -281,7 +302,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		_ = db.Close()
 		return result{}, err
 	}
-	if err := insertRows(col, rows); err != nil {
+	if err := insertRows(col, rows, cfg.BatchSize); err != nil {
 		_ = db.Close()
 		return result{}, err
 	}
@@ -319,6 +340,7 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		Dims:                      cfg.Dims,
 		Queries:                   cfg.Queries,
 		TopK:                      cfg.TopK,
+		BatchSize:                 cfg.BatchSize,
 		VectorMode:                cfg.VectorMode,
 		MetadataMode:              cfg.MetadataMode,
 		MetadataFilter:            cfg.MetadataFilter,
@@ -430,27 +452,39 @@ func normalize(v []float32) {
 	}
 }
 
-func insertRows(col *collections.Collection, rows []vectorRow) error {
-	ids := make([][]byte, len(rows))
-	docs := make([][]byte, len(rows))
-	for i, row := range rows {
-		raw, err := json.Marshal(map[string]any{
-			"did":       row.ID,
-			"tenant":    row.Tenant,
-			"title":     row.Title,
-			"time_us":   row.TimeUS,
-			"category":  row.Category,
-			"body":      fmt.Sprintf("RAG fixture body for %s in %s", row.ID, row.Category),
-			"embedding": row.Vector,
-		})
-		if err != nil {
+func insertRows(col *collections.Collection, rows []vectorRow, batchSize int) error {
+	if batchSize <= 0 {
+		batchSize = defaultVectorBatchSize
+	}
+	for start := 0; start < len(rows); start += batchSize {
+		end := start + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		ids := make([][]byte, end-start)
+		docs := make([][]byte, end-start)
+		for i := start; i < end; i++ {
+			row := rows[i]
+			raw, err := json.Marshal(map[string]any{
+				"did":       row.ID,
+				"tenant":    row.Tenant,
+				"title":     row.Title,
+				"time_us":   row.TimeUS,
+				"category":  row.Category,
+				"body":      fmt.Sprintf("RAG fixture body for %s in %s", row.ID, row.Category),
+				"embedding": row.Vector,
+			})
+			if err != nil {
+				return err
+			}
+			ids[i-start] = []byte(row.ID)
+			docs[i-start] = raw
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
 			return err
 		}
-		ids[i] = []byte(row.ID)
-		docs[i] = raw
 	}
-	_, err := col.InsertBatch(ids, docs)
-	return err
+	return nil
 }
 
 func runColumnGraphQueries(col *collections.Collection, queries []queryFixture, cfg config, res *result) error {
@@ -476,9 +510,9 @@ func runColumnGraphQueries(col *collections.Collection, queries []queryFixture, 
 		res.VectorDirectViews += got.Stats.VectorDirectViews
 		res.VectorScratchDecodes += got.Stats.VectorScratchDecodes
 		res.TypedColumnFallbacks += got.Stats.TypedColumnFallbacks
-		res.MappedBytes = maxUint64(res.MappedBytes, got.Stats.TypedColumnMappedBytes)
-		res.HeapCopyBytes = maxUint64(res.HeapCopyBytes, got.Stats.TypedColumnHeapCopyBytes)
-		res.DecodedBytes = maxUint64(res.DecodedBytes, got.Stats.TypedColumnDecodedBytes)
+		res.MappedBytesPeak = max(res.MappedBytesPeak, got.Stats.TypedColumnMappedBytes)
+		res.HeapCopyBytesPeak = max(res.HeapCopyBytesPeak, got.Stats.TypedColumnHeapCopyBytes)
+		res.DecodedBytesPeak = max(res.DecodedBytesPeak, got.Stats.TypedColumnDecodedBytes)
 		if i == 0 {
 			res.FirstResults = hitsFromSearchResults(got.Results)
 		}
@@ -671,7 +705,7 @@ func writeProfileArtifacts(dir string, res *result) error {
 func summaryMarkdown(res result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# TreeDB vector demo summary\n\n")
-	fmt.Fprintf(&b, "- preset: `%s`\n- vectors: `%s`\n- metadata: `%s`\n- rows: `%d`\n- dims: `%d`\n- queries: `%d`\n- top_k: `%d`\n- search_path: `%s`\n- setup_ms: `%.3f`\n- search_ms: `%.3f`\n- fetch_ms: `%.3f`\n- ops_sec: `%.2f`\n- docs_fetched: `%d`\n- mapped_bytes: `%d`\n- decoded_bytes: `%d`\n", res.Preset, res.VectorMode, res.MetadataMode, res.Rows, res.Dims, res.Queries, res.TopK, res.SearchPath, res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond, res.DocsFetched, res.MappedBytes+res.HeapCopyBytes, res.DecodedBytes)
+	fmt.Fprintf(&b, "- preset: `%s`\n- vectors: `%s`\n- metadata: `%s`\n- rows: `%d`\n- dims: `%d`\n- queries: `%d`\n- top_k: `%d`\n- batch_size: `%d`\n- search_path: `%s`\n- setup_ms: `%.3f`\n- search_ms: `%.3f`\n- fetch_ms: `%.3f`\n- ops_sec: `%.2f`\n- docs_fetched: `%d`\n- mapped_bytes_peak: `%d`\n- heap_copy_bytes_peak: `%d`\n- decoded_bytes_peak: `%d`\n", res.Preset, res.VectorMode, res.MetadataMode, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath, res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond, res.DocsFetched, res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak)
 	fmt.Fprintf(&b, "\nArtifacts: `vector_demo_cpu.pprof`, `vector_demo_allocs.pprof`, `vector_demo_summary.json`, `vector_demo_summary.md`.\n")
 	return b.String()
 }
@@ -679,10 +713,10 @@ func summaryMarkdown(res result) string {
 func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "TreeDB vector/RAG demo (pre-alpha collections)\n")
 	fmt.Fprintf(w, "preset=%s vectors=%s metadata=%s metadata_filter=%t final_fetch=%t\n", res.Preset, res.VectorMode, res.MetadataMode, res.MetadataFilter, res.FinalFetch)
-	fmt.Fprintf(w, "db_dir=%s rows=%d dims=%d queries=%d top_k=%d search_path=%s\n", res.Dir, res.Rows, res.Dims, res.Queries, res.TopK, res.SearchPath)
+	fmt.Fprintf(w, "db_dir=%s rows=%d dims=%d queries=%d top_k=%d batch_size=%d search_path=%s\n", res.Dir, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath)
 	fmt.Fprintf(w, "setup_ms=%.3f search_ms=%.3f fetch_ms=%.3f ops_sec=%.2f\n", res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond)
 	fmt.Fprintf(w, "candidates=%d candidates_per_search=%.2f scored_vectors=%d docs_fetched=%d document_bytes=%d\n", res.Candidates, res.CandidatesPerSearch, res.ScoredVectors, res.DocsFetched, res.DocumentBytes)
-	fmt.Fprintf(w, "mapped_bytes=%d heap_copy_bytes=%d decoded_bytes=%d physical_bytes_read=%d vector_direct_views=%d vector_scratch_decodes=%d typed_column_fallbacks=%d\n", res.MappedBytes, res.HeapCopyBytes, res.DecodedBytes, res.PhysicalBytesRead, res.VectorDirectViews, res.VectorScratchDecodes, res.TypedColumnFallbacks)
+	fmt.Fprintf(w, "mapped_bytes_peak=%d heap_copy_bytes_peak=%d decoded_bytes_peak=%d physical_bytes_read=%d vector_direct_views=%d vector_scratch_decodes=%d typed_column_fallbacks=%d\n", res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak, res.PhysicalBytesRead, res.VectorDirectViews, res.VectorScratchDecodes, res.TypedColumnFallbacks)
 	if res.MetadataFilterDescription != "" {
 		fmt.Fprintf(w, "metadata_filter_description=%s\n", res.MetadataFilterDescription)
 	}
@@ -706,10 +740,3 @@ func metadataFilterDescription(cfg config) string {
 }
 
 func millis(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
-
-func maxUint64(a, b uint64) uint64 {
-	if a > b {
-		return a
-	}
-	return b
-}

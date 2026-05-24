@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,23 @@ func TestParseConfigPresetAndOverrides(t *testing.T) {
 	}
 	if cfg.Preset != "perf-engineer" || cfg.Rows != 123 || cfg.Dims != 12 || cfg.MetadataMode != "document" || cfg.Queries != 4 || cfg.TopK != 3 || !cfg.MetadataFilter || !cfg.FinalFetch {
 		t.Fatalf("unexpected cfg: %+v", cfg)
+	}
+}
+
+func TestParseConfigDoubleDashPresetDefaults(t *testing.T) {
+	cfg, err := parseConfig([]string{"--preset", "perf-engineer"})
+	if err != nil {
+		t.Fatalf("parseConfig --preset: %v", err)
+	}
+	if cfg.Preset != "perf-engineer" || cfg.Rows != 10000 || cfg.Queries != 100 {
+		t.Fatalf("--preset did not apply perf-engineer defaults: %+v", cfg)
+	}
+	cfg, err = parseConfig([]string{"--preset=vector-rag"})
+	if err != nil {
+		t.Fatalf("parseConfig --preset=: %v", err)
+	}
+	if cfg.Preset != "vector-rag" || cfg.Rows != 1000 || cfg.Queries != 10 {
+		t.Fatalf("--preset= did not apply vector-rag defaults: %+v", cfg)
 	}
 }
 
@@ -93,7 +111,7 @@ func TestExactTopKShape(t *testing.T) {
 }
 
 func TestExecuteColumnGraphTopKSmoke(t *testing.T) {
-	res, err := execute(t.Context(), config{
+	res, err := execute(context.Background(), config{
 		Rows:         64,
 		Dims:         8,
 		VectorMode:   "typed-column",
@@ -111,6 +129,9 @@ func TestExecuteColumnGraphTopKSmoke(t *testing.T) {
 	}
 	if res.SearchPath != "column_graph_native_reader" || len(res.FirstResults) != 3 || res.Rows != 64 || res.Dims != 8 || res.Queries != 2 {
 		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.BatchSize != defaultVectorBatchSize {
+		t.Fatalf("batch_size=%d want default %d", res.BatchSize, defaultVectorBatchSize)
 	}
 	if res.VectorDirectViews == 0 || res.TypedColumnFallbacks != 0 {
 		t.Fatalf("typed-column vector counters missing/fallback: %+v", res)

@@ -43,6 +43,7 @@ const (
 	defaultStringCardinality = 16
 	defaultExtraFields       = 2
 	defaultSeed              = int64(1)
+	minFreshDemoDirBytes     = 8
 )
 
 type config struct {
@@ -515,7 +516,7 @@ func validateFreshDemoDir(dir string) (string, error) {
 	}
 	abs = filepath.Clean(abs)
 	root := filepath.VolumeName(abs) + string(os.PathSeparator)
-	if abs == root || len(abs) < 8 || abs == filepath.Clean(os.TempDir()) {
+	if abs == root || len(abs) < minFreshDemoDirBytes || abs == filepath.Clean(os.TempDir()) {
 		return "", fmt.Errorf("refusing unsafe demo directory %q", dir)
 	}
 	return abs, nil
@@ -651,13 +652,20 @@ func deterministicPayload(n int, seed int64, row int) string {
 }
 
 func encodeFixtureDoc(row fixtureRow, extraFields int) []byte {
-	var b bytes.Buffer
-	fmt.Fprintf(&b, `{"time_us":%d,"amount":%d,"kind":%q,"payload":%q`, row.TimeUS, row.Amount, row.Kind, row.Payload)
-	for i := 0; i < extraFields; i++ {
-		fmt.Fprintf(&b, `,"extra_%d":%d`, i, row.TimeUS+int64(i))
+	doc := map[string]any{
+		"time_us": row.TimeUS,
+		"amount":  row.Amount,
+		"kind":    row.Kind,
+		"payload": row.Payload,
 	}
-	b.WriteByte('}')
-	return b.Bytes()
+	for i := 0; i < extraFields; i++ {
+		doc[fmt.Sprintf("extra_%d", i)] = row.TimeUS + int64(i)
+	}
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		panic(fmt.Sprintf("encode deterministic fixture document: %v", err))
+	}
+	return encoded
 }
 
 func insertRows(col *collections.Collection, rows []fixtureRow, batchSize int) error {
@@ -804,7 +812,7 @@ func queryRange(rows []fixtureRow, full bool) (int64, int64) {
 func modeHasTypedStorage(mode string) bool { return mode != modeDocument }
 
 func diagnosticsFrom(d collections.TypedColumnInt64PredicateScanDiagnostics) diagnosticSummary {
-	return diagnosticSummary{Fallback: d.Fallback, FallbackReason: d.FallbackReason, RowsScanned: d.RowsScanned, RowsMatched: d.RowsMatched, PartsConsidered: d.PartsConsidered, PartsPruned: d.PartsPruned, BlocksDecoded: d.BlocksDecoded, MappedBytes: d.MappedBytes, DecodedBytes: d.DecodedHeapCopyBytes, HeapCopyBytes: d.HeapCopyBytes, DecodedMetadataBytes: d.DecodedMetadataBytes, ReadIntegrity: d.ColumnAssetReadIntegrity}
+	return diagnosticSummary{Fallback: d.Fallback, FallbackReason: d.FallbackReason, RowsScanned: d.RowsScanned, RowsMatched: d.RowsMatched, PartsConsidered: d.PartsConsidered, PartsPruned: d.PartsPruned, BlocksDecoded: d.BlocksDecoded, MappedBytes: d.MappedBytes, DecodedBytes: d.DecodedMetadataBytes + d.DecodedHeapCopyBytes, HeapCopyBytes: d.HeapCopyBytes, DecodedMetadataBytes: d.DecodedMetadataBytes, ReadIntegrity: d.ColumnAssetReadIntegrity}
 }
 
 func materializationFrom(d collections.TypedColumnInt64PredicateScanDiagnostics) materializationSummary {
@@ -826,17 +834,4 @@ func printSummary(w interface{ Write([]byte) (int, error) }, s summary) {
 
 func markdownSummary(s summary) string {
 	return fmt.Sprintf("# TreeDB collection demo\n\n- mode: `%s`\n- workload: `%s`\n- rows: `%d`\n- setup_ms: `%.3f`\n- query_ms: `%.3f`\n- matches: `%d`\n- count/sum/avg: `%d` / `%d` / `%.3f`\n- db_dir: `%s`\n", s.Mode, s.Workload, s.Rows, s.SetupMS, s.QueryMS, s.Matches, s.Aggregate.Count, s.Aggregate.Sum, s.Aggregate.Avg, s.DBDir)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

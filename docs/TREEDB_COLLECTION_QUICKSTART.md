@@ -70,6 +70,8 @@ make that visible instead of implying the optimized path was used.
 
 ## Vector/RAG quickstart
 
+See also `cmd/treedb_vector_demo/README.md`.
+
 `cmd/treedb_vector_demo` creates a fresh TreeDB directory, declares a collection,
 loads deterministic JSON fixtures, publishes embeddings as typed-column dense
 `float32_vector` sections, rebuilds a `column_graph` vector index, closes and
@@ -136,7 +138,7 @@ Profile artifacts:
 - `vector_demo_summary.md`
 
 The command prints setup timing separately from vector search timing and optional
-final document fetch timing. Counters include rows, dimensions, queries, top-k,
-ops/sec, candidate/scored-vector counts, documents fetched, typed-column mapped
-or heap-copy bytes, decoded bytes, and typed-column fallback counters where the
+final document fetch timing. Counters include rows, dimensions, queries, top-k, batch size, ops/sec,
+candidate/scored-vector counts, documents fetched, typed-column mapped/heap-copy
+byte peaks, decoded byte peaks, and typed-column fallback counters where the
 public search API exposes them.

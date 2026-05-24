@@ -1,6 +1,6 @@
 # treedb_collection_demo
 
-Quickstart/profile harness for TreeDB collections. It creates a fresh DB, loads deterministic fixture documents with `InsertBatch`, optionally checkpoints/reopens, and runs a selected read workload.
+Quickstart/profile harness for TreeDB collections. It creates a fresh DB, loads deterministic fixture documents with `InsertBatch`, optionally checkpoints/reopens, and runs a selected read workload. Explicit `-dir` values must be absent or empty; temporary DBs are removed unless `-keep-dir` is set.
 
 Examples:
 
