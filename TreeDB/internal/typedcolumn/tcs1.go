@@ -153,6 +153,9 @@ func DecodeTCS1ColumnPartHeader(header []byte, totalBytes int64) (TCS1PartRecord
 		return TCS1PartRecord{}, fmt.Errorf("typedcolumn: TCS1 rows=%d exceeds host int", rows64)
 	}
 	imageVersion := binary.LittleEndian.Uint16(header[tcs1ImageVersionOffset:tcs1ReservedOffset])
+	if imageVersion != columnPartImageVersion {
+		return TCS1PartRecord{}, fmt.Errorf("typedcolumn: unsupported part image version %d", imageVersion)
+	}
 	if reserved := binary.LittleEndian.Uint16(header[tcs1ReservedOffset:tcs1PayloadCRC32Offset]); reserved != 0 {
 		return TCS1PartRecord{}, fmt.Errorf("typedcolumn: TCS1 reserved=%d want 0", reserved)
 	}
@@ -207,6 +210,9 @@ func decodeTCS1Header(data []byte) (TCS1PartRecord, []byte, error) {
 	}
 	rows := int(rows64)
 	imageVersion := binary.LittleEndian.Uint16(data[tcs1ImageVersionOffset:tcs1ReservedOffset])
+	if imageVersion != columnPartImageVersion {
+		return TCS1PartRecord{}, nil, fmt.Errorf("typedcolumn: unsupported part image version %d", imageVersion)
+	}
 	if reserved := binary.LittleEndian.Uint16(data[tcs1ReservedOffset:tcs1PayloadCRC32Offset]); reserved != 0 {
 		return TCS1PartRecord{}, nil, fmt.Errorf("typedcolumn: TCS1 reserved=%d want 0", reserved)
 	}

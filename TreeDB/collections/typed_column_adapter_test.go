@@ -991,6 +991,40 @@ func TestTypedColumnAdapterDuplicateOrAmbiguousFieldsFailClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterImageDescriptorVersionFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	corrupt := image
+	corrupt.Bytes = bytes.Clone(image.Bytes)
+	corrupt.Sections = slices.Clone(image.Sections)
+	descriptor := typedColumnAdapterFindSection(t, corrupt, typedcolumn.ColumnPartImageSectionDescriptor)
+	binary.LittleEndian.PutUint16(corrupt.Bytes[descriptor.Offset:descriptor.Offset+2], 99)
+
+	if _, err := typedColumnAdapterPartFromImage(part.Options, corrupt); err == nil || !strings.Contains(err.Error(), "unsupported descriptor version") {
+		t.Fatalf("partFromImage descriptor version err=%v want unsupported descriptor version", err)
+	}
+}
+
+func TestTypedColumnAdapterImageSchemaVersionMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	rows := []typedColumnAdapterRow{{PrimaryID: 1, Values: map[string]columnDeclaredValue{"count": {Type: ColumnStoreValueInt64, Present: true, Int64: 10}}}}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1, SchemaVersion: 77, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, SchemaVersion: 78, Fields: []TypedStorageField{field}}, image); err == nil || !strings.Contains(err.Error(), "schema_version=77 want 78") {
+		t.Fatalf("partFromImage schema version mismatch err=%v want schema_version mismatch", err)
+	}
+}
+
 func TestTypedColumnAdapterImageSchemaMismatchFailsClosed(t *testing.T) {
 	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
 	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})
@@ -1004,6 +1038,20 @@ func TestTypedColumnAdapterImageSchemaMismatchFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterImageOwnerMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	mismatch := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	mismatch.Owner = TypedStorageOwnerRowAsset
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "owner=\"typed_row_asset\" want \"typed_column_part\"") {
+		t.Fatalf("partFromImage owner mismatch err=%v want owner mismatch", err)
+	}
+}
+
 func TestTypedColumnAdapterImageValueTypeMetadataMismatchFailsClosed(t *testing.T) {
 	field := typedColumnAdapterField("score", ColumnStoreValueDouble)
 	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueDouble, Present: true, Double: 42.5}})
@@ -1014,6 +1062,37 @@ func TestTypedColumnAdapterImageValueTypeMetadataMismatchFailsClosed(t *testing.
 	mismatch := typedColumnAdapterField("score", ColumnStoreValueFloat32)
 	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "value type metadata mismatch") {
 		t.Fatalf("partFromImage value-type mismatch err=%v want value type metadata mismatch", err)
+	}
+}
+
+func TestTypedColumnAdapterImageVectorDimsMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
+	field.VectorDims = 3
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 2, 3}},
+		{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{4, 5, 6}},
+	})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	mismatch := field
+	mismatch.VectorDims = 4
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "fixed_width_elements=3 want") {
+		t.Fatalf("partFromImage vector_dims mismatch err=%v want fixed_width_elements schema mismatch", err)
+	}
+}
+
+func TestTypedColumnAdapterPrepareInt64SchemaHashMismatchFailsBeforeScan(t *testing.T) {
+	field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	_, _, _, err = typedColumnAdapterPrepareInt64PredicateScanPart([]TypedStorageField{field}, image.Bytes, image.PartID, image.Rows, image.Rows, uint64(part.Part.Descriptor.SchemaVersion+1), "count")
+	if err == nil || !strings.Contains(err.Error(), "schema_version") {
+		t.Fatalf("prepare int64 predicate schema hash mismatch err=%v want schema_version failure before scan", err)
 	}
 }
 
@@ -1161,6 +1240,17 @@ func typedColumnAdapterFindColumnSection(t *testing.T, image typedcolumn.ColumnP
 		}
 	}
 	t.Fatalf("missing column data section %q in %+v", column, image.Sections)
+	return typedcolumn.ColumnPartImageSection{}
+}
+
+func typedColumnAdapterFindSection(t *testing.T, image typedcolumn.ColumnPartImage, kind typedcolumn.ColumnPartImageSectionKind) typedcolumn.ColumnPartImageSection {
+	t.Helper()
+	for _, section := range image.Sections {
+		if section.Kind == kind {
+			return section
+		}
+	}
+	t.Fatalf("missing section %q in %+v", kind, image.Sections)
 	return typedcolumn.ColumnPartImageSection{}
 }
 
