@@ -95,6 +95,22 @@ func TestTypedColumnInt64ScanRangePredicate(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64ScanAllPredicate(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{5, 10, 15})
+	insertTypedColumnInt64ScanRows(t, col, []int64{20, 25})
+
+	result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan all: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, result, []int64{5, 10, 15, 20, 25})
+	if result.Diagnostics.RowsScanned != 5 || result.Diagnostics.RowsMatched != 5 || result.Diagnostics.PartsPruned != 0 {
+		t.Fatalf("diagnostics=%+v want full scan over all rows", result.Diagnostics)
+	}
+}
+
 func TestTypedColumnInt64ScanPrunesWithMinMaxMetadata(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
@@ -880,23 +896,24 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 		if typedPath {
 			req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
 		}
+		b.StopTimer()
 		b.ReportAllocs()
 		b.ResetTimer()
 		reportTypedColumnInt64AggregateBenchSetupMetrics(b, setupMetrics)
-		benchStart := time.Now()
+		b.StartTimer()
+		var result TypedColumnInt64PredicateAggregateResult
+		var runErr error
 		for i := 0; i < b.N; i++ {
-			result, err := col.RunTypedColumnInt64PredicateAggregate(req)
-			if err != nil {
-				b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", err)
-			}
-			if result.Count != expected.count || result.Sum != expected.sum || result.Avg != expected.avg {
-				b.Fatalf("aggregate count=%d sum=%d avg=%f want count=%d sum=%d avg=%f diagnostics=%+v", result.Count, result.Sum, result.Avg, expected.count, expected.sum, expected.avg, result.Diagnostics)
-			}
-			if i == b.N-1 {
-				reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, time.Since(benchStart), b.N)
-			}
+			result, runErr = col.RunTypedColumnInt64PredicateAggregate(req)
 		}
 		b.StopTimer()
+		if runErr != nil {
+			b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", runErr)
+		}
+		if result.Count != expected.count || result.Sum != expected.sum || result.Avg != expected.avg {
+			b.Fatalf("aggregate count=%d sum=%d avg=%f want count=%d sum=%d avg=%f diagnostics=%+v", result.Count, result.Sum, result.Avg, expected.count, expected.sum, expected.avg, result.Diagnostics)
+		}
+		reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, b.Elapsed(), b.N)
 	})
 }
 
