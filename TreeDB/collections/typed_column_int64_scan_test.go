@@ -756,6 +756,122 @@ func TestTypedColumnInt64AggregateDirectDiagnosticsNoMaterialization(t *testing.
 	}
 }
 
+func TestTypedColumnInt64AggregatePreparedSessionLifecycle(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30, 20})
+
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	first, err := session.Run()
+	if err != nil {
+		_ = session.Close()
+		t.Fatalf("session first Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, first, 2, 40)
+	if first.Diagnostics.Fallback || first.Diagnostics.DirectTypedColumnAssetReads == 0 || first.Diagnostics.SegmentFileCacheMisses == 0 || first.Diagnostics.ColumnAssetReadIntegrity != string(ColumnAssetReadIntegrityCachedVerify) {
+		_ = session.Close()
+		t.Fatalf("first diagnostics=%+v want direct cached-verify read with initial cache miss", first.Diagnostics)
+	}
+	firstSessionDiag := session.Diagnostics()
+	if firstSessionDiag.ActiveResourceHandles == 0 || firstSessionDiag.ActiveMappedBytes+firstSessionDiag.ActiveHeapCopyBytes == 0 || firstSessionDiag.TotalResourceAcquires == 0 {
+		_ = session.Close()
+		t.Fatalf("session diagnostics after first run=%+v want active resource handles", firstSessionDiag)
+	}
+
+	second, err := session.Run()
+	if err != nil {
+		_ = session.Close()
+		t.Fatalf("session second Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, second, 2, 40)
+	if second.Diagnostics.SegmentFileCacheHits == 0 || second.Diagnostics.SegmentFileCacheMisses != 0 {
+		_ = session.Close()
+		t.Fatalf("second diagnostics=%+v want hot cache hits and no misses", second.Diagnostics)
+	}
+	secondSessionDiag := session.Diagnostics()
+	if firstSessionDiag.ActiveMappedBytes > 0 && secondSessionDiag.TotalResourceAcquires != firstSessionDiag.TotalResourceAcquires {
+		_ = session.Close()
+		t.Fatalf("session diagnostics after second run=%+v first=%+v want mapped handle reuse", secondSessionDiag, firstSessionDiag)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("session Close: %v", err)
+	}
+	closedDiag := session.Diagnostics()
+	if !closedDiag.Closed || closedDiag.ActiveResourceHandles != 0 || closedDiag.ActiveMappedBytes != 0 || closedDiag.ActiveHeapCopyBytes != 0 {
+		t.Fatalf("session diagnostics after close=%+v want no active handles or bytes", closedDiag)
+	}
+	if closedDiag.TotalResourceReleases != closedDiag.TotalResourceAcquires {
+		t.Fatalf("session diagnostics after close=%+v want releases to match acquires", closedDiag)
+	}
+	if _, err := session.Run(); !errors.Is(err, errTypedColumnInt64PredicateAggregateSessionClosed) {
+		t.Fatalf("session Run after Close err=%v want closed-session error", err)
+	}
+}
+
+func TestTypedColumnInt64AggregatePreparedSessionIntegrityFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		integrity ColumnAssetReadIntegrity
+	}{
+		{name: "verify", integrity: ColumnAssetReadIntegrityVerify},
+		{name: "cached_verify", integrity: ColumnAssetReadIntegrityCachedVerify},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.integrity == ColumnAssetReadIntegrityCachedVerify {
+				resetColumnAssetVerifiedChecksumCacheForTest(t)
+			}
+			d, col := setupTypedColumnInt64ScanCollection(t)
+			defer func() { _ = d.Close() }()
+			insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+			typedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+			if len(typedRefs) != 1 {
+				t.Fatalf("typed refs=%+v want one", typedRefs)
+			}
+
+			session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2, ColumnAssetReadIntegrity: tc.integrity})
+			if err != nil {
+				t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+			}
+			if _, err := session.Run(); err != nil {
+				_ = session.Close()
+				t.Fatalf("session warm Run: %v", err)
+			}
+			if tc.integrity == ColumnAssetReadIntegrityCachedVerify {
+				if err := session.Close(); err != nil {
+					t.Fatalf("cached-verify warm session Close: %v", err)
+				}
+				session = nil
+			}
+			corruptTypedColumnAssetPayload1755(t, d, typedRefs[0])
+			assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), typedRefs[0])
+			if err != nil {
+				_ = session.Close()
+				t.Fatalf("columnAssetSegmentPath: %v", err)
+			}
+			changedModTime := time.Now().Add(2 * time.Hour).Round(0)
+			if err := os.Chtimes(assetPath, changedModTime, changedModTime); err != nil {
+				_ = session.Close()
+				t.Fatalf("Chtimes corrupt typed-column asset: %v", err)
+			}
+			if tc.integrity == ColumnAssetReadIntegrityCachedVerify {
+				session, err = col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2, ColumnAssetReadIntegrity: tc.integrity})
+				if err != nil {
+					t.Fatalf("PrepareTypedColumnInt64PredicateAggregate after corruption: %v", err)
+				}
+			}
+			_, err = session.Run()
+			_ = session.Close()
+			if err == nil || !strings.Contains(err.Error(), "checksum") {
+				t.Fatalf("session Run after corruption err=%v want checksum failure", err)
+			}
+		})
+	}
+}
+
 func TestTypedColumnInt64AggregateFallbackDiagnostics(t *testing.T) {
 	t.Run("row_asset_owner", func(t *testing.T) {
 		d := openTypedColumnInt64ScanDB(t)
@@ -944,6 +1060,10 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		parallelUnsafe := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "typed_column_part", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityByName("skip_checksums"), typedColumnInt64AggregateBenchExecutionModeByName("parallel_contention"))
 		if !strings.Contains(parallelUnsafe, "/timed_one_shot_api/read_integrity_unsafe_skip_checksums_ceiling/execution_parallel_contention/") {
 			t.Fatalf("parallel unsafe sub-benchmark name=%q missing timed boundary/read integrity/execution labels", parallelUnsafe)
+		}
+		prepared := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "typed_column_part", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityByName("cached_verify"), typedColumnInt64AggregateBenchExecutionModeByName("prepared_session_serial"))
+		if !strings.Contains(prepared, "/timed_prepared_session_hot_scan/read_integrity_cached_verify/execution_serial/") {
+			t.Fatalf("prepared sub-benchmark name=%q missing prepared timed boundary", prepared)
 		}
 		fallback := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "document_full_scan_fallback", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityNotApplicable(), typedColumnInt64AggregateBenchExecutionModeByName("serial"))
 		if !strings.Contains(fallback, "/path_document_full_scan_fallback/") || !strings.Contains(fallback, "/read_integrity_not_applicable/") {
@@ -1191,11 +1311,10 @@ type typedColumnInt64AggregateBenchReadIntegrity struct {
 }
 
 type typedColumnInt64AggregateBenchExecutionMode struct {
-	name string
-	// runOneShotAPI intentionally measures the current public one-shot API only.
-	// Future prepared/session aggregate APIs should add a separate timed boundary
-	// instead of reusing this runner.
-	runOneShotAPI func(*testing.B, *Collection, TypedColumnInt64PredicateAggregateRequest, typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error)
+	name          string
+	timedBoundary string
+	typedPathOnly bool
+	run           func(*testing.B, *Collection, *TypedColumnInt64PredicateAggregateSession, TypedColumnInt64PredicateAggregateRequest, typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error)
 }
 
 const typedColumnInt64AggregateBenchBatchRows = 32768
@@ -1207,6 +1326,9 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 	}
 	for _, execution := range typedColumnInt64AggregateBenchExecutionModes() {
 		execution := execution
+		if execution.typedPathOnly && !typedPath {
+			continue
+		}
 		b.Run(typedColumnInt64AggregateBenchSubBenchmarkName(rows, dist, pathName, shape, readIntegrity, execution), func(b *testing.B) {
 			setupStart := time.Now()
 			d, col := setupTypedColumnInt64AggregateBenchCollection(b, typedPath)
@@ -1218,12 +1340,34 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 			req.Column = "time_us"
 			req.ColumnAssetReadIntegrity = readIntegrity.integrity
 			b.StopTimer()
+			var session *TypedColumnInt64PredicateAggregateSession
+			if execution.timedBoundary == "prepared_session_hot_scan" {
+				var err error
+				session, err = col.PrepareTypedColumnInt64PredicateAggregate(req)
+				if err != nil {
+					b.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+				}
+				warmup, err := session.Run()
+				if err != nil {
+					_ = session.Close()
+					b.Fatalf("prepared warmup Run: %v", err)
+				}
+				if err := validateTypedColumnInt64AggregateBenchResult(warmup, expected); err != nil {
+					_ = session.Close()
+					b.Fatal(err)
+				}
+			}
 			b.ReportAllocs()
 			b.ResetTimer()
 			reportTypedColumnInt64AggregateBenchSetupMetrics(b, setupMetrics)
 			b.StartTimer()
-			result, runErr := execution.runOneShotAPI(b, col, req, expected)
+			result, runErr := execution.run(b, col, session, req, expected)
 			b.StopTimer()
+			if session != nil {
+				if err := session.Close(); err != nil {
+					b.Fatalf("prepared session Close: %v", err)
+				}
+			}
 			if runErr != nil {
 				b.Fatalf("RunTypedColumnInt64PredicateAggregate: %v", runErr)
 			}
@@ -1236,10 +1380,14 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 }
 
 func typedColumnInt64AggregateBenchSubBenchmarkName(rows int, dist typedColumnInt64AggregateBenchDistribution, pathName string, shape typedColumnInt64AggregateBenchShape, readIntegrity typedColumnInt64AggregateBenchReadIntegrity, execution typedColumnInt64AggregateBenchExecutionMode) string {
-	return fmt.Sprintf("rows_%d/dist_%s/path_%s/shape_%s/timed_one_shot_api/read_integrity_%s/execution_%s/predicate_count_sum_avg", rows, dist.name, pathName, shape.name, readIntegrity.name, execution.name)
+	timedBoundary := execution.timedBoundary
+	if timedBoundary == "" {
+		timedBoundary = "one_shot_api"
+	}
+	return fmt.Sprintf("rows_%d/dist_%s/path_%s/shape_%s/timed_%s/read_integrity_%s/execution_%s/predicate_count_sum_avg", rows, dist.name, pathName, shape.name, timedBoundary, readIntegrity.name, execution.name)
 }
 
-func runTypedColumnInt64AggregateBenchOneShotSerial(b *testing.B, col *Collection, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
+func runTypedColumnInt64AggregateBenchOneShotSerial(b *testing.B, col *Collection, _ *TypedColumnInt64PredicateAggregateSession, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
 	b.Helper()
 	var result TypedColumnInt64PredicateAggregateResult
 	for i := 0; i < b.N; i++ {
@@ -1252,7 +1400,7 @@ func runTypedColumnInt64AggregateBenchOneShotSerial(b *testing.B, col *Collectio
 	return result, nil
 }
 
-func runTypedColumnInt64AggregateBenchOneShotParallel(b *testing.B, col *Collection, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
+func runTypedColumnInt64AggregateBenchOneShotParallel(b *testing.B, col *Collection, _ *TypedColumnInt64PredicateAggregateSession, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
 	b.Helper()
 	var firstResult TypedColumnInt64PredicateAggregateResult
 	var firstResultOnce sync.Once
@@ -1280,6 +1428,22 @@ func runTypedColumnInt64AggregateBenchOneShotParallel(b *testing.B, col *Collect
 		return firstResult, errValue.(error)
 	}
 	return firstResult, nil
+}
+
+func runTypedColumnInt64AggregateBenchPreparedSessionSerial(b *testing.B, _ *Collection, session *TypedColumnInt64PredicateAggregateSession, _ TypedColumnInt64PredicateAggregateRequest, _ typedColumnInt64AggregateBenchExpected) (TypedColumnInt64PredicateAggregateResult, error) {
+	b.Helper()
+	if session == nil {
+		return TypedColumnInt64PredicateAggregateResult{}, errors.New("missing prepared typed-column int64 aggregate session")
+	}
+	var result TypedColumnInt64PredicateAggregateResult
+	for i := 0; i < b.N; i++ {
+		var err error
+		result, err = session.Run()
+		if err != nil {
+			return result, err
+		}
+	}
+	return result, nil
 }
 
 func validateTypedColumnInt64AggregateBenchResult(result TypedColumnInt64PredicateAggregateResult, expected typedColumnInt64AggregateBenchExpected) error {
@@ -1462,15 +1626,18 @@ func typedColumnInt64AggregateBenchExecutionModes() []typedColumnInt64AggregateB
 	return []typedColumnInt64AggregateBenchExecutionMode{
 		typedColumnInt64AggregateBenchExecutionModeByName("serial"),
 		typedColumnInt64AggregateBenchExecutionModeByName("parallel_contention"),
+		typedColumnInt64AggregateBenchExecutionModeByName("prepared_session_serial"),
 	}
 }
 
 func typedColumnInt64AggregateBenchExecutionModeByName(name string) typedColumnInt64AggregateBenchExecutionMode {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "serial":
-		return typedColumnInt64AggregateBenchExecutionMode{name: "serial", runOneShotAPI: runTypedColumnInt64AggregateBenchOneShotSerial}
+		return typedColumnInt64AggregateBenchExecutionMode{name: "serial", timedBoundary: "one_shot_api", run: runTypedColumnInt64AggregateBenchOneShotSerial}
 	case "parallel", "parallel_contention", "runparallel":
-		return typedColumnInt64AggregateBenchExecutionMode{name: "parallel_contention", runOneShotAPI: runTypedColumnInt64AggregateBenchOneShotParallel}
+		return typedColumnInt64AggregateBenchExecutionMode{name: "parallel_contention", timedBoundary: "one_shot_api", run: runTypedColumnInt64AggregateBenchOneShotParallel}
+	case "prepared", "prepared_session", "prepared_session_serial", "session_serial":
+		return typedColumnInt64AggregateBenchExecutionMode{name: "serial", timedBoundary: "prepared_session_hot_scan", typedPathOnly: true, run: runTypedColumnInt64AggregateBenchPreparedSessionSerial}
 	default:
 		return typedColumnInt64AggregateBenchExecutionMode{}
 	}

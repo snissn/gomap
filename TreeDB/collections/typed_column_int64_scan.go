@@ -98,6 +98,47 @@ type TypedColumnInt64PredicateAggregateResult struct {
 	Diagnostics TypedColumnInt64PredicateScanDiagnostics
 }
 
+// TypedColumnInt64PredicateAggregateSession owns an explicit prepared lifetime
+// for repeated typed-column int64 predicate aggregate scans over one immutable
+// snapshot. It keeps the column physical asset read cache and mappedresource
+// handles alive between Run calls, and releases them on Close.
+//
+// A session is not safe for concurrent Run and Close calls; callers that share a
+// session between goroutines must provide external synchronization.
+type TypedColumnInt64PredicateAggregateSession struct {
+	view               columnPhysicalScanSnapshotView
+	closeView          func()
+	req                TypedColumnInt64PredicateAggregateRequest
+	fields             []TypedStorageField
+	schemaHash         uint64
+	refsByGeneration   map[uint64]columnManifestAssetRefForScan
+	readCache          columnPhysicalAssetReadCache
+	resourceManager    *mappedresource.Manager
+	resolver           *typedColumnLatestRowResolver
+	prepareDiagnostics TypedColumnInt64PredicateScanDiagnostics
+	closed             bool
+}
+
+// TypedColumnInt64PredicateAggregateSessionDiagnostics reports scoped resource
+// state for a prepared aggregate session without exposing internal resource
+// manager types in the public API.
+type TypedColumnInt64PredicateAggregateSessionDiagnostics struct {
+	Closed                   bool
+	ColumnAssetReadIntegrity string
+	SegmentFileCacheHits     uint64
+	SegmentFileCacheMisses   uint64
+	ActiveResourceHandles    int64
+	ActiveMappedBytes        int64
+	ActiveHeapCopyBytes      int64
+	TotalResourceAcquires    uint64
+	TotalResourceReleases    uint64
+	TotalMappedBytes         uint64
+	TotalHeapCopyBytes       uint64
+	FallbackReads            uint64
+}
+
+var errTypedColumnInt64PredicateAggregateSessionClosed = errors.New("collections: typed-column int64 predicate aggregate session is closed")
+
 const (
 	typedColumnInt64PredicateAggregateMaxSum = int64(1<<63 - 1)
 	typedColumnInt64PredicateAggregateMinSum = -typedColumnInt64PredicateAggregateMaxSum - 1
@@ -216,6 +257,39 @@ func (c *Collection) RunTypedColumnInt64PredicateAggregate(req TypedColumnInt64P
 		return c.runTypedColumnInt64PredicateAggregateDocumentFallback(req, cfg, "typed_column_not_selected", start)
 	}
 	return c.runTypedColumnInt64PredicateAggregateDirect(view, req, cfg, start)
+}
+
+// PrepareTypedColumnInt64PredicateAggregate prepares a scoped typed-column int64
+// predicate aggregate session over the current recovery-authoritative snapshot.
+// The prepared path is intentionally direct typed-column only: unsupported
+// columns or unavailable typed-column assets fail closed instead of falling back
+// to document scans. In cached_verify mode, the session reuses the file identity
+// captured when a segment reader is opened; use verify mode for per-run checksum
+// validation during a long-lived session. Call Close when finished to release
+// mapped assets and the pinned snapshot.
+func (c *Collection) PrepareTypedColumnInt64PredicateAggregate(req TypedColumnInt64PredicateAggregateRequest) (*TypedColumnInt64PredicateAggregateSession, error) {
+	if err := validateTypedColumnInt64PredicateAggregateRequest(req); err != nil {
+		return nil, err
+	}
+	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
+	if err != nil {
+		if closeView != nil {
+			closeView()
+		}
+		return nil, err
+	}
+	release := true
+	defer func() {
+		if release && closeView != nil {
+			closeView()
+		}
+	}()
+	session, _, err := c.prepareTypedColumnInt64PredicateAggregateSessionFromView(view, closeView, req)
+	if err != nil {
+		return nil, err
+	}
+	release = false
+	return session, nil
 }
 
 func validateTypedColumnInt64PredicateAggregateRequest(req TypedColumnInt64PredicateAggregateRequest) error {
@@ -465,15 +539,87 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 	return result, nil
 }
 
-func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhysicalScanSnapshotView, req TypedColumnInt64PredicateAggregateRequest, cfg ColumnStoreConfig, start time.Time) (TypedColumnInt64PredicateAggregateResult, error) {
+func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhysicalScanSnapshotView, req TypedColumnInt64PredicateAggregateRequest, _ ColumnStoreConfig, start time.Time) (TypedColumnInt64PredicateAggregateResult, error) {
+	session, diag, err := c.prepareTypedColumnInt64PredicateAggregateSessionFromView(view, nil, req)
+	if err != nil {
+		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
+	}
+	defer func() { _ = session.Close() }()
+	return session.run(start, session.prepareDiagnostics)
+}
+
+func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(view columnPhysicalScanSnapshotView, closeView func(), req TypedColumnInt64PredicateAggregateRequest) (*TypedColumnInt64PredicateAggregateSession, TypedColumnInt64PredicateScanDiagnostics, error) {
 	diag := typedColumnInt64PredicateDiagnosticsFromView(view)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
+	cfg := view.FullConfig
+	if !cfg.Enabled {
+		cfg = view.Config
+	}
 	fields := columnStoreTypedColumnPartFields(cfg)
 	if ok, err := typedColumnAdapterHasInt64PredicateColumn(fields, req.Column); err != nil {
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
+		return nil, diag, err
 	} else if !ok {
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", req.Column)
+		return nil, diag, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", req.Column)
 	}
+	refsByGeneration, err := typedColumnInt64PredicateAggregateRefsByGeneration(view)
+	if err != nil {
+		return nil, diag, err
+	}
+	if len(refsByGeneration) == 0 {
+		return nil, diag, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate aggregate")
+	}
+	if view.MutationParts == 0 {
+		if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+			return nil, diag, typedColumnPhysicalAssetPairingAggregateError(err)
+		}
+	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		return nil, diag, err
+	}
+
+	mgr := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		return nil, diag, err
+	}
+	readCache.returnViews = true
+	readCache.trustCachedVerifyFileIdentity = true
+	scope := mappedresource.Scope{Kind: mappedresource.ScopePreparedQuery, ID: "typed-column-int64-predicate-aggregate", Namespace: view.AssetNamespace, Collection: view.CollectionName, Generation: view.Diagnostics.ManifestGeneration, Reason: "typed-column int64 predicate aggregate session"}
+	if err := readCache.useMappedResourceManager(mgr, scope, "typed-column int64 predicate aggregate session"); err != nil {
+		_ = readCache.close()
+		return nil, diag, err
+	}
+
+	session := &TypedColumnInt64PredicateAggregateSession{
+		view:             view,
+		closeView:        closeView,
+		req:              req,
+		fields:           fields,
+		schemaHash:       cfg.SchemaHash,
+		refsByGeneration: refsByGeneration,
+		readCache:        readCache,
+		resourceManager:  mgr,
+	}
+	if view.MutationParts != 0 {
+		beforeStats := mgr.Stats()
+		beforeHits := session.readCache.hits
+		beforeMisses := session.readCache.misses
+		resolver, err := buildTypedColumnLatestRowResolver(view, &session.readCache, &session.prepareDiagnostics)
+		if err != nil {
+			_ = session.readCache.close()
+			return nil, diag, err
+		}
+		afterStats := mgr.Stats()
+		session.prepareDiagnostics.SegmentFileCacheHits = session.readCache.hits - beforeHits
+		session.prepareDiagnostics.SegmentFileCacheMisses = session.readCache.misses - beforeMisses
+		session.prepareDiagnostics.MappedBytes = afterStats.TotalMappedBytes - beforeStats.TotalMappedBytes
+		session.prepareDiagnostics.HeapCopyBytes = afterStats.TotalHeapCopyBytes - beforeStats.TotalHeapCopyBytes
+		session.prepareDiagnostics.FallbackReads = int(afterStats.FallbackReads - beforeStats.FallbackReads)
+		session.resolver = resolver
+	}
+	return session, diag, nil
+}
+
+func typedColumnInt64PredicateAggregateRefsByGeneration(view columnPhysicalScanSnapshotView) (map[uint64]columnManifestAssetRefForScan, error) {
 	refsByGeneration := make(map[uint64]columnManifestAssetRefForScan, len(view.TypedColumnPartRefs))
 	for _, ref := range view.TypedColumnPartRefs {
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
@@ -483,74 +629,117 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 			continue
 		}
 		if ref.Role == ColumnManifestPartRoleTombstone || ref.Reason == ColumnPublishOperationDelete {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: typed-column int64 predicate aggregate got tombstone typed ref generation=%d", ref.Ref.Generation)
+			return nil, fmt.Errorf("collections: typed-column int64 predicate aggregate got tombstone typed ref generation=%d", ref.Ref.Generation)
 		}
 		if _, exists := refsByGeneration[ref.Ref.Generation]; exists {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, fmt.Errorf("collections: duplicate typed_column_part ref for generation=%d", ref.Ref.Generation)
+			return nil, fmt.Errorf("collections: duplicate typed_column_part ref for generation=%d", ref.Ref.Generation)
 		}
 		refsByGeneration[ref.Ref.Generation] = ref
 	}
-	if len(refsByGeneration) == 0 {
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, errors.New("collections: missing typed_column_part assets for typed-column int64 predicate aggregate")
-	}
-	if view.MutationParts == 0 {
-		if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
-			return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, typedColumnPhysicalAssetPairingAggregateError(err)
-		}
-	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
-	}
+	return refsByGeneration, nil
+}
 
-	mgr := mappedresource.NewManager()
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
-	if err != nil {
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
+// Close releases mapped asset handles and the pinned snapshot owned by the
+// prepared aggregate session. It is safe to call multiple times.
+func (s *TypedColumnInt64PredicateAggregateSession) Close() error {
+	if s == nil || s.closed {
+		return nil
 	}
-	readCache.returnViews = true
-	if err := readCache.useMappedResourceManager(mgr, mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "typed-column-int64-predicate-aggregate", Namespace: view.AssetNamespace, Generation: view.Diagnostics.ManifestGeneration, Reason: "typed-column int64 predicate aggregate"}, "typed-column int64 predicate aggregate"); err != nil {
-		_ = readCache.close()
-		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
+	s.closed = true
+	var closeErr error
+	if err := s.readCache.close(); err != nil {
+		closeErr = err
 	}
-	defer func() { _ = readCache.close() }()
+	if s.closeView != nil {
+		s.closeView()
+		s.closeView = nil
+	}
+	return closeErr
+}
 
+// Diagnostics returns current scoped resource state for the prepared session.
+func (s *TypedColumnInt64PredicateAggregateSession) Diagnostics() TypedColumnInt64PredicateAggregateSessionDiagnostics {
+	if s == nil {
+		return TypedColumnInt64PredicateAggregateSessionDiagnostics{Closed: true}
+	}
+	stats := mappedresource.Stats{}
+	if s.resourceManager != nil {
+		stats = s.resourceManager.Stats()
+	}
+	return TypedColumnInt64PredicateAggregateSessionDiagnostics{
+		Closed:                   s.closed,
+		ColumnAssetReadIntegrity: columnAssetReadIntegrityLabel(s.req.ColumnAssetReadIntegrity),
+		SegmentFileCacheHits:     s.readCache.hits,
+		SegmentFileCacheMisses:   s.readCache.misses,
+		ActiveResourceHandles:    stats.ActiveHandles,
+		ActiveMappedBytes:        stats.ActiveMappedBytes,
+		ActiveHeapCopyBytes:      stats.ActiveHeapCopyBytes,
+		TotalResourceAcquires:    stats.TotalAcquires,
+		TotalResourceReleases:    stats.TotalReleases,
+		TotalMappedBytes:         stats.TotalMappedBytes,
+		TotalHeapCopyBytes:       stats.TotalHeapCopyBytes,
+		FallbackReads:            stats.FallbackReads,
+	}
+}
+
+// Run executes one hot aggregate scan against the prepared snapshot. Setup and
+// warmup work done before Run is not included in the returned ScanNanos.
+func (s *TypedColumnInt64PredicateAggregateSession) Run() (TypedColumnInt64PredicateAggregateResult, error) {
+	return s.run(time.Now(), TypedColumnInt64PredicateScanDiagnostics{})
+}
+
+func (s *TypedColumnInt64PredicateAggregateSession) run(start time.Time, includeDiagnostics TypedColumnInt64PredicateScanDiagnostics) (TypedColumnInt64PredicateAggregateResult, error) {
+	if s == nil || s.closed {
+		return TypedColumnInt64PredicateAggregateResult{}, errTypedColumnInt64PredicateAggregateSessionClosed
+	}
+	diag := typedColumnInt64PredicateDiagnosticsFromView(s.view)
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(s.req.ColumnAssetReadIntegrity)
+	addTypedColumnInt64PredicateAggregateDiagnostics(&diag, includeDiagnostics)
 	result := TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}
-	var resolver *typedColumnLatestRowResolver
-	if view.MutationParts != 0 {
-		resolver, err = buildTypedColumnLatestRowResolver(view, &readCache, &result.Diagnostics)
-		if err != nil {
-			return result, err
-		}
+	beforeStats := mappedresource.Stats{}
+	if s.resourceManager != nil {
+		beforeStats = s.resourceManager.Stats()
+	}
+	beforeHits := s.readCache.hits
+	beforeMisses := s.readCache.misses
+	updateCacheDeltas := func() {
+		result.Diagnostics.SegmentFileCacheHits = includeDiagnostics.SegmentFileCacheHits + s.readCache.hits - beforeHits
+		result.Diagnostics.SegmentFileCacheMisses = includeDiagnostics.SegmentFileCacheMisses + s.readCache.misses - beforeMisses
 	}
 	var rawScratch []byte
-	for _, physical := range view.AssetRefs {
+	for _, physical := range s.view.AssetRefs {
 		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
 			continue
 		}
-		typedRef := refsByGeneration[physical.Ref.Generation]
+		typedRef := s.refsByGeneration[physical.Ref.Generation]
 		result.Diagnostics.PartsConsidered++
-		raw, err := readCache.read(typedRef.Ref, rawScratch)
-		result.Diagnostics.SegmentFileCacheHits = readCache.hits
-		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+		raw, err := s.readCache.read(typedRef.Ref, rawScratch)
+		updateCacheDeltas()
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate aggregate read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		rawScratch = raw
+		if s.readCache.lastView {
+			result.Diagnostics.MappedBytes += uint64(len(raw))
+		} else {
+			result.Diagnostics.HeapCopyBytes += uint64(len(raw))
+		}
 		result.Diagnostics.DirectTypedColumnAssetReads++
 		result.Diagnostics.PhysicalBytesScanned += int64(len(raw))
-		adapterPart, adapterColumn, manifestBytes, err := typedColumnAdapterPrepareInt64PredicateAggregatePart(fields, raw, typedRef.Ref.PartID, typedRef.Rows, physical.Rows, cfg.SchemaHash, req.Column)
+		adapterPart, adapterColumn, manifestBytes, err := typedColumnAdapterPrepareInt64PredicateAggregatePart(s.fields, raw, typedRef.Ref.PartID, typedRef.Rows, physical.Rows, s.schemaHash, s.req.Column)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate aggregate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		result.Diagnostics.DecodedMetadataBytes += uint64(manifestBytes)
 		var visibility *typedColumnLatestPhysicalPart
-		if resolver != nil {
+		if s.resolver != nil {
 			var ok bool
-			visibility, ok = resolver.partForGeneration(physical.Ref.Generation)
+			visibility, ok = s.resolver.partForGeneration(physical.Ref.Generation)
 			if !ok {
 				return result, fmt.Errorf("collections: typed-column int64 predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
-		partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(req), &result, visibility)
+		partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(s.req), &result, visibility)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate aggregate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
@@ -563,12 +752,44 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	if result.Count != 0 {
 		result.Avg = float64(result.Sum) / float64(result.Count)
 	}
-	stats := mgr.Stats()
-	result.Diagnostics.MappedBytes = stats.TotalMappedBytes
-	result.Diagnostics.HeapCopyBytes = stats.TotalHeapCopyBytes
-	result.Diagnostics.FallbackReads = int(stats.FallbackReads)
+	if s.resourceManager != nil {
+		afterStats := s.resourceManager.Stats()
+		result.Diagnostics.FallbackReads += int(afterStats.FallbackReads - beforeStats.FallbackReads)
+	}
+	updateCacheDeltas()
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, nil
+}
+
+func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64PredicateScanDiagnostics, src TypedColumnInt64PredicateScanDiagnostics) {
+	if dst == nil {
+		return
+	}
+	dst.RowsScanned += src.RowsScanned
+	dst.RowsMatched += src.RowsMatched
+	dst.PartsConsidered += src.PartsConsidered
+	dst.PartsPruned += src.PartsPruned
+	dst.PartsDecoded += src.PartsDecoded
+	dst.BlocksConsidered += src.BlocksConsidered
+	dst.BlocksPruned += src.BlocksPruned
+	dst.BlocksDecoded += src.BlocksDecoded
+	dst.DirectTypedColumnAssetReads += src.DirectTypedColumnAssetReads
+	dst.FallbackReads += src.FallbackReads
+	dst.CodesMatched += src.CodesMatched
+	dst.DictionaryBytesDecoded += src.DictionaryBytesDecoded
+	dst.MappedBytes += src.MappedBytes
+	dst.HeapCopyBytes += src.HeapCopyBytes
+	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
+	dst.DecodedHeapCopyBytes += src.DecodedHeapCopyBytes
+	dst.PhysicalBytesScanned += src.PhysicalBytesScanned
+	dst.RowLocatorDecodes += src.RowLocatorDecodes
+	dst.PhysicalRowIDLookups += src.PhysicalRowIDLookups
+	dst.PhysicalRowAssetReads += src.PhysicalRowAssetReads
+	dst.RowMaterializations += src.RowMaterializations
+	dst.DocumentMaterializations += src.DocumentMaterializations
+	dst.DocumentReconstructions += src.DocumentReconstructions
+	dst.SegmentFileCacheHits += src.SegmentFileCacheHits
+	dst.SegmentFileCacheMisses += src.SegmentFileCacheMisses
 }
 
 func (c *Collection) typedColumnInt64PredicateCatalogColumn(column string) (ColumnStoreConfig, ColumnStoreColumn, bool, error) {
