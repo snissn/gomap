@@ -177,6 +177,8 @@ func (idx Int64ValueRowIndex) PlanInt64Predicate(pred Int64PruningPredicate) (Co
 		if ok, reason := idx.CanPlan(op); !ok {
 			return ColumnPruningCandidatePlan{Rows: idx.Rows, Reason: reason}, nil
 		}
+	} else {
+		return idx.planAllInt64Predicate()
 	}
 	plan := ColumnPruningCandidatePlan{Rows: idx.Rows, Blocks: make([]ColumnPruningBlockCandidate, len(idx.Blocks)), Exact: true}
 	rowsByBlock := make([][]int, len(idx.Blocks))
@@ -228,6 +230,26 @@ func (idx Int64ValueRowIndex) PlanInt64Predicate(pred Int64PruningPredicate) (Co
 			return ColumnPruningCandidatePlan{}, fmt.Errorf("typedcolumn: pruning block %d selection: %w", i, err)
 		}
 		candidate := ColumnPruningBlockCandidate{BlockIndex: block.Index, FirstRow: block.FirstRow, RowCount: block.RowCount, Selection: selection, Exact: exactSumOKByBlock[i], ExactCount: exactCountByBlock[i], ExactSum: exactSumByBlock[i]}
+		plan.Blocks[i] = candidate
+		if selection.IsEmpty() {
+			plan.PrunedBlocks++
+			plan.PrunedRows += block.RowCount
+			continue
+		}
+		plan.CandidateBlocks++
+		plan.CandidateRows += selection.Count()
+	}
+	return plan, nil
+}
+
+func (idx Int64ValueRowIndex) planAllInt64Predicate() (ColumnPruningCandidatePlan, error) {
+	plan := ColumnPruningCandidatePlan{Rows: idx.Rows, Blocks: make([]ColumnPruningBlockCandidate, len(idx.Blocks)), Exact: false}
+	for i, block := range idx.Blocks {
+		selection, err := NewAllRowSelection(block.RowCount)
+		if err != nil {
+			return ColumnPruningCandidatePlan{}, err
+		}
+		candidate := ColumnPruningBlockCandidate{BlockIndex: block.Index, FirstRow: block.FirstRow, RowCount: block.RowCount, Selection: selection, Exact: false}
 		plan.Blocks[i] = candidate
 		if selection.IsEmpty() {
 			plan.PrunedBlocks++

@@ -582,6 +582,9 @@ func TestTypedColumnInt64PreparedUsesDurablePruningMetadata(t *testing.T) {
 	if session.prepareDiagnostics.DecodedMetadataBytes == 0 || session.prepareDiagnostics.PruningCertified == 0 {
 		t.Fatalf("prepare diagnostics=%+v want pruning metadata decoded/certified", session.prepareDiagnostics)
 	}
+	if session.prepareDiagnostics.PruningBlocks != 1 || session.prepareDiagnostics.PruningRows != 2 {
+		t.Fatalf("prepare diagnostics=%+v want one pruned candidate block with two rows", session.prepareDiagnostics)
+	}
 	var preparedColumn *typedColumnPreparedColumnState
 	for _, part := range session.preparedState.partsByRef {
 		preparedColumn = part.Columns[session.aggregateColumn.Definition.Name]

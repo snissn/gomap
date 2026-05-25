@@ -265,6 +265,9 @@ func TestTypedColumnPreparedPruningComposedSelectionsDoNotAliasScratch(t *testin
 	if diag.PruningValidationFailures != 0 || diag.PruningFallbackBlocks != 0 {
 		t.Fatalf("pruning diagnostics=%+v want no validation/fallback", diag)
 	}
+	if diag.PruningBlocks != 2 || diag.PruningRows != 5 {
+		t.Fatalf("pruning diagnostics=%+v want two narrowed blocks and five candidate rows", diag)
+	}
 	column := part.Columns["score"]
 	if column == nil || !column.Int64PruningReady {
 		t.Fatalf("prepared column=%+v want pruning ready", column)

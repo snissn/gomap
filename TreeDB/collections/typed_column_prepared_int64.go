@@ -641,11 +641,12 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 	payloadRead := false
 	columnPlan := typeddecode.Int64ReducerPlan(preparedColumn.Plan.Layout, preparedColumn.Certification)
 	recordTypedColumnInt64FastDecodePlan(&result.Diagnostics, columnPlan)
+	recordScanPruningDiagnostics := result.Diagnostics.PruningBlocks == 0 && result.Diagnostics.PruningRows == 0
 	var err error
 	for blockIdx := range preparedColumn.BlockPlans {
 		block := &preparedColumn.BlockPlans[blockIdx]
 		result.Diagnostics.BlocksConsidered++
-		if preparedColumn.Int64PruningReady && !block.CandidateSelection.IsAll() {
+		if recordScanPruningDiagnostics && preparedColumn.Int64PruningReady && !block.CandidateSelection.IsAll() {
 			recordTypedColumnInt64PruningBlock(&result.Diagnostics, block.CandidateSelection.Count())
 		}
 		if block.CandidateSelection.IsEmpty() {

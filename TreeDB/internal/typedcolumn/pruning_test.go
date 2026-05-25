@@ -55,6 +55,27 @@ func TestColumnPruningInt64ValueRowsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestColumnPruningAllPredicateDoesNotScanValueRows(t *testing.T) {
+	part := mustStatsTestPartWithBlockRows(t, []int64{3, 4, 5, 6}, EncodingRawInt64, 2)
+	index, ok := part.PruningMetadata.Int64Column("value")
+	if !ok {
+		t.Fatalf("missing int64 pruning metadata for value")
+	}
+	index.Entries = nil
+	plan, err := index.PlanInt64Predicate(Int64PruningPredicate{Kind: Int64PruningPredicateAll})
+	if err != nil {
+		t.Fatalf("PlanInt64Predicate all: %v", err)
+	}
+	if plan.Exact || plan.CandidateRows != 4 || plan.CandidateBlocks != 2 || plan.PrunedBlocks != 0 {
+		t.Fatalf("all plan=%+v want all rows/blocks without exact value scan", plan)
+	}
+	for _, block := range plan.Blocks {
+		if !block.Selection.IsAll() || block.NeedsPredicate || block.Exact {
+			t.Fatalf("all block candidate=%+v want all non-exact selection", block)
+		}
+	}
+}
+
 func TestColumnPruningPayloadChecksumFailsClosed(t *testing.T) {
 	part := mustStatsTestPartWithBlockRows(t, []int64{3, 4, 5, 6}, EncodingRawInt64, 2)
 	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"id": "int64", "value": "int64"}})

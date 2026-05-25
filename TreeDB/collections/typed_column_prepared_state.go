@@ -746,6 +746,10 @@ func typedColumnApplyPreparedInt64Pruning(part *typedColumnPreparedPartState, re
 		}
 		block.CandidateSelection = newSelection
 		block.NeedsPredicate = false
+		if diag != nil && !newSelection.IsAll() {
+			diag.PruningBlocks++
+			diag.PruningRows += newSelection.Count()
+		}
 		block.PruningExact = candidate.Exact
 		block.PruningExactCount = candidate.ExactCount
 		block.PruningExactSum = candidate.ExactSum
