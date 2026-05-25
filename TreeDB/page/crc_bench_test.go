@@ -16,11 +16,11 @@ func BenchmarkPageChecksumUpdateVerify(b *testing.B) {
 		buf[16] = byte(i)
 		sum ^= UpdateChecksum(buf)
 		ok = VerifyChecksumNonMutating(buf)
+		if !ok {
+			b.Fatal("checksum verification failed")
+		}
 	}
 	b.StopTimer()
-	if !ok {
-		b.Fatal("checksum verification failed")
-	}
 	benchmarkPageCRCSink = sum
 	benchmarkPageBoolSink = ok
 }
@@ -34,11 +34,11 @@ func BenchmarkPageChecksumVerifyOnly(b *testing.B) {
 	var ok bool
 	for i := 0; i < b.N; i++ {
 		ok = VerifyChecksumNonMutating(buf)
+		if !ok {
+			b.Fatal("checksum verification failed")
+		}
 	}
 	b.StopTimer()
-	if !ok {
-		b.Fatal("checksum verification failed")
-	}
 	benchmarkPageBoolSink = ok
 }
 

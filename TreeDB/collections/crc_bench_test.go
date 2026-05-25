@@ -24,21 +24,38 @@ func BenchmarkColumnPhysicalAssetChecksumVerify(b *testing.B) {
 		b.Fatal("unexpected zero checksum for deterministic asset payload")
 	}
 
-	b.SetBytes(int64(len(raw)))
-	b.ReportAllocs()
-	b.ResetTimer()
-	var sum uint32
-	var ok bool
-	for i := 0; i < b.N; i++ {
-		got := page.Checksum(raw)
-		ok = got == ref.Checksum
-		if !ok {
-			b.Fatalf("column physical asset checksum=%d want %d", got, ref.Checksum)
+	b.Run("strict_verify", func(b *testing.B) {
+		b.SetBytes(int64(len(raw)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, true, ColumnAssetReadIntegrityVerify, "", columnAssetVerifiedChecksumFileIdentity{}); err != nil {
+				b.Fatal(err)
+			}
 		}
-		sum ^= got
-	}
-	benchmarkColumnAssetCRCSink = sum
-	benchmarkColumnAssetBoolSink = ok
+		benchmarkColumnAssetCRCSink = ref.Checksum
+		benchmarkColumnAssetBoolSink = true
+	})
+
+	b.Run("cached_verify_prepare_miss", func(b *testing.B) {
+		b.SetBytes(int64(len(raw)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			identity := columnAssetVerifiedChecksumFileIdentity{
+				dev:             1,
+				ino:             2,
+				size:            int64(len(raw)),
+				modTimeUnixNano: int64(i + 1),
+				valid:           true,
+			}
+			if err := verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, true, ColumnAssetReadIntegrityCachedVerify, "crc-bench-root", identity); err != nil {
+				b.Fatal(err)
+			}
+		}
+		benchmarkColumnAssetCRCSink = ref.Checksum
+		benchmarkColumnAssetBoolSink = true
+	})
 }
 
 func deterministicColumnAssetCRCBuf(size int) []byte {
