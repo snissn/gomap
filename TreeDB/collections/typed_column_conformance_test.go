@@ -228,98 +228,69 @@ func TestTypedColumnAdapterSemanticConformanceSmallRows(t *testing.T) {
 	}
 }
 
-type typedColumnTestSelectionKind string
-
-const (
-	typedColumnTestSelectionEmpty  typedColumnTestSelectionKind = "empty"
-	typedColumnTestSelectionAll    typedColumnTestSelectionKind = "all"
-	typedColumnTestSelectionRange  typedColumnTestSelectionKind = "range"
-	typedColumnTestSelectionBitmap typedColumnTestSelectionKind = "bitmap"
-	typedColumnTestSelectionSparse typedColumnTestSelectionKind = "sparse"
-)
-
-type typedColumnTestSelection struct {
-	kind   typedColumnTestSelectionKind
-	rows   int
-	start  int
-	end    int
-	bitmap []bool
-	sparse []int
-}
-
-func typedColumnTestSelectionRows(sel typedColumnTestSelection, visible, nulls, defaults []bool) []int {
-	if sel.rows <= 0 {
-		return nil
+func TestTypedColumnSelectionMaskConformance(t *testing.T) {
+	visible := mustConformanceMaskSelection(t, []bool{true, true, false, true, true, true, true, false})
+	nulls := mustConformanceMaskSelection(t, []bool{false, true, false, false, false, false, true, false})
+	defaults := mustConformanceMaskSelection(t, []bool{false, false, false, false, true, false, false, false})
+	bitmapWords := []uint64{0}
+	for _, row := range []int{0, 1, 4, 5, 7} {
+		bitmapWords[0] |= uint64(1) << uint(row)
 	}
-	out := make([]int, 0, sel.rows)
-	appendIfLive := func(row int) {
-		if row < 0 || row >= sel.rows {
-			return
-		}
-		if len(visible) != 0 && !visible[row] {
-			return
-		}
-		if len(nulls) != 0 && nulls[row] {
-			return
-		}
-		if len(defaults) != 0 && defaults[row] {
-			return
-		}
-		out = append(out, row)
+	bitmapSel, err := typedcolumn.NewBitmapRowSelection(8, bitmapWords)
+	if err != nil {
+		t.Fatalf("NewBitmapRowSelection: %v", err)
 	}
-	switch sel.kind {
-	case typedColumnTestSelectionEmpty:
-		return nil
-	case typedColumnTestSelectionAll:
-		for row := 0; row < sel.rows; row++ {
-			appendIfLive(row)
-		}
-	case typedColumnTestSelectionRange:
-		start, end := sel.start, sel.end
-		if start < 0 {
-			start = 0
-		}
-		if end > sel.rows {
-			end = sel.rows
-		}
-		for row := start; row < end; row++ {
-			appendIfLive(row)
-		}
-	case typedColumnTestSelectionBitmap:
-		limit := min(sel.rows, len(sel.bitmap))
-		for row := 0; row < limit; row++ {
-			if sel.bitmap[row] {
-				appendIfLive(row)
-			}
-		}
-	case typedColumnTestSelectionSparse:
-		for _, row := range sel.sparse {
-			appendIfLive(row)
-		}
+	emptySel, err := typedcolumn.NewEmptyRowSelection(8)
+	if err != nil {
+		t.Fatalf("NewEmptyRowSelection: %v", err)
 	}
-	return out
-}
-
-func TestTypedColumnSelectionMaskConformancePlaceholder(t *testing.T) {
-	visible := []bool{true, true, false, true, true, true, true, false}
-	nulls := []bool{false, true, false, false, false, false, true, false}
-	defaults := []bool{false, false, false, false, true, false, false, false}
+	allSel, err := typedcolumn.NewAllRowSelection(8)
+	if err != nil {
+		t.Fatalf("NewAllRowSelection: %v", err)
+	}
+	rangeSel, err := typedcolumn.NewRangeRowSelection(8, 2, 7)
+	if err != nil {
+		t.Fatalf("NewRangeRowSelection: %v", err)
+	}
+	sparseSel, err := typedcolumn.NewSparseRowSelection(8, []int{0, 3, 6})
+	if err != nil {
+		t.Fatalf("NewSparseRowSelection: %v", err)
+	}
 	tests := []struct {
 		name string
-		sel  typedColumnTestSelection
+		sel  typedcolumn.RowSelection
 		want []int
 	}{
-		{name: "empty", sel: typedColumnTestSelection{kind: typedColumnTestSelectionEmpty, rows: 8}, want: nil},
-		{name: "all", sel: typedColumnTestSelection{kind: typedColumnTestSelectionAll, rows: 8}, want: []int{0, 3, 5}},
-		{name: "range", sel: typedColumnTestSelection{kind: typedColumnTestSelectionRange, rows: 8, start: 2, end: 7}, want: []int{3, 5}},
-		{name: "bitmap", sel: typedColumnTestSelection{kind: typedColumnTestSelectionBitmap, rows: 8, bitmap: []bool{true, true, false, false, true, true, false, true}}, want: []int{0, 5}},
-		{name: "sparse", sel: typedColumnTestSelection{kind: typedColumnTestSelectionSparse, rows: 8, sparse: []int{6, 3, 0}}, want: []int{3, 0}},
+		{name: "empty", sel: emptySel, want: nil},
+		{name: "all", sel: allSel, want: []int{0, 3, 5}},
+		{name: "range", sel: rangeSel, want: []int{3, 5}},
+		{name: "bitmap", sel: bitmapSel, want: []int{0, 5}},
+		{name: "sparse", sel: sparseSel, want: []int{0, 3}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := typedColumnTestSelectionRows(tc.sel, visible, nulls, defaults); !slices.Equal(got, tc.want) {
-				t.Fatalf("selection rows=%v want %v", got, tc.want)
+			gotSel, err := typedcolumn.ComposeRowSelections(8, typedcolumn.RowSelectionComponents{Predicate: &tc.sel, Visibility: &visible, Nulls: &nulls, Defaults: &defaults})
+			if err != nil {
+				t.Fatalf("ComposeRowSelections: %v", err)
+			}
+			if got := gotSel.AppendRows(nil); !slices.Equal(got, tc.want) {
+				t.Fatalf("selection rows=%v want %v shape=%+v", got, tc.want, gotSel.Shape())
 			}
 		})
 	}
+}
+
+func mustConformanceMaskSelection(t *testing.T, mask []bool) typedcolumn.RowSelection {
+	t.Helper()
+	rows := make([]int, 0, len(mask))
+	for row, ok := range mask {
+		if ok {
+			rows = append(rows, row)
+		}
+	}
+	selection, err := typedcolumn.NewSparseRowSelection(len(mask), rows)
+	if err != nil {
+		t.Fatalf("NewSparseRowSelection mask: %v", err)
+	}
+	return selection
 }
