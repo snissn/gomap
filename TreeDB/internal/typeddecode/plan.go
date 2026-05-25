@@ -76,7 +76,7 @@ func (s Status) Direct() bool {
 func (s Status) Streaming() bool   { return s.Path == PathStreaming }
 func (s Status) Unsupported() bool { return s.Path == PathUnsupported }
 
-func (s Status) Error() string {
+func (s Status) String() string {
 	if s.Err != nil {
 		return s.Err.Error()
 	}

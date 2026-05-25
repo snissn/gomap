@@ -455,7 +455,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
 
 		if columnPlan.Path == typeddecode.PathUnsupported {
-			return false, fmt.Errorf("collections: typed-column int64 aggregate fast decode unsupported for column %q: %s", preparedColumn.Plan.Definition.Name, columnPlan.Status().Error())
+			return false, fmt.Errorf("collections: typed-column int64 aggregate fast decode unsupported for column %q: %s", preparedColumn.Plan.Definition.Name, columnPlan.Status().String())
 		}
 		if columnPlan.DirectCandidate() {
 			if block.Index < 0 || block.Index >= len(preparedColumn.Certification.Blocks) {
@@ -497,11 +497,11 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 					continue
 				}
 				if !typedColumnInt64DirectViewFallbackAllowed(viewStatus) {
-					return false, fmt.Errorf("collections: typed-column int64 aggregate direct view failed closed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, viewStatus.Error())
+					return false, fmt.Errorf("collections: typed-column int64 aggregate direct view failed closed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, viewStatus.String())
 				}
 			} else if !typedColumnInt64DirectViewFallbackAllowed(blockStatus) {
 				recordTypedColumnInt64DirectViewStatus(&result.Diagnostics, blockStatus)
-				return false, fmt.Errorf("collections: typed-column int64 aggregate direct-view contract failed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, blockStatus.Error())
+				return false, fmt.Errorf("collections: typed-column int64 aggregate direct-view contract failed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, blockStatus.String())
 			} else {
 				recordTypedColumnInt64DirectViewStatus(&result.Diagnostics, blockStatus)
 			}

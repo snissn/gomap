@@ -91,6 +91,15 @@ func TestDirectViewValidationFailsClosedForLengthRowEndianAndNullable(t *testing
 	}
 }
 
+func TestStatusDoesNotImplementError(t *testing.T) {
+	if _, ok := any(DirectStatus()).(error); ok {
+		t.Fatal("Status must not implement error; successful statuses would become non-nil errors")
+	}
+	if got := UnsupportedStatus(ReasonUnsupportedOperation, "nope").String(); got == "" {
+		t.Fatal("Status.String returned empty diagnostic")
+	}
+}
+
 func TestStatusFromLayoutCapabilityUsesTypedStatus(t *testing.T) {
 	stream := statusFromLayoutCapability(columnlayout.Capability{
 		Status:  columnsemantics.StatusFallback,
