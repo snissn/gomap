@@ -59,18 +59,55 @@ layout capabilities. For raw int64 it uses a safe little-endian byte-loop reduce
 and predicate cursor; it does not use unsafe pointer casts or expose zero-copy
 views. Delta-varint continues to use the streaming decode path.
 
+## Writer-certified layout contracts (#1850)
+
+Newly written `typed_column_part` images include one `layout_contract` section in
+addition to the descriptor and column-data sections. The contract is versioned
+and writer-built before publication. It records the image/descriptor identity,
+descriptor checksum, per-column logical type, physical typedcolumn type,
+encoding, compression, section offsets and lengths, section checksums, block row
+spans, payload offsets/lengths, fixed-width
+element counts, element size/alignment/endian, null/default mask presence and
+counts, dictionary section identity/order/collation fields, and capability flags
+for direct-view, streaming reducer, stats, and pruning shortcuts.
+
+The writer validates the contract before returning the image. Fixed-width direct
+view candidates must be uncompressed, little-endian, aligned, exact-length
+(`rows * fixed_width_elements * element_size`) for every block, and tied to the
+expected collection logical type. Missing or mismatched logical type metadata
+disables direct/streaming certification instead of being treated as compatible.
+Variable-width or wrapper layouts may certify streaming metadata, but nullable/default carrier
+values do not become value-fast-path eligible just because mask metadata exists.
+String dictionary contracts record dictionary identity; lexical ordering remains
+unsupported unless an explicit dictionary order plus collation proof is present.
+
+Prepared readers validate the contract once per immutable asset ref/session and
+bind that validation to the normal asset checksum/read-integrity policy. Old or
+manually constructed images without a `layout_contract` section fail closed in
+prepared certification with a pre-alpha rebuild error. Generic image parsing is
+kept tolerant enough for corruption tests and low-level tooling, but optimized
+prepared paths require certification.
+
 ## Validation boundary and diagnostics
 
 Current validation is at prepare plus payload-read boundaries:
 
-1. manifest, descriptor, schema, section identity, row count, and block lengths
-   are validated while preparing caller-owned/session-owned state;
+1. manifest, descriptor, schema, section identity, row count, block lengths, and
+   the writer-certified layout contract are validated while preparing
+   caller-owned/session-owned state;
 2. checksum/read-integrity policy is preserved for full asset, cached-verify, or
    benchmark-only skip-checksum modes;
-3. payload length and row-count consistency are validated before a raw fixed-width
-   reducer consumes bytes;
+3. certified raw fixed-width hot scans reuse the prepared plan and avoid repeated
+   generic payload row-count/length validation; uncached or uncertified paths
+   still validate before consuming bytes;
 4. hot row loops consume concrete prepared plans and must not call generic
    capability interfaces per row.
+
+Prepared int64 diagnostics include `DirectViewCertified`, `StreamingCertified`,
+`StatsCertified`, `PruningCertified`, `CertificationFailures`, and
+`CertificationFailureReason`, alongside mapped/heap/decoded/materialized byte
+counters. Benchmarks report these as `direct_view_certified/op`,
+`streaming_certified/op`, and `certification_failures/op`.
 
 Stable layout fallback reason codes live in `TreeDB/internal/columnlayout`, for
 example `layout_variable_width_no_direct_view`,
@@ -81,9 +118,9 @@ example `layout_variable_width_no_direct_view`,
 
 ## Future extension rules
 
-Future writer-certified contracts (#1850) may move more validation to the write
-path, but readers must still fail closed on stale/corrupt/unsupported assets and
-must honor checksum policy. Future fast decode/direct-view work (#1849) must use
+Writer-certified contracts move repeated validation out of prepared hot loops,
+but readers must still fail closed on stale/corrupt/unsupported assets and must
+honor checksum policy. Future fast decode/direct-view work (#1849) must use the
 validated layout metadata and resource lifetimes rather than ad-hoc unsafe casts.
 
 New layouts should declare unsupported operations explicitly. Examples:

@@ -42,18 +42,25 @@ type typedColumnPreparedColumnPlan struct {
 }
 
 type typedColumnPreparedStateDiagnostics struct {
-	PartsPrepared       int
-	ColumnsPrepared     int
-	BlocksPrepared      int
-	CandidateBlocks     int
-	PrunedBlocks        int
-	SectionDependencies int
-	CandidateRanges     int
-	CandidateRangeBytes uint64
-	ManifestBytes       uint64
-	DescriptorBytes     uint64
-	Fallback            bool
-	FallbackReason      string
+	PartsPrepared              int
+	ColumnsPrepared            int
+	BlocksPrepared             int
+	CandidateBlocks            int
+	PrunedBlocks               int
+	SectionDependencies        int
+	CandidateRanges            int
+	CandidateRangeBytes        uint64
+	ManifestBytes              uint64
+	DescriptorBytes            uint64
+	ContractBytes              uint64
+	DirectViewCertified        int
+	StreamingCertified         int
+	StatsCertified             int
+	PruningCertified           int
+	CertificationFailures      int
+	CertificationFailureReason string
+	Fallback                   bool
+	FallbackReason             string
 }
 
 type typedColumnPreparedBlockPlan struct {
@@ -67,11 +74,12 @@ type typedColumnPreparedBlockPlan struct {
 }
 
 type typedColumnPreparedColumnState struct {
-	Plan         typedColumnPreparedColumnPlan
-	Column       typedcolumn.ColumnPartColumn
-	Section      typedcolumn.ColumnPartImageSection
-	BlockPlans   []typedColumnPreparedBlockPlan
-	Dictionaries map[string]int64
+	Plan          typedColumnPreparedColumnPlan
+	Column        typedcolumn.ColumnPartColumn
+	Section       typedcolumn.ColumnPartImageSection
+	BlockPlans    []typedColumnPreparedBlockPlan
+	Certification typedcolumn.ColumnPartLayoutContractColumn
+	Dictionaries  map[string]int64
 }
 
 type typedColumnPreparedPartState struct {
@@ -82,6 +90,7 @@ type typedColumnPreparedPartState struct {
 	RowSpan         typedcolumn.RowSpan
 	PhysicalColumns map[string]typedcolumn.ColumnPartColumn
 	Columns         map[string]*typedColumnPreparedColumnState
+	Certification   typedcolumn.ColumnPartLayoutCertification
 	Dependencies    []typedcolumn.SectionDependencyDescriptor
 	ManifestBytes   int
 	DescriptorBytes int
@@ -120,6 +129,7 @@ func (p *typedColumnPreparedPartState) close() {
 		delete(p.PhysicalColumns, name)
 	}
 	p.PhysicalColumns = nil
+	p.Certification = typedcolumn.ColumnPartLayoutCertification{}
 	for name, column := range p.Columns {
 		if column != nil {
 			column.close()
@@ -140,6 +150,7 @@ func (c *typedColumnPreparedColumnState) close() {
 	c.Column = typedcolumn.ColumnPartColumn{}
 	c.Section = typedcolumn.ColumnPartImageSection{}
 	c.BlockPlans = nil
+	c.Certification = typedcolumn.ColumnPartLayoutContractColumn{}
 	c.Dictionaries = nil
 }
 
@@ -276,61 +287,69 @@ func typedColumnPreparedDependenciesForRequest(req typedColumnPreparedColumnRequ
 	return deps, nil
 }
 
-func typedColumnPreparedReadImageAndDescriptor(ref ColumnAssetRef, readRange typedColumnPreparedRangeReader) (typedcolumn.ColumnPartImage, typedcolumn.ColumnPartDescriptor, map[string]typedcolumn.ColumnPartColumn, int, []byte, error) {
+func typedColumnPreparedReadImageAndDescriptor(ref ColumnAssetRef, readRange typedColumnPreparedRangeReader) (typedcolumn.ColumnPartImage, typedcolumn.ColumnPartDescriptor, map[string]typedcolumn.ColumnPartColumn, int, []byte, []byte, error) {
 	if readRange == nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, errors.New("collections: typed-column prepared state requires range reader")
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, errors.New("collections: typed-column prepared state requires range reader")
 	}
 	if ref.Length > int64(maxCollectionInt) {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, fmt.Errorf("collections: typed-column part length=%d overflows int", ref.Length)
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, fmt.Errorf("collections: typed-column part length=%d overflows int", ref.Length)
 	}
 	header, err := readRange(0, typedcolumn.ColumnPartImageManifestHeaderBytes, true)
 	if err != nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
 	manifestBytes, err := typedcolumn.ColumnPartImageManifestLength(header)
 	if err != nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
 	if manifestBytes > int(ref.Length) {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, fmt.Errorf("collections: typed-column part manifest bytes=%d exceed ref length=%d", manifestBytes, ref.Length)
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, fmt.Errorf("collections: typed-column part manifest bytes=%d exceed ref length=%d", manifestBytes, ref.Length)
 	}
 	manifest := make([]byte, manifestBytes)
 	copy(manifest, header)
 	if manifestBytes > len(header) {
 		tail, err := readRange(len(header), manifestBytes-len(header), true)
 		if err != nil {
-			return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+			return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 		}
 		copy(manifest[len(header):], tail)
 	}
 	image, err := typedcolumn.ParseColumnPartImageManifest(manifest, int(ref.Length))
 	if err != nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
 	descriptorSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDescriptor)
 	if err != nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
 	descriptorRaw, err := readRange(descriptorSection.Offset, descriptorSection.Length, true)
 	if err != nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
 	desc, columns, err := typedcolumn.DecodeColumnPartDescriptorSection(descriptorRaw)
 	if err != nil {
-		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, err
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
-	return image, desc, columns, manifestBytes, descriptorRaw, nil
+	contractSection, err := image.LayoutContractSection()
+	if err != nil {
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
+	}
+	contractRaw, err := readRange(contractSection.Offset, contractSection.Length, true)
+	if err != nil {
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
+	}
+	return image, desc, columns, manifestBytes, descriptorRaw, contractRaw, nil
 }
 
 func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, fields []TypedStorageField, schemaHash uint64, columnRequests []typedColumnPreparedColumnRequest, readRange typedColumnPreparedRangeReader, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
-	image, desc, columns, manifestBytes, descriptorRaw, err := typedColumnPreparedReadImageAndDescriptor(ref, readRange)
+	image, desc, columns, manifestBytes, descriptorRaw, contractRaw, err := typedColumnPreparedReadImageAndDescriptor(ref, readRange)
 	if err != nil {
 		return nil, typedColumnPreparedStateDiagnostics{}, err
 	}
-	return typedColumnPreparePartStateFromParsed(ref, physical, typedRows, physicalRows, fields, schemaHash, image, desc, columns, manifestBytes, len(descriptorRaw), columnRequests, blockSelection)
+	return typedColumnPreparePartStateFromParsed(ref, physical, typedRows, physicalRows, fields, schemaHash, image, desc, columns, manifestBytes, descriptorRaw, contractRaw, columnRequests, blockSelection)
 }
 
-func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, _ []TypedStorageField, schemaHash uint64, image typedcolumn.ColumnPartImage, desc typedcolumn.ColumnPartDescriptor, columns map[string]typedcolumn.ColumnPartColumn, manifestBytes int, descriptorBytes int, columnRequests []typedColumnPreparedColumnRequest, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
+func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, _ []TypedStorageField, schemaHash uint64, image typedcolumn.ColumnPartImage, desc typedcolumn.ColumnPartDescriptor, columns map[string]typedcolumn.ColumnPartColumn, manifestBytes int, descriptorRaw []byte, contractRaw []byte, columnRequests []typedColumnPreparedColumnRequest, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
 	var diag typedColumnPreparedStateDiagnostics
 	if image.PartID != ref.PartID || image.Rows != typedRows {
 		return nil, diag, fmt.Errorf("collections: typed_column_part prepared image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d", image.PartID, ref.PartID, image.Rows, typedRows)
@@ -350,6 +369,12 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 	if err := typedColumnPreparedValidateColumnDataSections(image, desc, columns); err != nil {
 		return nil, diag, err
 	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContract(image, desc, columns, descriptorRaw, contractRaw)
+	if err != nil {
+		diag.CertificationFailures++
+		diag.CertificationFailureReason = err.Error()
+		return nil, diag, fmt.Errorf("collections: typed_column_part layout certification failed: %w", err)
+	}
 	span, err := typedcolumn.NewRowSpan(0, desc.RowCount)
 	if err != nil {
 		return nil, diag, err
@@ -362,12 +387,18 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 		RowSpan:         span,
 		PhysicalColumns: columns,
 		Columns:         make(map[string]*typedColumnPreparedColumnState, len(columnRequests)),
+		Certification:   certification,
 		ManifestBytes:   manifestBytes,
-		DescriptorBytes: descriptorBytes,
+		DescriptorBytes: len(descriptorRaw),
 	}
 	diag.PartsPrepared = 1
 	diag.ManifestBytes = uint64(manifestBytes)
-	diag.DescriptorBytes = uint64(descriptorBytes)
+	diag.DescriptorBytes = uint64(len(descriptorRaw))
+	diag.ContractBytes = uint64(len(contractRaw))
+	diag.DirectViewCertified = certification.DirectViewCertified
+	diag.StreamingCertified = certification.StreamingCertified
+	diag.StatsCertified = certification.StatsCertified
+	diag.PruningCertified = certification.PruningCertified
 	for _, request := range columnRequests {
 		plan, err := typedColumnDescribePreparedColumn(request, span)
 		if err != nil {
@@ -400,7 +431,8 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 		if !ok {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state missing column data section %q", plan.Definition.Name)
 		}
-		state, columnDiag, err := buildTypedColumnPreparedColumnState(plan, column, section, blockSelection)
+		columnCertification, _ := certification.Column(plan.Definition.Name)
+		state, columnDiag, err := buildTypedColumnPreparedColumnState(plan, column, section, columnCertification, blockSelection)
 		if err != nil {
 			return nil, diag, err
 		}
@@ -429,8 +461,8 @@ func typedColumnPreparedValidateColumnDefinition(want typedcolumn.ColumnDefiniti
 	return nil
 }
 
-func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, column typedcolumn.ColumnPartColumn, section typedcolumn.ColumnPartImageSection, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedColumnState, typedColumnPreparedStateDiagnostics, error) {
-	state := &typedColumnPreparedColumnState{Plan: plan, Column: column, Section: section, BlockPlans: make([]typedColumnPreparedBlockPlan, 0, len(column.Blocks))}
+func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, column typedcolumn.ColumnPartColumn, section typedcolumn.ColumnPartImageSection, certification typedcolumn.ColumnPartLayoutContractColumn, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedColumnState, typedColumnPreparedStateDiagnostics, error) {
+	state := &typedColumnPreparedColumnState{Plan: plan, Column: column, Section: section, BlockPlans: make([]typedColumnPreparedBlockPlan, 0, len(column.Blocks)), Certification: certification}
 	var diag typedColumnPreparedStateDiagnostics
 	offset := section.Offset
 	sectionEnd := section.Offset + section.Length
@@ -546,6 +578,15 @@ func typedColumnPreparedStateDiagnosticsAdd(dst *typedColumnPreparedStateDiagnos
 	dst.CandidateRangeBytes += src.CandidateRangeBytes
 	dst.ManifestBytes += src.ManifestBytes
 	dst.DescriptorBytes += src.DescriptorBytes
+	dst.ContractBytes += src.ContractBytes
+	dst.DirectViewCertified += src.DirectViewCertified
+	dst.StreamingCertified += src.StreamingCertified
+	dst.StatsCertified += src.StatsCertified
+	dst.PruningCertified += src.PruningCertified
+	dst.CertificationFailures += src.CertificationFailures
+	if src.CertificationFailureReason != "" {
+		dst.CertificationFailureReason = src.CertificationFailureReason
+	}
 	if src.Fallback {
 		dst.Fallback = true
 		dst.FallbackReason = src.FallbackReason

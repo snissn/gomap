@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -581,6 +582,9 @@ func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 	if prepared.Diagnostics.DecodedHeapCopyBytes != 0 {
 		t.Fatalf("prepared raw diagnostics=%+v want safe raw reducer without decoded heap copy", prepared.Diagnostics)
 	}
+	if session.prepareDiagnostics.DirectViewCertified == 0 || session.prepareDiagnostics.CertificationFailures != 0 {
+		t.Fatalf("prepare diagnostics=%+v want certified direct-view layout with no failures", session.prepareDiagnostics)
+	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)
@@ -595,11 +599,76 @@ func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	reopenedAgg, err := reopenedCol.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 12, High: 13})
+	reopenedAgg, err := reopenedCol.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 12, High: 13, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
 	if err != nil {
 		t.Fatalf("RunTypedColumnInt64PredicateAggregate reopened raw: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, reopenedAgg, 2, 25)
+	if reopenedAgg.Diagnostics.DirectViewCertified == 0 || reopenedAgg.Diagnostics.DecodedHeapCopyBytes != 0 {
+		t.Fatalf("reopened diagnostics=%+v want certified hot raw plan without heap decode", reopenedAgg.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64PreparedCertificationDiagnosticsAndClose(t *testing.T) {
+	d, col := setupTypedColumnInt64RawScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3, 4, 5})
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 2, High: 4, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	if session.prepareDiagnostics.DirectViewCertified == 0 || session.prepareDiagnostics.CertificationFailures != 0 {
+		t.Fatalf("prepare diagnostics=%+v want direct-view certification without failures", session.prepareDiagnostics)
+	}
+	first, err := session.Run()
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	second, err := session.Run()
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, first, 3, 9)
+	assertTypedColumnInt64Aggregate(t, second, 3, 9)
+	if first.Diagnostics.DecodedMetadataBytes != 0 || second.Diagnostics.DecodedMetadataBytes != 0 || first.Diagnostics.DecodedHeapCopyBytes != 0 || second.Diagnostics.DecodedHeapCopyBytes != 0 {
+		t.Fatalf("hot diagnostics first=%+v second=%+v want no per-run metadata or heap decode", first.Diagnostics, second.Diagnostics)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if diag := session.Diagnostics(); !diag.Closed || diag.ActiveResourceHandles != 0 || diag.ActiveMappedBytes != 0 || diag.ActiveHeapCopyBytes != 0 {
+		t.Fatalf("session diagnostics after close=%+v want resources released", diag)
+	}
+}
+
+func TestTypedColumnInt64PreparedLayoutContractCorruptionFailsClosed(t *testing.T) {
+	d, col := setupTypedColumnInt64RawScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		t.Fatalf("typed refs=%+v want one", refs)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		t.Fatalf("read typed-column part: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	contractSection, err := image.LayoutContractSection()
+	if err != nil {
+		t.Fatalf("LayoutContractSection: %v", err)
+	}
+	var corruptRows [8]byte
+	binary.LittleEndian.PutUint64(corruptRows[:], uint64(image.Rows+1))
+	// Contract row count sits after version/reserved/part_id in the contract section.
+	writeColumnAssetBytesAtRelativeOffset(t, d, refs[0], int64(contractSection.Offset+12), corruptRows[:])
+	_, err = col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums})
+	if err == nil || !strings.Contains(err.Error(), "layout certification") || !strings.Contains(err.Error(), "rows") {
+		t.Fatalf("Prepare corrupt layout contract err=%v want fail-closed certification row mismatch", err)
+	}
 }
 
 func TestTypedColumnInt64RawLayoutMatchesDeltaForQueryShapes(t *testing.T) {
@@ -1732,6 +1801,33 @@ func BenchmarkTypedColumnMultipartLatestVisibleLookup(b *testing.B) {
 	}
 }
 
+func BenchmarkTypedColumnInt64PrepareCertification(b *testing.B) {
+	const rows = 65536
+	for _, layout := range []typedColumnInt64AggregateBenchLayout{typedColumnInt64AggregateBenchLayoutByName("delta_varint"), typedColumnInt64AggregateBenchLayoutByName("raw_int64")} {
+		layout := layout
+		b.Run("layout_"+layout.name, func(b *testing.B) {
+			d, col := setupTypedColumnInt64AggregateBenchCollection(b, true, layout)
+			defer func() { _ = d.Close() }()
+			insertTypedColumnInt64AggregateBenchRows(b, col, rows, typedColumnInt64AggregateBenchDistributionByName("clustered"))
+			req := TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: int64(rows / 4), High: int64(rows / 2), ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
+			var diag TypedColumnInt64PredicateScanDiagnostics
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+				if err != nil {
+					b.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+				}
+				diag = session.prepareDiagnostics
+				if err := session.Close(); err != nil {
+					b.Fatalf("Close prepared session: %v", err)
+				}
+			}
+			reportTypedColumnInt64AggregateBenchMetrics(b, rows, diag, b.Elapsed(), b.N)
+		})
+	}
+}
+
 func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 	large, err := parseTypedColumnInt64AggregateBenchBool("TREEDB_TYPED_COLUMN_BENCH_LARGE", os.Getenv("TREEDB_TYPED_COLUMN_BENCH_LARGE"), false)
 	if err != nil {
@@ -1885,6 +1981,11 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 				b.Fatal(err)
 			}
 			reportTypedColumnInt64AggregateBenchMetrics(b, rows, result.Diagnostics, b.Elapsed(), b.N)
+			if session != nil {
+				b.ReportMetric(float64(session.prepareDiagnostics.DirectViewCertified), "prepare_direct_view_certified/op")
+				b.ReportMetric(float64(session.prepareDiagnostics.StreamingCertified), "prepare_streaming_certified/op")
+				b.ReportMetric(float64(session.prepareDiagnostics.CertificationFailures), "prepare_certification_failures/op")
+			}
 		})
 	}
 }
@@ -2591,6 +2692,10 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.MappedBytes), "mapped_bytes/op")
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
 	b.ReportMetric(float64(diag.DecodedHeapCopyBytes), "decoded_bytes/op")
+	b.ReportMetric(float64(diag.MaterializedBytes), "materialized_bytes/op")
+	b.ReportMetric(float64(diag.DirectViewCertified), "direct_view_certified/op")
+	b.ReportMetric(float64(diag.StreamingCertified), "streaming_certified/op")
+	b.ReportMetric(float64(diag.CertificationFailures), "certification_failures/op")
 	b.ReportMetric(float64(diag.PhysicalBytesScanned), "physical_bytes_scanned/op")
 	b.ReportMetric(float64(diag.RowLocatorDecodes), "row_locator_decodes/op")
 	b.ReportMetric(float64(diag.PhysicalRowIDLookups), "physical_row_id_lookups/op")
@@ -2668,6 +2773,10 @@ func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64P
 	b.ReportMetric(float64(diag.MappedBytes), "mapped_bytes/op")
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
 	b.ReportMetric(float64(diag.DecodedHeapCopyBytes), "decoded_bytes/op")
+	b.ReportMetric(float64(diag.MaterializedBytes), "materialized_bytes/op")
+	b.ReportMetric(float64(diag.DirectViewCertified), "direct_view_certified/op")
+	b.ReportMetric(float64(diag.StreamingCertified), "streaming_certified/op")
+	b.ReportMetric(float64(diag.CertificationFailures), "certification_failures/op")
 	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
 	b.ReportMetric(float64(diag.PartsPruned), "parts_pruned/op")
 	b.ReportMetric(float64(diag.BlocksPruned), "blocks_pruned/op")
@@ -2781,6 +2890,22 @@ func corruptColumnAssetByteAtRelativeOffset(tb testing.TB, d *backenddb.DB, ref 
 	one[0] ^= 0xff
 	if _, err := file.WriteAt(one[:], absoluteOffset); err != nil {
 		tb.Fatalf("WriteAt corrupt byte: %v", err)
+	}
+}
+
+func writeColumnAssetBytesAtRelativeOffset(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef, relativeOffset int64, data []byte) {
+	tb.Helper()
+	assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		tb.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	file, err := os.OpenFile(assetPath, os.O_RDWR, 0)
+	if err != nil {
+		tb.Fatalf("OpenFile asset: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.WriteAt(data, ref.Offset+relativeOffset); err != nil {
+		tb.Fatalf("WriteAt asset bytes: %v", err)
 	}
 }
 

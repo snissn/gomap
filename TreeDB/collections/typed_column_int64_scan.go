@@ -83,6 +83,13 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	HeapCopyBytes               uint64
 	DecodedMetadataBytes        uint64
 	DecodedHeapCopyBytes        uint64
+	MaterializedBytes           uint64
+	DirectViewCertified         int
+	StreamingCertified          int
+	StatsCertified              int
+	PruningCertified            int
+	CertificationFailures       int
+	CertificationFailureReason  string
 	PhysicalBytesScanned        int64
 	RowLocatorDecodes           int
 	PhysicalRowIDLookups        int
@@ -924,6 +931,15 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.HeapCopyBytes += src.HeapCopyBytes
 	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
 	dst.DecodedHeapCopyBytes += src.DecodedHeapCopyBytes
+	dst.MaterializedBytes += src.MaterializedBytes
+	dst.DirectViewCertified += src.DirectViewCertified
+	dst.StreamingCertified += src.StreamingCertified
+	dst.StatsCertified += src.StatsCertified
+	dst.PruningCertified += src.PruningCertified
+	dst.CertificationFailures += src.CertificationFailures
+	if src.CertificationFailureReason != "" {
+		dst.CertificationFailureReason = src.CertificationFailureReason
+	}
 	dst.PhysicalBytesScanned += src.PhysicalBytesScanned
 	dst.RowLocatorDecodes += src.RowLocatorDecodes
 	dst.PhysicalRowIDLookups += src.PhysicalRowIDLookups
@@ -1063,6 +1079,7 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDocumentFallback(req T
 	_, err := c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		result.Diagnostics.RowMaterializations++
 		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.MaterializedBytes += uint64(len(record.ID) + len(record.Document))
 		result.Diagnostics.FallbackReads++
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
 		if err != nil {
@@ -1104,6 +1121,7 @@ func (c *Collection) runTypedColumnInt64PredicateScanDocumentFallback(req TypedC
 	_, err := c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		result.Diagnostics.RowMaterializations++
 		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.MaterializedBytes += uint64(len(record.ID) + len(record.Document))
 		result.Diagnostics.FallbackReads++
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
 		if err != nil {

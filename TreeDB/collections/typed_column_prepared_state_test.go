@@ -137,7 +137,7 @@ func TestTypedColumnPreparedColumnStateAllowsZeroLengthEmptyBlock(t *testing.T) 
 		}},
 	}
 	section := typedcolumn.ColumnPartImageSection{Kind: typedcolumn.ColumnPartImageSectionColumnData, Column: "count", Offset: 128, Length: 0}
-	state, diag, err := buildTypedColumnPreparedColumnState(plan, column, section, nil)
+	state, diag, err := buildTypedColumnPreparedColumnState(plan, column, section, typedcolumn.ColumnPartLayoutContractColumn{}, nil)
 	if err != nil {
 		t.Fatalf("buildTypedColumnPreparedColumnState zero-length empty block: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestTypedColumnPreparedColumnStateAllowsZeroLengthEmptyBlock(t *testing.T) 
 	}
 
 	column.Blocks[0].Descriptor.RowCount = 1
-	_, _, err = buildTypedColumnPreparedColumnState(plan, column, section, nil)
+	_, _, err = buildTypedColumnPreparedColumnState(plan, column, section, typedcolumn.ColumnPartLayoutContractColumn{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "zero-length payload") {
 		t.Fatalf("buildTypedColumnPreparedColumnState zero-length non-empty block err=%v want fail-closed zero-length payload", err)
 	}
@@ -189,7 +189,7 @@ func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 		t.Fatalf("prepare with physical row mismatch err=%v want fail-closed row mismatch", err)
 	}
 
-	parsedImage, desc, columns, manifestBytes, descriptorRaw, err := typedColumnPreparedReadImageAndDescriptor(ref, readRange)
+	parsedImage, desc, columns, manifestBytes, descriptorRaw, contractRaw, err := typedColumnPreparedReadImageAndDescriptor(ref, readRange)
 	if err != nil {
 		t.Fatalf("typedColumnPreparedReadImageAndDescriptor: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 		}
 		missingKindSection.Sections = append(missingKindSection.Sections, section)
 	}
-	_, _, err = typedColumnPreparePartStateFromParsed(ref, physical, image.Rows, image.Rows, fields, uint64(adapterPart.Part.Descriptor.SchemaVersion), missingKindSection, desc, columns, manifestBytes, len(descriptorRaw), request, nil)
+	_, _, err = typedColumnPreparePartStateFromParsed(ref, physical, image.Rows, image.Rows, fields, uint64(adapterPart.Part.Descriptor.SchemaVersion), missingKindSection, desc, columns, manifestBytes, descriptorRaw, contractRaw, request, nil)
 	if err == nil || !strings.Contains(err.Error(), "missing column data section \"kind\"") {
 		t.Fatalf("prepare missing unrelated string column section err=%v want fail-closed multi-column metadata mismatch", err)
 	}

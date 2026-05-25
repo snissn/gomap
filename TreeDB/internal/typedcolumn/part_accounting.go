@@ -33,6 +33,7 @@ type ColumnPartByteAccounting struct {
 	SortKeyMetadataBytes    int                                    `json:"sort_key_metadata_bytes"`
 	AggregateMetadataBytes  int                                    `json:"aggregate_metadata_bytes"`
 	DescriptorBytes         int                                    `json:"descriptor_bytes"`
+	LayoutContractBytes     int                                    `json:"layout_contract_bytes"`
 	LocatorBytes            int                                    `json:"locator_bytes"`
 	TotalStoredBytes        int                                    `json:"total_stored_bytes"`
 	BytesPerRow             float64                                `json:"bytes_per_row"`
@@ -218,6 +219,7 @@ func (p *ColumnPart) ByteAccountingFromImage(image ColumnPartImage) ColumnPartBy
 	out.SortKeyMetadataBytes = image.CategoryBytes(ColumnPartImageCategorySortKeyMetadata)
 	out.AggregateMetadataBytes = image.CategoryBytes(ColumnPartImageCategoryAggregateMetadata)
 	out.DescriptorBytes = image.CategoryBytes(ColumnPartImageCategoryDescriptor)
+	out.LayoutContractBytes = image.CategoryBytes(ColumnPartImageCategoryLayoutContract)
 	out.LocatorBytes = image.CategoryBytes(ColumnPartImageCategoryLocators)
 	out.SerializedSections = image.SectionByteAccounting()
 	out.RecomputeTotals()
@@ -242,6 +244,7 @@ func (a ColumnPartByteAccounting) CategoryBytes() int {
 		a.SortKeyMetadataBytes +
 		a.AggregateMetadataBytes +
 		a.DescriptorBytes +
+		a.LayoutContractBytes +
 		a.LocatorBytes
 }
 
