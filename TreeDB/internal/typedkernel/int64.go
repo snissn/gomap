@@ -21,22 +21,22 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 	if err != nil {
 		return AggregateResult{}, err
 	}
-	if op == OpCountNonNull && req.Int64Values == nil {
-		return AggregateResult{Op: op, NonNulls: int64(req.Selection.Count()), HasValue: true}, nil
-	}
-	if len(req.Int64Values) != rows {
-		return AggregateResult{}, fmt.Errorf("typedkernel: int64 values rows=%d want %d", len(req.Int64Values), rows)
-	}
 	if op == OpCountNonNull {
 		return AggregateResult{Op: op, NonNulls: int64(req.Selection.Count()), HasValue: true}, nil
 	}
 	var acc int64Accum
+	if req.Selection.Kind() == typedcolumn.RowSelectionEmpty {
+		return int64Result(op, acc)
+	}
+	if len(req.Int64Values) != rows {
+		return AggregateResult{}, fmt.Errorf("typedkernel: int64 values rows=%d want %d", len(req.Int64Values), rows)
+	}
 	switch req.Selection.Kind() {
 	case typedcolumn.RowSelectionEmpty:
 		return int64Result(op, acc)
 	case typedcolumn.RowSelectionAll:
 		for row := 0; row < rows; row++ {
-			if err := acc.add(req.Int64Values[row]); err != nil {
+			if err := acc.add(op, req.Int64Values[row]); err != nil {
 				return AggregateResult{}, err
 			}
 		}
@@ -46,7 +46,7 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 			return AggregateResult{}, fmt.Errorf("typedkernel: invalid int64 range selection [%d,%d) rows=%d", start, end, rows)
 		}
 		for row := start; row < end; row++ {
-			if err := acc.add(req.Int64Values[row]); err != nil {
+			if err := acc.add(op, req.Int64Values[row]); err != nil {
 				return AggregateResult{}, err
 			}
 		}
@@ -56,7 +56,7 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 				return AggregateResult{}, fmt.Errorf("typedkernel: invalid int64 ranges selection [%d,%d) rows=%d", r.Start, r.End, rows)
 			}
 			for row := r.Start; row < r.End; row++ {
-				if err := acc.add(req.Int64Values[row]); err != nil {
+				if err := acc.add(op, req.Int64Values[row]); err != nil {
 					return AggregateResult{}, err
 				}
 			}
@@ -69,7 +69,7 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 				if row >= rows {
 					break
 				}
-				if err := acc.add(req.Int64Values[row]); err != nil {
+				if err := acc.add(op, req.Int64Values[row]); err != nil {
 					return AggregateResult{}, err
 				}
 				word &^= uint64(1) << uint(bit)
@@ -80,7 +80,7 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 			if row < 0 || row >= rows {
 				return AggregateResult{}, fmt.Errorf("typedkernel: invalid int64 sparse row=%d rows=%d", row, rows)
 			}
-			if err := acc.add(req.Int64Values[row]); err != nil {
+			if err := acc.add(op, req.Int64Values[row]); err != nil {
 				return AggregateResult{}, err
 			}
 		}
@@ -90,14 +90,16 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 	return int64Result(op, acc)
 }
 
-func (a *int64Accum) add(value int64) error {
-	if value > 0 && a.sum > math.MaxInt64-value {
-		return fmt.Errorf("typedkernel: int64 sum overflow current=%d value=%d", a.sum, value)
+func (a *int64Accum) add(op AggregateOp, value int64) error {
+	if op == OpSum || op == OpAvg {
+		if value > 0 && a.sum > math.MaxInt64-value {
+			return fmt.Errorf("typedkernel: int64 sum overflow current=%d value=%d", a.sum, value)
+		}
+		if value < 0 && a.sum < math.MinInt64-value {
+			return fmt.Errorf("typedkernel: int64 sum overflow current=%d value=%d", a.sum, value)
+		}
+		a.sum += value
 	}
-	if value < 0 && a.sum < math.MinInt64-value {
-		return fmt.Errorf("typedkernel: int64 sum overflow current=%d value=%d", a.sum, value)
-	}
-	a.sum += value
 	a.count++
 	if !a.has {
 		a.min = value

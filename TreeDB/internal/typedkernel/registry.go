@@ -40,7 +40,7 @@ type AggregateResult struct {
 
 // ReduceRequest is the concrete hot-loop input for one selected block. Rows is
 // the block-local row domain. Int64Values is used by int64 value kernels and may
-// be nil for count-row kernels.
+// be nil for count-row/count-non-null reducers and empty selections.
 type ReduceRequest struct {
 	Rows        int
 	Selection   typedcolumn.RowSelection
@@ -143,12 +143,10 @@ type DispatchRequest struct {
 // PreparedReducer is the concrete reducer selected by Dispatch. It is safe to
 // reuse for blocks with the same prepared semantic/layout decision.
 type PreparedReducer struct {
-	op           AggregateOp
-	kernel       KernelSpec
-	semanticCap  columnsemantics.Capability
-	layoutCap    columnlayout.Capability
-	layout       columnlayout.Capabilities
-	semanticDesc columnsemantics.Descriptor
+	op          AggregateOp
+	kernel      KernelSpec
+	semanticCap columnsemantics.Capability
+	layoutCap   columnlayout.Capability
 }
 
 func (p PreparedReducer) Operation() AggregateOp { return p.op }
@@ -187,7 +185,7 @@ func (r Registry) Dispatch(req DispatchRequest) (PreparedReducer, error) {
 	}
 	for _, entry := range r.entries {
 		if entry.matches(req.Operation, req.Semantic, req.Layout) {
-			return PreparedReducer{op: req.Operation, kernel: cloneKernelSpec(entry), semanticCap: semCap, layoutCap: layoutCap, layout: req.Layout, semanticDesc: req.Semantic}, nil
+			return PreparedReducer{op: req.Operation, kernel: cloneKernelSpec(entry), semanticCap: semCap, layoutCap: layoutCap}, nil
 		}
 	}
 	return PreparedReducer{}, fmt.Errorf("typedkernel: no kernel registered for op=%s logical=%s physical=%s encoding=%s nullable=%v", req.Operation, req.Semantic.Logical, req.Semantic.Physical, req.Semantic.Encoding, nullableDescriptor(req.Semantic, req.Layout))

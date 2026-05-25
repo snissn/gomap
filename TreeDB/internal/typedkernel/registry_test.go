@@ -61,6 +61,69 @@ func TestInt64AggregateOverflow(t *testing.T) {
 	}
 }
 
+func TestInt64MinMaxDoNotAccumulateOverflowingSum(t *testing.T) {
+	reg := typedkernel.DefaultRegistry()
+	selection := mustSelection(typedcolumn.NewAllRowSelection(2))
+	tests := []struct {
+		name string
+		op   typedkernel.AggregateOp
+		vals []int64
+		want int64
+	}{
+		{name: "min positive sum overflow", op: typedkernel.OpMin, vals: []int64{math.MaxInt64, 1}, want: 1},
+		{name: "max positive sum overflow", op: typedkernel.OpMax, vals: []int64{math.MaxInt64, 1}, want: math.MaxInt64},
+		{name: "min negative sum overflow", op: typedkernel.OpMin, vals: []int64{math.MinInt64, -1}, want: math.MinInt64},
+		{name: "max negative sum overflow", op: typedkernel.OpMax, vals: []int64{math.MinInt64, -1}, want: -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: tc.op, Semantic: int64Semantic(false, typedcolumn.EncodingRawInt64), Layout: int64Layout(false, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)})
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			got, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: len(tc.vals), Selection: selection, Int64Values: tc.vals}, nil)
+			if err != nil {
+				t.Fatalf("reduce: %v", err)
+			}
+			if !got.HasValue || got.NonNulls != 2 {
+				t.Fatalf("result metadata=%+v", got)
+			}
+			if tc.op == typedkernel.OpMin && got.Min != tc.want {
+				t.Fatalf("min=%d want %d", got.Min, tc.want)
+			}
+			if tc.op == typedkernel.OpMax && got.Max != tc.want {
+				t.Fatalf("max=%d want %d", got.Max, tc.want)
+			}
+		})
+	}
+}
+
+func TestInt64EmptySelectionDoesNotRequireValues(t *testing.T) {
+	reg := typedkernel.DefaultRegistry()
+	selection := mustSelection(typedcolumn.NewEmptyRowSelection(10))
+	for _, op := range []typedkernel.AggregateOp{typedkernel.OpSum, typedkernel.OpAvg, typedkernel.OpMin, typedkernel.OpMax} {
+		t.Run(string(op), func(t *testing.T) {
+			prepared, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: op, Semantic: int64Semantic(false, typedcolumn.EncodingRawInt64), Layout: int64Layout(false, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)})
+			if err != nil {
+				t.Fatalf("dispatch: %v", err)
+			}
+			got, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: 10, Selection: selection}, nil)
+			if err != nil {
+				t.Fatalf("reduce with nil values: %v", err)
+			}
+			if got.NonNulls != 0 {
+				t.Fatalf("non-nulls=%d want 0", got.NonNulls)
+			}
+			if op == typedkernel.OpSum && !got.HasValue {
+				t.Fatalf("empty sum should be additive identity: %+v", got)
+			}
+			if op != typedkernel.OpSum && got.HasValue {
+				t.Fatalf("empty %s should not have a value: %+v", op, got)
+			}
+		})
+	}
+}
+
 func TestDispatchSemanticAndLayoutGates(t *testing.T) {
 	reg := typedkernel.DefaultRegistry()
 	tests := []struct {
@@ -70,6 +133,13 @@ func TestDispatchSemanticAndLayoutGates(t *testing.T) {
 		layout  columnlayout.Capabilities
 		wantErr string
 	}{
+		{
+			name:    "semantic layout descriptor mismatch fails closed",
+			op:      typedkernel.OpCountRows,
+			sem:     int64Semantic(false, typedcolumn.EncodingRawInt64),
+			layout:  boolLayout(),
+			wantErr: "descriptor mismatch",
+		},
 		{
 			name:    "bool sum fails semantic gate",
 			op:      typedkernel.OpSum,
