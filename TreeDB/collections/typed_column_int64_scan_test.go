@@ -298,6 +298,13 @@ func TestTypedColumnInt64AggregateNullableTypedColumnUnsupportedFailsClosed(t *t
 	if result.Diagnostics.Fallback || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.FallbackReads != 0 || result.Count != 0 || result.Sum != 0 {
 		t.Fatalf("result=%+v want fail-closed without document fallback/materialization", result)
 	}
+	insertTypedColumnInt64ScanRows(t, col, []int64{0})
+	if session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}); err == nil {
+		_ = session.Close()
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate nullable err=nil want fail-closed nullable typed-column int64")
+	} else if !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate nullable err=%v want unsupported nullable typed-column int64", err)
+	}
 }
 
 func TestTypedColumnInt64ScanStaleMetadataFailsClosed(t *testing.T) {
@@ -709,6 +716,166 @@ func TestTypedColumnInt64PreparedDeltaUsesStreamingCursor(t *testing.T) {
 	if result.Diagnostics.FastDecodeStreamingPlans == 0 || result.Diagnostics.FastDecodeDirectViewPlans != 0 || result.Diagnostics.DirectViewSuccesses != 0 || result.Diagnostics.DecodedHeapCopyBytes != 0 {
 		t.Fatalf("diagnostics=%+v want delta-varint streaming cursor without direct view or []int64 materialization", result.Diagnostics)
 	}
+}
+
+func TestTypedColumnInt64PreparedKernelOverflowAndNegativeValues(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{-10, -20, 5})
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare negative values: %v", err)
+	}
+	negative, err := session.Run()
+	if closeErr := session.Close(); closeErr != nil {
+		t.Fatalf("Close negative session: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run negative values: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, negative, 3, -25)
+	if negative.Diagnostics.KernelBlocks == 0 {
+		t.Fatalf("negative diagnostics=%+v want prepared kernel path", negative.Diagnostics)
+	}
+
+	overflowDB, overflowCol := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = overflowDB.Close() }()
+	insertTypedColumnInt64ScanRows(t, overflowCol, []int64{typedColumnInt64PredicateAggregateMaxSum, 1})
+	overflowSession, err := overflowCol.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare overflow values: %v", err)
+	}
+	_, err = overflowSession.Run()
+	if closeErr := overflowSession.Close(); closeErr != nil {
+		t.Fatalf("Close overflow session: %v", closeErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "sum overflow") {
+		t.Fatalf("Run overflow err=%v want sum overflow through prepared kernel path", err)
+	}
+}
+
+func TestTypedColumnInt64PreparedDeltaKernelDiagnosticsFullPartialPruned(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3, 4, 5, 6})
+
+	allSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare all: %v", err)
+	}
+	all, err := allSession.Run()
+	if closeErr := allSession.Close(); closeErr != nil {
+		t.Fatalf("Close all: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run all: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, all, 6, 21)
+	if all.Diagnostics.KernelBlocks == 0 || all.Diagnostics.KernelCursorBlocks == 0 || all.Diagnostics.KernelFullCoveredBlocks == 0 || all.Diagnostics.KernelFallbackBlocks != 0 {
+		t.Fatalf("all diagnostics=%+v want full-covered streaming cursor kernel", all.Diagnostics)
+	}
+
+	partialSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 3, High: 4, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare partial: %v", err)
+	}
+	partial, err := partialSession.Run()
+	if closeErr := partialSession.Close(); closeErr != nil {
+		t.Fatalf("Close partial: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run partial: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, partial, 2, 7)
+	if partial.Diagnostics.KernelFallbackBlocks == 0 || partial.Diagnostics.KernelCursorBlocks != 0 {
+		t.Fatalf("partial diagnostics=%+v want explicit partial streaming fallback classification", partial.Diagnostics)
+	}
+
+	prunedSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 99, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare pruned: %v", err)
+	}
+	pruned, err := prunedSession.Run()
+	if closeErr := prunedSession.Close(); closeErr != nil {
+		t.Fatalf("Close pruned: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run pruned: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, pruned, 0, 0)
+	if pruned.Diagnostics.BlocksPruned == 0 || pruned.Diagnostics.RangeBytesRead != 0 || pruned.Diagnostics.KernelBlocks != 0 || pruned.Diagnostics.KernelFallbackBlocks != 0 {
+		t.Fatalf("pruned diagnostics=%+v want payload-free prune without kernel/fallback blocks", pruned.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64PreparedRawKernelSelectionShapes(t *testing.T) {
+	if !typedColumnInt64DirectViewSupportedForTest() {
+		t.Skip("raw selected-value kernel path requires direct-view support")
+	}
+	tests := []struct {
+		name      string
+		values    []int64
+		req       TypedColumnInt64PredicateAggregateRequest
+		wantCount int64
+		wantSum   int64
+		wantShape string
+	}{
+		{name: "all", values: []int64{1, 2, 3, 4}, req: TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll}, wantCount: 4, wantSum: 10, wantShape: "all"},
+		{name: "range", values: []int64{0, 1, 2, 3, 4, 5}, req: TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 2, High: 4}, wantCount: 3, wantSum: 9, wantShape: "range"},
+		{name: "sparse_parity", values: repeatedInt64SelectionValuesForTest(40, func(i int) bool { return i%2 == 0 }, 7), req: TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 7}, wantCount: 20, wantSum: 140},
+		{name: "bitmap_parity", values: repeatedInt64SelectionValuesForTest(128, func(i int) bool { return i%4 != 0 }, 7), req: TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 7}, wantCount: 96, wantSum: 672},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, col := setupTypedColumnInt64RawScanCollection(t)
+			defer func() { _ = d.Close() }()
+			insertTypedColumnInt64ScanRows(t, col, tc.values)
+			direct, err := col.RunTypedColumnInt64PredicateAggregate(tc.req)
+			if err != nil {
+				t.Fatalf("direct aggregate: %v", err)
+			}
+			assertTypedColumnInt64Aggregate(t, direct, tc.wantCount, tc.wantSum)
+			req := tc.req
+			req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
+			session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			prepared, err := session.Run()
+			if closeErr := session.Close(); closeErr != nil {
+				t.Fatalf("Close: %v", closeErr)
+			}
+			if err != nil {
+				t.Fatalf("prepared Run: %v", err)
+			}
+			assertTypedColumnInt64Aggregate(t, prepared, direct.Count, direct.Sum)
+			if prepared.Diagnostics.KernelBlocks == 0 || prepared.Diagnostics.KernelSelectedBlocks+prepared.Diagnostics.KernelFullCoveredBlocks == 0 || prepared.Diagnostics.KernelFallbackBlocks != 0 {
+				t.Fatalf("prepared diagnostics=%+v want raw direct-view typedkernel reducer", prepared.Diagnostics)
+			}
+			switch tc.wantShape {
+			case "all":
+				if prepared.Diagnostics.SelectionAllBlocks == 0 {
+					t.Fatalf("diagnostics=%+v want all selection", prepared.Diagnostics)
+				}
+			case "range":
+				if prepared.Diagnostics.SelectionRangeBlocks == 0 {
+					t.Fatalf("diagnostics=%+v want range selection", prepared.Diagnostics)
+				}
+			}
+		})
+	}
+}
+
+func repeatedInt64SelectionValuesForTest(rows int, selected func(int) bool, selectedValue int64) []int64 {
+	values := make([]int64, rows)
+	for i := range values {
+		if selected(i) {
+			values[i] = selectedValue
+		} else {
+			values[i] = selectedValue + 1
+		}
+	}
+	return values
 }
 
 func TestTypedColumnInt64PreparedLayoutContractCorruptionFailsClosed(t *testing.T) {

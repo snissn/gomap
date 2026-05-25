@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
 // typedColumnPreparedRangeReader is the caller-owned byte access boundary used
@@ -34,6 +35,7 @@ type typedColumnPreparedColumnRequest struct {
 type typedColumnPreparedColumnPlan struct {
 	Field            TypedStorageField
 	Logical          columnsemantics.LogicalType
+	Operation        columnsemantics.Operation
 	Definition       typedcolumn.ColumnDefinition
 	Capability       columnsemantics.Capability
 	Layout           columnlayout.Capabilities
@@ -74,12 +76,14 @@ type typedColumnPreparedBlockPlan struct {
 }
 
 type typedColumnPreparedColumnState struct {
-	Plan          typedColumnPreparedColumnPlan
-	Column        typedcolumn.ColumnPartColumn
-	Section       typedcolumn.ColumnPartImageSection
-	BlockPlans    []typedColumnPreparedBlockPlan
-	Certification typedcolumn.ColumnPartLayoutContractColumn
-	Dictionaries  map[string]int64
+	Plan                  typedColumnPreparedColumnPlan
+	Column                typedcolumn.ColumnPartColumn
+	Section               typedcolumn.ColumnPartImageSection
+	BlockPlans            []typedColumnPreparedBlockPlan
+	Certification         typedcolumn.ColumnPartLayoutContractColumn
+	AggregateReducer      typedkernel.PreparedReducer
+	AggregateReducerReady bool
+	Dictionaries          map[string]int64
 }
 
 type typedColumnPreparedPartState struct {
@@ -204,6 +208,7 @@ func typedColumnDescribePreparedColumn(req typedColumnPreparedColumnRequest, spa
 	plan := typedColumnPreparedColumnPlan{
 		Field:            req.Field,
 		Logical:          logical,
+		Operation:        req.Operation,
 		Definition:       adapterColumn.Definition,
 		Capability:       capability,
 		Layout:           layout,

@@ -90,6 +90,11 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	FastDecodeUnsupportedPlans  int
 	DirectViewSuccesses         int
 	DirectViewFailures          int
+	KernelBlocks                int
+	KernelFullCoveredBlocks     int
+	KernelSelectedBlocks        int
+	KernelCursorBlocks          int
+	KernelFallbackBlocks        int
 	FastDecodeFallbackReason    string
 	DirectViewCertified         int
 	StreamingCertified          int
@@ -950,6 +955,11 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.FastDecodeUnsupportedPlans += src.FastDecodeUnsupportedPlans
 	dst.DirectViewSuccesses += src.DirectViewSuccesses
 	dst.DirectViewFailures += src.DirectViewFailures
+	dst.KernelBlocks += src.KernelBlocks
+	dst.KernelFullCoveredBlocks += src.KernelFullCoveredBlocks
+	dst.KernelSelectedBlocks += src.KernelSelectedBlocks
+	dst.KernelCursorBlocks += src.KernelCursorBlocks
+	dst.KernelFallbackBlocks += src.KernelFallbackBlocks
 	if src.FastDecodeFallbackReason != "" {
 		dst.FastDecodeFallbackReason = src.FastDecodeFallbackReason
 	}

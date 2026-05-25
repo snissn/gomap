@@ -39,12 +39,15 @@ type AggregateResult struct {
 }
 
 // ReduceRequest is the concrete hot-loop input for one selected block. Rows is
-// the block-local row domain. Int64Values is used by int64 value kernels and may
-// be nil for count-row/count-non-null reducers and empty selections.
+// the block-local row domain. Int64Values is used by materialized/direct-view
+// int64 value kernels and may be nil for count-row/count-non-null reducers and
+// empty selections. Int64Cursor is used by streaming int64 kernels; callers
+// provide either Int64Values or Int64Cursor for value aggregates, not both.
 type ReduceRequest struct {
 	Rows        int
 	Selection   typedcolumn.RowSelection
 	Int64Values []int64
+	Int64Cursor *typedcolumn.Int64Cursor
 }
 
 // Scratch is caller/session-owned reusable storage for future kernels. It is
