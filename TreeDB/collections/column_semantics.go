@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
-	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func columnStoreSemanticLogicalType(valueType ColumnStoreValueType) (columnsemantics.LogicalType, bool) {
@@ -37,7 +36,7 @@ func typedColumnAdapterSemanticDescriptor(column typedColumnAdapterColumn) (colu
 		Logical:  logical,
 		Physical: column.Definition.Type,
 		Encoding: column.Definition.Encoding,
-		Nullable: column.Field.Nullable || column.Definition.Encoding == typedcolumn.EncodingNullableInt64,
+		Nullable: column.Field.Nullable,
 	}, nil
 }
 
