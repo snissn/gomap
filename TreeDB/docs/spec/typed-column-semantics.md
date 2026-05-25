@@ -44,6 +44,33 @@ signed int64 logical values; bool counts return int64 false/true/null buckets;
 and dictionary group-by keys are dictionary string values bound to a stable
 dictionary identity.
 
+## Row selection and mask composition (#1844)
+
+Typed-column kernels consume block-local row selections from
+`TreeDB/internal/typedcolumn` rather than reimplementing mask semantics per type.
+The internal `RowSelection` model represents:
+
+- empty selections;
+- all rows;
+- one contiguous range;
+- multiple sorted ranges;
+- bitmap selections;
+- sparse row indexes.
+
+Selections expose count, iteration, range extraction, and shape diagnostics
+without forcing row-id materialization for all/range forms. Composition is
+fail-closed: predicate and visibility masks are intersected, while delete,
+null, and default masks exclude rows from value semantics. Mismatched row domains
+return an empty selection plus an error. Scratch-backed `Into` helpers make reuse
+explicit and avoid hidden global caches.
+
+Multi-column execution contracts are descriptors, not a planner. They bind
+predicate/measure/projection/visibility/null/default roles to row spans,
+optional immutable asset identity, and section dependency kinds such as values,
+dictionaries, offsets, null/default masks, visibility, stats, pruning metadata,
+vector payloads, and adjacency payloads. Row-span or asset-generation mismatches
+must fail closed before a hot loop consumes multiple columns.
+
 ## typedcolumn coverage
 
 The matrix covers every current `typedcolumn.ColumnType`:

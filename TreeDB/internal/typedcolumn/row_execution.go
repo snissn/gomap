@@ -2,86 +2,80 @@ package typedcolumn
 
 import "fmt"
 
-type rowMaskRole uint8
+// RowMaskRole identifies how a mask participates in selection composition.
+type RowMaskRole uint8
+
+type rowMaskRole = RowMaskRole
 
 const (
-	rowMaskPredicate rowMaskRole = iota
+	rowMaskPredicate RowMaskRole = iota
 	rowMaskVisibility
 	rowMaskDelete
 	rowMaskNull
 	rowMaskDefault
 )
 
-type rowSelectionComponents struct {
-	Predicate  *rowSelection
-	Visibility *rowSelection
-	Deletes    *rowSelection
-	Nulls      *rowSelection
-	Defaults   *rowSelection
-}
-
-type rowSpan struct {
-	FirstRow int
-	RowCount int
-}
-
-type columnRowDescriptor struct {
-	Column string
-	Type   ColumnType
-	Span   rowSpan
-}
-
-type sectionDependencyRole uint8
-
 const (
-	sectionDependencyPredicate sectionDependencyRole = iota
-	sectionDependencyMeasure
-	sectionDependencyProjection
-	sectionDependencyVisibility
-	sectionDependencyNull
-	sectionDependencyDefault
+	RowMaskPredicate  RowMaskRole = rowMaskPredicate
+	RowMaskVisibility RowMaskRole = rowMaskVisibility
+	RowMaskDelete     RowMaskRole = rowMaskDelete
+	RowMaskNull       RowMaskRole = rowMaskNull
+	RowMaskDefault    RowMaskRole = rowMaskDefault
 )
 
-type sectionDependencyDescriptor struct {
-	Role        sectionDependencyRole
-	Column      string
-	Type        ColumnType
-	SectionKind ColumnPartImageSectionKind
-	Span        rowSpan
-	Required    bool
+// RowSelectionComponents centralizes block-local composition. Predicate and
+// visibility selections are included; delete/null/default selections name rows
+// that must be excluded from value semantics.
+type RowSelectionComponents struct {
+	Predicate  *RowSelection
+	Visibility *RowSelection
+	Deletes    *RowSelection
+	Nulls      *RowSelection
+	Defaults   *RowSelection
 }
 
-func composeRowSelections(rows int, components rowSelectionComponents) (rowSelection, error) {
+type rowSelectionComponents = RowSelectionComponents
+
+// ComposeRowSelections composes predicate, visibility/delete, and null/default
+// masks over a block-local row domain. Mismatched domains return an empty
+// fail-closed selection plus an error.
+func ComposeRowSelections(rows int, components RowSelectionComponents) (RowSelection, error) {
+	return ComposeRowSelectionsInto(rows, components, nil)
+}
+
+// ComposeRowSelectionsInto is the scratch-backed form of ComposeRowSelections.
+// Returned selections may alias scratch until scratch is reused.
+func ComposeRowSelectionsInto(rows int, components RowSelectionComponents, scratch *RowSelectionScratch) (RowSelection, error) {
 	current, err := makeAllRowSelection(rows)
 	if err != nil {
 		return current, err
 	}
 	if components.Predicate != nil {
-		current, err = includeSelection(current, *components.Predicate, rowMaskPredicate)
+		current, err = includeSelectionInto(current, *components.Predicate, rowMaskPredicate, scratch)
 		if err != nil {
 			return failClosedSelection(rows, components.Predicate.rows), err
 		}
 	}
 	if components.Visibility != nil {
-		current, err = includeSelection(current, *components.Visibility, rowMaskVisibility)
+		current, err = includeSelectionInto(current, *components.Visibility, rowMaskVisibility, scratch)
 		if err != nil {
 			return failClosedSelection(rows, components.Visibility.rows), err
 		}
 	}
 	if components.Deletes != nil {
-		current, err = excludeSelection(current, *components.Deletes, rowMaskDelete)
+		current, err = excludeSelectionInto(current, *components.Deletes, rowMaskDelete, scratch)
 		if err != nil {
 			return failClosedSelection(rows, components.Deletes.rows), err
 		}
 	}
 	if components.Nulls != nil {
-		current, err = excludeSelection(current, *components.Nulls, rowMaskNull)
+		current, err = excludeSelectionInto(current, *components.Nulls, rowMaskNull, scratch)
 		if err != nil {
 			return failClosedSelection(rows, components.Nulls.rows), err
 		}
 	}
 	if components.Defaults != nil {
-		current, err = excludeSelection(current, *components.Defaults, rowMaskDefault)
+		current, err = excludeSelectionInto(current, *components.Defaults, rowMaskDefault, scratch)
 		if err != nil {
 			return failClosedSelection(rows, components.Defaults.rows), err
 		}
@@ -89,28 +83,123 @@ func composeRowSelections(rows int, components rowSelectionComponents) (rowSelec
 	return current, nil
 }
 
+func composeRowSelections(rows int, components rowSelectionComponents) (rowSelection, error) {
+	return ComposeRowSelections(rows, components)
+}
+
 func includeSelection(current rowSelection, mask rowSelection, role rowMaskRole) (rowSelection, error) {
+	return includeSelectionInto(current, mask, role, nil)
+}
+
+func includeSelectionInto(current RowSelection, mask RowSelection, role RowMaskRole, scratch *RowSelectionScratch) (RowSelection, error) {
 	if err := validateSameSelectionRows(current, mask); err != nil {
 		return failClosedSelection(current.rows, mask.rows), fmt.Errorf("typedcolumn: %s mask row mismatch: %w", role, err)
 	}
-	return andRowSelections(current, mask)
+	return AndRowSelectionsInto(current, mask, scratch)
 }
 
 func excludeSelection(current rowSelection, mask rowSelection, role rowMaskRole) (rowSelection, error) {
+	return excludeSelectionInto(current, mask, role, nil)
+}
+
+func excludeSelectionInto(current RowSelection, mask RowSelection, role RowMaskRole, scratch *RowSelectionScratch) (RowSelection, error) {
 	if err := validateSameSelectionRows(current, mask); err != nil {
 		return failClosedSelection(current.rows, mask.rows), fmt.Errorf("typedcolumn: %s mask row mismatch: %w", role, err)
 	}
-	inverted, err := notRowSelection(mask)
+	inverted, err := NotRowSelectionInto(mask, scratch)
 	if err != nil {
 		return failClosedSelection(current.rows, mask.rows), fmt.Errorf("typedcolumn: invert %s mask: %w", role, err)
 	}
-	return andRowSelections(current, inverted)
+	return AndRowSelectionsInto(current, inverted, scratch)
 }
 
+// RowSpan is a half-open row span over a column section or block.
+type RowSpan struct {
+	FirstRow int
+	RowCount int
+}
+
+type rowSpan = RowSpan
+
+// ColumnExecutionRole classifies how a column participates in a future
+// multi-column execution plan. It is descriptive; it is not a planner.
+type ColumnExecutionRole uint8
+
+type sectionDependencyRole = ColumnExecutionRole
+
+const (
+	sectionDependencyPredicate ColumnExecutionRole = iota
+	sectionDependencyMeasure
+	sectionDependencyProjection
+	sectionDependencyVisibility
+	sectionDependencyNull
+	sectionDependencyDefault
+)
+
+const (
+	ColumnRolePredicate  ColumnExecutionRole = sectionDependencyPredicate
+	ColumnRoleMeasure    ColumnExecutionRole = sectionDependencyMeasure
+	ColumnRoleProjection ColumnExecutionRole = sectionDependencyProjection
+	ColumnRoleVisibility ColumnExecutionRole = sectionDependencyVisibility
+	ColumnRoleNull       ColumnExecutionRole = sectionDependencyNull
+	ColumnRoleDefault    ColumnExecutionRole = sectionDependencyDefault
+)
+
+// SectionDependencyKind names the logical section/payload class needed by an
+// operation. It intentionally covers future codecs without requiring a planner.
+type SectionDependencyKind string
+
+const (
+	SectionDependencyValues           SectionDependencyKind = "values"
+	SectionDependencyDictionaries     SectionDependencyKind = "dictionaries"
+	SectionDependencyOffsets          SectionDependencyKind = "offsets"
+	SectionDependencyNullMask         SectionDependencyKind = "null_mask"
+	SectionDependencyDefaultMask      SectionDependencyKind = "default_mask"
+	SectionDependencyVisibility       SectionDependencyKind = "visibility"
+	SectionDependencyStats            SectionDependencyKind = "stats"
+	SectionDependencyPruningMetadata  SectionDependencyKind = "pruning_metadata"
+	SectionDependencyVectorPayload    SectionDependencyKind = "vector_payload"
+	SectionDependencyAdjacencyPayload SectionDependencyKind = "adjacency_payload"
+)
+
+// ColumnRowDescriptor binds one column role to a row span and optional immutable
+// asset identity. Non-zero identity fields must align across descriptors.
+type ColumnRowDescriptor struct {
+	Column             string
+	Type               ColumnType
+	Span               RowSpan
+	SnapshotGeneration uint64
+	AssetGeneration    uint64
+	PartID             uint64
+	SchemaVersion      uint32
+	AlignmentKey       string
+}
+
+type columnRowDescriptor = ColumnRowDescriptor
+
+// SectionDependencyDescriptor describes a section read dependency for a column
+// role and row span. SectionKind identifies the tcs1 section class, while Kind
+// identifies the logical payload/metadata need.
+type SectionDependencyDescriptor struct {
+	Role        ColumnExecutionRole
+	Column      string
+	Type        ColumnType
+	Kind        SectionDependencyKind
+	SectionKind ColumnPartImageSectionKind
+	Span        RowSpan
+	Required    bool
+}
+
+type sectionDependencyDescriptor = SectionDependencyDescriptor
+
 func makeRowSpan(firstRow int, rowCount int) (rowSpan, error) {
-	span := rowSpan{FirstRow: firstRow, RowCount: rowCount}
+	return NewRowSpan(firstRow, rowCount)
+}
+
+func NewRowSpan(firstRow int, rowCount int) (RowSpan, error) {
+	span := RowSpan{FirstRow: firstRow, RowCount: rowCount}
 	if err := validateRowSpan(span); err != nil {
-		return rowSpan{}, err
+		return RowSpan{}, err
 	}
 	return span, nil
 }
@@ -118,6 +207,9 @@ func makeRowSpan(firstRow int, rowCount int) (rowSpan, error) {
 func (s rowSpan) endRow() int {
 	return s.FirstRow + s.RowCount
 }
+
+// EndRow returns the exclusive row end.
+func (s RowSpan) EndRow() int { return s.FirstRow + s.RowCount }
 
 func validateRowSpan(span rowSpan) error {
 	if span.FirstRow < 0 {
@@ -132,6 +224,12 @@ func validateRowSpan(span rowSpan) error {
 	return nil
 }
 
+// AlignColumnRowSpans validates that all columns share the same row span and
+// optional snapshot/asset/schema identity. It fails closed on any mismatch.
+func AlignColumnRowSpans(columns []ColumnRowDescriptor) (RowSpan, bool, error) {
+	return alignColumnRowSpans(columns)
+}
+
 func alignColumnRowSpans(columns []columnRowDescriptor) (rowSpan, bool, error) {
 	if len(columns) == 0 {
 		return rowSpan{}, false, fmt.Errorf("typedcolumn: no column row spans to align")
@@ -139,17 +237,35 @@ func alignColumnRowSpans(columns []columnRowDescriptor) (rowSpan, bool, error) {
 	if err := validateColumnRowDescriptor(columns[0]); err != nil {
 		return rowSpan{}, false, err
 	}
-	want := columns[0].Span
+	want := columns[0]
 	for i := 1; i < len(columns); i++ {
 		if err := validateColumnRowDescriptor(columns[i]); err != nil {
 			return rowSpan{}, false, err
 		}
-		if columns[i].Span != want {
-			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s span [%d,%d) mismatches [%d,%d)", columns[i].Column, columns[i].Span.FirstRow, columns[i].Span.endRow(), want.FirstRow, want.endRow())
+		if columns[i].Span != want.Span {
+			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s span [%d,%d) mismatches [%d,%d)", columns[i].Column, columns[i].Span.FirstRow, columns[i].Span.endRow(), want.Span.FirstRow, want.Span.endRow())
+		}
+		if mismatchIdentity(want.SnapshotGeneration, columns[i].SnapshotGeneration) {
+			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s snapshot generation %d mismatches %d", columns[i].Column, columns[i].SnapshotGeneration, want.SnapshotGeneration)
+		}
+		if mismatchIdentity(want.AssetGeneration, columns[i].AssetGeneration) {
+			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s asset generation %d mismatches %d", columns[i].Column, columns[i].AssetGeneration, want.AssetGeneration)
+		}
+		if mismatchIdentity(want.PartID, columns[i].PartID) {
+			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s part id %d mismatches %d", columns[i].Column, columns[i].PartID, want.PartID)
+		}
+		if mismatchIdentity32(want.SchemaVersion, columns[i].SchemaVersion) {
+			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s schema version %d mismatches %d", columns[i].Column, columns[i].SchemaVersion, want.SchemaVersion)
+		}
+		if want.AlignmentKey != "" && columns[i].AlignmentKey != "" && columns[i].AlignmentKey != want.AlignmentKey {
+			return rowSpan{}, false, fmt.Errorf("typedcolumn: column %s asset ref %q mismatches %q", columns[i].Column, columns[i].AlignmentKey, want.AlignmentKey)
 		}
 	}
-	return want, true, nil
+	return want.Span, true, nil
 }
+
+func mismatchIdentity(a, b uint64) bool   { return a != 0 && b != 0 && a != b }
+func mismatchIdentity32(a, b uint32) bool { return a != 0 && b != 0 && a != b }
 
 func validateColumnRowDescriptor(desc columnRowDescriptor) error {
 	if desc.Column == "" {
@@ -162,11 +278,21 @@ func validateColumnRowDescriptor(desc columnRowDescriptor) error {
 }
 
 func makeSectionDependency(role sectionDependencyRole, column string, columnType ColumnType, sectionKind ColumnPartImageSectionKind, span rowSpan, required bool) (sectionDependencyDescriptor, error) {
-	dep := sectionDependencyDescriptor{Role: role, Column: column, Type: columnType, SectionKind: sectionKind, Span: span, Required: required}
+	return NewSectionDependency(role, column, columnType, SectionDependencyValues, sectionKind, span, required)
+}
+
+func NewSectionDependency(role ColumnExecutionRole, column string, columnType ColumnType, kind SectionDependencyKind, sectionKind ColumnPartImageSectionKind, span RowSpan, required bool) (SectionDependencyDescriptor, error) {
+	dep := SectionDependencyDescriptor{Role: role, Column: column, Type: columnType, Kind: kind, SectionKind: sectionKind, Span: span, Required: required}
 	if err := validateSectionDependency(dep); err != nil {
-		return sectionDependencyDescriptor{}, err
+		return SectionDependencyDescriptor{}, err
 	}
 	return dep, nil
+}
+
+// ValidateSectionDependencies validates dependency descriptors and their row
+// alignment. It does not read any payloads.
+func ValidateSectionDependencies(deps []SectionDependencyDescriptor) (RowSpan, bool, error) {
+	return validateSectionDependencies(deps)
 }
 
 func validateSectionDependencies(deps []sectionDependencyDescriptor) (rowSpan, bool, error) {
@@ -190,6 +316,9 @@ func validateSectionDependency(dep sectionDependencyDescriptor) error {
 	if !dep.Role.valid() {
 		return fmt.Errorf("typedcolumn: invalid section dependency role %d", dep.Role)
 	}
+	if dep.Kind == "" {
+		return fmt.Errorf("typedcolumn: empty %s dependency kind", dep.Role)
+	}
 	if dep.SectionKind == ColumnPartImageSectionManifest {
 		return fmt.Errorf("typedcolumn: %s dependency cannot target manifest section", dep.Role)
 	}
@@ -197,6 +326,41 @@ func validateSectionDependency(dep sectionDependencyDescriptor) error {
 		return err
 	}
 	return nil
+}
+
+// PredicateColumnDependencies describes the ordinary sections needed to produce
+// a predicate selection for one column. Callers may add dictionary/vector/etc.
+// dependencies when the operation requires them.
+func PredicateColumnDependencies(column string, columnType ColumnType, span RowSpan, nullable bool) ([]SectionDependencyDescriptor, error) {
+	return standardColumnDependencies(ColumnRolePredicate, column, columnType, span, nullable, true)
+}
+
+func MeasureColumnDependencies(column string, columnType ColumnType, span RowSpan, nullable bool) ([]SectionDependencyDescriptor, error) {
+	return standardColumnDependencies(ColumnRoleMeasure, column, columnType, span, nullable, false)
+}
+
+func ProjectionColumnDependencies(column string, columnType ColumnType, span RowSpan, nullable bool) ([]SectionDependencyDescriptor, error) {
+	return standardColumnDependencies(ColumnRoleProjection, column, columnType, span, nullable, false)
+}
+
+func standardColumnDependencies(role ColumnExecutionRole, column string, columnType ColumnType, span RowSpan, nullable bool, pruning bool) ([]SectionDependencyDescriptor, error) {
+	kinds := []SectionDependencyKind{SectionDependencyValues}
+	if pruning {
+		kinds = append(kinds, SectionDependencyPruningMetadata)
+	}
+	if nullable {
+		kinds = append(kinds, SectionDependencyNullMask, SectionDependencyDefaultMask)
+	}
+	out := make([]SectionDependencyDescriptor, 0, len(kinds))
+	for _, kind := range kinds {
+		sectionKind := ColumnPartImageSectionColumnData
+		dep, err := NewSectionDependency(role, column, columnType, kind, sectionKind, span, true)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, dep)
+	}
+	return out, nil
 }
 
 func appendSelectedBools(dst []bool, values []bool, selection rowSelection) ([]bool, error) {
@@ -247,7 +411,7 @@ func appendSelectedUint32s(dst []uint32, values []uint32, selection rowSelection
 	return out, nil
 }
 
-func (r rowMaskRole) String() string {
+func (r RowMaskRole) String() string {
 	switch r {
 	case rowMaskPredicate:
 		return "predicate"
@@ -264,11 +428,11 @@ func (r rowMaskRole) String() string {
 	}
 }
 
-func (r sectionDependencyRole) valid() bool {
+func (r ColumnExecutionRole) valid() bool {
 	return r <= sectionDependencyDefault
 }
 
-func (r sectionDependencyRole) String() string {
+func (r ColumnExecutionRole) String() string {
 	switch r {
 	case sectionDependencyPredicate:
 		return "predicate"

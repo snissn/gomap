@@ -194,6 +194,38 @@ func TestSectionDependencyDescriptorsCoverRolesAndAlign(t *testing.T) {
 	if err == nil || ok || got.RowCount != 0 {
 		t.Fatalf("validateSectionDependencies mismatch got=%+v ok=%v err=%v", got, ok, err)
 	}
+
+	predicateDeps, err := PredicateColumnDependencies("active", ColumnTypeBool, span, true)
+	if err != nil {
+		t.Fatalf("PredicateColumnDependencies: %v", err)
+	}
+	seenKinds := make(map[SectionDependencyKind]bool)
+	for _, dep := range predicateDeps {
+		seenKinds[dep.Kind] = true
+	}
+	for _, kind := range []SectionDependencyKind{SectionDependencyValues, SectionDependencyPruningMetadata, SectionDependencyNullMask, SectionDependencyDefaultMask} {
+		if !seenKinds[kind] {
+			t.Fatalf("predicate dependency kinds=%v missing %s", seenKinds, kind)
+		}
+	}
+}
+
+func TestColumnRowAlignmentRejectsAssetIdentityMismatches(t *testing.T) {
+	span := mustRowSpan(t, 0, 16)
+	_, ok, err := alignColumnRowSpans([]columnRowDescriptor{
+		{Column: "predicate", Type: ColumnTypeInt64, Span: span, SnapshotGeneration: 7, AssetGeneration: 10, PartID: 2, SchemaVersion: 99, AlignmentKey: "asset-a"},
+		{Column: "measure", Type: ColumnTypeInt64, Span: span, SnapshotGeneration: 7, AssetGeneration: 10, PartID: 2, SchemaVersion: 99, AlignmentKey: "asset-b"},
+	})
+	if err == nil || ok || !strings.Contains(err.Error(), "asset ref") {
+		t.Fatalf("asset mismatch ok=%v err=%v", ok, err)
+	}
+	_, ok, err = alignColumnRowSpans([]columnRowDescriptor{
+		{Column: "predicate", Type: ColumnTypeInt64, Span: span, SnapshotGeneration: 7, AssetGeneration: 10, PartID: 2, SchemaVersion: 99},
+		{Column: "measure", Type: ColumnTypeInt64, Span: span, SnapshotGeneration: 8, AssetGeneration: 10, PartID: 2, SchemaVersion: 99},
+	})
+	if err == nil || ok || !strings.Contains(err.Error(), "snapshot generation") {
+		t.Fatalf("snapshot mismatch ok=%v err=%v", ok, err)
+	}
 }
 
 func TestRowSelectionNonInt64SmokeConsumption(t *testing.T) {
@@ -224,6 +256,21 @@ func TestRowSelectionNonInt64SmokeConsumption(t *testing.T) {
 	}
 }
 
+func BenchmarkRowSelectionIterateAll(b *testing.B) {
+	selection := mustAllSelection(b, 4096)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		selection.forEach(func(row int) {
+			count += row & 1
+		})
+		if count == -1 {
+			b.Fatal(count)
+		}
+	}
+}
+
 func BenchmarkRowSelectionIterateRange(b *testing.B) {
 	selection := mustRangeSelection(b, 4096, 256, 3840)
 	b.ReportAllocs()
@@ -234,6 +281,44 @@ func BenchmarkRowSelectionIterateRange(b *testing.B) {
 			count += row & 1
 		})
 		if count == -1 {
+			b.Fatal(count)
+		}
+	}
+}
+
+func BenchmarkRowSelectionIterateBitmap(b *testing.B) {
+	setRows := make([]int, 0, 512)
+	for row := 0; row < 4096; row += 8 {
+		setRows = append(setRows, row)
+	}
+	selection := mustBitmapSelection(b, 4096, setRows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		selection.forEach(func(row int) {
+			count += row & 1
+		})
+		if count != 0 {
+			b.Fatal(count)
+		}
+	}
+}
+
+func BenchmarkRowSelectionIterateSparse(b *testing.B) {
+	setRows := make([]int, 0, 512)
+	for row := 0; row < 4096; row += 8 {
+		setRows = append(setRows, row)
+	}
+	selection := mustSparseSelection(b, 4096, setRows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		selection.forEach(func(row int) {
+			count += row & 1
+		})
+		if count != 0 {
 			b.Fatal(count)
 		}
 	}
@@ -261,6 +346,26 @@ func BenchmarkRowSelectionAndRanges(b *testing.B) {
 		got, err := andRowSelections(left, right)
 		if err != nil || got.countRows() != 2048 {
 			b.Fatalf("got count=%d err=%v", got.countRows(), err)
+		}
+	}
+}
+
+func BenchmarkRowSelectionComposeScratchNoAlloc(b *testing.B) {
+	predicate := mustRangesSelection(b, 8192, []rowRange{{Start: 0, End: 4096}, {Start: 6144, End: 8192}})
+	visibility := mustRangesSelection(b, 8192, []rowRange{{Start: 1024, End: 7168}})
+	deletes := mustSparseSelection(b, 8192, []int{2048, 2049, 4096, 4097})
+	components := rowSelectionComponents{Predicate: &predicate, Visibility: &visibility, Deletes: &deletes}
+	var scratch RowSelectionScratch
+	warm, err := ComposeRowSelectionsInto(8192, components, &scratch)
+	if err != nil || warm.countRows() == 0 {
+		b.Fatalf("warm count=%d err=%v", warm.countRows(), err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := ComposeRowSelectionsInto(8192, components, &scratch)
+		if err != nil || got.countRows() != warm.countRows() {
+			b.Fatalf("got count=%d warm=%d err=%v", got.countRows(), warm.countRows(), err)
 		}
 	}
 }

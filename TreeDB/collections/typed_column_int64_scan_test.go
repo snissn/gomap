@@ -511,6 +511,34 @@ func TestTypedColumnInt64AggregateAllPrunedZero(t *testing.T) {
 	if result.Diagnostics.RowsScanned != 0 || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.PartsPruned != 2 || result.Diagnostics.BlocksDecoded != 0 {
 		t.Fatalf("diagnostics=%+v want all pruned zero aggregate", result.Diagnostics)
 	}
+	if result.Diagnostics.SelectionEmptyBlocks == 0 || result.Diagnostics.SelectionAllBlocks != 0 || result.Diagnostics.SelectionSparseBlocks != 0 {
+		t.Fatalf("diagnostics=%+v want shared empty selection diagnostics for pruned blocks", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64AggregateSelectionShapes(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30, 20})
+
+	all, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate all: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, all, 4, 80)
+	if all.Diagnostics.SelectionAllBlocks == 0 || all.Diagnostics.SelectionSparseBlocks != 0 || all.Diagnostics.SelectionEmptyBlocks != 0 {
+		t.Fatalf("all diagnostics=%+v want all-row selection shape", all.Diagnostics)
+	}
+
+	exact, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate exact: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, exact, 2, 40)
+	if exact.Diagnostics.SelectionSparseBlocks+exact.Diagnostics.SelectionRangeBlocks == 0 {
+		t.Fatalf("exact diagnostics=%+v want sparse/range predicate selection shape", exact.Diagnostics)
+	}
+	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, exact.Diagnostics, "selection-shaped typed-column aggregate")
 }
 
 func TestTypedColumnInt64AggregateReopenDurable(t *testing.T) {
@@ -2155,6 +2183,13 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.BlocksConsidered), "blocks_considered/op")
 	b.ReportMetric(float64(diag.BlocksPruned), "blocks_pruned/op")
 	b.ReportMetric(float64(diag.BlocksDecoded), "blocks_decoded/op")
+	b.ReportMetric(float64(diag.SelectionEmptyBlocks), "selection_empty_blocks/op")
+	b.ReportMetric(float64(diag.SelectionAllBlocks), "selection_all_blocks/op")
+	b.ReportMetric(float64(diag.SelectionRangeBlocks), "selection_range_blocks/op")
+	b.ReportMetric(float64(diag.SelectionRangesBlocks), "selection_ranges_blocks/op")
+	b.ReportMetric(float64(diag.SelectionBitmapBlocks), "selection_bitmap_blocks/op")
+	b.ReportMetric(float64(diag.SelectionSparseBlocks), "selection_sparse_blocks/op")
+	b.ReportMetric(float64(diag.SelectionCompositions), "selection_compositions/op")
 	b.ReportMetric(float64(diag.FullAssetReads), "full_asset_reads/op")
 	b.ReportMetric(float64(diag.FullAssetBytes), "full_asset_bytes/op")
 	b.ReportMetric(float64(diag.SectionBytesRead), "section_bytes_read/op")
@@ -2242,6 +2277,13 @@ func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64P
 	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
 	b.ReportMetric(float64(diag.PartsPruned), "parts_pruned/op")
 	b.ReportMetric(float64(diag.BlocksPruned), "blocks_pruned/op")
+	b.ReportMetric(float64(diag.SelectionEmptyBlocks), "selection_empty_blocks/op")
+	b.ReportMetric(float64(diag.SelectionAllBlocks), "selection_all_blocks/op")
+	b.ReportMetric(float64(diag.SelectionRangeBlocks), "selection_range_blocks/op")
+	b.ReportMetric(float64(diag.SelectionRangesBlocks), "selection_ranges_blocks/op")
+	b.ReportMetric(float64(diag.SelectionBitmapBlocks), "selection_bitmap_blocks/op")
+	b.ReportMetric(float64(diag.SelectionSparseBlocks), "selection_sparse_blocks/op")
+	b.ReportMetric(float64(diag.SelectionCompositions), "selection_compositions/op")
 }
 
 type typedColumnInt64AggregateTestBlockRange struct {

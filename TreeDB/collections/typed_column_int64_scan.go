@@ -63,6 +63,14 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	BlocksPruned     int
 	BlocksDecoded    int
 
+	SelectionEmptyBlocks  int
+	SelectionAllBlocks    int
+	SelectionRangeBlocks  int
+	SelectionRangesBlocks int
+	SelectionBitmapBlocks int
+	SelectionSparseBlocks int
+	SelectionCompositions int
+
 	DirectTypedColumnAssetReads int
 	FullAssetReads              int
 	FallbackReads               int
@@ -898,6 +906,13 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.BlocksConsidered += src.BlocksConsidered
 	dst.BlocksPruned += src.BlocksPruned
 	dst.BlocksDecoded += src.BlocksDecoded
+	dst.SelectionEmptyBlocks += src.SelectionEmptyBlocks
+	dst.SelectionAllBlocks += src.SelectionAllBlocks
+	dst.SelectionRangeBlocks += src.SelectionRangeBlocks
+	dst.SelectionRangesBlocks += src.SelectionRangesBlocks
+	dst.SelectionBitmapBlocks += src.SelectionBitmapBlocks
+	dst.SelectionSparseBlocks += src.SelectionSparseBlocks
+	dst.SelectionCompositions += src.SelectionCompositions
 	dst.DirectTypedColumnAssetReads += src.DirectTypedColumnAssetReads
 	dst.FullAssetReads += src.FullAssetReads
 	dst.FallbackReads += src.FallbackReads

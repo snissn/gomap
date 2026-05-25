@@ -6,10 +6,15 @@ import (
 	"math/bits"
 )
 
-type rowSelectionKind uint8
+// RowSelectionKind names the concrete representation used for a block-local
+// row selection. Callers should prefer all/range/ranges forms when possible;
+// bitmap and sparse forms are available for genuinely irregular selections.
+type RowSelectionKind uint8
+
+type rowSelectionKind = RowSelectionKind
 
 const (
-	rowSelectionEmpty rowSelectionKind = iota
+	rowSelectionEmpty RowSelectionKind = iota
 	rowSelectionAll
 	rowSelectionRange
 	rowSelectionRanges
@@ -17,29 +22,61 @@ const (
 	rowSelectionSparse
 )
 
-type rowRange struct {
+const (
+	RowSelectionEmpty  RowSelectionKind = rowSelectionEmpty
+	RowSelectionAll    RowSelectionKind = rowSelectionAll
+	RowSelectionRange  RowSelectionKind = rowSelectionRange
+	RowSelectionRanges RowSelectionKind = rowSelectionRanges
+	RowSelectionBitmap RowSelectionKind = rowSelectionBitmap
+	RowSelectionSparse RowSelectionKind = rowSelectionSparse
+)
+
+// RowRange is a half-open [Start, End) range over a block-local row domain.
+type RowRange struct {
 	Start int
 	End   int
 }
 
-type rowSelection struct {
+type rowRange = RowRange
+
+// RowSelection is an immutable block-local selection over rows [0, Rows()).
+// Slice-backed selections may alias caller-owned scratch when constructed by a
+// NoCopy/Into helper; callers must not mutate those slices until the selection
+// is no longer used. The type deliberately has no package-global cache.
+type RowSelection struct {
 	rows   int
-	kind   rowSelectionKind
+	kind   RowSelectionKind
 	start  int
 	end    int
-	ranges []rowRange
+	ranges []RowRange
 	bitmap []uint64
 	sparse []int
 	count  int
 }
 
-type rowSelectionShape struct {
+type rowSelection = RowSelection
+
+// RowSelectionShape is a cheap diagnostic summary that does not materialize row
+// IDs.
+type RowSelectionShape struct {
 	Kind        string
 	Rows        int
 	Count       int
 	Ranges      int
 	BitmapWords int
 	SparseRows  int
+}
+
+type rowSelectionShape = RowSelectionShape
+
+// RowSelectionScratch owns caller-scoped temporary storage for composition and
+// no-copy constructors. Returned selections may alias these slices until the
+// next operation using the same scratch.
+type RowSelectionScratch struct {
+	leftRanges  []RowRange
+	rightRanges []RowRange
+	outRanges   []RowRange
+	bitmap      []uint64
 }
 
 func makeEmptyRowSelection(rows int) (rowSelection, error) {
@@ -177,6 +214,111 @@ func makeBitmapRowSelection(rows int, bitmap []uint64) (rowSelection, error) {
 	return rowSelection{rows: rows, kind: rowSelectionBitmap, bitmap: copyBitmap, count: count}, nil
 }
 
+// NewEmptyRowSelection returns an empty selection over rows.
+func NewEmptyRowSelection(rows int) (RowSelection, error) { return makeEmptyRowSelection(rows) }
+
+// NewAllRowSelection returns a compact all-rows selection over rows.
+func NewAllRowSelection(rows int) (RowSelection, error) { return makeAllRowSelection(rows) }
+
+// NewRangeRowSelection returns a compact half-open range selection.
+func NewRangeRowSelection(rows int, start int, end int) (RowSelection, error) {
+	return makeRangeRowSelection(rows, start, end)
+}
+
+// NewRangesRowSelection returns a compact multi-range selection. Adjacent ranges
+// are coalesced and fully-covered domains collapse to all.
+func NewRangesRowSelection(rows int, ranges []RowRange) (RowSelection, error) {
+	return makeRangesRowSelection(rows, ranges)
+}
+
+// NewSparseRowSelection returns a sparse selection from strictly increasing row
+// indexes. The input slice is copied.
+func NewSparseRowSelection(rows int, sparse []int) (RowSelection, error) {
+	return makeSparseRowSelection(rows, sparse)
+}
+
+// NewSparseRowSelectionNoCopy returns a sparse selection that may alias sparse.
+// The input must be strictly increasing and must not be mutated while the
+// selection is in use.
+func NewSparseRowSelectionNoCopy(rows int, sparse []int) (RowSelection, error) {
+	return makeSparseRowSelectionNoCopy(rows, sparse)
+}
+
+// NewBitmapRowSelection returns a bitmap selection. The bitmap slice is copied
+// and must have exactly ceil(rows/64) words with zero padding bits.
+func NewBitmapRowSelection(rows int, bitmap []uint64) (RowSelection, error) {
+	return makeBitmapRowSelection(rows, bitmap)
+}
+
+func makeSparseRowSelectionNoCopy(rows int, sparse []int) (RowSelection, error) {
+	if rows < 0 {
+		return RowSelection{}, fmt.Errorf("typedcolumn: negative row selection rows %d", rows)
+	}
+	if len(sparse) == 0 {
+		return makeEmptyRowSelection(rows)
+	}
+	for i, row := range sparse {
+		if row < 0 || row >= rows {
+			return RowSelection{}, fmt.Errorf("typedcolumn: sparse row %d=%d outside [0,%d)", i, row, rows)
+		}
+		if i > 0 && row <= sparse[i-1] {
+			return RowSelection{}, fmt.Errorf("typedcolumn: sparse rows not strictly increasing at %d", i)
+		}
+	}
+	if len(sparse) == rows {
+		return makeAllRowSelection(rows)
+	}
+	if isContiguousSparse(sparse) {
+		return makeRangeRowSelection(rows, sparse[0], sparse[len(sparse)-1]+1)
+	}
+	return RowSelection{rows: rows, kind: rowSelectionSparse, sparse: sparse, count: len(sparse)}, nil
+}
+
+func makeRangesRowSelectionNoCopy(rows int, ranges []RowRange) (RowSelection, error) {
+	if rows < 0 {
+		return RowSelection{}, fmt.Errorf("typedcolumn: negative row selection rows %d", rows)
+	}
+	if len(ranges) == 0 {
+		return makeEmptyRowSelection(rows)
+	}
+	out := ranges[:0]
+	for i, r := range ranges {
+		if err := validateRowRange(rows, r); err != nil {
+			return RowSelection{}, fmt.Errorf("typedcolumn: invalid row range %d: %w", i, err)
+		}
+		if r.Start == r.End {
+			continue
+		}
+		if len(out) == 0 {
+			out = append(out, r)
+			continue
+		}
+		last := &out[len(out)-1]
+		if r.Start < last.End {
+			return RowSelection{}, fmt.Errorf("typedcolumn: row ranges overlap at %d", i)
+		}
+		if r.Start == last.End {
+			last.End = r.End
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(out) == 0 {
+		return makeEmptyRowSelection(rows)
+	}
+	count := 0
+	for _, r := range out {
+		count += r.End - r.Start
+	}
+	if count == rows {
+		return makeAllRowSelection(rows)
+	}
+	if len(out) == 1 {
+		return makeRangeRowSelection(rows, out[0].Start, out[0].End)
+	}
+	return RowSelection{rows: rows, kind: rowSelectionRanges, ranges: out, count: count}, nil
+}
+
 func (s rowSelection) rowsCount() int {
 	return s.rows
 }
@@ -184,6 +326,79 @@ func (s rowSelection) rowsCount() int {
 func (s rowSelection) countRows() int {
 	return s.count
 }
+
+// Rows returns the row-domain size.
+func (s RowSelection) Rows() int { return s.rows }
+
+// Count returns the selected row count without materializing row IDs.
+func (s RowSelection) Count() int { return s.count }
+
+// Kind returns the compact representation shape.
+func (s RowSelection) Kind() RowSelectionKind { return s.kind }
+
+// IsEmpty reports whether no rows are selected.
+func (s RowSelection) IsEmpty() bool { return s.count == 0 || s.kind == rowSelectionEmpty }
+
+// IsAll reports whether the selection covers the whole row domain.
+func (s RowSelection) IsAll() bool { return s.kind == rowSelectionAll }
+
+// SingleRange exposes the half-open range for range selections.
+func (s RowSelection) SingleRange() (start int, end int, ok bool) {
+	if s.kind != rowSelectionRange {
+		return 0, 0, false
+	}
+	return s.start, s.end, true
+}
+
+// Ranges returns the internal range slice for range/ranges selections. Treat the
+// returned slice as read-only and copy it if it must outlive caller scratch.
+func (s RowSelection) Ranges() []RowRange {
+	switch s.kind {
+	case rowSelectionRange:
+		return []RowRange{{Start: s.start, End: s.end}}
+	case rowSelectionRanges:
+		return s.ranges
+	case rowSelectionAll:
+		return []RowRange{{Start: 0, End: s.rows}}
+	default:
+		return nil
+	}
+}
+
+// SparseRows returns the internal sparse row slice for sparse selections.
+// Treat the returned slice as read-only.
+func (s RowSelection) SparseRows() []int {
+	if s.kind != rowSelectionSparse {
+		return nil
+	}
+	return s.sparse
+}
+
+// BitmapWords returns the internal bitmap words for bitmap selections. Treat the
+// returned slice as read-only.
+func (s RowSelection) BitmapWords() []uint64 {
+	if s.kind != rowSelectionBitmap {
+		return nil
+	}
+	return s.bitmap
+}
+
+// Contains reports whether row is selected.
+func (s RowSelection) Contains(row int) bool { return s.contains(row) }
+
+// ForEach calls fn once for each selected row in ascending order. It does not
+// allocate, but performance-sensitive kernels should switch on Kind and use the
+// concrete accessors to avoid callback overhead in inner loops.
+func (s RowSelection) ForEach(fn func(row int)) { s.forEach(fn) }
+
+// AppendRows appends selected rows in ascending order to dst.
+func (s RowSelection) AppendRows(dst []int) []int { return s.appendRows(dst) }
+
+// AppendRanges appends a range decomposition to dst without materializing rows.
+func (s RowSelection) AppendRanges(dst []RowRange) []RowRange { return s.appendRanges(dst) }
+
+// Shape returns diagnostic metadata for the selection representation.
+func (s RowSelection) Shape() RowSelectionShape { return s.shape() }
 
 func (s rowSelection) shape() rowSelectionShape {
 	shape := rowSelectionShape{Kind: s.kind.String(), Rows: s.rows, Count: s.count}
@@ -397,6 +612,95 @@ func andRowSelections(a rowSelection, b rowSelection) (rowSelection, error) {
 	return makeRangesRowSelection(a.rows, out)
 }
 
+// AndRowSelections returns the intersection of a and b. Mixed-shape results are
+// range-normalized and may allocate; use AndRowSelectionsInto with caller scratch
+// on prepared/hot paths.
+func AndRowSelections(a RowSelection, b RowSelection) (RowSelection, error) {
+	return andRowSelections(a, b)
+}
+
+// AndRowSelectionsInto intersects a and b using caller-owned scratch for mixed
+// range results. The returned selection may alias scratch until the next scratch
+// use.
+func AndRowSelectionsInto(a RowSelection, b RowSelection, scratch *RowSelectionScratch) (RowSelection, error) {
+	if scratch == nil {
+		return andRowSelections(a, b)
+	}
+	if err := validateSameSelectionRows(a, b); err != nil {
+		return failClosedSelection(a.rows, b.rows), err
+	}
+	if a.kind == rowSelectionEmpty || b.kind == rowSelectionEmpty {
+		return makeEmptyRowSelection(a.rows)
+	}
+	if a.kind == rowSelectionAll {
+		return b, nil
+	}
+	if b.kind == rowSelectionAll {
+		return a, nil
+	}
+	if a.kind == rowSelectionBitmap && b.kind == rowSelectionBitmap {
+		words := rowSelectionBitmapWords(a.rows)
+		if cap(scratch.bitmap) < words {
+			scratch.bitmap = make([]uint64, words)
+		}
+		out := scratch.bitmap[:words]
+		for i := range out {
+			out[i] = a.bitmap[i] & b.bitmap[i]
+		}
+		return makeBitmapRowSelectionNoCopy(a.rows, out)
+	}
+	scratch.leftRanges = a.appendRanges(scratch.leftRanges[:0])
+	scratch.rightRanges = b.appendRanges(scratch.rightRanges[:0])
+	scratch.outRanges = scratch.outRanges[:0]
+	i, j := 0, 0
+	for i < len(scratch.leftRanges) && j < len(scratch.rightRanges) {
+		start := max(scratch.leftRanges[i].Start, scratch.rightRanges[j].Start)
+		end := min(scratch.leftRanges[i].End, scratch.rightRanges[j].End)
+		if start < end {
+			scratch.outRanges = append(scratch.outRanges, RowRange{Start: start, End: end})
+		}
+		if scratch.leftRanges[i].End < scratch.rightRanges[j].End {
+			i++
+		} else {
+			j++
+		}
+	}
+	return makeRangesRowSelectionNoCopy(a.rows, scratch.outRanges)
+}
+
+func makeBitmapRowSelectionNoCopy(rows int, bitmap []uint64) (RowSelection, error) {
+	if rows < 0 {
+		return RowSelection{}, fmt.Errorf("typedcolumn: negative row selection rows %d", rows)
+	}
+	wantWords := rowSelectionBitmapWords(rows)
+	if len(bitmap) != wantWords {
+		return RowSelection{}, fmt.Errorf("typedcolumn: bitmap words=%d want=%d", len(bitmap), wantWords)
+	}
+	if wantWords == 0 {
+		return makeEmptyRowSelection(rows)
+	}
+	if padding := rows % 64; padding != 0 {
+		valid := uint64(1<<uint(padding)) - 1
+		if bitmap[len(bitmap)-1]&^valid != 0 {
+			return RowSelection{}, errors.New("typedcolumn: row selection bitmap has non-zero padding bits")
+		}
+	}
+	count := 0
+	for _, word := range bitmap {
+		count += bits.OnesCount64(word)
+	}
+	if count == 0 {
+		return makeEmptyRowSelection(rows)
+	}
+	if count == rows {
+		return makeAllRowSelection(rows)
+	}
+	if start, end, ok := contiguousBitmapRange(rows, bitmap); ok {
+		return makeRangeRowSelection(rows, start, end)
+	}
+	return RowSelection{rows: rows, kind: rowSelectionBitmap, bitmap: bitmap, count: count}, nil
+}
+
 func orRowSelections(a rowSelection, b rowSelection) (rowSelection, error) {
 	if err := validateSameSelectionRows(a, b); err != nil {
 		return failClosedSelection(a.rows, b.rows), err
@@ -420,6 +724,43 @@ func orRowSelections(a rowSelection, b rowSelection) (rowSelection, error) {
 	merged := append(a.appendRanges(nil), b.appendRanges(nil)...)
 	insertionSortRanges(merged)
 	return makeRangesRowSelection(a.rows, merged)
+}
+
+// OrRowSelections returns the union of a and b.
+func OrRowSelections(a RowSelection, b RowSelection) (RowSelection, error) {
+	return orRowSelections(a, b)
+}
+
+// NotRowSelection returns the complement of s over its row domain.
+func NotRowSelection(s RowSelection) (RowSelection, error) {
+	return notRowSelection(s)
+}
+
+// NotRowSelectionInto returns the complement of s using caller scratch for range
+// decomposition. Returned selections may alias scratch.
+func NotRowSelectionInto(s RowSelection, scratch *RowSelectionScratch) (RowSelection, error) {
+	if scratch == nil {
+		return notRowSelection(s)
+	}
+	switch s.kind {
+	case rowSelectionEmpty:
+		return makeAllRowSelection(s.rows)
+	case rowSelectionAll:
+		return makeEmptyRowSelection(s.rows)
+	}
+	scratch.leftRanges = s.appendRanges(scratch.leftRanges[:0])
+	scratch.outRanges = scratch.outRanges[:0]
+	start := 0
+	for _, r := range scratch.leftRanges {
+		if start < r.Start {
+			scratch.outRanges = append(scratch.outRanges, RowRange{Start: start, End: r.Start})
+		}
+		start = r.End
+	}
+	if start < s.rows {
+		scratch.outRanges = append(scratch.outRanges, RowRange{Start: start, End: s.rows})
+	}
+	return makeRangesRowSelectionNoCopy(s.rows, scratch.outRanges)
 }
 
 func notRowSelection(s rowSelection) (rowSelection, error) {

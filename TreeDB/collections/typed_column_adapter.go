@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -1731,8 +1732,11 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 type typedColumnInt64PredicateAggregateScanScratch struct {
 	// GranuleReader only retains decode/decompression scratch and is safe to
 	// reuse across immutable typed-column parts within the session lifetime.
-	reader typedcolumn.GranuleReader
-	values []int64
+	reader         typedcolumn.GranuleReader
+	values         []int64
+	predicateRows  []int
+	visibilityRows []int
+	selection      typedcolumn.RowSelectionScratch
 }
 
 func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {
@@ -1756,6 +1760,11 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *ty
 		g := block.Granule
 		if g.HasMinMax && !typedColumnInt64PredicateMayMatch(req, g.Min, g.Max) {
 			result.Diagnostics.BlocksPruned++
+			selection, err := typedcolumn.NewEmptyRowSelection(block.Descriptor.RowCount)
+			if err != nil {
+				return false, err
+			}
+			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
 			continue
 		}
 		values, err := scratch.reader.DecodeInt64Into(scratch.values[:0], g)
@@ -1770,21 +1779,163 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *ty
 		result.Diagnostics.BlocksDecoded++
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes)
 		result.Diagnostics.RowsScanned += len(values)
-		for i, v := range values {
-			rowIndex := block.Descriptor.FirstRow + i
-			if visibility != nil && !visibility.rowVisible(rowIndex) {
-				continue
-			}
-			if !typedColumnInt64PredicateMatches(req, v) {
-				continue
-			}
-			if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+
+		selection, err := typedColumnInt64PredicateAggregateBlockSelection(req, g, values, scratch)
+		if err != nil {
+			return false, err
+		}
+		if visibility != nil && !selection.IsEmpty() {
+			visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, scratch)
+			if err != nil {
 				return false, err
 			}
-			result.Diagnostics.RowsMatched++
+			selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &scratch.selection)
+			if err != nil {
+				return false, err
+			}
+			result.Diagnostics.SelectionCompositions++
+		}
+		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		if selection.IsEmpty() {
+			continue
+		}
+		if err := addTypedColumnInt64AggregateSelectedValues(result, values, selection); err != nil {
+			return false, err
 		}
 	}
 	return !decodedAny && len(valueCol.Blocks) != 0, nil
+}
+
+func typedColumnInt64PredicateAggregateBlockSelection(req TypedColumnInt64PredicateScanRequest, g typedcolumn.EncodedGranule, values []int64, scratch *typedColumnInt64PredicateAggregateScanScratch) (typedcolumn.RowSelection, error) {
+	rows := len(values)
+	if rows == 0 {
+		return typedcolumn.NewEmptyRowSelection(0)
+	}
+	if typedColumnInt64PredicateCoversGranule(req, g) {
+		return typedcolumn.NewAllRowSelection(rows)
+	}
+	scratch.predicateRows = scratch.predicateRows[:0]
+	for i, v := range values {
+		if typedColumnInt64PredicateMatches(req, v) {
+			scratch.predicateRows = append(scratch.predicateRows, i)
+		}
+	}
+	return typedcolumn.NewSparseRowSelectionNoCopy(rows, scratch.predicateRows)
+}
+
+func typedColumnInt64PredicateCoversGranule(req TypedColumnInt64PredicateScanRequest, g typedcolumn.EncodedGranule) bool {
+	switch req.Kind {
+	case TypedColumnInt64PredicateAll:
+		return true
+	case TypedColumnInt64PredicateEqual:
+		return g.HasMinMax && g.Min == req.Value && g.Max == req.Value
+	case TypedColumnInt64PredicateRange:
+		return g.HasMinMax && req.Low <= g.Min && req.High >= g.Max
+	default:
+		return false
+	}
+}
+
+func typedColumnInt64VisibilitySelectionForBlock(visibility *typedColumnLatestPhysicalPart, firstRow int, rowCount int, scratch *typedColumnInt64PredicateAggregateScanScratch) (typedcolumn.RowSelection, error) {
+	if visibility == nil {
+		return typedcolumn.NewAllRowSelection(rowCount)
+	}
+	scratch.visibilityRows = scratch.visibilityRows[:0]
+	for offset := 0; offset < rowCount; offset++ {
+		if visibility.rowVisible(firstRow + offset) {
+			scratch.visibilityRows = append(scratch.visibilityRows, offset)
+		}
+	}
+	return typedcolumn.NewSparseRowSelectionNoCopy(rowCount, scratch.visibilityRows)
+}
+
+func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, selection typedcolumn.RowSelection) error {
+	switch selection.Kind() {
+	case typedcolumn.RowSelectionEmpty:
+		return nil
+	case typedcolumn.RowSelectionAll:
+		for _, v := range values {
+			if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+				return err
+			}
+			result.Diagnostics.RowsMatched++
+		}
+		return nil
+	case typedcolumn.RowSelectionRange:
+		start, end, ok := selection.SingleRange()
+		if !ok || start < 0 || end > len(values) {
+			return fmt.Errorf("typed-column int64 aggregate invalid range selection [%d,%d) values=%d", start, end, len(values))
+		}
+		for _, v := range values[start:end] {
+			if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+				return err
+			}
+			result.Diagnostics.RowsMatched++
+		}
+		return nil
+	case typedcolumn.RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			if r.Start < 0 || r.End < r.Start || r.End > len(values) {
+				return fmt.Errorf("typed-column int64 aggregate invalid ranges selection [%d,%d) values=%d", r.Start, r.End, len(values))
+			}
+			for _, v := range values[r.Start:r.End] {
+				if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+					return err
+				}
+				result.Diagnostics.RowsMatched++
+			}
+		}
+		return nil
+	case typedcolumn.RowSelectionSparse:
+		for _, row := range selection.SparseRows() {
+			if row < 0 || row >= len(values) {
+				return fmt.Errorf("typed-column int64 aggregate sparse row=%d values=%d", row, len(values))
+			}
+			if err := addTypedColumnInt64PredicateAggregateValue(result, values[row]); err != nil {
+				return err
+			}
+			result.Diagnostics.RowsMatched++
+		}
+		return nil
+	case typedcolumn.RowSelectionBitmap:
+		for wordIndex, word := range selection.BitmapWords() {
+			for word != 0 {
+				bit := bits.TrailingZeros64(word)
+				row := wordIndex*64 + bit
+				if row >= len(values) {
+					break
+				}
+				if err := addTypedColumnInt64PredicateAggregateValue(result, values[row]); err != nil {
+					return err
+				}
+				result.Diagnostics.RowsMatched++
+				word &^= uint64(1) << uint(bit)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("typed-column int64 aggregate unsupported selection shape %s", selection.Shape().Kind)
+	}
+}
+
+func recordTypedColumnSelectionDiagnostics(diag *TypedColumnInt64PredicateScanDiagnostics, selection typedcolumn.RowSelection) {
+	if diag == nil {
+		return
+	}
+	switch selection.Kind() {
+	case typedcolumn.RowSelectionEmpty:
+		diag.SelectionEmptyBlocks++
+	case typedcolumn.RowSelectionAll:
+		diag.SelectionAllBlocks++
+	case typedcolumn.RowSelectionRange:
+		diag.SelectionRangeBlocks++
+	case typedcolumn.RowSelectionRanges:
+		diag.SelectionRangesBlocks++
+	case typedcolumn.RowSelectionBitmap:
+		diag.SelectionBitmapBlocks++
+	case typedcolumn.RowSelectionSparse:
+		diag.SelectionSparseBlocks++
+	}
 }
 
 type typedColumnStringPredicateScanScratch struct {
