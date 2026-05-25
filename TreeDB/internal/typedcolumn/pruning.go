@@ -371,7 +371,7 @@ func buildColumnPartPruning(part *ColumnPart) (ColumnPartPruning, error) {
 }
 
 func buildInt64ValueRowIndex(desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn) (Int64ValueRowIndex, bool, error) {
-	if column.Definition.Type != ColumnTypeInt64 || column.Definition.Encoding == EncodingNullableInt64 || column.Definition.Compression != CompressionNone {
+	if column.Definition.StatsDisabled || column.Definition.Type != ColumnTypeInt64 || column.Definition.Encoding == EncodingNullableInt64 || column.Definition.Compression != CompressionNone {
 		return Int64ValueRowIndex{}, false, nil
 	}
 	index := Int64ValueRowIndex{
@@ -869,6 +869,9 @@ func ValidateInt64ValueRowIndex(index Int64ValueRowIndex, desc ColumnPartDescrip
 	}
 	if envelope.ColumnName != columnDesc.Name || envelope.ColumnName != column.Definition.Name {
 		return fmt.Errorf("typedcolumn: column pruning name=%q descriptor=%q definition=%q: %s", envelope.ColumnName, columnDesc.Name, column.Definition.Name, ColumnPruningReasonIdentityMismatch)
+	}
+	if column.Definition.StatsDisabled {
+		return fmt.Errorf("typedcolumn: column pruning %s disabled by definition: %s", envelope.ColumnName, ColumnPruningReasonUnsupportedPayload)
 	}
 	if envelope.ColumnType != ColumnTypeInt64 || columnDesc.Type != ColumnTypeInt64 || column.Definition.Type != ColumnTypeInt64 || envelope.PayloadKind != ColumnPruningPayloadInt64ValueRowsV1 {
 		return fmt.Errorf("typedcolumn: column pruning %s int64 payload cannot apply to type envelope=%s descriptor=%s definition=%s payload=%s: %s", envelope.ColumnName, envelope.ColumnType, columnDesc.Type, column.Definition.Type, envelope.PayloadKind, ColumnPruningReasonUnsupportedPayload)

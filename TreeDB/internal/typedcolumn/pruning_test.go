@@ -76,6 +76,47 @@ func TestColumnPruningAllPredicateDoesNotScanValueRows(t *testing.T) {
 	}
 }
 
+func TestColumnPruningDisabledDefinitionSkipsInt64Payload(t *testing.T) {
+	part, err := BuildColumnPart(1, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, StatsDisabled: true},
+			{Name: "value", Type: ColumnTypeInt64, Encoding: EncodingDeltaVarint, StatsDisabled: true},
+			{Name: "raw_float_bits", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, StatsDisabled: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 4, DefaultCodecBlockRows: 4},
+	}, Batch{Rows: 3, Columns: map[string][]int64{"id": {1, 2, 3}, "value": {10, 20, 30}, "raw_float_bits": {0x3f800000, 0x40000000, 0x40400000}}})
+	if err != nil {
+		t.Fatalf("Build disabled pruning part: %v", err)
+	}
+	if !part.PruningMetadata.Empty() {
+		t.Fatalf("disabled int64 carriers emitted pruning metadata: %+v", part.PruningMetadata)
+	}
+
+	present := mustStatsTestPartWithBlockRows(t, []int64{1, 2, 3}, EncodingDeltaVarint, 3)
+	index, ok := present.PruningMetadata.Int64Column("value")
+	if !ok {
+		t.Fatalf("missing value pruning metadata")
+	}
+	column := present.Columns["value"]
+	column.Definition.StatsDisabled = true
+	columnDesc := ColumnPartColumnDescriptor{}
+	for _, desc := range present.Descriptor.Columns {
+		if desc.Name == "value" {
+			columnDesc = desc
+			break
+		}
+	}
+	if columnDesc.Name == "" {
+		t.Fatalf("missing value descriptor")
+	}
+	if err := ValidateInt64ValueRowIndex(index, present.Descriptor, columnDesc, column); err == nil || !strings.Contains(err.Error(), ColumnPruningReasonUnsupportedPayload) {
+		t.Fatalf("Validate disabled pruning err=%v want unsupported-payload fail-closed", err)
+	}
+}
+
 func TestColumnPruningPayloadChecksumFailsClosed(t *testing.T) {
 	part := mustStatsTestPartWithBlockRows(t, []int64{3, 4, 5, 6}, EncodingRawInt64, 2)
 	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"id": "int64", "value": "int64"}})
