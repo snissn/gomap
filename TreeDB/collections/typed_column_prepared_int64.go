@@ -160,6 +160,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 	}
 	decodedAny := false
 	payloadRead := false
+	var err error
 	for _, block := range preparedColumn.BlockPlans {
 		result.Diagnostics.BlocksConsidered++
 		if block.CandidateSelection.IsEmpty() {
@@ -167,11 +168,14 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, block.CandidateSelection)
 			continue
 		}
-		payload, err := s.readTypedColumnRange(ref, block.PayloadOffset, block.PayloadLength, false, result, updateCacheDeltas)
-		if err != nil {
-			return false, fmt.Errorf("read column %q block %d payload: %w", preparedColumn.Plan.Definition.Name, block.Index, err)
+		var payload []byte
+		if block.PayloadLength > 0 {
+			payload, err = s.readTypedColumnRange(ref, block.PayloadOffset, block.PayloadLength, false, result, updateCacheDeltas)
+			if err != nil {
+				return false, fmt.Errorf("read column %q block %d payload: %w", preparedColumn.Plan.Definition.Name, block.Index, err)
+			}
+			payloadRead = true
 		}
-		payloadRead = true
 		if len(payload) != block.PayloadLength {
 			return false, fmt.Errorf("typed-column int64 aggregate column %q block %d payload bytes=%d want %d", preparedColumn.Plan.Definition.Name, block.Index, len(payload), block.PayloadLength)
 		}

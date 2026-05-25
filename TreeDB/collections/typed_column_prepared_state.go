@@ -422,7 +422,7 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 	for i := range column.Blocks {
 		block := column.Blocks[i]
 		length := block.Descriptor.StoredBytes
-		if length <= 0 || offset > sectionEnd || length > sectionEnd-offset {
+		if length < 0 || offset > sectionEnd || length > sectionEnd-offset {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d length=%d outside section", plan.Definition.Name, i, length)
 		}
 		selection := typedcolumn.RowSelection{}

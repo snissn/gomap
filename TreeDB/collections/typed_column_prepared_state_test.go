@@ -127,6 +127,28 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPreparedColumnStateAllowsZeroLengthEmptyBlock(t *testing.T) {
+	plan := typedColumnPreparedColumnPlan{Definition: typedcolumn.ColumnDefinition{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone}}
+	column := typedcolumn.ColumnPartColumn{
+		Definition: plan.Definition,
+		Blocks: []typedcolumn.ColumnBlock{{
+			Descriptor: typedcolumn.ColumnBlockDescriptor{FirstRow: 0, RowCount: 0, StoredBytes: 0},
+			Granule:    typedcolumn.EncodedGranule{RawBytes: 0},
+		}},
+	}
+	section := typedcolumn.ColumnPartImageSection{Kind: typedcolumn.ColumnPartImageSectionColumnData, Column: "count", Offset: 128, Length: 0}
+	state, diag, err := buildTypedColumnPreparedColumnState(plan, column, section, nil)
+	if err != nil {
+		t.Fatalf("buildTypedColumnPreparedColumnState zero-length empty block: %v", err)
+	}
+	if len(state.BlockPlans) != 1 || state.BlockPlans[0].PayloadLength != 0 || !state.BlockPlans[0].CandidateSelection.IsEmpty() {
+		t.Fatalf("zero-length block plan=%+v want one empty zero-payload block", state.BlockPlans)
+	}
+	if diag.BlocksPrepared != 1 || diag.PrunedBlocks != 1 || diag.CandidateBlocks != 0 || diag.CandidateRangeBytes != 0 {
+		t.Fatalf("zero-length block diagnostics=%+v want one prepared/pruned block with no candidate bytes", diag)
+	}
+}
+
 func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 	countField := typedColumnAdapterField("count", ColumnStoreValueInt64)
 	kindField := typedColumnAdapterField("kind", ColumnStoreValueString)
