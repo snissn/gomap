@@ -64,9 +64,10 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 			IncludePruning: true,
 		},
 		{
-			Field:     s.aggregateColumn.Field,
-			Role:      typedcolumn.ColumnRoleMeasure,
-			Operation: columnsemantics.OpSum,
+			Field:        s.aggregateColumn.Field,
+			Role:         typedcolumn.ColumnRoleMeasure,
+			Operation:    columnsemantics.OpSum,
+			IncludeStats: true,
 		},
 	}
 	for _, physical := range s.view.AssetRefs {
@@ -119,6 +120,8 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 	prepareResult.Diagnostics.PruningCertified += state.diagnostics.PruningCertified
 	prepareResult.Diagnostics.CertificationFailures += state.diagnostics.CertificationFailures
 	prepareResult.Diagnostics.CertificationFailureReason = state.diagnostics.CertificationFailureReason
+	prepareResult.Diagnostics.StatsValidationFailures += state.diagnostics.StatsValidationFailures
+	prepareResult.Diagnostics.StatsValidationFailureReason = state.diagnostics.StatsValidationFailureReason
 	addTypedColumnInt64PredicateAggregateDiagnostics(&s.prepareDiagnostics, prepareResult.Diagnostics)
 	s.preparedState = state
 	return nil
@@ -372,6 +375,25 @@ func recordTypedColumnInt64KernelFallbackBlock(diag *TypedColumnInt64PredicateSc
 	diag.KernelFallbackBlocks++
 }
 
+func recordTypedColumnInt64StatsBlock(diag *TypedColumnInt64PredicateScanDiagnostics, rows int) {
+	if diag == nil {
+		return
+	}
+	diag.StatsBlocks++
+	diag.StatsFullCoveredBlocks++
+	diag.StatsRows += rows
+}
+
+func recordTypedColumnInt64StatsFallbackBlock(diag *TypedColumnInt64PredicateScanDiagnostics, reason string) {
+	if diag == nil {
+		return
+	}
+	diag.StatsFallbackBlocks++
+	if reason != "" {
+		diag.StatsFallbackReason = reason
+	}
+}
+
 func recordTypedColumnInt64FastDecodePlan(diag *TypedColumnInt64PredicateScanDiagnostics, plan typeddecode.Plan) {
 	if diag == nil {
 		return
@@ -524,6 +546,45 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 	return nil
 }
 
+func addTypedColumnInt64AggregateStatsBlock(result *TypedColumnInt64PredicateAggregateResult, preparedColumn *typedColumnPreparedColumnState, block *typedColumnPreparedBlockPlan) (bool, error) {
+	if result == nil || preparedColumn == nil {
+		return false, nil
+	}
+	if !preparedColumn.Int64StatsReady {
+		if preparedColumn.StatsFallbackReason != "" {
+			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, preparedColumn.StatsFallbackReason)
+		}
+		return false, nil
+	}
+	if !block.CandidateSelection.IsAll() || block.NeedsPredicate {
+		recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, typedcolumn.ColumnStatsReasonSelectionUnsupported)
+		return false, nil
+	}
+	ok, reason := preparedColumn.Int64Stats.CanAnswer(typedcolumn.ColumnStatsOpSum, typedcolumn.ColumnStatsSelectionFullBlock)
+	if !ok {
+		recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, reason)
+		return false, nil
+	}
+	blockStats, ok := preparedColumn.Int64Stats.Block(block.Index)
+	if !ok {
+		return false, fmt.Errorf("collections: typed-column int64 stats missing block %d for column %q", block.Index, preparedColumn.Plan.Definition.Name)
+	}
+	if blockStats.FirstRow != block.Descriptor.FirstRow || blockStats.RowCount != block.Descriptor.RowCount || blockStats.ValueCount != block.Descriptor.RowCount {
+		return false, fmt.Errorf("collections: typed-column int64 stats block %d row identity mismatch", block.Index)
+	}
+	ok, reason = blockStats.CanAnswer(typedcolumn.ColumnStatsOpSum)
+	if !ok {
+		recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, reason)
+		return false, nil
+	}
+	if err := addTypedColumnInt64AggregateKernelResult(result, typedkernel.AggregateResult{Op: preparedColumn.AggregateReducer.Operation(), NonNulls: int64(blockStats.ValueCount), Sum: blockStats.Sum, HasValue: true}); err != nil {
+		return false, err
+	}
+	recordTypedColumnSelectionDiagnostics(&result.Diagnostics, block.CandidateSelection)
+	recordTypedColumnInt64StatsBlock(&result.Diagnostics, blockStats.ValueCount)
+	return true, nil
+}
+
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnState(preparedColumn *typedColumnPreparedColumnState, ref ColumnAssetRef, visibility *typedColumnLatestPhysicalPart, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) (bool, error) {
 	if preparedColumn == nil {
 		return false, errors.New("collections: typed-column int64 predicate aggregate nil prepared column")
@@ -532,16 +593,34 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		return false, fmt.Errorf("collections: typed-column int64 predicate aggregate prepared column %q missing kernel reducer", preparedColumn.Plan.Definition.Name)
 	}
 	decodedAny := false
+	statsAny := false
 	payloadRead := false
 	columnPlan := typeddecode.Int64ReducerPlan(preparedColumn.Plan.Layout, preparedColumn.Certification)
 	recordTypedColumnInt64FastDecodePlan(&result.Diagnostics, columnPlan)
 	var err error
-	for _, block := range preparedColumn.BlockPlans {
+	for blockIdx := range preparedColumn.BlockPlans {
+		block := &preparedColumn.BlockPlans[blockIdx]
 		result.Diagnostics.BlocksConsidered++
 		if block.CandidateSelection.IsEmpty() {
 			result.Diagnostics.BlocksPruned++
 			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, block.CandidateSelection)
 			continue
+		}
+		if visibility == nil && s.req.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums {
+			usedStats, err := addTypedColumnInt64AggregateStatsBlock(result, preparedColumn, block)
+			if err != nil {
+				return false, err
+			}
+			if usedStats {
+				statsAny = true
+				continue
+			}
+		} else if s.req.ColumnAssetReadIntegrity == ColumnAssetReadIntegritySkipChecksums && preparedColumn.Int64StatsReady && block.CandidateSelection.IsAll() && !block.NeedsPredicate {
+			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, "skip_checksums")
+		} else if preparedColumn.Int64StatsReady && block.CandidateSelection.IsAll() && !block.NeedsPredicate {
+			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, "visibility_selection")
+		} else if !preparedColumn.Int64StatsReady && preparedColumn.StatsFallbackReason != "" {
+			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, preparedColumn.StatsFallbackReason)
 		}
 		var payload []byte
 		var handle *mappedresource.Handle
@@ -621,12 +700,12 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		}
 		decodedAny = true
 		result.Diagnostics.BlocksDecoded++
-		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), granule, block, preparedColumn.AggregateReducer, visibility, &s.aggregateScratch); err != nil {
+		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), granule, *block, preparedColumn.AggregateReducer, visibility, &s.aggregateScratch); err != nil {
 			return false, err
 		}
 	}
 	if payloadRead {
 		result.Diagnostics.DirectTypedColumnAssetReads++
 	}
-	return !decodedAny && len(preparedColumn.BlockPlans) != 0, nil
+	return !decodedAny && !statsAny && len(preparedColumn.BlockPlans) != 0, nil
 }

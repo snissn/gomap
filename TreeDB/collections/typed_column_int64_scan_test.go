@@ -696,6 +696,91 @@ func TestTypedColumnInt64PreparedCertificationDiagnosticsAndClose(t *testing.T) 
 	}
 }
 
+func TestTypedColumnInt64PreparedStatsRoundTripReopen(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnInt64ScanCollection(t, d)
+	insertTypedColumnInt64ScanRows(t, col, []int64{11, 12, 13, 14})
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	session, err := reopenedCol.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare all stats: %v", err)
+	}
+	all, err := session.Run()
+	if closeErr := session.Close(); closeErr != nil {
+		t.Fatalf("Close all stats: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run all stats: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, all, 4, 50)
+	if all.Diagnostics.StatsBlocks == 0 || all.Diagnostics.BlocksDecoded != 0 || all.Diagnostics.RowsScanned != 0 || all.Diagnostics.RangeBytesRead != 0 || all.Diagnostics.KernelBlocks != 0 {
+		t.Fatalf("all diagnostics=%+v want durable stats with no payload decode", all.Diagnostics)
+	}
+
+	rangeSession, err := reopenedCol.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 10, High: 20, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("Prepare full-covered range stats: %v", err)
+	}
+	covered, err := rangeSession.Run()
+	if closeErr := rangeSession.Close(); closeErr != nil {
+		t.Fatalf("Close range stats: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run full-covered range stats: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, covered, 4, 50)
+	if covered.Diagnostics.StatsBlocks == 0 || covered.Diagnostics.BlocksDecoded != 0 || covered.Diagnostics.StatsFallbackBlocks != 0 {
+		t.Fatalf("range diagnostics=%+v want full-covered durable stats", covered.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64PreparedStatsCorruptionFailsClosed(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		t.Fatalf("typed-column refs=%+v want one", refs)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		t.Fatalf("read typed-column asset: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	statsSection, ok, err := image.ColumnStatsSection()
+	if err != nil || !ok {
+		t.Fatalf("ColumnStatsSection ok=%v err=%v", ok, err)
+	}
+	corruptAt := int64(statsSection.Offset + statsSection.Length - 1)
+	var corrupt [1]byte
+	corrupt[0] = raw[corruptAt] ^ 0xff
+	writeColumnAssetBytesAtRelativeOffset(t, d, refs[0], corruptAt, corrupt[:])
+	_, err = col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums})
+	if err == nil || !strings.Contains(err.Error(), "stats validation") || !strings.Contains(err.Error(), typedcolumn.ColumnStatsReasonChecksumMismatch) {
+		t.Fatalf("Prepare corrupt stats err=%v want fail-closed stats checksum", err)
+	}
+}
+
 func TestTypedColumnInt64PreparedDeltaUsesStreamingCursor(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
@@ -734,8 +819,8 @@ func TestTypedColumnInt64PreparedKernelOverflowAndNegativeValues(t *testing.T) {
 		t.Fatalf("Run negative values: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, negative, 3, -25)
-	if negative.Diagnostics.KernelBlocks == 0 {
-		t.Fatalf("negative diagnostics=%+v want prepared kernel path", negative.Diagnostics)
+	if negative.Diagnostics.StatsBlocks == 0 || negative.Diagnostics.BlocksDecoded != 0 || negative.Diagnostics.KernelBlocks != 0 {
+		t.Fatalf("negative diagnostics=%+v want prepared durable stats path", negative.Diagnostics)
 	}
 
 	overflowDB, overflowCol := setupTypedColumnInt64ScanCollection(t)
@@ -771,8 +856,8 @@ func TestTypedColumnInt64PreparedDeltaKernelDiagnosticsFullPartialPruned(t *test
 		t.Fatalf("Run all: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, all, 6, 21)
-	if all.Diagnostics.KernelBlocks == 0 || all.Diagnostics.KernelFullCoveredBlocks == 0 || all.Diagnostics.KernelFallbackBlocks != 0 {
-		t.Fatalf("all diagnostics=%+v want full-covered streaming kernel fast path", all.Diagnostics)
+	if all.Diagnostics.StatsBlocks == 0 || all.Diagnostics.StatsFullCoveredBlocks == 0 || all.Diagnostics.BlocksDecoded != 0 || all.Diagnostics.KernelBlocks != 0 || all.Diagnostics.KernelFallbackBlocks != 0 {
+		t.Fatalf("all diagnostics=%+v want full-covered durable stats fast path", all.Diagnostics)
 	}
 
 	partialSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 3, High: 4, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
@@ -787,8 +872,8 @@ func TestTypedColumnInt64PreparedDeltaKernelDiagnosticsFullPartialPruned(t *test
 		t.Fatalf("Run partial: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, partial, 2, 7)
-	if partial.Diagnostics.KernelFallbackBlocks == 0 || partial.Diagnostics.KernelCursorBlocks != 0 {
-		t.Fatalf("partial diagnostics=%+v want explicit partial streaming fallback classification", partial.Diagnostics)
+	if partial.Diagnostics.StatsBlocks != 0 || partial.Diagnostics.StatsFallbackBlocks == 0 || partial.Diagnostics.KernelFallbackBlocks == 0 || partial.Diagnostics.KernelCursorBlocks != 0 {
+		t.Fatalf("partial diagnostics=%+v want stats fallback plus explicit partial streaming fallback classification", partial.Diagnostics)
 	}
 
 	prunedSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 99, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
@@ -849,7 +934,11 @@ func TestTypedColumnInt64PreparedRawKernelSelectionShapes(t *testing.T) {
 				t.Fatalf("prepared Run: %v", err)
 			}
 			assertTypedColumnInt64Aggregate(t, prepared, direct.Count, direct.Sum)
-			if prepared.Diagnostics.KernelBlocks == 0 || prepared.Diagnostics.KernelSelectedBlocks+prepared.Diagnostics.KernelFullCoveredBlocks == 0 || prepared.Diagnostics.KernelFallbackBlocks != 0 {
+			if tc.wantShape == "all" {
+				if prepared.Diagnostics.StatsBlocks == 0 || prepared.Diagnostics.BlocksDecoded != 0 || prepared.Diagnostics.KernelBlocks != 0 {
+					t.Fatalf("prepared diagnostics=%+v want raw all-selection durable stats reducer", prepared.Diagnostics)
+				}
+			} else if prepared.Diagnostics.KernelBlocks == 0 || prepared.Diagnostics.KernelSelectedBlocks+prepared.Diagnostics.KernelFullCoveredBlocks == 0 || prepared.Diagnostics.KernelFallbackBlocks != 0 {
 				t.Fatalf("prepared diagnostics=%+v want raw direct-view typedkernel reducer", prepared.Diagnostics)
 			}
 			switch tc.wantShape {
@@ -1553,8 +1642,8 @@ func TestTypedColumnInt64PreparedSessionCachedVerifyVisibilityUsesKernelPath(t *
 		t.Fatalf("Run: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, result, 2, 65)
-	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.SelectionCompositions == 0 || result.Diagnostics.KernelBlocks == 0 || result.Diagnostics.KernelCursorBlocks == 0 {
-		t.Fatalf("diagnostics=%+v want cached-verify targeted kernel+visibility path", result.Diagnostics)
+	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.SelectionCompositions == 0 || result.Diagnostics.KernelBlocks == 0 || result.Diagnostics.KernelCursorBlocks == 0 || result.Diagnostics.StatsBlocks != 0 || result.Diagnostics.StatsFallbackBlocks == 0 {
+		t.Fatalf("diagnostics=%+v want cached-verify targeted kernel+visibility path with stats fallback", result.Diagnostics)
 	}
 	if result.Diagnostics.FullAssetReads != 0 || result.Diagnostics.SectionBytesRead != 0 || result.Diagnostics.DecodedMetadataBytes != 0 || result.Diagnostics.DecodedHeapCopyBytes != 0 || result.Diagnostics.KernelFallbackBlocks != 0 {
 		t.Fatalf("diagnostics=%+v want hot targeted visibility run without full asset/materialized fallback", result.Diagnostics)
@@ -2980,6 +3069,11 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.KernelSelectedBlocks), "kernel_selected_blocks/op")
 	b.ReportMetric(float64(diag.KernelCursorBlocks), "kernel_cursor_blocks/op")
 	b.ReportMetric(float64(diag.KernelFallbackBlocks), "kernel_fallback_blocks/op")
+	b.ReportMetric(float64(diag.StatsBlocks), "stats_blocks/op")
+	b.ReportMetric(float64(diag.StatsFullCoveredBlocks), "stats_full_covered_blocks/op")
+	b.ReportMetric(float64(diag.StatsFallbackBlocks), "stats_fallback_blocks/op")
+	b.ReportMetric(float64(diag.StatsRows), "stats_rows/op")
+	b.ReportMetric(float64(diag.StatsValidationFailures), "stats_validation_failures/op")
 	b.ReportMetric(float64(diag.DirectViewCertified), "direct_view_certified/op")
 	b.ReportMetric(float64(diag.StreamingCertified), "streaming_certified/op")
 	b.ReportMetric(float64(diag.CertificationFailures), "certification_failures/op")

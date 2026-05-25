@@ -232,6 +232,7 @@ type ColumnPartImageReadOptions struct {
 	IncludeRowLocators       bool
 	ValidateRowLocators      bool
 	IncludeAggregateMetadata bool
+	IncludeColumnStats       bool
 }
 
 func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
@@ -239,6 +240,7 @@ func ColumnPartFromImage(image ColumnPartImage) (*ColumnPart, error) {
 		IncludeRowLocators:       true,
 		ValidateRowLocators:      true,
 		IncludeAggregateMetadata: true,
+		IncludeColumnStats:       true,
 	})
 }
 
@@ -321,6 +323,13 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 			return nil, err
 		}
 	}
+	var columnStats ColumnPartStats
+	if opts.IncludeColumnStats {
+		columnStats, err = decodeColumnStatsSectionFromImage(image, desc, columns)
+		if err != nil {
+			return nil, err
+		}
+	}
 	aggregateDefinitions := make([]AggregateMetadataDefinition, 0, len(aggregateMetadata))
 	for _, metadata := range aggregateMetadata {
 		aggregateDefinitions = append(aggregateDefinitions, metadata.Definition)
@@ -350,6 +359,7 @@ func ColumnPartFromImageWithOptions(image ColumnPartImage, opts ColumnPartImageR
 		Marks:             marks,
 		Locators:          locators,
 		AggregateMetadata: aggregateMetadata,
+		ColumnStats:       columnStats,
 	}
 	return part, nil
 }
@@ -1951,6 +1961,7 @@ func validateImageSectionMultiplicity(sections []ColumnPartImageSection) error {
 		ColumnPartImageSectionRowLocators,
 		ColumnPartImageSectionDictionaries,
 		ColumnPartImageSectionLayoutContract,
+		ColumnPartImageSectionColumnStats,
 	} {
 		if counts[kind] > 1 {
 			return fmt.Errorf("typedcolumn: image has %d %s sections, want at most 1", counts[kind], kind)
@@ -1979,6 +1990,8 @@ func expectedImageSectionCategory(kind ColumnPartImageSectionKind) (ColumnPartIm
 		return ColumnPartImageCategoryLocators, true
 	case ColumnPartImageSectionAggregateMetadata:
 		return ColumnPartImageCategoryAggregateMetadata, true
+	case ColumnPartImageSectionColumnStats:
+		return ColumnPartImageCategoryColumnStats, true
 	case ColumnPartImageSectionDictionaries:
 		return ColumnPartImageCategoryDictionaries, true
 	case ColumnPartImageSectionLayoutContract:

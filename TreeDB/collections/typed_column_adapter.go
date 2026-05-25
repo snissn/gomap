@@ -163,6 +163,7 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		Encoding:       mapping.Encoding,
 		Compression:    typedcolumn.CompressionNone,
 		CompressionSet: true,
+		StatsDisabled:  field.ValueType != ColumnStoreValueInt64,
 	}
 	switch field.ValueType {
 	case ColumnStoreValueFloat32Vector:
@@ -242,6 +243,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 		Encoding:       typedcolumn.EncodingRawInt64,
 		Compression:    typedcolumn.CompressionNone,
 		CompressionSet: true,
+		StatsDisabled:  true,
 	})
 	for _, column := range columns {
 		defs = append(defs, column.Definition)

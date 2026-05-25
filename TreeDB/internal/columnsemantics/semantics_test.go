@@ -27,13 +27,10 @@ func TestSemanticMatrixCoversCurrentLogicalTypesColumnTypesAndEncodings(t *testi
 
 func TestCapabilityInt64SupportsPreparedPredicateAndAggregateSemantics(t *testing.T) {
 	desc := Descriptor{Logical: LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint}
-	for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange} {
+	for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange} {
 		if cap := CapabilityFor(desc, op); cap.Status != StatusSupported || cap.Phase != PhasePrepare {
 			t.Fatalf("op %s status=%s reason=%s phase=%s", op, cap.Status, cap.Reason, cap.Phase)
 		}
-	}
-	if cap := CapabilityFor(desc, OpStatsSum); cap.Status != StatusUnsupported || cap.Reason != ReasonStatsPayloadUnsupported {
-		t.Fatalf("stats sum status=%s reason=%s", cap.Status, cap.Reason)
 	}
 }
 
@@ -46,6 +43,7 @@ func TestCapabilityInt64AggregateResultSemanticsAreExplicit(t *testing.T) {
 		OpAvg:          {ResultType: "float64", Accumulator: "checked int64 sum and int64 count", OverflowPolicy: "checked sum", Precision: "float64 quotient"},
 		OpMin:          {ResultType: "int64", Comparison: "signed int64 logical order"},
 		OpMax:          {ResultType: "int64", Comparison: "signed int64 logical order"},
+		OpStatsSum:     {ResultType: "int64", Accumulator: "durable int64 block/part stats payload", OverflowPolicy: "checked"},
 	}
 	for op, want := range checks {
 		cap := CapabilityFor(desc, op)
@@ -94,7 +92,7 @@ func TestCapabilityStringDictionaryCodesDoNotImplyLexicalRangeWithoutProof(t *te
 	if cap := CapabilityFor(desc, OpDictionaryEquality); cap.Status != StatusSupported {
 		t.Fatalf("dictionary equality status=%s reason=%s", cap.Status, cap.Reason)
 	}
-	for _, op := range []Operation{OpOrderedRange, OpDictionaryRange, OpStringPrefix, OpStringLexicalRange, OpPruneOrderedRange} {
+	for _, op := range []Operation{OpOrderedRange, OpDictionaryRange, OpStringPrefix, OpStringLexicalRange, OpStatsMinMax, OpPruneOrderedRange} {
 		cap := CapabilityFor(desc, op)
 		if cap.Status != StatusUnsupported || cap.Reason != ReasonDictionaryOrderUnproven {
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
@@ -117,7 +115,7 @@ func TestCapabilityNullableCarrierDistinguishesCountAndValueAggregateSemantics(t
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
 		}
 	}
-	for _, op := range []Operation{OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange} {
+	for _, op := range []Operation{OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange} {
 		cap := CapabilityFor(desc, op)
 		if cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierAggregateSemantics {
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)

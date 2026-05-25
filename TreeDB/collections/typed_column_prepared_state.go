@@ -44,25 +44,27 @@ type typedColumnPreparedColumnPlan struct {
 }
 
 type typedColumnPreparedStateDiagnostics struct {
-	PartsPrepared              int
-	ColumnsPrepared            int
-	BlocksPrepared             int
-	CandidateBlocks            int
-	PrunedBlocks               int
-	SectionDependencies        int
-	CandidateRanges            int
-	CandidateRangeBytes        uint64
-	ManifestBytes              uint64
-	DescriptorBytes            uint64
-	ContractBytes              uint64
-	DirectViewCertified        int
-	StreamingCertified         int
-	StatsCertified             int
-	PruningCertified           int
-	CertificationFailures      int
-	CertificationFailureReason string
-	Fallback                   bool
-	FallbackReason             string
+	PartsPrepared                int
+	ColumnsPrepared              int
+	BlocksPrepared               int
+	CandidateBlocks              int
+	PrunedBlocks                 int
+	SectionDependencies          int
+	CandidateRanges              int
+	CandidateRangeBytes          uint64
+	ManifestBytes                uint64
+	DescriptorBytes              uint64
+	ContractBytes                uint64
+	DirectViewCertified          int
+	StreamingCertified           int
+	StatsCertified               int
+	PruningCertified             int
+	CertificationFailures        int
+	CertificationFailureReason   string
+	StatsValidationFailures      int
+	StatsValidationFailureReason string
+	Fallback                     bool
+	FallbackReason               string
 }
 
 type typedColumnPreparedBlockPlan struct {
@@ -83,6 +85,9 @@ type typedColumnPreparedColumnState struct {
 	Certification         typedcolumn.ColumnPartLayoutContractColumn
 	AggregateReducer      typedkernel.PreparedReducer
 	AggregateReducerReady bool
+	Int64Stats            typedcolumn.Int64ColumnStats
+	Int64StatsReady       bool
+	StatsFallbackReason   string
 	Dictionaries          map[string]int64
 }
 
@@ -157,6 +162,9 @@ func (c *typedColumnPreparedColumnState) close() {
 	c.Certification = typedcolumn.ColumnPartLayoutContractColumn{}
 	c.AggregateReducer = typedkernel.PreparedReducer{}
 	c.AggregateReducerReady = false
+	c.Int64Stats = typedcolumn.Int64ColumnStats{}
+	c.Int64StatsReady = false
+	c.StatsFallbackReason = ""
 	c.Dictionaries = nil
 }
 
@@ -268,7 +276,7 @@ func typedColumnPreparedDependenciesForRequest(req typedColumnPreparedColumnRequ
 		deps = append(deps, dep)
 	}
 	if req.IncludeStats {
-		dep, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyStats, typedcolumn.ColumnPartImageSectionAggregateMetadata, span, false)
+		dep, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyStats, typedcolumn.ColumnPartImageSectionColumnStats, span, false)
 		if err != nil {
 			return nil, err
 		}
@@ -353,7 +361,16 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 	if err != nil {
 		return nil, typedColumnPreparedStateDiagnostics{}, err
 	}
-	return typedColumnPreparePartStateFromParsed(ref, physical, typedRows, physicalRows, fields, schemaHash, image, desc, columns, manifestBytes, descriptorRaw, contractRaw, columnRequests, blockSelection)
+	part, diag, err := typedColumnPreparePartStateFromParsed(ref, physical, typedRows, physicalRows, fields, schemaHash, image, desc, columns, manifestBytes, descriptorRaw, contractRaw, columnRequests, blockSelection)
+	if err != nil || part == nil || diag.Fallback || !typedColumnPreparedRequestsIncludeStats(columnRequests) {
+		return part, diag, err
+	}
+	if err := typedColumnAttachPreparedStats(part, image, readRange); err != nil {
+		diag.StatsValidationFailures++
+		diag.StatsValidationFailureReason = err.Error()
+		return nil, diag, fmt.Errorf("collections: typed_column_part stats validation failed: %w", err)
+	}
+	return part, diag, nil
 }
 
 func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, _ []TypedStorageField, schemaHash uint64, image typedcolumn.ColumnPartImage, desc typedcolumn.ColumnPartDescriptor, columns map[string]typedcolumn.ColumnPartColumn, manifestBytes int, descriptorRaw []byte, contractRaw []byte, columnRequests []typedColumnPreparedColumnRequest, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
@@ -535,6 +552,92 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 	return state, diag, nil
 }
 
+func typedColumnPreparedRequestsIncludeStats(requests []typedColumnPreparedColumnRequest) bool {
+	for _, request := range requests {
+		if request.IncludeStats {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnPreparedColumnWantsStats(column *typedColumnPreparedColumnState) bool {
+	if column == nil {
+		return false
+	}
+	for _, dep := range column.Plan.Dependencies {
+		if dep.Kind == typedcolumn.SectionDependencyStats {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnAttachPreparedStats(part *typedColumnPreparedPartState, image typedcolumn.ColumnPartImage, readRange typedColumnPreparedRangeReader) error {
+	if part == nil {
+		return errors.New("collections: typed-column prepared stats missing part")
+	}
+	section, ok, err := image.ColumnStatsSection()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		for _, column := range part.Columns {
+			if typedColumnPreparedColumnWantsStats(column) {
+				column.StatsFallbackReason = "missing_stats"
+			}
+		}
+		return nil
+	}
+	if readRange == nil {
+		return errors.New("collections: typed-column prepared stats requires range reader")
+	}
+	raw, err := readRange(section.Offset, section.Length, true)
+	if err != nil {
+		return err
+	}
+	stats, err := typedcolumn.DecodeColumnPartStatsSection(raw)
+	if err != nil {
+		return err
+	}
+	if err := typedcolumn.ValidateColumnPartStats(stats, part.Descriptor, part.PhysicalColumns); err != nil {
+		return err
+	}
+	for name, column := range part.Columns {
+		if !typedColumnPreparedColumnWantsStats(column) {
+			continue
+		}
+		int64Stats, ok := stats.Int64Column(name)
+		if !ok {
+			column.StatsFallbackReason = "missing_stats"
+			continue
+		}
+		semDesc := columnsemantics.Descriptor{
+			Logical:             column.Plan.Logical,
+			Physical:            column.Plan.Definition.Type,
+			Encoding:            column.Plan.Definition.Encoding,
+			Nullable:            column.Plan.Field.Nullable,
+			DictionaryOrder:     column.Plan.Layout.Descriptor.DictionaryOrder,
+			DictionaryCollation: column.Plan.Layout.Descriptor.DictionaryCollation,
+		}
+		if cap := columnsemantics.CapabilityFor(semDesc, columnsemantics.OpStatsSum); !cap.Supported() {
+			column.StatsFallbackReason = cap.Error()
+			continue
+		}
+		if cap := column.Plan.Layout.SupportsSemanticOperation(columnsemantics.OpStatsSum); !cap.Supported() {
+			column.StatsFallbackReason = cap.Error()
+			continue
+		}
+		if !column.Certification.StatsCertified {
+			column.StatsFallbackReason = "layout_stats_not_certified"
+			continue
+		}
+		column.Int64Stats = int64Stats
+		column.Int64StatsReady = true
+	}
+	return nil
+}
+
 func typedColumnPreparedValidateColumnDataSections(image typedcolumn.ColumnPartImage, desc typedcolumn.ColumnPartDescriptor, columns map[string]typedcolumn.ColumnPartColumn) error {
 	sectionsByColumn := make(map[string]typedcolumn.ColumnPartImageSection, len(columns))
 	for _, section := range image.Sections {
@@ -602,6 +705,10 @@ func typedColumnPreparedStateDiagnosticsAdd(dst *typedColumnPreparedStateDiagnos
 	dst.CertificationFailures += src.CertificationFailures
 	if src.CertificationFailureReason != "" {
 		dst.CertificationFailureReason = src.CertificationFailureReason
+	}
+	dst.StatsValidationFailures += src.StatsValidationFailures
+	if src.StatsValidationFailureReason != "" {
+		dst.StatsValidationFailureReason = src.StatsValidationFailureReason
 	}
 	if src.Fallback {
 		dst.Fallback = true

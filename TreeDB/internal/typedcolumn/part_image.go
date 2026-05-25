@@ -24,6 +24,7 @@ const (
 	ColumnPartImageSectionSortKeyMarks      ColumnPartImageSectionKind = "sort_key_marks"
 	ColumnPartImageSectionRowLocators       ColumnPartImageSectionKind = "row_locators"
 	ColumnPartImageSectionAggregateMetadata ColumnPartImageSectionKind = "aggregate_metadata"
+	ColumnPartImageSectionColumnStats       ColumnPartImageSectionKind = "column_stats"
 	ColumnPartImageSectionDictionaries      ColumnPartImageSectionKind = "dictionaries"
 	ColumnPartImageSectionLayoutContract    ColumnPartImageSectionKind = "layout_contract"
 	ColumnPartImageSectionColumnData        ColumnPartImageSectionKind = "column_data"
@@ -39,6 +40,7 @@ const (
 	ColumnPartImageCategoryMarks             ColumnPartImageSectionCategory = "marks"
 	ColumnPartImageCategoryLocators          ColumnPartImageSectionCategory = "locators"
 	ColumnPartImageCategoryAggregateMetadata ColumnPartImageSectionCategory = "aggregate_metadata"
+	ColumnPartImageCategoryColumnStats       ColumnPartImageSectionCategory = "column_stats"
 	ColumnPartImageCategoryDictionaries      ColumnPartImageSectionCategory = "dictionaries"
 	ColumnPartImageCategoryLayoutContract    ColumnPartImageSectionCategory = "layout_contract"
 	ColumnPartImageCategoryDeclaredColumns   ColumnPartImageSectionCategory = "declared_columns"
@@ -111,6 +113,7 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 		return nil, err
 	}
 	out := *p
+	out.ColumnStats = cloneColumnPartStats(p.ColumnStats)
 	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
 	for name, column := range p.Columns {
 		outColumn := column
@@ -268,6 +271,7 @@ func comparablePartColumnDefinitionForImage(imageDefinition ColumnDefinition, pa
 func comparableColumnDefinition(def ColumnDefinition) ColumnDefinition {
 	def.CodecBlockRows = 0
 	def.Compression = 0
+	def.StatsDisabled = false
 	return def
 }
 
@@ -324,6 +328,9 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 		return ColumnPartImage{}, err
 	}
 	if err := b.addAggregateMetadataSections(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addColumnStatsSection(); err != nil {
 		return ColumnPartImage{}, err
 	}
 	if err := b.addDictionarySection(); err != nil {
@@ -627,6 +634,25 @@ func (b *columnPartImageBuilder) addAggregateMetadataSections() error {
 			Blocks:   metadata.Stats.Entries,
 		}, enc.bytes())
 	}
+	return nil
+}
+
+func (b *columnPartImageBuilder) addColumnStatsSection() error {
+	data, err := encodeColumnPartStatsSection(b.part.ColumnStats)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionColumnStats,
+		Category: ColumnPartImageCategoryColumnStats,
+		Name:     "column_stats",
+		Rows:     b.part.Descriptor.RowCount,
+		Granules: len(b.part.Descriptor.Granules),
+		Blocks:   countColumnBlocks(b.part.Descriptor),
+	}, data)
 	return nil
 }
 
@@ -971,6 +997,7 @@ var columnPartImageSectionCodes = []columnPartImageSectionCode{
 	{kind: ColumnPartImageSectionColumnData, kindCode: 7, category: ColumnPartImageCategoryDeclaredColumns, categoryCode: 7},
 	{kind: ColumnPartImageSectionManifest, kindCode: 8, category: ColumnPartImageCategoryManifest, categoryCode: 8},
 	{kind: ColumnPartImageSectionLayoutContract, kindCode: 9, category: ColumnPartImageCategoryLayoutContract, categoryCode: 9},
+	{kind: ColumnPartImageSectionColumnStats, kindCode: 10, category: ColumnPartImageCategoryColumnStats, categoryCode: 10},
 }
 
 func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) (uint16, error) {

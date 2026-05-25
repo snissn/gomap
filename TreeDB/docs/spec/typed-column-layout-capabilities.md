@@ -4,7 +4,8 @@ Status: pre-alpha internal contract for typed-column prepare/read planning. Sema
 operation support remains defined in `typed-column-semantics.md`; this document
 covers the physical layout/codec contract that decides whether a semantic
 operation may use a direct view, safe fixed-width reducer, streaming decoder,
-stats payload, or pruning metadata.
+stats payload, or pruning metadata. The stats envelope and payload contract is
+specified in `typed-column-stats.md`.
 
 The implementation lives in `TreeDB/internal/columnlayout`. Capability keys are
 not just encodings. A key includes:
@@ -106,8 +107,12 @@ Current validation is at prepare plus payload-read boundaries:
 Prepared int64 diagnostics include `DirectViewCertified`, `StreamingCertified`,
 `StatsCertified`, `PruningCertified`, `CertificationFailures`, and
 `CertificationFailureReason`, alongside mapped/heap/decoded/materialized byte
-counters. Benchmarks report these as `direct_view_certified/op`,
-`streaming_certified/op`, and `certification_failures/op`.
+counters. When durable stats are consumed, block diagnostics distinguish
+`StatsBlocks`/`StatsFullCoveredBlocks`/`StatsRows` from `BlocksDecoded` and
+`Kernel*` counters; stats misses and unsupported selection shapes increment
+`StatsFallbackBlocks`. Benchmarks report these as `direct_view_certified/op`,
+`streaming_certified/op`, `stats_blocks/op`, `stats_fallback_blocks/op`, and
+`certification_failures/op`.
 
 Stable layout fallback reason codes live in `TreeDB/internal/columnlayout`, for
 example `layout_variable_width_no_direct_view`,

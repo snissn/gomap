@@ -20,7 +20,9 @@ Reducers dispatch once outside the hot row loop. Concrete reducers switch on
 `typedcolumn.RowSelection.Kind()` for empty, all, range, ranges, bitmap, and
 sparse selections. The initial int64 reducer represents count rows, count
 non-null, sum, avg, min, and max separately, with checked int64 sum accumulation.
-Nullable value aggregates remain fallback/unsupported until a future kernel
-composes null/default masks explicitly. Direct/zero-copy access is not
-implemented here; future integration should obtain any direct views through
-`TreeDB/internal/typeddecode` before invoking a concrete kernel.
+#1840 durable int64 stats may answer all/full-block-covered count/sum/avg before
+payload decode; partial selections, visibility masks, or unsupported stats fall
+back to these typedkernel reducers. Nullable value aggregates remain
+fallback/unsupported until a future kernel composes null/default masks
+explicitly. Direct/zero-copy access is obtained through `TreeDB/internal/typeddecode`
+before invoking a concrete kernel.
