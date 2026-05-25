@@ -56,5 +56,9 @@ func requireTypedColumnAdapterCapability(column typedColumnAdapterColumn, op col
 	if capability.Supported() {
 		return nil
 	}
-	return fmt.Errorf("%w: %s semantic capability %s status=%s reason=%s", ErrColumnQueryPlanUnsupported, context, op, capability.Status, capability.Reason)
+	capabilityDetail := capability.Error()
+	if capabilityDetail == "" {
+		capabilityDetail = string(capability.Reason)
+	}
+	return fmt.Errorf("%w: %s semantic capability %s status=%s reason=%s detail=%s", ErrColumnQueryPlanUnsupported, context, op, capability.Status, capability.Reason, capabilityDetail)
 }

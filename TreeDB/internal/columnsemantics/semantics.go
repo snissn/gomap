@@ -36,6 +36,7 @@ const (
 	OpIsNotNull                Operation = "predicate.is_not_null"
 	OpStringPrefix             Operation = "predicate.string_prefix"
 	OpStringLexicalRange       Operation = "predicate.string_lexical_range"
+	OpUnknownPredicateKind     Operation = "predicate.unknown_kind"
 	OpDictionaryEquality       Operation = "predicate.dictionary_equality"
 	OpDictionaryRange          Operation = "predicate.dictionary_range"
 	OpVectorSimilarity         Operation = "predicate.vector_similarity"
@@ -214,7 +215,10 @@ func CapabilityFor(desc Descriptor, op Operation) Capability {
 	if reason, ok := validatePhysicalEncoding(desc.Physical, desc.Encoding); !ok {
 		return Unsupported(op, reason, fmt.Sprintf("physical_type=%s encoding=%s", desc.Physical, desc.Encoding))
 	}
-	if desc.Nullable || desc.Encoding == typedcolumn.EncodingNullableInt64 {
+	if desc.Nullable && desc.Encoding != typedcolumn.EncodingNullableInt64 {
+		return Unsupported(op, ReasonEncodingPhysicalMismatch, fmt.Sprintf("nullable descriptor requires encoding=%s got=%s", typedcolumn.EncodingNullableInt64, desc.Encoding))
+	}
+	if desc.Encoding == typedcolumn.EncodingNullableInt64 {
 		switch op {
 		case OpCountRows, OpCountNonNull:
 			return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
@@ -327,8 +331,10 @@ func floatCapability(desc Descriptor, op Operation) Capability {
 		switch op {
 		case OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange, OpDirectScalarValueCarrier:
 			return Unsupported(op, ReasonFloatRawInt64BitPattern, "raw int64 float bit patterns do not provide numeric float semantics")
-		case OpAllRows, OpCountRows, OpCountNonNull:
+		case OpAllRows:
 			return Supported(op)
+		case OpCountRows, OpCountNonNull:
+			return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 		case OpEquality, OpInequality, OpInList:
 			return Fallback(op, ReasonNativeFloatLayoutMissing, "native float equality semantics require NaN/signed-zero rules and a float layout")
 		default:
@@ -371,7 +377,7 @@ func vectorCapability(desc Descriptor, op Operation) Capability {
 	switch op {
 	case OpAllRows:
 		return Supported(op)
-	case OpCountRows:
+	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpVectorSimilarity, OpVectorMetrics:
 		return Fallback(op, ReasonVectorCapabilityDeferred, "vector-specific kernels are deferred")
@@ -389,7 +395,7 @@ func adjacencyCapability(desc Descriptor, op Operation) Capability {
 	switch op {
 	case OpAllRows:
 		return Supported(op)
-	case OpCountRows:
+	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpVectorSimilarity, OpVectorMetrics:
 		return Fallback(op, ReasonAdjacencyCapabilityDeferred, "graph/vector-specific adjacency capabilities are deferred")

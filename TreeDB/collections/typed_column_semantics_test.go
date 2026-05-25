@@ -94,6 +94,27 @@ func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsFloatRawInt64Car
 	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), string(columnsemantics.ReasonFloatRawInt64BitPattern)) {
 		t.Fatalf("prepare float-as-int64 aggregate err=%v", err)
 	}
+
+	column, err := typedColumnAdapterMapField(semanticField("flag", ColumnStoreValueBool))
+	if err != nil {
+		t.Fatalf("typedColumnAdapterMapField: %v", err)
+	}
+	err = requireTypedColumnAdapterCapability(column, columnsemantics.OpOrderedRange, "bool predicate scan")
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "bool ordering is not exposed as scalar range semantics") {
+		t.Fatalf("semantic detail err=%v", err)
+	}
+}
+
+func TestTypedColumnInt64PredicateSemanticOperationUnknownKindFailsClosed(t *testing.T) {
+	op := typedColumnInt64PredicateSemanticOperation(TypedColumnInt64PredicateScanKind("future_kind"))
+	if op == columnsemantics.OpOrderedRange || op != columnsemantics.OpUnknownPredicateKind {
+		t.Fatalf("unknown predicate kind operation=%s", op)
+	}
+	desc := columnsemantics.Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint}
+	cap := columnsemantics.CapabilityFor(desc, op)
+	if cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonOperationUnsupported {
+		t.Fatalf("unknown predicate operation capability=%+v", cap)
+	}
 }
 
 func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsNullableCarrier(t *testing.T) {

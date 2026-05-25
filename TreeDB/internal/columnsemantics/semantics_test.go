@@ -64,6 +64,12 @@ func TestCapabilityFloatRawInt64DoesNotClaimInt64NumericSemantics(t *testing.T) 
 				t.Fatalf("%s %s status=%s reason=%s", logical, op, cap.Status, cap.Reason)
 			}
 		}
+		for _, op := range []Operation{OpCountRows, OpCountNonNull} {
+			cap := CapabilityFor(desc, op)
+			if cap.Status != StatusSupported || cap.Result.ResultType != "int64" {
+				t.Fatalf("%s %s capability=%+v", logical, op, cap)
+			}
+		}
 	}
 }
 
@@ -111,6 +117,13 @@ func TestCapabilityNullableCarrierDistinguishesCountAndValueAggregateSemantics(t
 	if cap := CapabilityFor(desc, OpSum); cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierAggregateSemantics {
 		t.Fatalf("nullable encoding sum status=%s reason=%s", cap.Status, cap.Reason)
 	}
+
+	// A nullable descriptor with a non-nullable physical encoding is inconsistent
+	// and must not silently route to nullable semantics.
+	inconsistent := Descriptor{Logical: LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Nullable: true}
+	if cap := CapabilityFor(inconsistent, OpSum); cap.Status != StatusUnsupported || cap.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("inconsistent nullable descriptor status=%s reason=%s", cap.Status, cap.Reason)
+	}
 }
 
 func TestCapabilityVectorAndAdjacencyRejectScalarShortcutSemantics(t *testing.T) {
@@ -123,6 +136,12 @@ func TestCapabilityVectorAndAdjacencyRejectScalarShortcutSemantics(t *testing.T)
 		{"adjacency", Descriptor{Logical: LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense}, ReasonAdjacencyScalarOperationUnsupported},
 	}
 	for _, tc := range cases {
+		for _, op := range []Operation{OpCountRows, OpCountNonNull} {
+			cap := CapabilityFor(tc.desc, op)
+			if cap.Status != StatusSupported || cap.Result.ResultType != "int64" {
+				t.Fatalf("%s %s capability=%+v", tc.name, op, cap)
+			}
+		}
 		for _, op := range []Operation{OpEquality, OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange, OpDirectScalarValueCarrier} {
 			cap := CapabilityFor(tc.desc, op)
 			if cap.Status != StatusUnsupported || cap.Reason != tc.reason {

@@ -1115,7 +1115,7 @@ func typedColumnInt64PredicateSemanticOperation(kind TypedColumnInt64PredicateSc
 	case TypedColumnInt64PredicateRange:
 		return columnsemantics.OpOrderedRange
 	default:
-		return columnsemantics.OpOrderedRange
+		return columnsemantics.OpUnknownPredicateKind
 	}
 }
 
