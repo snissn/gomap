@@ -745,7 +745,9 @@ func typedColumnApplyPreparedInt64Pruning(part *typedColumnPreparedPartState, re
 			newSelection = empty
 		}
 		block.CandidateSelection = newSelection
-		block.NeedsPredicate = false
+		if request.Int64PruningPredicate.Kind != typedcolumn.Int64PruningPredicateAll && !newSelection.IsAll() {
+			block.NeedsPredicate = true
+		}
 		if diag != nil && !newSelection.IsAll() {
 			diag.PruningBlocks++
 			diag.PruningRows += newSelection.Count()

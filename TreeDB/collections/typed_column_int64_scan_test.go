@@ -601,8 +601,8 @@ func TestTypedColumnInt64PreparedUsesDurablePruningMetadata(t *testing.T) {
 		if block.CandidateSelection.IsEmpty() {
 			continue
 		}
-		if block.NeedsPredicate {
-			t.Fatalf("block %+v still requires predicate after exact pruning metadata", block)
+		if !block.NeedsPredicate {
+			t.Fatalf("block %+v must keep predicate verification after pruning metadata narrows rows", block)
 		}
 		matched += block.CandidateSelection.Count()
 	}

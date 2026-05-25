@@ -641,12 +641,11 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 	payloadRead := false
 	columnPlan := typeddecode.Int64ReducerPlan(preparedColumn.Plan.Layout, preparedColumn.Certification)
 	recordTypedColumnInt64FastDecodePlan(&result.Diagnostics, columnPlan)
-	recordScanPruningDiagnostics := result.Diagnostics.PruningBlocks == 0 && result.Diagnostics.PruningRows == 0
 	var err error
 	for blockIdx := range preparedColumn.BlockPlans {
 		block := &preparedColumn.BlockPlans[blockIdx]
 		result.Diagnostics.BlocksConsidered++
-		if recordScanPruningDiagnostics && preparedColumn.Int64PruningReady && !block.CandidateSelection.IsAll() {
+		if preparedColumn.Int64PruningReady && !block.CandidateSelection.IsAll() {
 			recordTypedColumnInt64PruningBlock(&result.Diagnostics, block.CandidateSelection.Count())
 		}
 		if block.CandidateSelection.IsEmpty() {
@@ -709,9 +708,17 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 					result.Diagnostics.RowsScanned += len(values)
 					selection := block.CandidateSelection
 					if block.NeedsPredicate {
-						selection, err = typedColumnInt64PredicateAggregateBlockSelection(typedColumnInt64PredicateAggregateScanRequest(s.req), granule, values, &s.aggregateScratch)
+						predicateSelection, err := typedColumnInt64PredicateAggregateBlockSelection(typedColumnInt64PredicateAggregateScanRequest(s.req), granule, values, &s.aggregateScratch)
 						if err != nil {
 							return false, err
+						}
+						selection = predicateSelection
+						if !block.CandidateSelection.IsAll() {
+							selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &predicateSelection, Visibility: &block.CandidateSelection}, &s.aggregateScratch.selection)
+							if err != nil {
+								return false, err
+							}
+							result.Diagnostics.SelectionCompositions++
 						}
 					}
 					if visibility != nil && !selection.IsEmpty() {

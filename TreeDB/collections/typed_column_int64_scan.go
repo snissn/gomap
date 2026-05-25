@@ -596,7 +596,10 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
 	}
 	defer func() { _ = session.Close() }()
-	return session.run(start, session.prepareDiagnostics)
+	includeDiagnostics := session.prepareDiagnostics
+	includeDiagnostics.PruningBlocks = 0
+	includeDiagnostics.PruningRows = 0
+	return session.run(start, includeDiagnostics)
 }
 
 func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(view columnPhysicalScanSnapshotView, closeView func(), req TypedColumnInt64PredicateAggregateRequest) (*TypedColumnInt64PredicateAggregateSession, TypedColumnInt64PredicateScanDiagnostics, error) {

@@ -277,8 +277,8 @@ func TestTypedColumnPreparedPruningComposedSelectionsDoNotAliasScratch(t *testin
 	}
 	assertPreparedSelectionRows(t, column.BlockPlans[0].CandidateSelection, []int{1, 5, 8})
 	assertPreparedSelectionRows(t, column.BlockPlans[1].CandidateSelection, []int{0, 8})
-	if column.BlockPlans[0].NeedsPredicate || column.BlockPlans[1].NeedsPredicate {
-		t.Fatalf("block plans still require predicate after pruning: %+v", column.BlockPlans)
+	if !column.BlockPlans[0].NeedsPredicate || !column.BlockPlans[1].NeedsPredicate {
+		t.Fatalf("block plans must keep predicate verification after pruning: %+v", column.BlockPlans)
 	}
 }
 
