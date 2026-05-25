@@ -115,6 +115,12 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	if err != nil {
 		return typedColumnAdapterColumn{}, err
 	}
+	if field.ValueType == ColumnStoreValueInt64 && field.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian {
+		if field.Nullable {
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable int64 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
+		}
+		mapping.Encoding = typedcolumn.EncodingRawInt64
+	}
 	if field.Nullable {
 		switch field.ValueType {
 		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
@@ -1090,6 +1096,9 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
 		return false, err
 	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -1148,10 +1157,13 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 			return nil, typedColumnAdapterColumn{}, 0, err
 		}
 	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
@@ -1265,13 +1277,19 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 			return nil, err
 		}
 	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
-		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 		return nil, err
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 		return nil, err
 	}
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {

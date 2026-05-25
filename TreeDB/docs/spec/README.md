@@ -191,6 +191,11 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     schema evolution, fail-closed mismatch handling, rebuild-vs-migrate
     decisions, future migration tooling requirements, and allocation/performance
     evidence for format changes.
+- `TreeDB/docs/spec/typed-column-layout-capabilities.md`
+  - issue #1838 layout/codec capability contract keyed by logical type,
+    physical typedcolumn type, encoding, compression, and wrappers; documents
+    optional raw int64, validation boundaries, direct-view eligibility metadata,
+    and unsupported/fallback reason codes.
 
 ## Canonical Ownership
 

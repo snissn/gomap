@@ -135,7 +135,10 @@ Canonical shape names in output are `no_filter_full_aggregate`, `exact_value`,
 `tiny_range`, `selective_range_1pct`, `wide_range_10pct`,
 `all_pruned_no_match`, `all_match`, and `tail_range`. Canonical distribution
 names are `clustered_monotonic`, `reverse_monotonic`, `partially_clustered`,
-`random_uniform`, and `hotspot_skewed`.
+`random_uniform`, and `hotspot_skewed`. Set
+`TREEDB_TYPED_COLUMN_BENCH_LAYOUTS=delta,raw` (or `all`) to run the #1838
+layout matrix: default delta-varint rows keep `path_typed_column_part`, while
+raw fixed-width int64 rows use `path_typed_column_part_raw_int64`.
 
 Rows `10,000,000` and `50,000,000` are intentionally gated. Only use the large
 matrix when you have enough local time and disk space:
@@ -187,7 +190,7 @@ runtime bounded):
 ```sh
 RUN_DIR=/tmp/treedb_typed_column_1m_$(date +%Y%m%d_%H%M%S) \
 RUN_SMOKE=false RUN_1M=true RUN_HOT_PROFILE=false \
-BENCHTIME_1M=3x COUNT_1M=1 \
+LAYOUTS_1M=delta,raw BENCHTIME_1M=3x COUNT_1M=1 \
 scripts/treedb_typed_column_bench_profile.sh
 ```
 
@@ -217,6 +220,7 @@ scripts/treedb_typed_column_bench_profile.sh
 TREEDB_TYPED_COLUMN_BENCH_ROWS=1048576 \
 TREEDB_TYPED_COLUMN_BENCH_SHAPES=selective_range_1pct \
 TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered_monotonic \
+TREEDB_TYPED_COLUMN_BENCH_LAYOUTS=delta,raw \
 TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
 go test -run '^$' \
   -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg$' \

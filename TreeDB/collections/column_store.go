@@ -447,6 +447,14 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(valueType) {
 			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
 		}
+		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && valueType == ColumnStoreValueInt64 {
+			if owner != TypedStorageOwnerColumnPart {
+				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: int64 raw fixed-width encoding requires owner %q", col.Name, TypedStorageOwnerColumnPart)
+			}
+			if col.Nullable {
+				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: nullable int64 raw fixed-width encoding is unsupported", col.Name)
+			}
+		}
 		if valueType == ColumnStoreValueFloat32Vector {
 			if col.VectorDims <= 0 {
 				return fmt.Errorf("collections: invalid column %q vector_dims: must be positive", col.Name)
@@ -652,7 +660,7 @@ func columnStoreColumnIsTypedRowAsset(col ColumnStoreColumn) bool {
 
 func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
 	switch valueType {
-	case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+	case ColumnStoreValueInt64, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
 		return true
 	default:
 		return false
