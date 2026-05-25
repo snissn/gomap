@@ -783,8 +783,8 @@ func typedColumnPreparedPruningFallback(column *typedColumnPreparedColumnState, 
 		column.PruningFallbackReason = reason
 	}
 	if diag != nil {
-		blocks := 1
-		if column != nil && len(column.BlockPlans) != 0 {
+		blocks := 0
+		if column != nil {
 			blocks = len(column.BlockPlans)
 		}
 		diag.PruningFallbackBlocks += blocks

@@ -279,6 +279,20 @@ func TestTypedColumnPreparedPruningComposedSelectionsDoNotAliasScratch(t *testin
 	}
 }
 
+func TestTypedColumnPreparedPruningFallbackDoesNotInflateEmptyBlockPlans(t *testing.T) {
+	var diag typedColumnPreparedStateDiagnostics
+	column := &typedColumnPreparedColumnState{}
+	typedColumnPreparedPruningFallback(column, &diag, "missing")
+	if diag.PruningFallbackBlocks != 0 || diag.PruningFallbackReason != "missing" || column.PruningFallbackReason != "missing" {
+		t.Fatalf("fallback diag=%+v column_reason=%q want zero blocks and reason", diag, column.PruningFallbackReason)
+	}
+	column.BlockPlans = []typedColumnPreparedBlockPlan{{}, {}}
+	typedColumnPreparedPruningFallback(column, &diag, "unsupported")
+	if diag.PruningFallbackBlocks != 2 || diag.PruningFallbackReason != "unsupported" || column.PruningFallbackReason != "unsupported" {
+		t.Fatalf("fallback diag=%+v column_reason=%q want two blocks and updated reason", diag, column.PruningFallbackReason)
+	}
+}
+
 func assertPreparedSelectionRows(t *testing.T, selection typedcolumn.RowSelection, want []int) {
 	t.Helper()
 	got := selection.AppendRows(nil)
