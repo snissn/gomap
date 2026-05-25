@@ -74,13 +74,14 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 	}
 	includeStats := s.req.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums
 	pruningPredicate, pruningOK := typedColumnInt64PruningPredicate(typedColumnInt64PredicateAggregateScanRequest(s.req))
+	includePruning := pruningOK && pruningPredicate.Kind != typedcolumn.Int64PruningPredicateAll
 	requests := []typedColumnPreparedColumnRequest{
 		{
 			Field:                    s.aggregateColumn.Field,
 			Role:                     typedcolumn.ColumnRolePredicate,
 			Operation:                typedColumnInt64PredicateSemanticOperation(s.req.Kind),
-			IncludePruning:           true,
-			HasInt64PruningPredicate: pruningOK,
+			IncludePruning:           includePruning,
+			HasInt64PruningPredicate: includePruning,
 			Int64PruningPredicate:    pruningPredicate,
 		},
 		{

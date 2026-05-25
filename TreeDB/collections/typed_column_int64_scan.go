@@ -599,6 +599,8 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 	includeDiagnostics := session.prepareDiagnostics
 	includeDiagnostics.PruningBlocks = 0
 	includeDiagnostics.PruningRows = 0
+	includeDiagnostics.PruningFallbackBlocks = 0
+	includeDiagnostics.PruningFallbackReason = ""
 	return session.run(start, includeDiagnostics)
 }
 

@@ -619,6 +619,31 @@ func TestTypedColumnInt64PreparedUsesDurablePruningMetadata(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64PreparedAllPredicateSkipsPruningMetadata(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30, 20})
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate all: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	var preparedColumn *typedColumnPreparedColumnState
+	for _, part := range session.preparedState.partsByRef {
+		preparedColumn = part.Columns[session.aggregateColumn.Definition.Name]
+		break
+	}
+	if preparedColumn == nil {
+		t.Fatalf("prepared pruning column missing")
+	}
+	if preparedColumn.Int64PruningReady || preparedColumn.PruningFallbackReason != "" {
+		t.Fatalf("prepared all pruning state=%+v fallback=%q want pruning skipped", preparedColumn, preparedColumn.PruningFallbackReason)
+	}
+	if session.prepareDiagnostics.PruningBlocks != 0 || session.prepareDiagnostics.PruningRows != 0 || session.prepareDiagnostics.PruningFallbackBlocks != 0 {
+		t.Fatalf("prepare diagnostics=%+v want no all-predicate pruning work", session.prepareDiagnostics)
+	}
+}
+
 func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
