@@ -25,6 +25,7 @@ const (
 	ColumnPartImageSectionRowLocators       ColumnPartImageSectionKind = "row_locators"
 	ColumnPartImageSectionAggregateMetadata ColumnPartImageSectionKind = "aggregate_metadata"
 	ColumnPartImageSectionColumnStats       ColumnPartImageSectionKind = "column_stats"
+	ColumnPartImageSectionPruningMetadata   ColumnPartImageSectionKind = "pruning_metadata"
 	ColumnPartImageSectionDictionaries      ColumnPartImageSectionKind = "dictionaries"
 	ColumnPartImageSectionLayoutContract    ColumnPartImageSectionKind = "layout_contract"
 	ColumnPartImageSectionColumnData        ColumnPartImageSectionKind = "column_data"
@@ -41,6 +42,7 @@ const (
 	ColumnPartImageCategoryLocators          ColumnPartImageSectionCategory = "locators"
 	ColumnPartImageCategoryAggregateMetadata ColumnPartImageSectionCategory = "aggregate_metadata"
 	ColumnPartImageCategoryColumnStats       ColumnPartImageSectionCategory = "column_stats"
+	ColumnPartImageCategoryPruningMetadata   ColumnPartImageSectionCategory = "pruning_metadata"
 	ColumnPartImageCategoryDictionaries      ColumnPartImageSectionCategory = "dictionaries"
 	ColumnPartImageCategoryLayoutContract    ColumnPartImageSectionCategory = "layout_contract"
 	ColumnPartImageCategoryDeclaredColumns   ColumnPartImageSectionCategory = "declared_columns"
@@ -114,6 +116,7 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 	}
 	out := *p
 	out.ColumnStats = cloneColumnPartStats(p.ColumnStats)
+	out.PruningMetadata = cloneColumnPartPruning(p.PruningMetadata)
 	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
 	for name, column := range p.Columns {
 		outColumn := column
@@ -331,6 +334,9 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 		return ColumnPartImage{}, err
 	}
 	if err := b.addColumnStatsSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addPruningMetadataSection(); err != nil {
 		return ColumnPartImage{}, err
 	}
 	if err := b.addDictionarySection(); err != nil {
@@ -649,6 +655,25 @@ func (b *columnPartImageBuilder) addColumnStatsSection() error {
 		Kind:     ColumnPartImageSectionColumnStats,
 		Category: ColumnPartImageCategoryColumnStats,
 		Name:     "column_stats",
+		Rows:     b.part.Descriptor.RowCount,
+		Granules: len(b.part.Descriptor.Granules),
+		Blocks:   countColumnBlocks(b.part.Descriptor),
+	}, data)
+	return nil
+}
+
+func (b *columnPartImageBuilder) addPruningMetadataSection() error {
+	data, err := encodeColumnPartPruningSection(b.part.PruningMetadata)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionPruningMetadata,
+		Category: ColumnPartImageCategoryPruningMetadata,
+		Name:     "column_pruning",
 		Rows:     b.part.Descriptor.RowCount,
 		Granules: len(b.part.Descriptor.Granules),
 		Blocks:   countColumnBlocks(b.part.Descriptor),
@@ -998,6 +1023,7 @@ var columnPartImageSectionCodes = []columnPartImageSectionCode{
 	{kind: ColumnPartImageSectionManifest, kindCode: 8, category: ColumnPartImageCategoryManifest, categoryCode: 8},
 	{kind: ColumnPartImageSectionLayoutContract, kindCode: 9, category: ColumnPartImageCategoryLayoutContract, categoryCode: 9},
 	{kind: ColumnPartImageSectionColumnStats, kindCode: 10, category: ColumnPartImageCategoryColumnStats, categoryCode: 10},
+	{kind: ColumnPartImageSectionPruningMetadata, kindCode: 11, category: ColumnPartImageCategoryPruningMetadata, categoryCode: 11},
 }
 
 func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) (uint16, error) {

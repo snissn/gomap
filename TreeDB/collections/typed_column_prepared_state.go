@@ -21,15 +21,17 @@ type typedColumnPreparedRangeReader func(offset int, length int, section bool) (
 // physical definitions and from the concrete section dependencies selected by
 // the operation.
 type typedColumnPreparedColumnRequest struct {
-	Field                   TypedStorageField
-	Role                    typedcolumn.ColumnExecutionRole
-	Operation               columnsemantics.Operation
-	IncludeDictionaries     bool
-	IncludeVisibility       bool
-	IncludeStats            bool
-	IncludePruning          bool
-	IncludeVectorPayload    bool
-	IncludeAdjacencyPayload bool
+	Field                    TypedStorageField
+	Role                     typedcolumn.ColumnExecutionRole
+	Operation                columnsemantics.Operation
+	IncludeDictionaries      bool
+	IncludeVisibility        bool
+	IncludeStats             bool
+	IncludePruning           bool
+	HasInt64PruningPredicate bool
+	Int64PruningPredicate    typedcolumn.Int64PruningPredicate
+	IncludeVectorPayload     bool
+	IncludeAdjacencyPayload  bool
 }
 
 type typedColumnPreparedColumnPlan struct {
@@ -44,27 +46,34 @@ type typedColumnPreparedColumnPlan struct {
 }
 
 type typedColumnPreparedStateDiagnostics struct {
-	PartsPrepared                int
-	ColumnsPrepared              int
-	BlocksPrepared               int
-	CandidateBlocks              int
-	PrunedBlocks                 int
-	SectionDependencies          int
-	CandidateRanges              int
-	CandidateRangeBytes          uint64
-	ManifestBytes                uint64
-	DescriptorBytes              uint64
-	ContractBytes                uint64
-	DirectViewCertified          int
-	StreamingCertified           int
-	StatsCertified               int
-	PruningCertified             int
-	CertificationFailures        int
-	CertificationFailureReason   string
-	StatsValidationFailures      int
-	StatsValidationFailureReason string
-	Fallback                     bool
-	FallbackReason               string
+	PartsPrepared                  int
+	ColumnsPrepared                int
+	BlocksPrepared                 int
+	CandidateBlocks                int
+	PrunedBlocks                   int
+	SectionDependencies            int
+	CandidateRanges                int
+	CandidateRangeBytes            uint64
+	DecodedMetadataBytes           uint64
+	ManifestBytes                  uint64
+	DescriptorBytes                uint64
+	ContractBytes                  uint64
+	DirectViewCertified            int
+	StreamingCertified             int
+	StatsCertified                 int
+	PruningCertified               int
+	CertificationFailures          int
+	CertificationFailureReason     string
+	StatsValidationFailures        int
+	StatsValidationFailureReason   string
+	PruningBlocks                  int
+	PruningRows                    int
+	PruningFallbackBlocks          int
+	PruningFallbackReason          string
+	PruningValidationFailures      int
+	PruningValidationFailureReason string
+	Fallback                       bool
+	FallbackReason                 string
 }
 
 type typedColumnPreparedBlockPlan struct {
@@ -75,6 +84,9 @@ type typedColumnPreparedBlockPlan struct {
 	PayloadLength      int
 	CandidateSelection typedcolumn.RowSelection
 	NeedsPredicate     bool
+	PruningExact       bool
+	PruningExactCount  int64
+	PruningExactSum    int64
 }
 
 type typedColumnPreparedColumnState struct {
@@ -88,6 +100,8 @@ type typedColumnPreparedColumnState struct {
 	Int64Stats            typedcolumn.Int64ColumnStats
 	Int64StatsReady       bool
 	StatsFallbackReason   string
+	PruningFallbackReason string
+	Int64PruningReady     bool
 	Dictionaries          map[string]int64
 }
 
@@ -165,6 +179,8 @@ func (c *typedColumnPreparedColumnState) close() {
 	c.Int64Stats = typedcolumn.Int64ColumnStats{}
 	c.Int64StatsReady = false
 	c.StatsFallbackReason = ""
+	c.PruningFallbackReason = ""
+	c.Int64PruningReady = false
 	c.Dictionaries = nil
 }
 
@@ -246,7 +262,7 @@ func typedColumnPreparedDependenciesForRequest(req typedColumnPreparedColumnRequ
 	}
 	deps = append(deps, values)
 	if req.IncludePruning {
-		dep, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyPruningMetadata, typedcolumn.ColumnPartImageSectionColumnData, span, true)
+		dep, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyPruningMetadata, typedcolumn.ColumnPartImageSectionPruningMetadata, span, false)
 		if err != nil {
 			return nil, err
 		}
@@ -362,8 +378,20 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 		return nil, typedColumnPreparedStateDiagnostics{}, err
 	}
 	part, diag, err := typedColumnPreparePartStateFromParsed(ref, physical, typedRows, physicalRows, fields, schemaHash, image, desc, columns, manifestBytes, descriptorRaw, contractRaw, columnRequests, blockSelection)
-	if err != nil || part == nil || diag.Fallback || !typedColumnPreparedRequestsIncludeStats(columnRequests) {
+	if err != nil || part == nil || diag.Fallback {
 		return part, diag, err
+	}
+	if typedColumnPreparedRequestsIncludePruning(columnRequests) {
+		pruningDiag, err := typedColumnAttachPreparedPruning(part, image, readRange, columnRequests)
+		typedColumnPreparedStateDiagnosticsAdd(&diag, pruningDiag)
+		if err != nil {
+			diag.PruningValidationFailures++
+			diag.PruningValidationFailureReason = err.Error()
+			return nil, diag, fmt.Errorf("collections: typed_column_part pruning validation failed: %w", err)
+		}
+	}
+	if !typedColumnPreparedRequestsIncludeStats(columnRequests) {
+		return part, diag, nil
 	}
 	if err := typedColumnAttachPreparedStats(part, image, readRange); err != nil {
 		diag.StatsValidationFailures++
@@ -573,6 +601,203 @@ func typedColumnPreparedColumnWantsStats(column *typedColumnPreparedColumnState)
 	return false
 }
 
+func typedColumnPreparedRequestsIncludePruning(requests []typedColumnPreparedColumnRequest) bool {
+	for _, request := range requests {
+		if request.IncludePruning {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnPreparedColumnWantsPruning(column *typedColumnPreparedColumnState) bool {
+	if column == nil {
+		return false
+	}
+	for _, dep := range column.Plan.Dependencies {
+		if dep.Kind == typedcolumn.SectionDependencyPruningMetadata {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnAttachPreparedPruning(part *typedColumnPreparedPartState, image typedcolumn.ColumnPartImage, readRange typedColumnPreparedRangeReader, requests []typedColumnPreparedColumnRequest) (typedColumnPreparedStateDiagnostics, error) {
+	var diag typedColumnPreparedStateDiagnostics
+	if part == nil {
+		return diag, errors.New("collections: typed-column prepared pruning missing part")
+	}
+	section, ok, err := image.PruningMetadataSection()
+	if err != nil {
+		return diag, err
+	}
+	if !ok {
+		for _, column := range part.Columns {
+			if typedColumnPreparedColumnWantsPruning(column) {
+				typedColumnPreparedPruningFallback(column, &diag, typedcolumn.ColumnPruningReasonMissingMetadata)
+			}
+		}
+		return diag, nil
+	}
+	if readRange == nil {
+		return diag, errors.New("collections: typed-column prepared pruning requires range reader")
+	}
+	raw, err := readRange(section.Offset, section.Length, true)
+	if err != nil {
+		return diag, err
+	}
+	diag.DecodedMetadataBytes += uint64(len(raw))
+	pruning, err := typedcolumn.DecodeColumnPartPruningSection(raw)
+	if err != nil {
+		return diag, err
+	}
+	if err := typedcolumn.ValidateColumnPartPruning(pruning, part.Descriptor, part.PhysicalColumns); err != nil {
+		return diag, err
+	}
+	for _, request := range requests {
+		if !request.IncludePruning || !request.HasInt64PruningPredicate {
+			continue
+		}
+		if err := typedColumnApplyPreparedInt64Pruning(part, request, pruning, &diag); err != nil {
+			return diag, err
+		}
+	}
+	return diag, nil
+}
+
+func typedColumnApplyPreparedInt64Pruning(part *typedColumnPreparedPartState, request typedColumnPreparedColumnRequest, pruning typedcolumn.ColumnPartPruning, diag *typedColumnPreparedStateDiagnostics) error {
+	adapterColumn, err := typedColumnAdapterMapField(request.Field)
+	if err != nil {
+		return err
+	}
+	column := part.Columns[adapterColumn.Definition.Name]
+	if column == nil {
+		return fmt.Errorf("collections: typed-column prepared pruning missing column %q", adapterColumn.Definition.Name)
+	}
+	semOp := typedcolumn.ColumnPruningOpOrderedRange
+	if request.Int64PruningPredicate.Kind == typedcolumn.Int64PruningPredicateEqual {
+		semOp = typedcolumn.ColumnPruningOpEquality
+	}
+	semDesc := columnsemantics.Descriptor{Logical: column.Plan.Logical, Physical: column.Plan.Definition.Type, Encoding: column.Plan.Definition.Encoding, Nullable: column.Plan.Field.Nullable, DictionaryOrder: column.Plan.Layout.Descriptor.DictionaryOrder, DictionaryCollation: column.Plan.Layout.Descriptor.DictionaryCollation}
+	semanticsOp := columnsemantics.OpPruneOrderedRange
+	if semOp == typedcolumn.ColumnPruningOpEquality {
+		semanticsOp = columnsemantics.OpPruneEquality
+	}
+	if cap := columnsemantics.CapabilityFor(semDesc, semanticsOp); !cap.Supported() {
+		typedColumnPreparedPruningFallback(column, diag, cap.Error())
+		return nil
+	}
+	if cap := column.Plan.Layout.SupportsSemanticOperation(semanticsOp); !cap.Supported() {
+		typedColumnPreparedPruningFallback(column, diag, cap.Error())
+		return nil
+	}
+	if !column.Certification.PruningCertified {
+		typedColumnPreparedPruningFallback(column, diag, "layout_pruning_not_certified")
+		return nil
+	}
+	index, ok := pruning.Int64Column(adapterColumn.Definition.Name)
+	if !ok {
+		typedColumnPreparedPruningFallback(column, diag, typedcolumn.ColumnPruningReasonMissingMetadata)
+		return nil
+	}
+	plan, err := index.PlanInt64Predicate(request.Int64PruningPredicate)
+	if err != nil {
+		return err
+	}
+	if plan.Reason != "" && plan.Reason != typedcolumn.ColumnPruningReasonSupported {
+		typedColumnPreparedPruningFallback(column, diag, plan.Reason)
+		return nil
+	}
+	if len(plan.Blocks) != len(column.BlockPlans) {
+		return fmt.Errorf("collections: typed-column prepared pruning column %q block candidates=%d want %d", adapterColumn.Definition.Name, len(plan.Blocks), len(column.BlockPlans))
+	}
+	candidates := make(map[int]typedcolumn.ColumnPruningBlockCandidate, len(plan.Blocks))
+	for _, candidate := range plan.Blocks {
+		candidates[candidate.BlockIndex] = candidate
+	}
+	var scratch typedcolumn.RowSelectionScratch
+	for i := range column.BlockPlans {
+		block := &column.BlockPlans[i]
+		candidate, ok := candidates[block.Index]
+		if !ok {
+			return fmt.Errorf("collections: typed-column prepared pruning column %q missing block candidate %d", adapterColumn.Definition.Name, block.Index)
+		}
+		if candidate.FirstRow != block.Descriptor.FirstRow || candidate.RowCount != block.Descriptor.RowCount {
+			return fmt.Errorf("collections: typed-column prepared pruning column %q block %d identity mismatch", adapterColumn.Definition.Name, block.Index)
+		}
+		oldNonEmpty := !block.CandidateSelection.IsEmpty()
+		newSelection := candidate.Selection
+		if oldNonEmpty && !block.CandidateSelection.IsAll() {
+			composed, err := typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &newSelection, Visibility: &block.CandidateSelection}, &scratch)
+			if err != nil {
+				return err
+			}
+			newSelection, err = typedColumnPreparedCloneRowSelection(composed)
+			if err != nil {
+				return err
+			}
+		}
+		if !oldNonEmpty {
+			empty, err := typedcolumn.NewEmptyRowSelection(block.Descriptor.RowCount)
+			if err != nil {
+				return err
+			}
+			newSelection = empty
+		}
+		block.CandidateSelection = newSelection
+		if request.Int64PruningPredicate.Kind != typedcolumn.Int64PruningPredicateAll && !newSelection.IsAll() {
+			block.NeedsPredicate = true
+		}
+		if diag != nil && !newSelection.IsAll() {
+			diag.PruningBlocks++
+			diag.PruningRows += newSelection.Count()
+		}
+		block.PruningExact = candidate.Exact
+		block.PruningExactCount = candidate.ExactCount
+		block.PruningExactSum = candidate.ExactSum
+	}
+	column.PruningFallbackReason = ""
+	column.Int64PruningReady = true
+	return nil
+}
+
+func typedColumnPreparedCloneRowSelection(selection typedcolumn.RowSelection) (typedcolumn.RowSelection, error) {
+	switch selection.Kind() {
+	case typedcolumn.RowSelectionEmpty:
+		return typedcolumn.NewEmptyRowSelection(selection.Rows())
+	case typedcolumn.RowSelectionAll:
+		return typedcolumn.NewAllRowSelection(selection.Rows())
+	case typedcolumn.RowSelectionRange:
+		start, end, ok := selection.SingleRange()
+		if !ok {
+			return typedcolumn.RowSelection{}, fmt.Errorf("collections: typed-column prepared selection range shape missing range")
+		}
+		return typedcolumn.NewRangeRowSelection(selection.Rows(), start, end)
+	case typedcolumn.RowSelectionRanges:
+		return typedcolumn.NewRangesRowSelection(selection.Rows(), selection.Ranges())
+	case typedcolumn.RowSelectionBitmap:
+		return typedcolumn.NewBitmapRowSelection(selection.Rows(), selection.BitmapWords())
+	case typedcolumn.RowSelectionSparse:
+		return typedcolumn.NewSparseRowSelection(selection.Rows(), selection.SparseRows())
+	default:
+		return typedcolumn.RowSelection{}, fmt.Errorf("collections: typed-column prepared unsupported row selection shape %s", selection.Shape().Kind)
+	}
+}
+
+func typedColumnPreparedPruningFallback(column *typedColumnPreparedColumnState, diag *typedColumnPreparedStateDiagnostics, reason string) {
+	if column != nil {
+		column.PruningFallbackReason = reason
+	}
+	if diag != nil {
+		blocks := 0
+		if column != nil {
+			blocks = len(column.BlockPlans)
+		}
+		diag.PruningFallbackBlocks += blocks
+		diag.PruningFallbackReason = reason
+	}
+}
+
 func typedColumnAttachPreparedStats(part *typedColumnPreparedPartState, image typedcolumn.ColumnPartImage, readRange typedColumnPreparedRangeReader) error {
 	if part == nil {
 		return errors.New("collections: typed-column prepared stats missing part")
@@ -695,6 +920,7 @@ func typedColumnPreparedStateDiagnosticsAdd(dst *typedColumnPreparedStateDiagnos
 	dst.SectionDependencies += src.SectionDependencies
 	dst.CandidateRanges += src.CandidateRanges
 	dst.CandidateRangeBytes += src.CandidateRangeBytes
+	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
 	dst.ManifestBytes += src.ManifestBytes
 	dst.DescriptorBytes += src.DescriptorBytes
 	dst.ContractBytes += src.ContractBytes
@@ -709,6 +935,16 @@ func typedColumnPreparedStateDiagnosticsAdd(dst *typedColumnPreparedStateDiagnos
 	dst.StatsValidationFailures += src.StatsValidationFailures
 	if src.StatsValidationFailureReason != "" {
 		dst.StatsValidationFailureReason = src.StatsValidationFailureReason
+	}
+	dst.PruningBlocks += src.PruningBlocks
+	dst.PruningRows += src.PruningRows
+	dst.PruningFallbackBlocks += src.PruningFallbackBlocks
+	if src.PruningFallbackReason != "" {
+		dst.PruningFallbackReason = src.PruningFallbackReason
+	}
+	dst.PruningValidationFailures += src.PruningValidationFailures
+	if src.PruningValidationFailureReason != "" {
+		dst.PruningValidationFailureReason = src.PruningValidationFailureReason
 	}
 	if src.Fallback {
 		dst.Fallback = true

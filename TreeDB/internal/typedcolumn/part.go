@@ -105,6 +105,7 @@ type ColumnPart struct {
 	Locators          map[int64]RowLocator
 	AggregateMetadata map[string]AggregateMetadata
 	ColumnStats       ColumnPartStats
+	PruningMetadata   ColumnPartPruning
 }
 
 type ColumnPartDescriptor struct {
@@ -253,6 +254,11 @@ func (b *ColumnPartBuilder) Build(partID uint64, batch Batch) (*ColumnPart, erro
 		return nil, err
 	}
 	part.ColumnStats = stats
+	pruning, err := buildColumnPartPruning(part)
+	if err != nil {
+		return nil, err
+	}
+	part.PruningMetadata = pruning
 	return part, nil
 }
 

@@ -218,6 +218,97 @@ func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPreparedPruningComposedSelectionsDoNotAliasScratch(t *testing.T) {
+	field := TypedStorageField{Name: "score", Path: "score", Owner: TypedStorageOwnerColumnPart, ValueType: "int64"}
+	values := []int64{
+		0, 1, 1, 0, 0, 1, 1, 0, 1, 1,
+		1, 0, 0, 1, 1, 0, 0, 1, 1, 0,
+	}
+	rows := make([]typedColumnAdapterRow, len(values))
+	for i, value := range values {
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{
+			"score": {Type: field.ValueType, Present: true, Int64: value},
+		}}
+	}
+	adapterPart, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1841, RowsPerGranule: 10, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := adapterPart.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "test", Generation: 1, PartID: image.PartID, FileID: 1, Length: int64(len(image.Bytes))}
+	physical := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: "test", Generation: 1, PartID: columnPhysicalRowAssetPartID, FileID: 1, Length: int64(len(image.Bytes))}
+	readRange := func(offset int, length int, section bool) ([]byte, error) {
+		if offset < 0 || length <= 0 || offset+length > len(image.Bytes) {
+			t.Fatalf("range offset=%d length=%d outside image bytes=%d", offset, length, len(image.Bytes))
+		}
+		return image.Bytes[offset : offset+length], nil
+	}
+	blockSelection := func(g typedcolumn.EncodedGranule, rows int) (typedcolumn.RowSelection, bool, error) {
+		selection, err := typedcolumn.NewRangesRowSelection(rows, []typedcolumn.RowRange{{Start: 0, End: 2}, {Start: 5, End: 6}, {Start: 8, End: 9}})
+		return selection, true, err
+	}
+	requests := []typedColumnPreparedColumnRequest{{
+		Field:                    field,
+		Role:                     typedcolumn.ColumnRolePredicate,
+		Operation:                columnsemantics.OpEquality,
+		IncludePruning:           true,
+		HasInt64PruningPredicate: true,
+		Int64PruningPredicate:    typedcolumn.Int64PruningPredicate{Kind: typedcolumn.Int64PruningPredicateEqual, Value: 1},
+	}}
+	part, diag, err := typedColumnPreparePartStateFromRanges(ref, physical, image.Rows, image.Rows, []TypedStorageField{field}, uint64(adapterPart.Part.Descriptor.SchemaVersion), requests, readRange, blockSelection)
+	if err != nil {
+		t.Fatalf("typedColumnPreparePartStateFromRanges: %v", err)
+	}
+	if diag.PruningValidationFailures != 0 || diag.PruningFallbackBlocks != 0 {
+		t.Fatalf("pruning diagnostics=%+v want no validation/fallback", diag)
+	}
+	if diag.PruningBlocks != 2 || diag.PruningRows != 5 {
+		t.Fatalf("pruning diagnostics=%+v want two narrowed blocks and five candidate rows", diag)
+	}
+	column := part.Columns["score"]
+	if column == nil || !column.Int64PruningReady {
+		t.Fatalf("prepared column=%+v want pruning ready", column)
+	}
+	if len(column.BlockPlans) != 2 {
+		t.Fatalf("block plans=%d want 2", len(column.BlockPlans))
+	}
+	assertPreparedSelectionRows(t, column.BlockPlans[0].CandidateSelection, []int{1, 5, 8})
+	assertPreparedSelectionRows(t, column.BlockPlans[1].CandidateSelection, []int{0, 8})
+	if !column.BlockPlans[0].NeedsPredicate || !column.BlockPlans[1].NeedsPredicate {
+		t.Fatalf("block plans must keep predicate verification after pruning: %+v", column.BlockPlans)
+	}
+}
+
+func TestTypedColumnPreparedPruningFallbackDoesNotInflateEmptyBlockPlans(t *testing.T) {
+	var diag typedColumnPreparedStateDiagnostics
+	column := &typedColumnPreparedColumnState{}
+	typedColumnPreparedPruningFallback(column, &diag, "missing")
+	if diag.PruningFallbackBlocks != 0 || diag.PruningFallbackReason != "missing" || column.PruningFallbackReason != "missing" {
+		t.Fatalf("fallback diag=%+v column_reason=%q want zero blocks and reason", diag, column.PruningFallbackReason)
+	}
+	column.BlockPlans = []typedColumnPreparedBlockPlan{{}, {}}
+	typedColumnPreparedPruningFallback(column, &diag, "unsupported")
+	if diag.PruningFallbackBlocks != 2 || diag.PruningFallbackReason != "unsupported" || column.PruningFallbackReason != "unsupported" {
+		t.Fatalf("fallback diag=%+v column_reason=%q want two blocks and updated reason", diag, column.PruningFallbackReason)
+	}
+}
+
+func assertPreparedSelectionRows(t *testing.T, selection typedcolumn.RowSelection, want []int) {
+	t.Helper()
+	got := selection.AppendRows(nil)
+	if len(got) != len(want) {
+		t.Fatalf("selection rows=%v want %v shape=%+v", got, want, selection.Shape())
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("selection rows=%v want %v shape=%+v", got, want, selection.Shape())
+		}
+	}
+}
+
 func assertPreparedPlanDependency(t *testing.T, plan typedColumnPreparedColumnPlan, kind typedcolumn.SectionDependencyKind) {
 	t.Helper()
 	for _, dep := range plan.Dependencies {

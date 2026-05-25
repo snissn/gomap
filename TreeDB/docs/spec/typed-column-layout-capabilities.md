@@ -5,7 +5,8 @@ operation support remains defined in `typed-column-semantics.md`; this document
 covers the physical layout/codec contract that decides whether a semantic
 operation may use a direct view, safe fixed-width reducer, streaming decoder,
 stats payload, or pruning metadata. The stats envelope and payload contract is
-specified in `typed-column-stats.md`.
+specified in `typed-column-stats.md`; durable pruning metadata is specified in
+`typed-column-pruning.md`.
 
 The implementation lives in `TreeDB/internal/columnlayout`. Capability keys are
 not just encodings. A key includes:
@@ -21,8 +22,8 @@ not just encodings. A key includes:
 
 | Logical type | Physical + encoding | Layout capability |
 | --- | --- | --- |
-| `int64` | `int64` + `delta_varint` | Variable-width streaming int64 reducer/range predicate. No direct view. |
-| `int64` | `int64` + `raw_int64` + `compression=none` | Optional explicit fixed-width little-endian layout. Safe byte-loop reducer/range predicate is allowed after row-count and length validation. Direct-view metadata is declared for future use, but #1849 owns zero-copy typed views. |
+| `int64` | `int64` + `delta_varint` | Variable-width streaming int64 reducer/range predicate plus value-row pruning metadata. No direct view. |
+| `int64` | `int64` + `raw_int64` + `compression=none` | Optional explicit fixed-width little-endian layout. Safe byte-loop reducer/range predicate and value-row pruning metadata are allowed after row-count and length validation. Direct-view metadata is declared for future use, but #1849 owns zero-copy typed views. |
 | `string` | `low_cardinality_code` + `low_cardinality_uint32` | Dictionary-code equality/group support. Lexical range/pruning is unsupported unless dictionary order and collation proof are present. |
 | `bool` | `bool` + `bool_bitpack_rle` | Bool-specific counts/equality; scalar range remains unsupported by semantics. |
 | `float32`/`double` | current `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 numeric aggregate/range/pruning. Native float layouts must define NaN, signed-zero, infinity, endian, width, and stats rules before enabling numeric fast paths. |
@@ -110,9 +111,10 @@ Prepared int64 diagnostics include `DirectViewCertified`, `StreamingCertified`,
 counters. When durable stats are consumed, block diagnostics distinguish
 `StatsBlocks`/`StatsFullCoveredBlocks`/`StatsRows` from `BlocksDecoded` and
 `Kernel*` counters; stats misses and unsupported selection shapes increment
-`StatsFallbackBlocks`. Benchmarks report these as `direct_view_certified/op`,
-`streaming_certified/op`, `stats_blocks/op`, `stats_fallback_blocks/op`, and
-`certification_failures/op`.
+`StatsFallbackBlocks`. Pruning metadata validation is prepare-time and emits
+explicit fallback/validation diagnostics in the int64 prepared state. Benchmarks
+report these as `direct_view_certified/op`, `streaming_certified/op`,
+`stats_blocks/op`, `stats_fallback_blocks/op`, and `certification_failures/op`.
 
 Stable layout fallback reason codes live in `TreeDB/internal/columnlayout`, for
 example `layout_variable_width_no_direct_view`,

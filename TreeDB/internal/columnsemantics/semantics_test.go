@@ -27,7 +27,7 @@ func TestSemanticMatrixCoversCurrentLogicalTypesColumnTypesAndEncodings(t *testi
 
 func TestCapabilityInt64SupportsPreparedPredicateAndAggregateSemantics(t *testing.T) {
 	desc := Descriptor{Logical: LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint}
-	for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange} {
+	for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
 		if cap := CapabilityFor(desc, op); cap.Status != StatusSupported || cap.Phase != PhasePrepare {
 			t.Fatalf("op %s status=%s reason=%s phase=%s", op, cap.Status, cap.Reason, cap.Phase)
 		}
@@ -72,7 +72,7 @@ func TestCapabilityBoolSupportsEqualityButRejectsRangeSemantics(t *testing.T) {
 func TestCapabilityFloatRawInt64DoesNotClaimInt64NumericSemantics(t *testing.T) {
 	for _, logical := range []LogicalType{LogicalFloat32, LogicalDouble} {
 		desc := Descriptor{Logical: logical, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64}
-		for _, op := range []Operation{OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange, OpDirectScalarValueCarrier} {
+		for _, op := range []Operation{OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier} {
 			cap := CapabilityFor(desc, op)
 			if cap.Status != StatusUnsupported || cap.Reason != ReasonFloatRawInt64BitPattern {
 				t.Fatalf("%s %s status=%s reason=%s", logical, op, cap.Status, cap.Reason)
@@ -115,7 +115,7 @@ func TestCapabilityNullableCarrierDistinguishesCountAndValueAggregateSemantics(t
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
 		}
 	}
-	for _, op := range []Operation{OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange} {
+	for _, op := range []Operation{OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
 		cap := CapabilityFor(desc, op)
 		if cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierAggregateSemantics {
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
@@ -156,7 +156,7 @@ func TestCapabilityVectorAndAdjacencyRejectScalarShortcutSemantics(t *testing.T)
 				t.Fatalf("%s %s capability=%+v", tc.name, op, cap)
 			}
 		}
-		for _, op := range []Operation{OpEquality, OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange, OpDirectScalarValueCarrier} {
+		for _, op := range []Operation{OpEquality, OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier} {
 			cap := CapabilityFor(tc.desc, op)
 			if cap.Status != StatusUnsupported || cap.Reason != tc.reason {
 				t.Fatalf("%s %s status=%s reason=%s", tc.name, op, cap.Status, cap.Reason)
@@ -192,6 +192,7 @@ func TestCapabilityReasonCodesAreStable(t *testing.T) {
 		ReasonVectorScalarOperationUnsupported:    "vector_scalar_operation_unsupported",
 		ReasonAdjacencyScalarOperationUnsupported: "adjacency_scalar_operation_unsupported",
 		ReasonStatsPayloadUnsupported:             "stats_payload_unsupported",
+		ReasonPruningPayloadUnsupported:           "pruning_payload_unsupported",
 	}
 	for got, want := range checks {
 		if string(got) != want {
