@@ -1,7 +1,14 @@
 // Package crc is TreeDB's audited CRC-32 facade.
 //
 // All functions use the CRC-32/IEEE polynomial and preserve the byte-for-byte
-// values produced by github.com/snissn/go-crc32-asm.
+// values produced by hash/crc32.ChecksumIEEE and hash/crc32.Update. TreeDB
+// stores these checksum bytes on disk, so this package centralizes routing
+// through github.com/snissn/go-crc32-asm without changing the polynomial or
+// verification semantics.
+//
+// go-crc32-asm selects architecture-specific acceleration where available and
+// uses its bit-compatible fallback on unsupported architectures; callers must
+// treat either path as the same fail-closed verification primitive.
 package crc
 
 import crc32 "github.com/snissn/go-crc32-asm"
