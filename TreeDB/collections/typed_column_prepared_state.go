@@ -732,7 +732,10 @@ func typedColumnApplyPreparedInt64Pruning(part *typedColumnPreparedPartState, re
 			if err != nil {
 				return err
 			}
-			newSelection = composed
+			newSelection, err = typedColumnPreparedCloneRowSelection(composed)
+			if err != nil {
+				return err
+			}
 		}
 		if !oldNonEmpty {
 			empty, err := typedcolumn.NewEmptyRowSelection(block.Descriptor.RowCount)
@@ -743,10 +746,6 @@ func typedColumnApplyPreparedInt64Pruning(part *typedColumnPreparedPartState, re
 		}
 		block.CandidateSelection = newSelection
 		block.NeedsPredicate = false
-		if diag != nil && !newSelection.IsEmpty() {
-			diag.PruningBlocks++
-			diag.PruningRows += newSelection.Count()
-		}
 		block.PruningExact = candidate.Exact
 		block.PruningExactCount = candidate.ExactCount
 		block.PruningExactSum = candidate.ExactSum
@@ -754,6 +753,29 @@ func typedColumnApplyPreparedInt64Pruning(part *typedColumnPreparedPartState, re
 	column.PruningFallbackReason = ""
 	column.Int64PruningReady = true
 	return nil
+}
+
+func typedColumnPreparedCloneRowSelection(selection typedcolumn.RowSelection) (typedcolumn.RowSelection, error) {
+	switch selection.Kind() {
+	case typedcolumn.RowSelectionEmpty:
+		return typedcolumn.NewEmptyRowSelection(selection.Rows())
+	case typedcolumn.RowSelectionAll:
+		return typedcolumn.NewAllRowSelection(selection.Rows())
+	case typedcolumn.RowSelectionRange:
+		start, end, ok := selection.SingleRange()
+		if !ok {
+			return typedcolumn.RowSelection{}, fmt.Errorf("collections: typed-column prepared selection range shape missing range")
+		}
+		return typedcolumn.NewRangeRowSelection(selection.Rows(), start, end)
+	case typedcolumn.RowSelectionRanges:
+		return typedcolumn.NewRangesRowSelection(selection.Rows(), selection.Ranges())
+	case typedcolumn.RowSelectionBitmap:
+		return typedcolumn.NewBitmapRowSelection(selection.Rows(), selection.BitmapWords())
+	case typedcolumn.RowSelectionSparse:
+		return typedcolumn.NewSparseRowSelection(selection.Rows(), selection.SparseRows())
+	default:
+		return typedcolumn.RowSelection{}, fmt.Errorf("collections: typed-column prepared unsupported row selection shape %s", selection.Shape().Kind)
+	}
 }
 
 func typedColumnPreparedPruningFallback(column *typedColumnPreparedColumnState, diag *typedColumnPreparedStateDiagnostics, reason string) {

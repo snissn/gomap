@@ -611,6 +611,9 @@ func TestTypedColumnInt64PreparedUsesDurablePruningMetadata(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, result, 2, 40)
+	if result.Diagnostics.PruningBlocks != 1 || result.Diagnostics.PruningRows != 2 {
+		t.Fatalf("run diagnostics=%+v want one pruned candidate block with two rows", result.Diagnostics)
+	}
 }
 
 func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {

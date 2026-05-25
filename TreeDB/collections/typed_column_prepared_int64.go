@@ -645,6 +645,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 	for blockIdx := range preparedColumn.BlockPlans {
 		block := &preparedColumn.BlockPlans[blockIdx]
 		result.Diagnostics.BlocksConsidered++
+		if preparedColumn.Int64PruningReady && !block.CandidateSelection.IsAll() {
+			recordTypedColumnInt64PruningBlock(&result.Diagnostics, block.CandidateSelection.Count())
+		}
 		if block.CandidateSelection.IsEmpty() {
 			result.Diagnostics.BlocksPruned++
 			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, block.CandidateSelection)
