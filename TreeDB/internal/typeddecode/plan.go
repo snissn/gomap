@@ -6,10 +6,11 @@
 package typeddecode
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
+	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
@@ -227,7 +228,7 @@ func statusFromLayoutCapability(cap columnlayout.Capability) Status {
 	case columnlayout.ReasonOperationUnsupported:
 		reason = ReasonUnsupportedOperation
 	}
-	if string(cap.Status) == "fallback" {
+	if cap.Status == columnsemantics.StatusFallback {
 		return StreamingStatus(reason, cap.Error())
 	}
 	return UnsupportedStatus(reason, cap.Error())
@@ -275,7 +276,7 @@ func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
 		return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width byte count overflow")
 	}
 	if block.PayloadLength != want || block.RawBytes != want || block.StoredBytes != want {
-		return UnsupportedStatus(ReasonRowCountMismatch, fmt.Sprintf("payload/raw/stored=(%d,%d,%d) want rows=%d*elements=%d*width=%d=%d", block.PayloadLength, block.RawBytes, block.StoredBytes, req.Rows, elementsPerRow, req.Plan.ElementSize, want))
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("payload/raw/stored=(%d,%d,%d) want rows=%d*elements=%d*width=%d=%d", block.PayloadLength, block.RawBytes, block.StoredBytes, req.Rows, elementsPerRow, req.Plan.ElementSize, want))
 	}
 	return DirectStatus()
 }
@@ -386,17 +387,16 @@ func validateViewLen[T any](view []T, expected int, err error) ([]T, Status) {
 
 func classifyViewError(err error) Status {
 	msg := err.Error()
-	lower := strings.ToLower(msg)
 	switch {
-	case strings.Contains(lower, "nil handle"):
+	case errors.Is(err, mappedresource.ErrDirectViewNilHandle):
 		return StreamingStatus(ReasonNilHandle, msg)
-	case strings.Contains(lower, "released"):
+	case errors.Is(err, mappedresource.ErrDirectViewReleasedHandle):
 		return UnsupportedStatus(ReasonStaleHandle, msg)
-	case strings.Contains(lower, "aligned"):
+	case errors.Is(err, mappedresource.ErrDirectViewUnaligned):
 		return StreamingStatus(ReasonUnaligned, msg)
-	case strings.Contains(lower, "little-endian"):
+	case errors.Is(err, mappedresource.ErrDirectViewWrongEndian):
 		return StreamingStatus(ReasonWrongEndian, msg)
-	case strings.Contains(lower, "multiple"):
+	case errors.Is(err, mappedresource.ErrDirectViewLengthMultiple):
 		return UnsupportedStatus(ReasonLengthMultipleMismatch, msg)
 	default:
 		return UnsupportedStatus(ReasonValidationFailed, msg)

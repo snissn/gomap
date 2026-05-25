@@ -426,6 +426,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 	decodedAny := false
 	payloadRead := false
 	columnPlan := typeddecode.Int64ReducerPlan(preparedColumn.Plan.Layout, preparedColumn.Certification)
+	recordTypedColumnInt64FastDecodePlan(&result.Diagnostics, columnPlan)
 	var err error
 	for _, block := range preparedColumn.BlockPlans {
 		result.Diagnostics.BlocksConsidered++
@@ -453,7 +454,6 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		granule.Payload = payload
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
 
-		recordTypedColumnInt64FastDecodePlan(&result.Diagnostics, columnPlan)
 		if columnPlan.Path == typeddecode.PathUnsupported {
 			return false, fmt.Errorf("collections: typed-column int64 aggregate fast decode unsupported for column %q: %s", preparedColumn.Plan.Definition.Name, columnPlan.Status().Error())
 		}

@@ -11,6 +11,14 @@ var nativeLittleEndian = func() bool {
 	return *(*byte)(unsafe.Pointer(&value)) == 1
 }()
 
+var (
+	ErrDirectViewNilHandle      = errors.New("mappedresource: nil handle")
+	ErrDirectViewReleasedHandle = errors.New("mappedresource: handle is released")
+	ErrDirectViewWrongEndian    = errors.New("mappedresource: direct view wrong endian")
+	ErrDirectViewLengthMultiple = errors.New("mappedresource: direct view length multiple mismatch")
+	ErrDirectViewUnaligned      = errors.New("mappedresource: direct view unaligned")
+)
+
 // DirectViewOptions controls validation before raw bytes are reinterpreted as a
 // fixed-width typed slice.
 type DirectViewOptions struct {
@@ -33,17 +41,17 @@ func ValidateDirectView(data []byte, opts DirectViewOptions) (int, error) {
 		opts.TypeName = fmt.Sprintf("%d-byte", opts.ElementSize)
 	}
 	if opts.RequireLittleEndian && !nativeLittleEndian {
-		return 0, fmt.Errorf("mappedresource: %s direct view requires little-endian host", opts.TypeName)
+		return 0, fmt.Errorf("%w: %s direct view requires little-endian host", ErrDirectViewWrongEndian, opts.TypeName)
 	}
 	if uintptr(len(data))%opts.ElementSize != 0 {
-		return 0, fmt.Errorf("mappedresource: %s direct view length=%d is not multiple of element size=%d", opts.TypeName, len(data), opts.ElementSize)
+		return 0, fmt.Errorf("%w: %s direct view length=%d is not multiple of element size=%d", ErrDirectViewLengthMultiple, opts.TypeName, len(data), opts.ElementSize)
 	}
 	if len(data) == 0 {
 		return 0, nil
 	}
 	addr := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
 	if addr%opts.Alignment != 0 {
-		return 0, fmt.Errorf("mappedresource: %s direct view address=%#x is not %d-byte aligned", opts.TypeName, addr, opts.Alignment)
+		return 0, fmt.Errorf("%w: %s direct view address=%#x is not %d-byte aligned", ErrDirectViewUnaligned, opts.TypeName, addr, opts.Alignment)
 	}
 	return int(uintptr(len(data)) / opts.ElementSize), nil
 }
@@ -146,12 +154,12 @@ func (m *Manager) Uint32View(h *Handle) ([]uint32, error) {
 
 func liveHandleBytes(h *Handle) ([]byte, error) {
 	if h == nil {
-		return nil, errors.New("mappedresource: nil handle")
+		return nil, ErrDirectViewNilHandle
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.done {
-		return nil, errors.New("mappedresource: handle is released")
+		return nil, ErrDirectViewReleasedHandle
 	}
 	return h.bytes, nil
 }
