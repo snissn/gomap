@@ -65,6 +65,27 @@ const (
 	StatusFallback    Status = "fallback"
 )
 
+// ResolutionPhase records where a caller is allowed to make the semantic
+// dispatch decision. Current #1843 consumers resolve once during prepare; hot
+// row loops must already have selected a concrete scan/reducer implementation.
+type ResolutionPhase string
+
+const (
+	PhasePrepare ResolutionPhase = "prepare"
+)
+
+// ResultSemantics makes aggregate result shape explicit for capabilities that
+// expose aggregate output. Empty fields mean the operation is not an aggregate
+// result capability.
+type ResultSemantics struct {
+	ResultType     string
+	Accumulator    string
+	OverflowPolicy string
+	Comparison     string
+	GroupKey       string
+	Precision      string
+}
+
 // ReasonCode is a stable diagnostic token. Add new values rather than changing
 // existing strings; tests and planner diagnostics may key on them.
 type ReasonCode string
@@ -89,6 +110,7 @@ const (
 	ReasonVectorCapabilityDeferred            ReasonCode = "vector_capability_deferred"
 	ReasonAdjacencyCapabilityDeferred         ReasonCode = "adjacency_capability_deferred"
 	ReasonBoolRangeUnsupported                ReasonCode = "bool_range_unsupported"
+	ReasonStatsPayloadUnsupported             ReasonCode = "stats_payload_unsupported"
 )
 
 // Descriptor binds logical semantics to the current typedcolumn physical shape.
@@ -106,6 +128,8 @@ type Capability struct {
 	Status    Status
 	Reason    ReasonCode
 	Message   string
+	Phase     ResolutionPhase
+	Result    ResultSemantics
 }
 
 func (c Capability) Supported() bool { return c.Status == StatusSupported }
@@ -121,15 +145,21 @@ func (c Capability) Error() string {
 }
 
 func Supported(op Operation) Capability {
-	return Capability{Operation: op, Status: StatusSupported, Reason: ReasonSupported}
+	return Capability{Operation: op, Status: StatusSupported, Reason: ReasonSupported, Phase: PhasePrepare}
+}
+
+func SupportedResult(op Operation, result ResultSemantics) Capability {
+	cap := Supported(op)
+	cap.Result = result
+	return cap
 }
 
 func Unsupported(op Operation, reason ReasonCode, msg string) Capability {
-	return Capability{Operation: op, Status: StatusUnsupported, Reason: reason, Message: msg}
+	return Capability{Operation: op, Status: StatusUnsupported, Reason: reason, Message: msg, Phase: PhasePrepare}
 }
 
 func Fallback(op Operation, reason ReasonCode, msg string) Capability {
-	return Capability{Operation: op, Status: StatusFallback, Reason: reason, Message: msg}
+	return Capability{Operation: op, Status: StatusFallback, Reason: reason, Message: msg, Phase: PhasePrepare}
 }
 
 func LogicalTypes() []LogicalType {
@@ -184,9 +214,11 @@ func CapabilityFor(desc Descriptor, op Operation) Capability {
 	if reason, ok := validatePhysicalEncoding(desc.Physical, desc.Encoding); !ok {
 		return Unsupported(op, reason, fmt.Sprintf("physical_type=%s encoding=%s", desc.Physical, desc.Encoding))
 	}
-	if desc.Nullable {
+	if desc.Nullable || desc.Encoding == typedcolumn.EncodingNullableInt64 {
 		switch op {
-		case OpCountRows, OpCountNonNull, OpIsNull, OpIsNotNull:
+		case OpCountRows, OpCountNonNull:
+			return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+		case OpIsNull, OpIsNotNull:
 			return Supported(op)
 		case OpSum, OpAvg, OpMin, OpMax, OpStatsSum, OpStatsMinMax, OpPruneOrderedRange:
 			return Fallback(op, ReasonNullableCarrierAggregateSemantics, "nullable/default carrier requires explicit count/value aggregate semantics")
@@ -251,8 +283,18 @@ func int64Capability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, "int64 semantics require typedcolumn int64 physical type")
 	}
 	switch op {
-	case OpAllRows, OpEquality, OpInequality, OpOrderedRange, OpInList, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange, OpDirectScalarValueCarrier:
+	case OpAllRows, OpEquality, OpInequality, OpOrderedRange, OpInList, OpStatsMinMax, OpPruneOrderedRange, OpDirectScalarValueCarrier:
 		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpSum:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", Accumulator: "int64", OverflowPolicy: "checked"})
+	case OpAvg:
+		return SupportedResult(op, ResultSemantics{ResultType: "float64", Accumulator: "checked int64 sum and int64 count", OverflowPolicy: "checked sum", Precision: "float64 quotient"})
+	case OpMin, OpMax:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", Comparison: "signed int64 logical order"})
+	case OpStatsSum:
+		return Unsupported(op, ReasonStatsPayloadUnsupported, "current typed-column stats payloads do not store int64 sums")
 	case OpIsNull, OpIsNotNull:
 		return Unsupported(op, ReasonNotNullable, "non-null int64 column")
 	default:
@@ -265,8 +307,12 @@ func boolCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, "bool semantics require typedcolumn bool physical type")
 	}
 	switch op {
-	case OpAllRows, OpEquality, OpInequality, OpInList, OpCountRows, OpCountNonNull, OpBoolCounts, OpDirectScalarValueCarrier:
+	case OpAllRows, OpEquality, OpInequality, OpInList, OpDirectScalarValueCarrier:
 		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpBoolCounts:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64 counts", GroupKey: "bool false/true/null"})
 	case OpOrderedRange, OpPruneOrderedRange, OpMin, OpMax, OpStatsMinMax:
 		return Unsupported(op, ReasonBoolRangeUnsupported, "bool ordering is not exposed as scalar range semantics")
 	case OpIsNull, OpIsNotNull:
@@ -297,8 +343,12 @@ func stringCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, "string semantics require low-cardinality dictionary-code physical type")
 	}
 	switch op {
-	case OpAllRows, OpEquality, OpInequality, OpInList, OpDictionaryEquality, OpCountRows, OpCountNonNull, OpDictionaryGroupBy:
+	case OpAllRows, OpEquality, OpInequality, OpInList, OpDictionaryEquality:
 		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpDictionaryGroupBy:
+		return SupportedResult(op, ResultSemantics{ResultType: "groups", GroupKey: "dictionary string value with stable dictionary identity"})
 	case OpOrderedRange, OpDictionaryRange, OpStringPrefix, OpStringLexicalRange, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange:
 		if !desc.DictionaryOrder {
 			return Unsupported(op, ReasonDictionaryOrderUnproven, "dictionary code order is not proof of lexical value order")
@@ -319,8 +369,10 @@ func vectorCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, "float32_vector semantics require dense float32 vector physical type")
 	}
 	switch op {
-	case OpAllRows, OpCountRows:
+	case OpAllRows:
 		return Supported(op)
+	case OpCountRows:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpVectorSimilarity, OpVectorMetrics:
 		return Fallback(op, ReasonVectorCapabilityDeferred, "vector-specific kernels are deferred")
 	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange, OpDirectScalarValueCarrier:
@@ -335,8 +387,10 @@ func adjacencyCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, "adjacency_list semantics require dense uint32 adjacency physical type")
 	}
 	switch op {
-	case OpAllRows, OpCountRows:
+	case OpAllRows:
 		return Supported(op)
+	case OpCountRows:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpVectorSimilarity, OpVectorMetrics:
 		return Fallback(op, ReasonAdjacencyCapabilityDeferred, "graph/vector-specific adjacency capabilities are deferred")
 	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneOrderedRange, OpDirectScalarValueCarrier:

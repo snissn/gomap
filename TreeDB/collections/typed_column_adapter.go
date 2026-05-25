@@ -1078,6 +1078,11 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	if err != nil || !ok {
 		return ok, err
 	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
+			return false, err
+		}
+	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
 	}
@@ -1088,7 +1093,7 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 }
 
 func typedColumnAdapterHasStringPredicateColumn(fields []TypedStorageField, column string) (bool, error) {
-	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, column)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -1136,6 +1141,11 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 	}
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+			return nil, typedColumnAdapterColumn{}, 0, err
+		}
 	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
@@ -1248,6 +1258,11 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 	}
 	if !ok {
 		return nil, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
+	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+			return nil, err
+		}
 	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
 		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
@@ -1445,6 +1460,11 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	}
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate %s column %q is not owned by typed_column_part", operation, column)
+	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate %s column %q", operation, column)); err != nil {
+			return nil, typedColumnAdapterColumn{}, 0, err
+		}
 	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, operation, column)

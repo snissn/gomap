@@ -28,8 +28,29 @@ func TestSemanticMatrixCoversCurrentLogicalTypesColumnTypesAndEncodings(t *testi
 func TestCapabilityInt64SupportsPreparedPredicateAndAggregateSemantics(t *testing.T) {
 	desc := Descriptor{Logical: LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint}
 	for _, op := range []Operation{OpAllRows, OpEquality, OpOrderedRange, OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange} {
-		if cap := CapabilityFor(desc, op); cap.Status != StatusSupported {
-			t.Fatalf("op %s status=%s reason=%s", op, cap.Status, cap.Reason)
+		if cap := CapabilityFor(desc, op); cap.Status != StatusSupported || cap.Phase != PhasePrepare {
+			t.Fatalf("op %s status=%s reason=%s phase=%s", op, cap.Status, cap.Reason, cap.Phase)
+		}
+	}
+	if cap := CapabilityFor(desc, OpStatsSum); cap.Status != StatusUnsupported || cap.Reason != ReasonStatsPayloadUnsupported {
+		t.Fatalf("stats sum status=%s reason=%s", cap.Status, cap.Reason)
+	}
+}
+
+func TestCapabilityInt64AggregateResultSemanticsAreExplicit(t *testing.T) {
+	desc := Descriptor{Logical: LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint}
+	checks := map[Operation]ResultSemantics{
+		OpCountRows:    {ResultType: "int64", OverflowPolicy: "checked row count"},
+		OpCountNonNull: {ResultType: "int64", OverflowPolicy: "checked row count"},
+		OpSum:          {ResultType: "int64", Accumulator: "int64", OverflowPolicy: "checked"},
+		OpAvg:          {ResultType: "float64", Accumulator: "checked int64 sum and int64 count", OverflowPolicy: "checked sum", Precision: "float64 quotient"},
+		OpMin:          {ResultType: "int64", Comparison: "signed int64 logical order"},
+		OpMax:          {ResultType: "int64", Comparison: "signed int64 logical order"},
+	}
+	for op, want := range checks {
+		cap := CapabilityFor(desc, op)
+		if cap.Status != StatusSupported || cap.Result != want {
+			t.Fatalf("%s capability=%+v want result=%+v", op, cap, want)
 		}
 	}
 }
@@ -83,6 +104,13 @@ func TestCapabilityNullableCarrierDistinguishesCountAndValueAggregateSemantics(t
 	if cap := CapabilityFor(desc, OpEquality); cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierValueSemantics {
 		t.Fatalf("equality status=%s reason=%s", cap.Status, cap.Reason)
 	}
+
+	// The nullable carrier encoding itself is sufficient to force nullable/default
+	// semantics even if a direct caller forgets to set Descriptor.Nullable.
+	desc.Nullable = false
+	if cap := CapabilityFor(desc, OpSum); cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierAggregateSemantics {
+		t.Fatalf("nullable encoding sum status=%s reason=%s", cap.Status, cap.Reason)
+	}
 }
 
 func TestCapabilityVectorAndAdjacencyRejectScalarShortcutSemantics(t *testing.T) {
@@ -111,6 +139,7 @@ func TestCapabilityReasonCodesAreStable(t *testing.T) {
 		ReasonNullableCarrierAggregateSemantics:   "nullable_carrier_aggregate_semantics",
 		ReasonVectorScalarOperationUnsupported:    "vector_scalar_operation_unsupported",
 		ReasonAdjacencyScalarOperationUnsupported: "adjacency_scalar_operation_unsupported",
+		ReasonStatsPayloadUnsupported:             "stats_payload_unsupported",
 	}
 	for got, want := range checks {
 		if string(got) != want {

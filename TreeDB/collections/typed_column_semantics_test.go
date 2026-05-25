@@ -84,6 +84,18 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 	}
 }
 
+func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsFloatRawInt64Carrier(t *testing.T) {
+	field := semanticField("score", ColumnStoreValueFloat32)
+	_, _, _, err := typedColumnAdapterPrepareInt64PredicateScanPart([]TypedStorageField{field}, nil, 0, 0, 0, 0, "score")
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), string(columnsemantics.ReasonFloatRawInt64BitPattern)) {
+		t.Fatalf("prepare float-as-int64 scan err=%v", err)
+	}
+	_, _, _, err = typedColumnAdapterPrepareInt64PredicateAggregatePart([]TypedStorageField{field}, nil, 0, 0, 0, 0, "score")
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), string(columnsemantics.ReasonFloatRawInt64BitPattern)) {
+		t.Fatalf("prepare float-as-int64 aggregate err=%v", err)
+	}
+}
+
 func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsNullableCarrier(t *testing.T) {
 	field := semanticField("count", ColumnStoreValueInt64)
 	field.Nullable = true
