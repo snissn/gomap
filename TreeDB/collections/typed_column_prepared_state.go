@@ -322,10 +322,10 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 
 func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, _ []TypedStorageField, schemaHash uint64, image typedcolumn.ColumnPartImage, desc typedcolumn.ColumnPartDescriptor, columns map[string]typedcolumn.ColumnPartColumn, manifestBytes int, descriptorBytes int, columnRequests []typedColumnPreparedColumnRequest, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
 	var diag typedColumnPreparedStateDiagnostics
-	if image.PartID != ref.PartID || (typedRows != 0 && image.Rows != typedRows) {
+	if image.PartID != ref.PartID || image.Rows != typedRows {
 		return nil, diag, fmt.Errorf("collections: typed_column_part prepared image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d", image.PartID, ref.PartID, image.Rows, typedRows)
 	}
-	if physical != (ColumnAssetRef{}) && physicalRows != 0 && image.Rows != physicalRows {
+	if physical != (ColumnAssetRef{}) && image.Rows != physicalRows {
 		return nil, diag, fmt.Errorf("collections: typed_column_part prepared image/physical row mismatch image_rows=%d physical_rows=%d", image.Rows, physicalRows)
 	}
 	if desc.PartID != image.PartID || desc.RowCount != image.Rows {
@@ -424,6 +424,9 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 		length := block.Descriptor.StoredBytes
 		if length < 0 || offset > sectionEnd || length > sectionEnd-offset {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d length=%d outside section", plan.Definition.Name, i, length)
+		}
+		if length == 0 && block.Descriptor.RowCount != 0 {
+			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d has zero-length payload with row_count=%d", plan.Definition.Name, i, block.Descriptor.RowCount)
 		}
 		selection := typedcolumn.RowSelection{}
 		needsPredicate := true

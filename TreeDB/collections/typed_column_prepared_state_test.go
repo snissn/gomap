@@ -147,6 +147,12 @@ func TestTypedColumnPreparedColumnStateAllowsZeroLengthEmptyBlock(t *testing.T) 
 	if diag.BlocksPrepared != 1 || diag.PrunedBlocks != 1 || diag.CandidateBlocks != 0 || diag.CandidateRangeBytes != 0 {
 		t.Fatalf("zero-length block diagnostics=%+v want one prepared/pruned block with no candidate bytes", diag)
 	}
+
+	column.Blocks[0].Descriptor.RowCount = 1
+	_, _, err = buildTypedColumnPreparedColumnState(plan, column, section, nil)
+	if err == nil || !strings.Contains(err.Error(), "zero-length payload") {
+		t.Fatalf("buildTypedColumnPreparedColumnState zero-length non-empty block err=%v want fail-closed zero-length payload", err)
+	}
 }
 
 func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
@@ -174,6 +180,10 @@ func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 		return image.Bytes[offset : offset+length], nil
 	}
 	request := []typedColumnPreparedColumnRequest{{Field: countField, Role: typedcolumn.ColumnRoleMeasure, Operation: columnsemantics.OpSum}}
+	_, _, err = typedColumnPreparePartStateFromRanges(ref, physical, 0, image.Rows, fields, uint64(adapterPart.Part.Descriptor.SchemaVersion), request, readRange, nil)
+	if err == nil || !strings.Contains(err.Error(), "image/ref mismatch") {
+		t.Fatalf("prepare with typed manifest row mismatch err=%v want fail-closed row mismatch", err)
+	}
 	_, _, err = typedColumnPreparePartStateFromRanges(ref, physical, image.Rows, image.Rows+1, fields, uint64(adapterPart.Part.Descriptor.SchemaVersion), request, readRange, nil)
 	if err == nil || !strings.Contains(err.Error(), "image/physical row mismatch") {
 		t.Fatalf("prepare with physical row mismatch err=%v want fail-closed row mismatch", err)
