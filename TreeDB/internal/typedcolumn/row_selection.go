@@ -116,42 +116,20 @@ func makeRangesRowSelection(rows int, ranges []rowRange) (rowSelection, error) {
 	if len(ranges) == 0 {
 		return makeEmptyRowSelection(rows)
 	}
-	merged := make([]rowRange, 0, len(ranges))
+	merged := make([]RowRange, 0, len(ranges))
 	for i, r := range ranges {
 		if err := validateRowRange(rows, r); err != nil {
 			return rowSelection{}, fmt.Errorf("typedcolumn: invalid row range %d: %w", i, err)
 		}
-		if r.Start == r.End {
-			continue
-		}
-		if len(merged) == 0 {
+		if r.Start != r.End {
 			merged = append(merged, r)
-			continue
 		}
-		last := &merged[len(merged)-1]
-		if r.Start < last.End {
-			return rowSelection{}, fmt.Errorf("typedcolumn: row ranges overlap at %d", i)
-		}
-		if r.Start == last.End {
-			last.End = r.End
-			continue
-		}
-		merged = append(merged, r)
 	}
 	if len(merged) == 0 {
 		return makeEmptyRowSelection(rows)
 	}
-	count := 0
-	for _, r := range merged {
-		count += r.End - r.Start
-	}
-	if count == rows {
-		return makeAllRowSelection(rows)
-	}
-	if len(merged) == 1 {
-		return makeRangeRowSelection(rows, merged[0].Start, merged[0].End)
-	}
-	return rowSelection{rows: rows, kind: rowSelectionRanges, ranges: merged, count: count}, nil
+	insertionSortRanges(merged)
+	return makeUnionRangesRowSelection(rows, merged)
 }
 
 func makeSparseRowSelection(rows int, sparse []int) (rowSelection, error) {
@@ -225,8 +203,9 @@ func NewRangeRowSelection(rows int, start int, end int) (RowSelection, error) {
 	return makeRangeRowSelection(rows, start, end)
 }
 
-// NewRangesRowSelection returns a compact multi-range selection. Adjacent ranges
-// are coalesced and fully-covered domains collapse to all.
+// NewRangesRowSelection returns a compact multi-range selection. Ranges may be
+// unsorted; overlapping and adjacent ranges are coalesced, and fully-covered
+// domains collapse to all.
 func NewRangesRowSelection(rows int, ranges []RowRange) (RowSelection, error) {
 	return makeRangesRowSelection(rows, ranges)
 }
@@ -940,12 +919,10 @@ func validateSameSelectionRows(a rowSelection, b rowSelection) error {
 
 func failClosedSelection(aRows int, bRows int) rowSelection {
 	rows := aRows
-	if bRows > rows {
-		rows = bRows
-	}
 	if rows < 0 {
 		rows = 0
 	}
+	_ = bRows
 	return rowSelection{rows: rows, kind: rowSelectionEmpty}
 }
 

@@ -29,6 +29,9 @@ func TestRowSelectionShapesCountIterateAndRanges(t *testing.T) {
 	if shape := ranges.shape(); shape.Kind != "ranges" || shape.Ranges != 3 || shape.Count != 5 {
 		t.Fatalf("ranges shape=%+v", shape)
 	}
+	coalesced := mustRangesSelection(t, 10, []rowRange{{Start: 6, End: 8}, {Start: 1, End: 4}, {Start: 3, End: 6}})
+	assertSelectionRows(t, coalesced, []int{1, 2, 3, 4, 5, 6, 7})
+	assertSelectionRanges(t, coalesced, []rowRange{{Start: 1, End: 8}})
 
 	bitmap := mustBitmapSelection(t, 130, []int{0, 2, 64, 129})
 	assertSelectionRows(t, bitmap, []int{0, 2, 64, 129})
@@ -123,7 +126,7 @@ func TestRowSelectionFailClosedOnMaskRowMismatch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "visibility mask row mismatch") {
 		t.Fatalf("compose mismatch err=%v", err)
 	}
-	if got.countRows() != 0 || got.shape().Kind != "empty" {
+	if got.countRows() != 0 || got.shape().Kind != "empty" || got.rowsCount() != 5 {
 		t.Fatalf("fail-closed selection=%+v shape=%+v", got, got.shape())
 	}
 
