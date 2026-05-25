@@ -11,7 +11,7 @@ import (
 func TestInt64RawLayoutCapabilitiesAndValidation(t *testing.T) {
 	desc := Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone}
 	caps := CapabilitiesFor(desc)
-	if !caps.Layout.FixedWidth || caps.Layout.ElementWidthBytes != 8 || caps.Layout.Endian != EndianLittle || !caps.DirectView.Eligible || !caps.Reducers.Int64FixedWidthRaw || !caps.Reducers.Int64NumericAggregate {
+	if !caps.Layout.FixedWidth || caps.Layout.ElementWidthBytes != 8 || caps.Layout.Endian != EndianLittle || !caps.DirectView.Eligible || !caps.Reducers.Int64FixedWidthRaw || !caps.Reducers.Int64NumericAggregate || !caps.Pruning.ValueRows {
 		t.Fatalf("raw int64 caps=%+v", caps)
 	}
 	if cap := caps.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); !cap.Supported() {
@@ -47,11 +47,14 @@ func TestInt64RawLayoutCapabilitiesAndValidation(t *testing.T) {
 func TestInt64DeltaLayoutStillSupportsStreamingReducer(t *testing.T) {
 	desc := Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone}
 	caps := CapabilitiesFor(desc)
-	if !caps.Layout.VariableWidth || caps.DirectView.Eligible || !caps.Reducers.Int64Streaming || !caps.Reducers.Int64NumericAggregate {
+	if !caps.Layout.VariableWidth || caps.DirectView.Eligible || !caps.Reducers.Int64Streaming || !caps.Reducers.Int64NumericAggregate || !caps.Pruning.ValueRows {
 		t.Fatalf("delta caps=%+v", caps)
 	}
 	if cap := caps.SupportsSemanticOperation(columnsemantics.OpSum); !cap.Supported() {
 		t.Fatalf("delta sum cap=%+v", cap)
+	}
+	if cap := caps.SupportsSemanticOperation(columnsemantics.OpPruneEquality); !cap.Supported() {
+		t.Fatalf("delta equality pruning cap=%+v", cap)
 	}
 	if cap := caps.Supports(OpDirectView); cap.Supported() || cap.Reason != ReasonVariableWidthNoDirectView {
 		t.Fatalf("delta direct view cap=%+v want reason %s", cap, ReasonVariableWidthNoDirectView)

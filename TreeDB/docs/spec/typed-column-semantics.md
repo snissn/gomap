@@ -18,7 +18,7 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | Logical type | Current typedcolumn type | Encoding/layout | Scalar range/aggregate stance |
 | --- | --- | --- | --- |
 | `bool` | `bool` | `bool_bitpack_rle` | equality/counts supported; broad scalar range is unsupported (`bool_range_unsupported`). |
-| `int64` | `int64` | `delta_varint` by default; explicit `fixed_width_encoding: "little_endian"` selects uncompressed `raw_int64`; double-delta remains a valid typedcolumn encoding but is not the adapter default | equality, ordered range, count rows/non-null, sum/avg/min/max, min/max stats, sum stats, and ordered-range pruning are supported for non-null int64 semantics. Durable sum/count stats are gated by the stats envelope in `typed-column-stats.md` and are usable only for advertised all/full-block selection shapes. Physical reducer/direct-view eligibility is additionally gated by `typed-column-layout-capabilities.md`. |
+| `int64` | `int64` | `delta_varint` by default; explicit `fixed_width_encoding: "little_endian"` selects uncompressed `raw_int64`; double-delta remains a valid typedcolumn encoding but is not the adapter default | equality, ordered range, count rows/non-null, sum/avg/min/max, min/max stats, sum stats, equality pruning, and ordered-range pruning are supported for non-null int64 semantics. Durable sum/count stats are gated by the stats envelope in `typed-column-stats.md`; durable value-row pruning metadata is gated by `typed-column-pruning.md`. Physical reducer/direct-view/pruning eligibility is additionally gated by `typed-column-layout-capabilities.md`. |
 | `float32` | `int64` | `raw_int64` carrying `math.Float32bits` | raw bit patterns do **not** provide int64 ordered range, sum, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Native float semantics require a future float layout and NaN/signed-zero/infinity rules. |
 | `double` | `int64` | `raw_int64` carrying `math.Float64bits` | same raw-bit restriction as `float32`. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
@@ -70,6 +70,16 @@ optional immutable asset identity, and section dependency kinds such as values,
 dictionaries, offsets, null/default masks, visibility, stats, pruning metadata,
 vector payloads, and adjacency payloads. Row-span or asset-generation mismatches
 must fail closed before a hot loop consumes multiple columns.
+
+## Durable pruning metadata (#1841)
+
+Typed-column pruning metadata is generic at the envelope layer and type-specific
+at the payload layer. The first payload is `int64_value_rows_v1`, a non-null
+int64 `(value,row)` index that advertises `pruning.equality` and
+`pruning.ordered_range`. Prepared planning validates the envelope and payload,
+then produces block-local `RowSelection` candidates that compose with visibility
+and null/default masks. Missing metadata is a safe fallback; corrupt or stale
+metadata fails closed. See `typed-column-pruning.md` for the payload contract.
 
 ## Durable stats envelope (#1840)
 

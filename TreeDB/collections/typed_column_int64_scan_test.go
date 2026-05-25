@@ -570,6 +570,49 @@ func TestTypedColumnInt64AggregateSelectionShapes(t *testing.T) {
 	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, exact.Diagnostics, "selection-shaped typed-column aggregate")
 }
 
+func TestTypedColumnInt64PreparedUsesDurablePruningMetadata(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30, 20})
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 20, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	if session.prepareDiagnostics.DecodedMetadataBytes == 0 || session.prepareDiagnostics.PruningCertified == 0 {
+		t.Fatalf("prepare diagnostics=%+v want pruning metadata decoded/certified", session.prepareDiagnostics)
+	}
+	var preparedColumn *typedColumnPreparedColumnState
+	for _, part := range session.preparedState.partsByRef {
+		preparedColumn = part.Columns[session.aggregateColumn.Definition.Name]
+		break
+	}
+	if preparedColumn == nil {
+		t.Fatalf("prepared pruning column missing")
+	}
+	if !preparedColumn.Int64PruningReady || preparedColumn.PruningFallbackReason != "" {
+		t.Fatalf("prepared pruning state=%+v fallback=%q", preparedColumn, preparedColumn.PruningFallbackReason)
+	}
+	matched := 0
+	for _, block := range preparedColumn.BlockPlans {
+		if block.CandidateSelection.IsEmpty() {
+			continue
+		}
+		if block.NeedsPredicate {
+			t.Fatalf("block %+v still requires predicate after exact pruning metadata", block)
+		}
+		matched += block.CandidateSelection.Count()
+	}
+	if matched != 2 {
+		t.Fatalf("pruning candidate rows=%d want 2", matched)
+	}
+	result, err := session.Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 2, 40)
+}
+
 func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -2365,7 +2408,11 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 			if session != nil {
 				b.ReportMetric(float64(session.prepareDiagnostics.DirectViewCertified), "prepare_direct_view_certified/op")
 				b.ReportMetric(float64(session.prepareDiagnostics.StreamingCertified), "prepare_streaming_certified/op")
+				b.ReportMetric(float64(session.prepareDiagnostics.PruningCertified), "prepare_pruning_certified/op")
+				b.ReportMetric(float64(session.prepareDiagnostics.PruningBlocks), "prepare_pruning_blocks/op")
+				b.ReportMetric(float64(session.prepareDiagnostics.PruningRows), "prepare_pruning_rows/op")
 				b.ReportMetric(float64(session.prepareDiagnostics.CertificationFailures), "prepare_certification_failures/op")
+				b.ReportMetric(float64(session.prepareDiagnostics.PruningValidationFailures), "prepare_pruning_validation_failures/op")
 			}
 		})
 	}
@@ -3090,8 +3137,13 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.StatsFallbackBlocks), "stats_fallback_blocks/op")
 	b.ReportMetric(float64(diag.StatsRows), "stats_rows/op")
 	b.ReportMetric(float64(diag.StatsValidationFailures), "stats_validation_failures/op")
+	b.ReportMetric(float64(diag.PruningBlocks), "pruning_blocks/op")
+	b.ReportMetric(float64(diag.PruningRows), "pruning_rows/op")
+	b.ReportMetric(float64(diag.PruningFallbackBlocks), "pruning_fallback_blocks/op")
+	b.ReportMetric(float64(diag.PruningValidationFailures), "pruning_validation_failures/op")
 	b.ReportMetric(float64(diag.DirectViewCertified), "direct_view_certified/op")
 	b.ReportMetric(float64(diag.StreamingCertified), "streaming_certified/op")
+	b.ReportMetric(float64(diag.PruningCertified), "pruning_certified/op")
 	b.ReportMetric(float64(diag.CertificationFailures), "certification_failures/op")
 	b.ReportMetric(float64(diag.PhysicalBytesScanned), "physical_bytes_scanned/op")
 	b.ReportMetric(float64(diag.RowLocatorDecodes), "row_locator_decodes/op")
@@ -3110,6 +3162,9 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	}
 	if diag.FastDecodeFallbackReason != "" {
 		b.ReportMetric(1, "fast_decode_fallback_reason_"+typedColumnInt64AggregateBenchMetricToken(diag.FastDecodeFallbackReason)+"_count")
+	}
+	if diag.PruningFallbackReason != "" {
+		b.ReportMetric(1, "pruning_fallback_reason_"+typedColumnInt64AggregateBenchMetricToken(diag.PruningFallbackReason)+"_count")
 	}
 }
 

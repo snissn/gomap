@@ -354,6 +354,9 @@ func standardColumnDependencies(role ColumnExecutionRole, column string, columnT
 	out := make([]SectionDependencyDescriptor, 0, len(kinds))
 	for _, kind := range kinds {
 		sectionKind := ColumnPartImageSectionColumnData
+		if kind == SectionDependencyPruningMetadata {
+			sectionKind = ColumnPartImageSectionPruningMetadata
+		}
 		dep, err := NewSectionDependency(role, column, columnType, kind, sectionKind, span, true)
 		if err != nil {
 			return nil, err

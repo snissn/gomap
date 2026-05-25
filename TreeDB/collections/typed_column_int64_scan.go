@@ -71,57 +71,63 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	SelectionSparseBlocks int
 	SelectionCompositions int
 
-	DirectTypedColumnAssetReads  int
-	FullAssetReads               int
-	FallbackReads                int
-	CodesMatched                 int
-	DictionaryBytesDecoded       uint64
-	FullAssetBytes               uint64
-	SectionBytesRead             uint64
-	RangeBytesRead               uint64
-	MappedBytes                  uint64
-	HeapCopyBytes                uint64
-	DecodedMetadataBytes         uint64
-	DecodedHeapCopyBytes         uint64
-	MaterializedBytes            uint64
-	FastDecodeDirectViewPlans    int
-	FastDecodeStreamingPlans     int
-	FastDecodeMaterializePlans   int
-	FastDecodeUnsupportedPlans   int
-	DirectViewSuccesses          int
-	DirectViewFailures           int
-	KernelBlocks                 int
-	KernelFullCoveredBlocks      int
-	KernelSelectedBlocks         int
-	KernelCursorBlocks           int
-	KernelFallbackBlocks         int
-	StatsBlocks                  int
-	StatsFullCoveredBlocks       int
-	StatsFallbackBlocks          int
-	StatsRows                    int
-	StatsFallbackReason          string
-	StatsValidationFailures      int
-	StatsValidationFailureReason string
-	FastDecodeFallbackReason     string
-	DirectViewCertified          int
-	StreamingCertified           int
-	StatsCertified               int
-	PruningCertified             int
-	CertificationFailures        int
-	CertificationFailureReason   string
-	PhysicalBytesScanned         int64
-	RowLocatorDecodes            int
-	PhysicalRowIDLookups         int
-	PhysicalRowAssetReads        int
-	RowMaterializations          int
-	DocumentMaterializations     int
-	DocumentReconstructions      int
-	SegmentFileCacheHits         uint64
-	SegmentFileCacheMisses       uint64
-	ColumnAssetReadIntegrity     string
-	Fallback                     bool
-	FallbackReason               string
-	ScanNanos                    int64
+	DirectTypedColumnAssetReads    int
+	FullAssetReads                 int
+	FallbackReads                  int
+	CodesMatched                   int
+	DictionaryBytesDecoded         uint64
+	FullAssetBytes                 uint64
+	SectionBytesRead               uint64
+	RangeBytesRead                 uint64
+	MappedBytes                    uint64
+	HeapCopyBytes                  uint64
+	DecodedMetadataBytes           uint64
+	DecodedHeapCopyBytes           uint64
+	MaterializedBytes              uint64
+	FastDecodeDirectViewPlans      int
+	FastDecodeStreamingPlans       int
+	FastDecodeMaterializePlans     int
+	FastDecodeUnsupportedPlans     int
+	DirectViewSuccesses            int
+	DirectViewFailures             int
+	KernelBlocks                   int
+	KernelFullCoveredBlocks        int
+	KernelSelectedBlocks           int
+	KernelCursorBlocks             int
+	KernelFallbackBlocks           int
+	StatsBlocks                    int
+	StatsFullCoveredBlocks         int
+	StatsFallbackBlocks            int
+	StatsRows                      int
+	PruningBlocks                  int
+	PruningRows                    int
+	PruningFallbackBlocks          int
+	PruningFallbackReason          string
+	StatsFallbackReason            string
+	StatsValidationFailures        int
+	StatsValidationFailureReason   string
+	PruningValidationFailures      int
+	PruningValidationFailureReason string
+	FastDecodeFallbackReason       string
+	DirectViewCertified            int
+	StreamingCertified             int
+	StatsCertified                 int
+	PruningCertified               int
+	CertificationFailures          int
+	CertificationFailureReason     string
+	PhysicalBytesScanned           int64
+	RowLocatorDecodes              int
+	PhysicalRowIDLookups           int
+	PhysicalRowAssetReads          int
+	RowMaterializations            int
+	DocumentMaterializations       int
+	DocumentReconstructions        int
+	SegmentFileCacheHits           uint64
+	SegmentFileCacheMisses         uint64
+	ColumnAssetReadIntegrity       string
+	Fallback                       bool
+	FallbackReason                 string
+	ScanNanos                      int64
 }
 
 type TypedColumnInt64PredicateScanResult struct {
@@ -971,12 +977,22 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.StatsFullCoveredBlocks += src.StatsFullCoveredBlocks
 	dst.StatsFallbackBlocks += src.StatsFallbackBlocks
 	dst.StatsRows += src.StatsRows
+	dst.PruningBlocks += src.PruningBlocks
+	dst.PruningRows += src.PruningRows
+	dst.PruningFallbackBlocks += src.PruningFallbackBlocks
+	if src.PruningFallbackReason != "" {
+		dst.PruningFallbackReason = src.PruningFallbackReason
+	}
 	if src.StatsFallbackReason != "" {
 		dst.StatsFallbackReason = src.StatsFallbackReason
 	}
 	dst.StatsValidationFailures += src.StatsValidationFailures
 	if src.StatsValidationFailureReason != "" {
 		dst.StatsValidationFailureReason = src.StatsValidationFailureReason
+	}
+	dst.PruningValidationFailures += src.PruningValidationFailures
+	if src.PruningValidationFailureReason != "" {
+		dst.PruningValidationFailureReason = src.PruningValidationFailureReason
 	}
 	if src.FastDecodeFallbackReason != "" {
 		dst.FastDecodeFallbackReason = src.FastDecodeFallbackReason

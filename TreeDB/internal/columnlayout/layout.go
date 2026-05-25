@@ -19,6 +19,7 @@ const (
 	OpInt64NumericReducer    Operation = "reducer.int64_numeric"
 	OpInt64RangePredicate    Operation = "predicate.int64_range"
 	OpMinMaxPruning          Operation = "pruning.min_max"
+	OpValueRowPruning        Operation = "pruning.value_rows"
 	OpMinMaxStats            Operation = "stats.min_max"
 	OpSumStats               Operation = "stats.sum"
 	OpLexicalRangePredicate  Operation = "predicate.lexical_range"
@@ -64,6 +65,7 @@ const (
 	ReasonVectorScalarUnsupported     ReasonCode = "layout_vector_scalar_unsupported"
 	ReasonAdjacencyScalarUnsupported  ReasonCode = "layout_adjacency_scalar_unsupported"
 	ReasonStatsPayloadUnsupported     ReasonCode = "layout_stats_payload_unsupported"
+	ReasonPruningPayloadUnsupported   ReasonCode = "layout_pruning_payload_unsupported"
 	ReasonOperationUnsupported        ReasonCode = "layout_operation_unsupported"
 )
 
@@ -159,6 +161,7 @@ type StatsCapabilities struct {
 
 type PruningCapabilities struct {
 	OrderedMinMax     bool
+	ValueRows         bool
 	DictionaryCodes   bool
 	LexicalDictionary bool
 	VectorIndex       bool
@@ -240,6 +243,7 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 			caps.Stats.MinMax = true
 			caps.Stats.Sum = true
 			caps.Pruning.OrderedMinMax = true
+			caps.Pruning.ValueRows = true
 		}
 	case typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint:
 		caps.Layout.Kind = LayoutVariableWidth
@@ -252,6 +256,7 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 			caps.Stats.MinMax = true
 			caps.Stats.Sum = true
 			caps.Pruning.OrderedMinMax = true
+			caps.Pruning.ValueRows = true
 		}
 	case typedcolumn.EncodingNullableInt64:
 		caps.Layout.Kind = LayoutWrapper
@@ -342,7 +347,7 @@ func (c Capabilities) Supports(op Operation) Capability {
 	}
 	if c.Wrappers.Nullable {
 		switch op {
-		case OpDirectView, OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
+		case OpDirectView, OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
 			return Fallback(op, ReasonNullDefaultWrapperRequired, "nullable/default wrapper exposes null/default masks separately from carrier values")
 		}
 	}
@@ -350,25 +355,25 @@ func (c Capabilities) Supports(op Operation) Capability {
 		switch op {
 		case OpDirectView:
 			return Unsupported(op, ReasonCompressedDirectView, fmt.Sprintf("compression=%s", c.Descriptor.Compression))
-		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
+		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", c.Descriptor.Compression))
 		}
 	}
 	if c.Descriptor.Logical == columnsemantics.LogicalFloat32 || c.Descriptor.Logical == columnsemantics.LogicalDouble {
 		switch op {
-		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
+		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonFloatBitPatternNotNumeric, "float bit-pattern storage is not an int64 numeric layout")
 		}
 	}
 	if c.Descriptor.Logical == columnsemantics.LogicalFloat32Vector {
 		switch op {
-		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
+		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar aggregate/range shortcuts")
 		}
 	}
 	if c.Descriptor.Logical == columnsemantics.LogicalAdjacencyList {
 		switch op {
-		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
+		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonAdjacencyScalarUnsupported, "adjacency layouts reject scalar aggregate/range shortcuts")
 		}
 	}
@@ -393,7 +398,12 @@ func (c Capabilities) Supports(op Operation) Capability {
 		if c.Pruning.OrderedMinMax {
 			return Supported(op)
 		}
-		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise ordered min/max pruning")
+		return Unsupported(op, ReasonPruningPayloadUnsupported, "layout does not advertise ordered min/max pruning")
+	case OpValueRowPruning:
+		if c.Pruning.ValueRows {
+			return Supported(op)
+		}
+		return Unsupported(op, ReasonPruningPayloadUnsupported, "layout does not advertise value-row pruning")
 	case OpMinMaxStats:
 		if c.Stats.MinMax {
 			return Supported(op)
@@ -446,8 +456,10 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		return c.Supports(OpMinMaxStats)
 	case columnsemantics.OpStatsSum:
 		return c.Supports(OpSumStats)
+	case columnsemantics.OpPruneEquality:
+		return c.Supports(OpValueRowPruning)
 	case columnsemantics.OpPruneOrderedRange:
-		return c.Supports(OpMinMaxPruning)
+		return c.Supports(OpValueRowPruning)
 	case columnsemantics.OpDirectScalarValueCarrier:
 		return c.supportsDirectScalarValueCarrier()
 	case columnsemantics.OpStringLexicalRange, columnsemantics.OpStringPrefix, columnsemantics.OpDictionaryRange:

@@ -37,6 +37,22 @@ func (s *TypedColumnInt64PredicateAggregateSession) validatePreparedInt64Aggrega
 	return nil
 }
 
+func typedColumnInt64PruningPredicate(req TypedColumnInt64PredicateScanRequest) (typedcolumn.Int64PruningPredicate, bool) {
+	switch req.Kind {
+	case TypedColumnInt64PredicateAll:
+		return typedcolumn.Int64PruningPredicate{Kind: typedcolumn.Int64PruningPredicateAll}, true
+	case TypedColumnInt64PredicateEqual:
+		return typedcolumn.Int64PruningPredicate{Kind: typedcolumn.Int64PruningPredicateEqual, Value: req.Value}, true
+	case TypedColumnInt64PredicateRange:
+		if req.Low > req.High {
+			return typedcolumn.Int64PruningPredicate{}, false
+		}
+		return typedcolumn.Int64PruningPredicate{Kind: typedcolumn.Int64PruningPredicateRange, Low: req.Low, High: req.High}, true
+	default:
+		return typedcolumn.Int64PruningPredicate{}, false
+	}
+}
+
 func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateState() error {
 	if s == nil {
 		return errors.New("collections: nil typed-column int64 predicate aggregate session")
@@ -57,12 +73,15 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 		prepareResult.Diagnostics.SegmentFileCacheMisses = s.readCache.misses - beforeMisses
 	}
 	includeStats := s.req.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums
+	pruningPredicate, pruningOK := typedColumnInt64PruningPredicate(typedColumnInt64PredicateAggregateScanRequest(s.req))
 	requests := []typedColumnPreparedColumnRequest{
 		{
-			Field:          s.aggregateColumn.Field,
-			Role:           typedcolumn.ColumnRolePredicate,
-			Operation:      typedColumnInt64PredicateSemanticOperation(s.req.Kind),
-			IncludePruning: true,
+			Field:                    s.aggregateColumn.Field,
+			Role:                     typedcolumn.ColumnRolePredicate,
+			Operation:                typedColumnInt64PredicateSemanticOperation(s.req.Kind),
+			IncludePruning:           true,
+			HasInt64PruningPredicate: pruningOK,
+			Int64PruningPredicate:    pruningPredicate,
 		},
 		{
 			Field:        s.aggregateColumn.Field,
@@ -114,7 +133,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 		prepareResult.Diagnostics.FallbackReads += int(afterStats.FallbackReads - beforeStats.FallbackReads)
 	}
 	updateCacheDeltas()
-	prepareResult.Diagnostics.DecodedMetadataBytes += state.diagnostics.ManifestBytes + state.diagnostics.DescriptorBytes + state.diagnostics.ContractBytes
+	prepareResult.Diagnostics.DecodedMetadataBytes += state.diagnostics.ManifestBytes + state.diagnostics.DescriptorBytes + state.diagnostics.ContractBytes + state.diagnostics.DecodedMetadataBytes
 	prepareResult.Diagnostics.DirectViewCertified += state.diagnostics.DirectViewCertified
 	prepareResult.Diagnostics.StreamingCertified += state.diagnostics.StreamingCertified
 	prepareResult.Diagnostics.StatsCertified += state.diagnostics.StatsCertified
@@ -123,6 +142,12 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 	prepareResult.Diagnostics.CertificationFailureReason = state.diagnostics.CertificationFailureReason
 	prepareResult.Diagnostics.StatsValidationFailures += state.diagnostics.StatsValidationFailures
 	prepareResult.Diagnostics.StatsValidationFailureReason = state.diagnostics.StatsValidationFailureReason
+	prepareResult.Diagnostics.PruningBlocks += state.diagnostics.PruningBlocks
+	prepareResult.Diagnostics.PruningRows += state.diagnostics.PruningRows
+	prepareResult.Diagnostics.PruningFallbackBlocks += state.diagnostics.PruningFallbackBlocks
+	prepareResult.Diagnostics.PruningFallbackReason = state.diagnostics.PruningFallbackReason
+	prepareResult.Diagnostics.PruningValidationFailures += state.diagnostics.PruningValidationFailures
+	prepareResult.Diagnostics.PruningValidationFailureReason = state.diagnostics.PruningValidationFailureReason
 	addTypedColumnInt64PredicateAggregateDiagnostics(&s.prepareDiagnostics, prepareResult.Diagnostics)
 	s.preparedState = state
 	return nil
@@ -395,6 +420,24 @@ func recordTypedColumnInt64StatsFallbackBlock(diag *TypedColumnInt64PredicateSca
 	}
 }
 
+func recordTypedColumnInt64PruningBlock(diag *TypedColumnInt64PredicateScanDiagnostics, rows int) {
+	if diag == nil {
+		return
+	}
+	diag.PruningBlocks++
+	diag.PruningRows += rows
+}
+
+func recordTypedColumnInt64PruningFallbackBlock(diag *TypedColumnInt64PredicateScanDiagnostics, reason string) {
+	if diag == nil {
+		return
+	}
+	diag.PruningFallbackBlocks++
+	if reason != "" {
+		diag.PruningFallbackReason = reason
+	}
+}
+
 func recordTypedColumnInt64FastDecodePlan(diag *TypedColumnInt64PredicateScanDiagnostics, plan typeddecode.Plan) {
 	if diag == nil {
 		return
@@ -606,6 +649,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 			result.Diagnostics.BlocksPruned++
 			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, block.CandidateSelection)
 			continue
+		}
+		if preparedColumn.PruningFallbackReason != "" {
+			recordTypedColumnInt64PruningFallbackBlock(&result.Diagnostics, preparedColumn.PruningFallbackReason)
 		}
 		if visibility == nil && s.req.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums {
 			usedStats, err := addTypedColumnInt64AggregateStatsBlock(result, preparedColumn, block)
