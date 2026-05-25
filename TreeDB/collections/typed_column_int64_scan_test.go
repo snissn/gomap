@@ -806,9 +806,9 @@ func TestTypedColumnInt64AggregatePreparedSessionLifecycle(t *testing.T) {
 		t.Fatalf("session first Run: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, first, 2, 40)
-	if first.Diagnostics.Fallback || first.Diagnostics.DirectTypedColumnAssetReads == 0 || first.Diagnostics.SegmentFileCacheMisses == 0 || first.Diagnostics.ColumnAssetReadIntegrity != string(ColumnAssetReadIntegrityCachedVerify) {
+	if first.Diagnostics.Fallback || first.Diagnostics.DirectTypedColumnAssetReads == 0 || first.Diagnostics.SegmentFileCacheHits == 0 || first.Diagnostics.SegmentFileCacheMisses != 0 || first.Diagnostics.FullAssetReads != 0 || first.Diagnostics.SectionBytesRead != 0 || first.Diagnostics.DecodedMetadataBytes != 0 || first.Diagnostics.ColumnAssetReadIntegrity != string(ColumnAssetReadIntegrityCachedVerify) {
 		_ = session.Close()
-		t.Fatalf("first diagnostics=%+v want direct cached-verify read with initial cache miss", first.Diagnostics)
+		t.Fatalf("first diagnostics=%+v want prepared hot direct cached-verify read with prepare-time validation", first.Diagnostics)
 	}
 	firstSessionDiag := session.Diagnostics()
 	if firstSessionDiag.ActiveResourceHandles == 0 || firstSessionDiag.ActiveMappedBytes+firstSessionDiag.ActiveHeapCopyBytes == 0 || firstSessionDiag.TotalResourceAcquires == 0 {
@@ -842,6 +842,12 @@ func TestTypedColumnInt64AggregatePreparedSessionLifecycle(t *testing.T) {
 	if closedDiag.TotalResourceReleases != closedDiag.TotalResourceAcquires {
 		t.Fatalf("session diagnostics after close=%+v want releases to match acquires", closedDiag)
 	}
+	if len(session.refsByGeneration) != 0 || len(session.validatedRefs) != 0 || len(session.view.AssetRefs) != 0 || len(session.view.TypedColumnPartRefs) != 0 {
+		t.Fatalf("session retained stale refs after close: refs=%d validated=%d view_assets=%d typed_refs=%d", len(session.refsByGeneration), len(session.validatedRefs), len(session.view.AssetRefs), len(session.view.TypedColumnPartRefs))
+	}
+	if session.preparedState != nil && (!session.preparedState.closed || len(session.preparedState.partsByRef) != 0) {
+		t.Fatalf("prepared state after close=%+v want closed with no part refs", session.preparedState)
+	}
 	if _, err := session.Run(); !errors.Is(err, errTypedColumnInt64PredicateAggregateSessionClosed) {
 		t.Fatalf("session Run after Close err=%v want closed-session error", err)
 	}
@@ -869,8 +875,11 @@ func TestTypedColumnInt64AggregatePreparedSessionHotScanUsesTargetedRanges(t *te
 	if err := validateTypedColumnInt64AggregateBenchResult(warmup, expected); err != nil {
 		t.Fatal(err)
 	}
-	if warmup.Diagnostics.FullAssetBytes == 0 || warmup.Diagnostics.RangeBytesRead == 0 || warmup.Diagnostics.SectionBytesRead == 0 {
-		t.Fatalf("warmup diagnostics=%+v want one-time full validation plus section/range reads", warmup.Diagnostics)
+	if session.prepareDiagnostics.FullAssetBytes == 0 || session.prepareDiagnostics.SectionBytesRead == 0 || session.prepareDiagnostics.DecodedMetadataBytes == 0 {
+		t.Fatalf("prepare diagnostics=%+v want one-time full validation plus prepared section metadata", session.prepareDiagnostics)
+	}
+	if warmup.Diagnostics.FullAssetBytes != 0 || warmup.Diagnostics.SectionBytesRead != 0 || warmup.Diagnostics.DecodedMetadataBytes != 0 || warmup.Diagnostics.RangeBytesRead == 0 {
+		t.Fatalf("warmup diagnostics=%+v want prepared hot range reads only", warmup.Diagnostics)
 	}
 
 	hot, err := session.Run()
@@ -902,6 +911,123 @@ func TestTypedColumnInt64AggregatePreparedSessionHotScanUsesTargetedRanges(t *te
 	if diag.PhysicalBytesScanned >= totalTypedBytes {
 		t.Fatalf("hot diagnostics=%+v total_typed_bytes=%d want touched bytes below full typed-column assets", diag, totalTypedBytes)
 	}
+}
+
+func TestTypedColumnInt64AggregatePreparedSessionShapeParity(t *testing.T) {
+	const rows = 65536
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	dist := typedColumnInt64AggregateBenchDistributionByName("clustered")
+	insertTypedColumnInt64AggregateBenchRows(t, col, rows, dist)
+	for _, shapeName := range []string{"all_pruned_no_match", "exact_value", "tiny_range", "selective_range_1pct", "wide_range_10pct", "no_filter_full_aggregate", "all_match"} {
+		t.Run(shapeName, func(t *testing.T) {
+			shape := typedColumnInt64AggregateBenchShapeByName(shapeName)
+			req := shape.request(rows)
+			req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
+			expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
+			session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+			if err != nil {
+				t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+			}
+			defer func() { _ = session.Close() }()
+			result, err := session.Run()
+			if err != nil {
+				t.Fatalf("session Run: %v", err)
+			}
+			if err := validateTypedColumnInt64AggregateBenchResult(result, expected); err != nil {
+				t.Fatal(err)
+			}
+			assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, result.Diagnostics, "prepared shape parity")
+			if result.Diagnostics.FullAssetReads != 0 || result.Diagnostics.SectionBytesRead != 0 || result.Diagnostics.DecodedMetadataBytes != 0 {
+				t.Fatalf("hot diagnostics=%+v want no full/section/metadata reads", result.Diagnostics)
+			}
+			if shapeName == "all_pruned_no_match" {
+				if result.Diagnostics.DirectTypedColumnAssetReads != 0 || result.Diagnostics.RangeBytesRead != 0 || result.Diagnostics.PhysicalBytesScanned != 0 || result.Diagnostics.BlocksDecoded != 0 || result.Diagnostics.RowsScanned != 0 {
+					t.Fatalf("all-pruned hot diagnostics=%+v want metadata-only pruning with no payload reads", result.Diagnostics)
+				}
+			}
+		})
+	}
+}
+
+func TestTypedColumnInt64AggregatePreparedSessionAllPrunedAllocsPerRunGuardrail(t *testing.T) {
+	const rows = 65536
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	dist := typedColumnInt64AggregateBenchDistributionByName("clustered")
+	insertTypedColumnInt64AggregateBenchRows(t, col, rows, dist)
+	req := typedColumnInt64AggregateBenchShapeByName("all_pruned_no_match").request(rows)
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	for i := 0; i < 3; i++ {
+		result, err := session.Run()
+		if err != nil {
+			t.Fatalf("warm Run %d: %v", i, err)
+		}
+		if result.Count != 0 || result.Diagnostics.RangeBytesRead != 0 || result.Diagnostics.BlocksDecoded != 0 {
+			t.Fatalf("warm Run %d result=%+v diagnostics=%+v want all-pruned zero/payload-free", i, result, result.Diagnostics)
+		}
+	}
+	var runErr error
+	allocs := testing.AllocsPerRun(20, func() {
+		result, err := session.Run()
+		if err != nil && runErr == nil {
+			runErr = err
+		}
+		if result.Count != 0 && runErr == nil {
+			runErr = fmt.Errorf("count=%d want 0", result.Count)
+		}
+	})
+	if runErr != nil {
+		t.Fatalf("session Run during AllocsPerRun: %v", runErr)
+	}
+	if allocs > 16 {
+		t.Fatalf("all-pruned prepared hot Run allocs/run=%.2f want <=16 fixed session overhead allocations", allocs)
+	}
+}
+
+func TestTypedColumnInt64AggregatePreparedSessionSnapshotPinnedAcrossMutation(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{10, 20, 30})
+	req := TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	before, err := session.Run()
+	if err != nil {
+		_ = session.Close()
+		t.Fatalf("session before mutation Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, before, 3, 60)
+	if _, err := col.InsertBatch([][]byte{[]byte("e-new")}, [][]byte{[]byte(`{"time_us":100,"kind":"k"}`)}); err != nil {
+		_ = session.Close()
+		t.Fatalf("InsertBatch mutation: %v", err)
+	}
+	afterOldSnapshot, err := session.Run()
+	if err != nil {
+		_ = session.Close()
+		t.Fatalf("session after mutation Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, afterOldSnapshot, 3, 60)
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close old session: %v", err)
+	}
+	newSession, err := col.PrepareTypedColumnInt64PredicateAggregate(req)
+	if err != nil {
+		t.Fatalf("Prepare new session: %v", err)
+	}
+	defer func() { _ = newSession.Close() }()
+	fresh, err := newSession.Run()
+	if err != nil {
+		t.Fatalf("new session Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, fresh, 4, 160)
 }
 
 func TestTypedColumnInt64AggregatePreparedSessionReusesDecodeScratch(t *testing.T) {
@@ -1004,9 +1130,13 @@ func TestTypedColumnInt64AggregatePreparedSessionIntegrityFailClosed(t *testing.
 			}
 			if tc.integrity == ColumnAssetReadIntegrityCachedVerify {
 				session, err = col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2, ColumnAssetReadIntegrity: tc.integrity})
-				if err != nil {
-					t.Fatalf("PrepareTypedColumnInt64PredicateAggregate after corruption: %v", err)
+				if err == nil || !strings.Contains(err.Error(), "checksum") {
+					if session != nil {
+						_ = session.Close()
+					}
+					t.Fatalf("PrepareTypedColumnInt64PredicateAggregate after corruption err=%v want checksum failure", err)
 				}
+				return
 			}
 			_, err = session.Run()
 			_ = session.Close()
