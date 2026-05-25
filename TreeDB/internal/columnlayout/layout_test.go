@@ -14,6 +14,9 @@ func TestInt64RawLayoutCapabilitiesAndValidation(t *testing.T) {
 	if !caps.Layout.FixedWidth || caps.Layout.ElementWidthBytes != 8 || caps.Layout.Endian != EndianLittle || !caps.DirectView.Eligible || !caps.Reducers.Int64FixedWidthRaw || !caps.Reducers.Int64NumericAggregate {
 		t.Fatalf("raw int64 caps=%+v", caps)
 	}
+	if cap := caps.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); !cap.Supported() {
+		t.Fatalf("raw int64 direct scalar cap=%+v want supported", cap)
+	}
 	g := typedcolumn.EncodedGranule{Rows: 3, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 24, StoredBytes: 24, PayloadRef: typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: 24}}
 	if err := caps.ValidateGranule(g); err != nil {
 		t.Fatalf("ValidateGranule raw: %v", err)
@@ -84,6 +87,9 @@ func TestNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testing.T) {
 	if cap := floatBits.Supports(OpInt64RangePredicate); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
 		t.Fatalf("float range cap=%+v want %s", cap, ReasonFloatBitPatternNotNumeric)
 	}
+	if cap := floatBits.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
+		t.Fatalf("float direct scalar cap=%+v want %s", cap, ReasonFloatBitPatternNotNumeric)
+	}
 
 	dict := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Compression: typedcolumn.CompressionNone, Dictionary: true})
 	if cap := dict.Supports(OpLexicalRangePredicate); cap.Supported() || cap.Reason != ReasonDictionaryOrderUnproven {
@@ -106,8 +112,14 @@ func TestNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testing.T) {
 	if cap := vector.Supports(OpScalarNumericAggregate); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
 		t.Fatalf("vector scalar cap=%+v want %s", cap, ReasonVectorScalarUnsupported)
 	}
+	if cap := vector.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
+		t.Fatalf("vector direct scalar cap=%+v want %s", cap, ReasonVectorScalarUnsupported)
+	}
 	adjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, FixedWidthElements: 8})
 	if cap := adjacency.Supports(OpInt64RangePredicate); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
 		t.Fatalf("adjacency scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
+	}
+	if cap := adjacency.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
+		t.Fatalf("adjacency direct scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
 	}
 }

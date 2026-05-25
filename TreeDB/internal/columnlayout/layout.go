@@ -439,7 +439,7 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 	case columnsemantics.OpPruneOrderedRange:
 		return c.Supports(OpMinMaxPruning)
 	case columnsemantics.OpDirectScalarValueCarrier:
-		return c.Supports(OpDirectView)
+		return c.supportsDirectScalarValueCarrier()
 	case columnsemantics.OpStringLexicalRange, columnsemantics.OpStringPrefix, columnsemantics.OpDictionaryRange:
 		return c.Supports(OpLexicalRangePredicate)
 	case columnsemantics.OpDictionaryEquality, columnsemantics.OpDictionaryGroupBy:
@@ -464,6 +464,22 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		return Unsupported(Operation(op), ReasonNullDefaultWrapperRequired, "non-null layout has no null/default masks")
 	default:
 		return Unsupported(Operation(op), ReasonOperationUnsupported, "semantic operation has no layout mapping")
+	}
+}
+
+func (c Capabilities) supportsDirectScalarValueCarrier() Capability {
+	op := Operation(columnsemantics.OpDirectScalarValueCarrier)
+	switch c.Descriptor.Logical {
+	case columnsemantics.LogicalInt64:
+		return c.Supports(OpDirectView)
+	case columnsemantics.LogicalFloat32, columnsemantics.LogicalDouble:
+		return Unsupported(op, ReasonFloatBitPatternNotNumeric, "float bit-pattern storage is not a direct scalar value carrier")
+	case columnsemantics.LogicalFloat32Vector:
+		return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar direct-value carriers")
+	case columnsemantics.LogicalAdjacencyList:
+		return Unsupported(op, ReasonAdjacencyScalarUnsupported, "adjacency layouts reject scalar direct-value carriers")
+	default:
+		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise a direct scalar value carrier")
 	}
 }
 
