@@ -1588,6 +1588,41 @@ func TestColumnAssetSegmentAllocationCacheRescansOnConflictM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetSegmentAllocationSkipsDirectViewReservedBandM1849(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	namespace, err := columnAssetManagerNamespaceForRoot(root, normalized.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	directViewFileID, err := directViewTypedColumnSegmentFileID(7)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	directViewPath, err := columnAssetSegmentPath(root, ColumnAssetRef{Namespace: normalized.AssetManager.Namespace, FileID: directViewFileID})
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath direct-view: %v", err)
+	}
+	if err := os.WriteFile(directViewPath, []byte("reserved-direct-view"), 0o600); err != nil {
+		t.Fatalf("write direct-view segment: %v", err)
+	}
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	defer func() { _ = appender.abort() }()
+	if appender.fileID >= columnAssetDirectViewSegmentFileIDBase || appender.fileID == directViewFileID {
+		t.Fatalf("appender file_id=%d collided with direct-view reserved file_id=%d base=%d", appender.fileID, directViewFileID, columnAssetDirectViewSegmentFileIDBase)
+	}
+}
+
 func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

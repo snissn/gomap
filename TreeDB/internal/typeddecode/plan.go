@@ -298,6 +298,8 @@ func checkedMul3(a, b, c int) (int, bool) {
 
 // ResourceViewOptions controls handle-level direct-view validation.
 type ResourceViewOptions struct {
+	// ExpectedElements validates the view length. Use a negative value to skip
+	// length validation; zero intentionally means an empty view is expected.
 	ExpectedElements int
 	RequireMapped    bool
 }

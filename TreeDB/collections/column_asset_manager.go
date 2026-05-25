@@ -18,15 +18,16 @@ import (
 )
 
 const (
-	columnAssetManagerAssetsDirName     = "assets"
-	columnAssetManagerSegmentsDirName   = "segments"
-	columnAssetManagerIndexesDirName    = "indexes"
-	columnAssetManagerPreparedDirName   = "prepared"
-	columnAssetManagerQuarantineDirName = "quarantine"
-	columnAssetManagerTempDirName       = "tmp"
-	columnAssetSegmentFilePrefix        = "segment-"
-	columnAssetSegmentFileSuffix        = ".tca"
-	columnAssetM12ASegmentFileID        = uint32(1)
+	columnAssetManagerAssetsDirName        = "assets"
+	columnAssetManagerSegmentsDirName      = "segments"
+	columnAssetManagerIndexesDirName       = "indexes"
+	columnAssetManagerPreparedDirName      = "prepared"
+	columnAssetManagerQuarantineDirName    = "quarantine"
+	columnAssetManagerTempDirName          = "tmp"
+	columnAssetSegmentFilePrefix           = "segment-"
+	columnAssetSegmentFileSuffix           = ".tca"
+	columnAssetM12ASegmentFileID           = uint32(1)
+	columnAssetDirectViewSegmentFileIDBase = uint32(1 << 20)
 )
 
 const columnAssetSegmentWriteLockStripes = 64
@@ -306,7 +307,7 @@ func columnStoreConfigHasDirectViewFixedWidthColumn(cfg ColumnStoreConfig) bool 
 }
 
 func directViewTypedColumnSegmentFileID(generation uint64) (uint32, error) {
-	const base uint64 = 1 << 20
+	base := uint64(columnAssetDirectViewSegmentFileIDBase)
 	if generation == 0 || generation > uint64(^uint32(0))-base {
 		return 0, fmt.Errorf("collections: typed-column direct-view generation=%d cannot form segment file id", generation)
 	}
@@ -418,6 +419,9 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	}
 	maxFileID := uint32(0)
 	for _, segment := range segments {
+		if segment.fileID >= columnAssetDirectViewSegmentFileIDBase {
+			continue
+		}
 		if segment.fileID > maxFileID {
 			maxFileID = segment.fileID
 		}
@@ -425,8 +429,8 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if maxFileID < columnAssetM12ASegmentFileID {
 		maxFileID = columnAssetM12ASegmentFileID
 	}
-	if maxFileID == ^uint32(0) {
-		return 0, errors.New("collections: column asset segment file_id exhausted")
+	if maxFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
+		return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 	}
 	return maxFileID + 1, nil
 }
