@@ -14,11 +14,6 @@ func (s *TypedColumnInt64PredicateAggregateSession) validatePreparedInt64Aggrega
 		return errors.New("collections: nil typed-column int64 predicate aggregate session")
 	}
 	column := s.aggregateColumn
-	if column.Definition.Type == typedcolumn.ColumnTypeInt64 && column.Field.ValueType != ColumnStoreValueInt64 {
-		if err := requireTypedColumnAdapterCapability(column, typedColumnInt64PredicateSemanticOperation(s.req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", s.req.Column)); err != nil {
-			return err
-		}
-	}
 	if column.Field.ValueType != ColumnStoreValueInt64 || column.Field.Nullable || column.Definition.Type != typedcolumn.ColumnTypeInt64 || column.Definition.Encoding != typedcolumn.EncodingDeltaVarint || column.Definition.Compression != typedcolumn.CompressionNone {
 		return fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, s.req.Column)
 	}

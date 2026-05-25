@@ -331,6 +331,9 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 	if desc.PartID != image.PartID || desc.RowCount != image.Rows {
 		return nil, diag, fmt.Errorf("collections: typed_column_part prepared descriptor/image mismatch descriptor_part=%d image_part=%d descriptor_rows=%d image_rows=%d", desc.PartID, image.PartID, desc.RowCount, image.Rows)
 	}
+	// The typed-column descriptor stores the schema identity in its uint32
+	// SchemaVersion carrier; publication writes uint32(cfg.SchemaHash), so
+	// prepared readers must compare against the same persisted representation.
 	if desc.SchemaVersion != uint32(schemaHash) {
 		return nil, diag, fmt.Errorf("collections: typed_column_part schema_version=%d want %d", desc.SchemaVersion, uint32(schemaHash))
 	}
