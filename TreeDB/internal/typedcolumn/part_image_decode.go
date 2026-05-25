@@ -1950,6 +1950,7 @@ func validateImageSectionMultiplicity(sections []ColumnPartImageSection) error {
 		ColumnPartImageSectionSortKeyMarks,
 		ColumnPartImageSectionRowLocators,
 		ColumnPartImageSectionDictionaries,
+		ColumnPartImageSectionLayoutContract,
 	} {
 		if counts[kind] > 1 {
 			return fmt.Errorf("typedcolumn: image has %d %s sections, want at most 1", counts[kind], kind)
@@ -1980,6 +1981,8 @@ func expectedImageSectionCategory(kind ColumnPartImageSectionKind) (ColumnPartIm
 		return ColumnPartImageCategoryAggregateMetadata, true
 	case ColumnPartImageSectionDictionaries:
 		return ColumnPartImageCategoryDictionaries, true
+	case ColumnPartImageSectionLayoutContract:
+		return ColumnPartImageCategoryLayoutContract, true
 	case ColumnPartImageSectionColumnData:
 		return ColumnPartImageCategoryDeclaredColumns, true
 	case ColumnPartImageSectionManifest:

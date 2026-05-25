@@ -110,7 +110,13 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 		prepareResult.Diagnostics.FallbackReads += int(afterStats.FallbackReads - beforeStats.FallbackReads)
 	}
 	updateCacheDeltas()
-	prepareResult.Diagnostics.DecodedMetadataBytes += state.diagnostics.ManifestBytes + state.diagnostics.DescriptorBytes
+	prepareResult.Diagnostics.DecodedMetadataBytes += state.diagnostics.ManifestBytes + state.diagnostics.DescriptorBytes + state.diagnostics.ContractBytes
+	prepareResult.Diagnostics.DirectViewCertified += state.diagnostics.DirectViewCertified
+	prepareResult.Diagnostics.StreamingCertified += state.diagnostics.StreamingCertified
+	prepareResult.Diagnostics.StatsCertified += state.diagnostics.StatsCertified
+	prepareResult.Diagnostics.PruningCertified += state.diagnostics.PruningCertified
+	prepareResult.Diagnostics.CertificationFailures += state.diagnostics.CertificationFailures
+	prepareResult.Diagnostics.CertificationFailureReason = state.diagnostics.CertificationFailureReason
 	addTypedColumnInt64PredicateAggregateDiagnostics(&s.prepareDiagnostics, prepareResult.Diagnostics)
 	s.preparedState = state
 	return nil
@@ -137,6 +143,12 @@ func validateTypedColumnPreparedInt64AggregatePart(part *typedColumnPreparedPart
 	}
 	if cap := preparedColumn.Plan.Layout.Supports(columnlayout.OpInt64NumericReducer); !cap.Supported() {
 		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q layout capability %s", adapterColumn.Definition.Name, cap.Error())
+	}
+	if preparedColumn.Plan.Layout.Reducers.Int64FixedWidthRaw && !preparedColumn.Certification.DirectViewCertified {
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q lacks certified fixed-width direct-view contract", adapterColumn.Definition.Name)
+	}
+	if preparedColumn.Plan.Layout.Reducers.Int64Streaming && !preparedColumn.Certification.StreamingCertified {
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q lacks certified streaming contract", adapterColumn.Definition.Name)
 	}
 	return nil
 }
@@ -308,8 +320,10 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		granule.Payload = payload
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
 		if preparedColumn.Plan.Layout.Reducers.Int64FixedWidthRaw {
-			if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
-				return false, err
+			if !preparedColumn.Certification.DirectViewCertified {
+				if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
+					return false, err
+				}
 			}
 			decodedAny = true
 			result.Diagnostics.BlocksDecoded++

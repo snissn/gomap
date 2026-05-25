@@ -491,7 +491,13 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	if p == nil || p.Part == nil {
 		return typedcolumn.ColumnPartImage{}, errors.New("collections: nil typed-column adapter part")
 	}
-	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary})
+	logicalTypes := map[string]string{typedColumnAdapterPrimaryIDColumn: string(columnsemantics.LogicalInt64)}
+	for _, column := range p.Columns {
+		if logical, ok := columnStoreSemanticLogicalType(column.Field.ValueType); ok {
+			logicalTypes[column.Definition.Name] = string(logical)
+		}
+	}
+	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes})
 }
 
 func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValues, error) {

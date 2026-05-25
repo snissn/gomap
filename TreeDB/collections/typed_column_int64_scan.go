@@ -83,6 +83,12 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	HeapCopyBytes               uint64
 	DecodedMetadataBytes        uint64
 	DecodedHeapCopyBytes        uint64
+	DirectViewCertified         int
+	StreamingCertified          int
+	StatsCertified              int
+	PruningCertified            int
+	CertificationFailures       int
+	CertificationFailureReason  string
 	PhysicalBytesScanned        int64
 	RowLocatorDecodes           int
 	PhysicalRowIDLookups        int
@@ -924,6 +930,14 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.HeapCopyBytes += src.HeapCopyBytes
 	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
 	dst.DecodedHeapCopyBytes += src.DecodedHeapCopyBytes
+	dst.DirectViewCertified += src.DirectViewCertified
+	dst.StreamingCertified += src.StreamingCertified
+	dst.StatsCertified += src.StatsCertified
+	dst.PruningCertified += src.PruningCertified
+	dst.CertificationFailures += src.CertificationFailures
+	if src.CertificationFailureReason != "" {
+		dst.CertificationFailureReason = src.CertificationFailureReason
+	}
 	dst.PhysicalBytesScanned += src.PhysicalBytesScanned
 	dst.RowLocatorDecodes += src.RowLocatorDecodes
 	dst.PhysicalRowIDLookups += src.PhysicalRowIDLookups

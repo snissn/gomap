@@ -1,0 +1,377 @@
+package typedcolumn
+
+import (
+	"encoding/binary"
+	"strings"
+	"testing"
+)
+
+func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T) {
+	part := mustLayoutContractFixedWidthPart(t)
+	image := mustTransplantImage(t, part)
+	cert, err := CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	for _, name := range []string{"id", "value", "embedding", "neighbors"} {
+		column, ok := cert.Column(name)
+		if !ok {
+			t.Fatalf("missing certified column %q", name)
+		}
+		if !column.DirectViewCertified {
+			t.Fatalf("column %q contract=%+v want direct-view certified", name, column)
+		}
+		if column.Endian != ColumnPartLayoutEndianLittle || column.Alignment <= 0 || column.Section.Offset%column.Alignment != 0 {
+			t.Fatalf("column %q endian/alignment=(%s,%d) section_offset=%d", name, column.Endian, column.Alignment, column.Section.Offset)
+		}
+		for i, block := range column.Blocks {
+			if block.PayloadOffset%column.Alignment != 0 || block.PayloadLength%column.LengthMultiple != 0 {
+				t.Fatalf("column %q block %d payload offset/length=(%d,%d) alignment=%d multiple=%d", name, i, block.PayloadOffset, block.PayloadLength, column.Alignment, column.LengthMultiple)
+			}
+		}
+	}
+	if cert.DirectViewCertified < 4 {
+		t.Fatalf("direct-view certified=%d want at least 4", cert.DirectViewCertified)
+	}
+}
+
+func TestColumnPartLayoutContractCorruptionFailsClosed(t *testing.T) {
+	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	cases := []struct {
+		name string
+		edit func(*ColumnPartLayoutContract)
+		want string
+	}{
+		{
+			name: "row_count",
+			edit: func(c *ColumnPartLayoutContract) { c.Rows++ },
+			want: "rows",
+		},
+		{
+			name: "descriptor_checksum",
+			edit: func(c *ColumnPartLayoutContract) { c.Descriptor.Checksum ^= 0xfeedface },
+			want: "checksum",
+		},
+		{
+			name: "section_length",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "value")
+				column.Section.Length--
+			},
+			want: "section offset/length",
+		},
+		{
+			name: "payload_offset",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "value")
+				column.Blocks[0].PayloadOffset++
+			},
+			want: "payload offset/length",
+		},
+		{
+			name: "encoding",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "value")
+				column.Encoding = EncodingDeltaVarint
+			},
+			want: "encoding",
+		},
+		{
+			name: "compression",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "value")
+				column.Compression = CompressionSnappy
+			},
+			want: "compression",
+		},
+		{
+			name: "endian",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "value")
+				column.Endian = ColumnPartLayoutEndianCodecDefined
+			},
+			want: "endian",
+		},
+		{
+			name: "alignment",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "value")
+				column.Alignment = 4
+			},
+			want: "alignment",
+		},
+		{
+			name: "fixed_width_elements",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "embedding")
+				column.FixedWidthElements++
+			},
+			want: "fixed_width_elements",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := cloneColumnPartImageBytes(image)
+			contract := mustLayoutContractFromImage(t, corrupt)
+			tc.edit(&contract)
+			replaceLayoutContract(t, &corrupt, contract)
+			_, err := CertifyColumnPartLayoutContractFromImage(corrupt)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("certify err=%v want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestColumnPartLayoutContractOldAssetMissingContractFailsClosed(t *testing.T) {
+	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	descriptor := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)
+	desc, columns, err := DecodeColumnPartDescriptorSection(image.sectionBytes(descriptor))
+	if err != nil {
+		t.Fatalf("DecodeColumnPartDescriptorSection: %v", err)
+	}
+	old := image
+	old.Sections = append([]ColumnPartImageSection(nil), image.Sections...)
+	for i, section := range old.Sections {
+		if section.Kind == ColumnPartImageSectionLayoutContract {
+			old.Sections = append(old.Sections[:i], old.Sections[i+1:]...)
+			break
+		}
+	}
+	_, err = CertifyColumnPartLayoutContract(old, desc, columns, image.sectionBytes(descriptor), nil)
+	if err == nil || !strings.Contains(err.Error(), "pre-alpha typed-column assets must be rebuilt") {
+		t.Fatalf("missing contract err=%v want clear pre-alpha rebuild error", err)
+	}
+}
+
+func TestColumnPartLayoutContractDictionaryAndNullableMismatchesFailClosed(t *testing.T) {
+	t.Run("dictionary_identity_order", func(t *testing.T) {
+		part := mustTransplantPart(t, 185001, transplantTestOptions([]SortKeyColumn{{Column: "id"}}), transplantTestBatch())
+		image := mustTransplantImage(t, part)
+		cert, err := CertifyColumnPartLayoutContractFromImage(image)
+		if err != nil {
+			t.Fatalf("certify dictionary image: %v", err)
+		}
+		kind, ok := cert.Column("kind_code")
+		if !ok || !kind.Dictionary || kind.DictionaryOrdered || kind.DictionaryCollation != "" || kind.DictionarySection.Length == 0 {
+			t.Fatalf("kind_code contract=%+v want unordered dictionary identity", kind)
+		}
+
+		corrupt := cloneColumnPartImageBytes(image)
+		contract := mustLayoutContractFromImage(t, corrupt)
+		column := mustLayoutContractColumnPtr(t, &contract, "kind_code")
+		column.DictionaryOrdered = true
+		replaceLayoutContract(t, &corrupt, contract)
+		if _, err := CertifyColumnPartLayoutContractFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "dictionary order requires collation") {
+			t.Fatalf("ordered dictionary without collation err=%v", err)
+		}
+
+		corrupt = cloneColumnPartImageBytes(image)
+		contract = mustLayoutContractFromImage(t, corrupt)
+		column = mustLayoutContractColumnPtr(t, &contract, "kind_code")
+		column.DictionarySection.Length--
+		replaceLayoutContract(t, &corrupt, contract)
+		if _, err := CertifyColumnPartLayoutContractFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "dictionary section offset/length") {
+			t.Fatalf("dictionary section mismatch err=%v", err)
+		}
+	})
+
+	t.Run("nullable_mask_counts", func(t *testing.T) {
+		part := mustLayoutContractNullablePart(t)
+		image := mustTransplantImage(t, part)
+		cert, err := CertifyColumnPartLayoutContractFromImage(image)
+		if err != nil {
+			t.Fatalf("certify nullable image: %v", err)
+		}
+		maybe, ok := cert.Column("maybe")
+		if !ok || maybe.DirectViewCertified || maybe.StreamingCertified || !maybe.NullMaskPresent || !maybe.DefaultMaskPresent || maybe.NullCount != 1 || maybe.DefaultCount != 1 {
+			t.Fatalf("nullable contract=%+v want masks and no value fast path", maybe)
+		}
+		corrupt := cloneColumnPartImageBytes(image)
+		contract := mustLayoutContractFromImage(t, corrupt)
+		column := mustLayoutContractColumnPtr(t, &contract, "maybe")
+		column.NullCount++
+		replaceLayoutContract(t, &corrupt, contract)
+		if _, err := CertifyColumnPartLayoutContractFromImage(corrupt); err == nil || !strings.Contains(err.Error(), "null/default counts") {
+			t.Fatalf("nullable count mismatch err=%v", err)
+		}
+	})
+}
+
+func mustLayoutContractFixedWidthPart(t *testing.T) *ColumnPart {
+	t.Helper()
+	part, err := BuildColumnPart(185000, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "value", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "embedding", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 3},
+			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Encoding: EncodingRawUint32Dense, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 2},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:           3,
+		Columns:        map[string][]int64{"id": {3, 1, 2}, "value": {30, 10, 20}},
+		Float32Vectors: map[string][]float32{"embedding": {3, 0, 0, 1, 0, 0, 2, 0, 0}},
+		Uint32Vectors:  map[string][]uint32{"neighbors": {30, 31, 10, 11, 20, 21}},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart fixed-width: %v", err)
+	}
+	return part
+}
+
+func mustLayoutContractNullablePart(t *testing.T) *ColumnPart {
+	t.Helper()
+	part, err := BuildColumnPart(185002, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "maybe", Type: ColumnTypeInt64, Encoding: EncodingNullableInt64, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 4},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:     4,
+		Columns:  map[string][]int64{"id": {1, 2, 3, 4}, "maybe": {10, 0, 30, 0}},
+		Nulls:    map[string][]bool{"maybe": {false, true, false, false}},
+		Defaults: map[string][]bool{"maybe": {false, false, false, true}},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart nullable: %v", err)
+	}
+	return part
+}
+
+func mustLayoutContractFromImage(t *testing.T, image ColumnPartImage) ColumnPartLayoutContract {
+	t.Helper()
+	section, err := image.LayoutContractSection()
+	if err != nil {
+		t.Fatalf("LayoutContractSection: %v", err)
+	}
+	contract, err := DecodeColumnPartLayoutContract(image.sectionBytes(section))
+	if err != nil {
+		t.Fatalf("DecodeColumnPartLayoutContract: %v", err)
+	}
+	return contract
+}
+
+func mustLayoutContractColumnPtr(t *testing.T, contract *ColumnPartLayoutContract, name string) *ColumnPartLayoutContractColumn {
+	t.Helper()
+	for i := range contract.Columns {
+		if contract.Columns[i].Name == name {
+			return &contract.Columns[i]
+		}
+	}
+	t.Fatalf("missing contract column %q", name)
+	return nil
+}
+
+func replaceLayoutContract(t *testing.T, image *ColumnPartImage, contract ColumnPartLayoutContract) {
+	t.Helper()
+	section, err := image.LayoutContractSection()
+	if err != nil {
+		t.Fatalf("LayoutContractSection: %v", err)
+	}
+	encoded := encodeLayoutContractForTest(contract)
+	if len(encoded) != section.Length {
+		t.Fatalf("encoded contract bytes=%d want existing section length=%d", len(encoded), section.Length)
+	}
+	copy(image.Bytes[section.Offset:section.Offset+section.Length], encoded)
+}
+
+func mustLayoutContractDescriptorStoredBytesOffset(t *testing.T, image ColumnPartImage, column string) int {
+	t.Helper()
+	section := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)
+	dec := columnPartImageDecoder{data: image.sectionBytes(section)}
+	mustValidationSkipU16(t, &dec)
+	mustValidationSkipU64(t, &dec)
+	mustValidationReadU32(t, &dec)
+	mustValidationSkipI64(t, &dec)
+	mustValidationSkipI64(t, &dec)
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatalf("decode logical primary key: %v", err)
+	}
+	granuleCount := mustValidationReadU32(t, &dec)
+	dec.offset += int(granuleCount) * 64
+	columnCount := mustValidationReadU32(t, &dec)
+	for i := 0; i < int(columnCount); i++ {
+		name, err := dec.str()
+		if err != nil {
+			t.Fatalf("decode descriptor column name: %v", err)
+		}
+		mustValidationSkipU16(t, &dec)
+		mustValidationReadU32(t, &dec)
+		mustValidationReadU32(t, &dec)
+		blockCount := mustValidationReadU32(t, &dec)
+		for block := 0; block < int(blockCount); block++ {
+			if name == column {
+				dec.offset += 32 + 2 + 2 + 8
+				return section.Offset + dec.offset
+			}
+			dec.offset += 94
+		}
+	}
+	t.Fatalf("descriptor column %q not found", column)
+	return 0
+}
+
+func encodeLayoutContractForTest(contract ColumnPartLayoutContract) []byte {
+	var enc columnPartImageEncoder
+	enc.u16(contract.Version)
+	enc.u16(0)
+	enc.u64(contract.PartID)
+	enc.i64(int64(contract.Rows))
+	enc.u16(contract.ImageVersion)
+	enc.u16(0)
+	enc.i64(int64(contract.ManifestBytes))
+	encodeColumnPartLayoutContractSection(&enc, contract.Descriptor)
+	enc.u32(uint32(len(contract.Columns)))
+	for _, column := range contract.Columns {
+		encodeColumnPartLayoutContractColumn(&enc, column)
+	}
+	return enc.bytes()
+}
+
+func TestColumnPartLayoutContractDescriptorStoredBytesFailsClosed(t *testing.T) {
+	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	corrupt := cloneColumnPartImageBytes(image)
+	storedBytesOffset := mustLayoutContractDescriptorStoredBytesOffset(t, corrupt, "value")
+	storedBytes := int64(binary.LittleEndian.Uint64(corrupt.Bytes[storedBytesOffset : storedBytesOffset+8]))
+	binary.LittleEndian.PutUint64(corrupt.Bytes[storedBytesOffset:storedBytesOffset+8], uint64(storedBytes-1))
+	_, err := CertifyColumnPartLayoutContractFromImage(corrupt)
+	if err == nil || !(strings.Contains(err.Error(), "stored bytes") || strings.Contains(err.Error(), "descriptor")) {
+		t.Fatalf("descriptor stored bytes corruption err=%v want fail closed", err)
+	}
+}
+
+func TestColumnPartLayoutContractStoredBytesFieldFailsClosed(t *testing.T) {
+	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	corrupt := append([]byte(nil), image.Bytes...)
+	section := mustValidationSection(t, image, ColumnPartImageSectionLayoutContract)
+	contract := mustLayoutContractFromImage(t, image)
+	value := mustLayoutContractColumnPtr(t, &contract, "value")
+	// Corrupt the serialized stored_bytes for the first value block in-place to
+	// prove the stored contract bytes, not only decoded helper structs, fail.
+	encoded := encodeLayoutContractForTest(contract)
+	needle := make([]byte, 8)
+	binary.LittleEndian.PutUint64(needle, uint64(value.Blocks[0].StoredBytes))
+	idx := strings.Index(string(encoded), string(needle))
+	if idx < 0 {
+		t.Fatalf("stored bytes needle not found")
+	}
+	binary.LittleEndian.PutUint64(corrupt[section.Offset+idx:section.Offset+idx+8], uint64(value.Blocks[0].StoredBytes-1))
+	corruptImage := image
+	corruptImage.Bytes = corrupt
+	_, err := CertifyColumnPartLayoutContractFromImage(corruptImage)
+	if err == nil || !strings.Contains(err.Error(), "raw/stored") {
+		t.Fatalf("stored bytes corruption err=%v want raw/stored mismatch", err)
+	}
+}
