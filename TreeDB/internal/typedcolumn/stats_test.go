@@ -1,6 +1,7 @@
 package typedcolumn
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 )
@@ -61,6 +62,27 @@ func TestColumnStatsEnvelopeRejectsCorruptAndMismatchedMetadata(t *testing.T) {
 	if _, err := DecodeColumnPartStatsSection(badChecksum); err == nil || !strings.Contains(err.Error(), ColumnStatsReasonChecksumMismatch) {
 		t.Fatalf("checksum err=%v", err)
 	}
+	encodingOffset, compressionOffset := firstStatsEnvelopeEncodingOffsets(t, raw)
+	badEncodingOverflow := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint16(badEncodingOverflow[encodingOffset:], 0x0101)
+	if _, err := DecodeColumnPartStatsSection(badEncodingOverflow); err == nil || !strings.Contains(err.Error(), "encoding") || !strings.Contains(err.Error(), "exceeds uint8") {
+		t.Fatalf("encoding overflow err=%v", err)
+	}
+	badEncodingUnknown := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint16(badEncodingUnknown[encodingOffset:], 200)
+	if _, err := DecodeColumnPartStatsSection(badEncodingUnknown); err == nil || !strings.Contains(err.Error(), "unknown column stats envelope encoding") {
+		t.Fatalf("encoding unknown err=%v", err)
+	}
+	badCompressionOverflow := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint16(badCompressionOverflow[compressionOffset:], 0x0101)
+	if _, err := DecodeColumnPartStatsSection(badCompressionOverflow); err == nil || !strings.Contains(err.Error(), "compression") || !strings.Contains(err.Error(), "exceeds uint8") {
+		t.Fatalf("compression overflow err=%v", err)
+	}
+	badCompressionUnknown := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint16(badCompressionUnknown[compressionOffset:], 200)
+	if _, err := DecodeColumnPartStatsSection(badCompressionUnknown); err == nil || !strings.Contains(err.Error(), "unknown column stats envelope compression") {
+		t.Fatalf("compression unknown err=%v", err)
+	}
 
 	stats, err := DecodeColumnPartStatsSection(raw)
 	if err != nil {
@@ -100,6 +122,53 @@ func TestColumnStatsEnvelopeRejectsCorruptAndMismatchedMetadata(t *testing.T) {
 	if err := ValidateInt64ColumnStats(wrongType, part.Descriptor, part.Descriptor.Columns[1], part.Columns["value"]); err == nil || !strings.Contains(err.Error(), ColumnStatsReasonUnsupportedPayload) {
 		t.Fatalf("wrong type err=%v", err)
 	}
+}
+
+func firstStatsEnvelopeEncodingOffsets(t *testing.T, data []byte) (int, int) {
+	t.Helper()
+	dec := columnPartImageDecoder{data: data}
+	if _, err := dec.u32(); err != nil {
+		t.Fatalf("stats magic: %v", err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("stats version: %v", err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("stats reserved: %v", err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatalf("stats part id: %v", err)
+	}
+	if _, err := dec.i64(); err != nil {
+		t.Fatalf("stats rows: %v", err)
+	}
+	if _, err := dec.u32(); err != nil {
+		t.Fatalf("stats column count: %v", err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("envelope version: %v", err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("envelope reserved: %v", err)
+	}
+	if _, err := dec.u64(); err != nil {
+		t.Fatalf("envelope part id: %v", err)
+	}
+	if _, err := dec.str(); err != nil {
+		t.Fatalf("envelope column name: %v", err)
+	}
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("envelope column type: %v", err)
+	}
+	encodingOffset := dec.offset
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("envelope encoding: %v", err)
+	}
+	compressionOffset := dec.offset
+	if _, err := dec.u16(); err != nil {
+		t.Fatalf("envelope compression: %v", err)
+	}
+	return encodingOffset, compressionOffset
 }
 
 func TestColumnStatsOverflowAndNullableSemantics(t *testing.T) {

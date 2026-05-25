@@ -586,11 +586,19 @@ func decodeColumnStatsEnvelope(dec *columnPartImageDecoder) (ColumnStatsEnvelope
 	if err != nil {
 		return ColumnStatsEnvelope{}, err
 	}
-	encoding, err := dec.u16()
+	encodingCode, err := dec.u16()
 	if err != nil {
 		return ColumnStatsEnvelope{}, err
 	}
-	compression, err := dec.u16()
+	encoding, err := decodeStatsEncoding(encodingCode)
+	if err != nil {
+		return ColumnStatsEnvelope{}, err
+	}
+	compressionCode, err := dec.u16()
+	if err != nil {
+		return ColumnStatsEnvelope{}, err
+	}
+	compression, err := decodeStatsCompression(compressionCode)
 	if err != nil {
 		return ColumnStatsEnvelope{}, err
 	}
@@ -665,8 +673,8 @@ func decodeColumnStatsEnvelope(dec *columnPartImageDecoder) (ColumnStatsEnvelope
 		PartID:          partID,
 		ColumnName:      columnName,
 		ColumnType:      columnType,
-		Encoding:        Encoding(encoding),
-		Compression:     Compression(compression),
+		Encoding:        encoding,
+		Compression:     compression,
 		Rows:            rows,
 		Blocks:          blocks,
 		NullCount:       nullCount,
@@ -679,6 +687,32 @@ func decodeColumnStatsEnvelope(dec *columnPartImageDecoder) (ColumnStatsEnvelope
 		PayloadLength:   payloadLength,
 		PayloadChecksum: payloadChecksum,
 	}, nil
+}
+
+func decodeStatsEncoding(code uint16) (Encoding, error) {
+	if code > 0xff {
+		return 0, fmt.Errorf("typedcolumn: column stats envelope encoding=%d exceeds uint8", code)
+	}
+	encoding := Encoding(code)
+	switch encoding {
+	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense:
+		return encoding, nil
+	default:
+		return 0, fmt.Errorf("typedcolumn: unknown column stats envelope encoding=%d", code)
+	}
+}
+
+func decodeStatsCompression(code uint16) (Compression, error) {
+	if code > 0xff {
+		return 0, fmt.Errorf("typedcolumn: column stats envelope compression=%d exceeds uint8", code)
+	}
+	compression := Compression(code)
+	switch compression {
+	case CompressionNone, CompressionSnappy, CompressionLZ4, CompressionZSTD, CompressionZSTDDict:
+		return compression, nil
+	default:
+		return 0, fmt.Errorf("typedcolumn: unknown column stats envelope compression=%d", code)
+	}
 }
 
 func encodeInt64StatsPayload(stats Int64ColumnStats) ([]byte, error) {
