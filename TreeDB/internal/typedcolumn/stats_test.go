@@ -173,14 +173,39 @@ func TestColumnStatsOverflowAndNullableSemantics(t *testing.T) {
 }
 
 func TestColumnStatsSkipsNonFullyVisiblePart(t *testing.T) {
-	part := mustStatsTestPart(t, []int64{1, 2, 3}, EncodingDeltaVarint)
-	part.Descriptor.VisibleRowCount = part.Descriptor.RowCount - 1
-	stats, err := buildColumnPartStats(part)
-	if err != nil {
-		t.Fatalf("buildColumnPartStats non-visible: %v", err)
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *ColumnPart)
+	}{
+		{
+			name: "part visible row count",
+			mutate: func(t *testing.T, part *ColumnPart) {
+				part.Descriptor.VisibleRowCount = part.Descriptor.RowCount - 1
+			},
+		},
+		{
+			name: "granule visibility",
+			mutate: func(t *testing.T, part *ColumnPart) {
+				if len(part.Descriptor.Granules) == 0 {
+					t.Fatalf("test part has no granules")
+				}
+				part.Descriptor.Granules[0].VisibleRows = part.Descriptor.Granules[0].RowCount - 1
+				part.Descriptor.Granules[0].DeletedRows = 1
+			},
+		},
 	}
-	if !stats.Empty() {
-		t.Fatalf("non-fully-visible part emitted stats: %+v", stats)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			part := mustStatsTestPart(t, []int64{1, 2, 3}, EncodingDeltaVarint)
+			tt.mutate(t, part)
+			stats, err := buildColumnPartStats(part)
+			if err != nil {
+				t.Fatalf("buildColumnPartStats non-visible: %v", err)
+			}
+			if !stats.Empty() {
+				t.Fatalf("non-fully-visible part emitted stats: %+v", stats)
+			}
+		})
 	}
 }
 

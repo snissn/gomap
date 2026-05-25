@@ -219,7 +219,7 @@ func buildColumnPartStats(part *ColumnPart) (ColumnPartStats, error) {
 }
 
 func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn) (Int64ColumnStats, bool, error) {
-	if desc.VisibleRowCount != desc.RowCount {
+	if !columnStatsPartFullyVisible(desc) {
 		return Int64ColumnStats{}, false, nil
 	}
 	if column.Definition.StatsDisabled || column.Definition.Type != ColumnTypeInt64 || column.Definition.Encoding == EncodingNullableInt64 {
@@ -302,6 +302,18 @@ func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColum
 	}
 	stats.Envelope.SelectionShapes = append(stats.Envelope.SelectionShapes, ColumnStatsSelectionAllRows)
 	return stats, true, nil
+}
+
+func columnStatsPartFullyVisible(desc ColumnPartDescriptor) bool {
+	if desc.VisibleRowCount != desc.RowCount {
+		return false
+	}
+	for _, granule := range desc.Granules {
+		if granule.VisibleRows != granule.RowCount || granule.DeletedRows != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func buildInt64BlockStats(reader *GranuleReader, index int, block ColumnBlock) (Int64BlockStats, error) {
