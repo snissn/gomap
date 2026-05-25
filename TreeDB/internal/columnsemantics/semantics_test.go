@@ -55,7 +55,7 @@ func TestCapabilityInt64AggregateResultSemanticsAreExplicit(t *testing.T) {
 
 func TestCapabilityBoolSupportsEqualityButRejectsRangeSemantics(t *testing.T) {
 	desc := Descriptor{Logical: LogicalBool, Physical: typedcolumn.ColumnTypeBool, Encoding: typedcolumn.EncodingBoolBitpackRLE}
-	for _, op := range []Operation{OpAllRows, OpEquality, OpInequality, OpInList, OpBoolCounts, OpDirectScalarValueCarrier} {
+	for _, op := range []Operation{OpAllRows, OpEquality, OpInequality, OpInList, OpCountRows, OpCountNonNull, OpBoolCounts, OpDirectScalarValueCarrier} {
 		cap := CapabilityFor(desc, op)
 		if cap.Status != StatusSupported || cap.Reason != ReasonSupported || cap.Phase != PhasePrepare {
 			t.Fatalf("%s capability=%+v", op, cap)
@@ -66,6 +66,18 @@ func TestCapabilityBoolSupportsEqualityButRejectsRangeSemantics(t *testing.T) {
 		if cap.Status != StatusUnsupported || cap.Reason != ReasonBoolRangeUnsupported {
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
 		}
+	}
+	for _, op := range []Operation{OpSum, OpAvg} {
+		cap := CapabilityFor(desc, op)
+		if cap.Status != StatusUnsupported || cap.Reason != ReasonOperationUnsupported {
+			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
+		}
+	}
+	if cap := CapabilityFor(desc, OpPruneEquality); cap.Status != StatusFallback || cap.Reason != ReasonPruningPayloadUnsupported {
+		t.Fatalf("%s capability=%+v", OpPruneEquality, cap)
+	}
+	if cap := CapabilityFor(desc, OpStatsSum); cap.Status != StatusUnsupported || cap.Reason != ReasonOperationUnsupported {
+		t.Fatalf("%s capability=%+v", OpStatsSum, cap)
 	}
 }
 

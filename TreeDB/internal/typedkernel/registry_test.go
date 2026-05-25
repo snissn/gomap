@@ -326,6 +326,58 @@ func TestGenericCountRowsDispatchesForNonInt64(t *testing.T) {
 	}
 }
 
+func TestBoolCountsKernelSelectionParity(t *testing.T) {
+	values := []bool{true, false, true, true, false, false, true, false, true, false}
+	builder := typedcolumn.NewGranuleBuilder(typedcolumn.Config{Encoding: typedcolumn.EncodingBoolBitpackRLE, Compression: typedcolumn.CompressionNone})
+	granule, err := builder.BuildBool(values)
+	if err != nil {
+		t.Fatalf("BuildBool: %v", err)
+	}
+	selections := map[string]typedcolumn.RowSelection{
+		"all":    mustSelection(typedcolumn.NewAllRowSelection(len(values))),
+		"empty":  mustSelection(typedcolumn.NewEmptyRowSelection(len(values))),
+		"range":  mustSelection(typedcolumn.NewRangeRowSelection(len(values), 2, 8)),
+		"ranges": mustSelection(typedcolumn.NewRangesRowSelection(len(values), []typedcolumn.RowRange{{Start: 0, End: 2}, {Start: 5, End: 9}})),
+		"bitmap": mustSelection(typedcolumn.NewBitmapRowSelection(len(values), []uint64{(1 << 0) | (1 << 3) | (1 << 4) | (1 << 9)})),
+		"sparse": mustSelection(typedcolumn.NewSparseRowSelection(len(values), []int{1, 2, 7, 8})),
+	}
+	prepared, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpBoolCounts, Semantic: boolSemantic(), Layout: boolLayout()})
+	if err != nil {
+		t.Fatalf("dispatch bool counts: %v", err)
+	}
+	if prepared.KernelName() != "bool.counts.v1" {
+		t.Fatalf("kernel=%q want bool.counts.v1", prepared.KernelName())
+	}
+	var reader typedcolumn.GranuleReader
+	for shape, selection := range selections {
+		t.Run(shape, func(t *testing.T) {
+			wantTrue, wantFalse := expectedBoolCounts(values, selection)
+			got, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, BoolGranule: granule, HasBoolGranule: true, BoolReader: &reader}, nil)
+			if err != nil {
+				t.Fatalf("reduce bool counts: %v", err)
+			}
+			if got.Rows != int64(selection.Count()) || got.NonNulls != int64(selection.Count()) || got.TrueCount != int64(wantTrue) || got.FalseCount != int64(wantFalse) || !got.HasValue {
+				t.Fatalf("result=%+v want rows/non_null=%d true=%d false=%d", got, selection.Count(), wantTrue, wantFalse)
+			}
+		})
+	}
+}
+
+func TestBoolCountNonNullKernel(t *testing.T) {
+	selection := mustSelection(typedcolumn.NewSparseRowSelection(8, []int{1, 4, 7}))
+	prepared, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpCountNonNull, Semantic: boolSemantic(), Layout: boolLayout()})
+	if err != nil {
+		t.Fatalf("dispatch bool count non-null: %v", err)
+	}
+	got, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: 8, Selection: selection}, nil)
+	if err != nil {
+		t.Fatalf("reduce bool count non-null: %v", err)
+	}
+	if prepared.KernelName() != "bool.counts.v1" || got.NonNulls != 3 || got.Rows != 0 {
+		t.Fatalf("kernel=%q result=%+v", prepared.KernelName(), got)
+	}
+}
+
 func TestCallerOwnedFakeNonInt64KernelDispatch(t *testing.T) {
 	reg, err := typedkernel.NewRegistry(nil)
 	if err != nil {
@@ -440,4 +492,17 @@ func boolSemantic() columnsemantics.Descriptor {
 
 func boolLayout() columnlayout.Capabilities {
 	return columnlayout.CapabilitiesFor(columnlayout.Descriptor{Logical: columnsemantics.LogicalBool, Physical: typedcolumn.ColumnTypeBool, Encoding: typedcolumn.EncodingBoolBitpackRLE, Compression: typedcolumn.CompressionNone})
+}
+
+func expectedBoolCounts(values []bool, selection typedcolumn.RowSelection) (int, int) {
+	trueCount := 0
+	falseCount := 0
+	for _, row := range selection.AppendRows(nil) {
+		if values[row] {
+			trueCount++
+		} else {
+			falseCount++
+		}
+	}
+	return trueCount, falseCount
 }

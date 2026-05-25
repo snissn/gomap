@@ -32,8 +32,12 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			encoding: typedcolumn.EncodingBoolBitpackRLE,
 			checks: []capabilityCheck{
 				{op: columnsemantics.OpEquality, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpCountNonNull, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpBoolCounts, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonBoolRangeUnsupported},
+				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonOperationUnsupported},
+				{op: columnsemantics.OpAvg, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonOperationUnsupported},
 			},
 		},
 		{
