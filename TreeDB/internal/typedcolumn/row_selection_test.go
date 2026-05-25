@@ -58,12 +58,20 @@ func TestRowSelectionSetOperationsAndComposition(t *testing.T) {
 
 	orSel, err := orRowSelections(mustRangeSelection(t, 12, 0, 2), mustRangeSelection(t, 12, 2, 4))
 	if err != nil {
-		t.Fatalf("orRowSelections: %v", err)
+		t.Fatalf("orRowSelections adjacent: %v", err)
 	}
 	if shape := orSel.shape(); shape.Kind != "range" {
 		t.Fatalf("adjacent OR shape=%+v want range", shape)
 	}
 	assertSelectionRows(t, orSel, []int{0, 1, 2, 3})
+	overlapOr, err := orRowSelections(mustRangeSelection(t, 12, 0, 6), mustRangeSelection(t, 12, 3, 9))
+	if err != nil {
+		t.Fatalf("orRowSelections overlap: %v", err)
+	}
+	if shape := overlapOr.shape(); shape.Kind != "range" {
+		t.Fatalf("overlap OR shape=%+v want range", shape)
+	}
+	assertSelectionRows(t, overlapOr, []int{0, 1, 2, 3, 4, 5, 6, 7, 8})
 
 	notSel, err := notRowSelection(mustRangesSelection(t, 8, []rowRange{{Start: 2, End: 4}, {Start: 6, End: 7}}))
 	if err != nil {

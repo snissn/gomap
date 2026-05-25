@@ -723,7 +723,38 @@ func orRowSelections(a rowSelection, b rowSelection) (rowSelection, error) {
 	}
 	merged := append(a.appendRanges(nil), b.appendRanges(nil)...)
 	insertionSortRanges(merged)
-	return makeRangesRowSelection(a.rows, merged)
+	return makeUnionRangesRowSelection(a.rows, merged)
+}
+
+func makeUnionRangesRowSelection(rows int, ranges []RowRange) (RowSelection, error) {
+	if rows < 0 {
+		return RowSelection{}, fmt.Errorf("typedcolumn: negative row selection rows %d", rows)
+	}
+	if len(ranges) == 0 {
+		return makeEmptyRowSelection(rows)
+	}
+	out := ranges[:0]
+	for i, r := range ranges {
+		if err := validateRowRange(rows, r); err != nil {
+			return RowSelection{}, fmt.Errorf("typedcolumn: invalid row range %d: %w", i, err)
+		}
+		if r.Start == r.End {
+			continue
+		}
+		if len(out) == 0 {
+			out = append(out, r)
+			continue
+		}
+		last := &out[len(out)-1]
+		if r.Start <= last.End {
+			if r.End > last.End {
+				last.End = r.End
+			}
+			continue
+		}
+		out = append(out, r)
+	}
+	return makeRangesRowSelectionNoCopy(rows, out)
 }
 
 // SubtractRowSelectionsInto returns a-b using caller-owned scratch. The returned
