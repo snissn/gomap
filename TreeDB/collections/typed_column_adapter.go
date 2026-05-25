@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
@@ -1077,21 +1078,45 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	if err != nil || !ok {
 		return ok, err
 	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
+			return false, err
+		}
+	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return false, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
+		return false, err
 	}
 	return true, nil
 }
 
 func typedColumnAdapterHasStringPredicateColumn(fields []TypedStorageField, column string) (bool, error) {
-	adapterColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, column)
+	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, column)
 	if err != nil || !ok {
 		return ok, err
 	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueString || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
 		return false, fmt.Errorf("%w: typed-column string predicate column %q is not encoded as low-cardinality uint32 codes", ErrColumnQueryPlanUnsupported, column)
 	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpDictionaryEquality, fmt.Sprintf("typed-column string predicate column %q", column)); err != nil {
+		return false, err
+	}
 	return true, nil
+}
+
+func typedColumnInt64PredicateSemanticOperation(kind TypedColumnInt64PredicateScanKind) columnsemantics.Operation {
+	switch kind {
+	case TypedColumnInt64PredicateAll:
+		return columnsemantics.OpAllRows
+	case TypedColumnInt64PredicateEqual:
+		return columnsemantics.OpEquality
+	case TypedColumnInt64PredicateRange:
+		return columnsemantics.OpOrderedRange
+	default:
+		return columnsemantics.OpUnknownPredicateKind
+	}
 }
 
 type typedColumnAdapterPartImageDecoder func(typedColumnAdapterOptions, typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error)
@@ -1117,8 +1142,16 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
 	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+			return nil, typedColumnAdapterColumn{}, 0, err
+		}
+	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
@@ -1226,8 +1259,19 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 	if !ok {
 		return nil, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
 	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+			return nil, err
+		}
+	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
 		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, err
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, err
 	}
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
 		return nil, fmt.Errorf("collections: typed_column_part aggregate image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
@@ -1417,8 +1461,16 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate %s column %q is not owned by typed_column_part", operation, column)
 	}
+	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate %s column %q", operation, column)); err != nil {
+			return nil, typedColumnAdapterColumn{}, 0, err
+		}
+	}
 	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, operation, column)
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate %s column %q", operation, column)); err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
@@ -1452,6 +1504,9 @@ func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField
 	}
 	if adapterColumn.Field.Nullable {
 		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("%w: typed-column string predicate scan column %q nullable=true is unsupported", ErrColumnQueryPlanUnsupported, column)
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpDictionaryEquality, fmt.Sprintf("typed-column string predicate scan column %q", column)); err != nil {
+		return typedColumnStringPredicatePreparedPart{}, err
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {

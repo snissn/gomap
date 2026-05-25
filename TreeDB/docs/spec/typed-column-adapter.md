@@ -2,7 +2,8 @@
 
 Status: current implementation note for issues #1754, #1755, #1756, and #1783 under parent tracker #1744.
 Typed-column schema/version evolution and migration policy is defined in
-`typed-column-schema-evolution.md`.
+`typed-column-schema-evolution.md`. Logical capability status and admission
+rules are defined in `typed-column-semantics.md`.
 
 `TreeDB/collections/typed_column_adapter.go` adapts the transplanted
 `TreeDB/internal/typedcolumn` data plane to TreeDB typed-storage field metadata,
@@ -25,13 +26,17 @@ derived accelerators authoritative.
 
 ## Type Matrix
 
+This table describes durable representation only. Query/planner operation
+support is governed by `typed-column-semantics.md` and is resolved at prepare
+time.
+
 | TreeDB declared type | adapter / #1755 publication status | Representation |
 | --- | --- | --- |
 | `bool` | represented | `typedcolumn.ColumnTypeBool` bitpack/RLE encoding. |
 | `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint encoding. |
-| `float32` | represented | Raw int64 column carrying `math.Float32bits` in the low 32 bits until native float sections land. |
-| `double` / `float64` | represented | Raw int64 column carrying `math.Float64bits`. |
-| `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata. |
+| `float32` | represented | Raw int64 column carrying `math.Float32bits` in the low 32 bits until native float sections land; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
+| `double` / `float64` | represented | Raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
+| `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row. |
 | `adjacency_list` | represented | Fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. |
 
@@ -111,9 +116,10 @@ The explicit typed-column int64 predicate scan supports only non-nullable int64
 nullable, or if nullable metadata is observed on the direct typed-column int64
 path, the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not
 fall back to full-document reconstruction/materialization, and it must not treat
-null or missing rows as integer zero. Broader optimizer routing, string predicate
-expansion, aggregate integration, and vector/adjacency nullable scans are
-deferred to follow-up issues.
+null or missing rows as integer zero. The int64 and string prepared paths consume
+the semantic capability matrix during prepare. Broader optimizer routing, string
+predicate expansion, aggregate integration, and vector/adjacency nullable scans
+are deferred to follow-up issues.
 
 Direct typed-column predicate paths must preserve hot-path allocation discipline
 and should actively remove existing avoidable allocations or obvious local
