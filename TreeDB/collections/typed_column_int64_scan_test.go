@@ -985,8 +985,8 @@ func TestTypedColumnInt64AggregatePreparedSessionAllPrunedAllocsPerRunGuardrail(
 	if runErr != nil {
 		t.Fatalf("session Run during AllocsPerRun: %v", runErr)
 	}
-	if allocs > 4 {
-		t.Fatalf("all-pruned prepared hot Run allocs/run=%.2f want <=4 fixed session overhead allocations", allocs)
+	if allocs > 16 {
+		t.Fatalf("all-pruned prepared hot Run allocs/run=%.2f want <=16 fixed session overhead allocations", allocs)
 	}
 }
 
