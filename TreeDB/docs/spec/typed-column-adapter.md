@@ -3,7 +3,8 @@
 Status: current implementation note for issues #1754, #1755, #1756, and #1783 under parent tracker #1744.
 Typed-column schema/version evolution and migration policy is defined in
 `typed-column-schema-evolution.md`. Logical capability status and admission
-rules are defined in `typed-column-semantics.md`.
+rules are defined in `typed-column-semantics.md`; physical layout/codec
+capabilities are defined in `typed-column-layout-capabilities.md`.
 
 `TreeDB/collections/typed_column_adapter.go` adapts the transplanted
 `TreeDB/internal/typedcolumn` data plane to TreeDB typed-storage field metadata,
@@ -33,7 +34,7 @@ time.
 | TreeDB declared type | adapter / #1755 publication status | Representation |
 | --- | --- | --- |
 | `bool` | represented | `typedcolumn.ColumnTypeBool` bitpack/RLE encoding. |
-| `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint encoding. |
+| `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint by default. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` int64 column selects uncompressed `raw_int64`. |
 | `float32` | represented | Raw int64 column carrying `math.Float32bits` in the low 32 bits until native float sections land; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
 | `double` / `float64` | represented | Raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
@@ -117,8 +118,11 @@ nullable, or if nullable metadata is observed on the direct typed-column int64
 path, the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not
 fall back to full-document reconstruction/materialization, and it must not treat
 null or missing rows as integer zero. The int64 and string prepared paths consume
-the semantic capability matrix during prepare. Broader optimizer routing, string
-predicate expansion, aggregate integration, and vector/adjacency nullable scans
+the semantic capability matrix during prepare; int64 prepared aggregate planning
+also consumes the layout/codec capability contract so `delta_varint` remains a
+streaming decode layout while explicit `raw_int64` uses a safe little-endian byte
+reducer. Broader optimizer routing, string predicate expansion, aggregate
+integration, #1849 zero-copy direct views, and vector/adjacency nullable scans
 are deferred to follow-up issues.
 
 Direct typed-column predicate paths must preserve hot-path allocation discipline

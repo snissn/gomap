@@ -541,6 +541,187 @@ func TestTypedColumnInt64AggregateSelectionShapes(t *testing.T) {
 	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, exact.Diagnostics, "selection-shaped typed-column aggregate")
 }
 
+func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnInt64ScanCollectionWithFixedWidthEncoding(t, d, ColumnFixedWidthEncodingLittleEndian)
+	insertTypedColumnInt64ScanRows(t, col, []int64{11, 12, 13, 20})
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		t.Fatalf("typed-column refs=%+v want one", refs)
+	}
+	if got := typedColumnInt64ColumnEncodingForTest(t, d, refs[0], "time_us"); got != typedcolumn.EncodingRawInt64 {
+		t.Fatalf("time_us encoding=%s want %s", got, typedcolumn.EncodingRawInt64)
+	}
+	scan, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 12, High: 20})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan raw: %v", err)
+	}
+	assertTypedColumnInt64ScanValues(t, scan, []int64{12, 13, 20})
+	agg, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate raw: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, agg, 4, 56)
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 12, High: 20, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate raw: %v", err)
+	}
+	prepared, err := session.Run()
+	if closeErr := session.Close(); closeErr != nil {
+		t.Fatalf("Close prepared raw: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("prepared raw Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, prepared, 3, 45)
+	if prepared.Diagnostics.DecodedHeapCopyBytes != 0 {
+		t.Fatalf("prepared raw diagnostics=%+v want safe raw reducer without decoded heap copy", prepared.Diagnostics)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	reopenedAgg, err := reopenedCol.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 12, High: 13})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate reopened raw: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, reopenedAgg, 2, 25)
+}
+
+func TestTypedColumnInt64RawLayoutMatchesDeltaForQueryShapes(t *testing.T) {
+	values := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	shapes := []TypedColumnInt64PredicateAggregateRequest{
+		{Column: "time_us", Kind: TypedColumnInt64PredicateAll},
+		{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 4},
+		{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 3, High: 6},
+		{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 99},
+		{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 0, High: 9},
+	}
+	for _, req := range shapes {
+		req := req
+		t.Run(string(req.Kind), func(t *testing.T) {
+			deltaDB, deltaCol := setupTypedColumnInt64ScanCollection(t)
+			defer func() { _ = deltaDB.Close() }()
+			rawDB, rawCol := setupTypedColumnInt64RawScanCollection(t)
+			defer func() { _ = rawDB.Close() }()
+			insertTypedColumnInt64ScanRows(t, deltaCol, values)
+			insertTypedColumnInt64ScanRows(t, rawCol, values)
+			delta, err := deltaCol.RunTypedColumnInt64PredicateAggregate(req)
+			if err != nil {
+				t.Fatalf("delta aggregate: %v", err)
+			}
+			raw, err := rawCol.RunTypedColumnInt64PredicateAggregate(req)
+			if err != nil {
+				t.Fatalf("raw aggregate: %v", err)
+			}
+			if raw.Count != delta.Count || raw.Sum != delta.Sum || raw.Avg != delta.Avg {
+				t.Fatalf("raw result count=%d sum=%d avg=%f want delta count=%d sum=%d avg=%f raw_diag=%+v delta_diag=%+v", raw.Count, raw.Sum, raw.Avg, delta.Count, delta.Sum, delta.Avg, raw.Diagnostics, delta.Diagnostics)
+			}
+			rawSession, err := rawCol.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: req.Column, Kind: req.Kind, Value: req.Value, Low: req.Low, High: req.High, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+			if err != nil {
+				t.Fatalf("prepare raw: %v", err)
+			}
+			preparedRaw, err := rawSession.Run()
+			if closeErr := rawSession.Close(); closeErr != nil {
+				t.Fatalf("close raw session: %v", closeErr)
+			}
+			if err != nil {
+				t.Fatalf("prepared raw: %v", err)
+			}
+			if preparedRaw.Count != delta.Count || preparedRaw.Sum != delta.Sum || preparedRaw.Avg != delta.Avg {
+				t.Fatalf("prepared raw result=%+v want delta=%+v", preparedRaw, delta)
+			}
+		})
+	}
+}
+
+func TestTypedColumnInt64RawTruncatedPayloadFailsClosed(t *testing.T) {
+	d, col := setupTypedColumnInt64RawScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		t.Fatalf("typed-column refs=%+v want one", refs)
+	}
+	assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if err := os.Truncate(assetPath, refs[0].Offset+refs[0].Length-1); err != nil {
+		t.Fatalf("Truncate raw typed-column asset: %v", err)
+	}
+	if _, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums}); err == nil || !strings.Contains(err.Error(), "raw layout") {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate truncated raw err=%v want raw-layout fail closed", err)
+	}
+}
+
+func TestTypedColumnInt64PredicateSelectionShapes(t *testing.T) {
+	var scratch typedColumnInt64PredicateAggregateScanScratch
+
+	scratch.predicateRows = append(scratch.predicateRows[:0], 2, 3, 4, 5)
+	sel, err := typedColumnInt64PredicateRowsSelection(16, &scratch)
+	if err != nil {
+		t.Fatalf("range selection: %v", err)
+	}
+	if sel.Kind() != typedcolumn.RowSelectionRange || sel.Count() != 4 {
+		t.Fatalf("range selection=%+v shape=%+v", sel, sel.Shape())
+	}
+
+	scratch.predicateRows = append(scratch.predicateRows[:0], 1, 2, 8, 9, 14, 15)
+	sel, err = typedColumnInt64PredicateRowsSelection(20, &scratch)
+	if err != nil {
+		t.Fatalf("ranges selection: %v", err)
+	}
+	if sel.Kind() != typedcolumn.RowSelectionRanges || sel.Count() != 6 {
+		t.Fatalf("ranges selection=%+v shape=%+v", sel, sel.Shape())
+	}
+
+	scratch.predicateRows = scratch.predicateRows[:0]
+	for row := 0; row < 128; row++ {
+		if row%4 != 0 {
+			scratch.predicateRows = append(scratch.predicateRows, row)
+		}
+	}
+	sel, err = typedColumnInt64PredicateRowsSelection(128, &scratch)
+	if err != nil {
+		t.Fatalf("bitmap selection: %v", err)
+	}
+	if sel.Kind() != typedcolumn.RowSelectionBitmap || sel.Count() != 96 {
+		t.Fatalf("bitmap selection=%+v shape=%+v", sel, sel.Shape())
+	}
+}
+
+func TestTypedColumnInt64RawSchemaRejectsLegacyDeltaAsset(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	col.catalogMu.Lock()
+	if col.catalog == nil || col.catalog.meta.Options.ColumnStore == nil || len(col.catalog.meta.Options.ColumnStore.Columns) == 0 {
+		col.catalogMu.Unlock()
+		t.Fatal("missing cached column store config")
+	}
+	col.catalog.meta.Options.ColumnStore.Columns[0].FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	col.catalogMu.Unlock()
+	_, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err == nil || !strings.Contains(err.Error(), "schema mismatch") {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate mixed raw/delta err=%v want explicit schema mismatch", err)
+	}
+}
+
 func TestTypedColumnInt64AggregateReopenDurable(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -1326,6 +1507,26 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		}
 	})
 
+	t.Run("layouts", func(t *testing.T) {
+		got, err := parseTypedColumnInt64AggregateBenchLayouts("")
+		if err != nil {
+			t.Fatalf("default layouts: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchLayoutNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"delta_varint"}) {
+			t.Fatalf("default layouts=%v", gotNames)
+		}
+		got, err = parseTypedColumnInt64AggregateBenchLayouts("delta,raw")
+		if err != nil {
+			t.Fatalf("explicit layouts: %v", err)
+		}
+		if gotNames := typedColumnInt64AggregateBenchLayoutNames(got); fmt.Sprint(gotNames) != fmt.Sprint([]string{"delta_varint", "raw_int64"}) {
+			t.Fatalf("explicit layouts=%v", gotNames)
+		}
+		if _, err := parseTypedColumnInt64AggregateBenchLayouts("nope"); err == nil || !strings.Contains(err.Error(), "invalid layout") {
+			t.Fatalf("invalid layout err=%v", err)
+		}
+	})
+
 	t.Run("fallback_reason_metric_tokens", func(t *testing.T) {
 		for _, tc := range []struct {
 			input string
@@ -1552,6 +1753,10 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 	if err != nil {
 		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY: %v", err)
 	}
+	layouts, err := parseTypedColumnInt64AggregateBenchLayouts(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_LAYOUTS"))
+	if err != nil {
+		b.Fatalf("TREEDB_TYPED_COLUMN_BENCH_LAYOUTS: %v", err)
+	}
 	includeFallbackEnv := os.Getenv("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK")
 	if strings.TrimSpace(includeFallbackEnv) != "" {
 		if _, err := parseTypedColumnInt64AggregateBenchBool("TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK", includeFallbackEnv, false); err != nil {
@@ -1567,12 +1772,15 @@ func BenchmarkTypedColumnInt64PredicateAggregate(b *testing.B) {
 				shape := shape
 				req := shape.request(rows)
 				expected := expectedTypedColumnInt64AggregateBenchResultForDistribution(rows, dist, req)
-				for _, readIntegrity := range readIntegrities {
-					readIntegrity := readIntegrity
-					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, true, readIntegrity)
+				for _, layout := range layouts {
+					layout := layout
+					for _, readIntegrity := range readIntegrities {
+						readIntegrity := readIntegrity
+						runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, true, readIntegrity, layout)
+					}
 				}
 				if typedColumnInt64AggregateBenchIncludeFallback(includeFallbackEnv, rows) {
-					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false, typedColumnInt64AggregateBenchReadIntegrityNotApplicable())
+					runTypedColumnInt64AggregateBenchPath(b, rows, dist, shape, req, expected, false, typedColumnInt64AggregateBenchReadIntegrityNotApplicable(), typedColumnInt64AggregateBenchLayoutDefault())
 				}
 			}
 		}
@@ -1600,6 +1808,11 @@ type typedColumnInt64AggregateBenchReadIntegrity struct {
 	integrity ColumnAssetReadIntegrity
 }
 
+type typedColumnInt64AggregateBenchLayout struct {
+	name               string
+	fixedWidthEncoding ColumnFixedWidthEncoding
+}
+
 type typedColumnInt64AggregateBenchExecutionMode struct {
 	name          string
 	timedBoundary string
@@ -1609,10 +1822,13 @@ type typedColumnInt64AggregateBenchExecutionMode struct {
 
 const typedColumnInt64AggregateBenchBatchRows = 32768
 
-func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedColumnInt64AggregateBenchDistribution, shape typedColumnInt64AggregateBenchShape, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected, typedPath bool, readIntegrity typedColumnInt64AggregateBenchReadIntegrity) {
+func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedColumnInt64AggregateBenchDistribution, shape typedColumnInt64AggregateBenchShape, req TypedColumnInt64PredicateAggregateRequest, expected typedColumnInt64AggregateBenchExpected, typedPath bool, readIntegrity typedColumnInt64AggregateBenchReadIntegrity, layout typedColumnInt64AggregateBenchLayout) {
 	pathName := "document_full_scan_fallback"
 	if typedPath {
 		pathName = "typed_column_part"
+		if layout.name != "" && layout.name != "delta_varint" {
+			pathName = "typed_column_part_" + layout.name
+		}
 	}
 	for _, execution := range typedColumnInt64AggregateBenchExecutionModes() {
 		execution := execution
@@ -1621,7 +1837,7 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 		}
 		b.Run(typedColumnInt64AggregateBenchSubBenchmarkName(rows, dist, pathName, shape, readIntegrity, execution), func(b *testing.B) {
 			setupStart := time.Now()
-			d, col := setupTypedColumnInt64AggregateBenchCollection(b, typedPath)
+			d, col := setupTypedColumnInt64AggregateBenchCollection(b, typedPath, layout)
 			defer func() { _ = d.Close() }()
 			batches := insertTypedColumnInt64AggregateBenchRows(b, col, rows, dist)
 			setupDuration := time.Since(setupStart)
@@ -1747,10 +1963,11 @@ func validateTypedColumnInt64AggregateBenchResult(result TypedColumnInt64Predica
 	return nil
 }
 
-func setupTypedColumnInt64AggregateBenchCollection(tb testing.TB, typedPath bool) (*backenddb.DB, *Collection) {
+func setupTypedColumnInt64AggregateBenchCollection(tb testing.TB, typedPath bool, layout typedColumnInt64AggregateBenchLayout) (*backenddb.DB, *Collection) {
 	tb.Helper()
 	if typedPath {
-		return setupTypedColumnInt64ScanCollection(tb)
+		d := openTypedColumnInt64ScanDB(tb)
+		return d, createTypedColumnInt64ScanCollectionWithFixedWidthEncoding(tb, d, layout.fixedWidthEncoding)
 	}
 	d := openTypedColumnInt64ScanDB(tb)
 	mgr := NewCollectionManager(d)
@@ -1912,6 +2129,53 @@ func typedColumnInt64AggregateBenchReadIntegrityNames(readIntegrities []typedCol
 	names := make([]string, len(readIntegrities))
 	for i, readIntegrity := range readIntegrities {
 		names[i] = readIntegrity.name
+	}
+	return names
+}
+
+func parseTypedColumnInt64AggregateBenchLayouts(env string) ([]typedColumnInt64AggregateBenchLayout, error) {
+	if strings.TrimSpace(env) == "" {
+		return []typedColumnInt64AggregateBenchLayout{typedColumnInt64AggregateBenchLayoutDefault()}, nil
+	}
+	parts := strings.Split(env, ",")
+	out := make([]typedColumnInt64AggregateBenchLayout, 0, len(parts))
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, fmt.Errorf("empty layout")
+		}
+		if strings.EqualFold(name, "all") {
+			out = append(out, typedColumnInt64AggregateBenchLayoutByName("delta_varint"), typedColumnInt64AggregateBenchLayoutByName("raw_int64"))
+			continue
+		}
+		layout := typedColumnInt64AggregateBenchLayoutByName(name)
+		if layout.name == "" {
+			return nil, fmt.Errorf("invalid layout %q (available: delta_varint,raw_int64,all)", name)
+		}
+		out = append(out, layout)
+	}
+	return out, nil
+}
+
+func typedColumnInt64AggregateBenchLayoutDefault() typedColumnInt64AggregateBenchLayout {
+	return typedColumnInt64AggregateBenchLayoutByName("delta_varint")
+}
+
+func typedColumnInt64AggregateBenchLayoutByName(name string) typedColumnInt64AggregateBenchLayout {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "delta", "delta_varint", "legacy":
+		return typedColumnInt64AggregateBenchLayout{name: "delta_varint", fixedWidthEncoding: ColumnFixedWidthEncodingDefault}
+	case "raw", "raw_int64", "fixed", "fixed_width":
+		return typedColumnInt64AggregateBenchLayout{name: "raw_int64", fixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}
+	default:
+		return typedColumnInt64AggregateBenchLayout{}
+	}
+}
+
+func typedColumnInt64AggregateBenchLayoutNames(layouts []typedColumnInt64AggregateBenchLayout) []string {
+	names := make([]string, len(layouts))
+	for i, layout := range layouts {
+		names[i] = layout.name
 	}
 	return names
 }
@@ -2440,7 +2704,17 @@ func typedColumnInt64AggregateFindPrunedBlockRange(tb testing.TB, d *backenddb.D
 	return ColumnAssetRef{}, typedColumnInt64AggregateTestBlockRange{}
 }
 
-func typedColumnInt64AggregateTestBlockRanges(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef, column string) []typedColumnInt64AggregateTestBlockRange {
+func typedColumnInt64ColumnEncodingForTest(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef, column string) typedcolumn.Encoding {
+	tb.Helper()
+	_, columns := typedColumnInt64DescriptorColumnsForTest(tb, d, ref)
+	valueCol, ok := columns[column]
+	if !ok {
+		tb.Fatalf("missing column %q in descriptor", column)
+	}
+	return valueCol.Definition.Encoding
+}
+
+func typedColumnInt64DescriptorColumnsForTest(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef) (typedcolumn.ColumnPartImage, map[string]typedcolumn.ColumnPartColumn) {
 	tb.Helper()
 	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
 	if err != nil {
@@ -2458,6 +2732,12 @@ func typedColumnInt64AggregateTestBlockRanges(tb testing.TB, d *backenddb.DB, re
 	if err != nil {
 		tb.Fatalf("DecodeColumnPartDescriptorSection: %v", err)
 	}
+	return image, columns
+}
+
+func typedColumnInt64AggregateTestBlockRanges(tb testing.TB, d *backenddb.DB, ref ColumnAssetRef, column string) []typedColumnInt64AggregateTestBlockRange {
+	tb.Helper()
+	image, columns := typedColumnInt64DescriptorColumnsForTest(tb, d, ref)
 	valueCol, ok := columns[column]
 	if !ok {
 		tb.Fatalf("missing column %q in descriptor", column)
@@ -2510,6 +2790,12 @@ func setupTypedColumnInt64ScanCollection(tb testing.TB) (*backenddb.DB, *Collect
 	return d, createTypedColumnInt64ScanCollection(tb, d)
 }
 
+func setupTypedColumnInt64RawScanCollection(tb testing.TB) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	d := openTypedColumnInt64ScanDB(tb)
+	return d, createTypedColumnInt64ScanCollectionWithFixedWidthEncoding(tb, d, ColumnFixedWidthEncodingLittleEndian)
+}
+
 func openTypedColumnInt64ScanDB(tb testing.TB) *backenddb.DB {
 	tb.Helper()
 	dir := tb.TempDir()
@@ -2521,9 +2807,14 @@ func openTypedColumnInt64ScanDB(tb testing.TB) *backenddb.DB {
 
 func createTypedColumnInt64ScanCollection(tb testing.TB, d *backenddb.DB) *Collection {
 	tb.Helper()
+	return createTypedColumnInt64ScanCollectionWithFixedWidthEncoding(tb, d, ColumnFixedWidthEncodingDefault)
+}
+
+func createTypedColumnInt64ScanCollectionWithFixedWidthEncoding(tb testing.TB, d *backenddb.DB, fixedWidthEncoding ColumnFixedWidthEncoding) *Collection {
+	tb.Helper()
 	cfg := testColumnStoreConfig(nil)
 	cfg.Columns = []ColumnStoreColumn{
-		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: fixedWidthEncoding},
 		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerRowAsset, Dictionary: true},
 	}
 	cfg.SortKey = nil

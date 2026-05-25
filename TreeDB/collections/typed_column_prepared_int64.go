@@ -1,9 +1,12 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 
+	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -14,13 +17,19 @@ func (s *TypedColumnInt64PredicateAggregateSession) validatePreparedInt64Aggrega
 		return errors.New("collections: nil typed-column int64 predicate aggregate session")
 	}
 	column := s.aggregateColumn
-	if column.Field.ValueType != ColumnStoreValueInt64 || column.Field.Nullable || column.Definition.Type != typedcolumn.ColumnTypeInt64 || column.Definition.Encoding != typedcolumn.EncodingDeltaVarint || column.Definition.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, s.req.Column)
+	if column.Field.ValueType != ColumnStoreValueInt64 || column.Field.Nullable || column.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, s.req.Column)
 	}
 	if err := requireTypedColumnAdapterCapability(column, typedColumnInt64PredicateSemanticOperation(s.req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", s.req.Column)); err != nil {
 		return err
 	}
 	if err := requireTypedColumnAdapterCapability(column, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", s.req.Column)); err != nil {
+		return err
+	}
+	if err := requireTypedColumnLayoutCapability(column, typedColumnInt64PredicateSemanticOperation(s.req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", s.req.Column)); err != nil {
+		return err
+	}
+	if err := requireTypedColumnLayoutCapability(column, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", s.req.Column)); err != nil {
 		return err
 	}
 	return nil
@@ -123,8 +132,11 @@ func validateTypedColumnPreparedInt64AggregatePart(part *typedColumnPreparedPart
 	if !ok || preparedColumn == nil {
 		return fmt.Errorf("collections: typed-column int64 aggregate prepared state missing column %q", adapterColumn.Definition.Name)
 	}
-	if preparedColumn.Plan.Definition.Type != typedcolumn.ColumnTypeInt64 || preparedColumn.Plan.Definition.Encoding != typedcolumn.EncodingDeltaVarint || preparedColumn.Plan.Definition.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q type=%s encoding=%s compression=%s", adapterColumn.Definition.Name, preparedColumn.Plan.Definition.Type, preparedColumn.Plan.Definition.Encoding, preparedColumn.Plan.Definition.Compression)
+	if preparedColumn.Plan.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q type=%s", adapterColumn.Definition.Name, preparedColumn.Plan.Definition.Type)
+	}
+	if cap := preparedColumn.Plan.Layout.Supports(columnlayout.OpInt64NumericReducer); !cap.Supported() {
+		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q layout capability %s", adapterColumn.Definition.Name, cap.Error())
 	}
 	return nil
 }
@@ -154,6 +166,116 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateStatePa
 	return nil
 }
 
+func typedColumnInt64RawPayloadRows(raw []byte, rows int) error {
+	if rows < 0 {
+		return fmt.Errorf("typed-column raw int64 negative rows=%d", rows)
+	}
+	if len(raw)%8 != 0 || len(raw)/8 != rows {
+		return fmt.Errorf("typed-column raw int64 payload bytes=%d rows=%d", len(raw), rows)
+	}
+	return nil
+}
+
+func typedColumnInt64RawPredicateSelection(req TypedColumnInt64PredicateScanRequest, g typedcolumn.EncodedGranule, raw []byte, scratch *typedColumnInt64PredicateAggregateScanScratch) (typedcolumn.RowSelection, error) {
+	if err := typedColumnInt64RawPayloadRows(raw, g.Rows); err != nil {
+		return typedcolumn.RowSelection{}, err
+	}
+	if g.Rows == 0 {
+		return typedcolumn.NewEmptyRowSelection(0)
+	}
+	if typedColumnInt64PredicateCoversGranule(req, g) {
+		return typedcolumn.NewAllRowSelection(g.Rows)
+	}
+	if scratch == nil {
+		var local typedColumnInt64PredicateAggregateScanScratch
+		scratch = &local
+	}
+	scratch.predicateRows = scratch.predicateRows[:0]
+	for row := 0; row < g.Rows; row++ {
+		value := int64(binary.LittleEndian.Uint64(raw[row*8:]))
+		if typedColumnInt64PredicateMatches(req, value) {
+			scratch.predicateRows = append(scratch.predicateRows, row)
+		}
+	}
+	return typedColumnInt64PredicateRowsSelection(g.Rows, scratch)
+}
+
+func addTypedColumnInt64AggregateRawRow(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, row int) error {
+	if row < 0 || row >= rows {
+		return fmt.Errorf("typed-column int64 aggregate raw row=%d rows=%d", row, rows)
+	}
+	value := int64(binary.LittleEndian.Uint64(raw[row*8:]))
+	if err := addTypedColumnInt64PredicateAggregateValue(result, value); err != nil {
+		return err
+	}
+	result.Diagnostics.RowsMatched++
+	return nil
+}
+
+func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, selection typedcolumn.RowSelection) error {
+	if err := typedColumnInt64RawPayloadRows(raw, rows); err != nil {
+		return err
+	}
+	switch selection.Kind() {
+	case typedcolumn.RowSelectionEmpty:
+		return nil
+	case typedcolumn.RowSelectionAll:
+		for row := 0; row < rows; row++ {
+			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	case typedcolumn.RowSelectionRange:
+		start, end, ok := selection.SingleRange()
+		if !ok || start < 0 || end < start || end > rows {
+			return fmt.Errorf("typed-column int64 aggregate invalid raw range selection [%d,%d) rows=%d", start, end, rows)
+		}
+		for row := start; row < end; row++ {
+			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	case typedcolumn.RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			if r.Start < 0 || r.End < r.Start || r.End > rows {
+				return fmt.Errorf("typed-column int64 aggregate invalid raw ranges selection [%d,%d) rows=%d", r.Start, r.End, rows)
+			}
+			for row := r.Start; row < r.End; row++ {
+				if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	case typedcolumn.RowSelectionSparse:
+		for _, row := range selection.SparseRows() {
+			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	case typedcolumn.RowSelectionBitmap:
+		for wordIndex, word := range selection.BitmapWords() {
+			for word != 0 {
+				bit := bits.TrailingZeros64(word)
+				row := wordIndex*64 + bit
+				if row >= rows {
+					break
+				}
+				if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+					return err
+				}
+				word &^= uint64(1) << uint(bit)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("typed-column int64 aggregate unsupported raw selection shape %s", selection.Shape().Kind)
+	}
+}
+
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnState(preparedColumn *typedColumnPreparedColumnState, ref ColumnAssetRef, visibility *typedColumnLatestPhysicalPart, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) (bool, error) {
 	if preparedColumn == nil {
 		return false, errors.New("collections: typed-column int64 predicate aggregate nil prepared column")
@@ -172,6 +294,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		if block.PayloadLength > 0 {
 			payload, err = s.readTypedColumnRange(ref, block.PayloadOffset, block.PayloadLength, false, result, updateCacheDeltas)
 			if err != nil {
+				if preparedColumn.Plan.Layout.Reducers.Int64FixedWidthRaw {
+					return false, fmt.Errorf("raw layout read column %q block %d payload: %w", preparedColumn.Plan.Definition.Name, block.Index, err)
+				}
 				return false, fmt.Errorf("read column %q block %d payload: %w", preparedColumn.Plan.Definition.Name, block.Index, err)
 			}
 			payloadRead = true
@@ -182,6 +307,41 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		granule := block.Granule
 		granule.Payload = payload
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
+		if preparedColumn.Plan.Layout.Reducers.Int64FixedWidthRaw {
+			if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
+				return false, err
+			}
+			decodedAny = true
+			result.Diagnostics.BlocksDecoded++
+			result.Diagnostics.RowsScanned += granule.Rows
+
+			selection := block.CandidateSelection
+			if block.NeedsPredicate {
+				selection, err = typedColumnInt64RawPredicateSelection(typedColumnInt64PredicateAggregateScanRequest(s.req), granule, payload, &s.aggregateScratch)
+				if err != nil {
+					return false, err
+				}
+			}
+			if visibility != nil && !selection.IsEmpty() {
+				visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, &s.aggregateScratch)
+				if err != nil {
+					return false, err
+				}
+				selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &s.aggregateScratch.selection)
+				if err != nil {
+					return false, err
+				}
+				result.Diagnostics.SelectionCompositions++
+			}
+			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+			if selection.IsEmpty() {
+				continue
+			}
+			if err := addTypedColumnInt64AggregateSelectedRawValues(result, payload, granule.Rows, selection); err != nil {
+				return false, err
+			}
+			continue
+		}
 		values, err := s.aggregateScratch.reader.DecodeInt64Into(s.aggregateScratch.values[:0], granule)
 		if err != nil {
 			return false, err

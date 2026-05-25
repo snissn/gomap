@@ -18,7 +18,7 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | Logical type | Current typedcolumn type | Encoding/layout | Scalar range/aggregate stance |
 | --- | --- | --- | --- |
 | `bool` | `bool` | `bool_bitpack_rle` | equality/counts supported; broad scalar range is unsupported (`bool_range_unsupported`). |
-| `int64` | `int64` | `delta_varint` by adapter; raw/double-delta are valid typedcolumn encodings | equality, ordered range, count rows/non-null, sum/avg/min/max, min/max stats, and ordered-range pruning are supported for non-null int64 semantics. Sum stats are currently unsupported because existing stats payloads do not store sums (`stats_payload_unsupported`). |
+| `int64` | `int64` | `delta_varint` by default; explicit `fixed_width_encoding: "little_endian"` selects uncompressed `raw_int64`; double-delta remains a valid typedcolumn encoding but is not the adapter default | equality, ordered range, count rows/non-null, sum/avg/min/max, min/max stats, and ordered-range pruning are supported for non-null int64 semantics. Sum stats are currently unsupported because existing stats payloads do not store sums (`stats_payload_unsupported`). Physical reducer/direct-view eligibility is additionally gated by `typed-column-layout-capabilities.md`. |
 | `float32` | `int64` | `raw_int64` carrying `math.Float32bits` | raw bit patterns do **not** provide int64 ordered range, sum, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Native float semantics require a future float layout and NaN/signed-zero/infinity rules. |
 | `double` | `int64` | `raw_int64` carrying `math.Float64bits` | same raw-bit restriction as `float32`. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
@@ -107,5 +107,6 @@ must be admitted through this matrix with conformance tests that define:
 - explicit proof before any int64 kernel or pruning metadata is reused.
 
 Benchmarks are required only if capability checks move into block/run hot paths;
-current int64/string adapter consumption resolves capabilities during prepare and
-records the matrix resolution phase as `prepare`.
+current int64/string adapter consumption resolves semantic and layout
+capabilities during prepare and records the matrix resolution phase as
+`prepare`.

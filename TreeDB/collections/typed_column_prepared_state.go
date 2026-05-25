@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
@@ -31,11 +32,13 @@ type typedColumnPreparedColumnRequest struct {
 }
 
 type typedColumnPreparedColumnPlan struct {
-	Field        TypedStorageField
-	Logical      columnsemantics.LogicalType
-	Definition   typedcolumn.ColumnDefinition
-	Capability   columnsemantics.Capability
-	Dependencies []typedcolumn.SectionDependencyDescriptor
+	Field            TypedStorageField
+	Logical          columnsemantics.LogicalType
+	Definition       typedcolumn.ColumnDefinition
+	Capability       columnsemantics.Capability
+	Layout           columnlayout.Capabilities
+	LayoutCapability columnlayout.Capability
+	Dependencies     []typedcolumn.SectionDependencyDescriptor
 }
 
 type typedColumnPreparedStateDiagnostics struct {
@@ -185,13 +188,20 @@ func typedColumnDescribePreparedColumn(req typedColumnPreparedColumnRequest, spa
 		Encoding: adapterColumn.Definition.Encoding,
 		Nullable: req.Field.Nullable,
 	}, req.Operation)
+	layout := typedColumnLayoutCapabilitiesForAdapterColumn(adapterColumn)
+	layoutCapability := layout.SupportsSemanticOperation(req.Operation)
 	plan := typedColumnPreparedColumnPlan{
-		Field:      req.Field,
-		Logical:    logical,
-		Definition: adapterColumn.Definition,
-		Capability: capability,
+		Field:            req.Field,
+		Logical:          logical,
+		Definition:       adapterColumn.Definition,
+		Capability:       capability,
+		Layout:           layout,
+		LayoutCapability: layoutCapability,
 	}
 	if !capability.Supported() {
+		return plan, nil
+	}
+	if !layoutCapability.Supported() {
 		return plan, nil
 	}
 	deps, err := typedColumnPreparedDependenciesForRequest(req, adapterColumn.Definition, span)
@@ -368,6 +378,11 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 			diag.FallbackReason = plan.Capability.Error()
 			return part, diag, nil
 		}
+		if !plan.LayoutCapability.Supported() {
+			diag.Fallback = true
+			diag.FallbackReason = "layout capability " + plan.LayoutCapability.Error()
+			return part, diag, nil
+		}
 		if existing := part.Columns[plan.Definition.Name]; existing != nil {
 			existing.Plan.Dependencies = append(existing.Plan.Dependencies, plan.Dependencies...)
 			part.Dependencies = append(part.Dependencies, plan.Dependencies...)
@@ -422,6 +437,11 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 	for i := range column.Blocks {
 		block := column.Blocks[i]
 		length := block.Descriptor.StoredBytes
+		if plan.Layout.Descriptor.Logical != "" {
+			if err := plan.Layout.ValidateGranule(block.Granule); err != nil {
+				return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d layout validation: %w", plan.Definition.Name, i, err)
+			}
+		}
 		if length < 0 || offset > sectionEnd || length > sectionEnd-offset {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d length=%d outside section", plan.Definition.Name, i, length)
 		}
