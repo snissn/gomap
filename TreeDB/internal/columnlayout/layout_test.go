@@ -71,9 +71,17 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 	}
 	wrongCompression := typedcolumn.EncodedGranule{Rows: 1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionSnappy, RawBytes: 8, StoredBytes: 8}
 	if err := caps.ValidateGranule(wrongCompression); err == nil || !strings.Contains(err.Error(), "compression") {
-		t.Fatalf("wrong compression err=%v", err)
+		t.Fatalf("wrong compression err=%v want compression rejection", err)
 	}
-	badRows := typedcolumn.EncodedGranule{Rows: 0, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0}
+	compressedCaps := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionSnappy})
+	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpSum); cap.Supported() || cap.Reason != ReasonUnsupportedCompression {
+		t.Fatalf("compressed semantic cap=%+v want %s", cap, ReasonUnsupportedCompression)
+	}
+	emptyRows := typedcolumn.EncodedGranule{Rows: 0, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0}
+	if err := caps.ValidateGranule(emptyRows); err != nil {
+		t.Fatalf("empty rows err=%v want zero-row empty payload accepted", err)
+	}
+	badRows := typedcolumn.EncodedGranule{Rows: -1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0}
 	if err := caps.ValidateGranule(badRows); err == nil || !strings.Contains(err.Error(), "row count") {
 		t.Fatalf("bad rows err=%v", err)
 	}

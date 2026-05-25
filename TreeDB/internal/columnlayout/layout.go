@@ -495,7 +495,9 @@ func (c Capabilities) validateDescriptor(op Operation) Capability {
 		return Unsupported(op, ReasonUnsupportedEncoding, fmt.Sprintf("encoding=%s", desc.Encoding))
 	}
 	switch desc.Compression {
-	case typedcolumn.CompressionNone, typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
+	case typedcolumn.CompressionNone:
+	case typedcolumn.CompressionSnappy, typedcolumn.CompressionLZ4:
+		return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", desc.Compression))
 	default:
 		return Unsupported(op, ReasonUnsupportedCompression, fmt.Sprintf("compression=%s", desc.Compression))
 	}
@@ -537,7 +539,7 @@ func (c Capabilities) ValidateGranule(g typedcolumn.EncodedGranule) error {
 	if cap := c.validateDescriptor("validate.granule"); !cap.Supported() {
 		return fmt.Errorf("columnlayout: %s", cap.Error())
 	}
-	if g.Rows <= 0 {
+	if g.Rows < 0 {
 		return fmt.Errorf("columnlayout: invalid row count %d", g.Rows)
 	}
 	if g.Encoding != c.Descriptor.Encoding {
@@ -553,9 +555,6 @@ func (c Capabilities) ValidateGranule(g typedcolumn.EncodedGranule) error {
 		if g.NullCount < 0 || g.DefaultCount < 0 || g.NullCount > g.Rows || g.DefaultCount > g.Rows-g.NullCount {
 			return fmt.Errorf("columnlayout: invalid null/default counts rows=%d null=%d default=%d", g.Rows, g.NullCount, g.DefaultCount)
 		}
-	}
-	if c.Descriptor.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("columnlayout: %s: compression=%s for validated hot layout", ReasonUnsupportedCompression, c.Descriptor.Compression)
 	}
 	return c.validateGranuleLengths(g)
 }
@@ -579,6 +578,12 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 	}
 	if c.Layout.LengthMultipleBytes > 0 && g.RawBytes%c.Layout.LengthMultipleBytes != 0 {
 		return fmt.Errorf("columnlayout: raw bytes=%d not multiple of %d: %s", g.RawBytes, c.Layout.LengthMultipleBytes, ReasonLengthMultipleMismatch)
+	}
+	if g.Rows == 0 {
+		if g.RawBytes != 0 || g.StoredBytes != 0 {
+			return fmt.Errorf("columnlayout: zero-row payload raw=%d stored=%d want 0: %s", g.RawBytes, g.StoredBytes, ReasonRawLengthRowCountMismatch)
+		}
+		return nil
 	}
 	if !c.Layout.FixedWidth {
 		if g.RawBytes == 0 || g.StoredBytes == 0 {
