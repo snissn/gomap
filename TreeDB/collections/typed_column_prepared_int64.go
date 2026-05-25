@@ -308,6 +308,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		granule.Payload = payload
 		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
 		if preparedColumn.Plan.Layout.Reducers.Int64FixedWidthRaw {
+			if granule.Rows != block.Descriptor.RowCount {
+				return false, fmt.Errorf("raw layout column %q block %d granule rows=%d want descriptor row_count=%d: %s", preparedColumn.Plan.Definition.Name, block.Index, granule.Rows, block.Descriptor.RowCount, columnlayout.ReasonDescriptorRowCountMismatch)
+			}
 			if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
 				return false, err
 			}

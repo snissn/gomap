@@ -441,6 +441,9 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 			if err := plan.Layout.ValidateGranule(block.Granule); err != nil {
 				return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d layout validation: %w", plan.Definition.Name, i, err)
 			}
+			if block.Granule.Rows != block.Descriptor.RowCount {
+				return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d granule rows=%d want descriptor row_count=%d: %s", plan.Definition.Name, i, block.Granule.Rows, block.Descriptor.RowCount, columnlayout.ReasonDescriptorRowCountMismatch)
+			}
 		}
 		if length < 0 || offset > sectionEnd || length > sectionEnd-offset {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d length=%d outside section", plan.Definition.Name, i, length)

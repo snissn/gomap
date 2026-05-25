@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
@@ -152,6 +153,30 @@ func TestTypedColumnPreparedColumnStateAllowsZeroLengthEmptyBlock(t *testing.T) 
 	_, _, err = buildTypedColumnPreparedColumnState(plan, column, section, nil)
 	if err == nil || !strings.Contains(err.Error(), "zero-length payload") {
 		t.Fatalf("buildTypedColumnPreparedColumnState zero-length non-empty block err=%v want fail-closed zero-length payload", err)
+	}
+}
+
+func TestTypedColumnPreparedColumnStateRejectsGranuleDescriptorRowMismatch(t *testing.T) {
+	plan := typedColumnPreparedColumnPlan{
+		Definition: typedcolumn.ColumnDefinition{Name: "count", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone},
+		Layout: columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+			Logical:     columnsemantics.LogicalInt64,
+			Physical:    typedcolumn.ColumnTypeInt64,
+			Encoding:    typedcolumn.EncodingRawInt64,
+			Compression: typedcolumn.CompressionNone,
+		}),
+	}
+	column := typedcolumn.ColumnPartColumn{
+		Definition: plan.Definition,
+		Blocks: []typedcolumn.ColumnBlock{{
+			Descriptor: typedcolumn.ColumnBlockDescriptor{FirstRow: 0, RowCount: 1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 16, StoredBytes: 16},
+			Granule:    typedcolumn.EncodedGranule{Rows: 2, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 16, StoredBytes: 16},
+		}},
+	}
+	section := typedcolumn.ColumnPartImageSection{Kind: typedcolumn.ColumnPartImageSectionColumnData, Column: "count", Offset: 128, Length: 16}
+	_, _, err := buildTypedColumnPreparedColumnState(plan, column, section, nil)
+	if err == nil || !strings.Contains(err.Error(), string(columnlayout.ReasonDescriptorRowCountMismatch)) {
+		t.Fatalf("buildTypedColumnPreparedColumnState row mismatch err=%v want %s", err, columnlayout.ReasonDescriptorRowCountMismatch)
 	}
 }
 

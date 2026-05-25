@@ -50,6 +50,10 @@ const (
 	ReasonUnsupportedPhysicalType     ReasonCode = "layout_unsupported_physical_type"
 	ReasonUnsupportedEncoding         ReasonCode = "layout_unsupported_encoding"
 	ReasonUnsupportedCompression      ReasonCode = "layout_unsupported_compression"
+	ReasonInvalidRowCount             ReasonCode = "layout_invalid_row_count"
+	ReasonGranuleEncodingMismatch     ReasonCode = "layout_granule_encoding_mismatch"
+	ReasonNullDefaultCountMismatch    ReasonCode = "layout_null_default_count_mismatch"
+	ReasonDescriptorRowCountMismatch  ReasonCode = "layout_descriptor_row_count_mismatch"
 	ReasonLogicalPhysicalMismatch     ReasonCode = "layout_logical_physical_mismatch"
 	ReasonEncodingPhysicalMismatch    ReasonCode = "layout_encoding_physical_mismatch"
 	ReasonVariableWidthNoDirectView   ReasonCode = "layout_variable_width_no_direct_view"
@@ -540,20 +544,20 @@ func (c Capabilities) ValidateGranule(g typedcolumn.EncodedGranule) error {
 		return fmt.Errorf("columnlayout: %s", cap.Error())
 	}
 	if g.Rows < 0 {
-		return fmt.Errorf("columnlayout: invalid row count %d", g.Rows)
+		return fmt.Errorf("columnlayout: invalid row count %d: %s", g.Rows, ReasonInvalidRowCount)
 	}
 	if g.Encoding != c.Descriptor.Encoding {
-		return fmt.Errorf("columnlayout: granule encoding=%s want %s", g.Encoding, c.Descriptor.Encoding)
+		return fmt.Errorf("columnlayout: granule encoding=%s want %s: %s", g.Encoding, c.Descriptor.Encoding, ReasonGranuleEncodingMismatch)
 	}
 	if g.Compression != c.Descriptor.Compression {
-		return fmt.Errorf("columnlayout: granule compression=%s want %s", g.Compression, c.Descriptor.Compression)
+		return fmt.Errorf("columnlayout: granule compression=%s want %s: %s", g.Compression, c.Descriptor.Compression, ReasonUnsupportedCompression)
 	}
 	if !c.Wrappers.Nullable && (g.NullCount != 0 || g.DefaultCount != 0) {
-		return fmt.Errorf("columnlayout: non-null layout has null/default counts null=%d default=%d", g.NullCount, g.DefaultCount)
+		return fmt.Errorf("columnlayout: non-null layout has null/default counts null=%d default=%d: %s", g.NullCount, g.DefaultCount, ReasonNullDefaultCountMismatch)
 	}
 	if c.Wrappers.Nullable {
 		if g.NullCount < 0 || g.DefaultCount < 0 || g.NullCount > g.Rows || g.DefaultCount > g.Rows-g.NullCount {
-			return fmt.Errorf("columnlayout: invalid null/default counts rows=%d null=%d default=%d", g.Rows, g.NullCount, g.DefaultCount)
+			return fmt.Errorf("columnlayout: invalid null/default counts rows=%d null=%d default=%d: %s", g.Rows, g.NullCount, g.DefaultCount, ReasonNullDefaultCountMismatch)
 		}
 	}
 	return c.validateGranuleLengths(g)

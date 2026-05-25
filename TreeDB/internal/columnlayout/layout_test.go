@@ -66,12 +66,12 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 	desc := Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone}
 	caps := CapabilitiesFor(desc)
 	wrongEncoding := typedcolumn.EncodedGranule{Rows: 1, Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone, RawBytes: 8, StoredBytes: 8}
-	if err := caps.ValidateGranule(wrongEncoding); err == nil || !strings.Contains(err.Error(), "encoding") {
-		t.Fatalf("wrong encoding err=%v", err)
+	if err := caps.ValidateGranule(wrongEncoding); err == nil || !strings.Contains(err.Error(), string(ReasonGranuleEncodingMismatch)) {
+		t.Fatalf("wrong encoding err=%v want %s", err, ReasonGranuleEncodingMismatch)
 	}
 	wrongCompression := typedcolumn.EncodedGranule{Rows: 1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionSnappy, RawBytes: 8, StoredBytes: 8}
-	if err := caps.ValidateGranule(wrongCompression); err == nil || !strings.Contains(err.Error(), "compression") {
-		t.Fatalf("wrong compression err=%v want compression rejection", err)
+	if err := caps.ValidateGranule(wrongCompression); err == nil || !strings.Contains(err.Error(), string(ReasonUnsupportedCompression)) {
+		t.Fatalf("wrong compression err=%v want %s", err, ReasonUnsupportedCompression)
 	}
 	compressedCaps := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalInt64, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionSnappy})
 	if cap := compressedCaps.SupportsSemanticOperation(columnsemantics.OpSum); cap.Supported() || cap.Reason != ReasonUnsupportedCompression {
@@ -82,8 +82,12 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 		t.Fatalf("empty rows err=%v want zero-row empty payload accepted", err)
 	}
 	badRows := typedcolumn.EncodedGranule{Rows: -1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0}
-	if err := caps.ValidateGranule(badRows); err == nil || !strings.Contains(err.Error(), "row count") {
-		t.Fatalf("bad rows err=%v", err)
+	if err := caps.ValidateGranule(badRows); err == nil || !strings.Contains(err.Error(), string(ReasonInvalidRowCount)) {
+		t.Fatalf("bad rows err=%v want %s", err, ReasonInvalidRowCount)
+	}
+	badNullDefaults := typedcolumn.EncodedGranule{Rows: 1, NullCount: 1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 8, StoredBytes: 8}
+	if err := caps.ValidateGranule(badNullDefaults); err == nil || !strings.Contains(err.Error(), string(ReasonNullDefaultCountMismatch)) {
+		t.Fatalf("bad null/default counts err=%v want %s", err, ReasonNullDefaultCountMismatch)
 	}
 }
 
