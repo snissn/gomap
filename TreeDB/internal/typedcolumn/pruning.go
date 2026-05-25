@@ -756,7 +756,7 @@ func decodeInt64PruningPayload(envelope ColumnPruningEnvelope, payload []byte) (
 	if err != nil {
 		return Int64ValueRowIndex{}, err
 	}
-	blocksTotal, err := dec.boundedCount(blockCount, 48, "int64 pruning blocks")
+	blocksTotal, err := dec.boundedCount(blockCount, int64PruningBlockEncodedBytes, "int64 pruning blocks")
 	if err != nil {
 		return Int64ValueRowIndex{}, err
 	}
@@ -800,6 +800,8 @@ func decodeInt64PruningPayload(envelope ColumnPruningEnvelope, payload []byte) (
 	}
 	return index, nil
 }
+
+const int64PruningBlockEncodedBytes = 42
 
 func decodeInt64PruningBlock(dec *columnPartImageDecoder) (Int64PruningBlock, error) {
 	index, err := decodeStatsInt(dec, "int64 pruning block index")
