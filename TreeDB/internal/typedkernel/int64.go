@@ -33,6 +33,9 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 	}
 	if req.Selection.Kind() == typedcolumn.RowSelectionEmpty {
 		if req.Int64Cursor != nil {
+			if req.Int64Cursor.Rows() != rows {
+				return AggregateResult{}, fmt.Errorf("typedkernel: int64 cursor rows=%d want %d", req.Int64Cursor.Rows(), rows)
+			}
 			if err := req.Int64Cursor.Finish(); err != nil {
 				return AggregateResult{}, err
 			}

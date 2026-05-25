@@ -214,6 +214,18 @@ func TestInt64EmptySelectionValidatesCursorRequests(t *testing.T) {
 	if _, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Cursor: &cursor}, nil); err == nil || !strings.Contains(err.Error(), "decoded rows=0 want=3") {
 		t.Fatalf("empty cursor reduce err=%v want cursor validation failure", err)
 	}
+
+	shortGranule, err := builder.BuildInt64([]int64{99})
+	if err != nil {
+		t.Fatalf("BuildInt64 short: %v", err)
+	}
+	shortCursor, err := reader.Int64Cursor(shortGranule)
+	if err != nil {
+		t.Fatalf("short Int64Cursor: %v", err)
+	}
+	if _, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Cursor: &shortCursor}, nil); err == nil || !strings.Contains(err.Error(), "int64 cursor rows=1 want 3") {
+		t.Fatalf("empty short-cursor reduce err=%v want cursor row-domain mismatch", err)
+	}
 }
 
 func TestDispatchSemanticAndLayoutGates(t *testing.T) {
