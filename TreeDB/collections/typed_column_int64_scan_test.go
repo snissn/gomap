@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -1167,6 +1168,21 @@ func TestTypedColumnInt64AggregateBenchParsers(t *testing.T) {
 		}
 	})
 
+	t.Run("fallback_reason_metric_tokens", func(t *testing.T) {
+		for _, tc := range []struct {
+			input string
+			want  string
+		}{
+			{input: "typed_column_not_selected", want: "typed_column_not_selected"},
+			{input: "Capability: nullable carrier aggregate semantics", want: "capability_nullable_carrier_aggregate_semantics"},
+			{input: "!!!", want: "unknown"},
+		} {
+			if got := typedColumnInt64AggregateBenchMetricToken(tc.input); got != tc.want {
+				t.Fatalf("metric token %q=%q want %q", tc.input, got, tc.want)
+			}
+		}
+	})
+
 	t.Run("sub_benchmark_names", func(t *testing.T) {
 		name := typedColumnInt64AggregateBenchSubBenchmarkName(256, typedColumnInt64AggregateBenchDistributionByName("clustered_monotonic"), "typed_column_part", typedColumnInt64AggregateBenchShapeByName("range_1pct"), typedColumnInt64AggregateBenchReadIntegrityByName("cached_verify"), typedColumnInt64AggregateBenchExecutionModeByName("serial"))
 		want := "rows_256/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg"
@@ -1476,9 +1492,13 @@ func runTypedColumnInt64AggregateBenchPath(b *testing.B, rows int, dist typedCol
 			b.ReportAllocs()
 			b.ResetTimer()
 			reportTypedColumnInt64AggregateBenchSetupMetrics(b, setupMetrics)
+			stopHotCPUProfile := startTypedColumnInt64AggregateBenchHotCPUProfile(b)
 			b.StartTimer()
 			result, runErr := execution.run(b, col, session, req, expected)
 			b.StopTimer()
+			if stopHotCPUProfile != nil {
+				stopHotCPUProfile()
+			}
 			if session != nil {
 				if err := session.Close(); err != nil {
 					b.Fatalf("prepared session Close: %v", err)
@@ -2149,6 +2169,62 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.RowMaterializations), "row_materializations/op")
 	b.ReportMetric(float64(diag.DocumentMaterializations), "document_materializations/op")
 	b.ReportMetric(float64(diag.DocumentReconstructions), "document_reconstructions/op")
+	fallbackCount := 0
+	if diag.Fallback {
+		fallbackCount = 1
+	}
+	b.ReportMetric(float64(fallbackCount), "fallback_count")
+	if diag.FallbackReason != "" {
+		b.ReportMetric(1, "fallback_reason_"+typedColumnInt64AggregateBenchMetricToken(diag.FallbackReason)+"_count")
+	}
+}
+
+func startTypedColumnInt64AggregateBenchHotCPUProfile(b *testing.B) func() {
+	b.Helper()
+	profilePath := strings.TrimSpace(os.Getenv("TREEDB_TYPED_COLUMN_BENCH_HOT_CPU_PROFILE"))
+	if profilePath == "" {
+		return nil
+	}
+	if dir := filepath.Dir(profilePath); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			b.Fatalf("create hot CPU profile dir %q: %v", dir, err)
+		}
+	}
+	file, err := os.Create(profilePath)
+	if err != nil {
+		b.Fatalf("create hot CPU profile %q: %v", profilePath, err)
+	}
+	if err := pprof.StartCPUProfile(file); err != nil {
+		_ = file.Close()
+		b.Fatalf("start hot CPU profile %q: %v", profilePath, err)
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		if err := file.Close(); err != nil {
+			b.Fatalf("close hot CPU profile %q: %v", profilePath, err)
+		}
+	}
+}
+
+func typedColumnInt64AggregateBenchMetricToken(reason string) string {
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, r := range strings.ToLower(reason) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore && builder.Len() != 0 {
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	out := strings.Trim(builder.String(), "_")
+	if out == "" {
+		return "unknown"
+	}
+	return out
 }
 
 func reportTypedColumnInt64ScanBenchMetrics(b *testing.B, diag TypedColumnInt64PredicateScanDiagnostics, elapsed time.Duration, iterations int) {

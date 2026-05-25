@@ -83,8 +83,8 @@ go test -run '^$' \
 Expected output shape:
 
 ```text
-BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg-8 ... dataset_rows ... setup_ns ... ns/op ... rows_scanned/op ... rows_matched/op ... blocks_pruned/op ... mapped_bytes/op ... decoded_bytes/op ... document_materializations/op ... B/op ... allocs/op
-BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/dist_clustered_monotonic/path_document_full_scan_fallback/shape_selective_range_1pct/predicate_count_sum_avg-8 ... document_materializations/op ... row_materializations/op ... B/op ... allocs/op
+BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg-8 ... dataset_rows ... setup_ns ... ns/op ... rows_scanned/op ... rows_matched/op ... blocks_pruned/op ... mapped_bytes/op ... decoded_bytes/op ... document_materializations/op ... fallback_count ... B/op ... allocs/op
+BenchmarkTypedColumnInt64PredicateAggregate/rows_4096/dist_clustered_monotonic/path_document_full_scan_fallback/shape_selective_range_1pct/timed_one_shot_api/read_integrity_not_applicable/execution_serial/predicate_count_sum_avg-8 ... document_materializations/op ... row_materializations/op ... fallback_count ... fallback_reason_column_store_unavailable_count ... B/op ... allocs/op
 ```
 
 Read the typed-column row and fallback row separately. The direct typed-column
@@ -154,6 +154,63 @@ go test -run '^$' \
   ./TreeDB/collections
 ```
 
+### Repeatable script runbook
+
+The repo-local wrapper below writes stable artifact names under `RUN_DIR` and is
+safe for quick validation. It uses `GOWORK=off` by default.
+
+Small smoke (direct typed-column path plus the small document fallback sample for
+reason counters):
+
+```sh
+RUN_DIR=/tmp/treedb_typed_column_smoke_$(date +%Y%m%d_%H%M%S) \
+ROWS=4096 BENCHTIME=1x COUNT=1 RUN_1M=false \
+scripts/treedb_typed_column_bench_profile.sh
+```
+
+Primary smoke artifacts:
+
+```text
+$RUN_DIR/README.md
+$RUN_DIR/smoke/typed_column_int64_aggregate_bench.txt
+$RUN_DIR/hot_query_profile/hot_query_bench.txt
+$RUN_DIR/hot_query_profile/hot_query_cpu.pprof
+$RUN_DIR/hot_query_profile/hot_query_cpu_top.txt
+$RUN_DIR/hot_query_profile/process_allocs.pprof
+$RUN_DIR/hot_query_profile/process_allocs_top.txt
+```
+
+1M int64 matrix (all current shapes and distributions, direct typed-column path,
+three execution labels, cached-verify read integrity, fallback disabled to keep
+runtime bounded):
+
+```sh
+RUN_DIR=/tmp/treedb_typed_column_1m_$(date +%Y%m%d_%H%M%S) \
+RUN_SMOKE=false RUN_1M=true RUN_HOT_PROFILE=false \
+BENCHTIME_1M=3x COUNT_1M=1 \
+scripts/treedb_typed_column_bench_profile.sh
+```
+
+Primary 1M artifact:
+
+```text
+$RUN_DIR/matrix_1m/typed_column_int64_aggregate_bench.txt
+```
+
+Optional 1M matrix expansions:
+
+```sh
+# Include unsafe checksum-skipping ceiling rows next to cached-verify rows.
+RUN_DIR=/tmp/treedb_typed_column_1m_read_integrity_$(date +%Y%m%d_%H%M%S) \
+RUN_SMOKE=false RUN_1M=true RUN_HOT_PROFILE=false READ_INTEGRITY_1M=all \
+scripts/treedb_typed_column_bench_profile.sh
+
+# Include document fallback rows at 1M only when you explicitly want the cost.
+RUN_DIR=/tmp/treedb_typed_column_1m_fallback_$(date +%Y%m%d_%H%M%S) \
+RUN_SMOKE=false RUN_1M=true RUN_HOT_PROFILE=false INCLUDE_FALLBACK_1M=true \
+scripts/treedb_typed_column_bench_profile.sh
+```
+
 ### Medium 1M-row selective aggregate
 
 ```sh
@@ -162,7 +219,7 @@ TREEDB_TYPED_COLUMN_BENCH_SHAPES=selective_range_1pct \
 TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered_monotonic \
 TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
 go test -run '^$' \
-  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg$' \
+  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg$' \
   -benchmem \
   -benchtime=20x \
   -count=3 \
@@ -186,37 +243,54 @@ especially `no_filter_full_aggregate`, `all_match`, `random_uniform`, and
 
 ### Focused aggregate CPU and allocation profile
 
-This command profiles the current aggregate path with setup outside the timed
-loop but includes the per-operation read/validation work that the benchmark is
-measuring.
+Prefer the script's prepared-session hot-query CPU profile when investigating the
+scan loop boundary:
+
+```sh
+RUN_DIR=/tmp/treedb_typed_column_hot_$(date +%Y%m%d_%H%M%S) \
+RUN_SMOKE=false RUN_1M=false RUN_HOT_PROFILE=true \
+PROFILE_ROWS=65536 PROFILE_BENCHTIME=30000x PROFILE_COUNT=1 \
+scripts/treedb_typed_column_bench_profile.sh
+```
+
+Inspect profiles:
+
+```sh
+go tool pprof -top $RUN_DIR/hot_query_profile/hot_query_cpu.pprof
+go tool pprof -top -sample_index=alloc_space $RUN_DIR/hot_query_profile/process_allocs.pprof
+```
+
+The CPU profile uses the benchmark-owned
+`TREEDB_TYPED_COLUMN_BENCH_HOT_CPU_PROFILE` boundary around the prepared-session
+`Run` loop after setup, prepare, and warmup. Set it only with an exact single
+sub-benchmark regex, as repeated matching sub-benchmarks would overwrite the same
+profile path. The allocation profile is still Go
+test process-wide (`-memprofile` cannot be scoped to only the hot loop here), so
+use benchmark `B/op` and `allocs/op` as the hot-loop allocation signal and treat
+`process_allocs.pprof` as attribution context. A fully hot-only allocation
+profile remains follow-up work.
+
+Manual equivalent for the hot CPU profile:
 
 ```sh
 TREEDB_TYPED_COLUMN_BENCH_ROWS=65536 \
 TREEDB_TYPED_COLUMN_BENCH_SHAPES=selective_range_1pct \
 TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered_monotonic \
 TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
+TREEDB_TYPED_COLUMN_BENCH_HOT_CPU_PROFILE=/tmp/typedscan_hot_cpu.pprof \
 go test -run '^$' \
-  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_65536/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/predicate_count_sum_avg$' \
+  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_65536/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_prepared_session_hot_scan/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg$' \
   -benchmem \
   -benchtime=30000x \
   -count=1 \
-  -cpuprofile /tmp/typedscan_aggregate_cpu.pprof \
-  -memprofile /tmp/typedscan_aggregate_mem.pprof \
   ./TreeDB/collections
 ```
 
-Inspect profiles:
-
-```sh
-go tool pprof -top /tmp/typedscan_aggregate_cpu.pprof
-go tool pprof -top -sample_index=alloc_space /tmp/typedscan_aggregate_mem.pprof
-```
-
-Expected current profile themes are per-scan asset read/open/fstat/checksum,
-metadata/dictionary decode, and int64 decode allocation. If a profile instead
-shows document materialization dominating the direct typed-column row, re-check
-that you are running the `path_typed_column_part` sub-benchmark and not the
-fallback.
+Expected current profile themes are targeted section/range reads, metadata decode
+that remains inside the prepared-session hot loop, and int64 decode/aggregate
+work. If a profile instead shows document materialization dominating the direct
+typed-column row, re-check that you are running the `path_typed_column_part` and
+`timed_prepared_session_hot_scan` sub-benchmark, not fallback or one-shot setup.
 
 ### Dense vector typed-column smoke
 
@@ -324,6 +398,21 @@ $OUT/insights.html
 | `physical_row_asset_reads/op` | Typed-row physical asset reads. | Should be zero for direct typed-column aggregate paths. |
 | `physical_row_id_lookups/op` | Row-ID lookup work. | Aggregate path should avoid it; point/document fetch may need it. |
 | `row_locator_decodes/op` | Row locator decode work. | Should be zero for the direct aggregate path; locator work is tracked separately from column payload scans. |
+| `fallback_count` | Numeric 0/1 indicator for whether the measured aggregate result used a fallback path. | Direct typed-column aggregate rows should report 0. Fallback rows report 1 and should be read as a separate baseline, not mixed with direct rows. |
+| `fallback_reason_<reason>_count` | Reason-specific 0/1 fallback marker derived from `Diagnostics.FallbackReason`, for example `fallback_reason_column_store_unavailable_count` or `fallback_reason_typed_column_not_selected_count`. | Present only when a fallback reason is available in the result. Current int64 aggregate benchmark exposes fallback reasons, but semantic capability failures generally fail closed with an error instead of producing fallback rows. |
+
+### Fallback and capability reason limits
+
+For the int64 aggregate benchmark, small document fallback rows report
+`fallback_count=1` plus a sanitized `fallback_reason_<reason>_count` metric when
+`TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=true`. Direct typed-column rows report
+`fallback_count=0`.
+
+Typed-column semantic capability reasons (for example nullable aggregate carrier
+semantics or unsupported scalar operations) are not counted as benchmark fallback
+reasons today because these paths fail closed before producing a timed fallback
+row. Treat those as correctness/planner diagnostics from tests and errors, not as
+performance fallback counters, until broader selection-engine integration lands.
 
 ### Mapped bytes vs decoded bytes
 
