@@ -1,7 +1,6 @@
 package typedcolumn
 
 import (
-	"encoding/binary"
 	"math"
 	"testing"
 )
@@ -43,25 +42,38 @@ func TestGranuleReaderInt64CursorDeltaAndDoubleDelta(t *testing.T) {
 	}
 }
 
-func TestGranuleReaderInt64CursorFailsClosedOnDecodeOverflow(t *testing.T) {
+func TestGranuleReaderInt64CursorPreservesEncoderWraparound(t *testing.T) {
+	values := []int64{math.MaxInt64, math.MinInt64}
 	for _, enc := range []Encoding{EncodingDeltaVarint, EncodingDoubleDeltaVarint} {
 		t.Run(enc.String(), func(t *testing.T) {
-			payload := binary.AppendUvarint(nil, zigzag(math.MaxInt64))
-			payload = binary.AppendUvarint(payload, zigzag(1))
-			g := EncodedGranule{Rows: 2, Encoding: enc, Compression: CompressionNone, RawBytes: len(payload), StoredBytes: len(payload), PayloadRef: PayloadRef{Kind: PayloadRefInline, Length: len(payload)}, Payload: payload}
+			builder := NewGranuleBuilder(Config{Encoding: enc, Compression: CompressionNone})
+			g, err := builder.BuildInt64(values)
+			if err != nil {
+				t.Fatalf("BuildInt64: %v", err)
+			}
 			var reader GranuleReader
 			cursor, err := reader.Int64Cursor(g)
 			if err != nil {
 				t.Fatalf("Int64Cursor: %v", err)
 			}
-			if got, err := cursor.Next(); err != nil || got != math.MaxInt64 {
-				t.Fatalf("first Next got=%d err=%v want MaxInt64", got, err)
+			for i, want := range values {
+				got, err := cursor.Next()
+				if err != nil {
+					t.Fatalf("Next[%d]: %v", i, err)
+				}
+				if got != want {
+					t.Fatalf("Next[%d]=%d want %d", i, got, want)
+				}
 			}
-			if _, err := cursor.Next(); err == nil {
-				t.Fatal("second Next err=nil want overflow")
+			if err := cursor.Finish(); err != nil {
+				t.Fatalf("Finish: %v", err)
 			}
-			if _, _, err := reader.CountSumInt64(g); err == nil {
-				t.Fatal("CountSumInt64 err=nil want overflow")
+			count, sum, err := reader.CountSumInt64(g)
+			if err != nil {
+				t.Fatalf("CountSumInt64: %v", err)
+			}
+			if count != len(values) || sum != -1 {
+				t.Fatalf("CountSumInt64 count=%d sum=%d want count=%d sum=-1", count, sum, len(values))
 			}
 		})
 	}

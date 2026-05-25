@@ -293,11 +293,7 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 			delta := unzigzag(u)
 			v := delta
 			if row > 0 {
-				var addErr error
-				v, addErr = checkedInt64Add(prev, delta)
-				if addErr != nil {
-					return 0, 0, fmt.Errorf("typedcolumn: delta int64 overflow: %w", addErr)
-				}
+				v = prev + delta
 			}
 			if err := addCountSumInt64(&sum, v); err != nil {
 				return 0, 0, err
@@ -322,21 +318,11 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 			case 0:
 				v = encoded
 			case 1:
-				var addErr error
 				prevDelta = encoded
-				v, addErr = checkedInt64Add(prev, encoded)
-				if addErr != nil {
-					return 0, 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", addErr)
-				}
+				v = prev + encoded
 			default:
-				delta, addErr := checkedInt64Add(prevDelta, encoded)
-				if addErr != nil {
-					return 0, 0, fmt.Errorf("typedcolumn: double-delta delta overflow: %w", addErr)
-				}
-				v, addErr = checkedInt64Add(prev, delta)
-				if addErr != nil {
-					return 0, 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", addErr)
-				}
+				delta := prevDelta + encoded
+				v = prev + delta
 				prevDelta = delta
 			}
 			if err := addCountSumInt64(&sum, v); err != nil {
@@ -659,11 +645,7 @@ func (c *int64Cursor) Next() (int64, error) {
 		delta := unzigzag(u)
 		v := delta
 		if c.row > 0 {
-			var err error
-			v, err = checkedInt64Add(c.prev, delta)
-			if err != nil {
-				return 0, fmt.Errorf("typedcolumn: delta int64 overflow: %w", err)
-			}
+			v = c.prev + delta
 		}
 		c.row++
 		c.offset += n
@@ -680,21 +662,11 @@ func (c *int64Cursor) Next() (int64, error) {
 		case 0:
 			v = encoded
 		case 1:
-			var err error
 			c.prevDelta = encoded
-			v, err = checkedInt64Add(c.prev, encoded)
-			if err != nil {
-				return 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", err)
-			}
+			v = c.prev + encoded
 		default:
-			delta, err := checkedInt64Add(c.prevDelta, encoded)
-			if err != nil {
-				return 0, fmt.Errorf("typedcolumn: double-delta delta overflow: %w", err)
-			}
-			v, err = checkedInt64Add(c.prev, delta)
-			if err != nil {
-				return 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", err)
-			}
+			delta := c.prevDelta + encoded
+			v = c.prev + delta
 			c.prevDelta = delta
 		}
 		c.row++
