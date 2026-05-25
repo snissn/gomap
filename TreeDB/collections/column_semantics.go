@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -48,10 +49,45 @@ func typedColumnAdapterCapability(column typedColumnAdapterColumn, op columnsema
 	return columnsemantics.CapabilityFor(desc, op), nil
 }
 
+type typedColumnSemanticCapabilityError struct {
+	context   string
+	operation columnsemantics.Operation
+	status    columnsemantics.Status
+	reason    columnsemantics.ReasonCode
+	detail    string
+	cause     error
+}
+
+func (e *typedColumnSemanticCapabilityError) Error() string {
+	if e == nil {
+		return "typed-column semantic capability error"
+	}
+	if e.detail != "" {
+		return fmt.Sprintf("%s semantic capability %s status=%s reason=%s detail=%s", e.context, e.operation, e.status, e.reason, e.detail)
+	}
+	return fmt.Sprintf("%s semantic capability %s status=%s reason=%s", e.context, e.operation, e.status, e.reason)
+}
+
+func (e *typedColumnSemanticCapabilityError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func typedColumnSemanticCapabilityReason(err error) (columnsemantics.ReasonCode, bool) {
+	var semanticErr *typedColumnSemanticCapabilityError
+	if errors.As(err, &semanticErr) && semanticErr != nil {
+		return semanticErr.reason, true
+	}
+	return "", false
+}
+
 func requireTypedColumnAdapterCapability(column typedColumnAdapterColumn, op columnsemantics.Operation, context string) error {
 	capability, err := typedColumnAdapterCapability(column, op)
 	if err != nil {
-		return fmt.Errorf("%w: %s semantic capability %s reason=%s: %v", ErrColumnQueryPlanUnsupported, context, op, capability.Reason, err)
+		semanticErr := &typedColumnSemanticCapabilityError{context: context, operation: op, status: capability.Status, reason: capability.Reason, detail: err.Error(), cause: err}
+		return fmt.Errorf("%w: %w", ErrColumnQueryPlanUnsupported, semanticErr)
 	}
 	if capability.Supported() {
 		return nil
@@ -60,5 +96,6 @@ func requireTypedColumnAdapterCapability(column typedColumnAdapterColumn, op col
 	if capabilityDetail == "" {
 		capabilityDetail = string(capability.Reason)
 	}
-	return fmt.Errorf("%w: %s semantic capability %s status=%s reason=%s detail=%s", ErrColumnQueryPlanUnsupported, context, op, capability.Status, capability.Reason, capabilityDetail)
+	semanticErr := &typedColumnSemanticCapabilityError{context: context, operation: op, status: capability.Status, reason: capability.Reason, detail: capabilityDetail}
+	return fmt.Errorf("%w: %w", ErrColumnQueryPlanUnsupported, semanticErr)
 }

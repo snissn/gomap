@@ -55,6 +55,22 @@ func TestCapabilityInt64AggregateResultSemanticsAreExplicit(t *testing.T) {
 	}
 }
 
+func TestCapabilityBoolSupportsEqualityButRejectsRangeSemantics(t *testing.T) {
+	desc := Descriptor{Logical: LogicalBool, Physical: typedcolumn.ColumnTypeBool, Encoding: typedcolumn.EncodingBoolBitpackRLE}
+	for _, op := range []Operation{OpAllRows, OpEquality, OpInequality, OpInList, OpBoolCounts, OpDirectScalarValueCarrier} {
+		cap := CapabilityFor(desc, op)
+		if cap.Status != StatusSupported || cap.Reason != ReasonSupported || cap.Phase != PhasePrepare {
+			t.Fatalf("%s capability=%+v", op, cap)
+		}
+	}
+	for _, op := range []Operation{OpOrderedRange, OpPruneOrderedRange, OpMin, OpMax, OpStatsMinMax} {
+		cap := CapabilityFor(desc, op)
+		if cap.Status != StatusUnsupported || cap.Reason != ReasonBoolRangeUnsupported {
+			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
+		}
+	}
+}
+
 func TestCapabilityFloatRawInt64DoesNotClaimInt64NumericSemantics(t *testing.T) {
 	for _, logical := range []LogicalType{LogicalFloat32, LogicalDouble} {
 		desc := Descriptor{Logical: logical, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64}
@@ -146,6 +162,25 @@ func TestCapabilityVectorAndAdjacencyRejectScalarShortcutSemantics(t *testing.T)
 			cap := CapabilityFor(tc.desc, op)
 			if cap.Status != StatusUnsupported || cap.Reason != tc.reason {
 				t.Fatalf("%s %s status=%s reason=%s", tc.name, op, cap.Status, cap.Reason)
+			}
+		}
+	}
+}
+
+func TestCapabilityVectorAndAdjacencySpecificOperationsAreExplicitFallbacks(t *testing.T) {
+	checks := []struct {
+		name   string
+		desc   Descriptor
+		reason ReasonCode
+	}{
+		{"vector", Descriptor{Logical: LogicalFloat32Vector, Physical: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector}, ReasonVectorCapabilityDeferred},
+		{"adjacency", Descriptor{Logical: LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense}, ReasonAdjacencyCapabilityDeferred},
+	}
+	for _, tc := range checks {
+		for _, op := range []Operation{OpVectorSimilarity, OpVectorMetrics} {
+			cap := CapabilityFor(tc.desc, op)
+			if cap.Status != StatusFallback || cap.Reason != tc.reason || cap.Phase != PhasePrepare {
+				t.Fatalf("%s %s capability=%+v", tc.name, op, cap)
 			}
 		}
 	}
