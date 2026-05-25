@@ -84,6 +84,13 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	DecodedMetadataBytes        uint64
 	DecodedHeapCopyBytes        uint64
 	MaterializedBytes           uint64
+	FastDecodeDirectViewPlans   int
+	FastDecodeStreamingPlans    int
+	FastDecodeMaterializePlans  int
+	FastDecodeUnsupportedPlans  int
+	DirectViewSuccesses         int
+	DirectViewFailures          int
+	FastDecodeFallbackReason    string
 	DirectViewCertified         int
 	StreamingCertified          int
 	StatsCertified              int
@@ -857,13 +864,18 @@ func (s *TypedColumnInt64PredicateAggregateSession) ensureCachedVerifyFullAssetV
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) readTypedColumnRange(ref ColumnAssetRef, offset int, length int, section bool, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) ([]byte, error) {
+	raw, _, err := s.readTypedColumnRangeHandle(ref, offset, length, section, result, updateCacheDeltas)
+	return raw, err
+}
+
+func (s *TypedColumnInt64PredicateAggregateSession) readTypedColumnRangeHandle(ref ColumnAssetRef, offset int, length int, section bool, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) ([]byte, *mappedresource.Handle, error) {
 	if offset < 0 || length <= 0 {
-		return nil, fmt.Errorf("collections: typed-column range offset=%d length=%d is invalid", offset, length)
+		return nil, nil, fmt.Errorf("collections: typed-column range offset=%d length=%d is invalid", offset, length)
 	}
-	raw, err := s.readCache.readRange(ref, int64(offset), int64(length))
+	raw, handle, err := s.readCache.readRangeHandle(ref, int64(offset), int64(length))
 	updateCacheDeltas()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if s.readCache.lastView {
 		result.Diagnostics.MappedBytes += uint64(len(raw))
@@ -876,7 +888,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) readTypedColumnRange(ref Col
 		result.Diagnostics.RangeBytesRead += uint64(len(raw))
 	}
 	result.Diagnostics.PhysicalBytesScanned += int64(len(raw))
-	return raw, nil
+	return raw, handle, nil
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregatePart(typedRef columnManifestAssetRefForScan, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, adapterColumn typedColumnAdapterColumn, result *TypedColumnInt64PredicateAggregateResult) error {
@@ -932,6 +944,15 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
 	dst.DecodedHeapCopyBytes += src.DecodedHeapCopyBytes
 	dst.MaterializedBytes += src.MaterializedBytes
+	dst.FastDecodeDirectViewPlans += src.FastDecodeDirectViewPlans
+	dst.FastDecodeStreamingPlans += src.FastDecodeStreamingPlans
+	dst.FastDecodeMaterializePlans += src.FastDecodeMaterializePlans
+	dst.FastDecodeUnsupportedPlans += src.FastDecodeUnsupportedPlans
+	dst.DirectViewSuccesses += src.DirectViewSuccesses
+	dst.DirectViewFailures += src.DirectViewFailures
+	if src.FastDecodeFallbackReason != "" {
+		dst.FastDecodeFallbackReason = src.FastDecodeFallbackReason
+	}
 	dst.DirectViewCertified += src.DirectViewCertified
 	dst.StreamingCertified += src.StreamingCertified
 	dst.StatsCertified += src.StatsCertified

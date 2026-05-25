@@ -223,6 +223,42 @@ func (r *GranuleReader) int64Cursor(g EncodedGranule) (int64Cursor, error) {
 	return cursor, nil
 }
 
+// Int64Cursor streams int64 values from a granule without materializing a full
+// []int64. It is intended for reducers and predicate cursors that have already
+// selected a concrete typed-column path during prepare.
+type Int64Cursor struct {
+	cursor int64Cursor
+}
+
+// Int64Cursor returns a cursor over raw, delta-varint, or double-delta int64
+// payloads after payload decompression/validation. The cursor aliases reader
+// scratch for compressed payloads and is valid until the next GranuleReader
+// operation.
+func (r *GranuleReader) Int64Cursor(g EncodedGranule) (Int64Cursor, error) {
+	cursor, err := r.int64Cursor(g)
+	if err != nil {
+		return Int64Cursor{}, err
+	}
+	return Int64Cursor{cursor: cursor}, nil
+}
+
+// Next returns the next value. Call Finish after consuming Rows values to catch
+// truncated or trailing variable-width payload bytes.
+func (c *Int64Cursor) Next() (int64, error) { return c.cursor.Next() }
+
+// Finish validates that exactly the declared rows were consumed and that
+// variable-width encodings have no trailing bytes.
+func (c *Int64Cursor) Finish() error { return c.cursor.Finish() }
+
+// Row returns the next row index to be decoded.
+func (c *Int64Cursor) Row() int { return c.cursor.row }
+
+// Rows returns the declared row count.
+func (c *Int64Cursor) Rows() int { return c.cursor.rows }
+
+// RawBytesRead returns the payload byte offset consumed by the cursor.
+func (c *Int64Cursor) RawBytesRead() int { return c.cursor.RawBytesRead() }
+
 func (r *GranuleReader) RangeScanCountInt64(g EncodedGranule, low, high int64) (int, error) {
 	if low > high || (g.HasMinMax && (high < g.Min || low > g.Max)) {
 		r.values = r.values[:0]
