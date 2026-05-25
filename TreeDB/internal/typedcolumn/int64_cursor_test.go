@@ -1,6 +1,10 @@
 package typedcolumn
 
-import "testing"
+import (
+	"encoding/binary"
+	"math"
+	"testing"
+)
 
 func TestGranuleReaderInt64CursorDeltaAndDoubleDelta(t *testing.T) {
 	values := []int64{10, 12, 17, 17, -3, 100}
@@ -34,6 +38,30 @@ func TestGranuleReaderInt64CursorDeltaAndDoubleDelta(t *testing.T) {
 			}
 			if count != len(values) || sum != 153 {
 				t.Fatalf("CountSumInt64 count=%d sum=%d want count=%d sum=153", count, sum, len(values))
+			}
+		})
+	}
+}
+
+func TestGranuleReaderInt64CursorFailsClosedOnDecodeOverflow(t *testing.T) {
+	for _, enc := range []Encoding{EncodingDeltaVarint, EncodingDoubleDeltaVarint} {
+		t.Run(enc.String(), func(t *testing.T) {
+			payload := binary.AppendUvarint(nil, zigzag(math.MaxInt64))
+			payload = binary.AppendUvarint(payload, zigzag(1))
+			g := EncodedGranule{Rows: 2, Encoding: enc, Compression: CompressionNone, RawBytes: len(payload), StoredBytes: len(payload), PayloadRef: PayloadRef{Kind: PayloadRefInline, Length: len(payload)}, Payload: payload}
+			var reader GranuleReader
+			cursor, err := reader.Int64Cursor(g)
+			if err != nil {
+				t.Fatalf("Int64Cursor: %v", err)
+			}
+			if got, err := cursor.Next(); err != nil || got != math.MaxInt64 {
+				t.Fatalf("first Next got=%d err=%v want MaxInt64", got, err)
+			}
+			if _, err := cursor.Next(); err == nil {
+				t.Fatal("second Next err=nil want overflow")
+			}
+			if _, _, err := reader.CountSumInt64(g); err == nil {
+				t.Fatal("CountSumInt64 err=nil want overflow")
 			}
 		})
 	}

@@ -293,7 +293,11 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 			delta := unzigzag(u)
 			v := delta
 			if row > 0 {
-				v = prev + delta
+				var addErr error
+				v, addErr = checkedInt64Add(prev, delta)
+				if addErr != nil {
+					return 0, 0, fmt.Errorf("typedcolumn: delta int64 overflow: %w", addErr)
+				}
 			}
 			if err := addCountSumInt64(&sum, v); err != nil {
 				return 0, 0, err
@@ -318,11 +322,21 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 			case 0:
 				v = encoded
 			case 1:
+				var addErr error
 				prevDelta = encoded
-				v = prev + encoded
+				v, addErr = checkedInt64Add(prev, encoded)
+				if addErr != nil {
+					return 0, 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", addErr)
+				}
 			default:
-				delta := prevDelta + encoded
-				v = prev + delta
+				delta, addErr := checkedInt64Add(prevDelta, encoded)
+				if addErr != nil {
+					return 0, 0, fmt.Errorf("typedcolumn: double-delta delta overflow: %w", addErr)
+				}
+				v, addErr = checkedInt64Add(prev, delta)
+				if addErr != nil {
+					return 0, 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", addErr)
+				}
 				prevDelta = delta
 			}
 			if err := addCountSumInt64(&sum, v); err != nil {
@@ -341,14 +355,22 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 }
 
 func addCountSumInt64(sum *int64, value int64) error {
-	if value > 0 && *sum > math.MaxInt64-value {
-		return fmt.Errorf("typedcolumn: int64 sum overflow current=%d value=%d", *sum, value)
+	updated, err := checkedInt64Add(*sum, value)
+	if err != nil {
+		return fmt.Errorf("typedcolumn: int64 sum overflow: %w", err)
 	}
-	if value < 0 && *sum < math.MinInt64-value {
-		return fmt.Errorf("typedcolumn: int64 sum overflow current=%d value=%d", *sum, value)
-	}
-	*sum += value
+	*sum = updated
 	return nil
+}
+
+func checkedInt64Add(current, value int64) (int64, error) {
+	if value > 0 && current > math.MaxInt64-value {
+		return 0, fmt.Errorf("current=%d value=%d", current, value)
+	}
+	if value < 0 && current < math.MinInt64-value {
+		return 0, fmt.Errorf("current=%d value=%d", current, value)
+	}
+	return current + value, nil
 }
 
 func (r *GranuleReader) RangeScanCountInt64(g EncodedGranule, low, high int64) (int, error) {
@@ -637,7 +659,11 @@ func (c *int64Cursor) Next() (int64, error) {
 		delta := unzigzag(u)
 		v := delta
 		if c.row > 0 {
-			v = c.prev + delta
+			var err error
+			v, err = checkedInt64Add(c.prev, delta)
+			if err != nil {
+				return 0, fmt.Errorf("typedcolumn: delta int64 overflow: %w", err)
+			}
 		}
 		c.row++
 		c.offset += n
@@ -654,11 +680,21 @@ func (c *int64Cursor) Next() (int64, error) {
 		case 0:
 			v = encoded
 		case 1:
+			var err error
 			c.prevDelta = encoded
-			v = c.prev + encoded
+			v, err = checkedInt64Add(c.prev, encoded)
+			if err != nil {
+				return 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", err)
+			}
 		default:
-			delta := c.prevDelta + encoded
-			v = c.prev + delta
+			delta, err := checkedInt64Add(c.prevDelta, encoded)
+			if err != nil {
+				return 0, fmt.Errorf("typedcolumn: double-delta delta overflow: %w", err)
+			}
+			v, err = checkedInt64Add(c.prev, delta)
+			if err != nil {
+				return 0, fmt.Errorf("typedcolumn: double-delta int64 overflow: %w", err)
+			}
 			c.prevDelta = delta
 		}
 		c.row++
