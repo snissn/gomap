@@ -83,6 +83,7 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	HeapCopyBytes               uint64
 	DecodedMetadataBytes        uint64
 	DecodedHeapCopyBytes        uint64
+	MaterializedBytes           uint64
 	DirectViewCertified         int
 	StreamingCertified          int
 	StatsCertified              int
@@ -930,6 +931,7 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.HeapCopyBytes += src.HeapCopyBytes
 	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
 	dst.DecodedHeapCopyBytes += src.DecodedHeapCopyBytes
+	dst.MaterializedBytes += src.MaterializedBytes
 	dst.DirectViewCertified += src.DirectViewCertified
 	dst.StreamingCertified += src.StreamingCertified
 	dst.StatsCertified += src.StatsCertified
