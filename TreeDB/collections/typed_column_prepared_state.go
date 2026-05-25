@@ -422,6 +422,15 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 			return part, diag, nil
 		}
 		if existing := part.Columns[plan.Definition.Name]; existing != nil {
+			if request.Role == typedcolumn.ColumnRoleMeasure {
+				// A column can be requested once as a predicate and again as a
+				// measure. Keep the prepared reducer operation aligned with the
+				// measure request while preserving the union of section
+				// dependencies needed by both roles.
+				existing.Plan.Operation = plan.Operation
+				existing.Plan.Capability = plan.Capability
+				existing.Plan.LayoutCapability = plan.LayoutCapability
+			}
 			existing.Plan.Dependencies = append(existing.Plan.Dependencies, plan.Dependencies...)
 			part.Dependencies = append(part.Dependencies, plan.Dependencies...)
 			diag.SectionDependencies += len(plan.Dependencies)

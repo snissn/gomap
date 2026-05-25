@@ -194,6 +194,28 @@ func TestInt64EmptySelectionDoesNotRequireValues(t *testing.T) {
 	}
 }
 
+func TestInt64EmptySelectionValidatesCursorRequests(t *testing.T) {
+	values := []int64{1, 2, 3}
+	builder := typedcolumn.NewGranuleBuilder(typedcolumn.Config{Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone})
+	granule, err := builder.BuildInt64(values)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	var reader typedcolumn.GranuleReader
+	cursor, err := reader.Int64Cursor(granule)
+	if err != nil {
+		t.Fatalf("Int64Cursor: %v", err)
+	}
+	prepared, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpSum, Semantic: int64Semantic(false, typedcolumn.EncodingDeltaVarint), Layout: int64Layout(false, typedcolumn.EncodingDeltaVarint, typedcolumn.CompressionNone)})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	selection := mustSelection(typedcolumn.NewEmptyRowSelection(len(values)))
+	if _, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Cursor: &cursor}, nil); err == nil || !strings.Contains(err.Error(), "decoded rows=0 want=3") {
+		t.Fatalf("empty cursor reduce err=%v want cursor validation failure", err)
+	}
+}
+
 func TestDispatchSemanticAndLayoutGates(t *testing.T) {
 	reg := typedkernel.DefaultRegistry()
 	tests := []struct {
@@ -274,6 +296,21 @@ func TestCountRowsAndCountNonNullDistinct(t *testing.T) {
 	}
 	if nonNull.NonNulls != 5 || nonNull.Rows != 0 || nonNull.Op != typedkernel.OpCountNonNull {
 		t.Fatalf("count non-null result=%+v", nonNull)
+	}
+}
+
+func TestGenericCountRowsDispatchesForNonInt64(t *testing.T) {
+	prepared, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpCountRows, Semantic: boolSemantic(), Layout: boolLayout()})
+	if err != nil {
+		t.Fatalf("dispatch bool count rows: %v", err)
+	}
+	selection := mustSelection(typedcolumn.NewRangeRowSelection(8, 1, 6))
+	got, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: 8, Selection: selection}, nil)
+	if err != nil {
+		t.Fatalf("reduce bool count rows: %v", err)
+	}
+	if prepared.KernelName() != "generic.count_rows.v1" || got.Rows != 5 || got.NonNulls != 0 {
+		t.Fatalf("kernel=%q result=%+v want generic count rows", prepared.KernelName(), got)
 	}
 }
 

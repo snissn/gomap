@@ -28,13 +28,21 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 		return AggregateResult{Op: op, NonNulls: int64(req.Selection.Count()), HasValue: true}, nil
 	}
 	var acc int64Accum
+	if req.Int64Cursor != nil && len(req.Int64Values) != 0 {
+		return AggregateResult{}, fmt.Errorf("typedkernel: int64 reducer got both values and cursor")
+	}
 	if req.Selection.Kind() == typedcolumn.RowSelectionEmpty {
+		if req.Int64Cursor != nil {
+			if err := req.Int64Cursor.Finish(); err != nil {
+				return AggregateResult{}, err
+			}
+		}
+		if len(req.Int64Values) != 0 && len(req.Int64Values) != rows {
+			return AggregateResult{}, fmt.Errorf("typedkernel: int64 values rows=%d want %d", len(req.Int64Values), rows)
+		}
 		return int64Result(op, acc)
 	}
 	if req.Int64Cursor != nil {
-		if len(req.Int64Values) != 0 {
-			return AggregateResult{}, fmt.Errorf("typedkernel: int64 reducer got both values and cursor")
-		}
 		return reduceInt64AggregateCursor(op, req, rows)
 	}
 	if len(req.Int64Values) != rows {

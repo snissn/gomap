@@ -179,6 +179,17 @@ func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 		}
 		return image.Bytes[offset : offset+length], nil
 	}
+	duplicateRequests := []typedColumnPreparedColumnRequest{
+		{Field: countField, Role: typedcolumn.ColumnRolePredicate, Operation: columnsemantics.OpAllRows, IncludePruning: true},
+		{Field: countField, Role: typedcolumn.ColumnRoleMeasure, Operation: columnsemantics.OpSum},
+	}
+	part, _, err := typedColumnPreparePartStateFromRanges(ref, physical, image.Rows, image.Rows, fields, uint64(adapterPart.Part.Descriptor.SchemaVersion), duplicateRequests, readRange, nil)
+	if err != nil {
+		t.Fatalf("prepare duplicate predicate/measure column: %v", err)
+	}
+	if got := part.Columns["count"].Plan.Operation; got != columnsemantics.OpSum {
+		t.Fatalf("duplicate column prepared operation=%s want measure operation %s", got, columnsemantics.OpSum)
+	}
 	request := []typedColumnPreparedColumnRequest{{Field: countField, Role: typedcolumn.ColumnRoleMeasure, Operation: columnsemantics.OpSum}}
 	_, _, err = typedColumnPreparePartStateFromRanges(ref, physical, 0, image.Rows, fields, uint64(adapterPart.Part.Descriptor.SchemaVersion), request, readRange, nil)
 	if err == nil || !strings.Contains(err.Error(), "image/ref mismatch") {

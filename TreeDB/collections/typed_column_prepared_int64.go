@@ -173,7 +173,7 @@ func typedColumnPreparedInt64AggregateReducer(preparedColumn *typedColumnPrepare
 		DictionaryOrder:     preparedColumn.Plan.Layout.Descriptor.DictionaryOrder,
 		DictionaryCollation: preparedColumn.Plan.Layout.Descriptor.DictionaryCollation,
 	}
-	reducer, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: columnsemantics.OpSum, Semantic: desc, Layout: preparedColumn.Plan.Layout})
+	reducer, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: preparedColumn.Plan.Operation, Semantic: desc, Layout: preparedColumn.Plan.Layout})
 	if err != nil {
 		return typedkernel.PreparedReducer{}, fmt.Errorf("collections: typed-column int64 aggregate prepared column %q kernel dispatch: %w", preparedColumn.Plan.Definition.Name, err)
 	}

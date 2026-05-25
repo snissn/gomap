@@ -83,13 +83,11 @@ type Registry struct {
 
 var defaultEntries = [...]KernelSpec{
 	{
-		Name:     "int64.count_rows.v1",
-		Logical:  columnsemantics.LogicalInt64,
-		Physical: typedcolumn.ColumnTypeInt64,
-		Ops:      []AggregateOp{OpCountRows},
-		Reduce:   reduceCountRows,
+		Name:   "generic.count_rows.v1",
+		Ops:    []AggregateOp{OpCountRows},
+		Reduce: reduceCountRows,
 		// Counting rows does not consume carrier values and is safe for nullable
-		// int64 wrappers once semantics/layout have accepted the operation.
+		// wrappers once semantics/layout have accepted the operation.
 		AllowNullable: true,
 	},
 	{
