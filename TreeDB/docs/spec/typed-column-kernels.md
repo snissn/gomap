@@ -20,7 +20,7 @@ Reducers dispatch once outside the hot row loop. Concrete reducers switch on
 `typedcolumn.RowSelection.Kind()` for empty, all, range, ranges, bitmap, and
 sparse selections. The initial int64 reducer represents count rows, count
 non-null, sum, avg, min, and max separately, with checked int64 sum accumulation.
-#1840 durable int64 stats may answer all/full-block-covered count/sum/avg before
+Issue #1840 durable int64 stats may answer all/full-block-covered count/sum/avg before
 payload decode; partial selections, visibility masks, or unsupported stats fall
 back to these typedkernel reducers. Nullable value aggregates remain
 fallback/unsupported until a future kernel composes null/default masks

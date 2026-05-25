@@ -127,8 +127,17 @@ func TestColumnStatsOverflowAndNullableSemantics(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing part-overflow stats")
 	}
-	if partOverflowStats.SumValid || partOverflowStats.Envelope.SupportsSelectionShape(ColumnStatsSelectionAllRows) {
-		t.Fatalf("part-overflow stats should not advertise all-rows sum: %+v", partOverflowStats)
+	if partOverflowStats.SumValid {
+		t.Fatalf("part-overflow stats should not have a valid part sum: %+v", partOverflowStats)
+	}
+	if !partOverflowStats.Envelope.SupportsSelectionShape(ColumnStatsSelectionAllRows) {
+		t.Fatalf("part-overflow stats should still advertise all-rows shape for count operations: %+v", partOverflowStats.Envelope.SelectionShapes)
+	}
+	if ok, reason := partOverflowStats.CanAnswer(ColumnStatsOpSum, ColumnStatsSelectionAllRows); ok || reason != ColumnStatsReasonSumOverflow {
+		t.Fatalf("part-overflow all-rows sum CanAnswer ok=%v reason=%s", ok, reason)
+	}
+	if ok, reason := partOverflowStats.CanAnswer(ColumnStatsOpCountRows, ColumnStatsSelectionAllRows); !ok || reason != ColumnStatsReasonSupported {
+		t.Fatalf("part-overflow all-rows count CanAnswer ok=%v reason=%s", ok, reason)
 	}
 	if !partOverflowStats.Envelope.SupportsOperation(ColumnStatsOpSum) {
 		t.Fatalf("part-overflow stats should still advertise block sum op: %+v", partOverflowStats.Envelope.Operations)
@@ -160,6 +169,18 @@ func TestColumnStatsOverflowAndNullableSemantics(t *testing.T) {
 	}
 	if _, ok := part.ColumnStats.Int64Column("maybe"); ok {
 		t.Fatalf("nullable/default int64 carrier must not emit value sum stats: %+v", part.ColumnStats)
+	}
+}
+
+func TestColumnStatsSkipsNonFullyVisiblePart(t *testing.T) {
+	part := mustStatsTestPart(t, []int64{1, 2, 3}, EncodingDeltaVarint)
+	part.Descriptor.VisibleRowCount = part.Descriptor.RowCount - 1
+	stats, err := buildColumnPartStats(part)
+	if err != nil {
+		t.Fatalf("buildColumnPartStats non-visible: %v", err)
+	}
+	if !stats.Empty() {
+		t.Fatalf("non-fully-visible part emitted stats: %+v", stats)
 	}
 }
 

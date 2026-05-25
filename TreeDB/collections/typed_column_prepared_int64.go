@@ -56,6 +56,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 		prepareResult.Diagnostics.SegmentFileCacheHits = s.readCache.hits - beforeHits
 		prepareResult.Diagnostics.SegmentFileCacheMisses = s.readCache.misses - beforeMisses
 	}
+	includeStats := s.req.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums
 	requests := []typedColumnPreparedColumnRequest{
 		{
 			Field:          s.aggregateColumn.Field,
@@ -67,7 +68,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) prepareTargetedAggregateStat
 			Field:        s.aggregateColumn.Field,
 			Role:         typedcolumn.ColumnRoleMeasure,
 			Operation:    columnsemantics.OpSum,
-			IncludeStats: true,
+			IncludeStats: includeStats,
 		},
 	}
 	for _, physical := range s.view.AssetRefs {

@@ -751,7 +751,7 @@ func TestTypedColumnInt64PreparedStatsRoundTripReopen(t *testing.T) {
 	}
 }
 
-func TestTypedColumnInt64PreparedStatsCorruptionFailsClosed(t *testing.T) {
+func TestTypedColumnInt64PreparedStatsCorruptionIntegrityPolicy(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
 	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
@@ -775,9 +775,25 @@ func TestTypedColumnInt64PreparedStatsCorruptionFailsClosed(t *testing.T) {
 	var corrupt [1]byte
 	corrupt[0] = raw[corruptAt] ^ 0xff
 	writeColumnAssetBytesAtRelativeOffset(t, d, refs[0], corruptAt, corrupt[:])
-	_, err = col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums})
-	if err == nil || !strings.Contains(err.Error(), "stats validation") || !strings.Contains(err.Error(), typedcolumn.ColumnStatsReasonChecksumMismatch) {
-		t.Fatalf("Prepare corrupt stats err=%v want fail-closed stats checksum", err)
+	_, err = col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("Prepare corrupt stats err=%v want fail-closed checksum validation", err)
+	}
+
+	skipSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums})
+	if err != nil {
+		t.Fatalf("Prepare corrupt stats with skip-checksums: %v", err)
+	}
+	skipResult, err := skipSession.Run()
+	if closeErr := skipSession.Close(); closeErr != nil {
+		t.Fatalf("Close skip-checksums session: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run corrupt stats with skip-checksums: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, skipResult, 3, 6)
+	if skipResult.Diagnostics.StatsBlocks != 0 || skipResult.Diagnostics.BlocksDecoded == 0 {
+		t.Fatalf("skip-checksums diagnostics=%+v want stats ignored and decode fallback", skipResult.Diagnostics)
 	}
 }
 

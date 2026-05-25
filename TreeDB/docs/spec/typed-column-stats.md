@@ -42,7 +42,9 @@ Prepared int64 count/sum/avg scans use this payload only when a block is
 full-covered by the predicate and no visibility/mutation mask is required. This
 covers no-filter/all-match and clustered full-covered range blocks. Partial,
 random, sparse, hotspot, nullable/default, or mutation-visible blocks use the
-existing typedkernel/direct-view/streaming fallback path.
+existing typedkernel/direct-view/streaming fallback path. The envelope may still
+advertise the `all_rows` shape for exact count operations when part-level sum
+overflows; sum/avg additionally require `sum_valid`.
 
 Overflow behavior is explicit: if a block sum overflows int64 during stats
 construction, that block does not advertise a usable sum and selected scans fall

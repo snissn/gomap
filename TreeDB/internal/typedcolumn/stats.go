@@ -219,6 +219,9 @@ func buildColumnPartStats(part *ColumnPart) (ColumnPartStats, error) {
 }
 
 func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn) (Int64ColumnStats, bool, error) {
+	if desc.VisibleRowCount != desc.RowCount {
+		return Int64ColumnStats{}, false, nil
+	}
 	if column.Definition.StatsDisabled || column.Definition.Type != ColumnTypeInt64 || column.Definition.Encoding == EncodingNullableInt64 {
 		return Int64ColumnStats{}, false, nil
 	}
@@ -297,9 +300,7 @@ func buildInt64ColumnStats(desc ColumnPartDescriptor, columnDesc ColumnPartColum
 	if anyInt64BlockSumValid(stats.Blocks) {
 		stats.Envelope.Operations = append(stats.Envelope.Operations, ColumnStatsOpSum, ColumnStatsOpAvg, ColumnStatsOpStatsSum)
 	}
-	if stats.SumValid {
-		stats.Envelope.SelectionShapes = append(stats.Envelope.SelectionShapes, ColumnStatsSelectionAllRows)
-	}
+	stats.Envelope.SelectionShapes = append(stats.Envelope.SelectionShapes, ColumnStatsSelectionAllRows)
 	return stats, true, nil
 }
 
