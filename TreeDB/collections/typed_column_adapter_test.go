@@ -49,6 +49,30 @@ func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterMapFieldPreservesVectorAndAdjacencyFixedWidthEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		valueType ColumnStoreValueType
+		dims      int
+		degree    int
+		wantType  typedcolumn.ColumnType
+		wantEnc   typedcolumn.Encoding
+	}{
+		{name: "vector", valueType: ColumnStoreValueFloat32Vector, dims: 3, wantType: typedcolumn.ColumnTypeFloat32Vector, wantEnc: typedcolumn.EncodingRawFloat32Vector},
+		{name: "adjacency", valueType: ColumnStoreValueAdjacencyList, degree: 4, wantType: typedcolumn.ColumnTypeAdjacencyList, wantEnc: typedcolumn.EncodingRawUint32Dense},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			col, err := typedColumnAdapterMapField(TypedStorageField{Name: tc.name, Path: tc.name, Owner: TypedStorageOwnerColumnPart, ValueType: tc.valueType, VectorDims: tc.dims, AdjacencyDegree: tc.degree, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian})
+			if err != nil {
+				t.Fatalf("typedColumnAdapterMapField: %v", err)
+			}
+			if col.Definition.Type != tc.wantType || col.Definition.Encoding != tc.wantEnc || col.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+				t.Fatalf("column=%+v want type=%s encoding=%s fixed_width=%s", col, tc.wantType, tc.wantEnc, ColumnFixedWidthEncodingLittleEndian)
+			}
+		})
+	}
+}
+
 func TestTypedColumnAdapterRoundTripBool(t *testing.T) {
 	got := typedColumnAdapterRoundTrip(t, typedColumnAdapterField("flag", ColumnStoreValueBool), []columnDeclaredValue{
 		{Type: ColumnStoreValueBool, Present: true, Bool: true},

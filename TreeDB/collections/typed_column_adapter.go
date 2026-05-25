@@ -116,16 +116,22 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		return typedColumnAdapterColumn{}, err
 	}
 	if field.FixedWidthEncoding != "" {
-		if field.ValueType != ColumnStoreValueInt64 {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: fixed_width_encoding is only supported for int64", errTypedColumnAdapterUnsupportedType)
+		switch field.ValueType {
+		case ColumnStoreValueInt64:
+			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported int64 fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
+			}
+			if field.Nullable {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable int64 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
+			}
+			mapping.Encoding = typedcolumn.EncodingRawInt64
+		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported %s fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.ValueType, field.FixedWidthEncoding)
+			}
+		default:
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: fixed_width_encoding is unsupported for value_type=%s", errTypedColumnAdapterUnsupportedType, field.ValueType)
 		}
-		if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported int64 fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
-		}
-		if field.Nullable {
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable int64 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
-		}
-		mapping.Encoding = typedcolumn.EncodingRawInt64
 	}
 	if field.Nullable {
 		switch field.ValueType {
