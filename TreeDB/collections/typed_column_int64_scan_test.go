@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -23,12 +24,20 @@ import (
 )
 
 func typedColumnInt64DirectViewSupportedForTest() bool {
+	if !typedColumnInt64HostLittleEndianForTest() {
+		return false
+	}
 	switch runtime.GOOS {
 	case "darwin", "linux", "freebsd", "netbsd", "openbsd":
 		return true
 	default:
 		return false
 	}
+}
+
+func typedColumnInt64HostLittleEndianForTest() bool {
+	var value uint16 = 1
+	return *(*byte)(unsafe.Pointer(&value)) == 1
 }
 
 func TestTypedColumnInt64ScanEqualityPredicate(t *testing.T) {
