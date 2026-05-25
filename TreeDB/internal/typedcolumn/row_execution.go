@@ -106,11 +106,11 @@ func excludeSelectionInto(current RowSelection, mask RowSelection, role RowMaskR
 	if err := validateSameSelectionRows(current, mask); err != nil {
 		return failClosedSelection(current.rows, mask.rows), fmt.Errorf("typedcolumn: %s mask row mismatch: %w", role, err)
 	}
-	inverted, err := NotRowSelectionInto(mask, scratch)
+	out, err := SubtractRowSelectionsInto(current, mask, scratch)
 	if err != nil {
-		return failClosedSelection(current.rows, mask.rows), fmt.Errorf("typedcolumn: invert %s mask: %w", role, err)
+		return failClosedSelection(current.rows, mask.rows), fmt.Errorf("typedcolumn: exclude %s mask: %w", role, err)
 	}
-	return AndRowSelectionsInto(current, inverted, scratch)
+	return out, nil
 }
 
 // RowSpan is a half-open row span over a column section or block.

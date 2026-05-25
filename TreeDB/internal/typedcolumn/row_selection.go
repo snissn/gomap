@@ -726,6 +726,58 @@ func orRowSelections(a rowSelection, b rowSelection) (rowSelection, error) {
 	return makeRangesRowSelection(a.rows, merged)
 }
 
+// SubtractRowSelectionsInto returns a-b using caller-owned scratch. The returned
+// selection may alias scratch until scratch is reused.
+func SubtractRowSelectionsInto(a RowSelection, b RowSelection, scratch *RowSelectionScratch) (RowSelection, error) {
+	if scratch == nil {
+		var local RowSelectionScratch
+		scratch = &local
+	}
+	if err := validateSameSelectionRows(a, b); err != nil {
+		return failClosedSelection(a.rows, b.rows), err
+	}
+	if a.kind == rowSelectionEmpty || b.kind == rowSelectionAll {
+		return makeEmptyRowSelection(a.rows)
+	}
+	if b.kind == rowSelectionEmpty {
+		return a, nil
+	}
+	// Copy/decompose inputs into stable scratch slices before resetting outRanges:
+	// either input may itself alias scratch.outRanges from a previous operation.
+	scratch.leftRanges = a.appendRanges(scratch.leftRanges[:0])
+	scratch.rightRanges = b.appendRanges(scratch.rightRanges[:0])
+	scratch.outRanges = scratch.outRanges[:0]
+	rightIdx := 0
+	for _, left := range scratch.leftRanges {
+		cursor := left.Start
+		for rightIdx < len(scratch.rightRanges) && scratch.rightRanges[rightIdx].End <= left.Start {
+			rightIdx++
+		}
+		for idx := rightIdx; idx < len(scratch.rightRanges); idx++ {
+			right := scratch.rightRanges[idx]
+			if right.Start >= left.End {
+				break
+			}
+			if cursor < right.Start {
+				end := min(right.Start, left.End)
+				if cursor < end {
+					scratch.outRanges = append(scratch.outRanges, RowRange{Start: cursor, End: end})
+				}
+			}
+			if right.End > cursor {
+				cursor = right.End
+				if cursor >= left.End {
+					break
+				}
+			}
+		}
+		if cursor < left.End {
+			scratch.outRanges = append(scratch.outRanges, RowRange{Start: cursor, End: left.End})
+		}
+	}
+	return makeRangesRowSelectionNoCopy(a.rows, scratch.outRanges)
+}
+
 // OrRowSelections returns the union of a and b.
 func OrRowSelections(a RowSelection, b RowSelection) (RowSelection, error) {
 	return orRowSelections(a, b)

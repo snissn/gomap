@@ -84,6 +84,30 @@ func TestRowSelectionSetOperationsAndComposition(t *testing.T) {
 	assertSelectionRows(t, composed, []int{2, 4, 9})
 }
 
+func TestRowSelectionScratchCompositionMatchesAllocatingComposition(t *testing.T) {
+	predicate := mustRangesSelection(t, 12, []rowRange{{Start: 0, End: 8}, {Start: 9, End: 12}})
+	visibility := mustRangesSelection(t, 12, []rowRange{{Start: 0, End: 12}})
+	deletes := mustSparseSelection(t, 12, []int{8})
+	nulls := mustRangeSelection(t, 12, 9, 10)
+	defaults := mustRangeSelection(t, 12, 10, 11)
+	components := rowSelectionComponents{Predicate: &predicate, Visibility: &visibility, Deletes: &deletes, Nulls: &nulls, Defaults: &defaults}
+	want, err := ComposeRowSelections(12, components)
+	if err != nil {
+		t.Fatalf("ComposeRowSelections: %v", err)
+	}
+	assertSelectionRows(t, want, []int{0, 1, 2, 3, 4, 5, 6, 7, 11})
+	var scratch RowSelectionScratch
+	for i := 0; i < 3; i++ {
+		got, err := ComposeRowSelectionsInto(12, components, &scratch)
+		if err != nil {
+			t.Fatalf("ComposeRowSelectionsInto iter %d: %v", i, err)
+		}
+		if !reflect.DeepEqual(got.appendRows(nil), want.appendRows(nil)) {
+			t.Fatalf("iter %d rows=%v want %v shape=%+v", i, got.appendRows(nil), want.appendRows(nil), got.shape())
+		}
+	}
+}
+
 func TestRowSelectionFailClosedOnMaskRowMismatch(t *testing.T) {
 	predicate := mustAllSelection(t, 5)
 	visibility := mustAllSelection(t, 6)
