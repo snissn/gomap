@@ -383,6 +383,10 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 	collectionsDir := filepath.Join(repoRoot, "TreeDB", "collections")
 	allowedImports := map[string]struct{}{
 		filepath.Clean(filepath.Join(collectionsDir, "typed_column_adapter.go")): {},
+		// #1837 is the scoped prepared typed-column scan/session state seam
+		// shared by concrete collection hot paths.
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_prepared_state.go")): {},
+		filepath.Clean(filepath.Join(collectionsDir, "typed_column_prepared_int64.go")): {},
 		// #1782 is the scoped production vector graph reader that consumes
 		// validated typed-column dense vector sections through mappedresource.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_typed_column.go")): {},
