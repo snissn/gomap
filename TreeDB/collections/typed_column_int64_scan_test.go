@@ -771,8 +771,8 @@ func TestTypedColumnInt64PreparedDeltaKernelDiagnosticsFullPartialPruned(t *test
 		t.Fatalf("Run all: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, all, 6, 21)
-	if all.Diagnostics.KernelBlocks == 0 || all.Diagnostics.KernelCursorBlocks == 0 || all.Diagnostics.KernelFullCoveredBlocks == 0 || all.Diagnostics.KernelFallbackBlocks != 0 {
-		t.Fatalf("all diagnostics=%+v want full-covered streaming cursor kernel", all.Diagnostics)
+	if all.Diagnostics.KernelBlocks == 0 || all.Diagnostics.KernelFullCoveredBlocks == 0 || all.Diagnostics.KernelFallbackBlocks != 0 {
+		t.Fatalf("all diagnostics=%+v want full-covered streaming kernel fast path", all.Diagnostics)
 	}
 
 	partialSession, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 3, High: 4, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
@@ -1515,6 +1515,50 @@ func TestTypedColumnInt64AggregatePreparedSessionSnapshotPinnedAcrossMutation(t 
 		t.Fatalf("new session Run: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, fresh, 4, 160)
+}
+
+func TestTypedColumnInt64PreparedSessionCachedVerifyVisibilityUsesKernelPath(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2"), []byte("e3")}, [][]byte{
+		[]byte(`{"time_us":10,"kind":"k1"}`),
+		[]byte(`{"time_us":20,"kind":"k2"}`),
+		[]byte(`{"time_us":30,"kind":"k3"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if _, changed, err := col.Update([]byte("e1"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":25,"kind":"k1b"}`), true, nil
+	}); err != nil || !changed {
+		t.Fatalf("Update e1 changed=%v err=%v", changed, err)
+	}
+	if _, changed, err := col.Update([]byte("e2"), func(current []byte) ([]byte, bool, error) {
+		return []byte(`{"time_us":40,"kind":"k2b"}`), true, nil
+	}); err != nil || !changed {
+		t.Fatalf("Update e2 changed=%v err=%v", changed, err)
+	}
+	if deleted, err := col.DeleteDocument([]byte("e3")); err != nil || !deleted {
+		t.Fatalf("DeleteDocument e3 deleted=%v err=%v", deleted, err)
+	}
+
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	result, err := session.Run()
+	if closeErr := session.Close(); closeErr != nil {
+		t.Fatalf("Close: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 2, 65)
+	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.SelectionCompositions == 0 || result.Diagnostics.KernelBlocks == 0 || result.Diagnostics.KernelCursorBlocks == 0 {
+		t.Fatalf("diagnostics=%+v want cached-verify targeted kernel+visibility path", result.Diagnostics)
+	}
+	if result.Diagnostics.FullAssetReads != 0 || result.Diagnostics.SectionBytesRead != 0 || result.Diagnostics.DecodedMetadataBytes != 0 || result.Diagnostics.DecodedHeapCopyBytes != 0 || result.Diagnostics.KernelFallbackBlocks != 0 {
+		t.Fatalf("diagnostics=%+v want hot targeted visibility run without full asset/materialized fallback", result.Diagnostics)
+	}
 }
 
 func TestTypedColumnInt64AggregatePreparedSessionStreamsDeltaWithoutDecodeScratch(t *testing.T) {
@@ -2931,6 +2975,11 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.FastDecodeUnsupportedPlans), "fast_decode_unsupported_plans/op")
 	b.ReportMetric(float64(diag.DirectViewSuccesses), "direct_view_successes/op")
 	b.ReportMetric(float64(diag.DirectViewFailures), "direct_view_failures/op")
+	b.ReportMetric(float64(diag.KernelBlocks), "kernel_blocks/op")
+	b.ReportMetric(float64(diag.KernelFullCoveredBlocks), "kernel_full_covered_blocks/op")
+	b.ReportMetric(float64(diag.KernelSelectedBlocks), "kernel_selected_blocks/op")
+	b.ReportMetric(float64(diag.KernelCursorBlocks), "kernel_cursor_blocks/op")
+	b.ReportMetric(float64(diag.KernelFallbackBlocks), "kernel_fallback_blocks/op")
 	b.ReportMetric(float64(diag.DirectViewCertified), "direct_view_certified/op")
 	b.ReportMetric(float64(diag.StreamingCertified), "streaming_certified/op")
 	b.ReportMetric(float64(diag.CertificationFailures), "certification_failures/op")

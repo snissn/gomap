@@ -22,6 +22,9 @@ func reduceInt64Aggregate(op AggregateOp, req ReduceRequest, _ *Scratch) (Aggreg
 		return AggregateResult{}, err
 	}
 	if op == OpCountNonNull {
+		if req.Int64Cursor != nil {
+			return AggregateResult{}, fmt.Errorf("typedkernel: count non-null reducer does not accept int64 cursor")
+		}
 		return AggregateResult{Op: op, NonNulls: int64(req.Selection.Count()), HasValue: true}, nil
 	}
 	var acc int64Accum

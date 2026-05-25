@@ -434,6 +434,21 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 	}
 	result.Diagnostics.RowsScanned += rows
 	selection := block.CandidateSelection
+	if selection.IsAll() && !block.NeedsPredicate && visibility == nil {
+		count, sum, err := scratch.reader.CountSumInt64(granule)
+		if err != nil {
+			return err
+		}
+		if count != rows {
+			return fmt.Errorf("typed-column int64 streaming count=%d want rows=%d", count, rows)
+		}
+		if err := addTypedColumnInt64AggregateKernelResult(result, typedkernel.AggregateResult{Op: reducer.Operation(), NonNulls: int64(count), Sum: sum, HasValue: true}); err != nil {
+			return err
+		}
+		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		recordTypedColumnInt64KernelBlock(&result.Diagnostics, true, false)
+		return nil
+	}
 	if selection.IsAll() && !block.NeedsPredicate {
 		if visibility != nil {
 			visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, scratch)

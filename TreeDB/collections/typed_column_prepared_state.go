@@ -155,6 +155,8 @@ func (c *typedColumnPreparedColumnState) close() {
 	c.Section = typedcolumn.ColumnPartImageSection{}
 	c.BlockPlans = nil
 	c.Certification = typedcolumn.ColumnPartLayoutContractColumn{}
+	c.AggregateReducer = typedkernel.PreparedReducer{}
+	c.AggregateReducerReady = false
 	c.Dictionaries = nil
 }
 

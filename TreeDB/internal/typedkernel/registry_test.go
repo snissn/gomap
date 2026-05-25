@@ -141,6 +141,33 @@ func TestInt64MinMaxDoNotAccumulateOverflowingSum(t *testing.T) {
 	}
 }
 
+func TestInt64CountNonNullRejectsCursorWithoutConsuming(t *testing.T) {
+	values := []int64{1, 2, 3}
+	builder := typedcolumn.NewGranuleBuilder(typedcolumn.Config{Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone})
+	granule, err := builder.BuildInt64(values)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	granule.Payload = append(append([]byte(nil), granule.Payload...), 0)
+	granule.RawBytes = len(granule.Payload)
+	granule.StoredBytes = len(granule.Payload)
+	granule.PayloadRef.Length = len(granule.Payload)
+	var reader typedcolumn.GranuleReader
+	cursor, err := reader.Int64Cursor(granule)
+	if err != nil {
+		t.Fatalf("Int64Cursor with trailing bytes should be constructed before Finish: %v", err)
+	}
+	prepared, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpCountNonNull, Semantic: int64Semantic(false, typedcolumn.EncodingDeltaVarint), Layout: int64Layout(false, typedcolumn.EncodingDeltaVarint, typedcolumn.CompressionNone)})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	selection := mustSelection(typedcolumn.NewAllRowSelection(len(values)))
+	_, err = prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Cursor: &cursor}, nil)
+	if err == nil || !strings.Contains(err.Error(), "does not accept int64 cursor") {
+		t.Fatalf("count non-null cursor err=%v want explicit cursor rejection", err)
+	}
+}
+
 func TestInt64EmptySelectionDoesNotRequireValues(t *testing.T) {
 	reg := typedkernel.DefaultRegistry()
 	selection := mustSelection(typedcolumn.NewEmptyRowSelection(10))
