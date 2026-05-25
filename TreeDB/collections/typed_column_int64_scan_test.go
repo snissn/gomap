@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -18,7 +19,17 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
+
+func typedColumnInt64DirectViewSupportedForTest() bool {
+	switch runtime.GOOS {
+	case "darwin", "linux", "freebsd", "netbsd", "openbsd":
+		return true
+	default:
+		return false
+	}
+}
 
 func TestTypedColumnInt64ScanEqualityPredicate(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
@@ -593,8 +604,15 @@ func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 		t.Fatalf("Run after Close err=%v want session closed before exposing stale direct view", err)
 	}
 	assertTypedColumnInt64Aggregate(t, prepared, 3, 45)
-	if prepared.Diagnostics.DecodedHeapCopyBytes != 0 || prepared.Diagnostics.FastDecodeDirectViewPlans == 0 || prepared.Diagnostics.DirectViewSuccesses == 0 {
-		t.Fatalf("prepared raw diagnostics=%+v want direct-view reducer without decoded heap copy", prepared.Diagnostics)
+	if prepared.Diagnostics.DecodedHeapCopyBytes != 0 || prepared.Diagnostics.FastDecodeDirectViewPlans == 0 {
+		t.Fatalf("prepared raw diagnostics=%+v want fast raw reducer without decoded heap copy", prepared.Diagnostics)
+	}
+	if typedColumnInt64DirectViewSupportedForTest() {
+		if prepared.Diagnostics.DirectViewSuccesses == 0 || prepared.Diagnostics.HeapCopyBytes != 0 {
+			t.Fatalf("prepared raw diagnostics=%+v want mmap direct-view reducer", prepared.Diagnostics)
+		}
+	} else if prepared.Diagnostics.DirectViewFailures == 0 || prepared.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+		t.Fatalf("prepared raw diagnostics=%+v want platform heap fallback without materialization", prepared.Diagnostics)
 	}
 	if session.prepareDiagnostics.DirectViewCertified == 0 || session.prepareDiagnostics.CertificationFailures != 0 {
 		t.Fatalf("prepare diagnostics=%+v want certified direct-view layout with no failures", session.prepareDiagnostics)
@@ -644,8 +662,15 @@ func TestTypedColumnInt64PreparedCertificationDiagnosticsAndClose(t *testing.T) 
 	}
 	assertTypedColumnInt64Aggregate(t, first, 3, 9)
 	assertTypedColumnInt64Aggregate(t, second, 3, 9)
-	if first.Diagnostics.DecodedMetadataBytes != 0 || second.Diagnostics.DecodedMetadataBytes != 0 || first.Diagnostics.DecodedHeapCopyBytes != 0 || second.Diagnostics.DecodedHeapCopyBytes != 0 || first.Diagnostics.DirectViewSuccesses == 0 || second.Diagnostics.DirectViewSuccesses == 0 {
-		t.Fatalf("hot diagnostics first=%+v second=%+v want direct-view runs with no per-run metadata or heap decode", first.Diagnostics, second.Diagnostics)
+	if first.Diagnostics.DecodedMetadataBytes != 0 || second.Diagnostics.DecodedMetadataBytes != 0 || first.Diagnostics.DecodedHeapCopyBytes != 0 || second.Diagnostics.DecodedHeapCopyBytes != 0 {
+		t.Fatalf("hot diagnostics first=%+v second=%+v want no per-run metadata or heap decode", first.Diagnostics, second.Diagnostics)
+	}
+	if typedColumnInt64DirectViewSupportedForTest() {
+		if first.Diagnostics.DirectViewSuccesses == 0 || second.Diagnostics.DirectViewSuccesses == 0 || first.Diagnostics.HeapCopyBytes != 0 || second.Diagnostics.HeapCopyBytes != 0 {
+			t.Fatalf("hot diagnostics first=%+v second=%+v want mmap direct-view runs", first.Diagnostics, second.Diagnostics)
+		}
+	} else if first.Diagnostics.DirectViewFailures == 0 || second.Diagnostics.DirectViewFailures == 0 || first.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) || second.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+		t.Fatalf("hot diagnostics first=%+v second=%+v want platform heap fallback without materialization", first.Diagnostics, second.Diagnostics)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
