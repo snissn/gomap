@@ -345,16 +345,36 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 		var local typedColumnInt64PredicateAggregateScanScratch
 		scratch = &local
 	}
-	cursor, err := scratch.reader.Int64Cursor(granule)
-	if err != nil {
-		return err
-	}
 	rows := granule.Rows
 	if rows != block.Descriptor.RowCount {
 		return fmt.Errorf("typed-column int64 streaming rows=%d want block rows=%d", rows, block.Descriptor.RowCount)
 	}
 	result.Diagnostics.RowsScanned += rows
 	selection := block.CandidateSelection
+	if selection.IsAll() && !block.NeedsPredicate && visibility == nil {
+		count, sum, err := scratch.reader.CountSumInt64(granule)
+		if err != nil {
+			return err
+		}
+		if count != rows {
+			return fmt.Errorf("typed-column int64 streaming count=%d want rows=%d", count, rows)
+		}
+		if sum > 0 && result.Sum > typedColumnInt64PredicateAggregateMaxSum-sum {
+			return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, sum)
+		}
+		if sum < 0 && result.Sum < typedColumnInt64PredicateAggregateMinSum-sum {
+			return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, sum)
+		}
+		result.Count += int64(count)
+		result.Sum += sum
+		result.Diagnostics.RowsMatched += count
+		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		return nil
+	}
+	cursor, err := scratch.reader.Int64Cursor(granule)
+	if err != nil {
+		return err
+	}
 	needFinalSelection := block.NeedsPredicate || visibility != nil || !selection.IsAll()
 	if needFinalSelection {
 		scratch.predicateRows = scratch.predicateRows[:0]

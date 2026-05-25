@@ -28,6 +28,13 @@ func TestGranuleReaderInt64CursorDeltaAndDoubleDelta(t *testing.T) {
 			if err := cursor.Finish(); err != nil {
 				t.Fatalf("Finish: %v", err)
 			}
+			count, sum, err := reader.CountSumInt64(g)
+			if err != nil {
+				t.Fatalf("CountSumInt64: %v", err)
+			}
+			if count != len(values) || sum != 153 {
+				t.Fatalf("CountSumInt64 count=%d sum=%d want count=%d sum=153", count, sum, len(values))
+			}
 		})
 	}
 }
@@ -86,6 +93,27 @@ func BenchmarkGranuleReaderInt64DeltaCursorVsDecode(b *testing.B) {
 		}
 		if sum == 42 {
 			b.Fatal(sum)
+		}
+	})
+	b.Run("streaming_count_sum", func(b *testing.B) {
+		var reader GranuleReader
+		b.ReportAllocs()
+		b.SetBytes(int64(g.RawBytes))
+		b.ReportMetric(float64(len(values)), "values/op")
+		b.ResetTimer()
+		var total int64
+		for i := 0; i < b.N; i++ {
+			count, sum, err := reader.CountSumInt64(g)
+			if err != nil {
+				b.Fatalf("CountSumInt64: %v", err)
+			}
+			if count != len(values) {
+				b.Fatalf("CountSumInt64 count=%d want %d", count, len(values))
+			}
+			total += sum
+		}
+		if total == 42 {
+			b.Fatal(total)
 		}
 	})
 	b.Run("decode_into_scratch", func(b *testing.B) {

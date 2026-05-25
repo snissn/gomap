@@ -259,6 +259,98 @@ func (c *Int64Cursor) Rows() int { return c.cursor.rows }
 // RawBytesRead returns the payload byte offset consumed by the cursor.
 func (c *Int64Cursor) RawBytesRead() int { return c.cursor.RawBytesRead() }
 
+// CountSumInt64 streams all int64 values in the granule and returns count+sum
+// without materializing a []int64. It is intended for full-block reducers on
+// certified prepared paths where predicate/visibility/selection do not require
+// per-row branching in the caller.
+func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := validateGranuleDecodeRows(g.Rows); err != nil {
+		return 0, 0, err
+	}
+	var sum int64
+	switch g.Encoding {
+	case EncodingRawInt64:
+		if len(raw)%8 != 0 || len(raw)/8 != g.Rows {
+			return 0, 0, fmt.Errorf("typedcolumn: raw int64 length=%d rows=%d", len(raw), g.Rows)
+		}
+		for row := 0; row < g.Rows; row++ {
+			v := int64(binary.LittleEndian.Uint64(raw[row*8:]))
+			if err := addCountSumInt64(&sum, v); err != nil {
+				return 0, 0, err
+			}
+		}
+	case EncodingDeltaVarint:
+		prev := int64(0)
+		for row := 0; row < g.Rows; row++ {
+			u, n := binary.Uvarint(raw)
+			if n <= 0 {
+				return 0, 0, errors.New("typedcolumn: malformed delta varint")
+			}
+			delta := unzigzag(u)
+			v := delta
+			if row > 0 {
+				v = prev + delta
+			}
+			if err := addCountSumInt64(&sum, v); err != nil {
+				return 0, 0, err
+			}
+			prev = v
+			raw = raw[n:]
+		}
+		if len(raw) != 0 {
+			return 0, 0, errors.New("typedcolumn: trailing delta bytes")
+		}
+	case EncodingDoubleDeltaVarint:
+		prev := int64(0)
+		prevDelta := int64(0)
+		for row := 0; row < g.Rows; row++ {
+			u, n := binary.Uvarint(raw)
+			if n <= 0 {
+				return 0, 0, errors.New("typedcolumn: malformed double-delta varint")
+			}
+			encoded := unzigzag(u)
+			var v int64
+			switch row {
+			case 0:
+				v = encoded
+			case 1:
+				prevDelta = encoded
+				v = prev + encoded
+			default:
+				delta := prevDelta + encoded
+				v = prev + delta
+				prevDelta = delta
+			}
+			if err := addCountSumInt64(&sum, v); err != nil {
+				return 0, 0, err
+			}
+			prev = v
+			raw = raw[n:]
+		}
+		if len(raw) != 0 {
+			return 0, 0, errors.New("typedcolumn: trailing double-delta bytes")
+		}
+	default:
+		return 0, 0, fmt.Errorf("typedcolumn: unsupported encoding %d", g.Encoding)
+	}
+	return g.Rows, sum, nil
+}
+
+func addCountSumInt64(sum *int64, value int64) error {
+	if value > 0 && *sum > math.MaxInt64-value {
+		return fmt.Errorf("typedcolumn: int64 sum overflow current=%d value=%d", *sum, value)
+	}
+	if value < 0 && *sum < math.MinInt64-value {
+		return fmt.Errorf("typedcolumn: int64 sum overflow current=%d value=%d", *sum, value)
+	}
+	*sum += value
+	return nil
+}
+
 func (r *GranuleReader) RangeScanCountInt64(g EncodedGranule, low, high int64) (int, error) {
 	if low > high || (g.HasMinMax && (high < g.Min || low > g.Max)) {
 		r.values = r.values[:0]
