@@ -65,6 +65,11 @@ func TestDirectViewValidationFailsClosedForLengthRowEndianAndNullable(t *testing
 	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: wrongRows, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonRowCountMismatch {
 		t.Fatalf("row status=%+v want %s", status, ReasonRowCountMismatch)
 	}
+	wrongBytes := cert.Blocks[0]
+	wrongBytes.StoredBytes = 8
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: wrongBytes, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonPayloadLengthMismatch {
+		t.Fatalf("byte contract status=%+v want %s", status, ReasonPayloadLengthMismatch)
+	}
 
 	wrongEndian := cert
 	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
@@ -83,6 +88,25 @@ func TestDirectViewValidationFailsClosedForLengthRowEndianAndNullable(t *testing
 	compressed.Compression = typedcolumn.CompressionSnappy
 	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: compressed, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16}); status.Reason != ReasonCompressed {
 		t.Fatalf("compressed status=%+v want %s", status, ReasonCompressed)
+	}
+}
+
+func TestStatusFromLayoutCapabilityUsesTypedStatus(t *testing.T) {
+	stream := statusFromLayoutCapability(columnlayout.Capability{
+		Status:  columnsemantics.StatusFallback,
+		Reason:  columnlayout.ReasonVariableWidthNoDirectView,
+		Message: "no direct view",
+	})
+	if !stream.Streaming() || stream.Reason != ReasonVariableWidth {
+		t.Fatalf("stream status=%+v", stream)
+	}
+	unsupported := statusFromLayoutCapability(columnlayout.Capability{
+		Status:  columnsemantics.StatusUnsupported,
+		Reason:  columnlayout.ReasonVariableWidthNoDirectView,
+		Message: "no direct view",
+	})
+	if !unsupported.Unsupported() || unsupported.Reason != ReasonVariableWidth {
+		t.Fatalf("unsupported status=%+v", unsupported)
 	}
 }
 
