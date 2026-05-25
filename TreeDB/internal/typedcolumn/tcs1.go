@@ -3,7 +3,8 @@ package typedcolumn
 import (
 	"encoding/binary"
 	"fmt"
-	crc32 "github.com/snissn/go-crc32-asm"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 const (
@@ -74,7 +75,7 @@ func EncodeTCS1ColumnPartImage(image ColumnPartImage) ([]byte, TCS1PartRecord, e
 	binary.LittleEndian.PutUint64(out[tcs1RowsOffset:tcs1ImageVersionOffset], uint64(image.Rows))
 	binary.LittleEndian.PutUint16(out[tcs1ImageVersionOffset:tcs1ReservedOffset], image.Version)
 	binary.LittleEndian.PutUint16(out[tcs1ReservedOffset:tcs1PayloadCRC32Offset], 0)
-	checksum := crc32.ChecksumIEEE(image.Bytes)
+	checksum := crc.Checksum(image.Bytes)
 	binary.LittleEndian.PutUint32(out[tcs1PayloadCRC32Offset:tcs1PayloadOffset], checksum)
 	copy(out[tcs1PayloadOffset:], image.Bytes)
 	return out, TCS1PartRecord{
@@ -218,7 +219,7 @@ func decodeTCS1Header(data []byte) (TCS1PartRecord, []byte, error) {
 	}
 	wantChecksum := binary.LittleEndian.Uint32(data[tcs1PayloadCRC32Offset:tcs1PayloadOffset])
 	payload := data[tcs1PayloadOffset:]
-	if checksum := crc32.ChecksumIEEE(payload); checksum != wantChecksum {
+	if checksum := crc.Checksum(payload); checksum != wantChecksum {
 		return TCS1PartRecord{}, nil, fmt.Errorf("typedcolumn: TCS1 payload checksum=%08x want %08x", checksum, wantChecksum)
 	}
 	return TCS1PartRecord{

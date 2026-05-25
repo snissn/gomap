@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	crc32 "github.com/snissn/go-crc32-asm"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +12,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -585,8 +585,8 @@ func encodeValueLogRefCounts(commitSeq uint64, counts map[uint32]uint64) ([]byte
 		binary.LittleEndian.PutUint64(tmp8[:], counts[fileID])
 		buf = append(buf, tmp8[:]...)
 	}
-	crc := crc32.ChecksumIEEE(buf)
-	binary.LittleEndian.PutUint32(tmp4[:], crc)
+	checksum := crc.Checksum(buf)
+	binary.LittleEndian.PutUint32(tmp4[:], checksum)
 	buf = append(buf, tmp4[:]...)
 	return buf, nil
 }
@@ -604,7 +604,7 @@ func decodeValueLogRefCounts(data []byte) (valueLogRefCountsDisk, error) {
 	}
 	payload := data[:len(data)-4]
 	gotCRC := binary.LittleEndian.Uint32(data[len(data)-4:])
-	if crc32.ChecksumIEEE(payload) != gotCRC {
+	if crc.Checksum(payload) != gotCRC {
 		return valueLogRefCountsDisk{}, errValueLogRefCorrupt
 	}
 	off := len(valueLogRefCountsMagic)
