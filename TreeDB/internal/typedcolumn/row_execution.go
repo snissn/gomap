@@ -277,7 +277,7 @@ func validateColumnRowDescriptor(desc columnRowDescriptor) error {
 	return nil
 }
 
-func makeSectionDependency(role sectionDependencyRole, column string, columnType ColumnType, sectionKind ColumnPartImageSectionKind, span rowSpan, required bool) (sectionDependencyDescriptor, error) {
+func makeValuesSectionDependency(role sectionDependencyRole, column string, columnType ColumnType, sectionKind ColumnPartImageSectionKind, span rowSpan, required bool) (sectionDependencyDescriptor, error) {
 	return NewSectionDependency(role, column, columnType, SectionDependencyValues, sectionKind, span, required)
 }
 

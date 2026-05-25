@@ -501,9 +501,9 @@ func mustRowSpan(t testing.TB, firstRow int, rowCount int) rowSpan {
 
 func mustSectionDependency(t testing.TB, role sectionDependencyRole, column string, columnType ColumnType, span rowSpan) sectionDependencyDescriptor {
 	t.Helper()
-	dep, err := makeSectionDependency(role, column, columnType, ColumnPartImageSectionColumnData, span, true)
+	dep, err := makeValuesSectionDependency(role, column, columnType, ColumnPartImageSectionColumnData, span, true)
 	if err != nil {
-		t.Fatalf("makeSectionDependency: %v", err)
+		t.Fatalf("makeValuesSectionDependency: %v", err)
 	}
 	return dep
 }

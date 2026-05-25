@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"slices"
 )
 
 // RowSelectionKind names the concrete representation used for a block-local
@@ -128,7 +129,7 @@ func makeRangesRowSelection(rows int, ranges []rowRange) (rowSelection, error) {
 	if len(merged) == 0 {
 		return makeEmptyRowSelection(rows)
 	}
-	insertionSortRanges(merged)
+	sortRowRanges(merged)
 	return makeUnionRangesRowSelection(rows, merged)
 }
 
@@ -329,8 +330,10 @@ func (s RowSelection) SingleRange() (start int, end int, ok bool) {
 	return s.start, s.end, true
 }
 
-// Ranges returns the internal range slice for range/ranges selections. Treat the
-// returned slice as read-only and copy it if it must outlive caller scratch.
+// Ranges returns a range decomposition for range/ranges/all selections. Treat
+// the returned slice as read-only and copy it if it must outlive caller scratch.
+// For all/range shapes this returns a fresh one-element slice; hot paths should
+// prefer SingleRange or AppendRanges with caller-owned scratch.
 func (s RowSelection) Ranges() []RowRange {
 	switch s.kind {
 	case rowSelectionRange:
@@ -406,15 +409,16 @@ func (s rowSelection) contains(row int) bool {
 	case rowSelectionRange:
 		return row >= s.start && row < s.end
 	case rowSelectionRanges:
-		for _, r := range s.ranges {
-			if row < r.Start {
-				return false
-			}
-			if row < r.End {
-				return true
+		lo, hi := 0, len(s.ranges)
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			if s.ranges[mid].End <= row {
+				lo = mid + 1
+			} else {
+				hi = mid
 			}
 		}
-		return false
+		return lo < len(s.ranges) && row >= s.ranges[lo].Start
 	case rowSelectionBitmap:
 		return s.bitmap[row/64]&(uint64(1)<<uint(row%64)) != 0
 	case rowSelectionSparse:
@@ -701,7 +705,7 @@ func orRowSelections(a rowSelection, b rowSelection) (rowSelection, error) {
 		return makeBitmapRowSelection(a.rows, words)
 	}
 	merged := append(a.appendRanges(nil), b.appendRanges(nil)...)
-	insertionSortRanges(merged)
+	sortRowRanges(merged)
 	return makeUnionRangesRowSelection(a.rows, merged)
 }
 
@@ -926,14 +930,19 @@ func failClosedSelection(aRows int, bRows int) rowSelection {
 	return rowSelection{rows: rows, kind: rowSelectionEmpty}
 }
 
-func insertionSortRanges(ranges []rowRange) {
-	for i := 1; i < len(ranges); i++ {
-		r := ranges[i]
-		j := i - 1
-		for j >= 0 && (ranges[j].Start > r.Start || (ranges[j].Start == r.Start && ranges[j].End > r.End)) {
-			ranges[j+1] = ranges[j]
-			j--
+func sortRowRanges(ranges []rowRange) {
+	slices.SortFunc(ranges, func(a, b rowRange) int {
+		switch {
+		case a.Start < b.Start:
+			return -1
+		case a.Start > b.Start:
+			return 1
+		case a.End < b.End:
+			return -1
+		case a.End > b.End:
+			return 1
+		default:
+			return 0
 		}
-		ranges[j+1] = r
-	}
+	})
 }
