@@ -45,7 +45,7 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			checks: []capabilityCheck{
 				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpSum, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
-				{op: columnsemantics.OpStatsSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonStatsPayloadUnsupported},
+				{op: columnsemantics.OpStatsSum, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 			},
 		},
 		{
@@ -186,6 +186,14 @@ func TestTypedColumnAdapterSemanticConformanceSmallRows(t *testing.T) {
 	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1842, RowsPerGranule: 1, Fields: fields}, rows)
 	if err != nil {
 		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	if _, ok := part.Part.ColumnStats.Int64Column("count"); !ok {
+		t.Fatalf("logical int64 column missing stats: %+v", part.Part.ColumnStats)
+	}
+	for _, name := range []string{"score32", "score64", typedColumnAdapterPrimaryIDColumn} {
+		if _, ok := part.Part.ColumnStats.Int64Column(name); ok {
+			t.Fatalf("column %q emitted int64 stats despite non-int64 semantics: %+v", name, part.Part.ColumnStats)
+		}
 	}
 	if got := part.Dictionary["kind"]; got["alpha"] != 0 || got["beta"] != 1 {
 		t.Fatalf("dictionary=%+v want sorted string codes", got)

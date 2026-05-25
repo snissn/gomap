@@ -298,7 +298,7 @@ func int64Capability(desc Descriptor, op Operation) Capability {
 	case OpMin, OpMax:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", Comparison: "signed int64 logical order"})
 	case OpStatsSum:
-		return Unsupported(op, ReasonStatsPayloadUnsupported, "current typed-column stats payloads do not store int64 sums")
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", Accumulator: "durable int64 block/part stats payload", OverflowPolicy: "checked"})
 	case OpIsNull, OpIsNotNull:
 		return Unsupported(op, ReasonNotNullable, "non-null int64 column")
 	default:
