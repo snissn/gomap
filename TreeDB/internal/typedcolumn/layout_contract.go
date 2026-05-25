@@ -258,6 +258,12 @@ func CertifyColumnPartLayoutContract(image ColumnPartImage, desc ColumnPartDescr
 	if err != nil {
 		return cert, err
 	}
+	if descriptorRaw == nil {
+		return cert, fmt.Errorf("typedcolumn: descriptor bytes are required for layout contract certification")
+	}
+	if len(descriptorRaw) != descriptorSection.Length {
+		return cert, fmt.Errorf("typedcolumn: descriptor bytes=%d want section length=%d", len(descriptorRaw), descriptorSection.Length)
+	}
 	if err := certifyLayoutContractSection("descriptor", contract.Descriptor, descriptorSection, descriptorRaw); err != nil {
 		return cert, err
 	}
@@ -342,7 +348,9 @@ func encodeColumnPartLayoutContract(part *ColumnPart, opts ColumnPartImageOption
 		if err != nil {
 			return nil, err
 		}
-		encodeColumnPartLayoutContractColumn(&enc, contractColumn)
+		if err := encodeColumnPartLayoutContractColumn(&enc, contractColumn); err != nil {
+			return nil, err
+		}
 	}
 	return enc.bytes(), nil
 }
@@ -439,22 +447,22 @@ type columnPartContractLayout struct {
 func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) columnPartContractLayout {
 	switch def.Encoding {
 	case EncodingRawInt64:
-		direct := def.Compression == CompressionNone && (logicalType == "" || logicalType == "int64")
+		direct := def.Compression == CompressionNone && logicalType == "int64"
 		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct, stats: direct, pruning: direct}
 	case EncodingRawFloat32Vector:
-		direct := def.Compression == CompressionNone && (logicalType == "" || logicalType == "float32_vector")
+		direct := def.Compression == CompressionNone && logicalType == "float32_vector"
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, stats: direct, pruning: direct}
 	case EncodingRawUint32Dense:
-		direct := def.Compression == CompressionNone && (logicalType == "" || logicalType == "adjacency_list")
+		direct := def.Compression == CompressionNone && logicalType == "adjacency_list"
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, pruning: direct}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
-		streaming := def.Compression == CompressionNone && (logicalType == "" || logicalType == "int64")
+		streaming := def.Compression == CompressionNone && logicalType == "int64"
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}
 	case EncodingBoolBitpackRLE:
-		streaming := def.Compression == CompressionNone && (logicalType == "" || logicalType == "bool")
+		streaming := def.Compression == CompressionNone && logicalType == "bool"
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming}
 	case EncodingLowCardinalityUint32:
-		streaming := def.Compression == CompressionNone && (logicalType == "" || logicalType == "string")
+		streaming := def.Compression == CompressionNone && logicalType == "string"
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}
 	case EncodingNullableInt64:
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined}
@@ -647,10 +655,13 @@ const (
 	layoutContractFlagDefaultMask
 )
 
-func encodeColumnPartLayoutContractColumn(enc *columnPartImageEncoder, column ColumnPartLayoutContractColumn) {
+func encodeColumnPartLayoutContractColumn(enc *columnPartImageEncoder, column ColumnPartLayoutContractColumn) error {
 	enc.str(column.Name)
 	enc.str(column.LogicalType)
-	columnTypeCode, _ := columnTypeCode(column.Type)
+	columnTypeCode, err := columnTypeCode(column.Type)
+	if err != nil {
+		return err
+	}
 	enc.u16(columnTypeCode)
 	enc.u16(uint16(column.Encoding))
 	enc.u16(uint16(column.Compression))
@@ -697,6 +708,7 @@ func encodeColumnPartLayoutContractColumn(enc *columnPartImageEncoder, column Co
 	for _, block := range column.Blocks {
 		encodeColumnPartLayoutContractBlock(enc, block)
 	}
+	return nil
 }
 
 func decodeColumnPartLayoutContractColumn(dec *columnPartImageDecoder) (ColumnPartLayoutContractColumn, error) {

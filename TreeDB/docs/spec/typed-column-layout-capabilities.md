@@ -64,17 +64,19 @@ views. Delta-varint continues to use the streaming decode path.
 Newly written `typed_column_part` images include one `layout_contract` section in
 addition to the descriptor and column-data sections. The contract is versioned
 and writer-built before publication. It records the image/descriptor identity,
-descriptor checksum, per-column logical type (when supplied by the collection
-adapter), physical typedcolumn type, encoding, compression, section offsets and
-lengths, section checksums, block row spans, payload offsets/lengths, fixed-width
+descriptor checksum, per-column logical type, physical typedcolumn type,
+encoding, compression, section offsets and lengths, section checksums, block row
+spans, payload offsets/lengths, fixed-width
 element counts, element size/alignment/endian, null/default mask presence and
 counts, dictionary section identity/order/collation fields, and capability flags
 for direct-view, streaming reducer, stats, and pruning shortcuts.
 
 The writer validates the contract before returning the image. Fixed-width direct
-view candidates must be uncompressed, little-endian, aligned, and exact-length
-(`rows * fixed_width_elements * element_size`) for every block. Variable-width
-or wrapper layouts may certify streaming metadata, but nullable/default carrier
+view candidates must be uncompressed, little-endian, aligned, exact-length
+(`rows * fixed_width_elements * element_size`) for every block, and tied to the
+expected collection logical type. Missing or mismatched logical type metadata
+disables direct/streaming certification instead of being treated as compatible.
+Variable-width or wrapper layouts may certify streaming metadata, but nullable/default carrier
 values do not become value-fast-path eligible just because mask metadata exists.
 String dictionary contracts record dictionary identity; lexical ordering remains
 unsupported unless an explicit dictionary order plus collation proof is present.

@@ -1079,6 +1079,7 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDocumentFallback(req T
 	_, err := c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		result.Diagnostics.RowMaterializations++
 		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.MaterializedBytes += uint64(len(record.ID) + len(record.Document))
 		result.Diagnostics.FallbackReads++
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
 		if err != nil {
@@ -1120,6 +1121,7 @@ func (c *Collection) runTypedColumnInt64PredicateScanDocumentFallback(req TypedC
 	_, err := c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		result.Diagnostics.RowMaterializations++
 		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.MaterializedBytes += uint64(len(record.ID) + len(record.Document))
 		result.Diagnostics.FallbackReads++
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
 		if err != nil {

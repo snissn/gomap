@@ -7,8 +7,7 @@ import (
 )
 
 func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T) {
-	part := mustLayoutContractFixedWidthPart(t)
-	image := mustTransplantImage(t, part)
+	image := mustLayoutContractFixedWidthImage(t)
 	cert, err := CertifyColumnPartLayoutContractFromImage(image)
 	if err != nil {
 		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
@@ -35,8 +34,26 @@ func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T
 	}
 }
 
+func TestColumnPartLayoutContractMissingLogicalTypeDoesNotCertifyFastPath(t *testing.T) {
+	image, err := BuildColumnPartImage(mustLayoutContractFixedWidthPart(t), ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage without logical types: %v", err)
+	}
+	cert, err := CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	value, ok := cert.Column("value")
+	if !ok {
+		t.Fatalf("missing value column")
+	}
+	if value.DirectViewCertified || cert.DirectViewCertified != 0 {
+		t.Fatalf("missing logical type certified direct view: column=%+v total=%d", value, cert.DirectViewCertified)
+	}
+}
+
 func TestColumnPartLayoutContractCorruptionFailsClosed(t *testing.T) {
-	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	image := mustLayoutContractFixedWidthImage(t)
 	cases := []struct {
 		name string
 		edit func(*ColumnPartLayoutContract)
@@ -124,7 +141,7 @@ func TestColumnPartLayoutContractCorruptionFailsClosed(t *testing.T) {
 }
 
 func TestColumnPartLayoutContractOldAssetMissingContractFailsClosed(t *testing.T) {
-	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	image := mustLayoutContractFixedWidthImage(t)
 	descriptor := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)
 	desc, columns, err := DecodeColumnPartDescriptorSection(image.sectionBytes(descriptor))
 	if err != nil {
@@ -141,6 +158,20 @@ func TestColumnPartLayoutContractOldAssetMissingContractFailsClosed(t *testing.T
 	_, err = CertifyColumnPartLayoutContract(old, desc, columns, image.sectionBytes(descriptor), nil)
 	if err == nil || !strings.Contains(err.Error(), "pre-alpha typed-column assets must be rebuilt") {
 		t.Fatalf("missing contract err=%v want clear pre-alpha rebuild error", err)
+	}
+}
+
+func TestColumnPartLayoutContractRequiresDescriptorBytes(t *testing.T) {
+	image := mustLayoutContractFixedWidthImage(t)
+	descriptor := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)
+	desc, columns, err := DecodeColumnPartDescriptorSection(image.sectionBytes(descriptor))
+	if err != nil {
+		t.Fatalf("DecodeColumnPartDescriptorSection: %v", err)
+	}
+	contract := mustValidationSection(t, image, ColumnPartImageSectionLayoutContract)
+	_, err = CertifyColumnPartLayoutContract(image, desc, columns, nil, image.sectionBytes(contract))
+	if err == nil || !strings.Contains(err.Error(), "descriptor bytes") {
+		t.Fatalf("nil descriptor bytes err=%v want descriptor bytes error", err)
 	}
 }
 
@@ -225,6 +256,20 @@ func mustLayoutContractFixedWidthPart(t *testing.T) *ColumnPart {
 	return part
 }
 
+func mustLayoutContractFixedWidthImage(t *testing.T) ColumnPartImage {
+	t.Helper()
+	image, err := BuildColumnPartImage(mustLayoutContractFixedWidthPart(t), ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{
+		"id":        "int64",
+		"value":     "int64",
+		"embedding": "float32_vector",
+		"neighbors": "adjacency_list",
+	}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage fixed-width layout contract: %v", err)
+	}
+	return image
+}
+
 func mustLayoutContractNullablePart(t *testing.T) *ColumnPart {
 	t.Helper()
 	part, err := BuildColumnPart(185002, Options{
@@ -280,7 +325,7 @@ func replaceLayoutContract(t *testing.T, image *ColumnPartImage, contract Column
 	if err != nil {
 		t.Fatalf("LayoutContractSection: %v", err)
 	}
-	encoded := encodeLayoutContractForTest(contract)
+	encoded := encodeLayoutContractForTest(t, contract)
 	if len(encoded) != section.Length {
 		t.Fatalf("encoded contract bytes=%d want existing section length=%d", len(encoded), section.Length)
 	}
@@ -323,7 +368,8 @@ func mustLayoutContractDescriptorStoredBytesOffset(t *testing.T, image ColumnPar
 	return 0
 }
 
-func encodeLayoutContractForTest(contract ColumnPartLayoutContract) []byte {
+func encodeLayoutContractForTest(t *testing.T, contract ColumnPartLayoutContract) []byte {
+	t.Helper()
 	var enc columnPartImageEncoder
 	enc.u16(contract.Version)
 	enc.u16(0)
@@ -335,13 +381,85 @@ func encodeLayoutContractForTest(contract ColumnPartLayoutContract) []byte {
 	encodeColumnPartLayoutContractSection(&enc, contract.Descriptor)
 	enc.u32(uint32(len(contract.Columns)))
 	for _, column := range contract.Columns {
-		encodeColumnPartLayoutContractColumn(&enc, column)
+		if err := encodeColumnPartLayoutContractColumn(&enc, column); err != nil {
+			t.Fatalf("encode layout contract column: %v", err)
+		}
 	}
 	return enc.bytes()
 }
 
+func mustLayoutContractBlockStoredBytesOffset(t *testing.T, contractRaw []byte, columnName string, blockIndex int) int {
+	t.Helper()
+	dec := columnPartImageDecoder{data: contractRaw}
+	mustValidationSkipU16(t, &dec) // version
+	mustValidationSkipU16(t, &dec) // reserved
+	mustValidationSkipU64(t, &dec) // part_id
+	mustValidationSkipI64(t, &dec) // rows
+	mustValidationSkipU16(t, &dec) // image version
+	mustValidationSkipU16(t, &dec) // reserved
+	mustValidationSkipI64(t, &dec) // manifest bytes
+	mustValidationSkipI64(t, &dec) // descriptor offset
+	mustValidationSkipI64(t, &dec) // descriptor length
+	mustValidationReadU32(t, &dec) // descriptor checksum
+	columnCount := mustValidationReadU32(t, &dec)
+	for columnIndex := 0; columnIndex < int(columnCount); columnIndex++ {
+		name, err := dec.str()
+		if err != nil {
+			t.Fatalf("decode layout contract column name: %v", err)
+		}
+		if _, err := dec.str(); err != nil { // logical type
+			t.Fatalf("decode layout contract logical type: %v", err)
+		}
+		mustValidationSkipU16(t, &dec)       // column type
+		mustValidationSkipU16(t, &dec)       // encoding
+		mustValidationSkipU16(t, &dec)       // compression
+		mustValidationSkipU16(t, &dec)       // reserved
+		mustValidationReadU32(t, &dec)       // flags
+		mustValidationSkipI64(t, &dec)       // rows
+		mustValidationSkipI64(t, &dec)       // section offset
+		mustValidationSkipI64(t, &dec)       // section length
+		mustValidationReadU32(t, &dec)       // section checksum
+		mustValidationSkipI64(t, &dec)       // fixed-width elements
+		mustValidationSkipI64(t, &dec)       // element size
+		mustValidationSkipI64(t, &dec)       // alignment
+		mustValidationSkipU16(t, &dec)       // endian
+		mustValidationSkipU16(t, &dec)       // reserved
+		mustValidationSkipI64(t, &dec)       // length multiple
+		mustValidationSkipI64(t, &dec)       // null count
+		mustValidationSkipI64(t, &dec)       // default count
+		mustValidationSkipI64(t, &dec)       // dictionary offset
+		mustValidationSkipI64(t, &dec)       // dictionary length
+		mustValidationReadU32(t, &dec)       // dictionary checksum
+		if _, err := dec.str(); err != nil { // dictionary collation
+			t.Fatalf("decode layout contract dictionary collation: %v", err)
+		}
+		blockCount := mustValidationReadU32(t, &dec)
+		for block := 0; block < int(blockCount); block++ {
+			mustValidationSkipI64(t, &dec) // first row
+			mustValidationSkipI64(t, &dec) // row count
+			mustValidationSkipI64(t, &dec) // first granule
+			mustValidationSkipI64(t, &dec) // last granule
+			mustValidationSkipU16(t, &dec) // encoding
+			mustValidationSkipU16(t, &dec) // compression
+			mustValidationReadU32(t, &dec) // reserved
+			mustValidationSkipI64(t, &dec) // raw bytes
+			storedBytesOffset := dec.offset
+			mustValidationSkipI64(t, &dec) // stored bytes
+			if name == columnName && block == blockIndex {
+				return storedBytesOffset
+			}
+			mustValidationSkipI64(t, &dec) // payload offset
+			mustValidationSkipI64(t, &dec) // payload length
+			mustValidationSkipI64(t, &dec) // null count
+			mustValidationSkipI64(t, &dec) // default count
+		}
+	}
+	t.Fatalf("layout contract column %q block %d not found", columnName, blockIndex)
+	return 0
+}
+
 func TestColumnPartLayoutContractDescriptorStoredBytesFailsClosed(t *testing.T) {
-	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	image := mustLayoutContractFixedWidthImage(t)
 	corrupt := cloneColumnPartImageBytes(image)
 	storedBytesOffset := mustLayoutContractDescriptorStoredBytesOffset(t, corrupt, "value")
 	storedBytes := int64(binary.LittleEndian.Uint64(corrupt.Bytes[storedBytesOffset : storedBytesOffset+8]))
@@ -353,20 +471,14 @@ func TestColumnPartLayoutContractDescriptorStoredBytesFailsClosed(t *testing.T) 
 }
 
 func TestColumnPartLayoutContractStoredBytesFieldFailsClosed(t *testing.T) {
-	image := mustTransplantImage(t, mustLayoutContractFixedWidthPart(t))
+	image := mustLayoutContractFixedWidthImage(t)
 	corrupt := append([]byte(nil), image.Bytes...)
 	section := mustValidationSection(t, image, ColumnPartImageSectionLayoutContract)
 	contract := mustLayoutContractFromImage(t, image)
 	value := mustLayoutContractColumnPtr(t, &contract, "value")
 	// Corrupt the serialized stored_bytes for the first value block in-place to
 	// prove the stored contract bytes, not only decoded helper structs, fail.
-	encoded := encodeLayoutContractForTest(contract)
-	needle := make([]byte, 8)
-	binary.LittleEndian.PutUint64(needle, uint64(value.Blocks[0].StoredBytes))
-	idx := strings.Index(string(encoded), string(needle))
-	if idx < 0 {
-		t.Fatalf("stored bytes needle not found")
-	}
+	idx := mustLayoutContractBlockStoredBytesOffset(t, image.sectionBytes(section), "value", 0)
 	binary.LittleEndian.PutUint64(corrupt[section.Offset+idx:section.Offset+idx+8], uint64(value.Blocks[0].StoredBytes-1))
 	corruptImage := image
 	corruptImage.Bytes = corrupt
