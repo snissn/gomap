@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
@@ -1775,6 +1776,7 @@ type typedColumnInt64PredicateAggregateScanScratch struct {
 	predicateBitmap []uint64
 	visibilityRows  []int
 	selection       typedcolumn.RowSelectionScratch
+	kernel          typedkernel.Scratch
 }
 
 func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {

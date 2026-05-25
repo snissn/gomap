@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
 // typedColumnPreparedRangeReader is the caller-owned byte access boundary used
@@ -34,6 +35,7 @@ type typedColumnPreparedColumnRequest struct {
 type typedColumnPreparedColumnPlan struct {
 	Field            TypedStorageField
 	Logical          columnsemantics.LogicalType
+	Operation        columnsemantics.Operation
 	Definition       typedcolumn.ColumnDefinition
 	Capability       columnsemantics.Capability
 	Layout           columnlayout.Capabilities
@@ -74,12 +76,14 @@ type typedColumnPreparedBlockPlan struct {
 }
 
 type typedColumnPreparedColumnState struct {
-	Plan          typedColumnPreparedColumnPlan
-	Column        typedcolumn.ColumnPartColumn
-	Section       typedcolumn.ColumnPartImageSection
-	BlockPlans    []typedColumnPreparedBlockPlan
-	Certification typedcolumn.ColumnPartLayoutContractColumn
-	Dictionaries  map[string]int64
+	Plan                  typedColumnPreparedColumnPlan
+	Column                typedcolumn.ColumnPartColumn
+	Section               typedcolumn.ColumnPartImageSection
+	BlockPlans            []typedColumnPreparedBlockPlan
+	Certification         typedcolumn.ColumnPartLayoutContractColumn
+	AggregateReducer      typedkernel.PreparedReducer
+	AggregateReducerReady bool
+	Dictionaries          map[string]int64
 }
 
 type typedColumnPreparedPartState struct {
@@ -151,6 +155,8 @@ func (c *typedColumnPreparedColumnState) close() {
 	c.Section = typedcolumn.ColumnPartImageSection{}
 	c.BlockPlans = nil
 	c.Certification = typedcolumn.ColumnPartLayoutContractColumn{}
+	c.AggregateReducer = typedkernel.PreparedReducer{}
+	c.AggregateReducerReady = false
 	c.Dictionaries = nil
 }
 
@@ -204,6 +210,7 @@ func typedColumnDescribePreparedColumn(req typedColumnPreparedColumnRequest, spa
 	plan := typedColumnPreparedColumnPlan{
 		Field:            req.Field,
 		Logical:          logical,
+		Operation:        req.Operation,
 		Definition:       adapterColumn.Definition,
 		Capability:       capability,
 		Layout:           layout,
@@ -415,6 +422,15 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 			return part, diag, nil
 		}
 		if existing := part.Columns[plan.Definition.Name]; existing != nil {
+			if request.Role == typedcolumn.ColumnRoleMeasure {
+				// A column can be requested once as a predicate and again as a
+				// measure. Keep the prepared reducer operation aligned with the
+				// measure request while preserving the union of section
+				// dependencies needed by both roles.
+				existing.Plan.Operation = plan.Operation
+				existing.Plan.Capability = plan.Capability
+				existing.Plan.LayoutCapability = plan.LayoutCapability
+			}
 			existing.Plan.Dependencies = append(existing.Plan.Dependencies, plan.Dependencies...)
 			part.Dependencies = append(part.Dependencies, plan.Dependencies...)
 			diag.SectionDependencies += len(plan.Dependencies)
