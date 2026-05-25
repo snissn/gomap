@@ -41,6 +41,49 @@ func TestInt64AggregateParityRowSelectionShapes(t *testing.T) {
 	}
 }
 
+func TestInt64AggregateCursorParityRowSelectionShapes(t *testing.T) {
+	values := []int64{-7, 2, 0, 5, -3, 11, 4, -9, 8, 6}
+	selections := map[string]typedcolumn.RowSelection{
+		"all":    mustSelection(typedcolumn.NewAllRowSelection(len(values))),
+		"range":  mustSelection(typedcolumn.NewRangeRowSelection(len(values), 2, 8)),
+		"ranges": mustSelection(typedcolumn.NewRangesRowSelection(len(values), []typedcolumn.RowRange{{Start: 1, End: 3}, {Start: 5, End: 8}})),
+		"bitmap": mustSelection(typedcolumn.NewBitmapRowSelection(len(values), []uint64{(1 << 0) | (1 << 2) | (1 << 5) | (1 << 9)})),
+		"sparse": mustSelection(typedcolumn.NewSparseRowSelection(len(values), []int{0, 3, 4, 9})),
+	}
+	reg := typedkernel.DefaultRegistry()
+	for _, enc := range []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint} {
+		enc := enc
+		t.Run(enc.String(), func(t *testing.T) {
+			builder := typedcolumn.NewGranuleBuilder(typedcolumn.Config{Encoding: enc, Compression: typedcolumn.CompressionNone})
+			granule, err := builder.BuildInt64(values)
+			if err != nil {
+				t.Fatalf("BuildInt64: %v", err)
+			}
+			for shape, selection := range selections {
+				shape := shape
+				selection := selection
+				t.Run(shape, func(t *testing.T) {
+					prepared, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpSum, Semantic: int64Semantic(false, enc), Layout: int64Layout(false, enc, typedcolumn.CompressionNone)})
+					if err != nil {
+						t.Fatalf("dispatch: %v", err)
+					}
+					var reader typedcolumn.GranuleReader
+					cursor, err := reader.Int64Cursor(granule)
+					if err != nil {
+						t.Fatalf("Int64Cursor: %v", err)
+					}
+					got, err := prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Cursor: &cursor}, nil)
+					if err != nil {
+						t.Fatalf("reduce cursor: %v", err)
+					}
+					want := expectedInt64(values, selection)
+					assertInt64Aggregate(t, typedkernel.OpSum, got, want)
+				})
+			}
+		})
+	}
+}
+
 func TestInt64AggregateOverflow(t *testing.T) {
 	reg := typedkernel.DefaultRegistry()
 	prepared, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpSum, Semantic: int64Semantic(false, typedcolumn.EncodingRawInt64), Layout: int64Layout(false, typedcolumn.EncodingRawInt64, typedcolumn.CompressionNone)})
@@ -95,6 +138,33 @@ func TestInt64MinMaxDoNotAccumulateOverflowingSum(t *testing.T) {
 				t.Fatalf("max=%d want %d", got.Max, tc.want)
 			}
 		})
+	}
+}
+
+func TestInt64CountNonNullRejectsCursorWithoutConsuming(t *testing.T) {
+	values := []int64{1, 2, 3}
+	builder := typedcolumn.NewGranuleBuilder(typedcolumn.Config{Encoding: typedcolumn.EncodingDeltaVarint, Compression: typedcolumn.CompressionNone})
+	granule, err := builder.BuildInt64(values)
+	if err != nil {
+		t.Fatalf("BuildInt64: %v", err)
+	}
+	granule.Payload = append(append([]byte(nil), granule.Payload...), 0)
+	granule.RawBytes = len(granule.Payload)
+	granule.StoredBytes = len(granule.Payload)
+	granule.PayloadRef.Length = len(granule.Payload)
+	var reader typedcolumn.GranuleReader
+	cursor, err := reader.Int64Cursor(granule)
+	if err != nil {
+		t.Fatalf("Int64Cursor with trailing bytes should be constructed before Finish: %v", err)
+	}
+	prepared, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpCountNonNull, Semantic: int64Semantic(false, typedcolumn.EncodingDeltaVarint), Layout: int64Layout(false, typedcolumn.EncodingDeltaVarint, typedcolumn.CompressionNone)})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	selection := mustSelection(typedcolumn.NewAllRowSelection(len(values)))
+	_, err = prepared.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Cursor: &cursor}, nil)
+	if err == nil || !strings.Contains(err.Error(), "does not accept int64 cursor") {
+		t.Fatalf("count non-null cursor err=%v want explicit cursor rejection", err)
 	}
 }
 

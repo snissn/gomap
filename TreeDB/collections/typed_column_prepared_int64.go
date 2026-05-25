@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
+	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
 func (s *TypedColumnInt64PredicateAggregateSession) validatePreparedInt64AggregateColumn() error {
@@ -151,7 +152,32 @@ func validateTypedColumnPreparedInt64AggregatePart(part *typedColumnPreparedPart
 	if preparedColumn.Plan.Layout.Reducers.Int64Streaming && !preparedColumn.Certification.StreamingCertified {
 		return fmt.Errorf("collections: typed-column int64 aggregate prepared column %q lacks certified streaming contract", adapterColumn.Definition.Name)
 	}
+	reducer, err := typedColumnPreparedInt64AggregateReducer(preparedColumn)
+	if err != nil {
+		return err
+	}
+	preparedColumn.AggregateReducer = reducer
+	preparedColumn.AggregateReducerReady = true
 	return nil
+}
+
+func typedColumnPreparedInt64AggregateReducer(preparedColumn *typedColumnPreparedColumnState) (typedkernel.PreparedReducer, error) {
+	if preparedColumn == nil {
+		return typedkernel.PreparedReducer{}, errors.New("collections: typed-column int64 aggregate prepared reducer missing column state")
+	}
+	desc := columnsemantics.Descriptor{
+		Logical:             preparedColumn.Plan.Logical,
+		Physical:            preparedColumn.Plan.Definition.Type,
+		Encoding:            preparedColumn.Plan.Definition.Encoding,
+		Nullable:            preparedColumn.Plan.Field.Nullable,
+		DictionaryOrder:     preparedColumn.Plan.Layout.Descriptor.DictionaryOrder,
+		DictionaryCollation: preparedColumn.Plan.Layout.Descriptor.DictionaryCollation,
+	}
+	reducer, err := typedkernel.DefaultRegistry().Dispatch(typedkernel.DispatchRequest{Operation: columnsemantics.OpSum, Semantic: desc, Layout: preparedColumn.Plan.Layout})
+	if err != nil {
+		return typedkernel.PreparedReducer{}, fmt.Errorf("collections: typed-column int64 aggregate prepared column %q kernel dispatch: %w", preparedColumn.Plan.Definition.Name, err)
+	}
+	return reducer, nil
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateStatePart(typedRef columnManifestAssetRefForScan, physical columnManifestAssetRefForScan, preparedPart *typedColumnPreparedPartState, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) error {
@@ -289,6 +315,63 @@ func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64Predi
 	}
 }
 
+func addTypedColumnInt64AggregateKernelResult(result *TypedColumnInt64PredicateAggregateResult, out typedkernel.AggregateResult) error {
+	if result == nil {
+		return errors.New("collections: nil typed-column int64 aggregate result")
+	}
+	if out.NonNulls < 0 || out.NonNulls > int64(maxCollectionInt) {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate invalid kernel count=%d", out.NonNulls)
+	}
+	if out.Sum > 0 && result.Sum > typedColumnInt64PredicateAggregateMaxSum-out.Sum {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, out.Sum)
+	}
+	if out.Sum < 0 && result.Sum < typedColumnInt64PredicateAggregateMinSum-out.Sum {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, out.Sum)
+	}
+	result.Count += out.NonNulls
+	result.Sum += out.Sum
+	result.Diagnostics.RowsMatched += int(out.NonNulls)
+	return nil
+}
+
+func addTypedColumnInt64AggregateKernelValues(result *TypedColumnInt64PredicateAggregateResult, reducer typedkernel.PreparedReducer, values []int64, selection typedcolumn.RowSelection, scratch *typedkernel.Scratch) error {
+	out, err := reducer.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Values: values}, scratch)
+	if err != nil {
+		return err
+	}
+	return addTypedColumnInt64AggregateKernelResult(result, out)
+}
+
+func addTypedColumnInt64AggregateKernelCursor(result *TypedColumnInt64PredicateAggregateResult, reducer typedkernel.PreparedReducer, cursor *typedcolumn.Int64Cursor, rows int, selection typedcolumn.RowSelection, scratch *typedkernel.Scratch) error {
+	out, err := reducer.Reduce(typedkernel.ReduceRequest{Rows: rows, Selection: selection, Int64Cursor: cursor}, scratch)
+	if err != nil {
+		return err
+	}
+	return addTypedColumnInt64AggregateKernelResult(result, out)
+}
+
+func recordTypedColumnInt64KernelBlock(diag *TypedColumnInt64PredicateScanDiagnostics, fullCovered bool, cursor bool) {
+	if diag == nil {
+		return
+	}
+	diag.KernelBlocks++
+	if fullCovered {
+		diag.KernelFullCoveredBlocks++
+	} else {
+		diag.KernelSelectedBlocks++
+	}
+	if cursor {
+		diag.KernelCursorBlocks++
+	}
+}
+
+func recordTypedColumnInt64KernelFallbackBlock(diag *TypedColumnInt64PredicateScanDiagnostics) {
+	if diag == nil {
+		return
+	}
+	diag.KernelFallbackBlocks++
+}
+
 func recordTypedColumnInt64FastDecodePlan(diag *TypedColumnInt64PredicateScanDiagnostics, plan typeddecode.Plan) {
 	if diag == nil {
 		return
@@ -337,7 +420,7 @@ func typedColumnInt64DirectViewFallbackAllowed(status typeddecode.Status) bool {
 	}
 }
 
-func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64PredicateAggregateResult, req TypedColumnInt64PredicateScanRequest, granule typedcolumn.EncodedGranule, block typedColumnPreparedBlockPlan, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) error {
+func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64PredicateAggregateResult, req TypedColumnInt64PredicateScanRequest, granule typedcolumn.EncodedGranule, block typedColumnPreparedBlockPlan, reducer typedkernel.PreparedReducer, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) error {
 	if result == nil {
 		return errors.New("collections: nil typed-column int64 aggregate result")
 	}
@@ -359,18 +442,40 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 		if count != rows {
 			return fmt.Errorf("typed-column int64 streaming count=%d want rows=%d", count, rows)
 		}
-		if sum > 0 && result.Sum > typedColumnInt64PredicateAggregateMaxSum-sum {
-			return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, sum)
+		if err := addTypedColumnInt64AggregateKernelResult(result, typedkernel.AggregateResult{Op: reducer.Operation(), NonNulls: int64(count), Sum: sum, HasValue: true}); err != nil {
+			return err
 		}
-		if sum < 0 && result.Sum < typedColumnInt64PredicateAggregateMinSum-sum {
-			return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", result.Sum, sum)
-		}
-		result.Count += int64(count)
-		result.Sum += sum
-		result.Diagnostics.RowsMatched += count
 		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		recordTypedColumnInt64KernelBlock(&result.Diagnostics, true, false)
 		return nil
 	}
+	if selection.IsAll() && !block.NeedsPredicate {
+		if visibility != nil {
+			visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, scratch)
+			if err != nil {
+				return err
+			}
+			selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &scratch.selection)
+			if err != nil {
+				return err
+			}
+			result.Diagnostics.SelectionCompositions++
+		}
+		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		if selection.IsEmpty() {
+			return nil
+		}
+		cursor, err := scratch.reader.Int64Cursor(granule)
+		if err != nil {
+			return err
+		}
+		if err := addTypedColumnInt64AggregateKernelCursor(result, reducer, &cursor, rows, selection, &scratch.kernel); err != nil {
+			return err
+		}
+		recordTypedColumnInt64KernelBlock(&result.Diagnostics, visibility == nil && selection.IsAll(), true)
+		return nil
+	}
+	recordTypedColumnInt64KernelFallbackBlock(&result.Diagnostics)
 	cursor, err := scratch.reader.Int64Cursor(granule)
 	if err != nil {
 		return err
@@ -422,6 +527,9 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnState(preparedColumn *typedColumnPreparedColumnState, ref ColumnAssetRef, visibility *typedColumnLatestPhysicalPart, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) (bool, error) {
 	if preparedColumn == nil {
 		return false, errors.New("collections: typed-column int64 predicate aggregate nil prepared column")
+	}
+	if !preparedColumn.AggregateReducerReady {
+		return false, fmt.Errorf("collections: typed-column int64 predicate aggregate prepared column %q missing kernel reducer", preparedColumn.Plan.Definition.Name)
 	}
 	decodedAny := false
 	payloadRead := false
@@ -491,9 +599,10 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 					if selection.IsEmpty() {
 						continue
 					}
-					if err := addTypedColumnInt64AggregateSelectedValues(result, values, selection); err != nil {
+					if err := addTypedColumnInt64AggregateKernelValues(result, preparedColumn.AggregateReducer, values, selection, &s.aggregateScratch.kernel); err != nil {
 						return false, err
 					}
+					recordTypedColumnInt64KernelBlock(&result.Diagnostics, !block.NeedsPredicate && visibility == nil && selection.IsAll(), false)
 					continue
 				}
 				if !typedColumnInt64DirectViewFallbackAllowed(viewStatus) {
@@ -512,7 +621,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		}
 		decodedAny = true
 		result.Diagnostics.BlocksDecoded++
-		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), granule, block, visibility, &s.aggregateScratch); err != nil {
+		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), granule, block, preparedColumn.AggregateReducer, visibility, &s.aggregateScratch); err != nil {
 			return false, err
 		}
 	}
