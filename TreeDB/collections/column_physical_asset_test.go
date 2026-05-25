@@ -1588,6 +1588,64 @@ func TestColumnAssetSegmentAllocationCacheRescansOnConflictM15C(t *testing.T) {
 	}
 }
 
+func TestColumnAssetSegmentAllocationSkipsDirectViewReservedBandM1849(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	namespace, err := columnAssetManagerNamespaceForRoot(root, normalized.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	directViewFileID, err := directViewTypedColumnSegmentFileID(7)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	directViewPath, err := columnAssetSegmentPath(root, ColumnAssetRef{Namespace: normalized.AssetManager.Namespace, FileID: directViewFileID})
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath direct-view: %v", err)
+	}
+	if err := os.WriteFile(directViewPath, []byte("reserved-direct-view"), 0o600); err != nil {
+		t.Fatalf("write direct-view segment: %v", err)
+	}
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(root, *normalized)
+	if err != nil {
+		t.Fatalf("newNextColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	defer func() { _ = appender.abort() }()
+	if appender.fileID >= columnAssetDirectViewSegmentFileIDBase || appender.fileID == directViewFileID {
+		t.Fatalf("appender file_id=%d collided with direct-view reserved file_id=%d base=%d", appender.fileID, directViewFileID, columnAssetDirectViewSegmentFileIDBase)
+	}
+}
+
+func TestColumnAssetSegmentAllocationCacheStopsBeforeDirectViewReservedBandM1849(t *testing.T) {
+	cleanSegmentDir := filepath.Clean(t.TempDir())
+	cache := &columnAssetSegmentAllocationCache{segmentDir: cleanSegmentDir, nextFileID: columnAssetDirectViewSegmentFileIDBase - 1, valid: true}
+	namespace := columnAssetManagerNamespace{SegmentDir: cleanSegmentDir}
+	fileID, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache)
+	if err != nil || fileID != columnAssetDirectViewSegmentFileIDBase-1 {
+		t.Fatalf("cached file_id=%d err=%v want last regular id", fileID, err)
+	}
+	advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, cache, fileID)
+	if cache.nextFileID != 0 {
+		t.Fatalf("advanced cached next_file_id=%d want exhausted before direct-view band", cache.nextFileID)
+	}
+	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
+		t.Fatal("nextColumnAssetSegmentFileIDCached err=nil want exhausted before direct-view band")
+	}
+
+	cache.nextFileID = columnAssetDirectViewSegmentFileIDBase
+	cache.valid = true
+	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
+		t.Fatal("nextColumnAssetSegmentFileIDCached accepted reserved direct-view file id")
+	}
+}
+
 func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

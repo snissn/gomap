@@ -1,11 +1,13 @@
 package collections
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -14,10 +16,29 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
+
+func typedColumnInt64DirectViewSupportedForTest() bool {
+	if !typedColumnInt64HostLittleEndianForTest() {
+		return false
+	}
+	switch runtime.GOOS {
+	case "darwin", "linux", "freebsd", "netbsd", "openbsd":
+		return true
+	default:
+		return false
+	}
+}
+
+func typedColumnInt64HostLittleEndianForTest() bool {
+	var value uint16 = 1
+	return *(*byte)(unsafe.Pointer(&value)) == 1
+}
 
 func TestTypedColumnInt64ScanEqualityPredicate(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
@@ -554,6 +575,13 @@ func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 	if len(refs) != 1 {
 		t.Fatalf("typed-column refs=%+v want one", refs)
 	}
+	if refs[0].Offset != 0 || refs[0].FileID == columnAssetM12ASegmentFileID {
+		t.Fatalf("raw direct-view typed-column ref=%+v want deterministic direct-view segment at offset 0", refs[0])
+	}
+	reachability, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
+	if err != nil || !reachability.Complete || reachability.Segments.Unknown != 0 || reachability.Segments.Missing != 0 {
+		t.Fatalf("raw direct-view reachability plan=%+v err=%v want complete with no unknown/missing segments", reachability, err)
+	}
 	if got := typedColumnInt64ColumnEncodingForTest(t, d, refs[0], "time_us"); got != typedcolumn.EncodingRawInt64 {
 		t.Fatalf("time_us encoding=%s want %s", got, typedcolumn.EncodingRawInt64)
 	}
@@ -572,15 +600,28 @@ func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate raw: %v", err)
 	}
 	prepared, err := session.Run()
-	if closeErr := session.Close(); closeErr != nil {
-		t.Fatalf("Close prepared raw: %v", closeErr)
-	}
 	if err != nil {
 		t.Fatalf("prepared raw Run: %v", err)
 	}
+	if diag := session.Diagnostics(); diag.ActiveResourceHandles == 0 || diag.ActiveMappedBytes+diag.ActiveHeapCopyBytes == 0 {
+		t.Fatalf("session diagnostics before close=%+v want pinned direct-view resources", diag)
+	}
+	if closeErr := session.Close(); closeErr != nil {
+		t.Fatalf("Close prepared raw: %v", closeErr)
+	}
+	if _, err := session.Run(); !errors.Is(err, errTypedColumnInt64PredicateAggregateSessionClosed) {
+		t.Fatalf("Run after Close err=%v want session closed before exposing stale direct view", err)
+	}
 	assertTypedColumnInt64Aggregate(t, prepared, 3, 45)
-	if prepared.Diagnostics.DecodedHeapCopyBytes != 0 {
-		t.Fatalf("prepared raw diagnostics=%+v want safe raw reducer without decoded heap copy", prepared.Diagnostics)
+	if prepared.Diagnostics.DecodedHeapCopyBytes != 0 || prepared.Diagnostics.FastDecodeDirectViewPlans == 0 {
+		t.Fatalf("prepared raw diagnostics=%+v want fast raw reducer without decoded heap copy", prepared.Diagnostics)
+	}
+	if typedColumnInt64DirectViewSupportedForTest() {
+		if prepared.Diagnostics.DirectViewSuccesses == 0 || prepared.Diagnostics.HeapCopyBytes != 0 {
+			t.Fatalf("prepared raw diagnostics=%+v want mmap direct-view reducer", prepared.Diagnostics)
+		}
+	} else if prepared.Diagnostics.DirectViewFailures == 0 || prepared.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+		t.Fatalf("prepared raw diagnostics=%+v want platform heap fallback without materialization", prepared.Diagnostics)
 	}
 	if session.prepareDiagnostics.DirectViewCertified == 0 || session.prepareDiagnostics.CertificationFailures != 0 {
 		t.Fatalf("prepare diagnostics=%+v want certified direct-view layout with no failures", session.prepareDiagnostics)
@@ -633,11 +674,40 @@ func TestTypedColumnInt64PreparedCertificationDiagnosticsAndClose(t *testing.T) 
 	if first.Diagnostics.DecodedMetadataBytes != 0 || second.Diagnostics.DecodedMetadataBytes != 0 || first.Diagnostics.DecodedHeapCopyBytes != 0 || second.Diagnostics.DecodedHeapCopyBytes != 0 {
 		t.Fatalf("hot diagnostics first=%+v second=%+v want no per-run metadata or heap decode", first.Diagnostics, second.Diagnostics)
 	}
+	if typedColumnInt64DirectViewSupportedForTest() {
+		if first.Diagnostics.DirectViewSuccesses == 0 || second.Diagnostics.DirectViewSuccesses == 0 || first.Diagnostics.HeapCopyBytes != 0 || second.Diagnostics.HeapCopyBytes != 0 {
+			t.Fatalf("hot diagnostics first=%+v second=%+v want mmap direct-view runs", first.Diagnostics, second.Diagnostics)
+		}
+	} else if first.Diagnostics.DirectViewFailures == 0 || second.Diagnostics.DirectViewFailures == 0 || first.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) || second.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+		t.Fatalf("hot diagnostics first=%+v second=%+v want platform heap fallback without materialization", first.Diagnostics, second.Diagnostics)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if diag := session.Diagnostics(); !diag.Closed || diag.ActiveResourceHandles != 0 || diag.ActiveMappedBytes != 0 || diag.ActiveHeapCopyBytes != 0 {
 		t.Fatalf("session diagnostics after close=%+v want resources released", diag)
+	}
+}
+
+func TestTypedColumnInt64PreparedDeltaUsesStreamingCursor(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 3, 6, 10, 15, 21})
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateRange, Low: 3, High: 15, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	if session.prepareDiagnostics.StreamingCertified == 0 {
+		t.Fatalf("prepare diagnostics=%+v want streaming-certified delta layout", session.prepareDiagnostics)
+	}
+	result, err := session.Run()
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 4, 34)
+	if result.Diagnostics.FastDecodeStreamingPlans == 0 || result.Diagnostics.FastDecodeDirectViewPlans != 0 || result.Diagnostics.DirectViewSuccesses != 0 || result.Diagnostics.DecodedHeapCopyBytes != 0 {
+		t.Fatalf("diagnostics=%+v want delta-varint streaming cursor without direct view or []int64 materialization", result.Diagnostics)
 	}
 }
 
@@ -1280,7 +1350,7 @@ func TestTypedColumnInt64AggregatePreparedSessionSnapshotPinnedAcrossMutation(t 
 	assertTypedColumnInt64Aggregate(t, fresh, 4, 160)
 }
 
-func TestTypedColumnInt64AggregatePreparedSessionReusesDecodeScratch(t *testing.T) {
+func TestTypedColumnInt64AggregatePreparedSessionStreamsDeltaWithoutDecodeScratch(t *testing.T) {
 	const rows = 65536
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
@@ -1302,11 +1372,9 @@ func TestTypedColumnInt64AggregatePreparedSessionReusesDecodeScratch(t *testing.
 	if err := validateTypedColumnInt64AggregateBenchResult(first, expected); err != nil {
 		t.Fatal(err)
 	}
-	if len(session.aggregateScratch.values) == 0 {
-		t.Fatalf("first diagnostics=%+v left empty aggregate decode scratch", first.Diagnostics)
+	if first.Diagnostics.FastDecodeStreamingPlans == 0 || first.Diagnostics.DecodedHeapCopyBytes != 0 || len(session.aggregateScratch.values) != 0 {
+		t.Fatalf("first diagnostics=%+v scratch_values=%d want delta streaming cursor without decode scratch", first.Diagnostics, len(session.aggregateScratch.values))
 	}
-	firstPtr := &session.aggregateScratch.values[0]
-	firstCap := cap(session.aggregateScratch.values)
 
 	second, err := session.Run()
 	if err != nil {
@@ -1315,11 +1383,8 @@ func TestTypedColumnInt64AggregatePreparedSessionReusesDecodeScratch(t *testing.
 	if err := validateTypedColumnInt64AggregateBenchResult(second, expected); err != nil {
 		t.Fatal(err)
 	}
-	if len(session.aggregateScratch.values) == 0 {
-		t.Fatalf("second diagnostics=%+v left empty aggregate decode scratch", second.Diagnostics)
-	}
-	if got := &session.aggregateScratch.values[0]; got != firstPtr || cap(session.aggregateScratch.values) != firstCap {
-		t.Fatalf("aggregate decode scratch reallocated between hot runs: ptr %p -> %p cap %d -> %d", firstPtr, got, firstCap, cap(session.aggregateScratch.values))
+	if second.Diagnostics.FastDecodeStreamingPlans == 0 || second.Diagnostics.DecodedHeapCopyBytes != 0 || len(session.aggregateScratch.values) != 0 {
+		t.Fatalf("second diagnostics=%+v scratch_values=%d want delta streaming cursor without decode scratch", second.Diagnostics, len(session.aggregateScratch.values))
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -2693,6 +2758,12 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.HeapCopyBytes), "heap_copy_bytes/op")
 	b.ReportMetric(float64(diag.DecodedHeapCopyBytes), "decoded_bytes/op")
 	b.ReportMetric(float64(diag.MaterializedBytes), "materialized_bytes/op")
+	b.ReportMetric(float64(diag.FastDecodeDirectViewPlans), "fast_decode_direct_view_plans/op")
+	b.ReportMetric(float64(diag.FastDecodeStreamingPlans), "fast_decode_streaming_plans/op")
+	b.ReportMetric(float64(diag.FastDecodeMaterializePlans), "fast_decode_materialize_plans/op")
+	b.ReportMetric(float64(diag.FastDecodeUnsupportedPlans), "fast_decode_unsupported_plans/op")
+	b.ReportMetric(float64(diag.DirectViewSuccesses), "direct_view_successes/op")
+	b.ReportMetric(float64(diag.DirectViewFailures), "direct_view_failures/op")
 	b.ReportMetric(float64(diag.DirectViewCertified), "direct_view_certified/op")
 	b.ReportMetric(float64(diag.StreamingCertified), "streaming_certified/op")
 	b.ReportMetric(float64(diag.CertificationFailures), "certification_failures/op")
@@ -2710,6 +2781,9 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(fallbackCount), "fallback_count")
 	if diag.FallbackReason != "" {
 		b.ReportMetric(1, "fallback_reason_"+typedColumnInt64AggregateBenchMetricToken(diag.FallbackReason)+"_count")
+	}
+	if diag.FastDecodeFallbackReason != "" {
+		b.ReportMetric(1, "fast_decode_fallback_reason_"+typedColumnInt64AggregateBenchMetricToken(diag.FastDecodeFallbackReason)+"_count")
 	}
 }
 
