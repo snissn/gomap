@@ -197,7 +197,7 @@ func typedColumnInt64RawPredicateSelection(req TypedColumnInt64PredicateScanRequ
 			scratch.predicateRows = append(scratch.predicateRows, row)
 		}
 	}
-	return typedcolumn.NewSparseRowSelectionNoCopy(g.Rows, scratch.predicateRows)
+	return typedColumnInt64PredicateRowsSelection(g.Rows, scratch)
 }
 
 func addTypedColumnInt64AggregateRawRow(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, row int) error {
@@ -294,6 +294,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		if block.PayloadLength > 0 {
 			payload, err = s.readTypedColumnRange(ref, block.PayloadOffset, block.PayloadLength, false, result, updateCacheDeltas)
 			if err != nil {
+				if preparedColumn.Plan.Layout.Reducers.Int64FixedWidthRaw {
+					return false, fmt.Errorf("raw layout read column %q block %d payload: %w", preparedColumn.Plan.Definition.Name, block.Index, err)
+				}
 				return false, fmt.Errorf("read column %q block %d payload: %w", preparedColumn.Plan.Definition.Name, block.Index, err)
 			}
 			payloadRead = true

@@ -437,7 +437,7 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 	for i := range column.Blocks {
 		block := column.Blocks[i]
 		length := block.Descriptor.StoredBytes
-		if block.Descriptor.RowCount != 0 && plan.Layout.Descriptor.Logical != "" {
+		if plan.Layout.Descriptor.Logical != "" {
 			if err := plan.Layout.ValidateGranule(block.Granule); err != nil {
 				return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q block %d layout validation: %w", plan.Definition.Name, i, err)
 			}

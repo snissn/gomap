@@ -555,7 +555,7 @@ func (c Capabilities) ValidateGranule(g typedcolumn.EncodedGranule) error {
 		}
 	}
 	if c.Descriptor.Compression != typedcolumn.CompressionNone {
-		return fmt.Errorf("columnlayout: unsupported compression=%s for validated hot layout", c.Descriptor.Compression)
+		return fmt.Errorf("columnlayout: %s: compression=%s for validated hot layout", ReasonUnsupportedCompression, c.Descriptor.Compression)
 	}
 	return c.validateGranuleLengths(g)
 }

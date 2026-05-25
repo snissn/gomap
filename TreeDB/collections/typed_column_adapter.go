@@ -115,7 +115,13 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	if err != nil {
 		return typedColumnAdapterColumn{}, err
 	}
-	if field.ValueType == ColumnStoreValueInt64 && field.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian {
+	if field.FixedWidthEncoding != "" {
+		if field.ValueType != ColumnStoreValueInt64 {
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: fixed_width_encoding is only supported for int64", errTypedColumnAdapterUnsupportedType)
+		}
+		if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported int64 fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
+		}
 		if field.Nullable {
 			return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable int64 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
 		}
@@ -1750,11 +1756,13 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 type typedColumnInt64PredicateAggregateScanScratch struct {
 	// GranuleReader only retains decode/decompression scratch and is safe to
 	// reuse across immutable typed-column parts within the session lifetime.
-	reader         typedcolumn.GranuleReader
-	values         []int64
-	predicateRows  []int
-	visibilityRows []int
-	selection      typedcolumn.RowSelectionScratch
+	reader          typedcolumn.GranuleReader
+	values          []int64
+	predicateRows   []int
+	predicateRanges []typedcolumn.RowRange
+	predicateBitmap []uint64
+	visibilityRows  []int
+	selection       typedcolumn.RowSelectionScratch
 }
 
 func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {
@@ -1838,7 +1846,65 @@ func typedColumnInt64PredicateAggregateBlockSelection(req TypedColumnInt64Predic
 			scratch.predicateRows = append(scratch.predicateRows, i)
 		}
 	}
-	return typedcolumn.NewSparseRowSelectionNoCopy(rows, scratch.predicateRows)
+	return typedColumnInt64PredicateRowsSelection(rows, scratch)
+}
+
+const typedColumnInt64PredicateSelectionRangeLimit = 8
+
+func typedColumnInt64PredicateRowsSelection(rows int, scratch *typedColumnInt64PredicateAggregateScanScratch) (typedcolumn.RowSelection, error) {
+	if scratch == nil {
+		return typedcolumn.NewEmptyRowSelection(rows)
+	}
+	selected := scratch.predicateRows
+	if len(selected) == 0 {
+		return typedcolumn.NewEmptyRowSelection(rows)
+	}
+	if len(selected) == rows {
+		return typedcolumn.NewAllRowSelection(rows)
+	}
+	if isContiguousIntRows(selected) {
+		return typedcolumn.NewRangeRowSelection(rows, selected[0], selected[len(selected)-1]+1)
+	}
+
+	scratch.predicateRanges = scratch.predicateRanges[:0]
+	start, prev := selected[0], selected[0]
+	for _, row := range selected[1:] {
+		if row == prev+1 {
+			prev = row
+			continue
+		}
+		scratch.predicateRanges = append(scratch.predicateRanges, typedcolumn.RowRange{Start: start, End: prev + 1})
+		start, prev = row, row
+	}
+	scratch.predicateRanges = append(scratch.predicateRanges, typedcolumn.RowRange{Start: start, End: prev + 1})
+	if len(scratch.predicateRanges) <= typedColumnInt64PredicateSelectionRangeLimit {
+		return typedcolumn.NewRangesRowSelectionNoCopy(rows, scratch.predicateRanges)
+	}
+	if len(selected) >= 64 && len(selected)*4 >= rows*3 {
+		words := (rows + 63) / 64
+		if cap(scratch.predicateBitmap) < words {
+			scratch.predicateBitmap = make([]uint64, words)
+		} else {
+			scratch.predicateBitmap = scratch.predicateBitmap[:words]
+			for i := range scratch.predicateBitmap {
+				scratch.predicateBitmap[i] = 0
+			}
+		}
+		for _, row := range selected {
+			scratch.predicateBitmap[row/64] |= uint64(1) << uint(row%64)
+		}
+		return typedcolumn.NewBitmapRowSelectionNoCopy(rows, scratch.predicateBitmap)
+	}
+	return typedcolumn.NewSparseRowSelectionNoCopy(rows, selected)
+}
+
+func isContiguousIntRows(rows []int) bool {
+	for i := 1; i < len(rows); i++ {
+		if rows[i] != rows[i-1]+1 {
+			return false
+		}
+	}
+	return len(rows) != 0
 }
 
 func typedColumnInt64PredicateCoversGranule(req TypedColumnInt64PredicateScanRequest, g typedcolumn.EncodedGranule) bool {

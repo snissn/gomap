@@ -79,8 +79,9 @@ canonical_read_integrity() {
 
 canonical_layout_path() {
 	case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+		delta|delta_varint|"") printf '%s' "typed_column_part" ;;
 		raw|raw_int64|fixed|fixed_width) printf '%s' "typed_column_part_raw_int64" ;;
-		*) printf '%s' "typed_column_part" ;;
+		*) return 1 ;;
 	esac
 }
 
@@ -133,7 +134,10 @@ run_hot_profile() {
 	shape=$(canonical_shape "$PROFILE_SHAPE")
 	dist=$(canonical_dist "$PROFILE_DIST")
 	read_integrity=$(canonical_read_integrity "$PROFILE_READ_INTEGRITY")
-	layout_path=$(canonical_layout_path "$PROFILE_LAYOUT")
+	layout_path=$(canonical_layout_path "$PROFILE_LAYOUT") || {
+		echo "unsupported PROFILE_LAYOUT: $PROFILE_LAYOUT" >&2
+		exit 1
+	}
 	bench_regex="^BenchmarkTypedColumnInt64PredicateAggregate/rows_${PROFILE_ROWS}/dist_${dist}/path_${layout_path}/shape_${shape}/timed_prepared_session_hot_scan/read_integrity_${read_integrity}/execution_serial/predicate_count_sum_avg$"
 	cpu_profile="$dir/hot_query_cpu.pprof"
 	alloc_profile="$dir/process_allocs.pprof"

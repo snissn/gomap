@@ -211,6 +211,13 @@ func NewRangesRowSelection(rows int, ranges []RowRange) (RowSelection, error) {
 	return makeRangesRowSelection(rows, ranges)
 }
 
+// NewRangesRowSelectionNoCopy returns a compact multi-range selection that may
+// alias ranges. Ranges must already be sorted, non-overlapping, and must not be
+// mutated while the selection is in use.
+func NewRangesRowSelectionNoCopy(rows int, ranges []RowRange) (RowSelection, error) {
+	return makeRangesRowSelectionNoCopy(rows, ranges)
+}
+
 // NewSparseRowSelection returns a sparse selection from strictly increasing row
 // indexes. The input slice is copied.
 func NewSparseRowSelection(rows int, sparse []int) (RowSelection, error) {
@@ -228,6 +235,13 @@ func NewSparseRowSelectionNoCopy(rows int, sparse []int) (RowSelection, error) {
 // and must have exactly ceil(rows/64) words with zero padding bits.
 func NewBitmapRowSelection(rows int, bitmap []uint64) (RowSelection, error) {
 	return makeBitmapRowSelection(rows, bitmap)
+}
+
+// NewBitmapRowSelectionNoCopy returns a bitmap selection that may alias bitmap.
+// The bitmap must have exactly ceil(rows/64) words with zero padding bits and
+// must not be mutated while the selection is in use.
+func NewBitmapRowSelectionNoCopy(rows int, bitmap []uint64) (RowSelection, error) {
+	return makeBitmapRowSelectionNoCopy(rows, bitmap)
 }
 
 func makeSparseRowSelectionNoCopy(rows int, sparse []int) (RowSelection, error) {

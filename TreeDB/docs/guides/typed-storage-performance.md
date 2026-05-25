@@ -223,7 +223,7 @@ TREEDB_TYPED_COLUMN_BENCH_DISTS=clustered_monotonic \
 TREEDB_TYPED_COLUMN_BENCH_LAYOUTS=delta,raw \
 TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false \
 go test -run '^$' \
-  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/dist_clustered_monotonic/path_typed_column_part/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg$' \
+  -bench 'BenchmarkTypedColumnInt64PredicateAggregate/rows_1048576/dist_clustered_monotonic/path_(typed_column_part|typed_column_part_raw_int64)/shape_selective_range_1pct/timed_one_shot_api/read_integrity_cached_verify/execution_serial/predicate_count_sum_avg$' \
   -benchmem \
   -benchtime=20x \
   -count=3 \

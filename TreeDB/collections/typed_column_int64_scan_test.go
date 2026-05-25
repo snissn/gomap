@@ -664,8 +664,44 @@ func TestTypedColumnInt64RawTruncatedPayloadFailsClosed(t *testing.T) {
 	if err := os.Truncate(assetPath, refs[0].Offset+refs[0].Length-1); err != nil {
 		t.Fatalf("Truncate raw typed-column asset: %v", err)
 	}
-	if _, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll}); err == nil {
-		t.Fatalf("RunTypedColumnInt64PredicateAggregate truncated raw err=nil want fail closed")
+	if _, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll, ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums}); err == nil || !strings.Contains(err.Error(), "raw layout") {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate truncated raw err=%v want raw-layout fail closed", err)
+	}
+}
+
+func TestTypedColumnInt64PredicateSelectionShapes(t *testing.T) {
+	var scratch typedColumnInt64PredicateAggregateScanScratch
+
+	scratch.predicateRows = append(scratch.predicateRows[:0], 2, 3, 4, 5)
+	sel, err := typedColumnInt64PredicateRowsSelection(16, &scratch)
+	if err != nil {
+		t.Fatalf("range selection: %v", err)
+	}
+	if sel.Kind() != typedcolumn.RowSelectionRange || sel.Count() != 4 {
+		t.Fatalf("range selection=%+v shape=%+v", sel, sel.Shape())
+	}
+
+	scratch.predicateRows = append(scratch.predicateRows[:0], 1, 2, 8, 9, 14, 15)
+	sel, err = typedColumnInt64PredicateRowsSelection(20, &scratch)
+	if err != nil {
+		t.Fatalf("ranges selection: %v", err)
+	}
+	if sel.Kind() != typedcolumn.RowSelectionRanges || sel.Count() != 6 {
+		t.Fatalf("ranges selection=%+v shape=%+v", sel, sel.Shape())
+	}
+
+	scratch.predicateRows = scratch.predicateRows[:0]
+	for row := 0; row < 128; row++ {
+		if row%4 != 0 {
+			scratch.predicateRows = append(scratch.predicateRows, row)
+		}
+	}
+	sel, err = typedColumnInt64PredicateRowsSelection(128, &scratch)
+	if err != nil {
+		t.Fatalf("bitmap selection: %v", err)
+	}
+	if sel.Kind() != typedcolumn.RowSelectionBitmap || sel.Count() != 96 {
+		t.Fatalf("bitmap selection=%+v shape=%+v", sel, sel.Shape())
 	}
 }
 
