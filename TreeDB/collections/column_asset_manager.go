@@ -480,8 +480,9 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 
 func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
 	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
-		if cache.nextFileID == 0 {
-			return 0, errors.New("collections: column asset segment file_id exhausted")
+		if cache.nextFileID == 0 || cache.nextFileID >= columnAssetDirectViewSegmentFileIDBase {
+			cache.nextFileID = 0
+			return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 		}
 		return cache.nextFileID, nil
 	}
@@ -511,7 +512,7 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 	}
 	cache.segmentDir = cleanSegmentDir
 	cache.valid = true
-	if allocatedFileID == ^uint32(0) {
+	if allocatedFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
 		cache.nextFileID = 0
 		return
 	}

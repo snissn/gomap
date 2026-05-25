@@ -1623,6 +1623,29 @@ func TestColumnAssetSegmentAllocationSkipsDirectViewReservedBandM1849(t *testing
 	}
 }
 
+func TestColumnAssetSegmentAllocationCacheStopsBeforeDirectViewReservedBandM1849(t *testing.T) {
+	cleanSegmentDir := filepath.Clean(t.TempDir())
+	cache := &columnAssetSegmentAllocationCache{segmentDir: cleanSegmentDir, nextFileID: columnAssetDirectViewSegmentFileIDBase - 1, valid: true}
+	namespace := columnAssetManagerNamespace{SegmentDir: cleanSegmentDir}
+	fileID, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache)
+	if err != nil || fileID != columnAssetDirectViewSegmentFileIDBase-1 {
+		t.Fatalf("cached file_id=%d err=%v want last regular id", fileID, err)
+	}
+	advanceColumnAssetSegmentFileIDCache(cleanSegmentDir, cache, fileID)
+	if cache.nextFileID != 0 {
+		t.Fatalf("advanced cached next_file_id=%d want exhausted before direct-view band", cache.nextFileID)
+	}
+	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
+		t.Fatal("nextColumnAssetSegmentFileIDCached err=nil want exhausted before direct-view band")
+	}
+
+	cache.nextFileID = columnAssetDirectViewSegmentFileIDBase
+	cache.valid = true
+	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
+		t.Fatal("nextColumnAssetSegmentFileIDCached accepted reserved direct-view file id")
+	}
+}
+
 func TestColumnAssetSegmentAppenderFailedCloseRemovesSegmentM15C(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
