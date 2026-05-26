@@ -447,20 +447,16 @@ type columnPartContractLayout struct {
 func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) columnPartContractLayout {
 	switch def.Encoding {
 	case EncodingRawInt64:
-		direct := def.Compression == CompressionNone && logicalType == "int64"
+		direct := def.Compression == CompressionNone && logicalType == "int64" && def.Type == ColumnTypeInt64 && def.FixedWidthElements == 0
 		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct, stats: direct, pruning: direct}
 	case EncodingRawFloat32:
-		// Native scalar float payload bytes are fixed-width little-endian, but unsafe
-		// direct-view reader integration/certification is deferred to the follow-up
-		// direct-view tasks in the active stack.
-		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4}
+		direct := def.Compression == CompressionNone && logicalType == "float32" && def.Type == ColumnTypeFloat32 && def.FixedWidthElements == 0
+		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct}
 	case EncodingRawFloat64:
-		// Native scalar float payload bytes are fixed-width little-endian, but unsafe
-		// direct-view reader integration/certification is deferred to the follow-up
-		// direct-view tasks in the active stack.
-		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8}
+		direct := def.Compression == CompressionNone && logicalType == "double" && def.Type == ColumnTypeFloat64 && def.FixedWidthElements == 0
+		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct}
 	case EncodingRawFloat32Vector:
-		direct := def.Compression == CompressionNone && logicalType == "float32_vector"
+		direct := def.Compression == CompressionNone && logicalType == "float32_vector" && def.Type == ColumnTypeFloat32Vector && def.FixedWidthElements > 0
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, stats: direct, pruning: direct}
 	case EncodingRawUint32Dense:
 		// adjacency_list payload bytes are little-endian dense uint32, but certified
@@ -563,6 +559,11 @@ func certifyLayoutContractColumn(image ColumnPartImage, desc ColumnPartDescripto
 	}
 	if contract.NullMaskPresent != (nullCount > 0) || contract.DefaultMaskPresent != (defaultCount > 0) {
 		return fmt.Errorf("typedcolumn: layout contract column %s null/default mask flags=(%v,%v) want (%v,%v)", columnDesc.Name, contract.NullMaskPresent, contract.DefaultMaskPresent, nullCount > 0, defaultCount > 0)
+	}
+	if contract.DirectViewCertified {
+		if nullCount != 0 || defaultCount != 0 || contract.NullMaskPresent || contract.DefaultMaskPresent {
+			return fmt.Errorf("typedcolumn: layout contract column %s direct-view null/default counts=(%d,%d) mask_flags=(%v,%v)", columnDesc.Name, nullCount, defaultCount, contract.NullMaskPresent, contract.DefaultMaskPresent)
+		}
 	}
 	return nil
 }
