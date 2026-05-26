@@ -77,10 +77,10 @@ ID(rowIndex int) []byte
 
 For the current #1893/#1886 stack, physical row-asset adjacency is decoded into
 scratch even when the bytes are already little-endian; row-asset alignment is
-#1897 and certified adjacency direct views are #1901. Later phases may return a
-first adjacency slice that aliases block bytes when the storage owner/path is
-eligible. Callers must treat either slice as an ephemeral alias tied to the block
-view or scratch.
+issue #1897 and certified adjacency direct views are issue #1901. Later phases
+may return a first adjacency slice that aliases block bytes when the storage
+owner/path is eligible. Callers must treat either slice as an ephemeral alias
+tied to the block view or scratch.
 
 ## Search Algorithm
 

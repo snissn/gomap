@@ -499,21 +499,6 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 		return values, handle, true, false, nil
 	}
 	firstErr := fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String())
-	if handle.Source() == mappedresource.SourceMapped && typedColumnDenseDecodeFallbackAllowed(viewStatus) {
-		_ = handle.Release()
-		handle, err = manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{Reason: "column_graph typed-column dense vector section heap fallback", ValidationMode: mappedresource.ValidationVerify, AllowHeapCopy: true})
-		if err != nil {
-			return nil, nil, false, false, errors.Join(firstErr, err)
-		}
-		if checksumErr := validateColumnVectorGraphTypedColumnHandleChecksum(handle, sectionChecksum); checksumErr != nil {
-			_ = handle.Release()
-			return nil, nil, false, false, errors.Join(firstErr, checksumErr)
-		}
-		values, viewStatus = typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
-		if viewStatus.Direct() {
-			return values, handle, true, false, nil
-		}
-	}
 	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
 		_ = handle.Release()
 		return nil, nil, false, false, errors.Join(firstErr, fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String()))
