@@ -15,6 +15,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1643,6 +1644,231 @@ func TestColumnAssetSegmentAllocationCacheStopsBeforeDirectViewReservedBandM1849
 	cache.valid = true
 	if _, err := nextColumnAssetSegmentFileIDCached(namespace, cleanSegmentDir, cache); err == nil {
 		t.Fatal("nextColumnAssetSegmentFileIDCached accepted reserved direct-view file id")
+	}
+}
+
+func TestColumnAssetTypedColumnPartDirectViewSegmentTriggerAlignment(t *testing.T) {
+	cases := []struct {
+		name       string
+		field      TypedStorageField
+		value      columnDeclaredValue
+		wantDirect bool
+	}{
+		{
+			name:       "raw_int64",
+			field:      TypedStorageField{Name: "count", Path: "count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+			value:      columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: 7},
+			wantDirect: true,
+		},
+		{
+			name:       "native_float32",
+			field:      TypedStorageField{Name: "score32", Path: "score32", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+			value:      columnDeclaredValue{Type: ColumnStoreValueFloat32, Present: true, Float32: 1.25},
+			wantDirect: true,
+		},
+		{
+			name:       "native_float64",
+			field:      TypedStorageField{Name: "score64", Path: "score64", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueDouble, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+			value:      columnDeclaredValue{Type: ColumnStoreValueDouble, Present: true, Double: -2.5},
+			wantDirect: true,
+		},
+		{
+			name:       "float32_vector",
+			field:      TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2},
+			value:      columnDeclaredValue{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 2}},
+			wantDirect: true,
+		},
+		{
+			name:       "adjacency_deferred",
+			field:      TypedStorageField{Name: "neighbors", Path: "neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 2},
+			value:      columnDeclaredValue{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{3, 4}},
+			wantDirect: false,
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := columnAssetTypedColumnPartDirectViewTestConfig(t, "events_"+tc.name, tc.field)
+			root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+			payload := columnAssetTypedColumnPartDirectViewTestImage(t, tc.field, []columnDeclaredValue{tc.value})
+			ref, err := writeTypedColumnPartAssetToManager(root, cfg, payload, uint64(i+1), 1)
+			if err != nil {
+				t.Fatalf("writeTypedColumnPartAssetToManager: %v", err)
+			}
+			directFileID, err := directViewTypedColumnSegmentFileID(uint64(i + 1))
+			if err != nil {
+				t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+			}
+			if tc.wantDirect {
+				if ref.FileID != directFileID || ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+					t.Fatalf("ref=%+v want direct-view file_id=%d and %d-byte aligned offset", ref, directFileID, typedColumnPartDirectViewAssetAlignment)
+				}
+			} else if ref.FileID != columnAssetM12ASegmentFileID {
+				t.Fatalf("deferred ref=%+v want regular segment file_id=%d", ref, columnAssetM12ASegmentFileID)
+			}
+		})
+	}
+}
+
+func TestColumnAssetTypedColumnPartDirectViewSegmentPaddingAlignment(t *testing.T) {
+	cfg, payloads := columnAssetDirectViewAlignmentTestPayloads(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	const generation = uint64(17)
+	directFileID, err := directViewTypedColumnSegmentFileID(generation)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	seedRef, err := writeColumnAssetToManagerSegment(root, cfg, []byte{0xab}, ColumnAssetKindTCS1DictionaryCodes, generation, 90, directFileID)
+	if err != nil {
+		t.Fatalf("seed writeColumnAssetToManagerSegment: %v", err)
+	}
+	firstRef, err := writeTypedColumnPartAssetToManager(root, cfg, payloads[0], generation, 1)
+	if err != nil {
+		t.Fatalf("first writeTypedColumnPartAssetToManager: %v", err)
+	}
+	secondRef, err := writeTypedColumnPartAssetToManager(root, cfg, payloads[1], generation, 2)
+	if err != nil {
+		t.Fatalf("second writeTypedColumnPartAssetToManager: %v", err)
+	}
+	assertColumnAssetDirectViewAlignedTypedPartRef(t, firstRef, payloads[0], "count")
+	assertColumnAssetDirectViewAlignedTypedPartRef(t, secondRef, payloads[1], "count")
+	if firstRef.Offset != int64(typedColumnPartDirectViewAssetAlignment) {
+		t.Fatalf("first offset=%d want seeded prefix padded to %d", firstRef.Offset, typedColumnPartDirectViewAssetAlignment)
+	}
+	if secondRef.Offset <= firstRef.Offset || secondRef.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+		t.Fatalf("second offset=%d first=%d want later aligned typed-column part in same segment", secondRef.Offset, firstRef.Offset)
+	}
+	segment := readColumnAssetSegmentFileForTest(t, root, firstRef)
+	assertZeroBytesForTest(t, segment[seedRef.Offset+seedRef.Length:firstRef.Offset], "seed-to-first padding")
+	assertZeroBytesForTest(t, segment[firstRef.Offset+firstRef.Length:secondRef.Offset], "first-to-second padding")
+	if got, want := int64(len(segment)), secondRef.Offset+secondRef.Length; got != want {
+		t.Fatalf("segment size=%d want second ref end=%d including padding", got, want)
+	}
+}
+
+func TestColumnAssetTypedColumnPartDirectViewAppenderPaddingAlignment(t *testing.T) {
+	cfg, payloads := columnAssetDirectViewAlignmentTestPayloads(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	const generation = uint64(23)
+	directFileID, err := directViewTypedColumnSegmentFileID(generation)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	appender, err := newColumnPhysicalAssetSegmentAppender(root, cfg, directFileID)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetSegmentAppender: %v", err)
+	}
+	seedRef, err := appender.appendKind([]byte{0xcd}, ColumnAssetKindTCS1DictionaryCodes, generation, 90)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("seed appendKind: %v", err)
+	}
+	firstRef, err := appender.appendKind(payloads[0], ColumnAssetKindTCS1TypedColumnPart, generation, 1)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("first appendKind: %v", err)
+	}
+	secondRef, err := appender.appendKind(payloads[1], ColumnAssetKindTCS1TypedColumnPart, generation, 2)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("second appendKind: %v", err)
+	}
+	if appender.offset != secondRef.Offset+secondRef.Length {
+		_ = appender.abort()
+		t.Fatalf("appender offset=%d want second ref end=%d", appender.offset, secondRef.Offset+secondRef.Length)
+	}
+	if err := appender.close(); err != nil {
+		t.Fatalf("appender close: %v", err)
+	}
+	assertColumnAssetDirectViewAlignedTypedPartRef(t, firstRef, payloads[0], "count")
+	assertColumnAssetDirectViewAlignedTypedPartRef(t, secondRef, payloads[1], "count")
+	if firstRef.Offset != int64(typedColumnPartDirectViewAssetAlignment) || secondRef.Offset <= firstRef.Offset || secondRef.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+		t.Fatalf("refs first=%+v second=%+v want aligned typed-column parts in same appender segment", firstRef, secondRef)
+	}
+	segment := readColumnAssetSegmentFileForTest(t, root, firstRef)
+	assertZeroBytesForTest(t, segment[seedRef.Offset+seedRef.Length:firstRef.Offset], "appender seed-to-first padding")
+	assertZeroBytesForTest(t, segment[firstRef.Offset+firstRef.Length:secondRef.Offset], "appender first-to-second padding")
+	if got, want := int64(len(segment)), secondRef.Offset+secondRef.Length; got != want {
+		t.Fatalf("segment size=%d want second ref end=%d including appender padding", got, want)
+	}
+}
+
+func columnAssetDirectViewAlignmentTestPayloads(t *testing.T) (ColumnStoreConfig, [][]byte) {
+	t.Helper()
+	field := TypedStorageField{Name: "count", Path: "count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}
+	cfg := columnAssetTypedColumnPartDirectViewTestConfig(t, "events_alignment", field)
+	payloads := [][]byte{
+		columnAssetTypedColumnPartDirectViewTestImage(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 1}, {Type: ColumnStoreValueInt64, Present: true, Int64: 2}}),
+		columnAssetTypedColumnPartDirectViewTestImage(t, field, []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 3}, {Type: ColumnStoreValueInt64, Present: true, Int64: 4}, {Type: ColumnStoreValueInt64, Present: true, Int64: 5}}),
+	}
+	return cfg, payloads
+}
+
+func columnAssetTypedColumnPartDirectViewTestConfig(t *testing.T, collection string, field TypedStorageField) ColumnStoreConfig {
+	t.Helper()
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{{Name: field.Name, Path: field.Path, Owner: field.Owner, ValueType: field.ValueType, Nullable: field.Nullable, FixedWidthEncoding: field.FixedWidthEncoding, VectorDims: field.VectorDims, AdjacencyDegree: field.AdjacencyDegree}}}
+	normalized, err := normalizeColumnStoreConfig(collection, cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	return *normalized
+}
+
+func columnAssetTypedColumnPartDirectViewTestImage(t *testing.T, field TypedStorageField, values []columnDeclaredValue) []byte {
+	t.Helper()
+	part := typedColumnAdapterBuildPart(t, field, values)
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	return image.Bytes
+}
+
+func assertColumnAssetDirectViewAlignedTypedPartRef(t *testing.T, ref ColumnAssetRef, payload []byte, column string) {
+	t.Helper()
+	if ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 || ref.Length != int64(len(payload)) {
+		t.Fatalf("ref=%+v payload_len=%d want typed-column %d-byte aligned ref", ref, len(payload), typedColumnPartDirectViewAssetAlignment)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(payload)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	cert, ok := certification.Column(column)
+	if !ok || !cert.DirectViewCertified {
+		t.Fatalf("column %q certification=%+v ok=%v want direct-view certified", column, cert, ok)
+	}
+	if (ref.Offset+int64(cert.Section.Offset))%int64(cert.Alignment) != 0 {
+		t.Fatalf("section absolute offset ref=%d section=%d alignment=%d", ref.Offset, cert.Section.Offset, cert.Alignment)
+	}
+	for i, block := range cert.Blocks {
+		if (ref.Offset+int64(block.PayloadOffset))%int64(cert.Alignment) != 0 {
+			t.Fatalf("block[%d] absolute payload offset ref=%d payload=%d alignment=%d", i, ref.Offset, block.PayloadOffset, cert.Alignment)
+		}
+	}
+}
+
+func readColumnAssetSegmentFileForTest(t *testing.T, root string, ref ColumnAssetRef) []byte {
+	t.Helper()
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	segment, err := os.ReadFile(assetPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", assetPath, err)
+	}
+	return segment
+}
+
+func assertZeroBytesForTest(t *testing.T, raw []byte, label string) {
+	t.Helper()
+	for i, b := range raw {
+		if b != 0 {
+			t.Fatalf("%s byte[%d]=0x%02x want zero padding", label, i, b)
+		}
 	}
 }
 
