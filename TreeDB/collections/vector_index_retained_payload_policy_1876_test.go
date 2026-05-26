@@ -417,8 +417,8 @@ func assertRetainedPayloadPolicySearchDocuments1876(tb testing.TB, got VectorInd
 		if !projected && !reflect.DeepEqual(doc["embedding"], expected["embedding"]) {
 			tb.Fatalf("full document[%d] embedding mismatch", i)
 		}
-		hasBody := doc["body"] != nil
-		hasRetainedTag := doc["retained_tag"] != nil
+		_, hasBody := doc["body"]
+		_, hasRetainedTag := doc["retained_tag"]
 		if policy == ColumnRetainedPayloadNone {
 			if hasBody || hasRetainedTag {
 				tb.Fatalf("retained-none document[%d]=%v retained non-column fields", i, doc)
