@@ -251,6 +251,7 @@ type typedColumnPartReconstructionCache struct {
 	Fields     []TypedStorageField
 	Refs       map[uint64]columnManifestAssetRefForScan
 	RefsLoaded bool
+	ReadCache  *columnPhysicalAssetReadCache
 
 	CacheHits        uint64
 	CacheMisses      uint64
@@ -303,14 +304,24 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(s
 		if !found {
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction missing typed_column_part asset for generation=%d", physicalRow.Generation)
 		}
-		readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
-		if err != nil {
-			return typedColumnPartVisibleValues{}, err
+		readCache := (*columnPhysicalAssetReadCache)(nil)
+		closeReadCache := false
+		if cache != nil && cache.ReadCache != nil {
+			readCache = cache.ReadCache
+		} else {
+			localReadCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(c.db.ColumnAssetRootDir(), cfg.AssetManager.Namespace, ColumnAssetReadIntegrityVerify)
+			if err != nil {
+				return typedColumnPartVisibleValues{}, err
+			}
+			readCache = &localReadCache
+			closeReadCache = true
 		}
 		raw, readErr := readCache.read(ref.Ref, nil)
 		if readErr != nil {
-			if closeErr := readCache.close(); closeErr != nil {
-				readErr = errors.Join(readErr, closeErr)
+			if closeReadCache {
+				if closeErr := readCache.close(); closeErr != nil {
+					readErr = errors.Join(readErr, closeErr)
+				}
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction read generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, readErr)
 		}
@@ -319,13 +330,18 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(s
 		}
 		part, err := typedColumnAdapterPartFromBytesForReconstruction(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(cfg.SchemaHash)}, raw)
 		if err != nil {
-			if closeErr := readCache.close(); closeErr != nil {
-				err = errors.Join(err, closeErr)
+			if closeReadCache {
+				if closeErr := readCache.close(); closeErr != nil {
+					err = errors.Join(err, closeErr)
+				}
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
 		decoded, err = part.scanDecodedValues()
-		closeErr := readCache.close()
+		var closeErr error
+		if closeReadCache {
+			closeErr = readCache.close()
+		}
 		if err != nil {
 			if closeErr != nil {
 				err = errors.Join(err, closeErr)

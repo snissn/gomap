@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 // DocumentFetchOptions configures snapshot-bound document materialization.
@@ -16,8 +18,7 @@ import (
 type DocumentFetchOptions struct {
 	// ColumnAssetReadIntegrity controls typed-row/physical row asset reads used
 	// to find the visible row for a document. Typed-column part reconstruction
-	// continues to use the default verified read path until the prepared asset
-	// lifecycle lands.
+	// uses the prepared read-view cache with verified reads.
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
@@ -45,13 +46,14 @@ type DocumentFetchResult struct {
 }
 
 // DocumentMaterializationStats attributes the work performed by a
-// CollectionReadView fetch. Counters describe the fetch call, not the lifetime
-// of the read view.
+// CollectionReadView fetch. Counters describe the fetch call; AssetActiveHandles
+// is the read view's current mappedresource handle count after the fetch.
 type DocumentMaterializationStats struct {
 	DocumentsRequested uint64
 	DocumentsFetched   uint64
 	DocumentsMissing   uint64
 	DocumentBytes      uint64
+	FetchNanos         int64
 
 	RetainedPayloadFetches uint64
 	RetainedPayloadBytes   uint64
@@ -73,6 +75,12 @@ type DocumentMaterializationStats struct {
 	JSONReconstructionNanos int64
 
 	RowRefFallbackScans uint64
+
+	AssetMmapHits        uint64
+	AssetReadAtFallbacks uint64
+	AssetFileOpens       uint64
+	AssetFileCloses      uint64
+	AssetActiveHandles   int64
 }
 
 // DocumentFetchResponse contains ordered materialization results and per-call
@@ -81,6 +89,8 @@ type DocumentFetchResponse struct {
 	Results []DocumentFetchResult
 	Stats   DocumentMaterializationStats
 }
+
+var collectionReadViewScopeSeq atomic.Uint64
 
 // CollectionReadView is a closeable snapshot-bound document materializer for a
 // collection. It preserves the catalog/root visibility that existed when the
@@ -93,6 +103,15 @@ type CollectionReadView struct {
 	catalog    *collectionCatalog
 	ownsSnap   bool
 	closed     bool
+
+	assetScopeKind                  mappedresource.ScopeKind
+	assetScopeID                    string
+	assetManager                    *mappedresource.Manager
+	assetClosedCounters             documentMaterializerAssetCounters
+	rowAssetReadCache               *columnPhysicalAssetReadCache
+	rowAssetReadIntegrity           ColumnAssetReadIntegrity
+	typedColumnAssetReadCache       *columnPhysicalAssetReadCache
+	forceAssetReadAtFallbackForTest bool
 }
 
 // OpenCollectionReadView opens a snapshot-bound document materializer. Buffered
@@ -126,13 +145,28 @@ func (c *Collection) OpenCollectionReadView() (*CollectionReadView, error) {
 	if catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	view := newCollectionReadViewAtSnapshot(c, snap, catalog, true)
+	view := newCollectionReadViewAtSnapshot(c, snap, catalog, true, mappedresource.ScopeCollectionReadView)
 	closeOnErr = false
 	return view, nil
 }
 
-func newCollectionReadViewAtSnapshot(c *Collection, snap *backenddb.Snapshot, catalog *collectionCatalog, ownsSnap bool) *CollectionReadView {
-	return &CollectionReadView{collection: c, snapshot: snap, catalog: catalog, ownsSnap: ownsSnap}
+func newCollectionReadViewAtSnapshot(c *Collection, snap *backenddb.Snapshot, catalog *collectionCatalog, ownsSnap bool, scopeKind mappedresource.ScopeKind) *CollectionReadView {
+	if scopeKind == "" {
+		scopeKind = mappedresource.ScopeCollectionReadView
+	}
+	return &CollectionReadView{
+		collection:     c,
+		snapshot:       snap,
+		catalog:        catalog,
+		ownsSnap:       ownsSnap,
+		assetScopeKind: scopeKind,
+		assetScopeID:   newCollectionReadViewScopeID(scopeKind),
+	}
+}
+
+func newCollectionReadViewScopeID(kind mappedresource.ScopeKind) string {
+	seq := collectionReadViewScopeSeq.Add(1)
+	return fmt.Sprintf("%s-%d", kind, seq)
 }
 
 // Close releases the snapshot owned by the read view. Views that are bound to a
@@ -143,18 +177,22 @@ func (v *CollectionReadView) Close() error {
 		return nil
 	}
 	v.closed = true
+	cacheErr := v.closeAssetReadCaches()
+	var snapErr error
 	if v.ownsSnap && v.snapshot != nil {
-		err := v.snapshot.Close()
+		snapErr = v.snapshot.Close()
 		v.snapshot = nil
-		return err
 	}
-	return nil
+	return errors.Join(cacheErr, snapErr)
 }
 
 // FetchDocumentsByID materializes full documents for ids in input order. Missing
 // documents produce Found=false results without failing the whole fetch.
 func (v *CollectionReadView) FetchDocumentsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
-	return v.fetchDocumentsByID(ids, nil, opts)
+	start := time.Now()
+	response, err := v.fetchDocumentsByID(ids, nil, opts)
+	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
+	return response, err
 }
 
 func (v *CollectionReadView) validateOpen() error {
@@ -168,6 +206,179 @@ func (v *CollectionReadView) validateOpen() error {
 		return errors.New("collections: nil collection read view")
 	}
 	return nil
+}
+
+type documentMaterializerAssetCounters struct {
+	mmapHits        uint64
+	readAtFallbacks uint64
+	fileOpens       uint64
+	fileCloses      uint64
+	activeHandles   int64
+}
+
+func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowIntegrity ColumnAssetReadIntegrity) error {
+	if v == nil || v.collection == nil || v.collection.db == nil {
+		return errors.New("collections: nil collection read view")
+	}
+	if cfg.AssetManager == nil {
+		return errors.New("collections: document materializer requires column asset manager metadata")
+	}
+	rowIntegrity = normalizeDocumentMaterializerReadIntegrity(rowIntegrity)
+	if v.assetManager == nil {
+		v.assetManager = mappedresource.NewManager()
+	}
+	rootDir := v.collection.db.ColumnAssetRootDir()
+	namespace := cfg.AssetManager.Namespace
+	if v.rowAssetReadCache == nil || v.rowAssetReadIntegrity != rowIntegrity || v.rowAssetReadCache.namespace != namespace {
+		if v.rowAssetReadCache != nil {
+			if err := v.rowAssetReadCache.close(); err != nil {
+				return err
+			}
+			v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
+			v.rowAssetReadCache = nil
+		}
+		readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(rootDir, namespace, rowIntegrity)
+		if err != nil {
+			return err
+		}
+		readCache.returnViews = true
+		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
+		readCache.trustCachedVerifyFileIdentity = true
+		if err := readCache.useMappedResourceManager(v.assetManager, v.assetScope(cfg, "typed-row document materializer"), "document materializer typed-row asset read"); err != nil {
+			_ = readCache.close()
+			return err
+		}
+		v.rowAssetReadCache = &readCache
+		v.rowAssetReadIntegrity = rowIntegrity
+	}
+	if v.typedColumnAssetReadCache == nil || v.typedColumnAssetReadCache.namespace != namespace {
+		if v.typedColumnAssetReadCache != nil {
+			if err := v.typedColumnAssetReadCache.close(); err != nil {
+				return err
+			}
+			v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
+			v.typedColumnAssetReadCache = nil
+		}
+		readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(rootDir, namespace, ColumnAssetReadIntegrityVerify)
+		if err != nil {
+			return err
+		}
+		readCache.returnViews = true
+		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
+		readCache.trustCachedVerifyFileIdentity = true
+		if err := readCache.useMappedResourceManager(v.assetManager, v.assetScope(cfg, "typed-column document materializer"), "document materializer typed-column asset read"); err != nil {
+			_ = readCache.close()
+			return err
+		}
+		v.typedColumnAssetReadCache = &readCache
+	}
+	return nil
+}
+
+func normalizeDocumentMaterializerReadIntegrity(in ColumnAssetReadIntegrity) ColumnAssetReadIntegrity {
+	if in == "" {
+		return ColumnAssetReadIntegrityVerify
+	}
+	return in
+}
+
+func (v *CollectionReadView) assetScope(cfg ColumnStoreConfig, reason string) mappedresource.Scope {
+	kind := mappedresource.ScopeCollectionReadView
+	id := "collection_read_view"
+	if v != nil {
+		if v.assetScopeKind != "" {
+			kind = v.assetScopeKind
+		}
+		if v.assetScopeID != "" {
+			id = v.assetScopeID
+		}
+	}
+	generation := uint64(0)
+	if cfg.ActiveManifest != nil {
+		generation = cfg.ActiveManifest.Generation
+	}
+	namespace := ""
+	if cfg.AssetManager != nil {
+		namespace = cfg.AssetManager.Namespace
+	}
+	collectionName := ""
+	if v != nil && v.catalog != nil {
+		collectionName = v.catalog.meta.Name
+	}
+	return mappedresource.Scope{
+		Kind:       kind,
+		ID:         id,
+		Collection: collectionName,
+		Namespace:  namespace,
+		Generation: generation,
+		Reason:     reason,
+	}
+}
+
+func (v *CollectionReadView) assetCounters() documentMaterializerAssetCounters {
+	var out documentMaterializerAssetCounters
+	if v == nil {
+		return out
+	}
+	out = v.assetClosedCounters
+	if v.rowAssetReadCache != nil {
+		stats := v.rowAssetReadCache.lifecycleStats()
+		out.mmapHits += stats.MmapHits
+		out.readAtFallbacks += stats.ReadAtFallbacks
+		out.fileOpens += stats.FileOpens
+		out.fileCloses += stats.FileCloses
+	}
+	if v.typedColumnAssetReadCache != nil {
+		stats := v.typedColumnAssetReadCache.lifecycleStats()
+		out.mmapHits += stats.MmapHits
+		out.readAtFallbacks += stats.ReadAtFallbacks
+		out.fileOpens += stats.FileOpens
+		out.fileCloses += stats.FileCloses
+	}
+	if v.assetManager != nil {
+		out.activeHandles = v.assetManager.Stats().ActiveHandles
+	}
+	return out
+}
+
+func (c *documentMaterializerAssetCounters) addReadCache(readCache *columnPhysicalAssetReadCache) {
+	if c == nil || readCache == nil {
+		return
+	}
+	stats := readCache.lifecycleStats()
+	c.mmapHits += stats.MmapHits
+	c.readAtFallbacks += stats.ReadAtFallbacks
+	c.fileOpens += stats.FileOpens
+	c.fileCloses += stats.FileCloses
+}
+
+func addDocumentMaterializerAssetCounterDeltas(stats *DocumentMaterializationStats, before, after documentMaterializerAssetCounters) {
+	if stats == nil {
+		return
+	}
+	stats.AssetMmapHits += deltaUint64(before.mmapHits, after.mmapHits)
+	stats.AssetReadAtFallbacks += deltaUint64(before.readAtFallbacks, after.readAtFallbacks)
+	stats.AssetFileOpens += deltaUint64(before.fileOpens, after.fileOpens)
+	stats.AssetFileCloses += deltaUint64(before.fileCloses, after.fileCloses)
+	stats.AssetActiveHandles = after.activeHandles
+}
+
+func (v *CollectionReadView) closeAssetReadCaches() error {
+	if v == nil {
+		return nil
+	}
+	var closeErr error
+	if v.rowAssetReadCache != nil {
+		closeErr = errors.Join(closeErr, v.rowAssetReadCache.close())
+		v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
+		v.rowAssetReadCache = nil
+	}
+	if v.typedColumnAssetReadCache != nil {
+		closeErr = errors.Join(closeErr, v.typedColumnAssetReadCache.close())
+		v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
+		v.typedColumnAssetReadCache = nil
+	}
+	return closeErr
 }
 
 // FetchDocumentsByRowRef materializes full documents for row refs in input
@@ -193,7 +404,9 @@ func (v *CollectionReadView) FetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 		ids[i] = refs[i].DocumentID
 		expected[i] = &refs[i]
 	}
+	start := time.Now()
 	response, err := v.fetchDocumentsByID(ids, expected, opts)
+	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
 	response.Stats.RowRefFallbackScans++
 	return response, err
 }
@@ -260,14 +473,22 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	return v.fetchColumnStoreDocumentsByID(response, ids, retained, expected, opts)
 }
 
-func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
+	out = response
 	cfg := v.catalog.meta.Options.ColumnStore.copy()
 	readIntegrity := opts.ColumnAssetReadIntegrity
 	if readIntegrity == "" {
 		readIntegrity = ColumnAssetReadIntegrityVerify
 	}
+	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
+		return out, err
+	}
+	assetCountersBefore := v.assetCounters()
+	defer func() {
+		addDocumentMaterializerAssetCounterDeltas(&out.Stats, assetCountersBefore, v.assetCounters())
+	}()
 	visibleStart := time.Now()
-	visible, err := v.collection.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadIntegrity(
+	visible, err := v.collection.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(
 		v.snapshot,
 		v.catalog,
 		v.catalog.meta.Name,
@@ -277,14 +498,15 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		newColumnPhysicalVisibilityTargetIDs(ids),
 		nil,
 		readIntegrity,
+		v.rowAssetReadCache,
 	)
-	response.Stats.VisibilityNanos = time.Since(visibleStart).Nanoseconds()
-	response.Stats.VisibilityScans++
-	response.Stats.VisibilityRowsScanned = uint64(visible.Diagnostics.RowsScanned)
-	response.Stats.VisibilityRows = uint64(len(visible.Rows))
-	response.Stats.VisibilityPhysicalBytes = visible.Diagnostics.PhysicalBytesScanned
+	out.Stats.VisibilityNanos = time.Since(visibleStart).Nanoseconds()
+	out.Stats.VisibilityScans++
+	out.Stats.VisibilityRowsScanned = uint64(visible.Diagnostics.RowsScanned)
+	out.Stats.VisibilityRows = uint64(len(visible.Rows))
+	out.Stats.VisibilityPhysicalBytes = visible.Diagnostics.PhysicalBytesScanned
 	if err != nil {
-		return response, err
+		return out, err
 	}
 	visibleByID := make(map[string]columnPhysicalVisibleRow, len(visible.Rows))
 	for _, row := range visible.Rows {
@@ -292,65 +514,65 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	}
 	var typedColumnCache *typedColumnPartReconstructionCache
 	if columnStoreHasTypedColumnPartOwners(cfg) {
-		typedColumnCache = &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues)}
+		typedColumnCache = &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues), ReadCache: v.typedColumnAssetReadCache}
 	}
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
 	var documentArena []byte
-	for i := range response.Results {
-		if !response.Results[i].Found {
+	for i := range out.Results {
+		if !out.Results[i].Found {
 			continue
 		}
-		row, ok := visibleByID[string(response.Results[i].ID)]
+		row, ok := visibleByID[string(out.Results[i].ID)]
 		if !ok {
-			return response, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(response.Results[i].ID))
+			return out, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(out.Results[i].ID))
 		}
 		if row.Deleted {
-			return response, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(response.Results[i].ID))
+			return out, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(out.Results[i].ID))
 		}
 		rowRef := documentRowRefFromVisibleRow(row)
 		if expected != nil && expected[i] != nil {
 			if err := validateDocumentRowRefMatchesVisibleRow(*expected[i], row); err != nil {
-				return response, err
+				return out, err
 			}
 			rowRef.DocumentID = append(rowRef.DocumentID[:0], expected[i].DocumentID...)
 		}
-		response.Results[i].RowRef = rowRef
+		out.Results[i].RowRef = rowRef
 
 		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
 		typedStart := time.Now()
 		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch)
 		typedElapsed := time.Since(typedStart)
 		if err != nil {
-			return response, err
+			return out, err
 		}
 		if len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg) {
-			response.Stats.TypedColumnRows++
+			out.Stats.TypedColumnRows++
 		}
 		afterCacheHits, afterCacheMisses, afterPartLoads, afterPartDecodes := typedColumnCacheCounters(typedColumnCache)
-		response.Stats.TypedColumnCacheHits += deltaUint64(beforeCacheHits, afterCacheHits)
-		response.Stats.TypedColumnCacheMisses += deltaUint64(beforeCacheMisses, afterCacheMisses)
-		response.Stats.TypedColumnPartLoads += deltaUint64(beforePartLoads, afterPartLoads)
-		response.Stats.TypedColumnPartDecodes += deltaUint64(beforePartDecodes, afterPartDecodes)
-		response.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
+		out.Stats.TypedColumnCacheHits += deltaUint64(beforeCacheHits, afterCacheHits)
+		out.Stats.TypedColumnCacheMisses += deltaUint64(beforeCacheMisses, afterCacheMisses)
+		out.Stats.TypedColumnPartLoads += deltaUint64(beforePartLoads, afterPartLoads)
+		out.Stats.TypedColumnPartDecodes += deltaUint64(beforePartDecodes, afterPartDecodes)
+		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
 
 		reconstructStart := time.Now()
 		fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
 		if err != nil {
-			return response, err
+			return out, err
 		}
 		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained[i], row, fullValues)
 		if err != nil {
-			return response, err
+			return out, err
 		}
-		response.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
-		response.Stats.JSONReconstructionRows++
-		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &response.Results[i])
-		response.Stats.DocumentsFetched++
-		response.Stats.DocumentBytes += uint64(len(response.Results[i].Document))
+		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
+		out.Stats.JSONReconstructionRows++
+		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
+		out.Stats.DocumentsFetched++
+		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
 	}
-	return response, nil
+	return out, nil
 }
 
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {
@@ -416,6 +638,7 @@ func addDocumentMaterializationStatsToVectorStats(dst *VectorIndexSearchStats, s
 	dst.DocumentsFetched += src.DocumentsFetched
 	dst.DocumentsMissing += src.DocumentsMissing
 	dst.DocumentBytes += src.DocumentBytes
+	dst.DocumentFetchNanos += uint64(maxInt64ForMetric(src.FetchNanos, 0))
 	dst.DocumentRetainedFetches += src.RetainedPayloadFetches
 	dst.DocumentRetainedBytes += src.RetainedPayloadBytes
 	dst.DocumentVisibilityScans += src.VisibilityScans
@@ -436,6 +659,11 @@ func addDocumentMaterializationStatsToVectorStats(dst *VectorIndexSearchStats, s
 	dst.DocumentJSONReconstructionRows += src.JSONReconstructionRows
 	dst.DocumentJSONReconstructionNanos += uint64(maxInt64ForMetric(src.JSONReconstructionNanos, 0))
 	dst.DocumentRowRefFallbackScans += src.RowRefFallbackScans
+	dst.DocumentAssetMmapHits += src.AssetMmapHits
+	dst.DocumentAssetReadAtFallbacks += src.AssetReadAtFallbacks
+	dst.DocumentAssetFileOpens += src.AssetFileOpens
+	dst.DocumentAssetFileCloses += src.AssetFileCloses
+	dst.DocumentAssetActiveHandles = src.AssetActiveHandles
 	return nil
 }
 

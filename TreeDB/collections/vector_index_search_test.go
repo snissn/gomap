@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
@@ -272,6 +273,24 @@ func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T
 	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-a")
 	if got.Stats.DocumentsFetched != 1 {
 		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
+	}
+	if searcher.documentView == nil || searcher.documentView.assetScopeKind != mappedresource.ScopePreparedSearch {
+		t.Fatalf("document view=%+v want prepared_search scope", searcher.documentView)
+	}
+	again, err := searcher.Search(VectorIndexSearcherSearchOptions{
+		Query:            []float32{1, 0, 0},
+		TopK:             1,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+	})
+	if err != nil {
+		t.Fatalf("second Search after delete on bound searcher: %v", err)
+	}
+	if !bytes.Equal(again.Results[0].Document, got.Results[0].Document) {
+		t.Fatalf("second document=%s want %s", again.Results[0].Document, got.Results[0].Document)
+	}
+	if again.Stats.DocumentAssetFileOpens != 0 {
+		t.Fatalf("second stats=%+v want prepared document read cache reuse without file opens", again.Stats)
 	}
 }
 
@@ -1037,6 +1056,56 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4(b *testing
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 }
 
+func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsV4(b *testing.B) {
+	const (
+		rows     = 1024
+		dims     = 128
+		m        = 16
+		topK     = 10
+		efSearch = 128
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		b.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	query := append([]float32(nil), input[37].vector...)
+	opts := VectorIndexSearcherSearchOptions{
+		Query:            query,
+		TopK:             topK,
+		EfSearch:         efSearch,
+		IncludeDocuments: true,
+	}
+	if _, err := searcher.Search(opts); err != nil {
+		b.Fatalf("warm Search: %v", err)
+	}
+	measuredStats, err := searcher.Search(opts)
+	if err != nil {
+		b.Fatalf("measure Search stats: %v", err)
+	}
+	stats := measuredStats.Stats
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := searcher.Search(opts)
+		if err != nil {
+			b.Fatalf("Search: %v", err)
+		}
+		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
+	}
+	b.StopTimer()
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
+}
+
 func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B) {
 	const (
 		rows = 1024
@@ -1132,18 +1201,27 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.DocumentsFetched), "docs_fetched/search")
 	b.ReportMetric(float64(stats.DocumentsMissing), "docs_missing/search")
 	b.ReportMetric(float64(stats.DocumentBytes), "doc_B/search")
+	b.ReportMetric(float64(stats.DocumentFetchNanos), "doc_fetch_ns/search")
 	b.ReportMetric(float64(stats.DocumentRetainedFetches), "doc_retained_fetches/search")
 	b.ReportMetric(float64(stats.DocumentRetainedBytes), "doc_retained_B/search")
 	b.ReportMetric(float64(stats.DocumentVisibilityScans), "doc_visibility_scans/search")
 	b.ReportMetric(float64(stats.DocumentVisibilityRowsScanned), "doc_visibility_rows_scanned/search")
 	b.ReportMetric(float64(stats.DocumentVisibilityRows), "doc_visibility_rows/search")
 	b.ReportMetric(float64(stats.DocumentVisibilityPhysicalBytes), "doc_visibility_physical_B/search")
+	b.ReportMetric(float64(stats.DocumentVisibilityNanos), "doc_visibility_ns/search")
 	b.ReportMetric(float64(stats.DocumentTypedColumnRows), "doc_typed_column_rows/search")
 	b.ReportMetric(float64(stats.DocumentTypedColumnCacheHits), "doc_typed_column_cache_hits/search")
 	b.ReportMetric(float64(stats.DocumentTypedColumnCacheMisses), "doc_typed_column_cache_misses/search")
 	b.ReportMetric(float64(stats.DocumentTypedColumnPartLoads), "doc_typed_column_part_loads/search")
 	b.ReportMetric(float64(stats.DocumentTypedColumnPartDecodes), "doc_typed_column_part_decodes/search")
+	b.ReportMetric(float64(stats.DocumentTypedColumnNanos), "doc_typed_column_ns/search")
 	b.ReportMetric(float64(stats.DocumentJSONReconstructionRows), "doc_json_reconstruction_rows/search")
+	b.ReportMetric(float64(stats.DocumentJSONReconstructionNanos), "doc_json_reconstruction_ns/search")
+	b.ReportMetric(float64(stats.DocumentAssetMmapHits), "doc_asset_mmap_hits/search")
+	b.ReportMetric(float64(stats.DocumentAssetReadAtFallbacks), "doc_asset_readat_fallbacks/search")
+	b.ReportMetric(float64(stats.DocumentAssetFileOpens), "doc_asset_file_opens/search")
+	b.ReportMetric(float64(stats.DocumentAssetFileCloses), "doc_asset_file_closes/search")
+	b.ReportMetric(float64(stats.DocumentAssetActiveHandles), "doc_asset_active_handles")
 }
 
 var vectorSearchBenchSinkOrdinalV4 int
