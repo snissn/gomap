@@ -85,6 +85,42 @@ type VectorIndexSearchStats struct {
 	ResultFetches uint64 `json:"result_fetches,omitempty"`
 	// DocumentsFetched is the post-top-k document materialization count.
 	DocumentsFetched uint64 `json:"documents_fetched,omitempty"`
+	// DocumentsMissing is the post-top-k materialization miss count.
+	DocumentsMissing uint64 `json:"documents_missing,omitempty"`
+	// DocumentBytes is the materialized response document byte count.
+	DocumentBytes uint64 `json:"document_bytes,omitempty"`
+	// DocumentRetainedFetches counts primary retained-payload fetches for document materialization.
+	DocumentRetainedFetches uint64 `json:"document_retained_fetches,omitempty"`
+	// DocumentRetainedBytes counts retained-payload bytes read for document materialization.
+	DocumentRetainedBytes uint64 `json:"document_retained_bytes,omitempty"`
+	// DocumentVisibilityScans counts batched typed-row visibility scans used by materialization.
+	DocumentVisibilityScans uint64 `json:"document_visibility_scans,omitempty"`
+	// DocumentVisibilityRowsScanned counts typed-row asset rows scanned for materialization.
+	DocumentVisibilityRowsScanned uint64 `json:"document_visibility_rows_scanned,omitempty"`
+	// DocumentVisibilityRows counts visible typed rows found by materialization scans.
+	DocumentVisibilityRows uint64 `json:"document_visibility_rows,omitempty"`
+	// DocumentVisibilityPhysicalBytes counts typed-row physical bytes scanned for materialization.
+	DocumentVisibilityPhysicalBytes uint64 `json:"document_visibility_physical_bytes,omitempty"`
+	// DocumentVisibilityNanos attributes typed-row visibility scan time.
+	DocumentVisibilityNanos uint64 `json:"document_visibility_nanos,omitempty"`
+	// DocumentTypedColumnRows counts materialized rows that consulted typed_column_part storage.
+	DocumentTypedColumnRows uint64 `json:"document_typed_column_rows,omitempty"`
+	// DocumentTypedColumnCacheHits counts typed-column reconstruction cache hits.
+	DocumentTypedColumnCacheHits uint64 `json:"document_typed_column_cache_hits,omitempty"`
+	// DocumentTypedColumnCacheMisses counts typed-column reconstruction cache misses.
+	DocumentTypedColumnCacheMisses uint64 `json:"document_typed_column_cache_misses,omitempty"`
+	// DocumentTypedColumnPartLoads counts typed_column_part asset loads.
+	DocumentTypedColumnPartLoads uint64 `json:"document_typed_column_part_loads,omitempty"`
+	// DocumentTypedColumnPartDecodes counts typed_column_part decodes.
+	DocumentTypedColumnPartDecodes uint64 `json:"document_typed_column_part_decodes,omitempty"`
+	// DocumentTypedColumnNanos attributes typed-column value fetch/decode time.
+	DocumentTypedColumnNanos uint64 `json:"document_typed_column_nanos,omitempty"`
+	// DocumentJSONReconstructionRows counts rows serialized through JSON reconstruction.
+	DocumentJSONReconstructionRows uint64 `json:"document_json_reconstruction_rows,omitempty"`
+	// DocumentJSONReconstructionNanos attributes JSON merge/serialization time.
+	DocumentJSONReconstructionNanos uint64 `json:"document_json_reconstruction_nanos,omitempty"`
+	// DocumentRowRefFallbackScans counts row-ref requests served by the interim target-ID scan path.
+	DocumentRowRefFallbackScans uint64 `json:"document_row_ref_fallback_scans,omitempty"`
 
 	// RowFetches is the per-search count of physical row-reader fetch calls.
 	RowFetches uint64 `json:"row_fetches,omitempty"`
@@ -153,17 +189,18 @@ type VectorIndexSearchResponse struct {
 // searchers. Close and reopen the searcher after writes/rebuilds when callers
 // need the newest column_graph generation.
 type VectorIndexSearcher struct {
-	collection *Collection
-	indexName  string
-	strategy   VectorIndexStrategy
-	path       VectorIndexSearchPath
-	status     VectorIndexStatus
-	snapshot   *backenddb.Snapshot
-	catalog    *collectionCatalog
-	reader     *columnVectorGraphPhysicalRowReader
-	scratch    columnVectorGraphNativeSearchScratch
-	readerLast columnPhysicalRowReaderStats
-	closed     bool
+	collection   *Collection
+	indexName    string
+	strategy     VectorIndexStrategy
+	path         VectorIndexSearchPath
+	status       VectorIndexStatus
+	snapshot     *backenddb.Snapshot
+	catalog      *collectionCatalog
+	reader       *columnVectorGraphPhysicalRowReader
+	documentView *CollectionReadView
+	scratch      columnVectorGraphNativeSearchScratch
+	readerLast   columnPhysicalRowReaderStats
+	closed       bool
 }
 
 // SearchVectorIndex searches a collection vector index through the public
@@ -367,7 +404,6 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	}
 	idBytes := make([]byte, idByteCount)
 	idOffset := 0
-	var documentBytes []byte
 	for i, result := range results {
 		if len(result.ID) > len(idBytes)-idOffset {
 			return response, errors.New("collections: vector index search result id byte accounting mismatch")
@@ -381,26 +417,30 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 			Ordinal: result.Ordinal,
 			Score:   result.Score,
 		}
-		if opts.IncludeDocuments {
-			doc, found, err := s.getDocumentAtBoundSnapshot(result.ID)
-			if err != nil {
-				return response, err
+	}
+	if opts.IncludeDocuments {
+		if s.documentView == nil {
+			s.documentView = newCollectionReadViewAtSnapshot(s.collection, s.snapshot, s.catalog, false)
+		}
+		ids := make([][]byte, len(results))
+		for i := range results {
+			ids[i] = results[i].ID
+		}
+		documents, err := s.documentView.FetchDocumentsByID(ids, DocumentFetchOptions{})
+		if err != nil {
+			return response, err
+		}
+		if len(documents.Results) != len(response.Results) {
+			return response, errors.New("collections: vector index document materializer result count mismatch")
+		}
+		for i := range documents.Results {
+			if !documents.Results[i].Found {
+				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
 			}
-			if !found {
-				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, result.ID)
-			}
-			if documentBytes == nil {
-				capHint, err := multiplyVectorIndexSearchByteTotal(len(doc), len(results), math.MaxInt, "document")
-				if err != nil {
-					return response, err
-				}
-				documentBytes = make([]byte, 0, capHint)
-			}
-			docOffset := len(documentBytes)
-			documentBytes = append(documentBytes, doc...)
-			responseDoc := documentBytes[docOffset:len(documentBytes):len(documentBytes)]
-			response.Results[i].Document = responseDoc
-			response.Stats.DocumentsFetched++
+			response.Results[i].Document = documents.Results[i].Document
+		}
+		if err := addDocumentMaterializationStatsToVectorStats(&response.Stats, documents.Stats); err != nil {
+			return response, err
 		}
 	}
 	return response, nil
@@ -414,27 +454,6 @@ func validateVectorIndexSearchRequest(topK, efSearch int) error {
 		return errors.New("collections: vector index search ef_search cannot be negative")
 	}
 	return nil
-}
-
-// getDocumentAtBoundSnapshot returns snapshot-bound document bytes for immediate
-// use by Search. Search copies them into response-owned storage before exposing
-// documents to callers, matching Collection.Get retention semantics.
-func (s *VectorIndexSearcher) getDocumentAtBoundSnapshot(documentID []byte) ([]byte, bool, error) {
-	if s == nil || s.snapshot == nil || s.catalog == nil || s.collection == nil {
-		return nil, false, errors.New("collections: nil vector index searcher snapshot")
-	}
-	value, found, err := collectionGetAppendAtCatalogRoot(s.snapshot, s.catalog, collectionPrimaryRootName(s.collection.meta.Name), documentID, nil)
-	if err != nil || !found {
-		return nil, found, err
-	}
-	if !columnStoreCanReconstructDocument(s.catalog.meta) {
-		return value, true, nil
-	}
-	reconstructed, err := s.collection.reconstructColumnDocumentAtSnapshot(s.snapshot, s.catalog, documentID, value)
-	if err != nil {
-		return nil, false, err
-	}
-	return reconstructed, true, nil
 }
 
 func vectorIndexSearchResultIDBytes(results []columnVectorGraphNativeSearchResult) (int, error) {
@@ -477,14 +496,22 @@ func (s *VectorIndexSearcher) Close() error {
 	}
 	s.closed = true
 	var closeErr error
+	if s.documentView != nil {
+		if err := s.documentView.Close(); err != nil {
+			closeErr = err
+		}
+		s.documentView = nil
+	}
 	if s.reader == nil {
 		if s.snapshot != nil {
-			closeErr = s.snapshot.Close()
+			if err := s.snapshot.Close(); closeErr == nil && err != nil {
+				closeErr = err
+			}
 			s.snapshot = nil
 		}
 		return closeErr
 	}
-	if err := s.reader.Close(); err != nil {
+	if err := s.reader.Close(); closeErr == nil && err != nil {
 		closeErr = err
 	}
 	if s.snapshot != nil {
