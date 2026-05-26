@@ -2071,6 +2071,26 @@ func TestColumnPhysicalQueryGroupCountAndDistinctFused1870(t *testing.T) {
 			t.Fatalf("RunColumnPhysicalQueryParallel fused q2 err=%v want ErrColumnQueryPlanUnsupported", err)
 		}
 	})
+	t.Run("invalid requests fail with precise validation", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			req  ColumnPhysicalQueryRequest
+			want string
+		}{
+			{name: "missing group", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, DistinctColumn: "did"}, want: "group column is required"},
+			{name: "missing distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event"}, want: "distinct column is required"},
+			{name: "same columns", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "event"}, want: "group and distinct columns must differ"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if _, err := collection.PrepareColumnPhysicalQuery(tc.req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("PrepareColumnPhysicalQuery err=%v want ErrColumnQueryPlanUnsupported containing %q", err, tc.want)
+				}
+				if _, err := collection.RunColumnPhysicalQuery(tc.req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("RunColumnPhysicalQuery err=%v want ErrColumnQueryPlanUnsupported containing %q", err, tc.want)
+				}
+			})
+		}
+	})
 	t.Run("prepared", func(t *testing.T) {
 		runner, err := collection.PrepareColumnPhysicalQuery(req)
 		if err != nil {

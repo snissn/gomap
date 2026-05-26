@@ -135,11 +135,30 @@ type ColumnPhysicalQueryRunner struct {
 
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
 
+func validateColumnPhysicalGroupCountAndDistinctRequest(req ColumnPhysicalQueryRequest) error {
+	if req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
+		return nil
+	}
+	if req.GroupColumn == "" {
+		return fmt.Errorf("%w: physical column query group column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.DistinctColumn == "" {
+		return fmt.Errorf("%w: physical column query distinct column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.GroupColumn == req.DistinctColumn {
+		return fmt.Errorf("%w: physical column query group and distinct columns must differ", ErrColumnQueryPlanUnsupported)
+	}
+	return nil
+}
+
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
 // the recovery-authoritative manifest. Insert-only manifests use the direct
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
 // overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
 	mutationParts, err := c.columnPhysicalQueryMutationPartsHint()
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
@@ -187,6 +206,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // until Close and fail-closes for mutation-bearing manifests or unsupported
 // query shapes rather than silently changing semantics.
 func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return nil, err
+	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
 	if err != nil {
 		if closeView != nil {
@@ -536,6 +558,9 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(
 // Mutation-bearing manifests stay fail-closed until partitioned visibility
 // reconstruction is available.
 func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
 	if columnPhysicalQueryHasPredicates(req) {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical predicates require partitioned dictionary sidecar execution", ErrColumnQueryPlanUnsupported)
 	}
