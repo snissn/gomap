@@ -71,6 +71,11 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpVectorSimilarity, columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorDirectPayload, columnsemantics.OpVectorMetrics} {
+		if cap, _ := typedColumnAdapterCapability(vectorColumn, op); cap.Status != columnsemantics.StatusSupported || cap.Reason != columnsemantics.ReasonSupported {
+			t.Fatalf("vector %s capability=%+v want supported", op, cap)
+		}
+	}
 	if cap, _ := typedColumnAdapterCapability(vectorColumn, columnsemantics.OpSum); cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonVectorScalarOperationUnsupported {
 		t.Fatalf("vector sum capability=%+v", cap)
 	}
@@ -78,6 +83,11 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 	adjacencyColumn, err := typedColumnAdapterMapField(semanticAdjacencyField("neighbors"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyDirectPayload, columnsemantics.OpAdjacencyMetrics} {
+		if cap, _ := typedColumnAdapterCapability(adjacencyColumn, op); cap.Status != columnsemantics.StatusSupported || cap.Reason != columnsemantics.ReasonSupported {
+			t.Fatalf("adjacency %s capability=%+v want supported", op, cap)
+		}
 	}
 	if cap, _ := typedColumnAdapterCapability(adjacencyColumn, columnsemantics.OpOrderedRange); cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonAdjacencyScalarOperationUnsupported {
 		t.Fatalf("adjacency range capability=%+v", cap)
@@ -185,6 +195,28 @@ func TestTypedColumnInt64PredicateSemanticOperationUnknownKindFailsClosed(t *tes
 	cap := columnsemantics.CapabilityFor(desc, op)
 	if cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonOperationUnsupported {
 		t.Fatalf("unknown predicate operation capability=%+v", cap)
+	}
+}
+
+func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsVectorAndAdjacency(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		field  TypedStorageField
+		reason columnsemantics.ReasonCode
+	}{
+		{name: "vector", field: semanticVectorField("embedding"), reason: columnsemantics.ReasonVectorScalarOperationUnsupported},
+		{name: "adjacency", field: semanticAdjacencyField("neighbors"), reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := typedColumnAdapterPrepareInt64PredicateScanPart([]TypedStorageField{tc.field}, nil, 0, 0, 0, 0, tc.field.Name)
+			if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), string(tc.reason)) {
+				t.Fatalf("prepare %s-as-int64 scan err=%v want %s", tc.name, err, tc.reason)
+			}
+			_, _, _, err = typedColumnAdapterPrepareInt64PredicateAggregatePart([]TypedStorageField{tc.field}, nil, 0, 0, 0, 0, tc.field.Name)
+			if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), string(tc.reason)) {
+				t.Fatalf("prepare %s-as-int64 aggregate err=%v want %s", tc.name, err, tc.reason)
+			}
+		})
 	}
 }
 

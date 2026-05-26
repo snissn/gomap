@@ -151,17 +151,41 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	}
 
 	vector := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalFloat32Vector, Physical: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3})
+	for _, op := range []Operation{OpVectorDirectView, OpVectorSimilarity, OpVectorMetricReducer} {
+		if cap := vector.Supports(op); !cap.Supported() {
+			t.Fatalf("vector %s cap=%+v want supported", op, cap)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpVectorDirectPayload, columnsemantics.OpVectorSimilarity, columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorMetrics} {
+		if cap := vector.SupportsSemanticOperation(op); !cap.Supported() {
+			t.Fatalf("vector semantic %s cap=%+v want supported", op, cap)
+		}
+	}
 	if cap := vector.Supports(OpScalarNumericAggregate); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
 		t.Fatalf("vector scalar cap=%+v want %s", cap, ReasonVectorScalarUnsupported)
 	}
-	if cap := vector.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
-		t.Fatalf("vector direct scalar cap=%+v want %s", cap, ReasonVectorScalarUnsupported)
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
+		if cap := vector.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
+			t.Fatalf("vector semantic scalar %s cap=%+v want %s", op, cap, ReasonVectorScalarUnsupported)
+		}
 	}
 	adjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, FixedWidthElements: 8})
+	for _, op := range []Operation{OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
+		if cap := adjacency.Supports(op); !cap.Supported() {
+			t.Fatalf("adjacency %s cap=%+v want supported", op, cap)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyDirectPayload, columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyMetrics} {
+		if cap := adjacency.SupportsSemanticOperation(op); !cap.Supported() {
+			t.Fatalf("adjacency semantic %s cap=%+v want supported", op, cap)
+		}
+	}
 	if cap := adjacency.Supports(OpInt64RangePredicate); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
 		t.Fatalf("adjacency scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
 	}
-	if cap := adjacency.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
-		t.Fatalf("adjacency direct scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
+		if cap := adjacency.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
+			t.Fatalf("adjacency semantic scalar %s cap=%+v want %s", op, cap, ReasonAdjacencyScalarUnsupported)
+		}
 	}
 }

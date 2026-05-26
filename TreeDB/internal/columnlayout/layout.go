@@ -26,6 +26,12 @@ const (
 	OpDictionaryCodeLookup   Operation = "predicate.dictionary_code_lookup"
 	OpDictionaryReducer      Operation = "aggregate.dictionary_reducer"
 	OpScalarNumericAggregate Operation = "aggregate.scalar_numeric"
+	OpVectorDirectView       Operation = "direct.vector_payload"
+	OpAdjacencyDirectView    Operation = "direct.adjacency_payload"
+	OpVectorSimilarity       Operation = "predicate.vector_similarity"
+	OpVectorMetricReducer    Operation = "aggregate.vector_metrics"
+	OpAdjacencyTraversal     Operation = "graph.adjacency_traversal"
+	OpAdjacencyMetricReducer Operation = "aggregate.adjacency_metrics"
 )
 
 type Endian string
@@ -448,6 +454,37 @@ func (c Capabilities) Supports(op Operation) Capability {
 			return Unsupported(op, ReasonDictionaryCollationUnproven, "dictionary lexical range requires collation identity")
 		}
 		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise lexical range")
+	case OpVectorDirectView:
+		if c.Descriptor.Logical != columnsemantics.LogicalFloat32Vector {
+			return Unsupported(op, ReasonOperationUnsupported, "layout is not a vector payload")
+		}
+		if c.DirectView.Eligible {
+			return Supported(op)
+		}
+		return Unsupported(op, c.DirectView.Reason, "vector payload layout is not eligible for direct view")
+	case OpAdjacencyDirectView:
+		if c.Descriptor.Logical != columnsemantics.LogicalAdjacencyList {
+			return Unsupported(op, ReasonOperationUnsupported, "layout is not an adjacency payload")
+		}
+		if c.DirectView.Eligible {
+			return Supported(op)
+		}
+		return Unsupported(op, c.DirectView.Reason, "adjacency payload layout is not eligible for direct view")
+	case OpVectorSimilarity, OpVectorMetricReducer:
+		if c.Reducers.VectorMetrics {
+			return Supported(op)
+		}
+		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise vector metric support")
+	case OpAdjacencyTraversal:
+		if c.Pruning.AdjacencyIndex || c.Reducers.AdjacencyMetrics {
+			return Supported(op)
+		}
+		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise adjacency traversal support")
+	case OpAdjacencyMetricReducer:
+		if c.Reducers.AdjacencyMetrics {
+			return Supported(op)
+		}
+		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise adjacency metric support")
 	default:
 		return Unsupported(op, ReasonOperationUnsupported, "unknown layout operation")
 	}
@@ -502,11 +539,18 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 			return c.validateDescriptor(Operation(op))
 		}
 		return Unsupported(Operation(op), ReasonOperationUnsupported, "layout lacks bool count support")
-	case columnsemantics.OpVectorSimilarity, columnsemantics.OpVectorMetrics:
-		if c.Reducers.VectorMetrics || c.Reducers.AdjacencyMetrics {
-			return c.validateDescriptor(Operation(op))
-		}
-		return Unsupported(Operation(op), ReasonOperationUnsupported, "layout lacks vector/adjacency support")
+	case columnsemantics.OpVectorDirectPayload:
+		return c.Supports(OpVectorDirectView)
+	case columnsemantics.OpVectorSimilarity:
+		return c.Supports(OpVectorSimilarity)
+	case columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorMetrics:
+		return c.Supports(OpVectorMetricReducer)
+	case columnsemantics.OpAdjacencyDirectPayload:
+		return c.Supports(OpAdjacencyDirectView)
+	case columnsemantics.OpAdjacencyTraversal:
+		return c.Supports(OpAdjacencyTraversal)
+	case columnsemantics.OpAdjacencyMetrics:
+		return c.Supports(OpAdjacencyMetricReducer)
 	case columnsemantics.OpIsNull, columnsemantics.OpIsNotNull:
 		if c.Wrappers.Nullable {
 			return c.validateDescriptor(Operation(op))

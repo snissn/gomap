@@ -42,6 +42,10 @@ const (
 	OpDictionaryCategory       Operation = "predicate.dictionary_category"
 	OpDictionaryRange          Operation = "predicate.dictionary_range"
 	OpVectorSimilarity         Operation = "predicate.vector_similarity"
+	OpVectorDotProduct         Operation = "vector.dot_product"
+	OpVectorDirectPayload      Operation = "direct.vector_payload"
+	OpAdjacencyTraversal       Operation = "graph.adjacency_traversal"
+	OpAdjacencyDirectPayload   Operation = "direct.adjacency_payload"
 	OpCountRows                Operation = "aggregate.count_rows"
 	OpCountNonNull             Operation = "aggregate.count_non_null"
 	OpSum                      Operation = "aggregate.sum"
@@ -53,6 +57,7 @@ const (
 	OpDictionaryCount          Operation = "aggregate.dictionary_count"
 	OpDictionaryCountDistinct  Operation = "aggregate.dictionary_count_distinct"
 	OpVectorMetrics            Operation = "aggregate.vector_metrics"
+	OpAdjacencyMetrics         Operation = "aggregate.adjacency_metrics"
 	OpStatsMinMax              Operation = "stats.min_max"
 	OpStatsSum                 Operation = "stats.sum"
 	OpPruneEquality            Operation = "pruning.equality"
@@ -401,8 +406,16 @@ func vectorCapability(desc Descriptor, op Operation) Capability {
 		return Supported(op)
 	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
-	case OpVectorSimilarity, OpVectorMetrics:
-		return Fallback(op, ReasonVectorCapabilityDeferred, "vector-specific kernels are deferred")
+	case OpVectorDirectPayload:
+		return Supported(op)
+	case OpVectorSimilarity:
+		return SupportedResult(op, ResultSemantics{ResultType: "top-k vector scores", Accumulator: "specialized vector kernel", Comparison: "vector metric order"})
+	case OpVectorDotProduct:
+		return SupportedResult(op, ResultSemantics{ResultType: "float32/float64 score", Accumulator: "specialized dot-product kernel", Precision: "kernel-defined vector precision"})
+	case OpVectorMetrics:
+		return SupportedResult(op, ResultSemantics{ResultType: "vector-specific metrics", Accumulator: "specialized vector metric collector"})
+	case OpAdjacencyTraversal, OpAdjacencyDirectPayload, OpAdjacencyMetrics:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a float32_vector semantic capability")
 	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
 		return Unsupported(op, ReasonVectorScalarOperationUnsupported, "vector columns are not scalar comparable or scalar aggregate values")
 	default:
@@ -419,8 +432,14 @@ func adjacencyCapability(desc Descriptor, op Operation) Capability {
 		return Supported(op)
 	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
-	case OpVectorSimilarity, OpVectorMetrics:
-		return Fallback(op, ReasonAdjacencyCapabilityDeferred, "graph/vector-specific adjacency capabilities are deferred")
+	case OpAdjacencyDirectPayload:
+		return Supported(op)
+	case OpAdjacencyTraversal:
+		return SupportedResult(op, ResultSemantics{ResultType: "candidate row selection", Accumulator: "specialized graph traversal", GroupKey: "adjacency ordinal"})
+	case OpAdjacencyMetrics:
+		return SupportedResult(op, ResultSemantics{ResultType: "graph/adjacency-specific metrics", Accumulator: "specialized adjacency metric collector"})
+	case OpVectorSimilarity, OpVectorDotProduct, OpVectorDirectPayload, OpVectorMetrics:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not an adjacency_list semantic capability")
 	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
 		return Unsupported(op, ReasonAdjacencyScalarOperationUnsupported, "adjacency columns are not scalar comparable or scalar aggregate values")
 	default:
