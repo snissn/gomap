@@ -659,7 +659,7 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef: %v", err)
 	}
-	if view.rowLocator == nil || view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 {
+	if view.rowLocator == nil || view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be populated before integrity change")
 	}
 	cfg := view.columnSnapshotView.Config

@@ -729,7 +729,9 @@ func (v *CollectionReadView) pointRowScanProjection(view columnPhysicalScanSnaps
 
 // FetchDocumentsByRowRef materializes full documents for row refs in input
 // order. Supported typed-row refs are point-fetched by generation/part/row_index
-// and validated against the decoded physical row before reconstruction.
+// and validated against the decoded physical row before reconstruction. Row-ref
+// fetches are strict: a missing primary-root document, stale ref, or physical
+// mismatch fails the request instead of silently returning a partial batch.
 func (v *CollectionReadView) FetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
 	start := time.Now()
 	response, err := v.fetchDocumentsByRowRef(refs, opts)
