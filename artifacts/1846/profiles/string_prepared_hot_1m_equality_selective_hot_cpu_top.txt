@@ -1,0 +1,29 @@
+File: collections.test
+Type: cpu
+Time: 2026-05-25 16:12:19 HST
+Duration: 3.36s, Total samples = 2.74s (81.45%)
+Showing nodes accounting for 2.68s, 97.81% of 2.74s total
+Dropped 17 nodes (cum <= 0.01s)
+      flat  flat%   sum%        cum   cum%
+     1.10s 40.15% 40.15%      1.11s 40.51%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.contiguousBitmapRange
+     0.73s 26.64% 66.79%      0.74s 27.01%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.decodeInt64Payload
+     0.46s 16.79% 83.58%      0.80s 29.20%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.applyCodeRangeRows (inline)
+     0.34s 12.41% 95.99%      0.34s 12.41%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.readUint32Code (inline)
+     0.02s  0.73% 96.72%      0.02s  0.73%  runtime.asyncPreempt
+     0.01s  0.36% 97.08%      1.94s 70.80%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).SelectUint32Code
+     0.01s  0.36% 97.45%      1.13s 41.24%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.makeBitmapRowSelectionNoCopy
+     0.01s  0.36% 97.81%      0.02s  0.73%  runtime.pidlegetSpinning
+         0     0% 97.81%      2.71s 98.91%  github.com/snissn/gomap/TreeDB/collections.(*typedColumnStringPredicatePreparedHotRunner).scan
+         0     0% 97.81%      2.71s 98.91%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot.func1
+         0     0% 97.81%      2.71s 98.91%  github.com/snissn/gomap/TreeDB/collections.scanTypedColumnStringPreparedPartWithVisibility
+         0     0% 97.81%      0.75s 27.37%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).DecodeInt64Into
+         0     0% 97.81%      1.13s 41.24%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.NewBitmapRowSelectionNoCopy (inline)
+         0     0% 97.81%      1.93s 70.44%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.selectUint32CodeSelection
+         0     0% 97.81%      1.94s 70.80%  github.com/snissn/gomap/TreeDB/internal/typedkernel.SelectDictionaryCode
+         0     0% 97.81%      0.02s  0.73%  runtime.gopreempt_m (inline)
+         0     0% 97.81%      0.02s  0.73%  runtime.goschedImpl
+         0     0% 97.81%      0.02s  0.73%  runtime.morestack
+         0     0% 97.81%      0.02s  0.73%  runtime.newstack
+         0     0% 97.81%      0.03s  1.09%  runtime.wakep
+         0     0% 97.81%      2.71s 98.91%  testing.(*B).launch
+         0     0% 97.81%      2.71s 98.91%  testing.(*B).runN

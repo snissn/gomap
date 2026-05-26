@@ -1,0 +1,91 @@
+File: collections.test
+Type: alloc_space
+Time: 2026-05-25 16:12:22 HST
+Showing nodes accounting for 2416454.41kB, 98.50% of 2453306.34kB total
+Dropped 172 nodes (cum <= 12266.53kB)
+      flat  flat%   sum%        cum   cum%
+  284354kB 11.59% 11.59%   284354kB 11.59%  bytes.growSlice
+  187520kB  7.64% 19.23% 187550.42kB  7.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.DecodeCollectionInsertBatchByIDPayload
+  180512kB  7.36% 26.59% 277321.25kB 11.30%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).build
+  154096kB  6.28% 32.87%   247856kB 10.10%  github.com/snissn/gomap/TreeDB/internal/commitlog.EncodeCollectionInsertBatchByIDPayload
+  154096kB  6.28% 39.15% 247870.92kB 10.10%  github.com/snissn/gomap/TreeDB/internal/commitlog.encodeCommandFrameTo
+  139264kB  5.68% 44.83%   172032kB  7.01%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions
+  117200kB  4.78% 49.61% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex
+109668.28kB  4.47% 54.08% 111403.08kB  4.54%  github.com/snissn/gomap/TreeDB/collections.extractColumnDeclaredRowsFromJSONDocuments
+109452.92kB  4.46% 58.54% 109453.89kB  4.46%  github.com/snissn/gomap/TreeDB/collections.projectColumnDeclaredRowsForColumns
+93779.55kB  3.82% 62.36% 2125863.88kB 86.65%  github.com/snissn/gomap/TreeDB/collections.insertTypedColumnStringPredicateBenchRows
+   93760kB  3.82% 66.18%    93760kB  3.82%  github.com/snissn/gomap/TreeDB/collections.collectionDocumentsFromNoIndexEntries (inline)
+   93760kB  3.82% 70.01%    93760kB  3.82%  github.com/snissn/gomap/TreeDB/collections.columnWriteDocumentsFromNoIndexEntries (inline)
+   93760kB  3.82% 73.83%    93760kB  3.82%  github.com/snissn/gomap/TreeDB/internal/commitlog.canonicalCollectionDocuments
+   80224kB  3.27% 77.10%    80224kB  3.27%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerIntoWithIntegrity
+   78176kB  3.19% 80.28%    79664kB  3.25%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).addRowLocatorsSection
+   78128kB  3.18% 83.47%    78128kB  3.18%  github.com/snissn/gomap/TreeDB/batch.(*Batch).Reserve (inline)
+   78128kB  3.18% 86.65%    78128kB  3.18%  github.com/snissn/gomap/TreeDB/internal/memtable.getAppendOnlyEntries
+   66432kB  2.71% 89.36%    66432kB  2.71%  github.com/snissn/gomap/TreeDB/collections.cloneBatchDocumentIDs
+   54712kB  2.23% 91.59%    54712kB  2.23%  github.com/snissn/gomap/TreeDB/collections.typedColumnStringPredicateBenchKinds (inline)
+   32768kB  1.34% 92.93%    32768kB  1.34%  bufio.NewWriterSize (inline)
+31511.22kB  1.28% 94.21% 31511.22kB  1.28%  github.com/snissn/gomap/TreeDB/collections.typedColumnAdapterRowsFromDeclaredRows
+   31296kB  1.28% 95.49% 76332.81kB  3.11%  github.com/snissn/gomap/TreeDB/collections.buildTypedColumnAdapterPart
+25424.06kB  1.04% 96.52% 45036.81kB  1.84%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).Build
+   17136kB   0.7% 97.22%    17136kB   0.7%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).addColumnDataSections
+   15648kB  0.64% 97.86%    15648kB  0.64%  github.com/snissn/gomap/TreeDB/collections.buildColumnInt64ValuesAssetForColumn
+   15648kB  0.64% 98.50%    15648kB  0.64%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).sortedOrder
+    0.38kB 1.5e-05% 98.50% 78128.38kB  3.18%  github.com/snissn/gomap/TreeDB/internal/memtable.newAppendOnlyWithInitialEntries (inline)
+         0     0% 98.50%   152770kB  6.23%  bytes.(*Buffer).Write
+         0     0% 98.50%   131584kB  5.36%  bytes.(*Buffer).WriteString
+         0     0% 98.50%   284354kB 11.59%  bytes.(*Buffer).grow
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatch
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildColumnPublishPlanForCommandWALContext
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildColumnPublishPlanForCommandWALContext.func1
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatch (inline)
+         0     0% 98.50% 1427009.06kB 58.17%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex.func4
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent.func1
+         0     0% 98.50%   247856kB 10.10%  github.com/snissn/gomap/TreeDB/collections.(*Collection).newCollectionInsertCommandWALIntent
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsForCommand
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetsForCommand
+         0     0% 98.50% 1333249.06kB 54.34%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn.func1
+         0     0% 98.50% 1427009.06kB 58.17%  github.com/snissn/gomap/TreeDB/collections.(*Collection).withCommandWALPublishCoordinator
+         0     0% 98.50% 277321.25kB 11.30%  github.com/snissn/gomap/TreeDB/collections.(*typedColumnAdapterPart).buildImage
+         0     0% 98.50%    62528kB  2.55%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot
+         0     0% 98.50% 2388315.97kB 97.35%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot.func1
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.BuildColumnPublishPlan
+         0     0% 98.50%    15648kB  0.64%  github.com/snissn/gomap/TreeDB/collections.buildColumnInt64ValuesAssets
+         0     0% 98.50% 385165.28kB 15.70%  github.com/snissn/gomap/TreeDB/collections.buildTypedColumnPartImageForDeclaredRows
+         0     0% 98.50%    29442kB  1.20%  github.com/snissn/gomap/TreeDB/collections.encodeColumnInt64ValuesAsset
+         0     0% 98.50%   254912kB 10.39%  github.com/snissn/gomap/TreeDB/collections.encodeColumnPhysicalAsset
+         0     0% 98.50% 78128.38kB  3.18%  github.com/snissn/gomap/TreeDB/collections.newCollectionRunTable (inline)
+         0     0% 98.50%   178176kB  7.26%  github.com/snissn/gomap/TreeDB/collections.openCollectionCommandWALDB
+         0     0% 98.50%   178176kB  7.26%  github.com/snissn/gomap/TreeDB/collections.openTypedColumnInt64ScanDB
+         0     0% 98.50% 794621.17kB 32.39%  github.com/snissn/gomap/TreeDB/collections.prepareColumnPublishAssets
+         0     0% 98.50% 111403.08kB  4.54%  github.com/snissn/gomap/TreeDB/collections.prepareColumnWritePublishInputBeforeCommandWAL
+         0     0% 98.50%    80292kB  3.27%  github.com/snissn/gomap/TreeDB/collections.prepareTypedColumnStringPredicatePreparedHotRunnerForTargets
+         0     0% 98.50%    80224kB  3.27%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManager
+         0     0% 98.50%    80224kB  3.27%  github.com/snissn/gomap/TreeDB/collections.readColumnPhysicalAssetFromManagerInto (inline)
+         0     0% 98.50% 2032066.36kB 82.83%  github.com/snissn/gomap/TreeDB/collections.retryInsertBatchMutation
+         0     0% 98.50%   178176kB  7.26%  github.com/snissn/gomap/TreeDB/collections.setupTypedColumnStringPredicateBenchCollection
+         0     0% 98.50%    24640kB  1.00%  github.com/snissn/gomap/TreeDB/collections.writeManifestBytes
+         0     0% 98.50%   164480kB  6.70%  github.com/snissn/gomap/TreeDB/collections.writeManifestString
+         0     0% 98.50%   128130kB  5.22%  github.com/snissn/gomap/TreeDB/collections.writeManifestUint64 (inline)
+         0     0% 98.50% 1221845.98kB 49.80%  github.com/snissn/gomap/TreeDB/db.(*DB).PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder (inline)
+         0     0% 98.50% 341646.42kB 13.93%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntent
+         0     0% 98.50% 341646.42kB 13.93%  github.com/snissn/gomap/TreeDB/db.(*DB).appendPublicCommandWALIntent
+         0     0% 98.50% 1221845.98kB 49.80%  github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder
+         0     0% 98.50% 85578.39kB  3.49%  github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaIterator
+         0     0% 98.50%   178176kB  7.26%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0% 98.50%   178176kB  7.26%  github.com/snissn/gomap/TreeDB/db.openWithLock
+         0     0% 98.50%    78128kB  3.18%  github.com/snissn/gomap/TreeDB/db.orderedRootDeltaBatchFromIterator
+         0     0% 98.50% 341646.42kB 13.93%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).AppendCommand
+         0     0% 98.50% 247870.92kB 10.10%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*Writer).AppendCommand
+         0     0% 98.50%   172032kB  7.01%  github.com/snissn/gomap/TreeDB/internal/commitlog.OpenCommandJournal
+         0     0% 98.50% 187550.42kB  7.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopeForEncode
+         0     0% 98.50% 187550.42kB  7.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopePayload
+         0     0% 98.50% 78128.38kB  3.18%  github.com/snissn/gomap/TreeDB/internal/memtable.NewAppendOnlyWithEntryCapacity
+         0     0% 98.50% 45036.81kB  1.84%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BuildColumnPart
+         0     0% 98.50% 277321.25kB 11.30%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BuildColumnPartImage
+         0     0% 98.50% 1191153.37kB 48.55%  testing.(*B).launch
+         0     0% 98.50% 1259690.65kB 51.35%  testing.(*B).run1.func1
+         0     0% 98.50% 2450844.02kB 99.90%  testing.(*B).runN
