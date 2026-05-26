@@ -22,9 +22,9 @@ const (
 	// TypedStorageOwnerRowAsset means the field is authoritatively owned by the
 	// current typed-row physical asset path.
 	TypedStorageOwnerRowAsset TypedStorageFieldOwner = "typed_row_asset"
-	// TypedStorageOwnerColumnPart is a future typed-column owner placeholder. It
-	// may be represented by the resolver, but read/publication support fails
-	// closed until the typed-column format and publication path land.
+	// TypedStorageOwnerColumnPart means the field is authoritatively owned by a
+	// typed-column part. Unsupported value-type/layout combinations continue to
+	// fail closed in the adapter and publication path.
 	TypedStorageOwnerColumnPart TypedStorageFieldOwner = "typed_column_part"
 )
 
@@ -268,16 +268,16 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 			}
 			return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: unsupported for value_type %q", name, field.ValueType)
 		}
-		if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault && field.ValueType == ColumnStoreValueInt64 {
+		if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault && columnStoreValueTypeHasScalarFixedWidthPayload(field.ValueType) {
 			name := field.Name
 			if name == "" {
 				name = field.Path
 			}
 			if field.Owner != TypedStorageOwnerColumnPart {
-				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: int64 raw fixed-width encoding requires owner %q", name, TypedStorageOwnerColumnPart)
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: %s raw fixed-width encoding requires owner %q", name, field.ValueType, TypedStorageOwnerColumnPart)
 			}
 			if field.Nullable {
-				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: nullable int64 raw fixed-width encoding is unsupported", name)
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: nullable %s raw fixed-width encoding is unsupported", name, field.ValueType)
 			}
 		}
 		if prior, ok := seenPaths[field.Path]; ok {

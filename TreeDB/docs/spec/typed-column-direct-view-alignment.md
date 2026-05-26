@@ -3,7 +3,9 @@
 Status: pre-alpha safety contract and conformance target for the #1886 stack.
 This document defines when TreeDB column-store bytes may be exposed as typed Go
 slices without copying. It is a contract/harness spec only; writer padding and
-reader fast-path rollout are owned by later issues.
+reader fast-path rollout are owned by later issues. The #1737 payload phase adds
+native little-endian scalar float payload encodings and shared fixed-width
+helpers without enabling production unsafe reader direct views.
 
 ## Scope and non-goals
 

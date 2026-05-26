@@ -508,14 +508,20 @@ Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
 images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
 Issue `#1755` scalar path represents bool, int64, float32, double/float64, and
 string fields. Int64 typed-column fields use `delta_varint` by default; a
-non-null int64 `typed_column_part` field that explicitly sets
-`fixed_width_encoding: "little_endian"` uses uncompressed little-endian
-`raw_int64` blocks whose raw/stored bytes must equal `rows * 8`. Issue `#1756`
-adds fixed-dimension `float32_vector` fields as uncompressed row-major
-little-endian dense `float32` sections whose element count per row is
-`vector_dims`. Issue `#1783` adds fixed-degree `adjacency_list` fields as
-uncompressed row-major little-endian dense `uint32` sections whose element count
-per row is `adjacency_degree`.
+non-null scalar `typed_column_part` field that explicitly sets
+`fixed_width_encoding: "little_endian"` uses an uncompressed native raw
+little-endian payload: `raw_int64` for `int64` (`rows * 8` bytes),
+`raw_float32` for `float32` (`rows * 4` IEEE-754 bits), or `raw_float64` for
+`double`/`float64` (`rows * 8` IEEE-754 bits). Native scalar float payloads
+preserve raw bits exactly, including NaN payloads and signed zero. The legacy
+raw-`int64` float bit-pattern carrier remains a compatibility/fallback layout
+when native fixed-width encoding is not selected and must not be treated as a
+native scalar float direct-view payload. Issue `#1756` adds fixed-dimension
+`float32_vector` fields as uncompressed row-major little-endian dense `float32`
+sections whose element count per row is `vector_dims`. Issue `#1783` adds
+fixed-degree `adjacency_list` fields as uncompressed row-major little-endian
+dense `uint32` sections whose element count per row is `adjacency_degree`;
+adjacency direct-view certification remains deferred to #1901.
 
 Nullable scalar typed-column support uses nullable int64 carrier granules for
 bool, int64, float32, double/float64, and low-cardinality string fields. A

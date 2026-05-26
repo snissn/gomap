@@ -462,6 +462,9 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			if asset.Columns[i].FixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(asset.Columns[i].ValueType) {
 				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, asset.Columns[i].ValueType)
 			}
+			if asset.Columns[i].FixedWidthEncoding != ColumnFixedWidthEncodingDefault && columnStoreValueTypeHasScalarFixedWidthPayload(asset.Columns[i].ValueType) {
+				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] scalar fixed_width_encoding for value_type %q is typed_column_part-only", i, asset.Columns[i].ValueType)
+			}
 		}
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
@@ -659,6 +662,9 @@ func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, 
 		if encoding != ColumnFixedWidthEncodingDefault {
 			if !columnStoreValueTypeSupportsFixedWidthEncoding(col.ValueType) {
 				return 0, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, col.ValueType)
+			}
+			if columnStoreValueTypeHasScalarFixedWidthPayload(col.ValueType) {
+				return 0, fmt.Errorf("collections: column physical asset column[%d] scalar fixed_width_encoding for value_type %q is typed_column_part-only", i, col.ValueType)
 			}
 			requiresV5 = true
 		}

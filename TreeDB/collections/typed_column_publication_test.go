@@ -13,6 +13,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -110,6 +111,82 @@ func TestTypedColumnPublicationCheckpointReopen(t *testing.T) {
 	if reopenedGot, err := reopenedCol.Get([]byte("e2")); err != nil || reopenedGot != nil {
 		t.Fatalf("reopened Get deleted e2 got=%s err=%v, want missing", reopenedGot, err)
 	}
+}
+
+func TestTypedColumnNativeScalarFixedWidthPublicationCheckpointReopen(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	col := createTypedColumnNativeScalarFixedWidthCollection1737(t, d)
+
+	if _, err := col.InsertBatch([][]byte{[]byte("s1"), []byte("s2")}, [][]byte{
+		[]byte(`{"score32":1.5,"score64":2.25,"payload":"alpha"}`),
+		[]byte(`{"score32":-0,"score64":-3.5,"payload":"beta"}`),
+	}); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	refs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if len(refs) != 1 {
+		_ = d.Close()
+		t.Fatalf("typed refs=%+v want one", refs)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), refs[0])
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	part, err := typedColumnAdapterPartFromBytes(typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(*col.Meta().Options.ColumnStore)}, raw)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("typedColumnAdapterPartFromBytes: %v", err)
+	}
+	if got := part.Part.Columns["score32"].Definition; got.Type != typedcolumn.ColumnTypeFloat32 || got.Encoding != typedcolumn.EncodingRawFloat32 {
+		_ = d.Close()
+		t.Fatalf("score32 definition=%+v want native raw_float32", got)
+	}
+	if got := part.Part.Columns["score64"].Definition; got.Type != typedcolumn.ColumnTypeFloat64 || got.Encoding != typedcolumn.EncodingRawFloat64 {
+		_ = d.Close()
+		t.Fatalf("score64 definition=%+v want native raw_float64", got)
+	}
+	got, err := col.Get([]byte("s2"))
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("Get s2: %v", err)
+	}
+	assertJSONEqualM13C(t, got, []byte(`{"score32":-0,"score64":-3.5,"payload":"beta"}`))
+
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("native_scores")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	if got := reopenedCol.Meta().Options.ColumnStore.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("reopened score32 fixed_width_encoding=%q want little_endian", got)
+	}
+	if got := reopenedCol.Meta().Options.ColumnStore.Columns[1].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+		t.Fatalf("reopened score64 fixed_width_encoding=%q want little_endian", got)
+	}
+	reopenedGot, err := reopenedCol.Get([]byte("s1"))
+	if err != nil {
+		t.Fatalf("reopened Get s1: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"score32":1.5,"score64":2.25,"payload":"alpha"}`))
+	reopenedGot, err = reopenedCol.Get([]byte("s2"))
+	if err != nil {
+		t.Fatalf("reopened Get s2: %v", err)
+	}
+	assertJSONEqualM13C(t, reopenedGot, []byte(`{"score32":-0,"score64":-3.5,"payload":"beta"}`))
 }
 
 func TestTypedColumnVectorDensePublicationCheckpointReopen1756(t *testing.T) {
@@ -2453,6 +2530,26 @@ func createTypedColumnNullableScalarPartCollection1784(t testing.TB, d *backendd
 		t.Fatalf("CreateCollection: %v", err)
 	}
 	col, err := mgr.OpenCollection("nullable_events")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return col
+}
+
+func createTypedColumnNativeScalarFixedWidthCollection1737(t testing.TB, d *backenddb.DB) *Collection {
+	t.Helper()
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "score32", Path: "score32", ValueType: ColumnStoreValueFloat32, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		{Name: "score64", Path: "score64", ValueType: ColumnStoreValueDouble, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "native_scores", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("native_scores")
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}

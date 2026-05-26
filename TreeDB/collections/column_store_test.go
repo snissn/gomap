@@ -633,6 +633,34 @@ func TestColumnStoreAdjacencyFixedWidthEncodingNormalizes(t *testing.T) {
 	}
 }
 
+func TestColumnStoreScalarFixedWidthEncodingRequiresTypedColumnPart(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "score_i64", Path: "score_i64", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		{Name: "score32", Path: "score32", ValueType: ColumnStoreValueFloat32, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		{Name: "score64", Path: "score64", ValueType: ColumnStoreValueDouble, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "scores", Options: CollectionOptions{ColumnStore: cfg}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	for i, col := range meta.Options.ColumnStore.Columns {
+		if got := col.FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
+			t.Fatalf("column[%d] fixed_width_encoding=%q want %q", i, got, ColumnFixedWidthEncodingLittleEndian)
+		}
+	}
+
+	invalid := testColumnStoreConfig(nil)
+	invalid.Columns = []ColumnStoreColumn{{Name: "score32", Path: "score32", ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}}
+	invalid.SortKey = nil
+	invalid.AggregateMetadata = nil
+	if _, err := normalizeCollectionMeta(CollectionMeta{Name: "scores_invalid", Options: CollectionOptions{ColumnStore: invalid}}); err == nil || !strings.Contains(err.Error(), "requires owner") {
+		t.Fatalf("normalizeCollectionMeta row-asset scalar fixed_width err=%v want owner rejection", err)
+	}
+}
+
 func TestColumnStoreVectorMetadataNormalizes(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	cfg.Columns = append(cfg.Columns,

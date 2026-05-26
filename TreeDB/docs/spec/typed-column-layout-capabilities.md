@@ -27,7 +27,9 @@ not just encodings. A key includes:
 | `int64` | `int64` + `raw_int64` + `compression=none` | Optional explicit fixed-width little-endian layout. Safe byte-loop reducer/range predicate and value-row pruning metadata are allowed after row-count and length validation. Direct-view metadata is declared for future use, but #1849 owns zero-copy typed views. |
 | `string` | `low_cardinality_code` + `low_cardinality_uint32` | Dictionary-code equality/group support. Lexical range/pruning is unsupported unless dictionary order and collation proof are present. |
 | `bool` | `bool` + `bool_bitpack_rle` | Bool-specific counts/equality; scalar range remains unsupported by semantics. |
-| `float32`/`double` | current `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 direct-view, numeric aggregate/range, stats, or pruning capabilities. Native float layouts must define NaN, signed-zero, infinity, endian, width, direct-view lifetime, and stats/pruning rules before enabling numeric fast paths. |
+| `float32`/`double` | default compatibility `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 direct-view, numeric aggregate/range, stats, or pruning capabilities. |
+| `float32` | `float32` + `raw_float32` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
+| `double` | `float64` + `raw_float64` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Fixed-width little-endian dense payload bytes, but direct-view certification is deferred/fallback-only for the active #1886 stack (#1901). Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
 
@@ -63,7 +65,10 @@ and predicate cursor; it does not use unsafe pointer casts or expose zero-copy
 views. Delta-varint continues to use the streaming decode path. Raw int64
 carriers for scalar floats fail closed at both layers: they preserve bits for
 reconstruction, but they are not direct int64 views and cannot certify int64
-numeric reducers, stats, or pruning metadata.
+numeric reducers, stats, or pruning metadata. Native scalar float payloads are
+selected only by explicit little-endian fixed-width metadata and use
+`raw_float32`/`raw_float64`; those layouts are payload/direct-view candidates but
+float numeric equality/range/aggregate/stats/pruning semantics remain deferred.
 
 ## Writer-certified layout contracts (#1850)
 
