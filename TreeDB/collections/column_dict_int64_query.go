@@ -9,16 +9,20 @@ import (
 const columnDictionaryInt64GroupMaxGroups = 1 << 20
 
 type columnDictionaryInt64GroupRunner struct {
-	groupColumn string
-	valueColumn string
-	kind        ColumnPhysicalQueryKind
-	groupDict   []string
-	assets      []columnDictionaryInt64GroupAsset
-	seen        []uint64
-	minValues   []int64
-	maxValues   []int64
-	result      []ColumnPhysicalQueryGroup
-	assetBytes  int64
+	groupColumn          string
+	valueColumn          string
+	kind                 ColumnPhysicalQueryKind
+	groupDict            []string
+	assets               []columnDictionaryInt64GroupAsset
+	predicateAssets      []columnDictionaryPredicateAsset
+	seen                 []uint64
+	minValues            []int64
+	maxValues            []int64
+	result               []ColumnPhysicalQueryGroup
+	assetBytes           int64
+	predicateBytes       int64
+	predicateCodeHit     int
+	predicateDiagnostics columnPhysicalQueryPredicateDiagnosticPlan
 }
 
 type columnDictionaryInt64GroupAsset struct {
@@ -47,6 +51,14 @@ func prepareColumnDictionaryInt64GroupRunner(view columnPhysicalScanSnapshotView
 		kind:        req.Kind,
 		assets:      make([]columnDictionaryInt64GroupAsset, 0, len(view.AssetRefs)),
 	}
+	predicateAssets, predicateBytes, err := prepareColumnDictionaryPredicateAssets(view, req, readCache)
+	if err != nil {
+		return nil, err
+	}
+	runner.predicateAssets = predicateAssets
+	runner.predicateBytes = predicateBytes
+	runner.predicateCodeHit = columnDictionaryPredicateAssetHits(predicateAssets)
+	runner.predicateDiagnostics = newColumnPhysicalQueryPredicateDiagnosticPlan(req)
 	groupByValue := make(map[string]uint32)
 	var scratch []byte
 	for _, part := range view.AssetRefs {
@@ -287,12 +299,24 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 	start := time.Now()
 	clear(r.seen)
 	rows := 0
-	for _, asset := range r.assets {
+	matched := 0
+	for assetIdx, asset := range r.assets {
+		var predicates *columnDictionaryPredicateAsset
+		if len(r.predicateAssets) != 0 {
+			predicates = &r.predicateAssets[assetIdx]
+		}
 		for rowIdx, groupCode := range asset.groupCodes {
+			rows++
+			if predicates != nil && !predicates.matches(rowIdx) {
+				continue
+			}
 			value := asset.values[rowIdx]
 			r.reduceValue(groupCode, value)
-			rows++
+			matched++
 		}
+	}
+	if len(r.predicateAssets) == 0 {
+		matched = rows
 	}
 	r.result = r.result[:0]
 	for code, key := range r.groupDict {
@@ -308,17 +332,19 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 	sortColumnPhysicalQueryGroupsByKey(r.result)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = 2
+	diag.ProjectedColumns = columnPhysicalQueryProjectedColumnCount(req)
 	diag.ScheduledGranules = len(r.assets)
 	diag.DecodedBlocks = len(r.assets)
 	diag.DirectReduceBlocks = len(r.assets)
-	diag.DictionaryCodeHits = len(r.assets)
+	diag.DictionaryCodeHits = len(r.assets) + r.predicateCodeHit
+	diag.PredicateDictionaryCodeHits = r.predicateCodeHit
 	diag.Int64ValueHits = len(r.assets)
 	diag.RowsScanned = rows
-	diag.PhysicalBytesScanned = r.assetBytes
-	diag.ReduceRows = rows
+	diag.PhysicalBytesScanned = r.assetBytes + r.predicateBytes
+	diag.ReduceRows = matched
 	diag.ResultGroups = len(r.result)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
+	applyColumnPhysicalQueryPredicateDiagnostics(&diag, r.predicateDiagnostics, matched, r.predicateCodeHit)
 	diag.ScanNanos = time.Since(start).Nanoseconds()
 	return ColumnPhysicalQueryResult{Groups: r.result, Diagnostics: diag}
 }
