@@ -681,6 +681,34 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if len(view.pointRowBlocks) != 0 {
 		t.Fatalf("pointRowBlocks=%d want empty after row asset cache rebuild", len(view.pointRowBlocks))
 	}
+	lookup, err = view.LookupDocumentRowRefsByID([][]byte{[]byte("e1"), []byte("e2")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID after rebuild: %v", err)
+	}
+	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
+		t.Fatalf("FetchDocumentsByRowRef after rebuild: %v", err)
+	}
+	if view.rowLocator == nil || view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+		t.Fatalf("expected derived caches to be repopulated before close")
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if view.rowLocator != nil || view.columnSnapshotView != nil || view.pointRowRefs != nil || view.pointRowProjection != nil || view.pointRowBlocks != nil {
+		t.Fatalf("derived caches retained after Close: rowLocator=%v columnSnapshotView=%v pointRowRefs=%v pointRowProjection=%v pointRowBlocks=%v", view.rowLocator, view.columnSnapshotView, view.pointRowRefs, view.pointRowProjection, view.pointRowBlocks)
+	}
+}
+
+func TestDocumentRowLocatorCandidateNewerUsesOrdinalTieBreaker1874(t *testing.T) {
+	base := DocumentRowRef{Generation: 2, PartID: 7, RowIndex: 11, AppliedCommandLSN: 42}
+	older := documentRowLocatorCandidate{ref: base, ordinal: 3}
+	newer := documentRowLocatorCandidate{ref: base, ordinal: 4}
+	if !documentRowLocatorCandidateNewer(newer, older) {
+		t.Fatalf("higher ordinal should win exact row-ref ties")
+	}
+	if documentRowLocatorCandidateNewer(older, newer) {
+		t.Fatalf("lower ordinal should not win exact row-ref ties")
+	}
 }
 
 func BenchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b *testing.B) {

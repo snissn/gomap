@@ -129,6 +129,7 @@ type documentRowLocator struct {
 
 type documentRowLocatorCandidate struct {
 	ref     DocumentRowRef
+	ordinal int
 	deleted bool
 }
 
@@ -277,11 +278,7 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 	namespace := cfg.AssetManager.Namespace
 	if v.rowAssetReadCache == nil || v.rowAssetReadIntegrity != rowIntegrity || v.rowAssetReadCache.namespace != namespace {
 		if v.rowAssetReadCache != nil {
-			v.clearPointRowBlockCache()
-			v.rowLocator = nil
-			v.columnSnapshotView = nil
-			v.pointRowRefs = nil
-			v.pointRowProjection = nil
+			v.clearDerivedRowFetchCaches()
 			if err := v.rowAssetReadCache.close(); err != nil {
 				return err
 			}
@@ -419,7 +416,7 @@ func (v *CollectionReadView) closeAssetReadCaches() error {
 	if v == nil {
 		return nil
 	}
-	v.clearPointRowBlockCache()
+	v.clearDerivedRowFetchCaches()
 	var closeErr error
 	if v.rowAssetReadCache != nil {
 		closeErr = errors.Join(closeErr, v.rowAssetReadCache.close())
@@ -435,13 +432,18 @@ func (v *CollectionReadView) closeAssetReadCaches() error {
 	return closeErr
 }
 
-func (v *CollectionReadView) clearPointRowBlockCache() {
+func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	if v == nil {
 		return
 	}
 	for key := range v.pointRowBlocks {
 		delete(v.pointRowBlocks, key)
 	}
+	v.pointRowBlocks = nil
+	v.rowLocator = nil
+	v.columnSnapshotView = nil
+	v.pointRowRefs = nil
+	v.pointRowProjection = nil
 }
 
 // LookupDocumentRowRefsByID resolves document IDs to snapshot-visible typed-row
@@ -546,7 +548,7 @@ func (v *CollectionReadView) ensureDocumentRowLocator(cfg ColumnStoreConfig, rea
 	if stats != nil {
 		stats.RowLocatorBuilds++
 	}
-	for _, assetRef := range view.AssetRefs {
+	for ordinal, assetRef := range view.AssetRefs {
 		if assetRef.Ref.Kind != ColumnAssetKindTCS1PartImage {
 			return fmt.Errorf("collections: document row locator unsupported asset kind %q", assetRef.Ref.Kind)
 		}
@@ -560,8 +562,8 @@ func (v *CollectionReadView) ensureDocumentRowLocator(cfg ColumnStoreConfig, rea
 		}
 		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, assetRef.Ref, view.CollectionName, &view.Config, projection, assetRef.Reason, func(row columnPhysicalScanRowView) error {
 			key := string(row.ID)
-			candidate := documentRowLocatorCandidate{ref: documentRowRefFromScanRowView(row), deleted: row.Deleted}
-			if existing, ok := latest[key]; !ok || documentRowRefNewer(candidate.ref, existing.ref) {
+			candidate := documentRowLocatorCandidate{ref: documentRowRefFromScanRowView(row), ordinal: ordinal, deleted: row.Deleted}
+			if existing, ok := latest[key]; !ok || documentRowLocatorCandidateNewer(candidate, existing) {
 				latest[key] = candidate
 			}
 			return nil
@@ -1058,17 +1060,20 @@ func documentRowRefFromScanRowView(row columnPhysicalScanRowView) DocumentRowRef
 	}
 }
 
-func documentRowRefNewer(a, b DocumentRowRef) bool {
-	if a.AppliedCommandLSN != b.AppliedCommandLSN {
-		return a.AppliedCommandLSN > b.AppliedCommandLSN
+func documentRowLocatorCandidateNewer(a, b documentRowLocatorCandidate) bool {
+	if a.ref.AppliedCommandLSN != b.ref.AppliedCommandLSN {
+		return a.ref.AppliedCommandLSN > b.ref.AppliedCommandLSN
 	}
-	if a.Generation != b.Generation {
-		return a.Generation > b.Generation
+	if a.ref.Generation != b.ref.Generation {
+		return a.ref.Generation > b.ref.Generation
 	}
-	if a.PartID != b.PartID {
-		return a.PartID > b.PartID
+	if a.ref.PartID != b.ref.PartID {
+		return a.ref.PartID > b.ref.PartID
 	}
-	return a.RowIndex > b.RowIndex
+	if a.ref.RowIndex != b.ref.RowIndex {
+		return a.ref.RowIndex > b.ref.RowIndex
+	}
+	return a.ordinal > b.ordinal
 }
 
 func columnPhysicalVisibleRowFromReaderRow(row columnPhysicalRowReaderRow) columnPhysicalVisibleRow {
