@@ -32,19 +32,19 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 	assertPreparedPlanDependency(t, stringPlan, typedcolumn.SectionDependencyDictionaries)
 	assertPreparedPlanDependency(t, stringPlan, typedcolumn.SectionDependencyPruningMetadata)
 
-	unsupportedStringRange, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
+	fallbackStringRange, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
 		Field:     stringField,
 		Role:      typedcolumn.ColumnRolePredicate,
 		Operation: columnsemantics.OpOrderedRange,
 	}, span)
 	if err != nil {
-		t.Fatalf("describe unsupported string range: %v", err)
+		t.Fatalf("describe fallback string range: %v", err)
 	}
-	if unsupportedStringRange.Capability.Status != columnsemantics.StatusUnsupported || unsupportedStringRange.Capability.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
-		t.Fatalf("unsupported string range capability=%+v want #1843 dictionary-order status", unsupportedStringRange.Capability)
+	if fallbackStringRange.Capability.Status != columnsemantics.StatusFallback || fallbackStringRange.Capability.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
+		t.Fatalf("fallback string range capability=%+v want #1846 dictionary-order fallback status", fallbackStringRange.Capability)
 	}
-	if len(unsupportedStringRange.Dependencies) != 0 {
-		t.Fatalf("unsupported string range deps=%+v want no hot-path dependencies", unsupportedStringRange.Dependencies)
+	if len(fallbackStringRange.Dependencies) != 0 {
+		t.Fatalf("fallback string range deps=%+v want no hot-path dependencies", fallbackStringRange.Dependencies)
 	}
 
 	nullableInt := TypedStorageField{Name: "maybe_count", Path: "maybe_count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64, Nullable: true}

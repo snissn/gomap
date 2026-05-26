@@ -38,6 +38,8 @@ const (
 	OpStringLexicalRange       Operation = "predicate.string_lexical_range"
 	OpUnknownPredicateKind     Operation = "predicate.unknown_kind"
 	OpDictionaryEquality       Operation = "predicate.dictionary_equality"
+	OpDictionaryInList         Operation = "predicate.dictionary_in_list"
+	OpDictionaryCategory       Operation = "predicate.dictionary_category"
 	OpDictionaryRange          Operation = "predicate.dictionary_range"
 	OpVectorSimilarity         Operation = "predicate.vector_similarity"
 	OpCountRows                Operation = "aggregate.count_rows"
@@ -48,6 +50,8 @@ const (
 	OpMax                      Operation = "aggregate.max"
 	OpBoolCounts               Operation = "aggregate.bool_counts"
 	OpDictionaryGroupBy        Operation = "aggregate.dictionary_group_by"
+	OpDictionaryCount          Operation = "aggregate.dictionary_count"
+	OpDictionaryCountDistinct  Operation = "aggregate.dictionary_count_distinct"
 	OpVectorMetrics            Operation = "aggregate.vector_metrics"
 	OpStatsMinMax              Operation = "stats.min_max"
 	OpStatsSum                 Operation = "stats.sum"
@@ -353,15 +357,27 @@ func stringCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonLogicalPhysicalMismatch, "string semantics require low-cardinality dictionary-code physical type")
 	}
 	switch op {
-	case OpAllRows, OpEquality, OpInequality, OpInList, OpDictionaryEquality:
+	case OpAllRows, OpEquality, OpInequality, OpInList, OpDictionaryEquality, OpDictionaryInList, OpDictionaryCategory:
 		return Supported(op)
 	case OpPruneEquality:
 		return Fallback(op, ReasonPruningPayloadUnsupported, "string pruning payload is deferred to the string type-family slice")
 	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpDictionaryGroupBy:
-		return SupportedResult(op, ResultSemantics{ResultType: "groups", GroupKey: "dictionary string value with stable dictionary identity"})
-	case OpOrderedRange, OpDictionaryRange, OpStringPrefix, OpStringLexicalRange, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange:
+		return SupportedResult(op, ResultSemantics{ResultType: "groups", GroupKey: "dictionary string value; dictionary codes are part-local unless identity metadata proves otherwise"})
+	case OpDictionaryCount:
+		return SupportedResult(op, ResultSemantics{ResultType: "groups with int64 counts", OverflowPolicy: "checked row count", GroupKey: "dictionary string value; count by code is valid only within matching dictionary identity"})
+	case OpDictionaryCountDistinct:
+		return SupportedResult(op, ResultSemantics{ResultType: "groups with int64 distinct counts", OverflowPolicy: "checked row and distinct bitmap counts", GroupKey: "dictionary string value; distinct dictionaries must be translated by value unless identity metadata matches"})
+	case OpOrderedRange, OpStringPrefix, OpStringLexicalRange:
+		if !desc.DictionaryOrder {
+			return Fallback(op, ReasonDictionaryOrderUnproven, "lexical string comparison requires value-level fallback; dictionary code order is not proof of lexical value order")
+		}
+		if desc.DictionaryCollation == "" {
+			return Fallback(op, ReasonDictionaryCollationUnproven, "lexical string comparison requires value-level fallback unless dictionary order has an explicit collation identity")
+		}
+		return Supported(op)
+	case OpDictionaryRange, OpMin, OpMax, OpStatsMinMax, OpPruneOrderedRange:
 		if !desc.DictionaryOrder {
 			return Unsupported(op, ReasonDictionaryOrderUnproven, "dictionary code order is not proof of lexical value order")
 		}

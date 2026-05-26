@@ -17,9 +17,16 @@ import (
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
 const (
-	typedColumnAdapterPrimaryIDColumn       = "__treedb_primary_id"
-	typedColumnAdapterMetadataDictionary    = "__treedb_adapter_metadata"
-	typedColumnAdapterMetadataValueTypeMark = "value_type"
+	typedColumnAdapterPrimaryIDColumn                 = "__treedb_primary_id"
+	typedColumnAdapterMetadataDictionary              = "__treedb_adapter_metadata"
+	typedColumnAdapterMetadataValueTypeMark           = "value_type"
+	typedColumnAdapterMetadataDictionaryIdentityMark  = "dictionary_identity"
+	typedColumnAdapterMetadataDictionaryOrderMark     = "dictionary_order"
+	typedColumnAdapterMetadataDictionaryCollationMark = "dictionary_collation"
+
+	typedColumnAdapterStringDictionaryIdentity  = "part_local_string_dictionary_v1"
+	typedColumnAdapterStringDictionaryOrder     = "none"
+	typedColumnAdapterStringDictionaryCollation = "none"
 )
 
 type typedColumnAdapterTypeStatus string
@@ -925,7 +932,11 @@ func validateTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn,
 }
 
 func typedColumnAdapterMetadataKey(column typedColumnAdapterColumn) string {
-	return column.Definition.Name + "\x00" + typedColumnAdapterMetadataValueTypeMark + "\x00" + string(column.Field.ValueType)
+	return typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataValueTypeMark, string(column.Field.ValueType))
+}
+
+func typedColumnAdapterMetadataEntryKey(column typedColumnAdapterColumn, mark, value string) string {
+	return column.Definition.Name + "\x00" + mark + "\x00" + value
 }
 
 func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64, columns []typedColumnAdapterColumn) error {
@@ -940,6 +951,17 @@ func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64
 		if _, ok := metadata[typedColumnAdapterMetadataKey(column)]; !ok {
 			return fmt.Errorf("collections: typed-column adapter image value type metadata mismatch for column %q", column.Definition.Name)
 		}
+		if column.Field.ValueType == ColumnStoreValueString {
+			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity)]; !ok {
+				return fmt.Errorf("collections: typed-column adapter image dictionary identity metadata mismatch for column %q", column.Definition.Name)
+			}
+			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder)]; !ok {
+				return fmt.Errorf("collections: typed-column adapter image dictionary order metadata mismatch for column %q", column.Definition.Name)
+			}
+			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation)]; !ok {
+				return fmt.Errorf("collections: typed-column adapter image dictionary collation metadata mismatch for column %q", column.Definition.Name)
+			}
+		}
 	}
 	return nil
 }
@@ -947,8 +969,18 @@ func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64
 func typedColumnAdapterDictionaries(columns []typedColumnAdapterColumn) map[string]map[string]int64 {
 	out := make(map[string]map[string]int64)
 	metadata := make(map[string]int64, len(columns))
-	for i, column := range columns {
-		metadata[typedColumnAdapterMetadataKey(column)] = int64(i + 1)
+	metadataCode := int64(1)
+	for _, column := range columns {
+		metadata[typedColumnAdapterMetadataKey(column)] = metadataCode
+		metadataCode++
+		if column.Field.ValueType == ColumnStoreValueString {
+			metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity)] = metadataCode
+			metadataCode++
+			metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder)] = metadataCode
+			metadataCode++
+			metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation)] = metadataCode
+			metadataCode++
+		}
 		if len(column.Dictionary) != 0 {
 			out[column.Definition.Name] = column.Dictionary
 		}
@@ -1551,6 +1583,9 @@ func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
 		return typedColumnStringPredicatePreparedPart{}, err
+	}
+	if _, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image); err != nil {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed-column string predicate scan dictionary/layout identity validation: %w", err)
 	}
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
 		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed_column_part string predicate scan image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
