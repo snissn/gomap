@@ -191,6 +191,58 @@ func validateDirectViewCertification(layout columnlayout.Capabilities, cert type
 	return validateDirectViewCertificationFields(cert, elementSize, elementsPerRow)
 }
 
+// DenseFloat32VectorPlan selects a direct-view candidate only for writer-
+// certified raw little-endian float32_vector sections with the requested fixed
+// dimension. Callers must still validate each column/block payload and handle
+// lifetime before exposing the returned []float32.
+func DenseFloat32VectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, dims int) Plan {
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:            columnsemantics.LogicalFloat32Vector,
+		Physical:           typedcolumn.ColumnTypeFloat32Vector,
+		Encoding:           cert.Encoding,
+		Compression:        cert.Compression,
+		Nullable:           cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable:        cert.DefaultMaskPresent || cert.DefaultCount != 0,
+		FixedWidthElements: dims,
+	})
+	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalFloat32Vector, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.EncodingRawFloat32Vector, 4, dims)
+}
+
+// AdjacencyListPlan selects a direct-view candidate only for writer-certified
+// raw little-endian adjacency_list sections with the requested fixed degree.
+// Callers must still validate each column/block payload and handle lifetime
+// before exposing the returned []uint32.
+func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree int) Plan {
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:            columnsemantics.LogicalAdjacencyList,
+		Physical:           typedcolumn.ColumnTypeAdjacencyList,
+		Encoding:           cert.Encoding,
+		Compression:        cert.Compression,
+		Nullable:           cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable:        cert.DefaultMaskPresent || cert.DefaultCount != 0,
+		FixedWidthElements: degree,
+	})
+	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
+}
+
+func denseDirectViewPlan(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int, elementsPerRow int) Plan {
+	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: elementSize, ElementsPerRow: elementsPerRow, Alignment: elementSize, Rows: cert.Rows}
+	if elementsPerRow <= 0 {
+		return Plan{Path: PathUnsupported, Reason: ReasonDimensionMismatch, Message: fmt.Sprintf("elements_per_row=%d", elementsPerRow), ElementSize: elementSize, ElementsPerRow: elementsPerRow, Alignment: elementSize, Rows: cert.Rows}
+	}
+	status := validateDirectViewCertification(layout, cert, elementSize, elementsPerRow)
+	if !status.Direct() {
+		return Plan{Path: status.Path, Reason: status.Reason, Message: status.Message, ElementSize: elementSize, ElementsPerRow: elementsPerRow, Alignment: elementSize, Rows: cert.Rows}
+	}
+	if cert.LogicalType != string(logical) {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical_type=%q want %q", cert.LogicalType, logical), ElementSize: elementSize, ElementsPerRow: elementsPerRow, Alignment: elementSize, Rows: cert.Rows}
+	}
+	if cert.Type != physical || cert.Encoding != encoding {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("type/encoding=(%s,%s) want (%s,%s)", cert.Type, cert.Encoding, physical, encoding), ElementSize: elementSize, ElementsPerRow: elementsPerRow, Alignment: elementSize, Rows: cert.Rows}
+	}
+	return plan
+}
+
 func validateDirectViewCertificationFields(cert typedcolumn.ColumnPartLayoutContractColumn, elementSize int, elementsPerRow int) Status {
 	if !cert.DirectViewCertified {
 		return StreamingStatus(ReasonNotWriterCertified, "column lacks writer-certified direct-view contract")
@@ -243,6 +295,82 @@ type DirectViewBlockRequest struct {
 	PayloadBytes  int
 }
 
+// DirectViewColumnRequest validates a complete fixed-width column-data section
+// before callers expose a section-wide direct view.
+type DirectViewColumnRequest struct {
+	Plan          Plan
+	Certification typedcolumn.ColumnPartLayoutContractColumn
+	Rows          int
+	PayloadBytes  int
+}
+
+func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
+	if !req.Plan.DirectCandidate() {
+		return req.Plan.Status()
+	}
+	cert := req.Certification
+	if status := validateDirectViewCertificationFields(cert, req.Plan.ElementSize, max(1, req.Plan.ElementsPerRow)); !status.Direct() {
+		return status
+	}
+	if req.Rows < 0 || cert.Rows != req.Rows {
+		return StreamingStatus(ReasonRowCountMismatch, fmt.Sprintf("cert_rows=%d request_rows=%d", cert.Rows, req.Rows))
+	}
+	if req.PayloadBytes != cert.Section.Length {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("payload_bytes=%d section_length=%d", req.PayloadBytes, cert.Section.Length))
+	}
+	if cert.LengthMultiple <= 0 || cert.Section.Length%cert.LengthMultiple != 0 {
+		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("section_length=%d multiple=%d", cert.Section.Length, cert.LengthMultiple))
+	}
+	if cert.Alignment <= 0 || cert.Section.Offset%cert.Alignment != 0 {
+		return StreamingStatus(ReasonUnaligned, fmt.Sprintf("section_offset=%d alignment=%d", cert.Section.Offset, cert.Alignment))
+	}
+	elementsPerRow := req.Plan.ElementsPerRow
+	if elementsPerRow <= 0 {
+		elementsPerRow = 1
+	}
+	want, ok := checkedMul3(req.Rows, elementsPerRow, req.Plan.ElementSize)
+	if !ok {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width section byte count overflow")
+	}
+	if cert.Section.Length != want {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("section_length=%d want rows=%d*elements=%d*width=%d=%d", cert.Section.Length, req.Rows, elementsPerRow, req.Plan.ElementSize, want))
+	}
+	if len(cert.Blocks) == 0 {
+		if req.Rows == 0 && req.PayloadBytes == 0 {
+			return DirectStatus()
+		}
+		return UnsupportedStatus(ReasonValidationFailed, "direct-view column has no certified blocks")
+	}
+	nextRow := 0
+	nextPayloadOffset := cert.Section.Offset
+	totalPayload := 0
+	for i, block := range cert.Blocks {
+		if block.FirstRow != nextRow {
+			return StreamingStatus(ReasonRowCountMismatch, fmt.Sprintf("block %d first_row=%d want %d", i, block.FirstRow, nextRow))
+		}
+		if block.PayloadOffset != nextPayloadOffset {
+			return UnsupportedStatus(ReasonValidationFailed, fmt.Sprintf("block %d payload_offset=%d want %d", i, block.PayloadOffset, nextPayloadOffset))
+		}
+		if cert.Alignment <= 0 || block.PayloadOffset%cert.Alignment != 0 {
+			return StreamingStatus(ReasonUnaligned, fmt.Sprintf("block %d payload_offset=%d alignment=%d", i, block.PayloadOffset, cert.Alignment))
+		}
+		status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: req.Plan, Certification: cert, Block: block, Rows: block.RowCount, PayloadBytes: block.PayloadLength})
+		if !status.Direct() {
+			return status
+		}
+		nextRow += block.RowCount
+		nextPayloadOffset += block.PayloadLength
+		totalPayload += block.PayloadLength
+	}
+	if nextRow != req.Rows {
+		return StreamingStatus(ReasonRowCountMismatch, fmt.Sprintf("block_rows=%d request_rows=%d", nextRow, req.Rows))
+	}
+	if totalPayload != req.PayloadBytes {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("block_payload=%d request_payload=%d", totalPayload, req.PayloadBytes))
+	}
+	return DirectStatus()
+}
+
 func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
 	if !req.Plan.DirectCandidate() {
 		return req.Plan.Status()
@@ -266,6 +394,9 @@ func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
 	}
 	if cert.LengthMultiple <= 0 || block.PayloadLength%cert.LengthMultiple != 0 || block.RawBytes%cert.LengthMultiple != 0 {
 		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("payload=%d raw=%d multiple=%d", block.PayloadLength, block.RawBytes, cert.LengthMultiple))
+	}
+	if cert.Alignment <= 0 || block.PayloadOffset%cert.Alignment != 0 {
+		return StreamingStatus(ReasonUnaligned, fmt.Sprintf("payload_offset=%d alignment=%d", block.PayloadOffset, cert.Alignment))
 	}
 	elementsPerRow := req.Plan.ElementsPerRow
 	if elementsPerRow <= 0 {
@@ -362,6 +493,65 @@ func Uint32View(mgr *mappedresource.Manager, h *mappedresource.Handle, opts Reso
 		view, err = mappedresource.Uint32View(h.Bytes())
 	}
 	return validateViewLen(view, opts.ExpectedElements, err)
+}
+
+// Float32ByteView validates and exposes immutable bytes as []float32 without a
+// mappedresource handle. Callers are responsible for tying the byte slice to an
+// explicit lifetime; handle-backed optimized paths should prefer Float32View or
+// DenseFloat32VectorView.
+func Float32ByteView(raw []byte, opts ResourceViewOptions) ([]float32, Status) {
+	view, err := mappedresource.Float32View(raw)
+	return validateViewLen(view, opts.ExpectedElements, err)
+}
+
+// Uint32ByteView validates and exposes immutable bytes as []uint32 without a
+// mappedresource handle. Callers are responsible for tying the byte slice to an
+// explicit lifetime; handle-backed optimized paths should prefer Uint32View or
+// AdjacencyListView.
+func Uint32ByteView(raw []byte, opts ResourceViewOptions) ([]uint32, Status) {
+	view, err := mappedresource.Uint32View(raw)
+	return validateViewLen(view, opts.ExpectedElements, err)
+}
+
+func DenseFloat32VectorView(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, opts ResourceViewOptions) ([]float32, Status) {
+	status := ValidateDirectViewColumn(req)
+	if !status.Direct() {
+		return nil, status
+	}
+	opts, status = normalizeDenseViewOptions(req, opts)
+	if !status.Direct() {
+		return nil, status
+	}
+	return Float32View(mgr, h, opts)
+}
+
+func AdjacencyListView(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, opts ResourceViewOptions) ([]uint32, Status) {
+	status := ValidateDirectViewColumn(req)
+	if !status.Direct() {
+		return nil, status
+	}
+	opts, status = normalizeDenseViewOptions(req, opts)
+	if !status.Direct() {
+		return nil, status
+	}
+	return Uint32View(mgr, h, opts)
+}
+
+func normalizeDenseViewOptions(req DirectViewColumnRequest, opts ResourceViewOptions) (ResourceViewOptions, Status) {
+	elementsPerRow := req.Plan.ElementsPerRow
+	if elementsPerRow <= 0 {
+		elementsPerRow = 1
+	}
+	expected, ok := checkedMul3(req.Rows, elementsPerRow, 1)
+	if !ok {
+		return opts, UnsupportedStatus(ReasonPayloadLengthMismatch, "fixed-width element count overflow")
+	}
+	if opts.ExpectedElements < 0 {
+		opts.ExpectedElements = expected
+	} else if opts.ExpectedElements != expected {
+		return opts, UnsupportedStatus(ReasonRowCountMismatch, fmt.Sprintf("expected_elements=%d want %d", opts.ExpectedElements, expected))
+	}
+	return opts, DirectStatus()
 }
 
 func validateHandle(h *mappedresource.Handle, required mappedresource.Source, requireSource bool) Status {

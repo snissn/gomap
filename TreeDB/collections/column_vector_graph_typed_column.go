@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -322,11 +323,19 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 	if adapterPart.Part.Descriptor.SchemaVersion != uint32(cfg.SchemaHash) {
 		return nil, 0, fmt.Errorf("typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(cfg.SchemaHash))
 	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		return nil, 0, fmt.Errorf("typed_column_part dense vector layout certification: %w", err)
+	}
+	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
+	if !ok {
+		return nil, 0, fmt.Errorf("typed_column_part missing dense vector layout certification for column %q", adapterColumn.Definition.Name)
+	}
 	section, err := columnVectorGraphTypedColumnVectorSection(image, adapterColumn.Definition.Name)
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := validateColumnVectorGraphTypedColumnDenseVectorSection(adapterPart.Part, section, adapterColumn.Definition.Name, typedRef.Rows, adapterColumn.Definition.FixedWidthElements); err != nil {
+	if err := validateColumnVectorGraphTypedColumnDenseVectorSection(adapterPart.Part, section, certColumn, adapterColumn.Definition.Name, typedRef.Rows, adapterColumn.Definition.FixedWidthElements); err != nil {
 		return nil, 0, err
 	}
 	sectionBytes, err := image.SectionBytes(section)
@@ -334,7 +343,7 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 		return nil, 0, err
 	}
 	sectionChecksum := page.Checksum(sectionBytes)
-	values, handle, direct, scratchDecode, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, manager)
+	values, handle, direct, scratchDecode, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, manager)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -361,7 +370,7 @@ func columnVectorGraphTypedColumnVectorSection(image typedcolumn.ColumnPartImage
 	return typedcolumn.ColumnPartImageSection{}, fmt.Errorf("typed_column_part missing column data section %q", column)
 }
 
-func validateColumnVectorGraphTypedColumnDenseVectorSection(part *typedcolumn.ColumnPart, section typedcolumn.ColumnPartImageSection, columnName string, rows, dims int) error {
+func validateColumnVectorGraphTypedColumnDenseVectorSection(part *typedcolumn.ColumnPart, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, columnName string, rows, dims int) error {
 	if part == nil {
 		return errors.New("nil typed_column_part")
 	}
@@ -393,6 +402,11 @@ func validateColumnVectorGraphTypedColumnDenseVectorSection(part *typedcolumn.Co
 	}
 	if section.Rows != rows || section.Length != wantBytes {
 		return fmt.Errorf("typed_column_part vector section rows=%d length=%d want rows=%d length=%d", section.Rows, section.Length, rows, wantBytes)
+	}
+	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
+	status := typeddecode.ValidateDirectViewColumn(typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length})
+	if !status.Direct() {
+		return fmt.Errorf("typed_column_part vector direct-view validation failed: %s", status.String())
 	}
 	nextRow := 0
 	totalBytes := 0
@@ -434,7 +448,7 @@ func columnVectorGraphTypedColumnDenseByteLen(rows, dims int) (int, error) {
 	return elements * 4, nil
 }
 
-func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, sectionChecksum uint32, rows, dims int, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, bool, bool, error) {
+func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, bool, bool, error) {
 	if manager == nil {
 		return nil, nil, false, false, errors.New("nil mappedresource manager")
 	}
@@ -473,15 +487,19 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 		_ = handle.Release()
 		return nil, nil, false, false, err
 	}
-	values, err := manager.Float32View(handle)
-	if err == nil && len(values) == rows*dims {
+	expectedElements, err := typedColumnAdapterDenseElements(rows, dims)
+	if err != nil {
+		_ = handle.Release()
+		return nil, nil, false, false, err
+	}
+	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length}
+	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements})
+	if viewStatus.Direct() {
 		return values, handle, true, false, nil
 	}
-	firstErr := err
-	if firstErr == nil {
-		firstErr = fmt.Errorf("float32 direct view elements=%d want %d", len(values), rows*dims)
-	}
-	if handle.Source() == mappedresource.SourceMapped {
+	firstErr := fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String())
+	if handle.Source() == mappedresource.SourceMapped && typedColumnDenseDecodeFallbackAllowed(viewStatus) {
 		_ = handle.Release()
 		handle, err = manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{Reason: "column_graph typed-column dense vector section heap fallback", ValidationMode: mappedresource.ValidationVerify, AllowHeapCopy: true})
 		if err != nil {
@@ -491,22 +509,20 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 			_ = handle.Release()
 			return nil, nil, false, false, errors.Join(firstErr, checksumErr)
 		}
-		values, err = manager.Float32View(handle)
-		if err == nil && len(values) == rows*dims {
+		values, viewStatus = typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements})
+		if viewStatus.Direct() {
 			return values, handle, true, false, nil
 		}
-		if err == nil {
-			err = fmt.Errorf("float32 heap direct view elements=%d want %d", len(values), rows*dims)
-		}
+	}
+	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
+		_ = handle.Release()
+		return nil, nil, false, false, errors.Join(firstErr, fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String()))
 	}
 	bytes := handle.Bytes()
 	decoded, decodeErr := typedcolumn.DecodeRawFloat32VectorPayload(nil, bytes, rows, dims)
 	_ = handle.Release()
 	if decodeErr != nil {
-		if err != nil {
-			return nil, nil, false, false, errors.Join(firstErr, err, decodeErr)
-		}
-		return nil, nil, false, false, errors.Join(firstErr, decodeErr)
+		return nil, nil, false, false, errors.Join(firstErr, fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String()), decodeErr)
 	}
 	return decoded, nil, false, true, nil
 }

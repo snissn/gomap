@@ -4,7 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 var errColumnVectorGraphBlockViewRowOutOfBounds = errors.New("column_graph block view row outside block")
@@ -477,14 +478,11 @@ func columnVectorGraphBlockViewAdjacencyDirectView(reader *columnVectorGraphPhys
 }
 
 func columnVectorGraphLittleEndianUint32DirectView(raw []byte, count int) ([]uint32, bool) {
-	if !columnPhysicalNativeLittleEndian || count <= 0 || len(raw) != count*4 {
+	if count <= 0 || len(raw) != count*4 {
 		return nil, false
 	}
-	ptr := unsafe.Pointer(unsafe.SliceData(raw))
-	if uintptr(ptr)%unsafe.Alignof(uint32(0)) != 0 {
-		return nil, false
-	}
-	return unsafe.Slice((*uint32)(ptr), count), true
+	view, status := typeddecode.Uint32ByteView(raw, typeddecode.ResourceViewOptions{ExpectedElements: count})
+	return view, status.Direct()
 }
 
 func (v *columnVectorGraphBlockView) adjacencyLittleEndian() bool {

@@ -444,7 +444,15 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesHeapFallba
 	if err != nil {
 		t.Fatalf("SectionBytes: %v", err)
 	}
-	values, handle, direct, scratchDecode, err := (&Collection{db: d}).acquireColumnVectorGraphTypedColumnDenseVectorValues("docs", ref, image.Version, section, page.Checksum(sectionBytes), imageRows, 3, manager)
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
+	if !ok {
+		t.Fatalf("missing layout certification for %q", adapterColumn.Definition.Name)
+	}
+	values, handle, direct, scratchDecode, err := (&Collection{db: d}).acquireColumnVectorGraphTypedColumnDenseVectorValues("docs", ref, image.Version, section, certColumn, page.Checksum(sectionBytes), imageRows, 3, manager)
 	if err != nil {
 		t.Fatalf("acquire dense vector values: %v", err)
 	}

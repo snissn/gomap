@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
@@ -1053,30 +1054,51 @@ func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterRes
 	if section.Encoding != typedcolumn.EncodingRawUint32Dense || section.Compression != typedcolumn.CompressionNone {
 		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q section encoding/compression mismatch", column.Definition.Name)
 	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(reader.Image)
+	if err != nil {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q layout certification: %w", column.Definition.Name, err)
+	}
+	certColumn, ok := certification.Column(column.Definition.Name)
+	if !ok {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter image missing layout certification for column %q", column.Definition.Name)
+	}
+	plan := typeddecode.AdjacencyListPlan(certColumn, degree)
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length}
+	if status := typeddecode.ValidateDirectViewColumn(directReq); !status.Direct() {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q adjacency direct-view validation: %s", column.Definition.Name, status.String())
+	}
 	h, err := reader.AcquireSection(section)
 	if err != nil {
 		return typedColumnAdapterDenseUint32ResourceView{}, err
 	}
-	values, viewErr := typedColumnAdapterUint32View(reader.Manager, h)
-	if viewErr == nil {
-		if len(values) != expected {
-			_ = h.Release()
-			return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q dense uint32 values=%d want %d", column.Definition.Name, len(values), expected)
-		}
+	values, viewStatus := typeddecode.AdjacencyListView(reader.Manager, h, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expected})
+	if viewStatus.Direct() {
 		return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: values, Handle: h, Direct: true}, nil
+	}
+	viewErr := fmt.Errorf("collections: typed-column adapter column %q adjacency direct-view validation: %s", column.Definition.Name, viewStatus.String())
+	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
+		_ = h.Release()
+		return typedColumnAdapterDenseUint32ResourceView{}, viewErr
 	}
 	decoded, decodeErr := typedcolumn.DecodeRawUint32DensePayload(nil, h.Bytes(), rows, degree)
 	releaseErr := h.Release()
 	if decodeErr != nil {
-		if releaseErr != nil {
-			decodeErr = errors.Join(decodeErr, releaseErr)
-		}
+		decodeErr = errors.Join(viewErr, decodeErr, releaseErr)
 		return typedColumnAdapterDenseUint32ResourceView{}, decodeErr
 	}
 	if releaseErr != nil {
-		return typedColumnAdapterDenseUint32ResourceView{}, releaseErr
+		return typedColumnAdapterDenseUint32ResourceView{}, errors.Join(viewErr, releaseErr)
 	}
 	return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: decoded, Direct: false}, nil
+}
+
+func typedColumnDenseDecodeFallbackAllowed(status typeddecode.Status) bool {
+	switch status.Reason {
+	case typeddecode.ReasonUnaligned, typeddecode.ReasonHandleSourceUnsupported:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r typedColumnAdapterResourceReader) AcquireSection(section typedcolumn.ColumnPartImageSection) (*mappedresource.Handle, error) {
