@@ -21,6 +21,24 @@ var columnPhysicalQueryQ1BenchmarkFixture1890 struct {
 	err        error
 }
 
+func TestMain(m *testing.M) {
+	code := m.Run()
+	cleanupColumnPhysicalQueryQ1BenchmarkFixture1890()
+	os.Exit(code)
+}
+
+func cleanupColumnPhysicalQueryQ1BenchmarkFixture1890() {
+	fixture := &columnPhysicalQueryQ1BenchmarkFixture1890
+	if fixture.collection != nil && fixture.collection.db != nil {
+		_ = fixture.collection.db.Close()
+		fixture.collection = nil
+	}
+	if fixture.dir != "" {
+		_ = os.RemoveAll(fixture.dir)
+		fixture.dir = ""
+	}
+}
+
 func BenchmarkColumnPhysicalQueryQ1DirectPrepared1890(b *testing.B) {
 	fixture := columnPhysicalQueryQ1Fixture1890(b)
 	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
