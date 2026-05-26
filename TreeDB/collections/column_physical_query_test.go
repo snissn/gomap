@@ -2042,39 +2042,68 @@ func TestColumnPhysicalQueryGroupCountAndDistinctFused1870(t *testing.T) {
 	}
 	wantCounts := map[string]int{"like": 1, "post": 3}
 	wantDistinct := map[string]int{"like": 1, "post": 2}
-	for _, run := range []struct {
-		name string
-		fn   func() (ColumnPhysicalQueryResult, error)
-	}{
-		{name: "one-shot", fn: func() (ColumnPhysicalQueryResult, error) { return collection.RunColumnPhysicalQuery(req) }},
-		{name: "prepared", fn: func() (ColumnPhysicalQueryResult, error) {
-			runner, err := collection.PrepareColumnPhysicalQuery(req)
-			if err != nil {
-				return ColumnPhysicalQueryResult{}, err
-			}
-			defer func() { _ = runner.Close() }()
-			return runner.Run()
-		}},
-	} {
-		t.Run(run.name, func(t *testing.T) {
-			result, err := run.fn()
-			if err != nil {
-				t.Fatalf("%s fused q2: %v", run.name, err)
-			}
-			gotCounts := make(map[string]int, len(result.Groups))
-			gotDistinct := make(map[string]int, len(result.Groups))
-			for _, group := range result.Groups {
-				gotCounts[group.Key] = group.Count
-				gotDistinct[group.Key] = group.DistinctCount
-			}
-			if !reflect.DeepEqual(gotCounts, wantCounts) || !reflect.DeepEqual(gotDistinct, wantDistinct) {
-				t.Fatalf("fused groups counts=%v distinct=%v want counts=%v distinct=%v full=%+v", gotCounts, gotDistinct, wantCounts, wantDistinct, result.Groups)
-			}
-			if result.Diagnostics.RowsScanned != len(events) || result.Diagnostics.RowsMatched != 4 || result.Diagnostics.ReduceRows != 4 {
-				t.Fatalf("diagnostics=%+v want scanned=%d matched/reduced=4", result.Diagnostics, len(events))
-			}
-		})
+	assertFused := func(t *testing.T, result ColumnPhysicalQueryResult) {
+		t.Helper()
+		gotCounts := make(map[string]int, len(result.Groups))
+		gotDistinct := make(map[string]int, len(result.Groups))
+		for _, group := range result.Groups {
+			gotCounts[group.Key] = group.Count
+			gotDistinct[group.Key] = group.DistinctCount
+		}
+		if !reflect.DeepEqual(gotCounts, wantCounts) || !reflect.DeepEqual(gotDistinct, wantDistinct) {
+			t.Fatalf("fused groups counts=%v distinct=%v want counts=%v distinct=%v full=%+v", gotCounts, gotDistinct, wantCounts, wantDistinct, result.Groups)
+		}
+		if result.Diagnostics.RowsScanned != len(events) || result.Diagnostics.RowsMatched != 4 || result.Diagnostics.ReduceRows != 4 {
+			t.Fatalf("diagnostics=%+v want scanned=%d matched/reduced=4", result.Diagnostics, len(events))
+		}
 	}
+
+	t.Run("one-shot", func(t *testing.T) {
+		result, err := collection.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("one-shot fused q2: %v", err)
+		}
+		assertFused(t, result)
+	})
+	t.Run("prepared", func(t *testing.T) {
+		runner, err := collection.PrepareColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("PrepareColumnPhysicalQuery fused q2: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		for i := 0; i < 2; i++ {
+			result, err := runner.Run()
+			if err != nil {
+				t.Fatalf("prepared fused q2 run %d: %v", i, err)
+			}
+			assertFused(t, result)
+		}
+	})
+	t.Run("prepared no predicates", func(t *testing.T) {
+		noPredicateReq := req
+		noPredicateReq.Predicates = nil
+		runner, err := collection.PrepareColumnPhysicalQuery(noPredicateReq)
+		if err != nil {
+			t.Fatalf("PrepareColumnPhysicalQuery no-predicate fused q2: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		result, err := runner.Run()
+		if err != nil {
+			t.Fatalf("prepared no-predicate fused q2: %v", err)
+		}
+		gotCounts := make(map[string]int, len(result.Groups))
+		gotDistinct := make(map[string]int, len(result.Groups))
+		for _, group := range result.Groups {
+			gotCounts[group.Key] = group.Count
+			gotDistinct[group.Key] = group.DistinctCount
+		}
+		if wantCounts := map[string]int{"like": 1, "post": 4}; !reflect.DeepEqual(gotCounts, wantCounts) {
+			t.Fatalf("no-predicate counts=%v want %v full=%+v", gotCounts, wantCounts, result.Groups)
+		}
+		if wantDistinct := map[string]int{"like": 1, "post": 3}; !reflect.DeepEqual(gotDistinct, wantDistinct) {
+			t.Fatalf("no-predicate distinct=%v want %v full=%+v", gotDistinct, wantDistinct, result.Groups)
+		}
+	})
 }
 
 func TestColumnPhysicalQueryDictionaryPredicatesAbsentLiteralEmpty1869(t *testing.T) {

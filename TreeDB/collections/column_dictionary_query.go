@@ -652,7 +652,9 @@ func columnDictionaryCodeSnapshotBytes(view columnPhysicalScanSnapshotView, byPa
 func (r *columnDictionaryCodeGroupCountDistinctRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) ColumnPhysicalQueryResult {
 	start := time.Now()
 	clear(r.groupCounts)
-	clear(r.groupDistinctCounts)
+	if r.combined {
+		clear(r.groupDistinctCounts)
+	}
 	clear(r.seen)
 	rows := 0
 	matched := 0

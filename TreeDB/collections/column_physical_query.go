@@ -44,8 +44,10 @@ type ColumnPhysicalQueryRequest struct {
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
-// ColumnPhysicalQueryGroup is one reduced result row. Count is populated for
-// count-style queries; Int64 is populated for min/max/span-style queries.
+// ColumnPhysicalQueryGroup is one reduced result row. Key is the group key.
+// Count is populated for count-style queries and remains the distinct count for
+// group_count_distinct. DistinctCount is populated by group_count_and_distinct;
+// Int64 is populated for min/max/span-style queries.
 type ColumnPhysicalQueryGroup struct {
 	Key           string
 	Count         int
@@ -226,7 +228,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			_ = readCache.close()
 			return nil, fmt.Errorf("%w: prepared aggregate metadata query requires metadata assets", ErrColumnQueryPlanUnsupported)
 		}
-	} else if !columnPhysicalQueryHasPredicates(req) {
+	} else if !columnPhysicalQueryHasPredicates(req) && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
 		exec, err = newColumnPhysicalQueryExecutor(view.Config, req)
 		if err != nil {
 			_ = readCache.close()
@@ -259,6 +261,10 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	if err != nil {
 		_ = readCache.close()
 		return nil, err
+	}
+	if req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
+		_ = readCache.close()
+		return nil, fmt.Errorf("%w: fused count-distinct physical query requires dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
 	}
 	if columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil {
 		_ = readCache.close()
