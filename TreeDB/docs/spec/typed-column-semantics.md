@@ -19,11 +19,47 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | --- | --- | --- | --- |
 | `bool` | `bool` | `bool_bitpack_rle` | equality/counts supported; broad scalar range is unsupported (`bool_range_unsupported`). |
 | `int64` | `int64` | `delta_varint` by default; explicit `fixed_width_encoding: "little_endian"` selects uncompressed `raw_int64`; double-delta remains a valid typedcolumn encoding but is not the adapter default | equality, ordered range, count rows/non-null, sum/avg/min/max, min/max stats, sum stats, equality pruning, and ordered-range pruning are supported for non-null int64 semantics. Durable sum/count stats are gated by the stats envelope in `typed-column-stats.md`; durable value-row pruning metadata is gated by `typed-column-pruning.md`. Physical reducer/direct-view/pruning eligibility is additionally gated by `typed-column-layout-capabilities.md`. |
-| `float32` | `int64` | `raw_int64` carrying `math.Float32bits` | raw bit patterns do **not** provide int64 ordered range, sum, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Native float semantics require a future float layout and NaN/signed-zero/infinity rules. |
+| `float32` | `int64` | `raw_int64` carrying `math.Float32bits` | raw bit patterns do **not** provide int64 ordered range, sum, avg, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Count rows/count non-null may be supported because they do not inspect carrier ordering or arithmetic. Equality/in-list are explicit prepare-time fallback (`native_float_layout_missing`) until native float policy and layout exist. |
 | `double` | `int64` | `raw_int64` carrying `math.Float64bits` | same raw-bit restriction as `float32`. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
 | `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null supported for the non-null carrier; vector-specific capabilities are explicit/deferred. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
 | `adjacency_list` | `adjacency_list` | `raw_uint32_dense` | count rows/non-null supported for the non-null carrier; graph/vector-specific capabilities are explicit/deferred. Scalar shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
+
+## Scalar float fail-closed policy
+
+Current scalar `float32` and `double` typed-column storage is a preservation
+carrier, not a numeric float layout. The adapter stores raw IEEE-754 bit patterns
+inside an `int64` physical column so reconstruction can round-trip values, but
+those carrier integers are never a proof of float-domain ordering, equality, or
+arithmetic semantics.
+
+Until a native scalar float section is introduced through a separate design,
+semantic admission is:
+
+- `count_rows` and `count_non_null`: supported as checked `int64` counts because
+  they only count rows and do not inspect float bit ordering or arithmetic;
+- equality, inequality, and in-list: fallback only. A future implementation must
+  define whether equality is bit-exact or IEEE numeric equality, how NaN payloads
+  and quiet/signaling NaNs compare, and whether `+0` and `-0` are equal;
+- ordered range, min, max, sum, avg, stats min/max/sum, equality/range pruning,
+  and direct scalar value carriers: unsupported for raw bit carriers with
+  `float_raw_int64_bit_pattern`;
+- nullable/default float carriers use the same nullable/default wrapper contract
+  as other `nullable_int64` carriers: count/null operations may be supported, but
+  value predicates and value aggregates fallback until a kernel explicitly
+  composes value semantics with null/default masks.
+
+Required future float policy before enabling native float-domain stats, pruning,
+or reducers:
+
+- NaN: define accepted encodings, payload preservation, equality behavior,
+  ordering bucket, and aggregate propagation/ignore rules;
+- signed zero: define equality and min/max/range placement for `+0` and `-0`;
+- infinities: define ordering, range inclusion, min/max behavior, and sum/avg
+  overflow/invalid behavior;
+- precision/accumulation: define result type (`float32`, `double`, widened, or
+  compensated), rounding mode, overflow/underflow behavior, and deterministic
+  accumulation order.
 
 Nullable scalar adapter support uses `nullable_int64` as a carrier. The semantic
 matrix treats the `nullable_int64` encoding itself as a nullable/default carrier,
