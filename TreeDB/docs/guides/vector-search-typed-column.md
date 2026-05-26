@@ -112,10 +112,11 @@ The benchmark opens/builds the fixture and reusable searcher outside the timed
 loop, then times steady-state search plus top-k document fetch. Report
 `doc_fetch_ns/search`, typed-column counters, JSON reconstruction counters,
 `output_B/search`, retained/input/storage byte counters, and
-`write_amplification`. The post-#1885 Apple M3 smoke data did not justify making
-full-retained payloads a new default latency preset: non-column plus embedding
-exclusion was fastest among document-producing modes, while full-retained full
-documents reduced allocations but had higher `ns/op` and duplicated storage.
+`write_amplification`. The #1876 retained-payload policy matrix did not justify
+making full-retained payloads a new default latency preset: non-column plus
+embedding exclusion was fastest among document-producing modes, while
+full-retained full documents reduced allocations but had higher `ns/op` and
+duplicated storage.
 Issues [#1887](https://github.com/snissn/gomap/issues/1887) and
 [#1888](https://github.com/snissn/gomap/issues/1888) remain pending follow-up
 baselines before making stronger default recommendations.
