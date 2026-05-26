@@ -615,6 +615,82 @@ func TestCollectionReadViewResponseDocumentsAreOwned(t *testing.T) {
 	}
 }
 
+func TestCollectionReadViewResponseArenaFetchDocumentsByIDAndRowRef1888(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	ids := [][]byte{[]byte("e1"), []byte("e2")}
+	if _, err := col.InsertBatch(
+		ids,
+		[][]byte{
+			[]byte(`{"row_id":1,"kind":"alpha","score":1,"payload":"first"}`),
+			[]byte(`{"row_id":2,"kind":"beta","score":2,"payload":"second"}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+
+	fullByID, err := view.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID full: %v", err)
+	}
+	if len(fullByID.Results) != len(ids) || !fullByID.Results[0].Found || !fullByID.Results[1].Found {
+		t.Fatalf("full by id results=%+v want two found documents", fullByID.Results)
+	}
+	assertJSONMapEqual1875(t, fullByID.Results[0].Document, map[string]any{"row_id": float64(1), "kind": "alpha", "score": float64(1), "payload": "first"})
+	assertJSONMapEqual1875(t, fullByID.Results[1].Document, map[string]any{"row_id": float64(2), "kind": "beta", "score": float64(2), "payload": "second"})
+	if cap(fullByID.Results[0].Document) != len(fullByID.Results[0].Document) || cap(fullByID.Results[1].Document) != len(fullByID.Results[1].Document) {
+		t.Fatalf("full by id documents are not cap-limited: caps=%d/%d lens=%d/%d", cap(fullByID.Results[0].Document), cap(fullByID.Results[1].Document), len(fullByID.Results[0].Document), len(fullByID.Results[1].Document))
+	}
+	secondBefore := append([]byte(nil), fullByID.Results[1].Document...)
+	_ = append(fullByID.Results[0].Document, '!')
+	if !bytes.Equal(fullByID.Results[1].Document, secondBefore) {
+		t.Fatalf("full by id response documents share capacity: second=%s want %s", fullByID.Results[1].Document, secondBefore)
+	}
+
+	projectedByID, err := view.FetchDocumentsByID(ids, DocumentFetchOptions{IncludePaths: []string{"kind", "payload"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID projected: %v", err)
+	}
+	assertJSONMapEqual1875(t, projectedByID.Results[0].Document, map[string]any{"kind": "alpha", "payload": "first"})
+	assertJSONMapEqual1875(t, projectedByID.Results[1].Document, map[string]any{"kind": "beta", "payload": "second"})
+	if projectedByID.Stats.FieldsSkipped == 0 || projectedByID.Stats.FieldsReconstructed != 4 || projectedByID.Stats.DocumentBytes != projectedByID.Stats.OutputBytes {
+		t.Fatalf("projected by id stats=%+v want skipped/reconstructed/output counters", projectedByID.Stats)
+	}
+
+	refs := []DocumentRowRef{fullByID.Results[0].RowRef, fullByID.Results[1].RowRef}
+	fullByRowRef, err := view.FetchDocumentsByRowRef(refs, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByRowRef full: %v", err)
+	}
+	assertJSONMapEqual1875(t, fullByRowRef.Results[0].Document, map[string]any{"row_id": float64(1), "kind": "alpha", "score": float64(1), "payload": "first"})
+	assertJSONMapEqual1875(t, fullByRowRef.Results[1].Document, map[string]any{"row_id": float64(2), "kind": "beta", "score": float64(2), "payload": "second"})
+	if cap(fullByRowRef.Results[0].Document) != len(fullByRowRef.Results[0].Document) || cap(fullByRowRef.Results[1].Document) != len(fullByRowRef.Results[1].Document) {
+		t.Fatalf("full row-ref documents are not cap-limited: caps=%d/%d lens=%d/%d", cap(fullByRowRef.Results[0].Document), cap(fullByRowRef.Results[1].Document), len(fullByRowRef.Results[0].Document), len(fullByRowRef.Results[1].Document))
+	}
+
+	projectedByRowRef, err := view.FetchDocumentsByRowRef(refs, DocumentFetchOptions{ExcludePaths: []string{"score"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByRowRef projected: %v", err)
+	}
+	assertJSONMapEqual1875(t, projectedByRowRef.Results[0].Document, map[string]any{"row_id": float64(1), "kind": "alpha", "payload": "first"})
+	assertJSONMapEqual1875(t, projectedByRowRef.Results[1].Document, map[string]any{"row_id": float64(2), "kind": "beta", "payload": "second"})
+	if projectedByRowRef.Stats.PointRowFetches != uint64(len(refs)) || projectedByRowRef.Stats.FieldsSkipped == 0 || projectedByRowRef.Stats.DocumentBytes != projectedByRowRef.Stats.OutputBytes {
+		t.Fatalf("projected row-ref stats=%+v want point fetches and projection counters", projectedByRowRef.Stats)
+	}
+
+	projectedByID.Results[0].Document[0] = 'X'
+	fresh, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{IncludePaths: []string{"kind", "payload"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID after mutating response: %v", err)
+	}
+	assertJSONMapEqual1875(t, fresh.Results[0].Document, map[string]any{"kind": "alpha", "payload": "first"})
+}
+
 func TestCollectionReadViewFetchDocumentsByRowRefPointFetchInsertOnly1874(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
