@@ -101,6 +101,7 @@ type columnManifestScanSidecarFilter struct {
 	DictionaryCodes       bool
 	DictionaryColumn      string
 	DictionaryColumn2     string
+	DictionaryColumns     []string
 	Int64Values           bool
 	Int64Column           string
 }
@@ -132,6 +133,14 @@ func (f columnManifestScanSidecarFilter) aggregateMetadataNameForScan(name []byt
 
 func (f columnManifestScanSidecarFilter) dictionaryColumnNameForScan(columnName []byte) (string, bool) {
 	if !f.DictionaryCodes {
+		return "", false
+	}
+	if len(f.DictionaryColumns) > 0 {
+		for _, column := range f.DictionaryColumns {
+			if columnManifestBytesEqualString(columnName, column) {
+				return column, true
+			}
+		}
 		return "", false
 	}
 	if f.DictionaryColumn == "" && f.DictionaryColumn2 == "" {

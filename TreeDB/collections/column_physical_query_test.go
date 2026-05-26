@@ -1902,6 +1902,400 @@ func columnDeclaredValuesEquivalentM13C(a, b columnDeclaredValue) bool {
 	return columnPhysicalScanStringForTest(a) == columnPhysicalScanStringForTest(b)
 }
 
+func TestColumnPhysicalQueryDictionaryPredicatesJSONBenchShapes1869(t *testing.T) {
+	events := []columnPhysicalPredicateEvent1869{
+		{ID: "e1", Kind: "commit", Operation: "create", Event: "app.bsky.feed.post", Did: "did_b", TimeUS: 1000},
+		{ID: "e2", Kind: "commit", Operation: "create", Event: "app.bsky.feed.post", Did: "did_a", TimeUS: 2000},
+		{ID: "e3", Kind: "commit", Operation: "create", Event: "app.bsky.feed.post", Did: "did_a", TimeUS: 500},
+		{ID: "e4", Kind: "commit", Operation: "delete", Event: "app.bsky.feed.post", Did: "did_c", TimeUS: 10},
+		{ID: "e5", Kind: "identity", Operation: "create", Event: "app.bsky.feed.post", Did: "did_d", TimeUS: 20},
+		{ID: "e6", Kind: "commit", Operation: "create", Event: "app.bsky.feed.like", Did: "did_a", TimeUS: 3000},
+		{ID: "e7", Kind: "commit", Operation: "create", Event: "app.bsky.feed.repost", Did: "did_b", TimeUS: 4000},
+		{ID: "e8", Kind: "commit", Operation: "create", Event: "app.bsky.feed.post", Did: "did_b", TimeUS: 9000},
+	}
+	collection, closeFn := openColumnPhysicalPredicateFixture1869(t, events)
+	defer closeFn()
+
+	commitCreate := []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Kind: ColumnPhysicalQueryPredicateEqual, Value: "commit"},
+		{Column: "operation", Kind: ColumnPhysicalQueryPredicateEqual, Value: "create"},
+	}
+	postCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{Column: "event", Kind: ColumnPhysicalQueryPredicateEqual, Value: "app.bsky.feed.post"})
+
+	tests := []struct {
+		name        string
+		req         ColumnPhysicalQueryRequest
+		wantCount   map[string]int
+		wantInt64   map[string]int64
+		wantMatched int
+	}{
+		{
+			name: "q2 count by collection with kind operation predicates",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQueryGroupCount,
+				GroupColumn: "event",
+				Predicates:  commitCreate,
+			},
+			wantCount: map[string]int{
+				"app.bsky.feed.like":   1,
+				"app.bsky.feed.post":   4,
+				"app.bsky.feed.repost": 1,
+			},
+			wantMatched: 6,
+		},
+		{
+			name: "q2 distinct users by collection with kind operation predicates",
+			req: ColumnPhysicalQueryRequest{
+				Kind:           ColumnPhysicalQueryGroupCountDistinct,
+				GroupColumn:    "event",
+				DistinctColumn: "did",
+				Predicates:     commitCreate,
+			},
+			wantCount: map[string]int{
+				"app.bsky.feed.like":   1,
+				"app.bsky.feed.post":   2,
+				"app.bsky.feed.repost": 1,
+			},
+			wantMatched: 6,
+		},
+		{
+			name: "q4 min by user with post predicates",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQueryGroupMinInt64,
+				GroupColumn: "did",
+				ValueColumn: "time_us",
+				Predicates:  postCreate,
+			},
+			wantInt64:   map[string]int64{"did_a": 500, "did_b": 1000},
+			wantMatched: 4,
+		},
+		{
+			name: "q5 span by user with post predicates",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQueryGroupInt64Span,
+				GroupColumn: "did",
+				ValueColumn: "time_us",
+				Predicates:  postCreate,
+			},
+			wantInt64:   map[string]int64{"did_a": 1500, "did_b": 8000},
+			wantMatched: 4,
+		},
+		{
+			name: "in-list collection predicate",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQueryGroupCount,
+				GroupColumn: "event",
+				Predicates: []ColumnPhysicalQueryPredicate{
+					{Column: "kind", Value: "commit"},
+					{Column: "operation", Value: "create"},
+					{Column: "event", Kind: ColumnPhysicalQueryPredicateInList, Values: []string{"app.bsky.feed.like", "app.bsky.feed.repost"}},
+				},
+			},
+			wantCount:   map[string]int{"app.bsky.feed.like": 1, "app.bsky.feed.repost": 1},
+			wantMatched: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := collection.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery: %v", err)
+			}
+			assertColumnPhysicalPredicateResult1869(t, result, len(events), tc.wantMatched, tc.wantCount, tc.wantInt64)
+
+			runner, err := collection.PrepareColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+			}
+			defer func() { _ = runner.Close() }()
+			for i := 0; i < 2; i++ {
+				prepared, err := runner.Run()
+				if err != nil {
+					t.Fatalf("prepared Run %d: %v", i, err)
+				}
+				assertColumnPhysicalPredicateResult1869(t, prepared, len(events), tc.wantMatched, tc.wantCount, tc.wantInt64)
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalQueryDictionaryPredicatesAbsentLiteralEmpty1869(t *testing.T) {
+	events := []columnPhysicalPredicateEvent1869{
+		{ID: "e1", Kind: "commit", Operation: "create", Event: "app.bsky.feed.post", Did: "did_a", TimeUS: 1},
+		{ID: "e2", Kind: "commit", Operation: "create", Event: "app.bsky.feed.like", Did: "did_b", TimeUS: 2},
+	}
+	collection, closeFn := openColumnPhysicalPredicateFixture1869(t, events)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "event",
+		Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "missing_literal"}},
+	}
+	result, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery absent literal: %v", err)
+	}
+	assertColumnPhysicalPredicateResult1869(t, result, len(events), 0, map[string]int{}, nil)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery absent literal: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	prepared, err := runner.Run()
+	if err != nil {
+		t.Fatalf("prepared absent literal: %v", err)
+	}
+	assertColumnPhysicalPredicateResult1869(t, prepared, len(events), 0, map[string]int{}, nil)
+}
+
+func TestColumnPhysicalQueryPredicateValidationFailsClosed1869(t *testing.T) {
+	cfg := ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Dictionary: true},
+		{Name: "nullable_kind", Path: "nullable_kind", ValueType: ColumnStoreValueString, Dictionary: true, Nullable: true},
+		{Name: "payload", Path: "payload", ValueType: ColumnStoreValueString},
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+		{Name: "typed_kind", Path: "typed_kind", ValueType: ColumnStoreValueString, Dictionary: true, Owner: TypedStorageOwnerColumnPart},
+	}}
+	tooMany := make([]string, columnPhysicalQueryMaxPredicateValues+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("v%d", i)
+	}
+	tests := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+		want string
+	}{
+		{name: "missing column", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Value: "commit"}}}, want: "column is required"},
+		{name: "undeclared", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "missing", Value: "commit"}}}, want: "undeclared column"},
+		{name: "non string", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "time_us", Value: "1"}}}, want: "has type"},
+		{name: "non dictionary", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "payload", Value: "x"}}}, want: "requires dictionary"},
+		{name: "nullable", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "nullable_kind", Value: "x"}}}, want: "nullable"},
+		{name: "typed owner", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "typed_kind", Value: "x"}}}, want: "owner"},
+		{name: "empty in-list", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Kind: ColumnPhysicalQueryPredicateInList}}}, want: "at least one value"},
+		{name: "too many in-list", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Kind: ColumnPhysicalQueryPredicateInList, Values: tooMany}}}, want: "exceeds limit"},
+		{name: "unknown kind", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Kind: ColumnPhysicalQueryPredicateKind("prefix"), Value: "c"}}}, want: "unsupported physical predicate kind"},
+		{name: "duplicate", req: ColumnPhysicalQueryRequest{Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}, {Column: "kind", Value: "identity"}}}, want: "multiple physical predicates"},
+		{name: "metadata", req: ColumnPhysicalQueryRequest{AggregateMetadataName: "min_time_us", Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}}}, want: "aggregate metadata"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := columnPhysicalQueryPredicateSpecs(cfg, tc.req)
+			if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("predicate validation err=%v want unsupported containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func BenchmarkColumnPhysicalQueryDictionaryPredicates1869(b *testing.B) {
+	events := make([]columnPhysicalPredicateEvent1869, 8192)
+	collections := []string{"app.bsky.feed.post", "app.bsky.feed.like", "app.bsky.feed.repost"}
+	for i := range events {
+		events[i] = columnPhysicalPredicateEvent1869{
+			ID:        fmt.Sprintf("e%06d", i),
+			Kind:      "commit",
+			Operation: "create",
+			Event:     collections[i%len(collections)],
+			Did:       fmt.Sprintf("did_%04d", i%1024),
+			TimeUS:    int64(1_700_000_000_000_000 + i*1000),
+		}
+		if i%11 == 0 {
+			events[i].Kind = "identity"
+		}
+		if i%13 == 0 {
+			events[i].Operation = "delete"
+		}
+	}
+	collection, closeFn := openColumnPhysicalPredicateFixture1869(b, events)
+	defer closeFn()
+	commitCreate := []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}, {Column: "operation", Value: "create"}}
+	postCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{Column: "event", Value: "app.bsky.feed.post"})
+	cases := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+	}{
+		{name: "q2_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commitCreate}},
+		{name: "q2_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
+		{name: "q4_min", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", Predicates: postCreate}},
+		{name: "q5_span", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", Predicates: postCreate}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			runner, err := collection.PrepareColumnPhysicalQuery(tc.req)
+			if err != nil {
+				b.Fatalf("PrepareColumnPhysicalQuery(%s): %v", tc.name, err)
+			}
+			defer func() { _ = runner.Close() }()
+			if _, err := runner.Run(); err != nil {
+				b.Fatalf("warm Run: %v", err)
+			}
+			var scanned, matched int64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result, err := runner.Run()
+				if err != nil {
+					b.Fatalf("Run: %v", err)
+				}
+				scanned += int64(result.Diagnostics.RowsScanned)
+				matched += int64(result.Diagnostics.RowsMatched)
+			}
+			elapsed := b.Elapsed()
+			if elapsed > 0 && scanned > 0 {
+				b.ReportMetric(float64(scanned)/elapsed.Seconds(), "scanned_rows/s")
+			}
+			if b.N > 0 {
+				b.ReportMetric(float64(scanned)/float64(b.N), "scanned_rows/op")
+				b.ReportMetric(float64(matched)/float64(b.N), "matched_rows/op")
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalQueryPredicatesFailClosedForUnsupportedStates1869(t *testing.T) {
+	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer closeFn()
+	metadataReq := ColumnPhysicalQueryRequest{
+		Kind:                  ColumnPhysicalQueryGroupMinInt64,
+		GroupColumn:           "did",
+		ValueColumn:           "time_us",
+		AggregateMetadataName: "min_time_us",
+		Predicates:            []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "kind_00"}},
+	}
+	if _, err := reopened.RunColumnPhysicalQuery(metadataReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "aggregate metadata") {
+		t.Fatalf("metadata predicate err=%v want fail closed", err)
+	}
+	if _, err := reopened.PrepareColumnPhysicalQuery(metadataReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "aggregate metadata") {
+		t.Fatalf("prepared metadata predicate err=%v want fail closed", err)
+	}
+
+	mutated, closeMutated, _ := openColumnPhysicalMutationFixtureM13C(t, 32)
+	defer closeMutated()
+	mutationReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind", Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "kind_00"}}}
+	if _, err := mutated.RunColumnPhysicalQuery(mutationReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "insert-only") {
+		t.Fatalf("mutation predicate err=%v want insert-only fail closed", err)
+	}
+	if _, err := mutated.PrepareColumnPhysicalQuery(mutationReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "insert-only") {
+		t.Fatalf("prepared mutation predicate err=%v want insert-only fail closed", err)
+	}
+
+	multiRef, closeMulti := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeMulti()
+	parallelReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind", Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "kind_00"}}}
+	if _, err := multiRef.RunColumnPhysicalQueryParallel(parallelReq, 4); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "parallel physical predicates") {
+		t.Fatalf("parallel predicate err=%v want fail-closed unsupported", err)
+	}
+
+	hourReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us", Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "kind_00"}}}
+	if _, err := reopened.RunColumnPhysicalQuery(hourReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "hour-count physical predicates") {
+		t.Fatalf("hour-count predicate err=%v want specific fail-closed unsupported", err)
+	}
+	if _, err := reopened.PrepareColumnPhysicalQuery(hourReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "hour-count physical predicates") {
+		t.Fatalf("prepared hour-count predicate err=%v want specific fail-closed unsupported", err)
+	}
+}
+
+func assertColumnPhysicalPredicateResult1869(t *testing.T, result ColumnPhysicalQueryResult, wantScanned, wantMatched int, wantCount map[string]int, wantInt64 map[string]int64) {
+	t.Helper()
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentMaterializations != 0 {
+		t.Fatalf("materializations row=%d document=%d diagnostics=%+v", result.Diagnostics.RowMaterializations, result.Diagnostics.DocumentMaterializations, result.Diagnostics)
+	}
+	if result.Diagnostics.RowsScanned != wantScanned || result.Diagnostics.ReduceRows != wantMatched || result.Diagnostics.RowsMatched != wantMatched {
+		t.Fatalf("diagnostic rows scanned/matched/reduced=%d/%d/%d want %d/%d/%d diagnostics=%+v", result.Diagnostics.RowsScanned, result.Diagnostics.RowsMatched, result.Diagnostics.ReduceRows, wantScanned, wantMatched, wantMatched, result.Diagnostics)
+	}
+	if result.Diagnostics.PredicateCount == 0 || len(result.Diagnostics.PredicateColumns) != result.Diagnostics.PredicateCount {
+		t.Fatalf("missing predicate diagnostics: %+v", result.Diagnostics)
+	}
+	if wantMatched > 0 && result.Diagnostics.PredicateDictionaryCodeHits == 0 {
+		t.Fatalf("missing predicate dictionary code hits for matched rows: %+v", result.Diagnostics)
+	}
+	if len(wantCount) != 0 || wantCount != nil {
+		got := make(map[string]int, len(result.Groups))
+		for _, group := range result.Groups {
+			got[group.Key] = group.Count
+		}
+		if !reflect.DeepEqual(got, wantCount) {
+			t.Fatalf("count groups=%v want %v full=%+v", got, wantCount, result.Groups)
+		}
+		return
+	}
+	got := make(map[string]int64, len(result.Groups))
+	for _, group := range result.Groups {
+		got[group.Key] = group.Int64
+	}
+	if !reflect.DeepEqual(got, wantInt64) {
+		t.Fatalf("int64 groups=%v want %v full=%+v", got, wantInt64, result.Groups)
+	}
+}
+
+type columnPhysicalPredicateEvent1869 struct {
+	ID        string
+	Kind      string
+	Operation string
+	Event     string
+	Did       string
+	TimeUS    int64
+}
+
+func openColumnPhysicalPredicateFixture1869(tb testing.TB, events []columnPhysicalPredicateEvent1869) (*Collection, func()) {
+	tb.Helper()
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Dictionary: true},
+		{Name: "operation", Path: "operation", ValueType: ColumnStoreValueString, Dictionary: true},
+		{Name: "event", Path: "event", ValueType: ColumnStoreValueString, Dictionary: true},
+		{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Dictionary: true},
+	}}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("Checkpoint setup DB: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection setup: %v", err)
+	}
+	ids := make([][]byte, len(events))
+	docs := make([][]byte, len(events))
+	for i, event := range events {
+		ids[i] = []byte(event.ID)
+		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":%q,"operation":%q,"event":%q,"did":%q}`, event.TimeUS, event.Kind, event.Operation, event.Event, event.Did))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		_ = d.Close()
+		tb.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		tb.Fatalf("Close before reopen: %v", err)
+	}
+	reopen, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open reopened DB: %v", err)
+	}
+	reopened, err := NewCollectionManager(reopen).OpenCollection("events")
+	if err != nil {
+		_ = reopen.Close()
+		tb.Fatalf("OpenCollection reopened: %v", err)
+	}
+	return reopened, func() { _ = reopen.Close() }
+}
+
 func TestColumnPhysicalQueryAdapterRejectsUnsupportedShapeM13B(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(4)
 	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
