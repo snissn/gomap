@@ -318,10 +318,12 @@ The known q4 caveat is sort order, not row materialization: M2's single-part
 baseline can early-stop on a globally time-ordered part, while the correct M4
 multipart path currently scans visible rows. A future k-way sort-key/mark merge
 across parts is needed before multipart q4 can early-stop safely. The TreeDB
-comparison also includes explicit aggregate-metadata Top-K q4/q5 variants that
-report `topk_limit/op`, `topk_candidates/op`, and `result_shape_ns/op`; these
-use logical rows/sec with `rows_scanned/op=0` and should not be confused with
-full data-row scans or pruning metadata.
+comparison also includes `q3_group_hour_count`, a production physical reducer
+shape for dictionary predicates plus `collection/hour(time_us)` grouping, and
+explicit aggregate-metadata Top-K q4/q5 variants that report `topk_limit/op`,
+`topk_candidates/op`, and `result_shape_ns/op`; metadata paths use logical
+rows/sec with `rows_scanned/op=0` and should not be confused with full data-row
+scans or pruning metadata.
 
 ## M1D Gates Before Value-Log-Backed M2
 

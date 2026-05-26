@@ -111,6 +111,11 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 		{name: "q1_grouped_count", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}},
 		{name: "q2_group_count_distinct", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "collection", DistinctColumn: "did"}},
 		{name: "q3_hourly_count", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryHourCount, ValueColumn: "time_us"}},
+		{name: "q3_group_hour_count", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupHourCount, GroupColumn: "collection", ValueColumn: "time_us", Predicates: []collections.ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+			{Column: "collection", Kind: collections.ColumnPhysicalQueryPredicateInList, Values: []string{"app.bsky.feed.post"}},
+		}}},
 		{name: "q4_min_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
 		{name: "q5_span_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
 		{name: "q4_metadata_min_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}},
@@ -220,6 +225,9 @@ func jsonBenchColumnPhysicalResultDigest(groups []collections.ColumnPhysicalQuer
 		if ordered[i].Key != ordered[j].Key {
 			return ordered[i].Key < ordered[j].Key
 		}
+		if ordered[i].Hour != ordered[j].Hour {
+			return ordered[i].Hour < ordered[j].Hour
+		}
 		if ordered[i].Count != ordered[j].Count {
 			return ordered[i].Count < ordered[j].Count
 		}
@@ -227,7 +235,7 @@ func jsonBenchColumnPhysicalResultDigest(groups []collections.ColumnPhysicalQuer
 	})
 	h := sha256.New()
 	for _, group := range ordered {
-		_, _ = fmt.Fprintf(h, "%s\x00%d\x00%d\x00", group.Key, group.Count, group.Int64)
+		_, _ = fmt.Fprintf(h, "%s\x00%d\x00%d\x00%d\x00", group.Key, group.Hour, group.Count, group.Int64)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
