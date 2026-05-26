@@ -436,9 +436,6 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	if v == nil {
 		return
 	}
-	for key := range v.pointRowBlocks {
-		delete(v.pointRowBlocks, key)
-	}
 	v.pointRowBlocks = nil
 	v.rowLocator = nil
 	v.columnSnapshotView = nil
@@ -886,7 +883,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			out.Stats.RowRefValidationFailures++
 			return out, err
 		}
-		rowRef := documentRowRefFromVisibleRow(row)
+		rowRef := documentRowRefCoordinatesFromVisibleRow(row)
 		rowRef.DocumentID = out.Results[i].ID
 		out.Results[i].RowRef = rowRef
 
@@ -1039,8 +1036,13 @@ func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFet
 }
 
 func documentRowRefFromVisibleRow(row columnPhysicalVisibleRow) DocumentRowRef {
+	ref := documentRowRefCoordinatesFromVisibleRow(row)
+	ref.DocumentID = bytes.Clone(row.ID)
+	return ref
+}
+
+func documentRowRefCoordinatesFromVisibleRow(row columnPhysicalVisibleRow) DocumentRowRef {
 	return DocumentRowRef{
-		DocumentID:        bytes.Clone(row.ID),
 		Generation:        row.Generation,
 		PartID:            row.PartID,
 		RowIndex:          row.RowIndex,
