@@ -1,0 +1,72 @@
+File: typedcolumn.test
+Type: cpu
+Time: 2026-05-25 19:26:13 HST
+Duration: 8.73s, Total samples = 8.13s (93.16%)
+Showing nodes accounting for 7.99s, 98.28% of 8.13s total
+Dropped 51 nodes (cum <= 0.04s)
+      flat  flat%   sum%        cum   cum%
+     2.24s 27.55% 27.55%      2.37s 29.15%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.denseFloat32KernelSum1781 (inline)
+     1.14s 14.02% 41.57%      1.20s 14.76%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnVectorDenseDirectViewScan
+     1.09s 13.41% 54.98%      1.09s 13.41%  github.com/axiomhq/simd-go.dotProductFloat32NEON
+     1.08s 13.28% 68.27%      1.08s 13.28%  github.com/snissn/gomap/TreeDB/internal/vectorops.DotFloat32Scalar (inline)
+     0.86s 10.58% 78.84%      0.86s 10.58%  runtime.kevent
+     0.37s  4.55% 83.39%      0.37s  4.55%  runtime.asyncPreempt
+     0.16s  1.97% 85.36%      0.16s  1.97%  runtime.pthread_kill
+     0.15s  1.85% 87.21%      0.15s  1.85%  runtime.pthread_cond_wait
+     0.11s  1.35% 88.56%      1.39s 17.10%  github.com/snissn/gomap/TreeDB/internal/vectorops.DotFloat32
+     0.11s  1.35% 89.91%      0.11s  1.35%  runtime.madvise
+     0.10s  1.23% 91.14%      1.19s 14.64%  github.com/axiomhq/simd-go.dotProductFloat32Impl
+     0.09s  1.11% 92.25%      1.28s 15.74%  github.com/axiomhq/simd-go.DotProductFloat32
+     0.09s  1.11% 93.36%      0.42s  5.17%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnVectorDenseSectionScan
+     0.07s  0.86% 94.22%      2.60s 31.98%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnDenseFloat32Dot1790.func1
+     0.06s  0.74% 94.96%      0.06s  0.74%  runtime.pthread_cond_signal
+     0.05s  0.62% 95.57%      0.15s  1.85%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.DecodeRawFloat32VectorPayload
+     0.05s  0.62% 96.19%      1.13s 13.90%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.DenseFloat32DotScalar
+     0.05s  0.62% 96.80%      0.05s  0.62%  math.Float32frombits (inline)
+     0.05s  0.62% 97.42%      0.05s  0.62%  runtime.pthread_cond_timedwait_relative_np
+     0.05s  0.62% 98.03%      0.05s  0.62%  runtime.usleep
+     0.01s  0.12% 98.15%      1.40s 17.22%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.DenseFloat32Dot
+     0.01s  0.12% 98.28%      0.07s  0.86%  runtime.notewakeup
+         0     0% 98.28%      0.19s  2.34%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPart).DenseFloat32VectorColumn
+         0     0% 98.28%      0.15s  1.85%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).DecodeFloat32VectorInto
+         0     0% 98.28%      1.45s 17.84%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnDenseFloat32Dot1790.func2
+         0     0% 98.28%      1.15s 14.15%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnDenseFloat32Dot1790.func3
+         0     0% 98.28%      2.39s 29.40%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan.func1
+         0     0% 98.28%      0.19s  2.34%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.denseFloat32ColumnInto
+         0     0% 98.28%      0.12s  1.48%  runtime.(*gcControllerState).enlistWorker
+         0     0% 98.28%      0.12s  1.48%  runtime.(*gcWork).balance
+         0     0% 98.28%      0.10s  1.23%  runtime.(*mheap).alloc.func1
+         0     0% 98.28%      0.10s  1.23%  runtime.(*mheap).allocSpan
+         0     0% 98.28%      0.19s  2.34%  runtime.findRunnable
+         0     0% 98.28%      0.06s  0.74%  runtime.forEachPInternal
+         0     0% 98.28%      0.17s  2.09%  runtime.gcBgMarkWorker.func2
+         0     0% 98.28%      0.17s  2.09%  runtime.gcDrain
+         0     0% 98.28%      0.14s  1.72%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0% 98.28%      0.05s  0.62%  runtime.gcMarkDone.forEachP.func5
+         0     0% 98.28%      0.82s 10.09%  runtime.gcStart.func4
+         0     0% 98.28%      0.07s  0.86%  runtime.gopreempt_m (inline)
+         0     0% 98.28%      0.07s  0.86%  runtime.goschedImpl
+         0     0% 98.28%      0.15s  1.85%  runtime.mPark (inline)
+         0     0% 98.28%      0.21s  2.58%  runtime.mcall
+         0     0% 98.28%      0.07s  0.86%  runtime.morestack
+         0     0% 98.28%      0.86s 10.58%  runtime.netpoll
+         0     0% 98.28%      0.07s  0.86%  runtime.newstack
+         0     0% 98.28%      0.15s  1.85%  runtime.notesleep
+         0     0% 98.28%      0.05s  0.62%  runtime.notetsleep
+         0     0% 98.28%      0.05s  0.62%  runtime.notetsleep_internal
+         0     0% 98.28%      0.21s  2.58%  runtime.park_m
+         0     0% 98.28%      0.16s  1.97%  runtime.preemptM
+         0     0% 98.28%      0.13s  1.60%  runtime.preemptone
+         0     0% 98.28%      0.22s  2.71%  runtime.schedule
+         0     0% 98.28%      0.20s  2.46%  runtime.semasleep
+         0     0% 98.28%      0.06s  0.74%  runtime.semawakeup
+         0     0% 98.28%      0.16s  1.97%  runtime.signalM (inline)
+         0     0% 98.28%      0.86s 10.58%  runtime.startTheWorldWithSema
+         0     0% 98.28%      0.07s  0.86%  runtime.startm
+         0     0% 98.28%      0.15s  1.85%  runtime.stopm
+         0     0% 98.28%      0.09s  1.11%  runtime.sysUsed (inline)
+         0     0% 98.28%      0.09s  1.11%  runtime.sysUsedOS (inline)
+         0     0% 98.28%      1.24s 15.25%  runtime.systemstack
+         0     0% 98.28%      0.08s  0.98%  runtime.wakep
+         0     0% 98.28%      6.61s 81.30%  testing.(*B).launch
+         0     0% 98.28%      6.62s 81.43%  testing.(*B).runN
