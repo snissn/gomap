@@ -14,6 +14,19 @@ import (
 // shapes supported directly by the column asset scanner.
 type ColumnPhysicalQueryKind string
 
+// ColumnPhysicalQueryTopKOrder selects ordering for optional Top-K int64
+// physical query result shaping.
+type ColumnPhysicalQueryTopKOrder string
+
+const (
+	// ColumnPhysicalQueryTopKInt64Asc keeps the smallest Int64 groups first,
+	// using Key as the deterministic tie-break.
+	ColumnPhysicalQueryTopKInt64Asc ColumnPhysicalQueryTopKOrder = "int64_asc"
+	// ColumnPhysicalQueryTopKInt64Desc keeps the largest Int64 groups first,
+	// using Key as the deterministic tie-break.
+	ColumnPhysicalQueryTopKInt64Desc ColumnPhysicalQueryTopKOrder = "int64_desc"
+)
+
 const (
 	// ColumnPhysicalQueryGroupCount counts rows by a string group column.
 	ColumnPhysicalQueryGroupCount            ColumnPhysicalQueryKind = "group_count"
@@ -34,12 +47,18 @@ const (
 // does not invoke planner routing; M14 owns forced/automatic route selection.
 // Predicates are an AND-list of dictionary string equality/IN filters for the
 // insert-only physical sidecar path; unsupported predicate shapes fail closed.
+// TopK is optional and currently supported by aggregate-metadata int64 reducers
+// only. When TopK is set, TopKOrder chooses value order and Key is the tie-break;
+// SkipEmptyGroupKey omits empty-string group keys before applying the limit.
 type ColumnPhysicalQueryRequest struct {
 	Kind                     ColumnPhysicalQueryKind
 	GroupColumn              string
 	ValueColumn              string
 	DistinctColumn           string
 	AggregateMetadataName    string
+	TopK                     int
+	TopKOrder                ColumnPhysicalQueryTopKOrder
+	SkipEmptyGroupKey        bool
 	Predicates               []ColumnPhysicalQueryPredicate
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
@@ -90,6 +109,9 @@ type ColumnPhysicalQueryDiagnostics struct {
 	MappedBytes                 uint64
 	HeapCopyBytes               uint64
 	ReduceRows                  int
+	TopKLimit                   int
+	TopKCandidates              int
+	TopKOrder                   string
 	VisibilityRows              int
 	ReconstructionRows          int
 	ResultGroups                int
@@ -100,6 +122,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	ScanNanos                   int64
 	VisibilityNanos             int64
 	ReduceNanos                 int64
+	ResultShapeNanos            int64
 	ReconstructionNanos         int64
 }
 
@@ -135,6 +158,13 @@ type ColumnPhysicalQueryRunner struct {
 
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
 
+func validateColumnPhysicalQueryRequest(req ColumnPhysicalQueryRequest) error {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return err
+	}
+	return validateColumnPhysicalTopKRequest(req)
+}
+
 func validateColumnPhysicalGroupCountAndDistinctRequest(req ColumnPhysicalQueryRequest) error {
 	if req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
 		return nil
@@ -151,12 +181,43 @@ func validateColumnPhysicalGroupCountAndDistinctRequest(req ColumnPhysicalQueryR
 	return nil
 }
 
+func validateColumnPhysicalTopKRequest(req ColumnPhysicalQueryRequest) error {
+	if req.TopK < 0 {
+		return fmt.Errorf("%w: physical column query top-K limit must be non-negative", ErrColumnQueryPlanUnsupported)
+	}
+	if req.TopK == 0 {
+		if req.TopKOrder != "" {
+			return fmt.Errorf("%w: physical column query top-K order requires a positive limit", ErrColumnQueryPlanUnsupported)
+		}
+		if req.SkipEmptyGroupKey {
+			return fmt.Errorf("%w: physical column query skip-empty group key requires a positive top-K limit", ErrColumnQueryPlanUnsupported)
+		}
+		return nil
+	}
+	if req.AggregateMetadataName == "" {
+		return fmt.Errorf("%w: physical column query top-K requires aggregate metadata", ErrColumnQueryPlanUnsupported)
+	}
+	switch req.Kind {
+	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
+	default:
+		return fmt.Errorf("%w: physical column query top-K requires an int64 aggregate kind", ErrColumnQueryPlanUnsupported)
+	}
+	switch req.TopKOrder {
+	case ColumnPhysicalQueryTopKInt64Asc, ColumnPhysicalQueryTopKInt64Desc:
+		return nil
+	case "":
+		return fmt.Errorf("%w: physical column query top-K order is required", ErrColumnQueryPlanUnsupported)
+	default:
+		return fmt.Errorf("%w: unsupported physical column query top-K order %q", ErrColumnQueryPlanUnsupported, req.TopKOrder)
+	}
+}
+
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
 // the recovery-authoritative manifest. Insert-only manifests use the direct
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
 // overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
-	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+	if err := validateColumnPhysicalQueryRequest(req); err != nil {
 		return ColumnPhysicalQueryResult{}, err
 	}
 	mutationParts, err := c.columnPhysicalQueryMutationPartsHint()
@@ -206,7 +267,7 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // until Close and fail-closes for mutation-bearing manifests or unsupported
 // query shapes rather than silently changing semantics.
 func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
-	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+	if err := validateColumnPhysicalQueryRequest(req); err != nil {
 		return nil, err
 	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
@@ -432,10 +493,16 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	}
 	diag.ScanNanos = time.Since(start).Nanoseconds()
 	diag.ReduceRows = acc.rows
-	diag.ResultGroups = acc.groupCount()
+	shapeStart := time.Now()
+	groups := acc.groups(req)
+	diag.ResultShapeNanos = time.Since(shapeStart).Nanoseconds()
+	diag.ResultGroups = len(groups)
+	diag.TopKLimit = req.TopK
+	diag.TopKOrder = string(req.TopKOrder)
+	diag.TopKCandidates = acc.topKCandidates(req)
 	diag.SegmentFileCacheHits = readCache.hits
 	diag.SegmentFileCacheMisses = readCache.misses
-	return ColumnPhysicalQueryResult{Groups: acc.groups(), Diagnostics: diag}, nil
+	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, nil
 }
 
 func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, refModulo, refRemainder int, shouldCancel func() bool) (ColumnPhysicalQueryResult, bool, error) {
@@ -558,8 +625,11 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(
 // Mutation-bearing manifests stay fail-closed until partitioned visibility
 // reconstruction is available.
 func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
-	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+	if err := validateColumnPhysicalQueryRequest(req); err != nil {
 		return ColumnPhysicalQueryResult{}, err
+	}
+	if req.AggregateMetadataName != "" {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel aggregate metadata physical queries are not supported", ErrColumnQueryPlanUnsupported)
 	}
 	if columnPhysicalQueryHasPredicates(req) {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical predicates require partitioned dictionary sidecar execution", ErrColumnQueryPlanUnsupported)
@@ -1041,6 +1111,14 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.MappedBytes += right.MappedBytes
 	left.HeapCopyBytes += right.HeapCopyBytes
 	left.ReduceRows += right.ReduceRows
+	left.TopKCandidates += right.TopKCandidates
+	if right.TopKLimit > left.TopKLimit {
+		left.TopKLimit = right.TopKLimit
+	}
+	if left.TopKOrder == "" {
+		left.TopKOrder = right.TopKOrder
+	}
+	left.ResultShapeNanos += right.ResultShapeNanos
 	left.VisibilityRows += right.VisibilityRows
 	left.ReconstructionRows += right.ReconstructionRows
 	left.SegmentFileCacheHits += right.SegmentFileCacheHits
@@ -1724,20 +1802,60 @@ func (a *columnPhysicalQueryMetadataAccumulator) groupCount() int {
 	return len(a.int64Values)
 }
 
-func (a *columnPhysicalQueryMetadataAccumulator) groups() []ColumnPhysicalQueryGroup {
-	out := make([]ColumnPhysicalQueryGroup, 0, a.groupCount())
+func (a *columnPhysicalQueryMetadataAccumulator) groups(req ColumnPhysicalQueryRequest) []ColumnPhysicalQueryGroup {
+	capacity := a.groupCount()
+	if req.TopK > 0 && req.TopK < capacity {
+		capacity = req.TopK
+	}
+	out := make([]ColumnPhysicalQueryGroup, 0, capacity)
+	add := func(group ColumnPhysicalQueryGroup) {
+		if req.SkipEmptyGroupKey && group.Key == "" {
+			return
+		}
+		if req.TopK > 0 {
+			insertColumnPhysicalTopKGroup(&out, group, req.TopK, req.TopKOrder)
+			return
+		}
+		out = append(out, group)
+	}
 	switch a.kind {
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
 		for key, value := range a.int64Values {
-			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: value})
+			add(ColumnPhysicalQueryGroup{Key: key, Int64: value})
 		}
 	case ColumnPhysicalQueryGroupInt64Span:
 		for key, span := range a.spans {
-			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+			add(ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	sortColumnPhysicalQueryGroupsByKey(out)
+	if req.TopK == 0 {
+		sortColumnPhysicalQueryGroupsByKey(out)
+	}
 	return out
+}
+
+func (a *columnPhysicalQueryMetadataAccumulator) topKCandidates(req ColumnPhysicalQueryRequest) int {
+	if req.TopK <= 0 {
+		return 0
+	}
+	if !req.SkipEmptyGroupKey {
+		return a.groupCount()
+	}
+	candidates := 0
+	if a.spans != nil {
+		for key := range a.spans {
+			if key != "" {
+				candidates++
+			}
+		}
+		return candidates
+	}
+	for key := range a.int64Values {
+		if key != "" {
+			candidates++
+		}
+	}
+	return candidates
 }
 
 func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecutor) error {

@@ -110,8 +110,11 @@ go test ./TreeDB/collections \
 
 Key counters: `metadata_hits/op`, `metadata_decoded_bytes/op`,
 `mapped_bytes/op`, `heap_copy_bytes/op`, `rows_scanned/op`,
-`row_materializations/op`, `document_materializations/op`, and
-`reconstruction_rows/op`.
+`row_materializations/op`, `document_materializations/op`,
+`reconstruction_rows/op`, `topk_limit/op`, `topk_candidates/op`, and
+`result_shape_ns/op`. Prepared aggregate metadata queries may request explicit
+Top-K result shaping for int64 min/max/span results; this keeps all-groups
+semantics unchanged unless callers set `TopK` and `TopKOrder`.
 
 ### Selecting #1808 matrix shapes and distributions
 
