@@ -48,9 +48,11 @@ type DocumentRowRef struct {
 }
 
 // DocumentFetchResult is one materialized document result. ID and Document are
-// response-owned slices. Missing documents have Found=false and Document=nil.
-// RowRef is populated only when typed-storage reconstruction found a visible
-// physical row; it is zero for retained-payload-only results.
+// response-owned slices; non-empty Document slices are cap-limited so appending
+// to one result cannot mutate another result in the same response. Missing
+// documents have Found=false and Document=nil. RowRef is populated only when
+// typed-storage reconstruction found a visible physical row; it is zero for
+// retained-payload-only results.
 type DocumentFetchResult struct {
 	ID       []byte
 	Document []byte
@@ -949,13 +951,14 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 		if err != nil {
 			return out, err
 		}
-		reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjected(cfg, retained[i], row, fullValues, projection, &out.Stats)
+		var document []byte
+		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedInto(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats)
 		if err != nil {
 			return out, err
 		}
 		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
 		out.Stats.JSONReconstructionRows++
-		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
+		out.Results[i].Document = document
 		out.Stats.DocumentsFetched++
 		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
 		out.Stats.OutputBytes += uint64(len(out.Results[i].Document))
@@ -1052,13 +1055,14 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		if err != nil {
 			return out, err
 		}
-		reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjected(cfg, retained[i], row, fullValues, projection, &out.Stats)
+		var document []byte
+		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedInto(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats)
 		if err != nil {
 			return out, err
 		}
 		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
 		out.Stats.JSONReconstructionRows++
-		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
+		out.Results[i].Document = document
 		out.Stats.DocumentsFetched++
 		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
 		out.Stats.OutputBytes += uint64(len(out.Results[i].Document))
