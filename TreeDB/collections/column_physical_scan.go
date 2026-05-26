@@ -27,6 +27,7 @@ type columnPhysicalScanRequest struct {
 	RefOrdinalRemainder int
 	ShouldCancel        func() bool
 	ReadIntegrity       ColumnAssetReadIntegrity
+	ReadCache           *columnPhysicalAssetReadCache
 }
 
 type columnPhysicalScanDiagnostics struct {
@@ -445,12 +446,16 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 	if req.RefOrdinalModulo > 0 && (req.RefOrdinalRemainder < 0 || req.RefOrdinalRemainder >= req.RefOrdinalModulo) {
 		return diag, fmt.Errorf("collections: physical column scan ref ordinal remainder=%d outside modulo=%d", req.RefOrdinalRemainder, req.RefOrdinalModulo)
 	}
-	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ReadIntegrity)
-	if err != nil {
-		return diag, err
+	readCache := req.ReadCache
+	if readCache == nil {
+		localReadCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ReadIntegrity)
+		if err != nil {
+			return diag, err
+		}
+		readCache = &localReadCache
+		defer func() { _ = readCache.close() }()
 	}
-	defer func() { _ = readCache.close() }()
-	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ReadIntegrity)
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(readCache.readIntegrity)
 	var rawScratch []byte
 	start, step := columnPhysicalScanRefOrdinalPartition(req)
 	for ordinal := start; ordinal < len(view.AssetRefs); ordinal += step {

@@ -6,6 +6,7 @@ import (
 	"math"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 // ErrVectorIndexSearchUnavailable reports that the requested vector index is
@@ -89,6 +90,8 @@ type VectorIndexSearchStats struct {
 	DocumentsMissing uint64 `json:"documents_missing,omitempty"`
 	// DocumentBytes is the materialized response document byte count.
 	DocumentBytes uint64 `json:"document_bytes,omitempty"`
+	// DocumentFetchNanos attributes end-to-end post-top-k document fetch/materialization time.
+	DocumentFetchNanos uint64 `json:"document_fetch_nanos,omitempty"`
 	// DocumentRetainedFetches counts primary retained-payload fetches for document materialization.
 	DocumentRetainedFetches uint64 `json:"document_retained_fetches,omitempty"`
 	// DocumentRetainedBytes counts retained-payload bytes read for document materialization.
@@ -121,6 +124,16 @@ type VectorIndexSearchStats struct {
 	DocumentJSONReconstructionNanos uint64 `json:"document_json_reconstruction_nanos,omitempty"`
 	// DocumentRowRefFallbackScans counts row-ref requests served by the interim target-ID scan path.
 	DocumentRowRefFallbackScans uint64 `json:"document_row_ref_fallback_scans,omitempty"`
+	// DocumentAssetMmapHits counts document materializer typed-row/typed-column asset reads served from mmap-backed views.
+	DocumentAssetMmapHits uint64 `json:"document_asset_mmap_hits,omitempty"`
+	// DocumentAssetReadAtFallbacks counts document materializer asset reads that fell back to heap/read-at.
+	DocumentAssetReadAtFallbacks uint64 `json:"document_asset_readat_fallbacks,omitempty"`
+	// DocumentAssetFileOpens counts materializer asset segment file opens.
+	DocumentAssetFileOpens uint64 `json:"document_asset_file_opens,omitempty"`
+	// DocumentAssetFileCloses counts materializer asset segment file closes.
+	DocumentAssetFileCloses uint64 `json:"document_asset_file_closes,omitempty"`
+	// DocumentAssetActiveHandles is the current active mappedresource handle count held by the materializer read view.
+	DocumentAssetActiveHandles int64 `json:"document_asset_active_handles,omitempty"`
 
 	// RowFetches is the per-search count of physical row-reader fetch calls.
 	RowFetches uint64 `json:"row_fetches,omitempty"`
@@ -226,8 +239,14 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		EfSearch:         opts.EfSearch,
 		IncludeDocuments: opts.IncludeDocuments,
 	})
+	documentView := searcher.documentView
 	if closeErr := searcher.Close(); err == nil && closeErr != nil {
 		return response, closeErr
+	}
+	if documentView != nil {
+		counters := documentView.assetCounters()
+		response.Stats.DocumentAssetFileCloses = counters.fileCloses
+		response.Stats.DocumentAssetActiveHandles = counters.activeHandles
 	}
 	return response, err
 }
@@ -420,7 +439,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	}
 	if opts.IncludeDocuments {
 		if s.documentView == nil {
-			s.documentView = newCollectionReadViewAtSnapshot(s.collection, s.snapshot, s.catalog, false)
+			s.documentView = newCollectionReadViewAtSnapshot(s.collection, s.snapshot, s.catalog, false, mappedresource.ScopePreparedSearch)
 		}
 		ids := make([][]byte, len(results))
 		for i := range results {

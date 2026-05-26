@@ -871,19 +871,24 @@ func columnAssetVerifiedChecksumCacheHashUint64(h uint64, v uint64) uint64 {
 }
 
 type columnPhysicalAssetReadCache struct {
-	namespace      string
-	rootDir        string
-	segmentDir     string
-	readIntegrity  ColumnAssetReadIntegrity
-	verifyChecksum bool
-	fileID         uint32
-	file           *columnPhysicalAssetSegmentReader
-	files          map[uint32]*columnPhysicalAssetSegmentReader
-	scratch        []byte
-	returnViews    bool
-	lastView       bool
-	hits           uint64
-	misses         uint64
+	namespace           string
+	rootDir             string
+	segmentDir          string
+	readIntegrity       ColumnAssetReadIntegrity
+	verifyChecksum      bool
+	fileID              uint32
+	file                *columnPhysicalAssetSegmentReader
+	files               map[uint32]*columnPhysicalAssetSegmentReader
+	scratch             []byte
+	returnViews         bool
+	forceReadAtFallback bool
+	lastView            bool
+	hits                uint64
+	misses              uint64
+	mmapHits            uint64
+	readAtFallbacks     uint64
+	fileOpens           uint64
+	fileCloses          uint64
 	// trustCachedVerifyFileIdentity lets explicit prepared lifetimes reuse the
 	// identity captured when the segment reader was opened. Default read caches
 	// keep refreshing identity so existing fail-closed tests and non-prepared
@@ -943,6 +948,30 @@ func (c *columnPhysicalAssetReadCache) useMappedResourceManager(manager *mappedr
 	c.resourceScope = scope
 	c.resourceReason = reason
 	return nil
+}
+
+type columnPhysicalAssetReadCacheLifecycleStats struct {
+	MmapHits        uint64
+	ReadAtFallbacks uint64
+	FileOpens       uint64
+	FileCloses      uint64
+	ActiveHandles   int64
+}
+
+func (c *columnPhysicalAssetReadCache) lifecycleStats() columnPhysicalAssetReadCacheLifecycleStats {
+	if c == nil {
+		return columnPhysicalAssetReadCacheLifecycleStats{}
+	}
+	stats := columnPhysicalAssetReadCacheLifecycleStats{
+		MmapHits:        c.mmapHits,
+		ReadAtFallbacks: c.readAtFallbacks,
+		FileOpens:       c.fileOpens,
+		FileCloses:      c.fileCloses,
+	}
+	if c.resourceManager != nil {
+		stats.ActiveHandles = c.resourceManager.Stats().ActiveHandles
+	}
+	return stats
 }
 
 func (c *columnPhysicalAssetReadCache) mappedResourceStats() mappedresource.Stats {
@@ -1014,6 +1043,9 @@ func (c *columnPhysicalAssetReadCache) close() error {
 		c.scratch = nil
 	}
 	if c.file != nil {
+		if c.file.file != nil {
+			c.fileCloses++
+		}
 		if err := c.file.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
@@ -1022,6 +1054,9 @@ func (c *columnPhysicalAssetReadCache) close() error {
 	for fileID, reader := range c.files {
 		if reader == nil {
 			continue
+		}
+		if reader.file != nil {
+			c.fileCloses++
 		}
 		if err := reader.close(); err != nil && closeErr == nil {
 			closeErr = err
@@ -1056,9 +1091,11 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 			if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceMapped, ""); err != nil {
 				return nil, err
 			}
+			c.mmapHits++
 			c.lastView = true
 			return raw, nil
 		}
+		c.readAtFallbacks++
 	}
 	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
 		if cap(c.scratch) < int(ref.Length) {
@@ -1160,9 +1197,11 @@ func (c *columnPhysicalAssetReadCache) readRangeHandle(ref ColumnAssetRef, relat
 			if err != nil {
 				return nil, nil, err
 			}
+			c.mmapHits++
 			c.lastView = true
 			return raw, handle, nil
 		}
+		c.readAtFallbacks++
 	}
 	if length > int64(maxCollectionInt) {
 		return nil, nil, fmt.Errorf("collections: column physical asset range length=%d overflows int", length)
@@ -1373,11 +1412,12 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPh
 	if err != nil {
 		return nil, err
 	}
+	c.fileOpens++
 	reader := &columnPhysicalAssetSegmentReader{
 		file:     file,
 		identity: columnAssetVerifiedChecksumFileIdentityFromFile(file),
 	}
-	if c.returnViews {
+	if c.returnViews && !c.forceReadAtFallback {
 		if mapped, err := mmapColumnPhysicalAssetFile(file); err == nil {
 			reader.mmap = mapped
 		}
