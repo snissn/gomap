@@ -1,9 +1,12 @@
 package colgranule
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -114,16 +117,17 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 	}
 	for _, q := range queries {
 		q := q
+		req := q.req
+		req.ColumnAssetReadIntegrity = collections.ColumnAssetReadIntegrityCachedVerify
+		previewDigest := verifyTreeDBColumnStoreComparePreviewDigest(b, col, q.name, req)
 		b.Run("treedb_column_store_one_shot/"+q.name, func(b *testing.B) {
 			reportTreeDBJSONBenchColumnStoreSetupMetrics(b, setup)
-			req := q.req
-			req.ColumnAssetReadIntegrity = collections.ColumnAssetReadIntegrityCachedVerify
 			preview, err := col.RunColumnPhysicalQuery(req)
 			if err != nil {
 				b.Fatalf("TreeDB preview %s: %v", q.name, err)
 			}
-			if len(preview.Groups) == 0 {
-				b.Fatalf("TreeDB preview %s returned zero groups", q.name)
+			if digest := jsonBenchColumnPhysicalResultDigest(preview.Groups); digest != previewDigest {
+				b.Fatalf("TreeDB preview %s digest=%s want %s", q.name, digest, previewDigest)
 			}
 			b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
 			b.ReportAllocs()
@@ -145,8 +149,6 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 		})
 		b.Run("treedb_column_store_prepared/"+q.name, func(b *testing.B) {
 			reportTreeDBJSONBenchColumnStoreSetupMetrics(b, setup)
-			req := q.req
-			req.ColumnAssetReadIntegrity = collections.ColumnAssetReadIntegrityCachedVerify
 			runner, err := col.PrepareColumnPhysicalQuery(req)
 			if err != nil {
 				b.Fatalf("PrepareColumnPhysicalQuery %s: %v", q.name, err)
@@ -156,8 +158,8 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 			if err != nil {
 				b.Fatalf("TreeDB prepared preview %s: %v", q.name, err)
 			}
-			if len(preview.Groups) == 0 {
-				b.Fatalf("TreeDB prepared preview %s returned zero groups", q.name)
+			if digest := jsonBenchColumnPhysicalResultDigest(preview.Groups); digest != previewDigest {
+				b.Fatalf("TreeDB prepared preview %s digest=%s want %s", q.name, digest, previewDigest)
 			}
 			b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
 			b.ReportAllocs()
@@ -178,6 +180,53 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 			reportTreeDBJSONBenchColumnStoreCompareMetrics(b, reducedRows, last, ds.Rows)
 		})
 	}
+}
+
+func verifyTreeDBColumnStoreComparePreviewDigest(b *testing.B, col *collections.Collection, name string, req collections.ColumnPhysicalQueryRequest) string {
+	b.Helper()
+	oneShot, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		b.Fatalf("TreeDB one-shot preview %s: %v", name, err)
+	}
+	oneShotDigest := jsonBenchColumnPhysicalResultDigest(oneShot.Groups)
+	if len(oneShot.Groups) == 0 {
+		b.Fatalf("TreeDB one-shot preview %s returned zero groups digest=%s", name, oneShotDigest)
+	}
+	runner, err := col.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		b.Fatalf("PrepareColumnPhysicalQuery preview %s: %v", name, err)
+	}
+	defer func() { _ = runner.Close() }()
+	prepared, err := runner.Run()
+	if err != nil {
+		b.Fatalf("TreeDB prepared preview %s: %v", name, err)
+	}
+	preparedDigest := jsonBenchColumnPhysicalResultDigest(prepared.Groups)
+	if len(prepared.Groups) == 0 {
+		b.Fatalf("TreeDB prepared preview %s returned zero groups digest=%s", name, preparedDigest)
+	}
+	if oneShotDigest != preparedDigest {
+		b.Fatalf("TreeDB preview digest mismatch %s: one-shot=%s prepared=%s", name, oneShotDigest, preparedDigest)
+	}
+	return oneShotDigest
+}
+
+func jsonBenchColumnPhysicalResultDigest(groups []collections.ColumnPhysicalQueryGroup) string {
+	ordered := append([]collections.ColumnPhysicalQueryGroup(nil), groups...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Key != ordered[j].Key {
+			return ordered[i].Key < ordered[j].Key
+		}
+		if ordered[i].Count != ordered[j].Count {
+			return ordered[i].Count < ordered[j].Count
+		}
+		return ordered[i].Int64 < ordered[j].Int64
+	})
+	h := sha256.New()
+	for _, group := range ordered {
+		_, _ = fmt.Fprintf(h, "%s\x00%d\x00%d\x00", group.Key, group.Count, group.Int64)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type jsonBenchTreeDBColumnStoreSetup struct {
