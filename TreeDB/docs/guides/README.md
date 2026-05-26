@@ -17,6 +17,9 @@ directories when moving between branches.
 - [Typed-storage performance guide](typed-storage-performance.md) — workload-fit
   table, benchmark/profile commands, counter interpretation, troubleshooting,
   and performance-engineering playbooks.
+- [JSONBench column-store experiment](jsonbench-columnstore-clickhouse-experiment.md)
+  — reproduce the preferred 10M TreeDB column-store vs ClickHouse comparison
+  and interpret the current results.
 - [Vector typed-column guide](vector-search-typed-column.md) — place vector
   payloads in dense typed-column sections, keep metadata ownership explicit, and
   separate search/scoring from final document fetch.
