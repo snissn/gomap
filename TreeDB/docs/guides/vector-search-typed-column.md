@@ -93,7 +93,7 @@ input document bytes, retained-payload bytes, typed-column/typed-row asset bytes
 graph asset bytes, total DB directory bytes, and write amplification
 (`db_dir_B_total / input_doc_B_total`). Value-log pointers referenced by primary
 rows are persistent storage managed by reachability, GC, and rewrite/compaction;
-they are not ephemeral WAL records or legacy slabs. See the
+they are not ephemeral WAL records or transient large-value records. See the
 [value-log lifecycle spec](../spec/value-log-lifecycle.md) for storage-lifetime
 rules.
 
