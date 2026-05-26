@@ -1130,6 +1130,20 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 		b.ReportMetric(float64(stats.OpenPhysicalBytesRead), "max_open_physical_B")
 	}
 	b.ReportMetric(float64(stats.DocumentsFetched), "docs_fetched/search")
+	b.ReportMetric(float64(stats.DocumentsMissing), "docs_missing/search")
+	b.ReportMetric(float64(stats.DocumentBytes), "doc_B/search")
+	b.ReportMetric(float64(stats.DocumentRetainedFetches), "doc_retained_fetches/search")
+	b.ReportMetric(float64(stats.DocumentRetainedBytes), "doc_retained_B/search")
+	b.ReportMetric(float64(stats.DocumentVisibilityScans), "doc_visibility_scans/search")
+	b.ReportMetric(float64(stats.DocumentVisibilityRowsScanned), "doc_visibility_rows_scanned/search")
+	b.ReportMetric(float64(stats.DocumentVisibilityRows), "doc_visibility_rows/search")
+	b.ReportMetric(float64(stats.DocumentVisibilityPhysicalBytes), "doc_visibility_physical_B/search")
+	b.ReportMetric(float64(stats.DocumentTypedColumnRows), "doc_typed_column_rows/search")
+	b.ReportMetric(float64(stats.DocumentTypedColumnCacheHits), "doc_typed_column_cache_hits/search")
+	b.ReportMetric(float64(stats.DocumentTypedColumnCacheMisses), "doc_typed_column_cache_misses/search")
+	b.ReportMetric(float64(stats.DocumentTypedColumnPartLoads), "doc_typed_column_part_loads/search")
+	b.ReportMetric(float64(stats.DocumentTypedColumnPartDecodes), "doc_typed_column_part_decodes/search")
+	b.ReportMetric(float64(stats.DocumentJSONReconstructionRows), "doc_json_reconstruction_rows/search")
 }
 
 var vectorSearchBenchSinkOrdinalV4 int
