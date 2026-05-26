@@ -157,6 +157,12 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) {
 		t.Fatalf("DocumentsFetched=%d want %d", got.Stats.DocumentsFetched, len(got.Results))
 	}
+	if got.Stats.DocumentRowLocatorLookups != uint64(len(got.Results)) || got.Stats.DocumentRowLocatorMisses != 0 || got.Stats.DocumentPointRowFetches != uint64(len(got.Results)) || got.Stats.DocumentPointRowDecodes != uint64(len(got.Results)) {
+		t.Fatalf("stats=%+v want row-locator lookup and point row fetch per document", got.Stats)
+	}
+	if got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 || got.Stats.DocumentVisibilityRowsScanned != 0 {
+		t.Fatalf("stats=%+v want IncludeDocuments to avoid row-ref scan fallback on supported manifest", got.Stats)
+	}
 	documentBefore := append([]byte(nil), got.Results[0].Document...)
 	if _, err := col.SearchVectorIndex(opts); err != nil {
 		t.Fatalf("second SearchVectorIndex: %v", err)
@@ -273,6 +279,9 @@ func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T
 	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-a")
 	if got.Stats.DocumentsFetched != 1 {
 		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
+	}
+	if got.Stats.DocumentRowLocatorLookups != 1 || got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentPointRowDecodes != 1 || got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 {
+		t.Fatalf("stats=%+v want prepared IncludeDocuments to use row refs and point fetches", got.Stats)
 	}
 	if searcher.documentView == nil || searcher.documentView.assetScopeKind != mappedresource.ScopePreparedSearch {
 		t.Fatalf("document view=%+v want prepared_search scope", searcher.documentView)
@@ -1217,6 +1226,17 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.DocumentTypedColumnNanos), "doc_typed_column_ns/search")
 	b.ReportMetric(float64(stats.DocumentJSONReconstructionRows), "doc_json_reconstruction_rows/search")
 	b.ReportMetric(float64(stats.DocumentJSONReconstructionNanos), "doc_json_reconstruction_ns/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorBuilds), "doc_row_locator_builds/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorLookups), "doc_row_locator_lookups/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorMisses), "doc_row_locator_misses/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorRowsScanned), "doc_row_locator_rows_scanned/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorPhysicalBytes), "doc_row_locator_physical_B/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorNanos), "doc_row_locator_ns/search")
+	b.ReportMetric(float64(stats.DocumentPointRowFetches), "doc_point_row_fetches/search")
+	b.ReportMetric(float64(stats.DocumentPointRowDecodes), "doc_point_row_decodes/search")
+	b.ReportMetric(float64(stats.DocumentRowRefFallbackScans), "doc_row_ref_fallback_scans/search")
+	b.ReportMetric(float64(stats.DocumentRowRefUnsupported), "doc_row_ref_unsupported/search")
+	b.ReportMetric(float64(stats.DocumentRowRefValidationFailures), "doc_row_ref_validation_failures/search")
 	b.ReportMetric(float64(stats.DocumentAssetMmapHits), "doc_asset_mmap_hits/search")
 	b.ReportMetric(float64(stats.DocumentAssetReadAtFallbacks), "doc_asset_readat_fallbacks/search")
 	b.ReportMetric(float64(stats.DocumentAssetFileOpens), "doc_asset_file_opens/search")

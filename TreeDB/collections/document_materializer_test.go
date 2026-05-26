@@ -412,6 +412,229 @@ func TestCollectionReadViewResponseDocumentsAreOwned(t *testing.T) {
 	}
 }
 
+func TestCollectionReadViewFetchDocumentsByRowRefPointFetchInsertOnly1874(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	ids := [][]byte{[]byte("e1"), []byte("e2"), []byte("e3")}
+	docs := [][]byte{
+		[]byte(`{"row_id":1,"kind":"alpha","score":1,"payload":"first"}`),
+		[]byte(`{"row_id":2,"kind":"beta","score":2,"payload":"second"}`),
+		[]byte(`{"row_id":3,"kind":"gamma","score":3,"payload":"third"}`),
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	want := make(map[string][]byte, len(ids))
+	for _, id := range ids {
+		doc, err := col.Get(id)
+		if err != nil {
+			t.Fatalf("Get %q: %v", id, err)
+		}
+		want[string(id)] = doc
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	resolved, err := view.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	refsByID := make(map[string]DocumentRowRef, len(resolved.Results))
+	for i := range resolved.Results {
+		if !resolved.Results[i].Found {
+			t.Fatalf("resolved[%d] missing", i)
+		}
+		refsByID[string(resolved.Results[i].ID)] = resolved.Results[i].RowRef
+	}
+	orderedRefs := []DocumentRowRef{refsByID["e3"], refsByID["e1"], refsByID["e3"], refsByID["e2"]}
+	got, err := view.FetchDocumentsByRowRef(orderedRefs, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByRowRef: %v", err)
+	}
+	wantIDs := []string{"e3", "e1", "e3", "e2"}
+	if len(got.Results) != len(wantIDs) {
+		t.Fatalf("results=%d want %d", len(got.Results), len(wantIDs))
+	}
+	for i, wantID := range wantIDs {
+		if !got.Results[i].Found || !bytes.Equal(got.Results[i].ID, []byte(wantID)) || !bytes.Equal(got.Results[i].Document, want[wantID]) {
+			t.Fatalf("result[%d]=%+v doc=%s want id=%s doc=%s", i, got.Results[i], got.Results[i].Document, wantID, want[wantID])
+		}
+	}
+	if got.Stats.PointRowFetches != uint64(len(orderedRefs)) || got.Stats.PointRowDecodes != uint64(len(orderedRefs)) {
+		t.Fatalf("stats=%+v want one point fetch/decode per ref", got.Stats)
+	}
+	if got.Stats.RowRefFallbackScans != 0 || got.Stats.VisibilityScans != 0 || got.Stats.VisibilityRowsScanned != 0 {
+		t.Fatalf("stats=%+v want direct row-ref point fetch without visibility scan fallback", got.Stats)
+	}
+}
+
+func TestCollectionReadViewFetchDocumentsByRowRefMutationLatestVisible1874(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	oldE1Doc := []byte(`{"row_id":1,"kind":"old","score":1,"payload":"before"}`)
+	oldE2Doc := []byte(`{"row_id":2,"kind":"keep","score":2,"payload":"delete-me"}`)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{oldE1Doc, oldE2Doc}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	oldE1, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get old e1: %v", err)
+	}
+	oldE2, err := col.Get([]byte("e2"))
+	if err != nil {
+		t.Fatalf("Get old e2: %v", err)
+	}
+	oldView, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("Open old read view: %v", err)
+	}
+	defer func() { _ = oldView.Close() }()
+	oldResolved, err := oldView.FetchDocumentsByID([][]byte{[]byte("e1"), []byte("e2")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("old FetchDocumentsByID: %v", err)
+	}
+	oldE1Ref := oldResolved.Results[0].RowRef
+	oldE2Ref := oldResolved.Results[1].RowRef
+
+	newE1Doc := []byte(`{"row_id":1,"kind":"new","score":11,"payload":"after"}`)
+	matched, modified, err := col.Update([]byte("e1"), func([]byte) ([]byte, bool, error) { return newE1Doc, true, nil })
+	if err != nil || !matched || !modified {
+		t.Fatalf("Update e1 matched=%t modified=%t err=%v", matched, modified, err)
+	}
+	if err := col.Delete([]byte("e2")); err != nil {
+		t.Fatalf("Delete e2: %v", err)
+	}
+	newE1, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get new e1: %v", err)
+	}
+	if liveE2, err := col.Get([]byte("e2")); err != nil || liveE2 != nil {
+		t.Fatalf("Get deleted e2=%s err=%v want missing", liveE2, err)
+	}
+
+	currentView, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("Open current read view: %v", err)
+	}
+	defer func() { _ = currentView.Close() }()
+	lookup, err := currentView.LookupDocumentRowRefsByID([][]byte{[]byte("e1"), []byte("e2")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
+	}
+	if !lookup.Results[0].Found || lookup.Results[1].Found || lookup.Stats.RowLocatorLookups != 2 || lookup.Stats.RowLocatorMisses != 1 || lookup.Stats.RowLocatorBuilds != 1 {
+		t.Fatalf("lookup=%+v stats=%+v want updated e1 ref and deleted e2 miss", lookup.Results, lookup.Stats)
+	}
+	current, err := currentView.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("current FetchDocumentsByRowRef: %v", err)
+	}
+	if len(current.Results) != 1 || !current.Results[0].Found || !bytes.Equal(current.Results[0].Document, newE1) {
+		t.Fatalf("current row-ref doc=%s want %s", current.Results[0].Document, newE1)
+	}
+	if current.Stats.RowRefFallbackScans != 0 || current.Stats.PointRowFetches != 1 || current.Stats.PointRowDecodes != 1 {
+		t.Fatalf("current stats=%+v want direct point fetch", current.Stats)
+	}
+	if _, err := currentView.FetchDocumentsByRowRef([]DocumentRowRef{oldE1Ref}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "latest-visible") {
+		t.Fatalf("old e1 ref on current view err=%v want latest-visible fail closed", err)
+	}
+	if _, err := currentView.FetchDocumentsByRowRef([]DocumentRowRef{oldE2Ref}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "not visible") {
+		t.Fatalf("old e2 ref on current view err=%v want deleted/missing fail closed", err)
+	}
+
+	stale, err := oldView.FetchDocumentsByRowRef([]DocumentRowRef{oldE1Ref, oldE2Ref}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("old snapshot FetchDocumentsByRowRef after later writes: %v", err)
+	}
+	if len(stale.Results) != 2 || !bytes.Equal(stale.Results[0].Document, oldE1) || !bytes.Equal(stale.Results[1].Document, oldE2) {
+		t.Fatalf("stale docs=%s/%s want old %s/%s", stale.Results[0].Document, stale.Results[1].Document, oldE1, oldE2)
+	}
+}
+
+func TestCollectionReadViewFetchDocumentsByRowRefMismatchFailsClosed1874(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1"), []byte("e2")},
+		[][]byte{
+			[]byte(`{"row_id":1,"kind":"alpha","score":1,"payload":"first"}`),
+			[]byte(`{"row_id":2,"kind":"beta","score":2,"payload":"second"}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	resolved, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	ref := resolved.Results[0].RowRef
+	tests := []struct {
+		name string
+		mut  func(DocumentRowRef) DocumentRowRef
+		want string
+	}{
+		{name: "row_index", mut: func(r DocumentRowRef) DocumentRowRef { r.RowIndex = 99; return r }, want: "row_index"},
+		{name: "generation", mut: func(r DocumentRowRef) DocumentRowRef { r.Generation += 100; return r }, want: "generation"},
+		{name: "part", mut: func(r DocumentRowRef) DocumentRowRef { r.PartID += 100; return r }, want: "part_id"},
+		{name: "lsn", mut: func(r DocumentRowRef) DocumentRowRef { r.AppliedCommandLSN++; return r }, want: "applied_command_lsn"},
+		{name: "document_id", mut: func(r DocumentRowRef) DocumentRowRef { r.DocumentID = []byte("e2"); return r }, want: "id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := view.FetchDocumentsByRowRef([]DocumentRowRef{tt.mut(ref)}, DocumentFetchOptions{})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("FetchDocumentsByRowRef err=%v want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestCollectionReadViewFetchDocumentsByRowRefResponseDocumentsAreOwned1874(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1"), []byte("e2")},
+		[][]byte{
+			[]byte(`{"row_id":1,"kind":"alpha","score":1,"payload":"first"}`),
+			[]byte(`{"row_id":2,"kind":"beta","score":2,"payload":"second"}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	resolved, err := view.FetchDocumentsByID([][]byte{[]byte("e1"), []byte("e2")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID: %v", err)
+	}
+	got, err := view.FetchDocumentsByRowRef([]DocumentRowRef{resolved.Results[0].RowRef, resolved.Results[1].RowRef}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByRowRef: %v", err)
+	}
+	secondBefore := append([]byte(nil), got.Results[1].Document...)
+	_ = append(got.Results[0].Document, '!')
+	if !bytes.Equal(got.Results[1].Document, secondBefore) {
+		t.Fatalf("second document changed after appending to first: got %s want %s", got.Results[1].Document, secondBefore)
+	}
+	got.Results[0].Document[0] = 'X'
+	fresh, err := col.Get([]byte("e1"))
+	if err != nil {
+		t.Fatalf("Get e1 after mutating response: %v", err)
+	}
+	if len(fresh) == 0 || fresh[0] == 'X' {
+		t.Fatalf("mutating row-ref response document affected stored document: %s", fresh)
+	}
+}
+
 func BenchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b *testing.B) {
 	benchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b, false)
 }
@@ -479,6 +702,17 @@ func reportDocumentMaterializerBenchMetrics(b *testing.B, stats DocumentMaterial
 	b.ReportMetric(float64(stats.TypedColumnNanos), "typed_column_ns/fetch")
 	b.ReportMetric(float64(stats.JSONReconstructionRows), "json_reconstruction_rows/fetch")
 	b.ReportMetric(float64(stats.JSONReconstructionNanos), "json_reconstruction_ns/fetch")
+	b.ReportMetric(float64(stats.RowLocatorBuilds), "row_locator_builds/fetch")
+	b.ReportMetric(float64(stats.RowLocatorLookups), "row_locator_lookups/fetch")
+	b.ReportMetric(float64(stats.RowLocatorMisses), "row_locator_misses/fetch")
+	b.ReportMetric(float64(stats.RowLocatorRowsScanned), "row_locator_rows_scanned/fetch")
+	b.ReportMetric(float64(stats.RowLocatorPhysicalBytes), "row_locator_physical_B/fetch")
+	b.ReportMetric(float64(stats.RowLocatorNanos), "row_locator_ns/fetch")
+	b.ReportMetric(float64(stats.PointRowFetches), "point_row_fetches/fetch")
+	b.ReportMetric(float64(stats.PointRowDecodes), "point_row_decodes/fetch")
+	b.ReportMetric(float64(stats.RowRefFallbackScans), "row_ref_fallback_scans/fetch")
+	b.ReportMetric(float64(stats.RowRefUnsupported), "row_ref_unsupported/fetch")
+	b.ReportMetric(float64(stats.RowRefValidationFailures), "row_ref_validation_failures/fetch")
 	b.ReportMetric(float64(stats.AssetMmapHits), "asset_mmap_hits/fetch")
 	b.ReportMetric(float64(stats.AssetReadAtFallbacks), "asset_readat_fallbacks/fetch")
 	b.ReportMetric(float64(stats.AssetFileOpens), "asset_file_opens/fetch")

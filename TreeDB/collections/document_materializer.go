@@ -11,21 +11,20 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
-// DocumentFetchOptions configures snapshot-bound document materialization.
-// Projection and row-locator point-fetch options are intentionally deferred to
-// later materializer milestones; the zero value preserves Collection.Get-style
-// full-document output and verified column-asset reads.
+// DocumentFetchOptions configures snapshot-bound document materialization. The
+// zero value preserves Collection.Get-style full-document output and verified
+// column-asset reads.
 type DocumentFetchOptions struct {
 	// ColumnAssetReadIntegrity controls typed-row/physical row asset reads used
-	// to find the visible row for a document. Typed-column part reconstruction
-	// uses the prepared read-view cache with verified reads.
+	// to locate or point-fetch the visible row for a document. Typed-column part
+	// reconstruction uses the prepared read-view cache with verified reads.
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
 // DocumentRowRef identifies a document row in a snapshot-bound typed-storage
-// materialization request. #1872 keeps the row-ref API seam but still resolves
-// documents through the batched document-ID scan; direct O(topK) row-locator
-// point fetch is deferred to #1874.
+// materialization request. Refs are produced by typed-storage locator lookups or
+// by FetchDocumentsByID scan reconstruction and are validated against the
+// decoded physical row before materialization.
 type DocumentRowRef struct {
 	DocumentID        []byte
 	Generation        uint64
@@ -74,7 +73,19 @@ type DocumentMaterializationStats struct {
 	JSONReconstructionRows  uint64
 	JSONReconstructionNanos int64
 
-	RowRefFallbackScans uint64
+	RowLocatorBuilds        uint64
+	RowLocatorLookups       uint64
+	RowLocatorMisses        uint64
+	RowLocatorRowsScanned   uint64
+	RowLocatorPhysicalBytes int64
+	RowLocatorNanos         int64
+
+	PointRowFetches uint64
+	PointRowDecodes uint64
+
+	RowRefFallbackScans      uint64
+	RowRefUnsupported        uint64
+	RowRefValidationFailures uint64
 
 	AssetMmapHits        uint64
 	AssetReadAtFallbacks uint64
@@ -90,7 +101,36 @@ type DocumentFetchResponse struct {
 	Stats   DocumentMaterializationStats
 }
 
+// DocumentRowRefLookupResult is one ordered document-row locator lookup result.
+// Missing or deleted documents have Found=false and a zero RowRef.
+type DocumentRowRefLookupResult struct {
+	ID     []byte
+	RowRef DocumentRowRef
+	Found  bool
+}
+
+// DocumentRowRefLookupResponse contains ordered row-ref lookup results and
+// diagnostics for the snapshot-derived locator work.
+type DocumentRowRefLookupResponse struct {
+	Results []DocumentRowRefLookupResult
+	Stats   DocumentMaterializationStats
+}
+
 var collectionReadViewScopeSeq atomic.Uint64
+
+type documentRowPartKey struct {
+	Generation uint64
+	PartID     uint64
+}
+
+type documentRowLocator struct {
+	byID map[string]DocumentRowRef
+}
+
+type documentRowLocatorCandidate struct {
+	ref     DocumentRowRef
+	deleted bool
+}
 
 // CollectionReadView is a closeable snapshot-bound document materializer for a
 // collection. It preserves the catalog/root visibility that existed when the
@@ -111,6 +151,12 @@ type CollectionReadView struct {
 	rowAssetReadCache               *columnPhysicalAssetReadCache
 	rowAssetReadIntegrity           ColumnAssetReadIntegrity
 	typedColumnAssetReadCache       *columnPhysicalAssetReadCache
+	typedColumnReconstructionCache  *typedColumnPartReconstructionCache
+	columnSnapshotView              *columnPhysicalScanSnapshotView
+	rowLocator                      *documentRowLocator
+	pointRowRefs                    map[documentRowPartKey]columnManifestAssetRefForScan
+	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
+	pointRowProjection              *columnPhysicalScanProjection
 	forceAssetReadAtFallbackForTest bool
 }
 
@@ -231,6 +277,7 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 	namespace := cfg.AssetManager.Namespace
 	if v.rowAssetReadCache == nil || v.rowAssetReadIntegrity != rowIntegrity || v.rowAssetReadCache.namespace != namespace {
 		if v.rowAssetReadCache != nil {
+			v.clearPointRowBlockCache()
 			if err := v.rowAssetReadCache.close(); err != nil {
 				return err
 			}
@@ -253,6 +300,7 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 	}
 	if v.typedColumnAssetReadCache == nil || v.typedColumnAssetReadCache.namespace != namespace {
 		if v.typedColumnAssetReadCache != nil {
+			v.typedColumnReconstructionCache = nil
 			if err := v.typedColumnAssetReadCache.close(); err != nil {
 				return err
 			}
@@ -367,6 +415,7 @@ func (v *CollectionReadView) closeAssetReadCaches() error {
 	if v == nil {
 		return nil
 	}
+	v.clearPointRowBlockCache()
 	var closeErr error
 	if v.rowAssetReadCache != nil {
 		closeErr = errors.Join(closeErr, v.rowAssetReadCache.close())
@@ -378,37 +427,343 @@ func (v *CollectionReadView) closeAssetReadCaches() error {
 		v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
 		v.typedColumnAssetReadCache = nil
 	}
+	v.typedColumnReconstructionCache = nil
 	return closeErr
 }
 
+func (v *CollectionReadView) clearPointRowBlockCache() {
+	if v == nil {
+		return
+	}
+	for key := range v.pointRowBlocks {
+		delete(v.pointRowBlocks, key)
+	}
+}
+
+// LookupDocumentRowRefsByID resolves document IDs to snapshot-visible typed-row
+// refs in input order. It builds or reuses a generic materializer row-locator
+// map for the read view; missing or deleted documents return Found=false.
+func (v *CollectionReadView) LookupDocumentRowRefsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentRowRefLookupResponse, error) {
+	start := time.Now()
+	response, err := v.lookupDocumentRowRefsByID(ids, opts)
+	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
+	return response, err
+}
+
+func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts DocumentFetchOptions) (DocumentRowRefLookupResponse, error) {
+	if err := v.validateOpen(); err != nil {
+		return DocumentRowRefLookupResponse{}, err
+	}
+	if len(ids) == 0 {
+		return DocumentRowRefLookupResponse{}, nil
+	}
+	response := DocumentRowRefLookupResponse{
+		Results: make([]DocumentRowRefLookupResult, len(ids)),
+		Stats: DocumentMaterializationStats{
+			DocumentsRequested: uint64(len(ids)),
+		},
+	}
+	if !columnStoreCanReconstructDocument(v.catalog.meta) {
+		response.Stats.RowRefUnsupported++
+		return response, errors.New("collections: document row ref lookup requires typed-storage reconstruction support")
+	}
+	cfg := v.catalog.meta.Options.ColumnStore.copy()
+	readIntegrity := opts.ColumnAssetReadIntegrity
+	if readIntegrity == "" {
+		readIntegrity = ColumnAssetReadIntegrityVerify
+	}
+	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
+		response.Stats.RowRefUnsupported++
+		return response, err
+	}
+	assetCountersBefore := v.assetCounters()
+	defer func() {
+		addDocumentMaterializerAssetCounterDeltas(&response.Stats, assetCountersBefore, v.assetCounters())
+	}()
+	if err := v.ensureDocumentRowLocator(cfg, readIntegrity, &response.Stats); err != nil {
+		response.Stats.RowRefUnsupported++
+		return response, err
+	}
+	var idArena []byte
+	for i, id := range ids {
+		if len(id) == 0 {
+			return response, fmt.Errorf("collections: document id at position %d cannot be empty", i)
+		}
+		idStart := len(idArena)
+		idArena = append(idArena, id...)
+		ownedID := idArena[idStart:len(idArena):len(idArena)]
+		response.Results[i].ID = ownedID
+		response.Stats.RowLocatorLookups++
+		rowRef, ok := v.rowLocator.byID[string(id)]
+		if !ok {
+			response.Stats.RowLocatorMisses++
+			continue
+		}
+		rowRef.DocumentID = ownedID
+		response.Results[i].RowRef = rowRef
+		response.Results[i].Found = true
+	}
+	return response, nil
+}
+
+func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfig) (columnPhysicalScanSnapshotView, error) {
+	if v == nil || v.collection == nil || v.catalog == nil || v.snapshot == nil {
+		return columnPhysicalScanSnapshotView{}, errors.New("collections: nil collection read view")
+	}
+	if v.columnSnapshotView != nil {
+		return *v.columnSnapshotView, nil
+	}
+	collectionName := v.catalog.meta.Name
+	rootID := v.catalog.rootID(collectionColumnManifestRootName(collectionName))
+	view, err := v.collection.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(v.snapshot, v.catalog, collectionName, rootID, cfg, true, columnManifestScanNoSidecars())
+	if err != nil {
+		return columnPhysicalScanSnapshotView{}, err
+	}
+	v.columnSnapshotView = &view
+	return view, nil
+}
+
+func (v *CollectionReadView) ensureDocumentRowLocator(cfg ColumnStoreConfig, readIntegrity ColumnAssetReadIntegrity, stats *DocumentMaterializationStats) error {
+	if v == nil {
+		return errors.New("collections: nil collection read view")
+	}
+	if v.rowLocator != nil {
+		return nil
+	}
+	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
+		return err
+	}
+	view, err := v.materializerColumnSnapshotView(cfg)
+	if err != nil {
+		return err
+	}
+	projection := noColumnPhysicalScanProjection(view.Config)
+	latest := make(map[string]documentRowLocatorCandidate, max(len(view.AssetRefs), 1))
+	var rawScratch []byte
+	buildStart := time.Now()
+	if stats != nil {
+		stats.RowLocatorBuilds++
+	}
+	for _, assetRef := range view.AssetRefs {
+		if assetRef.Ref.Kind != ColumnAssetKindTCS1PartImage {
+			return fmt.Errorf("collections: document row locator unsupported asset kind %q", assetRef.Ref.Kind)
+		}
+		raw, err := v.rowAssetReadCache.read(assetRef.Ref, rawScratch)
+		if err != nil {
+			return fmt.Errorf("collections: document row locator read generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+		}
+		rawScratch = raw
+		if stats != nil {
+			stats.RowLocatorPhysicalBytes += int64(len(raw))
+		}
+		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, assetRef.Ref, view.CollectionName, &view.Config, projection, assetRef.Reason, func(row columnPhysicalScanRowView) error {
+			key := string(row.ID)
+			candidate := documentRowLocatorCandidate{ref: documentRowRefFromScanRowView(row), deleted: row.Deleted}
+			if existing, ok := latest[key]; !ok || documentRowRefNewer(candidate.ref, existing.ref) {
+				latest[key] = candidate
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("collections: document row locator decode generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+		}
+		if stats != nil {
+			stats.RowLocatorRowsScanned += uint64(summary.rows)
+		}
+	}
+	locator := &documentRowLocator{byID: make(map[string]DocumentRowRef, len(latest))}
+	for key, candidate := range latest {
+		if candidate.deleted {
+			continue
+		}
+		locator.byID[key] = candidate.ref
+	}
+	v.rowLocator = locator
+	if stats != nil {
+		stats.RowLocatorNanos += time.Since(buildStart).Nanoseconds()
+	}
+	return nil
+}
+
+func noColumnPhysicalScanProjection(cfg ColumnStoreConfig) columnPhysicalScanProjection {
+	projection := columnPhysicalScanProjection{outputByColumn: make([]int, len(cfg.Columns))}
+	for i := range projection.outputByColumn {
+		projection.outputByColumn[i] = -1
+	}
+	return projection
+}
+
+func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, stats *DocumentMaterializationStats) error {
+	if v == nil || v.rowLocator == nil {
+		return nil
+	}
+	if stats != nil {
+		stats.RowLocatorLookups++
+	}
+	latest, ok := v.rowLocator.byID[string(ref.DocumentID)]
+	if !ok {
+		if stats != nil {
+			stats.RowLocatorMisses++
+			stats.RowRefValidationFailures++
+		}
+		return fmt.Errorf("collections: document row ref for id %q is not latest-visible in snapshot", string(ref.DocumentID))
+	}
+	if err := validateDocumentRowRefMatchesRowRef(ref, latest); err != nil {
+		if stats != nil {
+			stats.RowRefValidationFailures++
+		}
+		return err
+	}
+	return nil
+}
+
+func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
+	if stats != nil {
+		stats.PointRowFetches++
+	}
+	assetRef, err := v.pointRowAssetRef(view, ref)
+	if err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	block, err := v.loadPointRowBlock(view, assetRef)
+	if err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	if ref.RowIndex < 0 || ref.RowIndex >= len(block.rowOffsets) {
+		return columnPhysicalVisibleRow{}, fmt.Errorf("collections: document row ref for id %q row_index=%d outside physical rows=%d", string(ref.DocumentID), ref.RowIndex, len(block.rowOffsets))
+	}
+	projection, err := v.pointRowScanProjection(view)
+	if err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	reader := &columnPhysicalRowReader{view: view, projection: projection}
+	row, err := reader.decodeRowFromBlock(block, ref.RowIndex, ref.RowIndex, scratch)
+	if err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	if stats != nil {
+		stats.PointRowDecodes++
+	}
+	if err := validateDocumentRowRefMatchesPointRow(ref, row); err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	return columnPhysicalVisibleRowFromReaderRow(row), nil
+}
+
+func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotView, ref DocumentRowRef) (columnManifestAssetRefForScan, error) {
+	if v.pointRowRefs == nil {
+		v.pointRowRefs = make(map[documentRowPartKey]columnManifestAssetRefForScan, len(view.AssetRefs))
+		for _, assetRef := range view.AssetRefs {
+			if assetRef.Ref.Kind != ColumnAssetKindTCS1PartImage {
+				return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref unsupported asset kind %q", assetRef.Ref.Kind)
+			}
+			key := documentRowPartKey{Generation: assetRef.Ref.Generation, PartID: assetRef.Ref.PartID}
+			if _, exists := v.pointRowRefs[key]; exists {
+				return columnManifestAssetRefForScan{}, fmt.Errorf("collections: duplicate document row ref asset generation=%d part_id=%d", key.Generation, key.PartID)
+			}
+			v.pointRowRefs[key] = assetRef
+		}
+	}
+	key := documentRowPartKey{Generation: ref.Generation, PartID: ref.PartID}
+	assetRef, ok := v.pointRowRefs[key]
+	if !ok {
+		return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref for id %q generation=%d part_id=%d is not present in snapshot", string(ref.DocumentID), ref.Generation, ref.PartID)
+	}
+	return assetRef, nil
+}
+
+func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotView, assetRef columnManifestAssetRefForScan) (*columnPhysicalRowReaderBlock, error) {
+	key := documentRowPartKey{Generation: assetRef.Ref.Generation, PartID: assetRef.Ref.PartID}
+	if block := v.pointRowBlocks[key]; block != nil {
+		return block, nil
+	}
+	if v.rowAssetReadCache == nil {
+		return nil, errors.New("collections: document row point fetch requires row asset read cache")
+	}
+	raw, err := v.rowAssetReadCache.read(assetRef.Ref, nil)
+	if err != nil {
+		return nil, fmt.Errorf("collections: document row point fetch read generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+	}
+	if !v.rowAssetReadCache.lastView {
+		raw = bytes.Clone(raw)
+	}
+	header, version, rowsOffset, err := parseColumnPhysicalAssetScanHeader(raw, assetRef.Ref, view.CollectionName, &view.Config, assetRef.Reason)
+	if err != nil {
+		return nil, fmt.Errorf("collections: document row point fetch header generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+	}
+	header = cloneColumnPhysicalAssetScanHeader(header)
+	rowOffsets, err := indexColumnPhysicalAssetReaderRows(raw, version, rowsOffset, header, &view.Config)
+	if err != nil {
+		return nil, fmt.Errorf("collections: document row point fetch index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
+	}
+	block := &columnPhysicalRowReaderBlock{
+		assetOrdinal:  -1,
+		raw:           raw,
+		version:       version,
+		header:        header,
+		rowOffsets:    rowOffsets,
+		residentBytes: int64(len(raw)),
+	}
+	if v.pointRowBlocks == nil {
+		v.pointRowBlocks = make(map[documentRowPartKey]*columnPhysicalRowReaderBlock)
+	}
+	v.pointRowBlocks[key] = block
+	return block, nil
+}
+
+func (v *CollectionReadView) pointRowScanProjection(view columnPhysicalScanSnapshotView) (columnPhysicalScanProjection, error) {
+	if v.pointRowProjection != nil {
+		return *v.pointRowProjection, nil
+	}
+	projection, err := newColumnPhysicalScanProjection(view.Config, nil)
+	if err != nil {
+		return columnPhysicalScanProjection{}, err
+	}
+	v.pointRowProjection = &projection
+	return projection, nil
+}
+
 // FetchDocumentsByRowRef materializes full documents for row refs in input
-// order. The current implementation validates the row ref against the visible
-// row discovered by a batched document-ID scan; direct row-locator fetch is
-// intentionally deferred to #1874.
+// order. Supported typed-row refs are point-fetched by generation/part/row_index
+// and validated against the decoded physical row before reconstruction.
 func (v *CollectionReadView) FetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
+	start := time.Now()
+	response, err := v.fetchDocumentsByRowRef(refs, opts)
+	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
+	return response, err
+}
+
+func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
 	if err := v.validateOpen(); err != nil {
 		return DocumentFetchResponse{}, err
 	}
 	if len(refs) == 0 {
 		return DocumentFetchResponse{}, nil
 	}
+	if !columnStoreCanReconstructDocument(v.catalog.meta) {
+		response := DocumentFetchResponse{Stats: DocumentMaterializationStats{DocumentsRequested: uint64(len(refs)), RowRefUnsupported: 1}}
+		return response, errors.New("collections: document row ref materialization requires typed-storage reconstruction support")
+	}
 	ids := make([][]byte, len(refs))
-	expected := make([]*DocumentRowRef, len(refs))
 	for i := range refs {
-		if len(refs[i].DocumentID) == 0 {
-			return DocumentFetchResponse{}, fmt.Errorf("collections: document row ref %d missing document id", i)
-		}
-		if refs[i].RowIndex < 0 {
-			return DocumentFetchResponse{}, fmt.Errorf("collections: document row ref %d has negative row index", i)
+		if err := validateDocumentRowRefForPointFetch(i, refs[i]); err != nil {
+			return DocumentFetchResponse{}, err
 		}
 		ids[i] = refs[i].DocumentID
-		expected[i] = &refs[i]
 	}
-	start := time.Now()
-	response, err := v.fetchDocumentsByID(ids, expected, opts)
-	response.Stats.FetchNanos = time.Since(start).Nanoseconds()
-	response.Stats.RowRefFallbackScans++
-	return response, err
+	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids)
+	if err != nil {
+		return response, err
+	}
+	if foundCount != len(refs) {
+		for i := range response.Results {
+			if !response.Results[i].Found {
+				response.Stats.RowRefValidationFailures++
+				return response, fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(response.Results[i].ID))
+			}
+		}
+	}
+	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts)
 }
 
 func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
@@ -421,36 +776,9 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	if len(ids) == 0 {
 		return DocumentFetchResponse{}, nil
 	}
-	response := DocumentFetchResponse{
-		Results: make([]DocumentFetchResult, len(ids)),
-		Stats: DocumentMaterializationStats{
-			DocumentsRequested: uint64(len(ids)),
-		},
-	}
-	var idArena []byte
-	retained := make([][]byte, len(ids))
-	foundCount := 0
-	for i, id := range ids {
-		if len(id) == 0 {
-			return response, fmt.Errorf("collections: document id at position %d cannot be empty", i)
-		}
-		idStart := len(idArena)
-		idArena = append(idArena, id...)
-		ownedID := idArena[idStart:len(idArena):len(idArena)]
-		response.Results[i].ID = ownedID
-		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), id, nil)
-		if err != nil {
-			return response, err
-		}
-		if !found {
-			response.Stats.DocumentsMissing++
-			continue
-		}
-		response.Results[i].Found = true
-		retained[i] = value
-		foundCount++
-		response.Stats.RetainedPayloadFetches++
-		response.Stats.RetainedPayloadBytes += uint64(len(value))
+	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids)
+	if err != nil {
+		return response, err
 	}
 	if foundCount == 0 {
 		return response, nil
@@ -471,6 +799,131 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 		return response, nil
 	}
 	return v.fetchColumnStoreDocumentsByID(response, ids, retained, expected, opts)
+}
+
+func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFetchResponse, [][]byte, int, error) {
+	response := DocumentFetchResponse{
+		Results: make([]DocumentFetchResult, len(ids)),
+		Stats: DocumentMaterializationStats{
+			DocumentsRequested: uint64(len(ids)),
+		},
+	}
+	var idArena []byte
+	retained := make([][]byte, len(ids))
+	foundCount := 0
+	for i, id := range ids {
+		if len(id) == 0 {
+			return response, retained, foundCount, fmt.Errorf("collections: document id at position %d cannot be empty", i)
+		}
+		idStart := len(idArena)
+		idArena = append(idArena, id...)
+		ownedID := idArena[idStart:len(idArena):len(idArena)]
+		response.Results[i].ID = ownedID
+		value, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, collectionPrimaryRootName(v.catalog.meta.Name), id, nil)
+		if err != nil {
+			return response, retained, foundCount, err
+		}
+		if !found {
+			response.Stats.DocumentsMissing++
+			continue
+		}
+		response.Results[i].Found = true
+		retained[i] = value
+		foundCount++
+		response.Stats.RetainedPayloadFetches++
+		response.Stats.RetainedPayloadBytes += uint64(len(value))
+	}
+	return response, retained, foundCount, nil
+}
+
+func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
+	out = response
+	cfg := v.catalog.meta.Options.ColumnStore.copy()
+	readIntegrity := opts.ColumnAssetReadIntegrity
+	if readIntegrity == "" {
+		readIntegrity = ColumnAssetReadIntegrityVerify
+	}
+	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
+		out.Stats.RowRefUnsupported++
+		return out, err
+	}
+	assetCountersBefore := v.assetCounters()
+	defer func() {
+		addDocumentMaterializerAssetCounterDeltas(&out.Stats, assetCountersBefore, v.assetCounters())
+	}()
+	view, err := v.materializerColumnSnapshotView(cfg)
+	if err != nil {
+		out.Stats.RowRefUnsupported++
+		return out, err
+	}
+	if view.MutationParts != 0 {
+		if err := v.ensureDocumentRowLocator(cfg, readIntegrity, &out.Stats); err != nil {
+			out.Stats.RowRefUnsupported++
+			return out, err
+		}
+	}
+	typedColumnCache := v.typedColumnReconstructionCacheForConfig(cfg)
+	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
+	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
+	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
+	var rowScratch columnPhysicalRowReaderScratch
+	var documentArena []byte
+	for i := range out.Results {
+		if !out.Results[i].Found {
+			out.Stats.RowRefValidationFailures++
+			return out, fmt.Errorf("collections: document row ref for id %q is not visible in primary root", string(out.Results[i].ID))
+		}
+		if view.MutationParts != 0 {
+			if err := v.validateDocumentRowRefLatest(refs[i], &out.Stats); err != nil {
+				return out, err
+			}
+		}
+		row, err := v.fetchDocumentPointRow(view, refs[i], &rowScratch, &out.Stats)
+		if err != nil {
+			out.Stats.RowRefValidationFailures++
+			return out, err
+		}
+		if row.Deleted {
+			out.Stats.RowRefValidationFailures++
+			return out, fmt.Errorf("collections: document row ref for id %q points at deleted row", string(refs[i].DocumentID))
+		}
+		rowRef := documentRowRefFromVisibleRow(row)
+		rowRef.DocumentID = out.Results[i].ID
+		out.Results[i].RowRef = rowRef
+
+		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
+		typedStart := time.Now()
+		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch)
+		typedElapsed := time.Since(typedStart)
+		if err != nil {
+			return out, err
+		}
+		if len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg) {
+			out.Stats.TypedColumnRows++
+		}
+		afterCacheHits, afterCacheMisses, afterPartLoads, afterPartDecodes := typedColumnCacheCounters(typedColumnCache)
+		out.Stats.TypedColumnCacheHits += deltaUint64(beforeCacheHits, afterCacheHits)
+		out.Stats.TypedColumnCacheMisses += deltaUint64(beforeCacheMisses, afterCacheMisses)
+		out.Stats.TypedColumnPartLoads += deltaUint64(beforePartLoads, afterPartLoads)
+		out.Stats.TypedColumnPartDecodes += deltaUint64(beforePartDecodes, afterPartDecodes)
+		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
+
+		reconstructStart := time.Now()
+		fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
+		if err != nil {
+			return out, err
+		}
+		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained[i], row, fullValues)
+		if err != nil {
+			return out, err
+		}
+		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
+		out.Stats.JSONReconstructionRows++
+		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
+		out.Stats.DocumentsFetched++
+		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
+	}
+	return out, nil
 }
 
 func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
@@ -512,10 +965,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	for _, row := range visible.Rows {
 		visibleByID[string(row.ID)] = row
 	}
-	var typedColumnCache *typedColumnPartReconstructionCache
-	if columnStoreHasTypedColumnPartOwners(cfg) {
-		typedColumnCache = &typedColumnPartReconstructionCache{Parts: make(map[uint64]typedColumnPartDecodedValues), ReadCache: v.typedColumnAssetReadCache}
-	}
+	typedColumnCache := v.typedColumnReconstructionCacheForConfig(cfg)
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
@@ -599,6 +1049,110 @@ func documentRowRefFromVisibleRow(row columnPhysicalVisibleRow) DocumentRowRef {
 	}
 }
 
+func documentRowRefFromScanRowView(row columnPhysicalScanRowView) DocumentRowRef {
+	// Row locators are keyed by document ID, so the stored ref only needs the
+	// physical row coordinates. Lookup callers attach an owned DocumentID to the
+	// response row ref; avoiding a per-row ID clone keeps locator builds cheap.
+	return DocumentRowRef{
+		Generation:        row.Generation,
+		PartID:            row.PartID,
+		RowIndex:          row.RowIndex,
+		AppliedCommandLSN: row.AppliedCommandLSN,
+	}
+}
+
+func documentRowRefNewer(a, b DocumentRowRef) bool {
+	if a.AppliedCommandLSN != b.AppliedCommandLSN {
+		return a.AppliedCommandLSN > b.AppliedCommandLSN
+	}
+	if a.Generation != b.Generation {
+		return a.Generation > b.Generation
+	}
+	if a.PartID != b.PartID {
+		return a.PartID > b.PartID
+	}
+	return a.RowIndex > b.RowIndex
+}
+
+func columnPhysicalVisibleRowFromReaderRow(row columnPhysicalRowReaderRow) columnPhysicalVisibleRow {
+	return columnPhysicalVisibleRow{
+		Generation:        row.Generation,
+		PartID:            row.PartID,
+		AppliedCommandLSN: row.AppliedCommandLSN,
+		Operation:         row.Operation,
+		RowIndex:          row.RowIndex,
+		ID:                row.ID,
+		Values:            row.Values,
+		Deleted:           row.Deleted,
+	}
+}
+
+func validateDocumentRowRefForPointFetch(pos int, ref DocumentRowRef) error {
+	if len(ref.DocumentID) == 0 {
+		return fmt.Errorf("collections: document row ref %d missing document id", pos)
+	}
+	if ref.Generation == 0 {
+		return fmt.Errorf("collections: document row ref %d missing generation", pos)
+	}
+	if ref.PartID == 0 {
+		return fmt.Errorf("collections: document row ref %d missing part_id", pos)
+	}
+	if ref.RowIndex < 0 {
+		return fmt.Errorf("collections: document row ref %d has negative row_index", pos)
+	}
+	if ref.AppliedCommandLSN == 0 {
+		return fmt.Errorf("collections: document row ref %d missing applied_command_lsn", pos)
+	}
+	return nil
+}
+
+func validateDocumentRowRefMatchesPointRow(ref DocumentRowRef, row columnPhysicalRowReaderRow) error {
+	if len(ref.DocumentID) == 0 {
+		return errors.New("collections: document row ref missing document id")
+	}
+	if !bytes.Equal(ref.DocumentID, row.ID) {
+		return fmt.Errorf("collections: document row ref id %q does not match physical row id %q", string(ref.DocumentID), string(row.ID))
+	}
+	if ref.Generation != row.Generation {
+		return fmt.Errorf("collections: document row ref for id %q generation=%d does not match physical generation=%d", string(ref.DocumentID), ref.Generation, row.Generation)
+	}
+	if ref.PartID != row.PartID {
+		return fmt.Errorf("collections: document row ref for id %q part_id=%d does not match physical part_id=%d", string(ref.DocumentID), ref.PartID, row.PartID)
+	}
+	if ref.RowIndex != row.RowIndex {
+		return fmt.Errorf("collections: document row ref for id %q row_index=%d does not match physical row_index=%d", string(ref.DocumentID), ref.RowIndex, row.RowIndex)
+	}
+	if ref.AppliedCommandLSN != row.AppliedCommandLSN {
+		return fmt.Errorf("collections: document row ref for id %q applied_command_lsn=%d does not match physical applied_command_lsn=%d", string(ref.DocumentID), ref.AppliedCommandLSN, row.AppliedCommandLSN)
+	}
+	if row.Deleted {
+		return fmt.Errorf("collections: document row ref for id %q points at deleted physical row", string(ref.DocumentID))
+	}
+	return nil
+}
+
+func validateDocumentRowRefMatchesRowRef(ref DocumentRowRef, latest DocumentRowRef) error {
+	if len(ref.DocumentID) == 0 {
+		return errors.New("collections: document row ref missing document id")
+	}
+	if len(latest.DocumentID) != 0 && !bytes.Equal(ref.DocumentID, latest.DocumentID) {
+		return fmt.Errorf("collections: document row ref id %q does not match latest-visible id %q", string(ref.DocumentID), string(latest.DocumentID))
+	}
+	if ref.Generation != latest.Generation {
+		return fmt.Errorf("collections: document row ref for id %q generation=%d does not match latest-visible generation=%d", string(ref.DocumentID), ref.Generation, latest.Generation)
+	}
+	if ref.PartID != latest.PartID {
+		return fmt.Errorf("collections: document row ref for id %q part_id=%d does not match latest-visible part_id=%d", string(ref.DocumentID), ref.PartID, latest.PartID)
+	}
+	if ref.RowIndex != latest.RowIndex {
+		return fmt.Errorf("collections: document row ref for id %q row_index=%d does not match latest-visible row_index=%d", string(ref.DocumentID), ref.RowIndex, latest.RowIndex)
+	}
+	if ref.AppliedCommandLSN != latest.AppliedCommandLSN {
+		return fmt.Errorf("collections: document row ref for id %q applied_command_lsn=%d does not match latest-visible applied_command_lsn=%d", string(ref.DocumentID), ref.AppliedCommandLSN, latest.AppliedCommandLSN)
+	}
+	return nil
+}
+
 func validateDocumentRowRefMatchesVisibleRow(ref DocumentRowRef, row columnPhysicalVisibleRow) error {
 	if len(ref.DocumentID) == 0 {
 		return errors.New("collections: document row ref missing document id")
@@ -622,6 +1176,19 @@ func validateDocumentRowRefMatchesVisibleRow(ref DocumentRowRef, row columnPhysi
 		return fmt.Errorf("collections: document row ref for id %q applied_command_lsn=%d does not match visible applied_command_lsn=%d", string(ref.DocumentID), ref.AppliedCommandLSN, row.AppliedCommandLSN)
 	}
 	return nil
+}
+
+func (v *CollectionReadView) typedColumnReconstructionCacheForConfig(cfg ColumnStoreConfig) *typedColumnPartReconstructionCache {
+	if v == nil || !columnStoreHasTypedColumnPartOwners(cfg) {
+		return nil
+	}
+	if v.typedColumnReconstructionCache == nil || v.typedColumnReconstructionCache.ReadCache != v.typedColumnAssetReadCache {
+		v.typedColumnReconstructionCache = &typedColumnPartReconstructionCache{
+			Parts:     make(map[uint64]typedColumnPartDecodedValues),
+			ReadCache: v.typedColumnAssetReadCache,
+		}
+	}
+	return v.typedColumnReconstructionCache
 }
 
 func typedColumnCacheCounters(cache *typedColumnPartReconstructionCache) (hits, misses, loads, decodes uint64) {
@@ -658,7 +1225,21 @@ func addDocumentMaterializationStatsToVectorStats(dst *VectorIndexSearchStats, s
 	dst.DocumentTypedColumnNanos += uint64(maxInt64ForMetric(src.TypedColumnNanos, 0))
 	dst.DocumentJSONReconstructionRows += src.JSONReconstructionRows
 	dst.DocumentJSONReconstructionNanos += uint64(maxInt64ForMetric(src.JSONReconstructionNanos, 0))
+	dst.DocumentRowLocatorBuilds += src.RowLocatorBuilds
+	dst.DocumentRowLocatorLookups += src.RowLocatorLookups
+	dst.DocumentRowLocatorMisses += src.RowLocatorMisses
+	dst.DocumentRowLocatorRowsScanned += src.RowLocatorRowsScanned
+	locatorBytes, err := addInt64ToUint64Metric(dst.DocumentRowLocatorPhysicalBytes, src.RowLocatorPhysicalBytes, "document row locator physical bytes")
+	if err != nil {
+		return err
+	}
+	dst.DocumentRowLocatorPhysicalBytes = locatorBytes
+	dst.DocumentRowLocatorNanos += uint64(maxInt64ForMetric(src.RowLocatorNanos, 0))
+	dst.DocumentPointRowFetches += src.PointRowFetches
+	dst.DocumentPointRowDecodes += src.PointRowDecodes
 	dst.DocumentRowRefFallbackScans += src.RowRefFallbackScans
+	dst.DocumentRowRefUnsupported += src.RowRefUnsupported
+	dst.DocumentRowRefValidationFailures += src.RowRefValidationFailures
 	dst.DocumentAssetMmapHits += src.AssetMmapHits
 	dst.DocumentAssetReadAtFallbacks += src.AssetReadAtFallbacks
 	dst.DocumentAssetFileOpens += src.AssetFileOpens
