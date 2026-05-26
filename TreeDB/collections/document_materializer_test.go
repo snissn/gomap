@@ -229,6 +229,32 @@ func TestCollectionReadViewMappedPinsProtectRewriteCandidates(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalScanReadCacheIntegrityMismatchFails(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.Insert([]byte("e1"), []byte(`{"row_id":1,"kind":"alpha","score":1.5,"payload":"retained-a"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotView()
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalScanSnapshotView: %v", err)
+	}
+	defer closeView()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity: %v", err)
+	}
+	defer func() { _ = readCache.close() }()
+	_, err = col.scanColumnPhysicalRowsInSnapshotView(view, columnPhysicalScanRequest{
+		ReadIntegrity: ColumnAssetReadIntegrityVerify,
+		ReadCache:     &readCache,
+		Visitor:       func(columnPhysicalScanRowView) error { return nil },
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match request integrity") {
+		t.Fatalf("scan err=%v want integrity mismatch", err)
+	}
+}
+
 func TestCollectionReadViewFetchDocumentsByRowRefRequiresTypedStorage(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {

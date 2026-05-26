@@ -177,17 +177,13 @@ func (v *CollectionReadView) Close() error {
 		return nil
 	}
 	v.closed = true
-	var closeErr error
-	if err := v.closeAssetReadCaches(); err != nil {
-		closeErr = err
-	}
+	cacheErr := v.closeAssetReadCaches()
+	var snapErr error
 	if v.ownsSnap && v.snapshot != nil {
-		if err := v.snapshot.Close(); closeErr == nil && err != nil {
-			closeErr = err
-		}
+		snapErr = v.snapshot.Close()
 		v.snapshot = nil
 	}
-	return closeErr
+	return errors.Join(cacheErr, snapErr)
 }
 
 // FetchDocumentsByID materializes full documents for ids in input order. Missing

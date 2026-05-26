@@ -454,6 +454,8 @@ func (c *Collection) scanColumnPhysicalRowsInSnapshotView(
 		}
 		readCache = &localReadCache
 		defer func() { _ = readCache.close() }()
+	} else if columnAssetReadIntegrityLabel(req.ReadIntegrity) != columnAssetReadIntegrityLabel(readCache.readIntegrity) {
+		return diag, fmt.Errorf("collections: physical column scan read cache integrity=%q does not match request integrity=%q", columnAssetReadIntegrityLabel(readCache.readIntegrity), columnAssetReadIntegrityLabel(req.ReadIntegrity))
 	}
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(readCache.readIntegrity)
 	var rawScratch []byte
