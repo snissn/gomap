@@ -15,13 +15,16 @@ import (
 type AggregateOp = columnsemantics.Operation
 
 const (
-	OpCountRows    AggregateOp = columnsemantics.OpCountRows
-	OpCountNonNull AggregateOp = columnsemantics.OpCountNonNull
-	OpSum          AggregateOp = columnsemantics.OpSum
-	OpAvg          AggregateOp = columnsemantics.OpAvg
-	OpMin          AggregateOp = columnsemantics.OpMin
-	OpMax          AggregateOp = columnsemantics.OpMax
-	OpBoolCounts   AggregateOp = columnsemantics.OpBoolCounts
+	OpCountRows               AggregateOp = columnsemantics.OpCountRows
+	OpCountNonNull            AggregateOp = columnsemantics.OpCountNonNull
+	OpSum                     AggregateOp = columnsemantics.OpSum
+	OpAvg                     AggregateOp = columnsemantics.OpAvg
+	OpMin                     AggregateOp = columnsemantics.OpMin
+	OpMax                     AggregateOp = columnsemantics.OpMax
+	OpBoolCounts              AggregateOp = columnsemantics.OpBoolCounts
+	OpDictionaryGroupBy       AggregateOp = columnsemantics.OpDictionaryGroupBy
+	OpDictionaryCount         AggregateOp = columnsemantics.OpDictionaryCount
+	OpDictionaryCountDistinct AggregateOp = columnsemantics.OpDictionaryCountDistinct
 )
 
 // AggregateResult keeps row-count and value-count semantics distinct. For
@@ -61,9 +64,10 @@ type ReduceRequest struct {
 // Scratch is caller/session-owned reusable storage for future kernels. It is
 // deliberately explicit even though the initial int64 reducers do not need it.
 type Scratch struct {
-	Selection typedcolumn.RowSelectionScratch
-	Int64     []int64
-	Bool      typedcolumn.BoolSelectionScratch
+	Selection  typedcolumn.RowSelectionScratch
+	Int64      []int64
+	Bool       typedcolumn.BoolSelectionScratch
+	Dictionary typedcolumn.Uint32CodeSelectionScratch
 }
 
 // ReduceFunc runs a concrete reducer after registry dispatch. Implementations
@@ -249,7 +253,7 @@ func (entry KernelSpec) matches(op AggregateOp, desc columnsemantics.Descriptor,
 
 func isAggregateOp(op AggregateOp) bool {
 	switch op {
-	case OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpBoolCounts:
+	case OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpBoolCounts, OpDictionaryGroupBy, OpDictionaryCount, OpDictionaryCountDistinct:
 		return true
 	default:
 		return false

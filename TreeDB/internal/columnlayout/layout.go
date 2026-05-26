@@ -23,6 +23,8 @@ const (
 	OpMinMaxStats            Operation = "stats.min_max"
 	OpSumStats               Operation = "stats.sum"
 	OpLexicalRangePredicate  Operation = "predicate.lexical_range"
+	OpDictionaryCodeLookup   Operation = "predicate.dictionary_code_lookup"
+	OpDictionaryReducer      Operation = "aggregate.dictionary_reducer"
 	OpScalarNumericAggregate Operation = "aggregate.scalar_numeric"
 )
 
@@ -414,6 +416,16 @@ func (c Capabilities) Supports(op Operation) Capability {
 			return Supported(op)
 		}
 		return Unsupported(op, ReasonStatsPayloadUnsupported, "layout does not advertise sum stats")
+	case OpDictionaryCodeLookup:
+		if c.Reducers.DictionaryCodes {
+			return Supported(op)
+		}
+		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise dictionary-code lookup")
+	case OpDictionaryReducer:
+		if c.Reducers.DictionaryCodes {
+			return Supported(op)
+		}
+		return Unsupported(op, ReasonOperationUnsupported, "layout does not advertise dictionary-code reducer")
 	case OpLexicalRangePredicate:
 		if c.Pruning.LexicalDictionary {
 			return Supported(op)
@@ -464,11 +476,16 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		return c.supportsDirectScalarValueCarrier()
 	case columnsemantics.OpStringLexicalRange, columnsemantics.OpStringPrefix, columnsemantics.OpDictionaryRange:
 		return c.Supports(OpLexicalRangePredicate)
-	case columnsemantics.OpDictionaryEquality, columnsemantics.OpDictionaryGroupBy:
+	case columnsemantics.OpDictionaryEquality, columnsemantics.OpDictionaryInList, columnsemantics.OpDictionaryCategory:
 		if c.Reducers.DictionaryCodes {
-			return c.validateDescriptor(Operation(op))
+			return c.Supports(OpDictionaryCodeLookup)
 		}
-		return Unsupported(Operation(op), ReasonOperationUnsupported, "layout lacks dictionary-code support")
+		return Unsupported(Operation(op), ReasonOperationUnsupported, "layout lacks dictionary-code lookup support")
+	case columnsemantics.OpDictionaryGroupBy, columnsemantics.OpDictionaryCount, columnsemantics.OpDictionaryCountDistinct:
+		if c.Reducers.DictionaryCodes {
+			return c.Supports(OpDictionaryReducer)
+		}
+		return Unsupported(Operation(op), ReasonOperationUnsupported, "layout lacks dictionary-code reducer support")
 	case columnsemantics.OpBoolCounts:
 		if c.Reducers.BoolCounts {
 			return c.validateDescriptor(Operation(op))

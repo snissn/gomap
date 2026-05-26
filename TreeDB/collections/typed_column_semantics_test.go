@@ -50,7 +50,7 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cap, _ := typedColumnAdapterCapability(stringColumn, columnsemantics.OpStringPrefix); cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
+	if cap, _ := typedColumnAdapterCapability(stringColumn, columnsemantics.OpStringPrefix); cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
 		t.Fatalf("string prefix capability=%+v", cap)
 	}
 
@@ -137,6 +137,26 @@ func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsNullableCarrier(
 	}
 }
 
+func TestTypedColumnAdapterStringSemanticCapabilityMatrix(t *testing.T) {
+	stringColumn, err := typedColumnAdapterMapField(semanticField("kind", ColumnStoreValueString))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpEquality, columnsemantics.OpInList, columnsemantics.OpDictionaryEquality, columnsemantics.OpDictionaryInList, columnsemantics.OpDictionaryCategory, columnsemantics.OpDictionaryGroupBy, columnsemantics.OpDictionaryCount, columnsemantics.OpDictionaryCountDistinct} {
+		if cap, _ := typedColumnAdapterCapability(stringColumn, op); cap.Status != columnsemantics.StatusSupported {
+			t.Fatalf("%s capability=%+v want supported", op, cap)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpStringPrefix, columnsemantics.OpStringLexicalRange} {
+		if cap, _ := typedColumnAdapterCapability(stringColumn, op); cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
+			t.Fatalf("%s capability=%+v want dictionary order proof fallback", op, cap)
+		}
+	}
+	if cap, _ := typedColumnAdapterCapability(stringColumn, columnsemantics.OpDictionaryRange); cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
+		t.Fatalf("%s capability=%+v want dictionary order proof rejection", columnsemantics.OpDictionaryRange, cap)
+	}
+}
+
 func TestTypedColumnAdapterPrepareStringSemanticCapabilityAllowsDictionaryEqualityOnly(t *testing.T) {
 	field := semanticField("kind", ColumnStoreValueString)
 	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 45, SchemaVersion: 778, RowsPerGranule: 2, Fields: []TypedStorageField{field}}, []typedColumnAdapterRow{
@@ -158,7 +178,7 @@ func TestTypedColumnAdapterPrepareStringSemanticCapabilityAllowsDictionaryEquali
 		t.Fatalf("prepared=%+v", prepared)
 	}
 	cap, _ := typedColumnAdapterCapability(prepared.Column, columnsemantics.OpStringLexicalRange)
-	if cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
+	if cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonDictionaryOrderUnproven {
 		t.Fatalf("string lexical range capability=%+v", cap)
 	}
 }

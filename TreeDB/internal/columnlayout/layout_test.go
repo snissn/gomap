@@ -103,8 +103,17 @@ func TestNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testing.T) {
 	}
 
 	dict := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Compression: typedcolumn.CompressionNone, Dictionary: true})
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpDictionaryEquality, columnsemantics.OpDictionaryInList, columnsemantics.OpDictionaryCategory, columnsemantics.OpDictionaryGroupBy, columnsemantics.OpDictionaryCount, columnsemantics.OpDictionaryCountDistinct} {
+		if cap := dict.SupportsSemanticOperation(op); !cap.Supported() {
+			t.Fatalf("dictionary semantic %s cap=%+v want supported", op, cap)
+		}
+	}
 	if cap := dict.Supports(OpLexicalRangePredicate); cap.Supported() || cap.Reason != ReasonDictionaryOrderUnproven {
 		t.Fatalf("dictionary lexical cap=%+v want %s", cap, ReasonDictionaryOrderUnproven)
+	}
+	orderedNoCollation := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Compression: typedcolumn.CompressionNone, Dictionary: true, DictionaryOrder: true})
+	if cap := orderedNoCollation.Supports(OpLexicalRangePredicate); cap.Supported() || cap.Reason != ReasonDictionaryCollationUnproven {
+		t.Fatalf("ordered dictionary without collation cap=%+v want %s", cap, ReasonDictionaryCollationUnproven)
 	}
 	orderedDict := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Compression: typedcolumn.CompressionNone, Dictionary: true, DictionaryOrder: true, DictionaryCollation: "bytewise"})
 	if cap := orderedDict.Supports(OpLexicalRangePredicate); !cap.Supported() {

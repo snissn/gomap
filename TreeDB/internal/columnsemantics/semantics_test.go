@@ -99,24 +99,56 @@ func TestCapabilityFloatRawInt64DoesNotClaimInt64NumericSemantics(t *testing.T) 
 	}
 }
 
+func TestCapabilityStringDictionaryMatrixIsExplicit(t *testing.T) {
+	desc := Descriptor{Logical: LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32}
+	for _, op := range []Operation{OpEquality, OpInequality, OpInList, OpDictionaryEquality, OpDictionaryInList, OpDictionaryCategory} {
+		if cap := CapabilityFor(desc, op); cap.Status != StatusSupported || cap.Reason != ReasonSupported {
+			t.Fatalf("%s capability=%+v want supported dictionary category/equality", op, cap)
+		}
+	}
+	checks := map[Operation]ResultSemantics{
+		OpCountRows:               {ResultType: "int64", OverflowPolicy: "checked row count"},
+		OpCountNonNull:            {ResultType: "int64", OverflowPolicy: "checked row count"},
+		OpDictionaryGroupBy:       {ResultType: "groups", GroupKey: "dictionary string value; dictionary codes are part-local unless identity metadata proves otherwise"},
+		OpDictionaryCount:         {ResultType: "groups with int64 counts", OverflowPolicy: "checked row count", GroupKey: "dictionary string value; count by code is valid only within matching dictionary identity"},
+		OpDictionaryCountDistinct: {ResultType: "groups with int64 distinct counts", OverflowPolicy: "checked row and distinct bitmap counts", GroupKey: "dictionary string value; distinct dictionaries must be translated by value unless identity metadata matches"},
+	}
+	for op, want := range checks {
+		cap := CapabilityFor(desc, op)
+		if cap.Status != StatusSupported || cap.Result != want {
+			t.Fatalf("%s capability=%+v want result=%+v", op, cap, want)
+		}
+	}
+}
+
 func TestCapabilityStringDictionaryCodesDoNotImplyLexicalRangeWithoutProof(t *testing.T) {
 	desc := Descriptor{Logical: LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32}
-	if cap := CapabilityFor(desc, OpDictionaryEquality); cap.Status != StatusSupported {
-		t.Fatalf("dictionary equality status=%s reason=%s", cap.Status, cap.Reason)
+	for _, op := range []Operation{OpOrderedRange, OpStringPrefix, OpStringLexicalRange} {
+		cap := CapabilityFor(desc, op)
+		if cap.Status != StatusFallback || cap.Reason != ReasonDictionaryOrderUnproven {
+			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
+		}
 	}
-	for _, op := range []Operation{OpOrderedRange, OpDictionaryRange, OpStringPrefix, OpStringLexicalRange, OpStatsMinMax, OpPruneOrderedRange} {
+	for _, op := range []Operation{OpDictionaryRange, OpStatsMinMax, OpPruneOrderedRange, OpMin, OpMax} {
 		cap := CapabilityFor(desc, op)
 		if cap.Status != StatusUnsupported || cap.Reason != ReasonDictionaryOrderUnproven {
 			t.Fatalf("%s status=%s reason=%s", op, cap.Status, cap.Reason)
 		}
 	}
 	desc.DictionaryOrder = true
-	if cap := CapabilityFor(desc, OpStringLexicalRange); cap.Reason != ReasonDictionaryCollationUnproven {
-		t.Fatalf("ordered dictionary without collation reason=%s", cap.Reason)
+	for _, op := range []Operation{OpOrderedRange, OpStringPrefix, OpStringLexicalRange} {
+		if cap := CapabilityFor(desc, op); cap.Status != StatusFallback || cap.Reason != ReasonDictionaryCollationUnproven {
+			t.Fatalf("ordered dictionary without collation %s capability=%+v", op, cap)
+		}
+	}
+	if cap := CapabilityFor(desc, OpDictionaryRange); cap.Status != StatusUnsupported || cap.Reason != ReasonDictionaryCollationUnproven {
+		t.Fatalf("ordered dictionary range without collation capability=%+v", cap)
 	}
 	desc.DictionaryCollation = "unicode-codepoint-v1"
-	if cap := CapabilityFor(desc, OpStringLexicalRange); cap.Status != StatusSupported {
-		t.Fatalf("ordered dictionary with collation status=%s reason=%s", cap.Status, cap.Reason)
+	for _, op := range []Operation{OpDictionaryRange, OpStringPrefix, OpStringLexicalRange} {
+		if cap := CapabilityFor(desc, op); cap.Status != StatusSupported {
+			t.Fatalf("ordered dictionary with collation %s status=%s reason=%s", op, cap.Status, cap.Reason)
+		}
 	}
 }
 
@@ -200,6 +232,7 @@ func TestCapabilityReasonCodesAreStable(t *testing.T) {
 	checks := map[ReasonCode]string{
 		ReasonFloatRawInt64BitPattern:             "float_raw_int64_bit_pattern",
 		ReasonDictionaryOrderUnproven:             "dictionary_order_unproven",
+		ReasonDictionaryCollationUnproven:         "dictionary_collation_unproven",
 		ReasonNullableCarrierAggregateSemantics:   "nullable_carrier_aggregate_semantics",
 		ReasonVectorScalarOperationUnsupported:    "vector_scalar_operation_unsupported",
 		ReasonAdjacencyScalarOperationUnsupported: "adjacency_scalar_operation_unsupported",

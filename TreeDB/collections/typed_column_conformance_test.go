@@ -85,7 +85,7 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			checks: []capabilityCheck{
 				{op: columnsemantics.OpDictionaryEquality, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpDictionaryGroupBy, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
-				{op: columnsemantics.OpStringPrefix, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonDictionaryOrderUnproven},
+				{op: columnsemantics.OpStringPrefix, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonDictionaryOrderUnproven},
 			},
 		},
 		{

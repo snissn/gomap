@@ -17,9 +17,16 @@ import (
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
 const (
-	typedColumnAdapterPrimaryIDColumn       = "__treedb_primary_id"
-	typedColumnAdapterMetadataDictionary    = "__treedb_adapter_metadata"
-	typedColumnAdapterMetadataValueTypeMark = "value_type"
+	typedColumnAdapterPrimaryIDColumn                 = "__treedb_primary_id"
+	typedColumnAdapterMetadataDictionary              = "__treedb_adapter_metadata"
+	typedColumnAdapterMetadataValueTypeMark           = "value_type"
+	typedColumnAdapterMetadataDictionaryIdentityMark  = "dictionary_identity"
+	typedColumnAdapterMetadataDictionaryOrderMark     = "dictionary_order"
+	typedColumnAdapterMetadataDictionaryCollationMark = "dictionary_collation"
+
+	typedColumnAdapterStringDictionaryIdentity  = "part_local_string_dictionary_v1"
+	typedColumnAdapterStringDictionaryOrder     = "none"
+	typedColumnAdapterStringDictionaryCollation = "none"
 )
 
 type typedColumnAdapterTypeStatus string
@@ -925,7 +932,11 @@ func validateTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn,
 }
 
 func typedColumnAdapterMetadataKey(column typedColumnAdapterColumn) string {
-	return column.Definition.Name + "\x00" + typedColumnAdapterMetadataValueTypeMark + "\x00" + string(column.Field.ValueType)
+	return typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataValueTypeMark, string(column.Field.ValueType))
+}
+
+func typedColumnAdapterMetadataEntryKey(column typedColumnAdapterColumn, mark, value string) string {
+	return column.Definition.Name + "\x00" + mark + "\x00" + value
 }
 
 func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64, columns []typedColumnAdapterColumn) error {
@@ -940,6 +951,17 @@ func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64
 		if _, ok := metadata[typedColumnAdapterMetadataKey(column)]; !ok {
 			return fmt.Errorf("collections: typed-column adapter image value type metadata mismatch for column %q", column.Definition.Name)
 		}
+		if column.Field.ValueType == ColumnStoreValueString {
+			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity)]; !ok {
+				return fmt.Errorf("collections: typed-column adapter image dictionary identity metadata mismatch for column %q", column.Definition.Name)
+			}
+			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder)]; !ok {
+				return fmt.Errorf("collections: typed-column adapter image dictionary order metadata mismatch for column %q", column.Definition.Name)
+			}
+			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation)]; !ok {
+				return fmt.Errorf("collections: typed-column adapter image dictionary collation metadata mismatch for column %q", column.Definition.Name)
+			}
+		}
 	}
 	return nil
 }
@@ -947,8 +969,18 @@ func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64
 func typedColumnAdapterDictionaries(columns []typedColumnAdapterColumn) map[string]map[string]int64 {
 	out := make(map[string]map[string]int64)
 	metadata := make(map[string]int64, len(columns))
-	for i, column := range columns {
-		metadata[typedColumnAdapterMetadataKey(column)] = int64(i + 1)
+	metadataCode := int64(1)
+	for _, column := range columns {
+		metadata[typedColumnAdapterMetadataKey(column)] = metadataCode
+		metadataCode++
+		if column.Field.ValueType == ColumnStoreValueString {
+			metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity)] = metadataCode
+			metadataCode++
+			metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder)] = metadataCode
+			metadataCode++
+			metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation)] = metadataCode
+			metadataCode++
+		}
 		if len(column.Dictionary) != 0 {
 			out[column.Definition.Name] = column.Dictionary
 		}
@@ -1552,6 +1584,9 @@ func typedColumnAdapterPrepareStringPredicateScanPart(fields []TypedStorageField
 	if err != nil {
 		return typedColumnStringPredicatePreparedPart{}, err
 	}
+	if _, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image); err != nil {
+		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed-column string predicate scan dictionary/layout identity validation: %w", err)
+	}
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
 		return typedColumnStringPredicatePreparedPart{}, fmt.Errorf("collections: typed_column_part string predicate scan image/ref mismatch image_part=%d ref_part=%d image_rows=%d typed_manifest_rows=%d physical_rows=%d", image.PartID, refPartID, image.Rows, typedRows, physicalRows)
 	}
@@ -2040,9 +2075,234 @@ func recordTypedColumnSelectionDiagnostics(diag *TypedColumnInt64PredicateScanDi
 }
 
 type typedColumnStringPredicateScanScratch struct {
-	reader typedcolumn.GranuleReader
-	codes  []uint32
-	ids    []int64
+	reader         typedcolumn.GranuleReader
+	codes          []uint32
+	ids            []int64
+	visibilityRows []int
+	selection      typedcolumn.RowSelectionScratch
+	kernel         typedkernel.Scratch
+}
+
+func typedColumnStringPreparedColumnRequests(adapterColumn typedColumnAdapterColumn, op columnsemantics.Operation) []typedColumnPreparedColumnRequest {
+	return []typedColumnPreparedColumnRequest{{Field: adapterColumn.Field, Role: typedcolumn.ColumnRolePredicate, Operation: op, IncludeDictionaries: true}}
+}
+
+func typedColumnPreparedPartDictionaryBytes(preparedPart *typedColumnPreparedPartState) int {
+	if preparedPart == nil {
+		return 0
+	}
+	return preparedPart.Image.CategoryBytes(typedcolumn.ColumnPartImageCategoryDictionaries)
+}
+
+func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPreparedPartState, valueColumn string, codes []uint32, valueByCode map[uint32]string, generation uint64, partID uint64, result *TypedColumnStringPredicateScanResult, visibility *typedColumnLatestPhysicalPart, readRange typedColumnPreparedRangeReader, scratch *typedColumnStringPredicateScanScratch) (bool, error) {
+	if preparedPart == nil {
+		return false, errors.New("nil typed-column prepared part")
+	}
+	preparedColumn := preparedPart.Columns[valueColumn]
+	if preparedColumn == nil {
+		return false, fmt.Errorf("missing prepared value column %q", valueColumn)
+	}
+	idCol, ok := preparedPart.PhysicalColumns[typedColumnAdapterPrimaryIDColumn]
+	if !ok {
+		return false, fmt.Errorf("missing primary id column %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	idSection, ok := typedColumnAdapterColumnDataSection(preparedPart.Image, typedColumnAdapterPrimaryIDColumn)
+	if !ok {
+		return false, fmt.Errorf("missing primary id section %q", typedColumnAdapterPrimaryIDColumn)
+	}
+	if idCol.Definition.Type != typedcolumn.ColumnTypeInt64 || idCol.Definition.Encoding != typedcolumn.EncodingRawInt64 {
+		return false, fmt.Errorf("primary id column %q type=%s encoding=%s", typedColumnAdapterPrimaryIDColumn, idCol.Definition.Type, idCol.Definition.Encoding)
+	}
+	cardinality := preparedColumn.Column.Definition.Cardinality
+	if cardinality == 0 {
+		return false, fmt.Errorf("typed-column string predicate column %q has zero cardinality", valueColumn)
+	}
+	if scratch == nil {
+		scratch = &typedColumnStringPredicateScanScratch{}
+	}
+	idBlockIndex := 0
+	decodedAny := false
+	for blockIdx := range preparedColumn.BlockPlans {
+		block := &preparedColumn.BlockPlans[blockIdx]
+		result.Diagnostics.BlocksConsidered++
+		if block.CandidateSelection.IsEmpty() {
+			result.Diagnostics.BlocksPruned++
+			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, block.CandidateSelection)
+			continue
+		}
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return false, fmt.Errorf("value column %q block first_row=%d min/max [%d,%d] outside cardinality %d", valueColumn, block.Descriptor.FirstRow, g.Min, g.Max, cardinality)
+			}
+			if !typedColumnStringCodesIntersectMinMax(codes, uint32(g.Min), uint32(g.Max)) {
+				result.Diagnostics.BlocksPruned++
+				continue
+			}
+		}
+		payload, err := readRange(block.PayloadOffset, block.PayloadLength, false)
+		if err != nil {
+			return false, fmt.Errorf("read column %q block %d payload: %w", valueColumn, block.Index, err)
+		}
+		if len(payload) != block.PayloadLength {
+			return false, fmt.Errorf("typed-column string predicate column %q block %d payload bytes=%d want %d", valueColumn, block.Index, len(payload), block.PayloadLength)
+		}
+		granule := g
+		granule.Payload = payload
+		granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: block.PayloadLength}
+		if err := preparedColumn.Plan.Layout.ValidateGranulePayload(granule, payload); err != nil {
+			return false, err
+		}
+		selection := block.CandidateSelection
+		if len(codes) == 1 {
+			selection, err = typedkernel.SelectDictionaryCode(typedkernel.DictionaryPredicateRequest{Rows: block.Descriptor.RowCount, Selection: selection, Granule: granule, HasGranule: true, Reader: &scratch.reader, Code: codes[0]}, &scratch.kernel)
+		} else {
+			selection, err = typedkernel.SelectDictionaryCodesIn(typedkernel.DictionaryPredicateRequest{Rows: block.Descriptor.RowCount, Selection: selection, Granule: granule, HasGranule: true, Reader: &scratch.reader, Codes: codes}, &scratch.kernel)
+		}
+		if err != nil {
+			return false, err
+		}
+		result.Diagnostics.KernelBlocks++
+		result.Diagnostics.KernelSelectedBlocks++
+		if visibility != nil && !selection.IsEmpty() {
+			visibilitySelection, err := typedColumnStringVisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, scratch)
+			if err != nil {
+				return false, err
+			}
+			selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &scratch.selection)
+			if err != nil {
+				return false, err
+			}
+			result.Diagnostics.SelectionCompositions++
+		}
+		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		if selection.IsEmpty() {
+			continue
+		}
+		idBlock, ok := typedColumnAlignedBlock(idCol.Blocks, &idBlockIndex, block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		if !ok {
+			return false, fmt.Errorf("missing aligned primary-id block first_row=%d rows=%d", block.Descriptor.FirstRow, block.Descriptor.RowCount)
+		}
+		idPayloadOffset := idSection.Offset
+		for i := 0; i < idBlockIndex; i++ {
+			idPayloadOffset += idCol.Blocks[i].Descriptor.StoredBytes
+		}
+		idPayload, err := readRange(idPayloadOffset, idBlock.Descriptor.StoredBytes, false)
+		if err != nil {
+			return false, fmt.Errorf("read primary-id block first_row=%d payload: %w", idBlock.Descriptor.FirstRow, err)
+		}
+		idGranule := idBlock.Granule
+		idGranule.Payload = idPayload
+		idGranule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: idBlock.Descriptor.StoredBytes}
+		ids, err := scratch.reader.DecodeInt64Into(scratch.ids[:0], idGranule)
+		if err != nil {
+			return false, err
+		}
+		scratch.ids = ids
+		if len(ids) != block.Descriptor.RowCount {
+			return false, fmt.Errorf("decoded primary ids=%d want %d", len(ids), block.Descriptor.RowCount)
+		}
+		var codesForRows []uint32
+		if len(codes) != 1 {
+			codesForRows, err = scratch.reader.DecodeUint32CodesInto(scratch.codes[:0], granule)
+			if err != nil {
+				return false, err
+			}
+			scratch.codes = codesForRows
+			if len(codesForRows) != block.Descriptor.RowCount {
+				return false, fmt.Errorf("decoded codes=%d want %d", len(codesForRows), block.Descriptor.RowCount)
+			}
+		}
+		decodedAny = true
+		result.Diagnostics.BlocksDecoded++
+		result.Diagnostics.DecodedHeapCopyBytes += uint64(block.PayloadLength + idBlock.Descriptor.StoredBytes)
+		result.Diagnostics.RowsScanned += block.Descriptor.RowCount
+		var forEachErr error
+		selection.ForEach(func(row int) {
+			if forEachErr != nil {
+				return
+			}
+			if row < 0 || row >= len(ids) {
+				forEachErr = fmt.Errorf("typed-column string predicate selection row=%d outside ids=%d first_row=%d rows=%d", row, len(ids), block.Descriptor.FirstRow, block.Descriptor.RowCount)
+				return
+			}
+			matchedValue := valueByCode[codes[0]]
+			if len(codes) != 1 {
+				matchedValue = valueByCode[codesForRows[row]]
+			}
+			rowIndex := block.Descriptor.FirstRow + row
+			out := TypedColumnStringPredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: ids[row], Value: matchedValue}
+			if visibility != nil {
+				out.Generation = visibility.Ref.Generation
+				out.PartID = visibility.Ref.PartID
+				out.DocumentID = visibility.documentID(rowIndex)
+			}
+			result.Rows = append(result.Rows, out)
+			result.Diagnostics.RowsMatched++
+			result.Diagnostics.CodesMatched++
+		})
+		if forEachErr != nil {
+			return false, forEachErr
+		}
+	}
+	return !decodedAny && len(preparedColumn.BlockPlans) != 0, nil
+}
+
+func typedColumnStringCodesIntersectMinMax(codes []uint32, minCode uint32, maxCode uint32) bool {
+	for _, code := range codes {
+		if code >= minCode && code <= maxCode {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnStringVisibilitySelectionForBlock(visibility *typedColumnLatestPhysicalPart, firstRow int, rowCount int, scratch *typedColumnStringPredicateScanScratch) (typedcolumn.RowSelection, error) {
+	if visibility == nil {
+		return typedcolumn.NewAllRowSelection(rowCount)
+	}
+	scratch.visibilityRows = scratch.visibilityRows[:0]
+	for offset := 0; offset < rowCount; offset++ {
+		if visibility.rowVisible(firstRow + offset) {
+			scratch.visibilityRows = append(scratch.visibilityRows, offset)
+		}
+	}
+	return typedcolumn.NewSparseRowSelectionNoCopy(rowCount, scratch.visibilityRows)
+}
+
+func typedColumnStringResolvePreparedCodes(column *typedColumnPreparedColumnState, values []string) ([]uint32, map[uint32]string, bool, error) {
+	if column == nil {
+		return nil, nil, false, errors.New("collections: typed-column string prepared state missing column")
+	}
+	if column.Column.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || column.Column.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return nil, nil, false, fmt.Errorf("collections: typed-column string prepared column %q type=%s encoding=%s", column.Plan.Definition.Name, column.Column.Definition.Type, column.Column.Definition.Encoding)
+	}
+	if len(values) == 0 {
+		return nil, nil, false, nil
+	}
+	valueByCode := make(map[uint32]string, len(values))
+	seenValues := make(map[string]struct{}, len(values))
+	codes := make([]uint32, 0, len(values))
+	for _, value := range values {
+		if _, dup := seenValues[value]; dup {
+			continue
+		}
+		seenValues[value] = struct{}{}
+		code, ok := column.Dictionaries[value]
+		if !ok {
+			continue
+		}
+		if code < 0 || uint64(code) >= uint64(column.Column.Definition.Cardinality) || uint64(code) > uint64(^uint32(0)) {
+			return nil, nil, false, fmt.Errorf("collections: typed-column string dictionary code %d for column %q outside cardinality %d", code, column.Plan.Definition.Name, column.Column.Definition.Cardinality)
+		}
+		u32 := uint32(code)
+		if _, exists := valueByCode[u32]; exists {
+			continue
+		}
+		valueByCode[u32] = value
+		codes = append(codes, u32)
+	}
+	return codes, valueByCode, len(codes) != 0, nil
 }
 
 func scanTypedColumnStringPredicatePartWithVisibility(part *typedcolumn.ColumnPart, valueColumn string, code uint32, value string, generation uint64, partID uint64, result *TypedColumnStringPredicateScanResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnStringPredicateScanScratch) (bool, error) {

@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: Apple M3
+BenchmarkTypedColumnStringPredicatePreparedHot/rows_1000000/path_prepared_dictionary_kernel/equality_selective-8         	   10000	    460125 ns/op	       124.0 blocks_considered/op	        16.00 blocks_decoded/op	       108.0 blocks_pruned/op	        16.00 codes_matched/op	   1179680 decoded_bytes/op	         0 decoded_metadata_bytes/op	       542.0 dictionary_bytes/session	         0 dictionary_bytes_decoded/op	         0 document_materializations/op	         0 document_reconstructions/op	   1179680 heap_copy_bytes/op	  41068280 heap_copy_bytes/session	        16.00 kernel_blocks/op	        16.00 kernel_selected_blocks/op	         0 mapped_bytes/op	     33288 matches/sec	      2080 ops/sec	         2.000 parts_considered/op	         1.000 parts_decoded/op	         1.000 parts_pruned/op	  41068280 physical_bytes/session	   1179680 physical_bytes_scanned/op	   1179680 range_bytes_read/op	         0 row_materializations/op	 272695124 rows/sec	        16.00 rows_matched/op	    131072 rows_scanned/op	         0 section_bytes_read/op	         0 selection_all_blocks/op	         0 selection_bitmap_blocks/op	         0 selection_compositions/op	         0 selection_empty_blocks/op	        16.00 selection_range_blocks/op	         0 selection_ranges_blocks/op	         0 selection_sparse_blocks/op	       1 B/op	       0 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	13.093s

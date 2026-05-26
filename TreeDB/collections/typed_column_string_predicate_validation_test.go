@@ -107,7 +107,30 @@ func TestTypedColumnStringPredicateDictionaryMetadataFailsClosed(t *testing.T) {
 			mutate: func(dicts map[string]map[string]int64) {
 				delete(dicts[typedColumnAdapterMetadataDictionary], typedColumnAdapterMetadataKey(part.Columns[0]))
 			},
-			wantErr: "metadata dictionary",
+			wantErr: "value type metadata mismatch",
+		},
+		{
+			name: "missing_dictionary_identity_metadata",
+			mutate: func(dicts map[string]map[string]int64) {
+				delete(dicts[typedColumnAdapterMetadataDictionary], typedColumnAdapterMetadataEntryKey(part.Columns[0], typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity))
+			},
+			wantErr: "dictionary identity metadata mismatch",
+		},
+		{
+			name: "mismatched_dictionary_order_metadata",
+			mutate: func(dicts map[string]map[string]int64) {
+				delete(dicts[typedColumnAdapterMetadataDictionary], typedColumnAdapterMetadataEntryKey(part.Columns[0], typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
+				dicts[typedColumnAdapterMetadataDictionary][typedColumnAdapterMetadataEntryKey(part.Columns[0], typedColumnAdapterMetadataDictionaryOrderMark, "lexical")] = 99
+			},
+			wantErr: "dictionary order metadata mismatch",
+		},
+		{
+			name: "mismatched_dictionary_collation_metadata",
+			mutate: func(dicts map[string]map[string]int64) {
+				delete(dicts[typedColumnAdapterMetadataDictionary], typedColumnAdapterMetadataEntryKey(part.Columns[0], typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
+				dicts[typedColumnAdapterMetadataDictionary][typedColumnAdapterMetadataEntryKey(part.Columns[0], typedColumnAdapterMetadataDictionaryCollationMark, "unicode-codepoint-v1")] = 100
+			},
+			wantErr: "dictionary collation metadata mismatch",
 		},
 		{
 			name: "missing_dictionary",
@@ -153,7 +176,32 @@ func TestTypedColumnStringPredicateDictionaryMetadataFailsClosed(t *testing.T) {
 	}
 }
 
-func TestTypedColumnStringPredicatePayloadCodeOutsideCardinalityFailsClosed(t *testing.T) {
+func TestTypedColumnStringPredicateLayoutDictionaryIdentityFailsClosed(t *testing.T) {
+	field := typedColumnStringPredicateField(false)
+	part := typedColumnStringPredicateBuildPart(t, field, []string{"alpha", "beta", "gamma"})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	corrupt := image
+	corrupt.Bytes = bytes.Clone(image.Bytes)
+	for _, section := range corrupt.Sections {
+		if section.Kind == typedcolumn.ColumnPartImageSectionDictionaries {
+			if section.Length == 0 {
+				t.Fatalf("dictionary section is empty: %+v", section)
+			}
+			corrupt.Bytes[section.Offset+section.Length-1] ^= 0x01
+			_, err = typedColumnAdapterPrepareStringPredicateScanPart([]TypedStorageField{field}, corrupt.Bytes, corrupt.PartID, corrupt.Rows, corrupt.Rows, uint64(part.Part.Descriptor.SchemaVersion), "kind", "beta")
+			if err == nil || !strings.Contains(err.Error(), "dictionary/layout identity validation") || !strings.Contains(err.Error(), "checksum") {
+				t.Fatalf("prepare corrupt dictionary layout err=%v want identity checksum failure", err)
+			}
+			return
+		}
+	}
+	t.Fatal("missing dictionaries section")
+}
+
+func TestTypedColumnStringPredicatePayloadCodeCorruptionFailsClosedAtLayoutValidation(t *testing.T) {
 	field := typedColumnStringPredicateField(false)
 	part := typedColumnStringPredicateBuildPart(t, field, []string{"alpha", "beta", "gamma"})
 	image, err := part.buildImage()
@@ -171,18 +219,9 @@ func TestTypedColumnStringPredicatePayloadCodeOutsideCardinalityFailsClosed(t *t
 	// The adapter builds uncompressed uint8 code payloads for this small dictionary.
 	corrupt.Bytes[section.Offset+2] = byte(part.Part.Columns["kind"].Definition.Cardinality)
 
-	prepared, err := typedColumnAdapterPrepareStringPredicateScanPart([]TypedStorageField{field}, corrupt.Bytes, corrupt.PartID, corrupt.Rows, corrupt.Rows, uint64(part.Part.Descriptor.SchemaVersion), "kind", "alpha")
-	if err != nil {
-		t.Fatalf("prepare corrupt payload: %v", err)
-	}
-	_, _, _, err = scanTypedColumnStringEqualityPredicateCodes(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, prepared.QueryCodeFound, nil)
-	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
-		t.Fatalf("scan corrupt code err=%v want outside cardinality", err)
-	}
-	result := TypedColumnStringPredicateScanResult{}
-	_, err = scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, "alpha", corrupt.PartID, corrupt.PartID, &result, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "outside cardinality") {
-		t.Fatalf("production scan corrupt code err=%v want outside cardinality", err)
+	_, err = typedColumnAdapterPrepareStringPredicateScanPart([]TypedStorageField{field}, corrupt.Bytes, corrupt.PartID, corrupt.Rows, corrupt.Rows, uint64(part.Part.Descriptor.SchemaVersion), "kind", "alpha")
+	if err == nil || !strings.Contains(err.Error(), "dictionary/layout identity validation") || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("prepare corrupt payload err=%v want layout checksum rejection", err)
 	}
 }
 
