@@ -113,6 +113,28 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 		}
 	}
 
+	for _, tc := range []struct {
+		logical  columnsemantics.LogicalType
+		physical typedcolumn.ColumnType
+		encoding typedcolumn.Encoding
+		width    int
+	}{
+		{columnsemantics.LogicalFloat32, typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32, 4},
+		{columnsemantics.LogicalDouble, typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64, 8},
+	} {
+		native := CapabilitiesFor(Descriptor{Logical: tc.logical, Physical: tc.physical, Encoding: tc.encoding, Compression: typedcolumn.CompressionNone})
+		if !native.Layout.FixedWidth || native.Layout.ElementWidthBytes != tc.width || native.Layout.Endian != EndianLittle || !native.DirectView.Eligible || native.Reducers.Int64NumericAggregate || native.Stats.MinMax || native.Pruning.ValueRows {
+			t.Fatalf("native %s caps=%+v", tc.logical, native)
+		}
+		if cap := native.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); !cap.Supported() {
+			t.Fatalf("native %s direct scalar cap=%+v want supported", tc.logical, cap)
+		}
+		g := typedcolumn.EncodedGranule{Rows: 3, Encoding: tc.encoding, Compression: typedcolumn.CompressionNone, RawBytes: 3 * tc.width, StoredBytes: 3 * tc.width, PayloadRef: typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: 3 * tc.width}}
+		if err := native.ValidateGranule(g); err != nil {
+			t.Fatalf("native %s ValidateGranule: %v", tc.logical, err)
+		}
+	}
+
 	nullableFloat := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalFloat32, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingNullableInt64, Compression: typedcolumn.CompressionNone, Nullable: true, Defaultable: true})
 	if !nullableFloat.Wrappers.CarrierAggregateUnsafe || nullableFloat.Stats.MinMax || nullableFloat.Stats.Sum || nullableFloat.Pruning.ValueRows {
 		t.Fatalf("nullable float caps=%+v want wrapper fallback with stats/pruning disabled", nullableFloat)

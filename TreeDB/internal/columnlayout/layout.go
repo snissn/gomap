@@ -299,6 +299,30 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 				caps.Pruning.LexicalDictionary = true
 			}
 		}
+	case typedcolumn.EncodingRawFloat32:
+		caps.Layout.Kind = LayoutFixedWidth
+		caps.Layout.FixedWidth = true
+		caps.Layout.ElementWidthBytes = 4
+		caps.Layout.Endian = EndianLittle
+		caps.Layout.AlignmentBytes = 4
+		caps.Layout.LengthMultipleBytes = 4
+		if desc.Logical == columnsemantics.LogicalFloat32 && desc.Physical == typedcolumn.ColumnTypeFloat32 {
+			caps.DirectView = directView(desc, 4, EndianLittle, 4)
+		} else {
+			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		}
+	case typedcolumn.EncodingRawFloat64:
+		caps.Layout.Kind = LayoutFixedWidth
+		caps.Layout.FixedWidth = true
+		caps.Layout.ElementWidthBytes = 8
+		caps.Layout.Endian = EndianLittle
+		caps.Layout.AlignmentBytes = 8
+		caps.Layout.LengthMultipleBytes = 8
+		if desc.Logical == columnsemantics.LogicalDouble && desc.Physical == typedcolumn.ColumnTypeFloat64 {
+			caps.DirectView = directView(desc, 8, EndianLittle, 8)
+		} else {
+			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 8, AlignmentBytes: 8, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		}
 	case typedcolumn.EncodingRawFloat32Vector:
 		caps.Layout.Kind = LayoutFixedWidth
 		caps.Layout.FixedWidth = true
@@ -602,7 +626,15 @@ func (c Capabilities) supportsDirectScalarValueCarrier() Capability {
 	switch c.Descriptor.Logical {
 	case columnsemantics.LogicalInt64:
 		return c.Supports(OpDirectView)
-	case columnsemantics.LogicalFloat32, columnsemantics.LogicalDouble:
+	case columnsemantics.LogicalFloat32:
+		if c.Descriptor.Physical == typedcolumn.ColumnTypeFloat32 && c.Descriptor.Encoding == typedcolumn.EncodingRawFloat32 {
+			return c.Supports(OpDirectView)
+		}
+		return Unsupported(op, ReasonFloatBitPatternNotNumeric, "float bit-pattern storage is not a direct scalar value carrier")
+	case columnsemantics.LogicalDouble:
+		if c.Descriptor.Physical == typedcolumn.ColumnTypeFloat64 && c.Descriptor.Encoding == typedcolumn.EncodingRawFloat64 {
+			return c.Supports(OpDirectView)
+		}
 		return Unsupported(op, ReasonFloatBitPatternNotNumeric, "float bit-pattern storage is not a direct scalar value carrier")
 	case columnsemantics.LogicalFloat32Vector:
 		return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar direct-value carriers")
@@ -657,6 +689,10 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		case typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingNullableInt64:
 			return ReasonSupported, true
 		}
+	case typedcolumn.ColumnTypeFloat32:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32
+	case typedcolumn.ColumnTypeFloat64:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat64
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeAdjacencyList:

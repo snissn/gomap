@@ -184,8 +184,8 @@ func normalizeAggregateMetadataDefinition(def AggregateMetadataDefinition, colum
 		if !ok {
 			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s predicate column %s is not declared", def.Name, predicate.Column)
 		}
-		if predicateDef.Type == ColumnTypeFloat32Vector || predicateDef.Type == ColumnTypeAdjacencyList {
-			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s predicate column %s type=%s is not scalar", def.Name, predicate.Column, predicateDef.Type)
+		if !isInt64SortCarrier(predicateDef.Type) {
+			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s predicate column %s type=%s is not scalar/int64 predicate carrier", def.Name, predicate.Column, predicateDef.Type)
 		}
 		if _, ok := seenPredicates[predicate.Column]; ok {
 			return AggregateMetadataDefinition{}, fmt.Errorf("typedcolumn: aggregate metadata %s duplicate predicate column %s", def.Name, predicate.Column)

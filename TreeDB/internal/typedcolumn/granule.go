@@ -27,6 +27,8 @@ const (
 	EncodingLowCardinalityUint32
 	EncodingRawFloat32Vector
 	EncodingRawUint32Dense
+	EncodingRawFloat32
+	EncodingRawFloat64
 )
 
 func (e Encoding) String() string {
@@ -47,6 +49,10 @@ func (e Encoding) String() string {
 		return "raw_float32_vector"
 	case EncodingRawUint32Dense:
 		return "raw_uint32_dense"
+	case EncodingRawFloat32:
+		return "raw_float32"
+	case EncodingRawFloat64:
+		return "raw_float64"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}
@@ -182,6 +188,8 @@ type GranuleReader struct {
 	nulls    []bool
 	defaults []bool
 	codes    []uint32
+	float32s []float32
+	float64s []float64
 }
 
 func (r *GranuleReader) DecodeInt64(g EncodedGranule) ([]int64, error) {
@@ -278,7 +286,7 @@ func (r *GranuleReader) CountSumInt64(g EncodedGranule) (int, int64, error) {
 			return 0, 0, fmt.Errorf("typedcolumn: raw int64 length=%d rows=%d", len(raw), g.Rows)
 		}
 		for row := 0; row < g.Rows; row++ {
-			v := int64(binary.LittleEndian.Uint64(raw[row*8:]))
+			v := int64(readLittleEndianUint64(raw[row*8:]))
 			if err := addCountSumInt64(&sum, v); err != nil {
 				return 0, 0, err
 			}
@@ -405,16 +413,10 @@ func decodeInt64Payload(dst []int64, raw []byte, g EncodedGranule) ([]int64, err
 	out := dst[:0]
 	switch g.Encoding {
 	case EncodingRawInt64:
-		if len(raw)%8 != 0 || len(raw)/8 != g.Rows {
-			return nil, fmt.Errorf("typedcolumn: raw int64 length=%d rows=%d", len(raw), g.Rows)
-		}
-		if cap(out) < g.Rows {
-			out = make([]int64, g.Rows)
-		} else {
-			out = out[:g.Rows]
-		}
-		for i := range out {
-			out[i] = int64(binary.LittleEndian.Uint64(raw[i*8:]))
+		var err error
+		out, err = decodeLittleEndian8Payload(out, raw, g.Rows, "raw int64")
+		if err != nil {
+			return nil, err
 		}
 	case EncodingDeltaVarint:
 		var err error
@@ -478,16 +480,7 @@ func newEncodedGranule(rows int, min int64, max int64, hasMinMax bool, encoding 
 func encodeInt64Payload(dst []byte, values []int64, encoding Encoding) ([]byte, error) {
 	switch encoding {
 	case EncodingRawInt64:
-		need := len(values) * 8
-		if cap(dst) < need {
-			dst = make([]byte, need)
-		} else {
-			dst = dst[:need]
-		}
-		for i, v := range values {
-			binary.LittleEndian.PutUint64(dst[i*8:], uint64(v))
-		}
-		return dst, nil
+		return encodeLittleEndian8Payload(dst, values, "raw int64")
 	case EncodingDeltaVarint:
 		if cap(dst) < len(values)*2 {
 			dst = make([]byte, 0, len(values)*2)
@@ -633,7 +626,7 @@ func (c *int64Cursor) Next() (int64, error) {
 	}
 	switch c.encoding {
 	case EncodingRawInt64:
-		v := int64(binary.LittleEndian.Uint64(c.raw[c.row*8:]))
+		v := int64(readLittleEndianUint64(c.raw[c.row*8:]))
 		c.row++
 		c.offset = c.row * 8
 		return v, nil
@@ -907,6 +900,10 @@ func maxGranuleRawPayloadBytes(encoding Encoding, rows int) int {
 		return 2 + rows*binary.MaxVarintLen64
 	case EncodingLowCardinalityUint32:
 		return 1 + binary.MaxVarintLen64 + rows*4
+	case EncodingRawFloat32:
+		return rows * 4
+	case EncodingRawFloat64:
+		return rows * 8
 	default:
 		return -1
 	}

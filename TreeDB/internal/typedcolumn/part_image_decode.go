@@ -619,6 +619,14 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 			return fmt.Errorf("typedcolumn: descriptor column %s block %d dense raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
 		}
 	}
+	if columnType == ColumnTypeFloat32 || columnType == ColumnTypeFloat64 {
+		if block.Compression != CompressionNone {
+			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
+		}
+		if block.RawBytes != maxRawBytes {
+			return fmt.Errorf("typedcolumn: descriptor column %s block %d fixed-width raw bytes=%d want %d for %d rows", column, blockIndex, block.RawBytes, maxRawBytes, block.RowCount)
+		}
+	}
 	if block.Compression == CompressionNone && block.StoredBytes != block.RawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d uncompressed stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
@@ -717,6 +725,16 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 			return 0, err
 		}
 		return checkedAddInt(2, rleBytes, "bool raw bytes")
+	case ColumnTypeFloat32:
+		if encoding != EncodingRawFloat32 {
+			return 0, fmt.Errorf("unsupported float32 encoding %d", encoding)
+		}
+		return checkedMulInt(rows, 4, "float32 raw bytes")
+	case ColumnTypeFloat64:
+		if encoding != EncodingRawFloat64 {
+			return 0, fmt.Errorf("unsupported float64 encoding %d", encoding)
+		}
+		return checkedMulInt(rows, 8, "float64 raw bytes")
 	case ColumnTypeFloat32Vector:
 		if encoding != EncodingRawFloat32Vector {
 			return 0, fmt.Errorf("unsupported float32_vector encoding %d", encoding)
@@ -2205,6 +2223,10 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 		return ColumnTypeFloat32Vector, nil
 	case 5:
 		return ColumnTypeAdjacencyList, nil
+	case 6:
+		return ColumnTypeFloat32, nil
+	case 7:
+		return ColumnTypeFloat64, nil
 	default:
 		return "", fmt.Errorf("typedcolumn: unknown column type code %d", code)
 	}
