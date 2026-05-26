@@ -3,6 +3,7 @@ package typedcolumn
 import (
 	"errors"
 	"fmt"
+	"math/bits"
 )
 
 const maxAggregateCells = 1 << 20
@@ -38,6 +39,33 @@ func (a *AggregateArena) GroupedCountCodes(granules []EncodedGranule, cardinalit
 			counts[code]++
 			return nil
 		}); err != nil {
+			return nil, err
+		}
+	}
+	a.counts = counts
+	return counts, nil
+}
+
+// GroupedCountCodesSelected returns arena-owned count storage for one selection
+// per granule. It is the dictionary-code reducer substrate for callers that
+// already resolved visibility/category predicates into RowSelection values.
+// The returned slice is valid only until the next AggregateArena operation or
+// Reset.
+func (a *AggregateArena) GroupedCountCodesSelected(granules []EncodedGranule, selections []RowSelection, cardinality uint32) ([]uint64, error) {
+	if err := validateUint32CodeSelectedGranules(granules, selections); err != nil {
+		return nil, err
+	}
+	counts, err := a.prepareCounts(granules, cardinality)
+	if err != nil {
+		return nil, err
+	}
+	clear(counts)
+	for i, g := range granules {
+		header, err := a.reader.uint32CodesHeader(g)
+		if err != nil {
+			return nil, err
+		}
+		if err := addUint32CodeCountsSelection(header, selections[i], counts); err != nil {
 			return nil, err
 		}
 	}
@@ -162,6 +190,42 @@ func (a *AggregateArena) ExactDistinctCodes(granules []EncodedGranule, cardinali
 	return distinct, nil
 }
 
+// ExactDistinctCodesSelected returns an exact distinct code count over one
+// selection per granule without materializing strings or full code slices.
+func (a *AggregateArena) ExactDistinctCodesSelected(granules []EncodedGranule, selections []RowSelection, cardinality uint32) (int, error) {
+	if err := validateUint32CodeSelectedGranules(granules, selections); err != nil {
+		return 0, err
+	}
+	cardinality, err := inferCodeCardinality(granules, cardinality)
+	if err != nil {
+		return 0, err
+	}
+	words := (int(cardinality) + 63) / 64
+	if words > maxAggregateCells {
+		return 0, fmt.Errorf("typedcolumn: code distinct words=%d exceeds cap %d", words, maxAggregateCells)
+	}
+	if cap(a.codeBits) < words {
+		a.codeBits = make([]uint64, words)
+	} else {
+		a.codeBits = a.codeBits[:words]
+	}
+	clear(a.codeBits)
+	for i, g := range granules {
+		header, err := a.reader.uint32CodesHeader(g)
+		if err != nil {
+			return 0, err
+		}
+		if err := markUint32DistinctCodesSelection(header, selections[i], cardinality, a.codeBits); err != nil {
+			return 0, err
+		}
+	}
+	distinct := 0
+	for _, word := range a.codeBits {
+		distinct += popcount64(word)
+	}
+	return distinct, nil
+}
+
 func (a *AggregateArena) ExactDistinctInt64(granules []EncodedGranule) (int, error) {
 	if a.seenInt64 == nil {
 		a.seenInt64 = make(map[int64]struct{})
@@ -275,6 +339,124 @@ func (a *AggregateArena) TimeBucketedCountCodes(codeGranules []EncodedGranule, t
 		Cardinality: cardinality,
 		Counts:      a.bucketCounts,
 	}, nil
+}
+
+func addUint32CodeCountsSelection(header uint32CodesHeader, selection RowSelection, counts []uint64) error {
+	addRow := func(row int) error {
+		code := readUint32Code(header.data, header.width, row)
+		if code >= header.cardinality || int(code) >= len(counts) {
+			return fmt.Errorf("typedcolumn: code %d outside counts", code)
+		}
+		counts[code]++
+		return nil
+	}
+	addRange := func(start, end int) error {
+		for row := start; row < end; row++ {
+			if err := addRow(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	switch selection.Kind() {
+	case RowSelectionEmpty:
+		return nil
+	case RowSelectionAll:
+		return addRange(0, selection.Rows())
+	case RowSelectionRange:
+		start, end, _ := selection.SingleRange()
+		return addRange(start, end)
+	case RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			if err := addRange(r.Start, r.End); err != nil {
+				return err
+			}
+		}
+		return nil
+	case RowSelectionBitmap:
+		for wordIndex, word := range selection.BitmapWords() {
+			for word != 0 {
+				bit := bits.TrailingZeros64(word)
+				row := wordIndex*64 + bit
+				if row >= selection.Rows() {
+					break
+				}
+				if err := addRow(row); err != nil {
+					return err
+				}
+				word &^= uint64(1) << uint(bit)
+			}
+		}
+		return nil
+	case RowSelectionSparse:
+		for _, row := range selection.SparseRows() {
+			if err := addRow(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("typedcolumn: unsupported code row selection shape %s", selection.Shape().Kind)
+	}
+}
+
+func markUint32DistinctCodesSelection(header uint32CodesHeader, selection RowSelection, cardinality uint32, out []uint64) error {
+	markRow := func(row int) error {
+		code := readUint32Code(header.data, header.width, row)
+		if code >= header.cardinality || code >= cardinality || int(code/64) >= len(out) {
+			return fmt.Errorf("typedcolumn: code %d outside cardinality %d", code, cardinality)
+		}
+		out[code/64] |= uint64(1) << uint(code%64)
+		return nil
+	}
+	markRange := func(start, end int) error {
+		for row := start; row < end; row++ {
+			if err := markRow(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	switch selection.Kind() {
+	case RowSelectionEmpty:
+		return nil
+	case RowSelectionAll:
+		return markRange(0, selection.Rows())
+	case RowSelectionRange:
+		start, end, _ := selection.SingleRange()
+		return markRange(start, end)
+	case RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			if err := markRange(r.Start, r.End); err != nil {
+				return err
+			}
+		}
+		return nil
+	case RowSelectionBitmap:
+		for wordIndex, word := range selection.BitmapWords() {
+			for word != 0 {
+				bit := bits.TrailingZeros64(word)
+				row := wordIndex*64 + bit
+				if row >= selection.Rows() {
+					break
+				}
+				if err := markRow(row); err != nil {
+					return err
+				}
+				word &^= uint64(1) << uint(bit)
+			}
+		}
+		return nil
+	case RowSelectionSparse:
+		for _, row := range selection.SparseRows() {
+			if err := markRow(row); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("typedcolumn: unsupported code row selection shape %s", selection.Shape().Kind)
+	}
 }
 
 func (a *AggregateArena) prepareCounts(granules []EncodedGranule, cardinality uint32) ([]uint64, error) {

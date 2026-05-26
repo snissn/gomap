@@ -1,0 +1,137 @@
+package typedcolumn
+
+import "testing"
+
+func TestUint32CodeSelectionParityShapes(t *testing.T) {
+	codes := make([]uint32, 130)
+	for i := range codes {
+		codes[i] = uint32((i*i + 3*i) % 11)
+	}
+	codes[17] = 70000 // force 4-byte code width without affecting target parity.
+	codes[96] = 70000
+	builder := NewGranuleBuilder(Config{Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone})
+	granule, err := builder.BuildUint32Codes(codes, 70001)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes: %v", err)
+	}
+	bitmap := make([]uint64, rowSelectionBitmapWords(len(codes)))
+	for _, row := range []int{0, 2, 5, 17, 31, 64, 65, 96, 127, 129} {
+		bitmap[row/64] |= uint64(1) << uint(row%64)
+	}
+	selections := map[string]RowSelection{
+		"all":    mustCodeSelection(NewAllRowSelection(len(codes))),
+		"empty":  mustCodeSelection(NewEmptyRowSelection(len(codes))),
+		"range":  mustCodeSelection(NewRangeRowSelection(len(codes), 7, 101)),
+		"ranges": mustCodeSelection(NewRangesRowSelection(len(codes), []RowRange{{Start: 1, End: 9}, {Start: 32, End: 47}, {Start: 90, End: len(codes)}})),
+		"bitmap": mustCodeSelection(NewBitmapRowSelection(len(codes), bitmap)),
+		"sparse": mustCodeSelection(NewSparseRowSelection(len(codes), []int{1, 4, 7, 31, 64, 65, 88, 127})),
+	}
+	var reader GranuleReader
+	var scratch Uint32CodeSelectionScratch
+	for name, selection := range selections {
+		for _, target := range []uint32{0, 3, 70000, 90000} {
+			t.Run(name+"/eq", func(t *testing.T) {
+				wantRows := expectedCodeRows(codes, selection, map[uint32]struct{}{target: {}})
+				gotCount, err := reader.CountUint32Code(granule, selection, target)
+				if err != nil {
+					t.Fatalf("CountUint32Code: %v", err)
+				}
+				if gotCount != len(wantRows) {
+					t.Fatalf("CountUint32Code=%d want %d rows=%v", gotCount, len(wantRows), wantRows)
+				}
+				gotSelection, err := reader.SelectUint32Code(granule, selection, target, &scratch)
+				if err != nil {
+					t.Fatalf("SelectUint32Code: %v", err)
+				}
+				if gotRows := gotSelection.AppendRows(nil); !equalCodeRows(gotRows, wantRows) {
+					t.Fatalf("SelectUint32Code rows=%v want %v shape=%+v", gotRows, wantRows, gotSelection.Shape())
+				}
+			})
+		}
+		t.Run(name+"/in", func(t *testing.T) {
+			wantSet := map[uint32]struct{}{2: {}, 5: {}, 70000: {}, 90000: {}}
+			wantRows := expectedCodeRows(codes, selection, wantSet)
+			gotCount, err := reader.CountUint32CodesIn(granule, selection, []uint32{2, 5, 70000, 90000, 5}, &scratch)
+			if err != nil {
+				t.Fatalf("CountUint32CodesIn: %v", err)
+			}
+			if gotCount != len(wantRows) {
+				t.Fatalf("CountUint32CodesIn=%d want %d rows=%v", gotCount, len(wantRows), wantRows)
+			}
+			gotSelection, err := reader.SelectUint32CodesIn(granule, selection, []uint32{2, 5, 70000, 90000, 5}, &scratch)
+			if err != nil {
+				t.Fatalf("SelectUint32CodesIn: %v", err)
+			}
+			if gotRows := gotSelection.AppendRows(nil); !equalCodeRows(gotRows, wantRows) {
+				t.Fatalf("SelectUint32CodesIn rows=%v want %v shape=%+v", gotRows, wantRows, gotSelection.Shape())
+			}
+		})
+	}
+}
+
+func TestAggregateArenaSelectedCodeReducers(t *testing.T) {
+	leftCodes := []uint32{0, 1, 2, 1, 3, 2, 1}
+	rightCodes := []uint32{3, 3, 2, 0, 1, 4}
+	leftBuilder := NewGranuleBuilder(Config{Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone})
+	left, err := leftBuilder.BuildUint32Codes(leftCodes, 5)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes left: %v", err)
+	}
+	rightBuilder := NewGranuleBuilder(Config{Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone})
+	right, err := rightBuilder.BuildUint32Codes(rightCodes, 5)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes right: %v", err)
+	}
+	selections := []RowSelection{
+		mustCodeSelection(NewRangesRowSelection(len(leftCodes), []RowRange{{Start: 1, End: 4}, {Start: 5, End: 7}})),
+		mustCodeSelection(NewBitmapRowSelection(len(rightCodes), []uint64{(1 << 0) | (1 << 2) | (1 << 5)})),
+	}
+	var arena AggregateArena
+	counts, err := arena.GroupedCountCodesSelected([]EncodedGranule{left, right}, selections, 5)
+	if err != nil {
+		t.Fatalf("GroupedCountCodesSelected: %v", err)
+	}
+	wantCounts := []uint64{0, 3, 3, 1, 1}
+	for code, want := range wantCounts {
+		if counts[code] != want {
+			t.Fatalf("count[%d]=%d want %d all=%v", code, counts[code], want, counts)
+		}
+	}
+	distinct, err := arena.ExactDistinctCodesSelected([]EncodedGranule{left, right}, selections, 5)
+	if err != nil {
+		t.Fatalf("ExactDistinctCodesSelected: %v", err)
+	}
+	if distinct != 4 {
+		t.Fatalf("distinct=%d want 4", distinct)
+	}
+}
+
+func expectedCodeRows(codes []uint32, selection RowSelection, want map[uint32]struct{}) []int {
+	rows := selection.AppendRows(nil)
+	out := rows[:0]
+	for _, row := range rows {
+		if _, ok := want[codes[row]]; ok {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func mustCodeSelection(selection RowSelection, err error) RowSelection {
+	if err != nil {
+		panic(err)
+	}
+	return selection
+}
+
+func equalCodeRows(left, right []int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
