@@ -172,6 +172,142 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	}
 }
 
+func TestSearchVectorIndexColumnGraphProjectedDocuments1875(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+
+	full, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            []float32{0, 0, 1},
+		TopK:             2,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex full documents: %v", err)
+	}
+	projected, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:            def.Name,
+		Query:                []float32{0, 0, 1},
+		TopK:                 2,
+		EfSearch:             len(rows),
+		IncludeDocuments:     true,
+		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+		MaxDecodedBlocks:     1,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex projected documents: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, projected, def.Name, 2)
+	if projected.Stats.DocumentsFetched != uint64(len(projected.Results)) || projected.Stats.DocumentFieldsSkipped == 0 || projected.Stats.DocumentFieldsReconstructed == 0 {
+		t.Fatalf("projected stats=%+v want fetched docs, skipped fields, reconstructed fields", projected.Stats)
+	}
+	if projected.Stats.DocumentOutputBytes != projected.Stats.DocumentBytes || projected.Stats.DocumentBytes >= full.Stats.DocumentBytes {
+		t.Fatalf("projected stats=%+v full stats=%+v want output bytes below full document bytes", projected.Stats, full.Stats)
+	}
+	for i := range projected.Results {
+		var doc map[string]any
+		if err := json.Unmarshal(projected.Results[i].Document, &doc); err != nil {
+			t.Fatalf("projected document[%d]=%q invalid JSON: %v", i, projected.Results[i].Document, err)
+		}
+		if _, ok := doc["embedding"]; ok {
+			t.Fatalf("projected document[%d]=%s retained embedding", i, projected.Results[i].Document)
+		}
+		did, didOK := doc["did"].(string)
+		kind, kindOK := doc["kind"].(string)
+		if !didOK || did == "" || !kindOK || kind != "vector" {
+			t.Fatalf("projected document[%d]=%v want selected metadata fields", i, doc)
+		}
+	}
+	secondBefore := append([]byte(nil), projected.Results[1].Document...)
+	_ = append(projected.Results[0].Document, '!')
+	if !bytes.Equal(projected.Results[1].Document, secondBefore) {
+		t.Fatalf("projected response documents share capacity: second=%s want %s", projected.Results[1].Document, secondBefore)
+	}
+	projected.Results[0].Document[0] = 'X'
+	fresh, err := col.Get(projected.Results[0].ID)
+	if err != nil {
+		t.Fatalf("Get after mutating projected response: %v", err)
+	}
+	if len(fresh) == 0 || fresh[0] == 'X' {
+		t.Fatalf("mutating projected response affected stored document: %s", fresh)
+	}
+}
+
+func TestVectorIndexSearcherProjectedDocumentsSnapshotBound1875(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	if err := col.Delete([]byte("doc-a")); err != nil {
+		t.Fatalf("Delete doc-a after opening searcher: %v", err)
+	}
+	got, err := searcher.Search(VectorIndexSearcherSearchOptions{
+		Query:                []float32{1, 0, 0},
+		TopK:                 1,
+		EfSearch:             len(rows),
+		IncludeDocuments:     true,
+		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+	})
+	if err != nil {
+		t.Fatalf("Search projected after delete on bound searcher: %v", err)
+	}
+	if len(got.Results) != 1 || string(got.Results[0].ID) != "doc-a" {
+		t.Fatalf("results=%+v want snapshot-bound doc-a", got.Results)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(got.Results[0].Document, &doc); err != nil {
+		t.Fatalf("projected snapshot document invalid JSON: %v", err)
+	}
+	if doc["did"] != "doc-a" {
+		t.Fatalf("projected snapshot doc=%v want old doc-a", doc)
+	}
+	if _, ok := doc["embedding"]; ok {
+		t.Fatalf("projected snapshot document retained embedding: %s", got.Results[0].Document)
+	}
+	if got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentFieldsSkipped == 0 {
+		t.Fatalf("stats=%+v want row-ref point fetch and skipped projection field", got.Stats)
+	}
+}
+
+func TestSearchVectorIndexProjectionRequiresIncludeDocuments1875(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{{id: "doc-a", vector: []float32{1, 0, 0}}}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	_, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:            def.Name,
+		Query:                []float32{1, 0, 0},
+		TopK:                 1,
+		EfSearch:             len(rows),
+		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "IncludeDocuments") {
+		t.Fatalf("SearchVectorIndex projection without IncludeDocuments err=%v want fail closed", err)
+	}
+}
+
 func TestSearchVectorIndexColumnGraphRetainedFullDocumentsFallbackV4(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -1117,6 +1253,48 @@ func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsV4(b *testing
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
 }
 
+func BenchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsExcludeEmbedding1875(b *testing.B) {
+	const (
+		rows     = 1024
+		dims     = 128
+		m        = 16
+		topK     = 10
+		efSearch = 128
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	query := append([]float32(nil), input[37].vector...)
+	opts := VectorIndexSearchOptions{
+		IndexName:            def.Name,
+		Query:                query,
+		TopK:                 topK,
+		EfSearch:             efSearch,
+		IncludeDocuments:     true,
+		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
+		MaxDecodedBlocks:     1,
+	}
+	warm, err := col.SearchVectorIndex(opts)
+	if err != nil {
+		b.Fatalf("warm SearchVectorIndex: %v", err)
+	}
+	stats := warm.Stats
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := col.SearchVectorIndex(opts)
+		if err != nil {
+			b.Fatalf("SearchVectorIndex: %v", err)
+		}
+		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
+	}
+	b.StopTimer()
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, true)
+}
+
 func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsV4(b *testing.B) {
 	const (
 		rows     = 1024
@@ -1145,6 +1323,57 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsV4(b *t
 		TopK:             topK,
 		EfSearch:         efSearch,
 		IncludeDocuments: true,
+	}
+	if _, err := searcher.Search(opts); err != nil {
+		b.Fatalf("warm Search: %v", err)
+	}
+	measuredStats, err := searcher.Search(opts)
+	if err != nil {
+		b.Fatalf("measure Search stats: %v", err)
+	}
+	stats := measuredStats.Stats
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := searcher.Search(opts)
+		if err != nil {
+			b.Fatalf("Search: %v", err)
+		}
+		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
+	}
+	b.StopTimer()
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
+}
+
+func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsExcludeEmbedding1875(b *testing.B) {
+	const (
+		rows     = 1024
+		dims     = 128
+		m        = 16
+		topK     = 10
+		efSearch = 128
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		b.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	query := append([]float32(nil), input[37].vector...)
+	opts := VectorIndexSearcherSearchOptions{
+		Query:                query,
+		TopK:                 topK,
+		EfSearch:             efSearch,
+		IncludeDocuments:     true,
+		DocumentFetchOptions: DocumentFetchOptions{ExcludePaths: []string{"embedding"}},
 	}
 	if _, err := searcher.Search(opts); err != nil {
 		b.Fatalf("warm Search: %v", err)
@@ -1262,6 +1491,9 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.DocumentsFetched), "docs_fetched/search")
 	b.ReportMetric(float64(stats.DocumentsMissing), "docs_missing/search")
 	b.ReportMetric(float64(stats.DocumentBytes), "doc_B/search")
+	b.ReportMetric(float64(stats.DocumentOutputBytes), "output_B/search")
+	b.ReportMetric(float64(stats.DocumentFieldsReconstructed), "fields_reconstructed/search")
+	b.ReportMetric(float64(stats.DocumentFieldsSkipped), "fields_skipped/search")
 	b.ReportMetric(float64(stats.DocumentFetchNanos), "doc_fetch_ns/search")
 	b.ReportMetric(float64(stats.DocumentRetainedFetches), "doc_retained_fetches/search")
 	b.ReportMetric(float64(stats.DocumentRetainedBytes), "doc_retained_B/search")

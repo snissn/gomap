@@ -168,8 +168,11 @@ type VectorIndexSearchOptions struct {
 	IndexRangeFilter     *VectorIndexRangeFilter
 	ExactFilterMaxDocs   int
 	DisableExactFallback bool
-	// IncludeDocuments materializes full documents after column_graph top-k selection.
+	// IncludeDocuments materializes documents after column_graph top-k selection.
 	IncludeDocuments bool
+	// DocumentFetchOptions controls optional projected final-fetch materialization.
+	// It is used only when IncludeDocuments is true; the zero value returns full documents.
+	DocumentFetchOptions DocumentFetchOptions
 	// MaxDecodedBlocks bounds the physical column row reader cache for column_graph search.
 	MaxDecodedBlocks int
 }

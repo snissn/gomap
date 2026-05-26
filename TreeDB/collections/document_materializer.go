@@ -13,8 +13,22 @@ import (
 
 // DocumentFetchOptions configures snapshot-bound document materialization. The
 // zero value preserves Collection.Get-style full-document output and verified
-// column-asset reads.
+// column-asset reads. Projection paths are explicit JSON top-level fields:
+// IncludePaths is an allowlist when non-empty, ExcludePaths wins over includes,
+// missing fields are ignored, and present JSON null values are preserved. The
+// same projection contract is applied to retained payload fields, typed-row
+// asset fields, and typed-column-part fields.
 type DocumentFetchOptions struct {
+	// IncludePaths is an optional allowlist of top-level JSON fields to return.
+	// When non-empty, fields not listed here are skipped. Nested projection paths
+	// are intentionally unsupported for this pre-alpha API and fail closed.
+	IncludePaths []string
+	// ExcludePaths is an optional denylist of top-level JSON fields to skip.
+	// Excludes take precedence over IncludePaths.
+	ExcludePaths []string
+	// Format selects the materialized document format. The zero value preserves
+	// collection-default output; projected fetches currently require JSON output.
+	Format DocumentFormat
 	// ColumnAssetReadIntegrity controls typed-row/physical row asset reads used
 	// to locate or point-fetch the visible row for a document. Typed-column part
 	// reconstruction uses the prepared read-view cache with verified reads.
@@ -48,11 +62,14 @@ type DocumentFetchResult struct {
 // CollectionReadView fetch. Counters describe the fetch call; AssetActiveHandles
 // is the read view's current mappedresource handle count after the fetch.
 type DocumentMaterializationStats struct {
-	DocumentsRequested uint64
-	DocumentsFetched   uint64
-	DocumentsMissing   uint64
-	DocumentBytes      uint64
-	FetchNanos         int64
+	DocumentsRequested  uint64
+	DocumentsFetched    uint64
+	DocumentsMissing    uint64
+	DocumentBytes       uint64
+	OutputBytes         uint64
+	FieldsReconstructed uint64
+	FieldsSkipped       uint64
+	FetchNanos          int64
 
 	RetainedPayloadFetches uint64
 	RetainedPayloadBytes   uint64
@@ -618,7 +635,7 @@ func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, st
 	return nil
 }
 
-func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
+func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
 	if stats != nil {
 		stats.PointRowFetches++
 	}
@@ -632,10 +649,6 @@ func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapsh
 	}
 	if ref.RowIndex < 0 || ref.RowIndex >= len(block.rowOffsets) {
 		return columnPhysicalVisibleRow{}, fmt.Errorf("collections: document row ref for id %q row_index=%d outside physical rows=%d", string(ref.DocumentID), ref.RowIndex, len(block.rowOffsets))
-	}
-	projection, err := v.pointRowScanProjection(view)
-	if err != nil {
-		return columnPhysicalVisibleRow{}, err
 	}
 	reader := &columnPhysicalRowReader{view: view, projection: projection}
 	row, err := reader.decodeRowFromBlock(block, ref.RowIndex, ref.RowIndex, scratch)
@@ -712,7 +725,10 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 	return block, nil
 }
 
-func (v *CollectionReadView) pointRowScanProjection(view columnPhysicalScanSnapshotView) (columnPhysicalScanProjection, error) {
+func (v *CollectionReadView) pointRowScanProjection(view columnPhysicalScanSnapshotView, projected []string) (columnPhysicalScanProjection, error) {
+	if projected != nil {
+		return newColumnPhysicalScanProjection(view.Config, projected)
+	}
 	if v.pointRowProjection != nil {
 		return *v.pointRowProjection, nil
 	}
@@ -743,6 +759,10 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 	if len(refs) == 0 {
 		return DocumentFetchResponse{}, nil
 	}
+	projection, err := normalizeDocumentFetchProjection(v.catalog.meta, opts)
+	if err != nil {
+		return DocumentFetchResponse{}, err
+	}
 	if !columnStoreCanReconstructDocument(v.catalog.meta) {
 		response := DocumentFetchResponse{Stats: DocumentMaterializationStats{DocumentsRequested: uint64(len(refs)), RowRefUnsupported: 1}}
 		return response, errors.New("collections: document row ref materialization requires typed-storage reconstruction support")
@@ -766,7 +786,7 @@ func (v *CollectionReadView) fetchDocumentsByRowRef(refs []DocumentRowRef, opts 
 			}
 		}
 	}
-	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts)
+	return v.fetchColumnStoreDocumentsByRowRef(response, refs, retained, opts, projection)
 }
 
 func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (DocumentFetchResponse, error) {
@@ -778,6 +798,10 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	}
 	if len(ids) == 0 {
 		return DocumentFetchResponse{}, nil
+	}
+	projection, err := normalizeDocumentFetchProjection(v.catalog.meta, opts)
+	if err != nil {
+		return DocumentFetchResponse{}, err
 	}
 	response, retained, foundCount, err := v.fetchRetainedPayloadsByID(ids)
 	if err != nil {
@@ -795,13 +819,22 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 			if !response.Results[i].Found {
 				continue
 			}
-			documentArena = appendDocumentFetchOwnedBytes(documentArena, retained[i], &response.Results[i])
+			document := retained[i]
+			if projection.active() {
+				var err error
+				document, err = projectJSONDocument(retained[i], projection, &response.Stats)
+				if err != nil {
+					return response, err
+				}
+			}
+			documentArena = appendDocumentFetchOwnedBytes(documentArena, document, &response.Results[i])
 			response.Stats.DocumentsFetched++
 			response.Stats.DocumentBytes += uint64(len(response.Results[i].Document))
+			response.Stats.OutputBytes += uint64(len(response.Results[i].Document))
 		}
 		return response, nil
 	}
-	return v.fetchColumnStoreDocumentsByID(response, ids, retained, expected, opts)
+	return v.fetchColumnStoreDocumentsByID(response, ids, retained, expected, opts, projection)
 }
 
 func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFetchResponse, [][]byte, int, error) {
@@ -839,7 +872,7 @@ func (v *CollectionReadView) fetchRetainedPayloadsByID(ids [][]byte) (DocumentFe
 	return response, retained, foundCount, nil
 }
 
-func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
+func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection) (out DocumentFetchResponse, err error) {
 	out = response
 	cfg := v.catalog.meta.Options.ColumnStore.copy()
 	readIntegrity := opts.ColumnAssetReadIntegrity
@@ -862,6 +895,13 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			return out, err
 		}
 	}
+	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
+	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
+	typedProjection := documentProjectionTypedColumnPartSelection(cfg, selectedColumns)
+	pointProjection, err := v.pointRowScanProjection(view, rowProjection)
+	if err != nil {
+		return out, err
+	}
 	typedColumnCache := v.typedColumnReconstructionCacheForConfig(cfg)
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
@@ -878,7 +918,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 				return out, err
 			}
 		}
-		row, err := v.fetchDocumentPointRow(view, refs[i], &rowScratch, &out.Stats)
+		row, err := v.fetchDocumentPointRow(view, refs[i], pointProjection, &rowScratch, &out.Stats)
 		if err != nil {
 			out.Stats.RowRefValidationFailures++
 			return out, err
@@ -889,12 +929,12 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 
 		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
 		typedStart := time.Now()
-		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch)
+		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch, typedProjection)
 		typedElapsed := time.Since(typedStart)
 		if err != nil {
 			return out, err
 		}
-		if len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg) {
+		if documentProjectionHasSelectedTypedColumn(typedProjection) && (len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg)) {
 			out.Stats.TypedColumnRows++
 		}
 		afterCacheHits, afterCacheMisses, afterPartLoads, afterPartDecodes := typedColumnCacheCounters(typedColumnCache)
@@ -905,11 +945,11 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
 
 		reconstructStart := time.Now()
-		fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
+		fullValues, err := mergeColumnReconstructionValuesProjectedInto(cfg, row.Values, typedValues.Values, selectedColumns, mergeScratch)
 		if err != nil {
 			return out, err
 		}
-		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained[i], row, fullValues)
+		reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjected(cfg, retained[i], row, fullValues, projection, &out.Stats)
 		if err != nil {
 			return out, err
 		}
@@ -918,11 +958,12 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
 		out.Stats.DocumentsFetched++
 		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
+		out.Stats.OutputBytes += uint64(len(out.Results[i].Document))
 	}
 	return out, nil
 }
 
-func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions) (out DocumentFetchResponse, err error) {
+func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions, projection *documentProjection) (out DocumentFetchResponse, err error) {
 	out = response
 	cfg := v.catalog.meta.Options.ColumnStore.copy()
 	readIntegrity := opts.ColumnAssetReadIntegrity
@@ -936,6 +977,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	defer func() {
 		addDocumentMaterializerAssetCounterDeltas(&out.Stats, assetCountersBefore, v.assetCounters())
 	}()
+	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
+	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
+	typedProjection := documentProjectionTypedColumnPartSelection(cfg, selectedColumns)
 	visibleStart := time.Now()
 	visible, err := v.collection.scanColumnPhysicalVisibleRowsAtSnapshotForTargetsWithReadCache(
 		v.snapshot,
@@ -945,7 +989,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		cfg,
 		true,
 		newColumnPhysicalVisibilityTargetIDs(ids),
-		nil,
+		rowProjection,
 		readIntegrity,
 		v.rowAssetReadCache,
 	)
@@ -988,12 +1032,12 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 
 		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
 		typedStart := time.Now()
-		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch)
+		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch, typedProjection)
 		typedElapsed := time.Since(typedStart)
 		if err != nil {
 			return out, err
 		}
-		if len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg) {
+		if documentProjectionHasSelectedTypedColumn(typedProjection) && (len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg)) {
 			out.Stats.TypedColumnRows++
 		}
 		afterCacheHits, afterCacheMisses, afterPartLoads, afterPartDecodes := typedColumnCacheCounters(typedColumnCache)
@@ -1004,11 +1048,11 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
 
 		reconstructStart := time.Now()
-		fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
+		fullValues, err := mergeColumnReconstructionValuesProjectedInto(cfg, row.Values, typedValues.Values, selectedColumns, mergeScratch)
 		if err != nil {
 			return out, err
 		}
-		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained[i], row, fullValues)
+		reconstructed, err := reconstructColumnDocumentFromVisibleRowValuesProjected(cfg, retained[i], row, fullValues, projection, &out.Stats)
 		if err != nil {
 			return out, err
 		}
@@ -1017,6 +1061,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
 		out.Stats.DocumentsFetched++
 		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
+		out.Stats.OutputBytes += uint64(len(out.Results[i].Document))
 	}
 	return out, nil
 }
@@ -1209,6 +1254,9 @@ func addDocumentMaterializationStatsToVectorStats(dst *VectorIndexSearchStats, s
 	dst.DocumentsFetched += src.DocumentsFetched
 	dst.DocumentsMissing += src.DocumentsMissing
 	dst.DocumentBytes += src.DocumentBytes
+	dst.DocumentOutputBytes += src.OutputBytes
+	dst.DocumentFieldsReconstructed += src.FieldsReconstructed
+	dst.DocumentFieldsSkipped += src.FieldsSkipped
 	dst.DocumentFetchNanos += uint64(maxInt64ForMetric(src.FetchNanos, 0))
 	dst.DocumentRetainedFetches += src.RetainedPayloadFetches
 	dst.DocumentRetainedBytes += src.RetainedPayloadBytes
