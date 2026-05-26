@@ -184,6 +184,123 @@ func TestAggregateMetadataTypedColumnPartPreparedRunnerAllocation1786(t *testing
 	}
 }
 
+func TestAggregateMetadataPreparedTopK1871(t *testing.T) {
+	events := []columnPhysicalQueryEventM13B{
+		{ID: "e00", Did: "", TimeUS: 0, Kind: "post"},
+		{ID: "e01", Did: "", TimeUS: 100, Kind: "post"},
+		{ID: "e02", Did: "did:a", TimeUS: 10, Kind: "post"},
+		{ID: "e03", Did: "did:a", TimeUS: 20, Kind: "post"},
+		{ID: "e04", Did: "did:b", TimeUS: 5, Kind: "post"},
+		{ID: "e05", Did: "did:b", TimeUS: 15, Kind: "post"},
+		{ID: "e06", Did: "did:c", TimeUS: 5, Kind: "post"},
+		{ID: "e07", Did: "did:c", TimeUS: 13, Kind: "post"},
+		{ID: "e08", Did: "did:d", TimeUS: 1, Kind: "post"},
+		{ID: "e09", Did: "did:d", TimeUS: 10, Kind: "post"},
+		{ID: "e10", Did: "did:e", TimeUS: 7, Kind: "post"},
+		{ID: "e11", Did: "did:e", TimeUS: 14, Kind: "post"},
+	}
+	d, col := openAggregateMetadataTypedColumnPartFixture1786(t, events)
+	defer func() { _ = d.Close() }()
+
+	tests := []struct {
+		name  string
+		req   ColumnPhysicalQueryRequest
+		want  []ColumnPhysicalQueryGroup
+		order ColumnPhysicalQueryTopKOrder
+	}{
+		{
+			name:  "q4 asc min skips empty",
+			req:   ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3, TopKOrder: ColumnPhysicalQueryTopKInt64Asc, SkipEmptyGroupKey: true},
+			want:  []ColumnPhysicalQueryGroup{{Key: "did:d", Int64: 1}, {Key: "did:b", Int64: 5}, {Key: "did:c", Int64: 5}},
+			order: ColumnPhysicalQueryTopKInt64Asc,
+		},
+		{
+			name:  "q5 desc span skips empty",
+			req:   ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3, TopKOrder: ColumnPhysicalQueryTopKInt64Desc, SkipEmptyGroupKey: true},
+			want:  []ColumnPhysicalQueryGroup{{Key: "did:a", Int64: 10}, {Key: "did:b", Int64: 10}, {Key: "did:d", Int64: 9}},
+			order: ColumnPhysicalQueryTopKInt64Desc,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			oneShot, err := col.RunColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("RunColumnPhysicalQuery: %v", err)
+			}
+			if !equalColumnPhysicalGroups1871(oneShot.Groups, tc.want) {
+				t.Fatalf("one-shot groups=%+v want %+v", oneShot.Groups, tc.want)
+			}
+			runner, err := col.PrepareColumnPhysicalQuery(tc.req)
+			if err != nil {
+				t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+			}
+			defer func() { _ = runner.Close() }()
+			for i := 0; i < 2; i++ {
+				result, err := runner.Run()
+				if err != nil {
+					t.Fatalf("runner Run %d: %v", i, err)
+				}
+				if !equalColumnPhysicalGroups1871(result.Groups, tc.want) {
+					t.Fatalf("groups=%+v want %+v", result.Groups, tc.want)
+				}
+				if result.Diagnostics.RowsScanned != 0 || result.Diagnostics.ReduceRows != len(events) {
+					t.Fatalf("diagnostics=%+v want zero scanned and reduce rows=%d", result.Diagnostics, len(events))
+				}
+				if result.Diagnostics.TopKLimit != 3 || result.Diagnostics.TopKOrder != string(tc.order) || result.Diagnostics.TopKCandidates != 5 || result.Diagnostics.ResultGroups != 3 || result.Diagnostics.ResultShapeNanos <= 0 {
+					t.Fatalf("top-K diagnostics=%+v", result.Diagnostics)
+				}
+			}
+		})
+	}
+
+	allReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}
+	all, err := col.RunColumnPhysicalQuery(allReq)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery all groups: %v", err)
+	}
+	if len(all.Groups) != 6 || all.Groups[0].Key != "" || all.Diagnostics.TopKLimit != 0 {
+		t.Fatalf("all-groups result=%+v diagnostics=%+v", all.Groups, all.Diagnostics)
+	}
+}
+
+func TestAggregateMetadataTopKValidation1871(t *testing.T) {
+	d, col := openAggregateMetadataTypedColumnPartFixture1786(t, columnPhysicalQueryFixtureEventsM13B(16))
+	defer func() { _ = d.Close() }()
+	tests := []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+		want string
+	}{
+		{name: "negative", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: -1}, want: "non-negative"},
+		{name: "missing metadata", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, TopKOrder: ColumnPhysicalQueryTopKInt64Asc}, want: "requires aggregate metadata"},
+		{name: "missing order", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3}, want: "order is required"},
+		{name: "order without limit", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopKOrder: ColumnPhysicalQueryTopKInt64Asc}, want: "requires a positive limit"},
+		{name: "unsupported kind", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3, TopKOrder: ColumnPhysicalQueryTopKInt64Asc}, want: "requires an int64 aggregate kind"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := col.PrepareColumnPhysicalQuery(tc.req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("PrepareColumnPhysicalQuery err=%v want ErrColumnQueryPlanUnsupported containing %q", err, tc.want)
+			}
+		})
+	}
+	if _, err := col.RunColumnPhysicalQueryParallel(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}, 4); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "parallel aggregate metadata") {
+		t.Fatalf("RunColumnPhysicalQueryParallel aggregate metadata err=%v want fail-closed", err)
+	}
+}
+
+func equalColumnPhysicalGroups1871(a, b []ColumnPhysicalQueryGroup) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func openAggregateMetadataTypedColumnPartFixture1786(tb testing.TB, events []columnPhysicalQueryEventM13B) (*backenddb.DB, *Collection) {
 	tb.Helper()
 	d := openTypedColumnInt64ScanDB(tb)
@@ -247,6 +364,10 @@ func BenchmarkAggregateMetadataTypedColumnPart1786(b *testing.B) {
 	const rows = 4096
 	events := columnPhysicalQueryFixtureEventsM13B(rows)
 	reqMetadata := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
+	reqMetadataTopK := reqMetadata
+	reqMetadataTopK.TopK = 3
+	reqMetadataTopK.TopKOrder = ColumnPhysicalQueryTopKInt64Desc
+	reqMetadataTopK.SkipEmptyGroupKey = true
 	reqScan := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
 
 	b.Run("typed_column_metadata", func(b *testing.B) {
@@ -289,6 +410,34 @@ func BenchmarkAggregateMetadataTypedColumnPart1786(b *testing.B) {
 			result, err := runner.Run()
 			if err != nil {
 				b.Fatalf("runner Run metadata: %v", err)
+			}
+			last = result.Diagnostics
+		}
+		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
+	})
+	b.Run("typed_column_metadata_prepared_topk", func(b *testing.B) {
+		d, col := openAggregateMetadataTypedColumnPartFixture1786(b, events)
+		defer func() { _ = d.Close() }()
+		runner, err := col.PrepareColumnPhysicalQuery(reqMetadataTopK)
+		if err != nil {
+			b.Fatalf("PrepareColumnPhysicalQuery top-K metadata: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		preview, err := runner.Run()
+		if err != nil {
+			b.Fatalf("preview prepared top-K metadata: %v", err)
+		}
+		if got, want := len(preview.Groups), 3; got != want {
+			b.Fatalf("preview top-K groups=%d want %d", got, want)
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		for i := 0; i < b.N; i++ {
+			result, err := runner.Run()
+			if err != nil {
+				b.Fatalf("runner Run top-K metadata: %v", err)
 			}
 			last = result.Diagnostics
 		}
@@ -431,6 +580,9 @@ func reportAggregateMetadataPhysicalQueryBench1786(b *testing.B, diag ColumnPhys
 	b.ReportMetric(float64(diag.RowMaterializations), "row_materializations/op")
 	b.ReportMetric(float64(diag.DocumentMaterializations), "document_materializations/op")
 	b.ReportMetric(float64(diag.ReconstructionRows), "reconstruction_rows/op")
+	b.ReportMetric(float64(diag.TopKLimit), "topk_limit/op")
+	b.ReportMetric(float64(diag.TopKCandidates), "topk_candidates/op")
+	b.ReportMetric(float64(diag.ResultShapeNanos), "result_shape_ns/op")
 }
 
 func assertAggregateMetadataTypedColumnDiagnostics1786(t testing.TB, diag ColumnPhysicalQueryDiagnostics, wantRows int) {
