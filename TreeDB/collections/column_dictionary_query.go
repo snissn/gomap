@@ -8,9 +8,9 @@ import (
 
 const (
 	columnDictionaryCodeDistinctMaxSeenWords = 1 << 20
-	// Keep routed one-shot dictionary scans to small/medium payloads for now.
-	// Larger snapshots use the prepared runner path until routed sessions can
-	// reuse decoded dictionaries without moving setup into every query.
+	// Keep deferred/retained one-shot dictionary scans to small/medium payloads.
+	// Pure q1 group-count streams codes synchronously and intentionally does not
+	// use this cap, so direct one-shot calls avoid a throwaway translated arena.
 	columnDictionaryCodeOneShotMaxBytes          = 3 << 20
 	columnDictionaryCodeDistinctOneShotMaxValues = 1 << 16
 )
@@ -268,7 +268,7 @@ func (r *columnDictionaryCodeGroupCountRunner) run(view columnPhysicalScanSnapsh
 }
 
 func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache) (ColumnPhysicalQueryResult, bool, error) {
-	if req.Kind != ColumnPhysicalQueryGroupCount || req.GroupColumn == "" || view.MutationParts != 0 {
+	if req.Kind != ColumnPhysicalQueryGroupCount || req.GroupColumn == "" || view.MutationParts != 0 || columnPhysicalQueryHasPredicates(req) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	if readCache == nil {
@@ -280,9 +280,6 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 	}
 	byPart := columnDictionaryCodeSnapshotsByPart(view, req.GroupColumn)
 	if len(byPart) == 0 || !columnDictionaryCodeSnapshotsCoverParts(view, byPart) {
-		return ColumnPhysicalQueryResult{}, false, nil
-	}
-	if bytes := columnDictionaryCodeSnapshotBytes(view, byPart); bytes > columnDictionaryCodeOneShotMaxBytes {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	start := time.Now()
@@ -303,12 +300,12 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn, err)
 		}
 		scratch = raw
-		if !readCache.lastView {
-			return ColumnPhysicalQueryResult{}, false, nil
-		}
 		dictCur, cardinality, rowCount, err := decodeColumnDictionaryCodesAssetHeader(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.GroupColumn, false)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
+		}
+		if rowCount != part.Rows {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", rowCount, part.Rows, snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn)
 		}
 		localToGlobal := reducer.prepareDictionary(cardinality)
 		ok := true
