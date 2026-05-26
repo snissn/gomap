@@ -3,8 +3,7 @@ package collections
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -70,7 +69,7 @@ func TestSearchVectorIndexColumnGraphRetainedPayloadPolicyMatrix1876(t *testing.
 					}
 					assertColumnGraphSearchResponseLoadedV4(t, got, fixture.def.Name, fixture.shape.topK)
 					assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, fixture.input, fixture.query, fixture.shape.topK), true)
-					assertRetainedPayloadPolicySearchDocuments1876(t, got, policy, mode)
+					assertRetainedPayloadPolicySearchDocuments1876(t, got, policy, mode, fixture.docs)
 				})
 			}
 		})
@@ -106,7 +105,7 @@ func TestSearchVectorIndexColumnGraphRetainedFullDocumentsReopenValueLogPointers
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, fixture.def.Name, fixture.shape.topK)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, fixture.input, fixture.query, fixture.shape.topK), true)
-	assertRetainedPayloadPolicySearchDocuments1876(t, got, ColumnRetainedPayloadFull, retainedPayloadPolicySearchMode1876{name: "full_documents"})
+	assertRetainedPayloadPolicySearchDocuments1876(t, got, ColumnRetainedPayloadFull, retainedPayloadPolicySearchMode1876{name: "full_documents"}, fixture.docs)
 	if got.Stats.DocumentRetainedBytes == 0 || got.Stats.DocumentRowRefUnsupported == 0 {
 		t.Fatalf("stats=%+v want retained-full fetch from primary value-log-backed payload after reopen", got.Stats)
 	}
@@ -320,7 +319,11 @@ func retainedPayloadPolicyBytes1876(tb testing.TB, cfg ColumnStoreConfig, docs [
 
 func collectRetainedPayloadPolicyStorage1876(col *Collection, dir, indexName string) (retainedPayloadPolicyStorage1876, error) {
 	var storage retainedPayloadPolicyStorage1876
-	storage.dbDirBytes = dirSize1876(dir)
+	dbDirBytes, err := dirSize(dir)
+	if err != nil {
+		return storage, err
+	}
+	storage.dbDirBytes = dbDirBytes
 	if col == nil || col.db == nil {
 		return storage, errCollectionNil
 	}
@@ -368,22 +371,7 @@ func collectRetainedPayloadPolicyStorage1876(col *Collection, dir, indexName str
 	return storage, nil
 }
 
-func dirSize1876(dir string) int64 {
-	var total int64
-	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err == nil {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total
-}
-
-func assertRetainedPayloadPolicySearchDocuments1876(tb testing.TB, got VectorIndexSearchResponse, policy ColumnRetainedPayloadPolicy, mode retainedPayloadPolicySearchMode1876) {
+func assertRetainedPayloadPolicySearchDocuments1876(tb testing.TB, got VectorIndexSearchResponse, policy ColumnRetainedPayloadPolicy, mode retainedPayloadPolicySearchMode1876, sourceDocs [][]byte) {
 	tb.Helper()
 	projected := documentFetchOptionsHasProjection(mode.opts)
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentOutputBytes == 0 {
@@ -405,32 +393,57 @@ func assertRetainedPayloadPolicySearchDocuments1876(tb testing.TB, got VectorInd
 	if policy == ColumnRetainedPayloadNone && got.Stats.DocumentRetainedBytes != uint64(2*len(got.Results)) {
 		tb.Fatalf("retained-none bytes=%d want {} per result", got.Stats.DocumentRetainedBytes)
 	}
+	expectedByID := retainedPayloadPolicyExpectedDocsByID1876(tb, sourceDocs)
 	for i, result := range got.Results {
 		var doc map[string]any
 		if err := json.Unmarshal(result.Document, &doc); err != nil {
 			tb.Fatalf("document[%d]=%q invalid JSON: %v", i, result.Document, err)
 		}
-		kind, kindOK := doc["kind"].(string)
-		if doc["did"] != string(result.ID) || !kindOK || kind == "" || doc["time_us"] == nil {
-			tb.Fatalf("document[%d]=%v want typed fields and did=%q", i, doc, string(result.ID))
+		id := string(result.ID)
+		expected, ok := expectedByID[id]
+		if !ok {
+			tb.Fatalf("document[%d] id=%q missing expected source document", i, id)
+		}
+		if doc["did"] != expected["did"] || doc["did"] != id {
+			tb.Fatalf("document[%d]=%v want did=%q", i, doc, id)
+		}
+		if doc["kind"] != expected["kind"] || doc["time_us"] != expected["time_us"] {
+			tb.Fatalf("document[%d]=%v want kind=%v time_us=%v", i, doc, expected["kind"], expected["time_us"])
 		}
 		_, hasEmbedding := doc["embedding"]
 		if projected && hasEmbedding {
 			tb.Fatalf("projected document[%d]=%v retained embedding", i, doc)
 		}
-		if !projected && !hasEmbedding {
-			tb.Fatalf("full document[%d]=%v missing embedding", i, doc)
+		if !projected && !reflect.DeepEqual(doc["embedding"], expected["embedding"]) {
+			tb.Fatalf("full document[%d] embedding mismatch", i)
 		}
-		_, hasBody := doc["body"]
-		_, hasRetainedTag := doc["retained_tag"]
+		hasBody := doc["body"] != nil
+		hasRetainedTag := doc["retained_tag"] != nil
 		if policy == ColumnRetainedPayloadNone {
 			if hasBody || hasRetainedTag {
 				tb.Fatalf("retained-none document[%d]=%v retained non-column fields", i, doc)
 			}
-		} else if !hasBody || !hasRetainedTag {
-			tb.Fatalf("policy %q document[%d]=%v missing non-column retained fields", policy, i, doc)
+		} else if doc["body"] != expected["body"] || doc["retained_tag"] != expected["retained_tag"] {
+			tb.Fatalf("policy %q document[%d]=%v want body/tag from source row", policy, i, doc)
 		}
 	}
+}
+
+func retainedPayloadPolicyExpectedDocsByID1876(tb testing.TB, docs [][]byte) map[string]map[string]any {
+	tb.Helper()
+	expectedByID := make(map[string]map[string]any, len(docs))
+	for i, raw := range docs {
+		var doc map[string]any
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			tb.Fatalf("source document[%d]=%q invalid JSON: %v", i, raw, err)
+		}
+		id, ok := doc["did"].(string)
+		if !ok || id == "" {
+			tb.Fatalf("source document[%d]=%v missing did", i, doc)
+		}
+		expectedByID[id] = doc
+	}
+	return expectedByID
 }
 
 func reportRetainedPayloadPolicyFixtureMetrics1876(b *testing.B, fixture retainedPayloadPolicyFixture1876, mode retainedPayloadPolicySearchMode1876) {
