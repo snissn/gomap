@@ -369,16 +369,12 @@ func (v *CollectionReadView) closeAssetReadCaches() error {
 	}
 	var closeErr error
 	if v.rowAssetReadCache != nil {
-		if err := v.rowAssetReadCache.close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		closeErr = errors.Join(closeErr, v.rowAssetReadCache.close())
 		v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
 		v.rowAssetReadCache = nil
 	}
 	if v.typedColumnAssetReadCache != nil {
-		if err := v.typedColumnAssetReadCache.close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		closeErr = errors.Join(closeErr, v.typedColumnAssetReadCache.close())
 		v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
 		v.typedColumnAssetReadCache = nil
 	}
