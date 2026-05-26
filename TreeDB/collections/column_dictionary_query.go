@@ -31,8 +31,10 @@ type columnDictionaryCodeGroupCountRunner struct {
 type columnDictionaryCodeGroupCountDistinctRunner struct {
 	groupColumn          string
 	distinctColumn       string
+	combined             bool
 	groupDict            []string
 	groupCounts          []int
+	groupDistinctCounts  []int
 	seen                 []uint64
 	wordsPerGroup        int
 	assets               []columnDictionaryCodeGroupCountDistinctAsset
@@ -365,7 +367,7 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 }
 
 func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache) (*columnDictionaryCodeGroupCountDistinctRunner, error) {
-	if req.Kind != ColumnPhysicalQueryGroupCountDistinct || req.GroupColumn == "" || req.DistinctColumn == "" || view.MutationParts != 0 {
+	if (req.Kind != ColumnPhysicalQueryGroupCountDistinct && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct) || req.GroupColumn == "" || req.DistinctColumn == "" || view.MutationParts != 0 {
 		return nil, nil
 	}
 	if req.GroupColumn == req.DistinctColumn {
@@ -397,6 +399,7 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	runner := &columnDictionaryCodeGroupCountDistinctRunner{
 		groupColumn:    req.GroupColumn,
 		distinctColumn: req.DistinctColumn,
+		combined:       req.Kind == ColumnPhysicalQueryGroupCountAndDistinct,
 		assets:         make([]columnDictionaryCodeGroupCountDistinctAsset, 0, len(view.AssetRefs)),
 	}
 	predicateAssets, predicateBytes, err := prepareColumnDictionaryPredicateAssets(view, req, readCache)
@@ -570,6 +573,9 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 	}
 	runner.wordsPerGroup = wordsPerGroup
 	runner.groupCounts = make([]int, len(runner.groupDict))
+	if runner.combined {
+		runner.groupDistinctCounts = make([]int, len(runner.groupDict))
+	}
 	runner.seen = make([]uint64, totalWords)
 	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, len(runner.groupDict))
 	return runner, nil
@@ -646,6 +652,9 @@ func columnDictionaryCodeSnapshotBytes(view columnPhysicalScanSnapshotView, byPa
 func (r *columnDictionaryCodeGroupCountDistinctRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) ColumnPhysicalQueryResult {
 	start := time.Now()
 	clear(r.groupCounts)
+	if r.combined {
+		clear(r.groupDistinctCounts)
+	}
 	clear(r.seen)
 	rows := 0
 	matched := 0
@@ -659,12 +668,19 @@ func (r *columnDictionaryCodeGroupCountDistinctRunner) run(view columnPhysicalSc
 			if predicates != nil && !predicates.matches(rowIdx) {
 				continue
 			}
+			if r.combined {
+				r.groupCounts[groupCode]++
+			}
 			distinctCode := asset.distinctCodes[rowIdx]
 			seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
 			mask := uint64(1) << (distinctCode & 63)
 			if r.seen[seenIdx]&mask == 0 {
 				r.seen[seenIdx] |= mask
-				r.groupCounts[groupCode]++
+				if r.combined {
+					r.groupDistinctCounts[groupCode]++
+				} else {
+					r.groupCounts[groupCode]++
+				}
 			}
 			matched++
 		}
@@ -677,10 +693,11 @@ func (r *columnDictionaryCodeGroupCountDistinctRunner) run(view columnPhysicalSc
 		if count == 0 {
 			continue
 		}
-		r.resultGroups = append(r.resultGroups, ColumnPhysicalQueryGroup{
-			Key:   r.groupDict[code],
-			Count: count,
-		})
+		group := ColumnPhysicalQueryGroup{Key: r.groupDict[code], Count: count}
+		if r.combined {
+			group.DistinctCount = r.groupDistinctCounts[code]
+		}
+		r.resultGroups = append(r.resultGroups, group)
 	}
 	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)

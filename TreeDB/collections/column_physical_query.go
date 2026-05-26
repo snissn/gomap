@@ -16,12 +16,13 @@ type ColumnPhysicalQueryKind string
 
 const (
 	// ColumnPhysicalQueryGroupCount counts rows by a string group column.
-	ColumnPhysicalQueryGroupCount         ColumnPhysicalQueryKind = "group_count"
-	ColumnPhysicalQueryGroupCountDistinct ColumnPhysicalQueryKind = "group_count_distinct"
-	ColumnPhysicalQueryHourCount          ColumnPhysicalQueryKind = "hour_count"
-	ColumnPhysicalQueryGroupMinInt64      ColumnPhysicalQueryKind = "group_min_int64"
-	ColumnPhysicalQueryGroupMaxInt64      ColumnPhysicalQueryKind = "group_max_int64"
-	ColumnPhysicalQueryGroupInt64Span     ColumnPhysicalQueryKind = "group_int64_span"
+	ColumnPhysicalQueryGroupCount            ColumnPhysicalQueryKind = "group_count"
+	ColumnPhysicalQueryGroupCountDistinct    ColumnPhysicalQueryKind = "group_count_distinct"
+	ColumnPhysicalQueryGroupCountAndDistinct ColumnPhysicalQueryKind = "group_count_and_distinct"
+	ColumnPhysicalQueryHourCount             ColumnPhysicalQueryKind = "hour_count"
+	ColumnPhysicalQueryGroupMinInt64         ColumnPhysicalQueryKind = "group_min_int64"
+	ColumnPhysicalQueryGroupMaxInt64         ColumnPhysicalQueryKind = "group_max_int64"
+	ColumnPhysicalQueryGroupInt64Span        ColumnPhysicalQueryKind = "group_int64_span"
 )
 
 const (
@@ -43,12 +44,15 @@ type ColumnPhysicalQueryRequest struct {
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
-// ColumnPhysicalQueryGroup is one reduced result row. Count is populated for
-// count-style queries; Int64 is populated for min/max/span-style queries.
+// ColumnPhysicalQueryGroup is one reduced result row. Key is the group key.
+// Count is populated for count-style queries and remains the distinct count for
+// group_count_distinct. DistinctCount is populated by group_count_and_distinct;
+// Int64 is populated for min/max/span-style queries.
 type ColumnPhysicalQueryGroup struct {
-	Key   string
-	Count int
-	Int64 int64
+	Key           string
+	Count         int
+	DistinctCount int
+	Int64         int64
 }
 
 // ColumnPhysicalQueryDiagnostics reports scan and reduce work for a physical
@@ -131,11 +135,30 @@ type ColumnPhysicalQueryRunner struct {
 
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
 
+func validateColumnPhysicalGroupCountAndDistinctRequest(req ColumnPhysicalQueryRequest) error {
+	if req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
+		return nil
+	}
+	if req.GroupColumn == "" {
+		return fmt.Errorf("%w: physical column query group column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.DistinctColumn == "" {
+		return fmt.Errorf("%w: physical column query distinct column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.GroupColumn == req.DistinctColumn {
+		return fmt.Errorf("%w: physical column query group and distinct columns must differ", ErrColumnQueryPlanUnsupported)
+	}
+	return nil
+}
+
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
 // the recovery-authoritative manifest. Insert-only manifests use the direct
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
 // overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
 	mutationParts, err := c.columnPhysicalQueryMutationPartsHint()
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
@@ -183,6 +206,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // until Close and fail-closes for mutation-bearing manifests or unsupported
 // query shapes rather than silently changing semantics.
 func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return nil, err
+	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
 	if err != nil {
 		if closeView != nil {
@@ -224,7 +250,12 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			_ = readCache.close()
 			return nil, fmt.Errorf("%w: prepared aggregate metadata query requires metadata assets", ErrColumnQueryPlanUnsupported)
 		}
-	} else if !columnPhysicalQueryHasPredicates(req) {
+	} else if !columnPhysicalQueryHasPredicates(req) && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
+		// ColumnPhysicalQueryGroupCountAndDistinct intentionally skips the
+		// columnPhysicalQueryHasPredicates/no-predicate direct executor path:
+		// newColumnPhysicalQueryExecutor does not implement fused q2 semantics, so
+		// prepared execution must use the dictionary sidecar runner unless direct
+		// fused support is added and validated here.
 		exec, err = newColumnPhysicalQueryExecutor(view.Config, req)
 		if err != nil {
 			_ = readCache.close()
@@ -257,6 +288,10 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	if err != nil {
 		_ = readCache.close()
 		return nil, err
+	}
+	if req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
+		_ = readCache.close()
+		return nil, fmt.Errorf("%w: fused count-distinct physical query requires dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
 	}
 	if columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil {
 		_ = readCache.close()
@@ -523,6 +558,9 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(
 // Mutation-bearing manifests stay fail-closed until partitioned visibility
 // reconstruction is available.
 func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
 	if columnPhysicalQueryHasPredicates(req) {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical predicates require partitioned dictionary sidecar execution", ErrColumnQueryPlanUnsupported)
 	}
@@ -645,7 +683,7 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		switch req.Kind {
 		case ColumnPhysicalQueryGroupCount:
 			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn}
-		case ColumnPhysicalQueryGroupCountDistinct:
+		case ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct:
 			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, DictionaryColumn2: req.DistinctColumn}
 		case ColumnPhysicalQueryHourCount:
 			return columnManifestScanSidecarFilter{Int64Values: true, Int64Column: req.ValueColumn}
@@ -674,7 +712,7 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	switch req.Kind {
 	case ColumnPhysicalQueryGroupCount:
 		addDictionaryColumn(req.GroupColumn)
-	case ColumnPhysicalQueryGroupCountDistinct:
+	case ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct:
 		addDictionaryColumn(req.GroupColumn)
 		addDictionaryColumn(req.DistinctColumn)
 	case ColumnPhysicalQueryHourCount:
@@ -741,7 +779,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 
 func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
 	if req.AggregateMetadataName != "" || view.MutationParts != 0 ||
-		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct) {
+		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)

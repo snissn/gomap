@@ -2020,6 +2020,118 @@ func TestColumnPhysicalQueryDictionaryPredicatesJSONBenchShapes1869(t *testing.T
 	}
 }
 
+func TestColumnPhysicalQueryGroupCountAndDistinctFused1870(t *testing.T) {
+	events := []columnPhysicalPredicateEvent1869{
+		{ID: "e1", Kind: "commit", Operation: "create", Event: "post", Did: "did_a", TimeUS: 1},
+		{ID: "e2", Kind: "commit", Operation: "create", Event: "post", Did: "did_a", TimeUS: 2},
+		{ID: "e3", Kind: "commit", Operation: "create", Event: "post", Did: "did_b", TimeUS: 3},
+		{ID: "e4", Kind: "commit", Operation: "create", Event: "like", Did: "did_a", TimeUS: 4},
+		{ID: "e5", Kind: "identity", Operation: "create", Event: "post", Did: "did_c", TimeUS: 5},
+	}
+	collection, closeFn := openColumnPhysicalPredicateFixture1869(t, events)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "event",
+		DistinctColumn: "did",
+		Predicates: []ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+		},
+	}
+	wantCounts := map[string]int{"like": 1, "post": 3}
+	wantDistinct := map[string]int{"like": 1, "post": 2}
+	assertFused := func(t *testing.T, result ColumnPhysicalQueryResult) {
+		t.Helper()
+		gotCounts := make(map[string]int, len(result.Groups))
+		gotDistinct := make(map[string]int, len(result.Groups))
+		for _, group := range result.Groups {
+			gotCounts[group.Key] = group.Count
+			gotDistinct[group.Key] = group.DistinctCount
+		}
+		if !reflect.DeepEqual(gotCounts, wantCounts) || !reflect.DeepEqual(gotDistinct, wantDistinct) {
+			t.Fatalf("fused groups counts=%v distinct=%v want counts=%v distinct=%v full=%+v", gotCounts, gotDistinct, wantCounts, wantDistinct, result.Groups)
+		}
+		if result.Diagnostics.RowsScanned != len(events) || result.Diagnostics.RowsMatched != 4 || result.Diagnostics.ReduceRows != 4 {
+			t.Fatalf("diagnostics=%+v want scanned=%d matched/reduced=4", result.Diagnostics, len(events))
+		}
+	}
+
+	t.Run("one-shot", func(t *testing.T) {
+		result, err := collection.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("one-shot fused q2: %v", err)
+		}
+		assertFused(t, result)
+	})
+	t.Run("parallel fail closed", func(t *testing.T) {
+		_, err := collection.RunColumnPhysicalQueryParallel(req, 4)
+		if !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+			t.Fatalf("RunColumnPhysicalQueryParallel fused q2 err=%v want ErrColumnQueryPlanUnsupported", err)
+		}
+	})
+	t.Run("invalid requests fail with precise validation", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			req  ColumnPhysicalQueryRequest
+			want string
+		}{
+			{name: "missing group", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, DistinctColumn: "did"}, want: "group column is required"},
+			{name: "missing distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event"}, want: "distinct column is required"},
+			{name: "same columns", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "event"}, want: "group and distinct columns must differ"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				if _, err := collection.PrepareColumnPhysicalQuery(tc.req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("PrepareColumnPhysicalQuery err=%v want ErrColumnQueryPlanUnsupported containing %q", err, tc.want)
+				}
+				if _, err := collection.RunColumnPhysicalQuery(tc.req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("RunColumnPhysicalQuery err=%v want ErrColumnQueryPlanUnsupported containing %q", err, tc.want)
+				}
+			})
+		}
+	})
+	t.Run("prepared", func(t *testing.T) {
+		runner, err := collection.PrepareColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("PrepareColumnPhysicalQuery fused q2: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		for i := 0; i < 2; i++ {
+			result, err := runner.Run()
+			if err != nil {
+				t.Fatalf("prepared fused q2 run %d: %v", i, err)
+			}
+			assertFused(t, result)
+		}
+	})
+	t.Run("prepared no predicates", func(t *testing.T) {
+		noPredicateReq := req
+		noPredicateReq.Predicates = nil
+		runner, err := collection.PrepareColumnPhysicalQuery(noPredicateReq)
+		if err != nil {
+			t.Fatalf("PrepareColumnPhysicalQuery no-predicate fused q2: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		result, err := runner.Run()
+		if err != nil {
+			t.Fatalf("prepared no-predicate fused q2: %v", err)
+		}
+		gotCounts := make(map[string]int, len(result.Groups))
+		gotDistinct := make(map[string]int, len(result.Groups))
+		for _, group := range result.Groups {
+			gotCounts[group.Key] = group.Count
+			gotDistinct[group.Key] = group.DistinctCount
+		}
+		if wantCounts := map[string]int{"like": 1, "post": 4}; !reflect.DeepEqual(gotCounts, wantCounts) {
+			t.Fatalf("no-predicate counts=%v want %v full=%+v", gotCounts, wantCounts, result.Groups)
+		}
+		if wantDistinct := map[string]int{"like": 1, "post": 3}; !reflect.DeepEqual(gotDistinct, wantDistinct) {
+			t.Fatalf("no-predicate distinct=%v want %v full=%+v", gotDistinct, wantDistinct, result.Groups)
+		}
+	})
+}
+
 func TestColumnPhysicalQueryDictionaryPredicatesAbsentLiteralEmpty1869(t *testing.T) {
 	events := []columnPhysicalPredicateEvent1869{
 		{ID: "e1", Kind: "commit", Operation: "create", Event: "app.bsky.feed.post", Did: "did_a", TimeUS: 1},
@@ -2119,6 +2231,7 @@ func BenchmarkColumnPhysicalQueryDictionaryPredicates1869(b *testing.B) {
 	}{
 		{name: "q2_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commitCreate}},
 		{name: "q2_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
+		{name: "q2_fused_count_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
 		{name: "q4_min", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", Predicates: postCreate}},
 		{name: "q5_span", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", Predicates: postCreate}},
 	}
