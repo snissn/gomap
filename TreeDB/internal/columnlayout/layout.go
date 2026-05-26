@@ -72,6 +72,7 @@ const (
 	ReasonFloatBitPatternNotNumeric   ReasonCode = "layout_float_bit_pattern_not_numeric"
 	ReasonVectorScalarUnsupported     ReasonCode = "layout_vector_scalar_unsupported"
 	ReasonAdjacencyScalarUnsupported  ReasonCode = "layout_adjacency_scalar_unsupported"
+	ReasonAdjacencyDirectViewDeferred ReasonCode = "layout_adjacency_direct_view_deferred"
 	ReasonStatsPayloadUnsupported     ReasonCode = "layout_stats_payload_unsupported"
 	ReasonPruningPayloadUnsupported   ReasonCode = "layout_pruning_payload_unsupported"
 	ReasonFixedWidthElementsRequired  ReasonCode = "layout_fixed_width_elements_required"
@@ -328,7 +329,7 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 			caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 4, EndianLittle, 4)
 			break
 		}
-		caps.DirectView = directView(desc, 4, EndianLittle, 4)
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "deferred to #1901", ValidationBoundary: "prepare"}
 		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
 			caps.Reducers.AdjacencyMetrics = true
 			caps.Pruning.AdjacencyIndex = true

@@ -28,6 +28,22 @@ type columnVectorGraphNativeSearchBenchShapeV3 struct {
 	typedColumnVector   bool
 }
 
+func TestColumnVectorGraphAdjacencySourceStatsSkipEmptyNoopV3(t *testing.T) {
+	var stats columnVectorGraphNativeSearchStats
+	recordColumnVectorGraphAdjacencySourceStats(&stats, 0, false)
+	if stats.AdjacencyBytesRead != 0 || stats.AdjacencyDirectViews != 0 || stats.AdjacencyScratchDecodes != 0 {
+		t.Fatalf("empty adjacency stats=%+v want no direct/scratch decode counts", stats)
+	}
+	recordColumnVectorGraphAdjacencySourceStats(&stats, 2, false)
+	if stats.AdjacencyBytesRead != 8 || stats.AdjacencyDirectViews != 0 || stats.AdjacencyScratchDecodes != 1 {
+		t.Fatalf("scratch adjacency stats=%+v want bytes=8 scratch=1", stats)
+	}
+	recordColumnVectorGraphAdjacencySourceStats(&stats, 3, true)
+	if stats.AdjacencyBytesRead != 20 || stats.AdjacencyDirectViews != 1 || stats.AdjacencyScratchDecodes != 1 {
+		t.Fatalf("direct adjacency stats=%+v want cumulative bytes=20 direct=1 scratch=1", stats)
+	}
+}
+
 func columnVectorGraphNativeSearchSmallBenchShapeV3() columnVectorGraphNativeSearchBenchShapeV3 {
 	return columnVectorGraphNativeSearchBenchShapeV3{
 		rows:         1024,

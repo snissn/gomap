@@ -403,10 +403,8 @@ func validateColumnVectorGraphTypedColumnDenseVectorSection(part *typedcolumn.Co
 	if section.Rows != rows || section.Length != wantBytes {
 		return fmt.Errorf("typed_column_part vector section rows=%d length=%d want rows=%d length=%d", section.Rows, section.Length, rows, wantBytes)
 	}
-	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
-	status := typeddecode.ValidateDirectViewColumn(typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length})
-	if !status.Direct() {
-		return fmt.Errorf("typed_column_part vector direct-view validation failed: %s", status.String())
+	if err := validateColumnVectorGraphTypedColumnDenseVectorImageLocalContract(section, certColumn, rows, dims); err != nil {
+		return err
 	}
 	nextRow := 0
 	totalBytes := 0
@@ -430,6 +428,23 @@ func validateColumnVectorGraphTypedColumnDenseVectorSection(part *typedcolumn.Co
 	}
 	if nextRow != rows || totalBytes != section.Length {
 		return fmt.Errorf("typed_column_part vector blocks rows=%d bytes=%d want rows=%d bytes=%d", nextRow, totalBytes, rows, section.Length)
+	}
+	return nil
+}
+
+func validateColumnVectorGraphTypedColumnDenseVectorImageLocalContract(section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, rows, dims int) error {
+	// This preflight validates only the contract properties available from the
+	// typed-column image: image-local section/block alignment, lengths, rows, and
+	// writer certification. It intentionally uses AssetOffset=0 and must not be
+	// read as full #1893 absolute storage-offset enforcement. The real
+	// ColumnAssetRef.Offset is unavailable until the section is acquired;
+	// acquireColumnVectorGraphTypedColumnDenseVectorValues validates the same
+	// request with ref.Offset and treats absolute_offset_unaligned as scratch
+	// fallback, not preflight corruption.
+	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
+	status := typeddecode.ValidateDirectViewColumn(typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: 0, HasAssetOffset: true})
+	if !status.Direct() {
+		return fmt.Errorf("typed_column_part vector image-local direct-view contract validation failed: %s", status.String())
 	}
 	return nil
 }
@@ -493,27 +508,12 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 		return nil, nil, false, false, err
 	}
 	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
-	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length}
-	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements})
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: int64(ref.Offset), HasAssetOffset: true}
+	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
 	if viewStatus.Direct() {
 		return values, handle, true, false, nil
 	}
 	firstErr := fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String())
-	if handle.Source() == mappedresource.SourceMapped && typedColumnDenseDecodeFallbackAllowed(viewStatus) {
-		_ = handle.Release()
-		handle, err = manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{Reason: "column_graph typed-column dense vector section heap fallback", ValidationMode: mappedresource.ValidationVerify, AllowHeapCopy: true})
-		if err != nil {
-			return nil, nil, false, false, errors.Join(firstErr, err)
-		}
-		if checksumErr := validateColumnVectorGraphTypedColumnHandleChecksum(handle, sectionChecksum); checksumErr != nil {
-			_ = handle.Release()
-			return nil, nil, false, false, errors.Join(firstErr, checksumErr)
-		}
-		values, viewStatus = typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements})
-		if viewStatus.Direct() {
-			return values, handle, true, false, nil
-		}
-	}
 	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
 		_ = handle.Release()
 		return nil, nil, false, false, errors.Join(firstErr, fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String()))

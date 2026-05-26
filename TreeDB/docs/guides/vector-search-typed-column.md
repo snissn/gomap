@@ -17,7 +17,7 @@ changes.
 | Document title/body/source text | Retained document / residual payload | Usually needed only after top-k; keep flexible. |
 | Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
 | Vector graph/ANN data | `derived_accelerator` | It accelerates search but is not the authoritative owner of the embedding field. |
-| Fixed-degree adjacency list | `typed_column_part` `adjacency_list` with positive `adjacency_degree` when it is an authoritative field | Stored as dense row-major little-endian `uint32`; nullable/missing adjacency remains fail-closed. |
+| Fixed-degree adjacency list | fallback/deferred for direct views in the active stack | Dense little-endian `uint32` payload bytes are supported as a format fixture, but certified adjacency mmap direct views are deferred to #1901; nullable/missing adjacency remains fail-closed. |
 
 Best practice: keep vector payloads out of retained JSON for search-heavy
 workloads when the typed-column vector section is the intended search data plane.
@@ -228,7 +228,7 @@ counters.
 | Limitation | Status/link |
 | --- | --- |
 | Native vector graph reads from typed-column dense sections are landed for the current `column_graph` path, but broader vector product tuning remains pre-alpha. | [#1782](https://github.com/snissn/gomap/issues/1782), [column graph native vector search spec](../spec/column-graph-native-vector-search.md). |
-| Authoritative fixed-degree `adjacency_list` typed-column storage is landed for explicit `typed_column_part` owners with positive `adjacency_degree`; graph adjacency remains derived unless schema ownership promotes it. | [#1783](https://github.com/snissn/gomap/issues/1783) |
+| Authoritative fixed-degree `adjacency_list` typed-column storage is landed for explicit `typed_column_part` owners with positive `adjacency_degree`, but certified adjacency mmap direct views are deferred/fallback-only for this stack. | [#1783](https://github.com/snissn/gomap/issues/1783), [#1901](https://github.com/snissn/gomap/issues/1901) |
 | SIMD/vectorized dense-section kernels are follow-up optimization work. | [#1790](https://github.com/snissn/gomap/issues/1790) |
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
@@ -257,4 +257,4 @@ counters.
 | `docs_fetched` is non-zero in a search-only comparison | You included final document materialization. | Drop `-include-docs` or move document fetch into a separate benchmark row. |
 | Search benchmark allocates heavily | You may be timing setup/open, public document materialization, or fallback decode. | Compare reusable-searcher vs one-shot names and inspect allocation profiles. |
 | Results differ across branches | On-disk formats/APIs are pre-alpha. | Rebuild DB directories and rerun with the same rows/dims/degree/top-k/seed. |
-| Adjacency typed-column ownership is needed | Fixed-degree dense row-major little-endian `uint32` is supported for explicit non-nullable `typed_column_part` owners with positive `adjacency_degree`; nullable/missing adjacency still fails closed. | Configure `adjacency_degree` on the authoritative field; keep graph/search sidecars derived unless the schema owns the field. |
+| Adjacency typed-column ownership is needed | Fixed-degree dense row-major little-endian `uint32` bytes are supported for explicit non-nullable `typed_column_part` owners with positive `adjacency_degree`, but direct-view certification is deferred to #1901. | Configure `adjacency_degree` on the authoritative field; expect decode/fallback paths until #1901 lands. |

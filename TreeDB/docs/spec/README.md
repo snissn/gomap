@@ -196,6 +196,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     physical typedcolumn type, encoding, compression, and wrappers; documents
     optional raw int64, validation boundaries, direct-view eligibility metadata,
     and unsupported/fallback reason codes.
+- `TreeDB/docs/spec/typed-column-direct-view-alignment.md`
+  - issue #1893 aligned fixed-width direct-view safety contract, all-type/storage
+    owner classification, absolute-offset alignment rule, fallback/deferred
+    policy, counter vocabulary, and benchmark harness expectations for #1886.
 
 ## Canonical Ownership
 

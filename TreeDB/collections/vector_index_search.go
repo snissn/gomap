@@ -193,6 +193,7 @@ type VectorIndexSearchStats struct {
 	// VectorScratchDecodes is the per-search count of candidate vectors served from scratch/fallback decoded vectors.
 	VectorScratchDecodes uint64 `json:"vector_scratch_decodes,omitempty"`
 	// AdjacencyDirectViews is the per-search count of adjacency payloads served from validated direct views.
+	// It is expected to remain zero for current row-asset adjacency fallback paths until #1901.
 	AdjacencyDirectViews uint64 `json:"adjacency_direct_views,omitempty"`
 	// AdjacencyScratchDecodes is the per-search count of adjacency payloads served from scratch/fallback decodes.
 	AdjacencyScratchDecodes uint64 `json:"adjacency_scratch_decodes,omitempty"`

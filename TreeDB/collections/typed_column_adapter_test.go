@@ -953,7 +953,7 @@ func TestTypedColumnAdapterMappedResourceMmapHeapParity(t *testing.T) {
 	}
 }
 
-func TestTypedColumnAdapterAdjacencyDenseDirectViewAndFallback(t *testing.T) {
+func TestTypedColumnAdapterAdjacencyDenseFallbackOnly(t *testing.T) {
 	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
 	field.AdjacencyDegree = 3
 	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
@@ -978,14 +978,11 @@ func TestTypedColumnAdapterAdjacencyDenseDirectViewAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireDenseUint32ColumnView: %v", err)
 	}
-	if !view.Direct || view.Handle == nil || !slices.Equal(view.Values, []uint32{1, 2, 3, 4, 5, 6}) {
+	if view.Direct || view.Handle != nil || !slices.Equal(view.Values, []uint32{1, 2, 3, 4, 5, 6}) {
 		if view.Handle != nil {
 			_ = view.Handle.Release()
 		}
-		t.Fatalf("direct view=%+v want direct dense values", view)
-	}
-	if err := view.Handle.Release(); err != nil {
-		t.Fatalf("Release: %v", err)
+		t.Fatalf("adjacency view=%+v want decoded fallback values without retained direct handle", view)
 	}
 	assertTypedColumnAdapterNoActive(t, mgr)
 }
@@ -993,6 +990,9 @@ func TestTypedColumnAdapterAdjacencyDenseDirectViewAndFallback(t *testing.T) {
 func TestTypedColumnAdapterDenseDecodeFallbackAllowsHostEndianMismatch(t *testing.T) {
 	if !typedColumnDenseDecodeFallbackAllowed(typeddecode.StreamingStatus(typeddecode.ReasonWrongEndian, "host endian mismatch")) {
 		t.Fatalf("wrong-endian direct-view status should allow safe little-endian decode fallback")
+	}
+	if !typedColumnDenseDecodeFallbackAllowed(typeddecode.UnsupportedStatus(typeddecode.ReasonDirectViewDeferred, "adjacency direct views deferred")) {
+		t.Fatalf("deferred adjacency direct-view status should allow safe decode fallback")
 	}
 	if typedColumnDenseDecodeFallbackAllowed(typeddecode.UnsupportedStatus(typeddecode.ReasonPayloadLengthMismatch, "short payload")) {
 		t.Fatalf("payload length mismatch must fail closed, not decode fallback")
@@ -1554,7 +1554,7 @@ func TestTypedColumnAdapterUnsupportedTypeFailsClosed(t *testing.T) {
 var typedColumnAdapterBenchmarkSink columnDeclaredValue
 var typedColumnAdapterAdjacencyBenchSink uint64
 
-func BenchmarkTypedColumnAdjacencyDenseDirectViewScan(b *testing.B) {
+func BenchmarkTypedColumnAdjacencyDenseFallbackScan(b *testing.B) {
 	const rowsN = 8192
 	const degree = 16
 	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
@@ -1594,8 +1594,8 @@ func BenchmarkTypedColumnAdjacencyDenseDirectViewScan(b *testing.B) {
 	if view.Handle != nil {
 		defer view.Handle.Release()
 	}
-	if !view.Direct || view.Handle == nil {
-		b.Fatalf("expected direct mapped view")
+	if view.Direct || view.Handle != nil {
+		b.Fatalf("expected fallback-only adjacency view direct=%v handle=%v", view.Direct, view.Handle != nil)
 	}
 	values := view.Values
 	var sink uint64

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +13,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func columnGraphTypedColumnMmapDirectViewSupportedForTest() bool {
+	// Windows currently falls back from AcquireFileRange with mmap_failed, and
+	// non-little-endian hosts cannot expose native float32 slices safely. Those
+	// paths still use the typed-column source, but they must decode to scratch and
+	// must not report mmap_direct_view evidence for #1893.
+	return runtime.GOOS != "windows" && columnPhysicalNativeLittleEndian
+}
 
 func TestColumnVectorGraphTypedColumnVectorReaderParity1782(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
@@ -63,11 +72,17 @@ func TestColumnVectorGraphTypedColumnVectorReaderParity1782(t *testing.T) {
 	if stats.VectorDirectViews+stats.VectorScratchDecodes != stats.CandidateFetches {
 		t.Fatalf("stats=%+v want vector direct+scratch accounting to match candidate fetches", stats)
 	}
-	if stats.VectorDirectViews == 0 {
-		t.Fatalf("stats=%+v want typed-column vector direct views on valid dense section", stats)
-	}
-	if stats.TypedColumnMappedBytes+stats.TypedColumnHeapCopyBytes == 0 || stats.TypedColumnActiveHandles == 0 || stats.TypedColumnFallbacks != 0 {
-		t.Fatalf("stats=%+v want live mappedresource-backed typed-column source without fallback", stats)
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if stats.VectorDirectViews == 0 {
+			t.Fatalf("stats=%+v want typed-column vector mmap direct views on valid dense section", stats)
+		}
+		if stats.TypedColumnMappedBytes == 0 || stats.TypedColumnActiveHandles == 0 || stats.TypedColumnFallbacks != 0 {
+			t.Fatalf("stats=%+v want live mappedresource-backed typed-column source without fallback", stats)
+		}
+	} else {
+		if stats.VectorDirectViews != 0 || stats.VectorScratchDecodes == 0 || stats.TypedColumnDecodedBytes == 0 || stats.TypedColumnFallbacks != 0 {
+			t.Fatalf("stats=%+v want platform scratch fallback from typed-column source", stats)
+		}
 	}
 }
 
@@ -90,9 +105,14 @@ func TestColumnVectorGraphTypedColumnVectorCloseReleasesHandles1782(t *testing.T
 		_ = reader.Close()
 		t.Fatalf("typed vector source=%v manager=%v want active source", source != nil, source != nil && source.manager != nil)
 	}
-	if stats := source.manager.Stats(); stats.ActiveHandles == 0 || stats.ActiveMappedBytes+stats.ActiveHeapCopyBytes == 0 {
+	if stats := source.manager.Stats(); columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if stats.ActiveHandles == 0 || stats.ActiveMappedBytes == 0 {
+			_ = reader.Close()
+			t.Fatalf("stats before close=%+v want active typed-column mmap handles/bytes", stats)
+		}
+	} else if stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 || source.decodedDerivedBytes == 0 {
 		_ = reader.Close()
-		t.Fatalf("stats before close=%+v want active typed-column handles/bytes", stats)
+		t.Fatalf("stats before close=%+v decoded=%d want released platform scratch fallback", stats, source.decodedDerivedBytes)
 	}
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader.Close: %v", err)
@@ -121,6 +141,12 @@ func TestColumnVectorGraphTypedColumnVectorPinKeyUsesTypedColumnAssetRef1782(t *
 		t.Fatalf("missing typed vector source")
 	}
 	pins := reader.typedVectorSource.manager.PinSummary()
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if len(pins) != 0 {
+			t.Fatalf("pins=%d want none when platform cannot provide mmap direct views", len(pins))
+		}
+		return
+	}
 	if len(pins) == 0 {
 		t.Fatal("typed vector source has no mappedresource pins")
 	}
@@ -176,8 +202,12 @@ func TestSearchVectorIndexTypedColumnVectorReopenGeneration1782(t *testing.T) {
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
-	if got.Stats.VectorDirectViews == 0 || got.Stats.TypedColumnMappedBytes+got.Stats.TypedColumnHeapCopyBytes == 0 || got.Stats.TypedColumnFallbacks != 0 {
-		t.Fatalf("stats=%+v want durable typed-column vector direct reads after reopen", got.Stats)
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if got.Stats.VectorDirectViews == 0 || got.Stats.TypedColumnMappedBytes == 0 || got.Stats.TypedColumnFallbacks != 0 {
+			t.Fatalf("stats=%+v want durable typed-column vector mmap direct reads after reopen", got.Stats)
+		}
+	} else if got.Stats.VectorDirectViews != 0 || got.Stats.VectorScratchDecodes == 0 || got.Stats.TypedColumnDecodedBytes == 0 || got.Stats.TypedColumnFallbacks != 0 {
+		t.Fatalf("stats=%+v want durable typed-column vector scratch fallback after reopen", got.Stats)
 	}
 }
 
@@ -399,7 +429,7 @@ func TestColumnVectorGraphTypedColumnVectorStaleGraphFailsClosed1782(t *testing.
 	}
 }
 
-func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesHeapFallback1782(t *testing.T) {
+func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFallback1782(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -465,18 +495,18 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesHeapFallba
 	if handle != nil {
 		handleSource = handle.Source()
 	}
-	if !direct || scratchDecode || handle == nil || handleSource != mappedresource.SourceHeapCopy {
-		t.Fatalf("direct=%v scratchDecode=%v handle=%v source=%s want heap-copy direct fallback", direct, scratchDecode, handle != nil, handleSource)
+	if direct || !scratchDecode || handle != nil || handleSource != mappedresource.Source("<nil>") {
+		t.Fatalf("direct=%v scratchDecode=%v handle=%v source=%s want scratch fallback, not mmap direct view", direct, scratchDecode, handle != nil, handleSource)
 	}
 	if !float32SlicesEqual1782(values[:3], []float32{1, 0, 0}) || !float32SlicesEqual1782(values[3:], []float32{0, 1, 0}) {
 		t.Fatalf("values=%v want row-major typed vectors", values)
 	}
 	stats := manager.Stats()
-	if stats.DirectViewSuccesses == 0 || stats.ActiveHeapCopyBytes != int64(section.Length) || stats.ActiveHandles != 1 {
-		t.Fatalf("stats=%+v want active heap-copy direct view", stats)
+	if stats.DirectViewSuccesses != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 || stats.ActiveHandles != 0 {
+		t.Fatalf("stats=%+v want released scratch fallback, not direct-view evidence", stats)
 	}
-	if stats.DirectViewFailures == 0 && stats.FallbackReads == 0 {
-		t.Fatalf("stats=%+v want mapped direct-view failure or mmap fallback before heap-copy direct view", stats)
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() && stats.TotalHeapCopyBytes != uint64(section.Length) {
+		t.Fatalf("stats=%+v want one platform heap-copy fallback decode", stats)
 	}
 }
 

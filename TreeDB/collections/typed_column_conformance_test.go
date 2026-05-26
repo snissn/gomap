@@ -137,7 +137,7 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			encoding: typedcolumn.EncodingRawUint32Dense,
 			checks: []capabilityCheck{
 				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
-				{op: columnsemantics.OpAdjacencyDirectPayload, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpAdjacencyDirectPayload, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonAdjacencyCapabilityDeferred},
 				{op: columnsemantics.OpAdjacencyTraversal, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpAdjacencyMetrics, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},

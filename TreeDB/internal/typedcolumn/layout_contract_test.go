@@ -12,7 +12,7 @@ func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T
 	if err != nil {
 		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
 	}
-	for _, name := range []string{"id", "value", "embedding", "neighbors"} {
+	for _, name := range []string{"id", "value", "embedding"} {
 		column, ok := cert.Column(name)
 		if !ok {
 			t.Fatalf("missing certified column %q", name)
@@ -29,8 +29,15 @@ func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T
 			}
 		}
 	}
-	if cert.DirectViewCertified < 4 {
-		t.Fatalf("direct-view certified=%d want at least 4", cert.DirectViewCertified)
+	neighbors, ok := cert.Column("neighbors")
+	if !ok {
+		t.Fatalf("missing neighbors column")
+	}
+	if neighbors.DirectViewCertified || neighbors.Endian != ColumnPartLayoutEndianLittle || neighbors.ElementSize != 4 || neighbors.Alignment != 4 {
+		t.Fatalf("neighbors contract=%+v want little-endian payload metadata but no direct-view certification", neighbors)
+	}
+	if cert.DirectViewCertified < 3 {
+		t.Fatalf("direct-view certified=%d want at least 3", cert.DirectViewCertified)
 	}
 }
 

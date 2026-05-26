@@ -84,10 +84,13 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyDirectPayload, columnsemantics.OpAdjacencyMetrics} {
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyMetrics} {
 		if cap, _ := typedColumnAdapterCapability(adjacencyColumn, op); cap.Status != columnsemantics.StatusSupported || cap.Reason != columnsemantics.ReasonSupported {
 			t.Fatalf("adjacency %s capability=%+v want supported", op, cap)
 		}
+	}
+	if cap, _ := typedColumnAdapterCapability(adjacencyColumn, columnsemantics.OpAdjacencyDirectPayload); cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonAdjacencyCapabilityDeferred {
+		t.Fatalf("adjacency direct payload capability=%+v want deferred fallback", cap)
 	}
 	if cap, _ := typedColumnAdapterCapability(adjacencyColumn, columnsemantics.OpOrderedRange); cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonAdjacencyScalarOperationUnsupported {
 		t.Fatalf("adjacency range capability=%+v", cap)

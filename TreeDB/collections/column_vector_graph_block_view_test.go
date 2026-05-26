@@ -91,15 +91,8 @@ func TestColumnVectorGraphBlockViewAccessorsV1(t *testing.T) {
 	if !slices.Equal(adjacency, []uint32{0}) {
 		t.Fatalf("adjacency=%v want [0]", adjacency)
 	}
-	if columnPhysicalNativeLittleEndian {
-		if direct && len(adjacencyScratch) != 0 {
-			t.Fatalf("direct adjacency view used scratch=%v", adjacencyScratch)
-		}
-		if !direct && !slices.Equal(adjacencyScratch, []uint32{0}) {
-			t.Fatalf("scratch adjacency=%v want [0] when direct view is unaligned", adjacencyScratch)
-		}
-	} else if direct || !slices.Equal(adjacencyScratch, []uint32{0}) {
-		t.Fatalf("direct=%t scratch=%v want scratch adjacency decode", direct, adjacencyScratch)
+	if direct || !slices.Equal(adjacencyScratch, []uint32{0}) {
+		t.Fatalf("direct=%t scratch=%v want fallback-only scratch adjacency decode", direct, adjacencyScratch)
 	}
 	stats := reader.Stats()
 	if stats.RowFetches != 0 || stats.RowsFetched != 0 {
@@ -172,40 +165,29 @@ func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 	}
 }
 
-func TestColumnVectorGraphAdjacencyDirectViewProbeAlignedLittleEndianV1(t *testing.T) {
-	if !columnPhysicalNativeLittleEndian {
-		t.Skip("direct uint32 byte views require little-endian host order")
-	}
+func TestColumnVectorGraphAdjacencyLittleEndianPayloadFixtureV1(t *testing.T) {
 	raw := columnVectorGraphAlignedBytesForTest(t, 8)
 	columnVectorGraphPutLittleEndianUint32sForTest(raw, []uint32{7, 11})
-	adjacency, ok := columnVectorGraphLittleEndianUint32DirectView(raw, 2)
-	if !ok {
-		t.Fatal("direct view probe returned ok=false for aligned little-endian adjacency")
-	}
-	if !slices.Equal(adjacency, []uint32{7, 11}) {
-		t.Fatalf("adjacency=%v want [7 11]", adjacency)
+	if got := []uint32{binary.LittleEndian.Uint32(raw[0:4]), binary.LittleEndian.Uint32(raw[4:8])}; !slices.Equal(got, []uint32{7, 11}) {
+		t.Fatalf("little-endian adjacency payload=%v want [7 11]", got)
 	}
 }
 
-func TestColumnVectorGraphBlockViewAdjacencyAlignedDirectNoScratchV1(t *testing.T) {
-	if !columnPhysicalNativeLittleEndian {
-		t.Skip("direct uint32 byte views require little-endian host order")
-	}
+func TestColumnVectorGraphBlockViewAdjacencyAlignedUsesScratchFallbackV1(t *testing.T) {
 	raw := columnVectorGraphAlignedBytesForTest(t, 8)
 	columnVectorGraphPutLittleEndianUint32sForTest(raw, []uint32{3, 5})
-	view := columnVectorGraphAdjacencyBlockViewForTest(nil, raw, columnVectorGraphAdjacencySpan{start: 0, end: len(raw), count: 2})
+	reader, cleanup := columnVectorGraphAdjacencyLittleEndianReaderForTest(t)
+	defer cleanup()
+	view := columnVectorGraphAdjacencyBlockViewForTest(reader, raw, columnVectorGraphAdjacencySpan{start: 0, end: len(raw), count: 2})
 	adjacency, scratch, direct, err := view.adjacency(0, nil)
 	if err != nil {
 		t.Fatalf("adjacency: %v", err)
 	}
-	if !direct {
-		t.Fatal("adjacency direct=false want direct view")
+	if direct {
+		t.Fatal("adjacency direct=true want fallback-only row-asset adjacency")
 	}
-	if len(scratch) != 0 {
-		t.Fatalf("scratch len=%d want 0 for direct view", len(scratch))
-	}
-	if !slices.Equal(adjacency, []uint32{3, 5}) {
-		t.Fatalf("adjacency=%v want [3 5]", adjacency)
+	if !slices.Equal(adjacency, []uint32{3, 5}) || !slices.Equal(scratch, []uint32{3, 5}) {
+		t.Fatalf("adjacency=%v scratch=%v want scratch decoded [3 5]", adjacency, scratch)
 	}
 }
 
@@ -230,18 +212,14 @@ func TestColumnVectorGraphAdjacencyDirectViewProbeUnalignedFallsBackV1(t *testin
 	}
 }
 
-func TestColumnVectorGraphAdjacencyDirectViewProbeZeroLengthDirectV1(t *testing.T) {
-	adjacency, ok := columnVectorGraphLittleEndianUint32DirectView(nil, 0)
-	if !ok || adjacency != nil {
-		t.Fatalf("direct view probe=(%v,%t) want nil,true for zero-length adjacency", adjacency, ok)
-	}
+func TestColumnVectorGraphAdjacencyZeroLengthFallbackV1(t *testing.T) {
 	view := columnVectorGraphAdjacencyBlockViewForTest(nil, nil, columnVectorGraphAdjacencySpan{})
 	adjacency, scratch, direct, err := view.adjacency(0, nil)
 	if err != nil {
 		t.Fatalf("adjacency: %v", err)
 	}
-	if !direct || adjacency != nil || scratch != nil {
-		t.Fatalf("adjacency=%v scratch=%v direct=%t want nil nil true", adjacency, scratch, direct)
+	if direct || adjacency != nil || scratch != nil {
+		t.Fatalf("adjacency=%v scratch=%v direct=%t want nil nil false", adjacency, scratch, direct)
 	}
 }
 
@@ -262,7 +240,7 @@ func columnVectorGraphAdjacencyBlockViewForTest(reader *columnVectorGraphPhysica
 		block:               &columnPhysicalRowReaderBlock{raw: raw},
 		adjSpans:            []columnVectorGraphAdjacencySpan{span},
 		rowValidated:        []bool{true},
-		adjacencyDirectView: true,
+		adjacencyDirectView: false,
 	}
 }
 

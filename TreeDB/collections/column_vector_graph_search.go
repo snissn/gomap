@@ -401,14 +401,7 @@ func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVecto
 	if err != nil {
 		return 0, err
 	}
-	if stats != nil {
-		stats.AdjacencyBytesRead += uint64(len(adjacency)) * 4
-		if direct {
-			stats.AdjacencyDirectViews++
-		} else {
-			stats.AdjacencyScratchDecodes++
-		}
-	}
+	recordColumnVectorGraphAdjacencySourceStats(stats, len(adjacency), direct)
 	return columnVectorGraphAdjacencyMaxLayer(adjacency)
 }
 
@@ -599,17 +592,27 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan 
 	if stats != nil {
 		stats.ExpansionFetches++
 		stats.AdjacencyExpansions++
-		stats.AdjacencyBytesRead += uint64(len(adjacency)) * 4
-		if direct {
-			stats.AdjacencyDirectViews++
-		} else {
-			stats.AdjacencyScratchDecodes++
-		}
+		recordColumnVectorGraphAdjacencySourceStats(stats, len(adjacency), direct)
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
 		stats.BlockViewBuilds = plan.builds
 	}
 	return layerAdjacency, nil
+}
+
+func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, direct bool) {
+	if stats == nil {
+		return
+	}
+	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
+	if adjacencyLen == 0 {
+		return
+	}
+	if direct {
+		stats.AdjacencyDirectViews++
+	} else {
+		stats.AdjacencyScratchDecodes++
+	}
 }
 
 func (r *columnVectorGraphPhysicalRowReader) rawCandidateAdjacency(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch) ([]uint32, error) {
