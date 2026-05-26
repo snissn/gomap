@@ -16,12 +16,13 @@ type ColumnPhysicalQueryKind string
 
 const (
 	// ColumnPhysicalQueryGroupCount counts rows by a string group column.
-	ColumnPhysicalQueryGroupCount         ColumnPhysicalQueryKind = "group_count"
-	ColumnPhysicalQueryGroupCountDistinct ColumnPhysicalQueryKind = "group_count_distinct"
-	ColumnPhysicalQueryHourCount          ColumnPhysicalQueryKind = "hour_count"
-	ColumnPhysicalQueryGroupMinInt64      ColumnPhysicalQueryKind = "group_min_int64"
-	ColumnPhysicalQueryGroupMaxInt64      ColumnPhysicalQueryKind = "group_max_int64"
-	ColumnPhysicalQueryGroupInt64Span     ColumnPhysicalQueryKind = "group_int64_span"
+	ColumnPhysicalQueryGroupCount            ColumnPhysicalQueryKind = "group_count"
+	ColumnPhysicalQueryGroupCountDistinct    ColumnPhysicalQueryKind = "group_count_distinct"
+	ColumnPhysicalQueryGroupCountAndDistinct ColumnPhysicalQueryKind = "group_count_and_distinct"
+	ColumnPhysicalQueryHourCount             ColumnPhysicalQueryKind = "hour_count"
+	ColumnPhysicalQueryGroupMinInt64         ColumnPhysicalQueryKind = "group_min_int64"
+	ColumnPhysicalQueryGroupMaxInt64         ColumnPhysicalQueryKind = "group_max_int64"
+	ColumnPhysicalQueryGroupInt64Span        ColumnPhysicalQueryKind = "group_int64_span"
 )
 
 const (
@@ -46,9 +47,10 @@ type ColumnPhysicalQueryRequest struct {
 // ColumnPhysicalQueryGroup is one reduced result row. Count is populated for
 // count-style queries; Int64 is populated for min/max/span-style queries.
 type ColumnPhysicalQueryGroup struct {
-	Key   string
-	Count int
-	Int64 int64
+	Key           string
+	Count         int
+	DistinctCount int
+	Int64         int64
 }
 
 // ColumnPhysicalQueryDiagnostics reports scan and reduce work for a physical
@@ -645,7 +647,7 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		switch req.Kind {
 		case ColumnPhysicalQueryGroupCount:
 			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn}
-		case ColumnPhysicalQueryGroupCountDistinct:
+		case ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct:
 			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, DictionaryColumn2: req.DistinctColumn}
 		case ColumnPhysicalQueryHourCount:
 			return columnManifestScanSidecarFilter{Int64Values: true, Int64Column: req.ValueColumn}
@@ -674,7 +676,7 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	switch req.Kind {
 	case ColumnPhysicalQueryGroupCount:
 		addDictionaryColumn(req.GroupColumn)
-	case ColumnPhysicalQueryGroupCountDistinct:
+	case ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct:
 		addDictionaryColumn(req.GroupColumn)
 		addDictionaryColumn(req.DistinctColumn)
 	case ColumnPhysicalQueryHourCount:
@@ -741,7 +743,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 
 func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
 	if req.AggregateMetadataName != "" || view.MutationParts != 0 ||
-		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct) {
+		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
