@@ -635,6 +635,51 @@ func TestCollectionReadViewFetchDocumentsByRowRefResponseDocumentsAreOwned1874(t
 	}
 }
 
+func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(t *testing.T) {
+	d, col := newDocumentMaterializerTestCollection(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1"), []byte("e2")},
+		[][]byte{
+			[]byte(`{"row_id":1,"kind":"alpha","score":1,"payload":"first"}`),
+			[]byte(`{"row_id":2,"kind":"beta","score":2,"payload":"second"}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	lookup, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1"), []byte("e2")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
+	}
+	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
+		t.Fatalf("FetchDocumentsByRowRef: %v", err)
+	}
+	if view.rowLocator == nil || view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 {
+		t.Fatalf("expected derived caches to be populated before integrity change")
+	}
+	cfg := view.columnSnapshotView.Config
+	if err := view.ensureAssetReadCaches(cfg, ColumnAssetReadIntegritySkipChecksums); err != nil {
+		t.Fatalf("ensureAssetReadCaches: %v", err)
+	}
+	if view.rowLocator != nil {
+		t.Fatalf("rowLocator=%v want nil after row asset cache rebuild", view.rowLocator)
+	}
+	if view.columnSnapshotView != nil {
+		t.Fatalf("columnSnapshotView=%v want nil after row asset cache rebuild", view.columnSnapshotView)
+	}
+	if view.pointRowRefs != nil {
+		t.Fatalf("pointRowRefs=%v want nil after row asset cache rebuild", view.pointRowRefs)
+	}
+	if len(view.pointRowBlocks) != 0 {
+		t.Fatalf("pointRowBlocks=%d want empty after row asset cache rebuild", len(view.pointRowBlocks))
+	}
+}
+
 func BenchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b *testing.B) {
 	benchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b, false)
 }

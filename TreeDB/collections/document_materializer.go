@@ -278,6 +278,9 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 	if v.rowAssetReadCache == nil || v.rowAssetReadIntegrity != rowIntegrity || v.rowAssetReadCache.namespace != namespace {
 		if v.rowAssetReadCache != nil {
 			v.clearPointRowBlockCache()
+			v.rowLocator = nil
+			v.columnSnapshotView = nil
+			v.pointRowRefs = nil
 			if err := v.rowAssetReadCache.close(); err != nil {
 				return err
 			}
