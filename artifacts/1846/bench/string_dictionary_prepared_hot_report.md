@@ -14,10 +14,10 @@ The timed loop reuses prepared typed-column state and calls the shared prepared 
 
 | shape | ns/op | ops/sec | rows/sec | matches/sec | B/op | allocs/op | dict bytes/session | dict bytes/op | mapped bytes/op | decoded bytes/op | physical bytes/op | rows scanned/op | rows matched/op | diagnostics |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| equality_selective | 317,815 | 3,145 | 412,247,401 | 50,323 | 0 | 0 | 542 | 0 | 0 | 1,179,680 | 1,179,680 | 131,072 | 16 | parts 2 considered / 1 decoded / 1 pruned; blocks 124 considered / 16 decoded / 108 pruned; kernel blocks 16; selection ranges 16; row/document materializations 0 |
-| equality_all_match | 9,532,626 | 104.9 | 104,901,377 | 104,901,377 | 0 | 0 | 502 | 0 | 0 | 9,000,248 | 9,000,248 | 1,000,000 | 1,000,000 | parts 2 decoded; blocks 124 decoded; kernel blocks 124; selection all blocks 124; row/document materializations 0 |
-| equality_all_pruned | 118.3 | 3,896,053 | 0 | 0 | 0 | 0 | 542 | 0 | 0 | 0 | 0 | 0 | 0 | parts 2 pruned before payload decode; blocks 124 considered / 124 pruned; kernel blocks 0; row/document materializations 0 |
-| in_list_category | 3,251,812 | 307.5 | 153,752,069 | 76,876,035 | 0 | 0 | 562 | 0 | 0 | 4,500,124 | 4,500,124 | 500,000 | 250,000 | targets `kind_003,kind_007`; parts 1 decoded / 1 pruned; blocks 124 considered / 62 decoded / 62 pruned; kernel blocks 62; selection bitmap blocks 62; row/document materializations 0 |
+| equality_selective | 455,262 | 2,196 | 287,799,924 | 35,132 | 0 | 0 | 542 | 0 | 0 | 1,179,680 | 1,179,680 | 131,072 | 16 | parts 2 considered / 1 decoded / 1 pruned; blocks 124 considered / 16 decoded / 108 pruned; kernel blocks 16; selection ranges 16; row/document materializations 0 |
+| equality_all_match | 9,569,178 | 104.5 | 104,500,246 | 104,500,246 | 0 | 0 | 502 | 0 | 0 | 9,000,248 | 9,000,248 | 1,000,000 | 1,000,000 | parts 2 decoded; blocks 124 decoded; kernel blocks 124; selection all blocks 124; row/document materializations 0 |
+| equality_all_pruned | 123.3 | 4,116,582 | 0 | 0 | 0 | 0 | 542 | 0 | 0 | 0 | 0 | 0 | 0 | parts 2 pruned before payload decode; blocks 124 considered / 124 pruned; kernel blocks 0; row/document materializations 0 |
+| in_list_category | 3,787,502 | 264.0 | 132,007,015 | 66,003,507 | 0 | 0 | 562 | 0 | 0 | 4,500,124 | 4,500,124 | 500,000 | 250,000 | targets `kind_003,kind_007`; parts 1 decoded / 1 pruned; blocks 124 considered / 62 decoded / 62 pruned; kernel blocks 62; selection bitmap blocks 62; row/document materializations 0 |
 
 Primary hot profile command:
 
@@ -33,17 +33,17 @@ TREEDB_TYPED_COLUMN_STRING_HOT_PROFILE_MATCH=equality_selective \
 
 CPU hot-path summary (`artifacts/1846/profiles/string_prepared_hot_1m_equality_selective_hot_cpu_top.txt`):
 
-- `typedColumnStringPredicatePreparedHotRunner.scan` / `scanTypedColumnStringPreparedPartWithVisibility`: 98.91% cumulative.
-- `typedkernel.SelectDictionaryCode` / `typedcolumn.(*GranuleReader).SelectUint32Code`: 70.80% cumulative.
-- `typedcolumn.applyCodeRangeRows`: 29.20% cumulative; `typedcolumn.readUint32Code`: 12.41% flat.
-- `typedcolumn.(*GranuleReader).DecodeInt64Into`: 27.37% cumulative for primary-id materialization of selected blocks.
+- `typedColumnStringPredicatePreparedHotRunner.scan` / `scanTypedColumnStringPreparedPartWithVisibility`: 99.25% cumulative.
+- `typedkernel.SelectDictionaryCode` / `typedcolumn.(*GranuleReader).SelectUint32Code`: 80.90% / 80.65% cumulative.
+- `typedcolumn.applyCodeRangeRows`: 50.75% cumulative; `typedcolumn.readValidUint32Code`: 23.37% cumulative while preserving fail-closed stored-code cardinality validation.
+- `typedcolumn.(*GranuleReader).DecodeInt64Into`: 17.34% cumulative for primary-id materialization of selected blocks.
 - No per-row string materialization, document materialization, or document reconstruction appears in the hot CPU profile or benchmark counters.
 
 Allocation notes:
 
 - The stable 100x prepared-hot benchmark reports `0 B/op` and `0 allocs/op` for all four shapes.
 - Dictionary sections are session/prepared-state scoped (`dictionary_bytes/session`), with `dictionary_bytes_decoded/op=0` in the hot loop.
-- The optional hot-profile run uses `runtime.MemProfileRate=1`; that instrumentation perturbs B/op (`119 B/op`, `0 allocs/op`) and the emitted alloc-space profile still includes setup/calibration samples from Go's benchmark process. Treat benchmem as authoritative for hot-loop allocations.
+- The optional hot-profile run uses `runtime.MemProfileRate=1`; that instrumentation perturbs B/op (`120 B/op`, `0 allocs/op`) and the emitted alloc-space profile still includes setup/calibration samples from Go's benchmark process. Treat benchmem as authoritative for hot-loop allocations.
 
 Artifacts:
 

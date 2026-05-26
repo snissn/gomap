@@ -71,11 +71,15 @@ func TestDictionaryRegistryFallbackStance(t *testing.T) {
 	reg := typedkernel.DefaultRegistry()
 	sem := dictionarySemantic(false, "")
 	layout := dictionaryLayout(false, "")
-	_, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.OpDictionaryGroupBy, Semantic: sem, Layout: layout})
-	if err == nil || !strings.Contains(err.Error(), "no kernel registered") {
-		t.Fatalf("dictionary group-by dispatch err=%v want explicit no-kernel fallback", err)
+	for _, op := range []typedkernel.AggregateOp{typedkernel.OpDictionaryGroupBy, typedkernel.OpDictionaryCount, typedkernel.OpDictionaryCountDistinct} {
+		t.Run(string(op), func(t *testing.T) {
+			_, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: op, Semantic: sem, Layout: layout})
+			if err == nil || !strings.Contains(err.Error(), "no kernel registered") {
+				t.Fatalf("dictionary dispatch err=%v want explicit no-kernel fallback", err)
+			}
+		})
 	}
-	_, err = reg.Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.AggregateOp(columnsemantics.OpStringPrefix), Semantic: sem, Layout: layout})
+	_, err := reg.Dispatch(typedkernel.DispatchRequest{Operation: typedkernel.AggregateOp(columnsemantics.OpStringPrefix), Semantic: sem, Layout: layout})
 	if err == nil || !strings.Contains(err.Error(), "unsupported aggregate operation") {
 		t.Fatalf("string prefix dispatch err=%v want unsupported aggregate operation", err)
 	}

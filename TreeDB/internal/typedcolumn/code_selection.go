@@ -33,7 +33,7 @@ func (r *GranuleReader) CountUint32Code(g EncodedGranule, selection RowSelection
 	if code >= header.cardinality {
 		return 0, nil
 	}
-	return countUint32CodeSelection(header, selection, code), nil
+	return countUint32CodeSelection(header, selection, code)
 }
 
 // CountUint32CodesIn counts rows in selection whose low-cardinality uint32 code
@@ -56,7 +56,7 @@ func (r *GranuleReader) CountUint32CodesIn(g EncodedGranule, selection RowSelect
 	if !any {
 		return 0, nil
 	}
-	return countUint32CodeSetSelection(header, selection, bits), nil
+	return countUint32CodeSetSelection(header, selection, bits)
 }
 
 // SelectUint32Code returns the subset of selection whose low-cardinality uint32
@@ -130,19 +130,23 @@ func validateUint32CodeSelectionRows(g EncodedGranule, selection RowSelection) e
 	return nil
 }
 
-func countUint32CodeSelection(header uint32CodesHeader, selection RowSelection, code uint32) int {
-	countRange := func(start, end int) int {
+func countUint32CodeSelection(header uint32CodesHeader, selection RowSelection, code uint32) (int, error) {
+	countRange := func(start, end int) (int, error) {
 		count := 0
 		for row := start; row < end; row++ {
-			if readUint32Code(header.data, header.width, row) == code {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return 0, err
+			}
+			if got == code {
 				count++
 			}
 		}
-		return count
+		return count, nil
 	}
 	switch selection.Kind() {
 	case RowSelectionEmpty:
-		return 0
+		return 0, nil
 	case RowSelectionAll:
 		return countRange(0, selection.Rows())
 	case RowSelectionRange:
@@ -151,9 +155,13 @@ func countUint32CodeSelection(header uint32CodesHeader, selection RowSelection, 
 	case RowSelectionRanges:
 		count := 0
 		for _, r := range selection.Ranges() {
-			count += countRange(r.Start, r.End)
+			n, err := countRange(r.Start, r.End)
+			if err != nil {
+				return 0, err
+			}
+			count += n
 		}
-		return count
+		return count, nil
 	case RowSelectionBitmap:
 		count := 0
 		for wordIndex, word := range selection.BitmapWords() {
@@ -163,39 +171,51 @@ func countUint32CodeSelection(header uint32CodesHeader, selection RowSelection, 
 				if row >= selection.Rows() {
 					break
 				}
-				if readUint32Code(header.data, header.width, row) == code {
+				got, err := readValidUint32Code(header, row)
+				if err != nil {
+					return 0, err
+				}
+				if got == code {
 					count++
 				}
 				word &^= uint64(1) << uint(bit)
 			}
 		}
-		return count
+		return count, nil
 	case RowSelectionSparse:
 		count := 0
 		for _, row := range selection.SparseRows() {
-			if readUint32Code(header.data, header.width, row) == code {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return 0, err
+			}
+			if got == code {
 				count++
 			}
 		}
-		return count
+		return count, nil
 	default:
-		return 0
+		return 0, nil
 	}
 }
 
-func countUint32CodeSetSelection(header uint32CodesHeader, selection RowSelection, codeBits []uint64) int {
-	countRange := func(start, end int) int {
+func countUint32CodeSetSelection(header uint32CodesHeader, selection RowSelection, codeBits []uint64) (int, error) {
+	countRange := func(start, end int) (int, error) {
 		count := 0
 		for row := start; row < end; row++ {
-			if uint32CodeSetContains(codeBits, readUint32Code(header.data, header.width, row)) {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return 0, err
+			}
+			if uint32CodeSetContains(codeBits, got) {
 				count++
 			}
 		}
-		return count
+		return count, nil
 	}
 	switch selection.Kind() {
 	case RowSelectionEmpty:
-		return 0
+		return 0, nil
 	case RowSelectionAll:
 		return countRange(0, selection.Rows())
 	case RowSelectionRange:
@@ -204,9 +224,13 @@ func countUint32CodeSetSelection(header uint32CodesHeader, selection RowSelectio
 	case RowSelectionRanges:
 		count := 0
 		for _, r := range selection.Ranges() {
-			count += countRange(r.Start, r.End)
+			n, err := countRange(r.Start, r.End)
+			if err != nil {
+				return 0, err
+			}
+			count += n
 		}
-		return count
+		return count, nil
 	case RowSelectionBitmap:
 		count := 0
 		for wordIndex, word := range selection.BitmapWords() {
@@ -216,23 +240,31 @@ func countUint32CodeSetSelection(header uint32CodesHeader, selection RowSelectio
 				if row >= selection.Rows() {
 					break
 				}
-				if uint32CodeSetContains(codeBits, readUint32Code(header.data, header.width, row)) {
+				got, err := readValidUint32Code(header, row)
+				if err != nil {
+					return 0, err
+				}
+				if uint32CodeSetContains(codeBits, got) {
 					count++
 				}
 				word &^= uint64(1) << uint(bit)
 			}
 		}
-		return count
+		return count, nil
 	case RowSelectionSparse:
 		count := 0
 		for _, row := range selection.SparseRows() {
-			if uint32CodeSetContains(codeBits, readUint32Code(header.data, header.width, row)) {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return 0, err
+			}
+			if uint32CodeSetContains(codeBits, got) {
 				count++
 			}
 		}
-		return count
+		return count, nil
 	default:
-		return 0
+		return 0, nil
 	}
 }
 
@@ -243,7 +275,11 @@ func selectUint32CodeSelection(header uint32CodesHeader, rows int, selection Row
 	case RowSelectionSparse:
 		scratch.Rows = scratch.Rows[:0]
 		for _, row := range selection.SparseRows() {
-			if readUint32Code(header.data, header.width, row) == code {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return RowSelection{}, err
+			}
+			if got == code {
 				scratch.Rows = append(scratch.Rows, row)
 			}
 		}
@@ -258,16 +294,24 @@ func selectUint32CodeSelection(header uint32CodesHeader, rows int, selection Row
 		}
 		switch selection.Kind() {
 		case RowSelectionAll:
-			applyCodeRangeRows(header, code, scratch.Bitmap, 0, rows)
+			if err := applyCodeRangeRows(header, code, scratch.Bitmap, 0, rows); err != nil {
+				return RowSelection{}, err
+			}
 		case RowSelectionRange:
 			start, end, _ := selection.SingleRange()
-			applyCodeRangeRows(header, code, scratch.Bitmap, start, end)
+			if err := applyCodeRangeRows(header, code, scratch.Bitmap, start, end); err != nil {
+				return RowSelection{}, err
+			}
 		case RowSelectionRanges:
 			for _, r := range selection.Ranges() {
-				applyCodeRangeRows(header, code, scratch.Bitmap, r.Start, r.End)
+				if err := applyCodeRangeRows(header, code, scratch.Bitmap, r.Start, r.End); err != nil {
+					return RowSelection{}, err
+				}
 			}
 		case RowSelectionBitmap:
-			applyCodeBitmapRows(header, code, rows, selection.BitmapWords(), scratch.Bitmap)
+			if err := applyCodeBitmapRows(header, code, rows, selection.BitmapWords(), scratch.Bitmap); err != nil {
+				return RowSelection{}, err
+			}
 		default:
 			return RowSelection{}, fmt.Errorf("typedcolumn: unsupported code row selection shape %s", selection.Shape().Kind)
 		}
@@ -282,7 +326,11 @@ func selectUint32CodeSetSelection(header uint32CodesHeader, rows int, selection 
 	case RowSelectionSparse:
 		scratch.Rows = scratch.Rows[:0]
 		for _, row := range selection.SparseRows() {
-			if uint32CodeSetContains(codeBits, readUint32Code(header.data, header.width, row)) {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return RowSelection{}, err
+			}
+			if uint32CodeSetContains(codeBits, got) {
 				scratch.Rows = append(scratch.Rows, row)
 			}
 		}
@@ -297,16 +345,24 @@ func selectUint32CodeSetSelection(header uint32CodesHeader, rows int, selection 
 		}
 		switch selection.Kind() {
 		case RowSelectionAll:
-			applyCodeSetRangeRows(header, codeBits, scratch.Bitmap, 0, rows)
+			if err := applyCodeSetRangeRows(header, codeBits, scratch.Bitmap, 0, rows); err != nil {
+				return RowSelection{}, err
+			}
 		case RowSelectionRange:
 			start, end, _ := selection.SingleRange()
-			applyCodeSetRangeRows(header, codeBits, scratch.Bitmap, start, end)
+			if err := applyCodeSetRangeRows(header, codeBits, scratch.Bitmap, start, end); err != nil {
+				return RowSelection{}, err
+			}
 		case RowSelectionRanges:
 			for _, r := range selection.Ranges() {
-				applyCodeSetRangeRows(header, codeBits, scratch.Bitmap, r.Start, r.End)
+				if err := applyCodeSetRangeRows(header, codeBits, scratch.Bitmap, r.Start, r.End); err != nil {
+					return RowSelection{}, err
+				}
 			}
 		case RowSelectionBitmap:
-			applyCodeSetBitmapRows(header, codeBits, rows, selection.BitmapWords(), scratch.Bitmap)
+			if err := applyCodeSetBitmapRows(header, codeBits, rows, selection.BitmapWords(), scratch.Bitmap); err != nil {
+				return RowSelection{}, err
+			}
 		default:
 			return RowSelection{}, fmt.Errorf("typedcolumn: unsupported code row selection shape %s", selection.Shape().Kind)
 		}
@@ -314,15 +370,20 @@ func selectUint32CodeSetSelection(header uint32CodesHeader, rows int, selection 
 	}
 }
 
-func applyCodeRangeRows(header uint32CodesHeader, code uint32, out []uint64, start int, end int) {
+func applyCodeRangeRows(header uint32CodesHeader, code uint32, out []uint64, start int, end int) error {
 	for row := start; row < end; row++ {
-		if readUint32Code(header.data, header.width, row) == code {
+		got, err := readValidUint32Code(header, row)
+		if err != nil {
+			return err
+		}
+		if got == code {
 			out[row/64] |= uint64(1) << uint(row%64)
 		}
 	}
+	return nil
 }
 
-func applyCodeBitmapRows(header uint32CodesHeader, code uint32, rows int, selectedWords []uint64, out []uint64) {
+func applyCodeBitmapRows(header uint32CodesHeader, code uint32, rows int, selectedWords []uint64, out []uint64) error {
 	for wordIndex, word := range selectedWords {
 		for word != 0 {
 			bit := bits.TrailingZeros64(word)
@@ -330,23 +391,33 @@ func applyCodeBitmapRows(header uint32CodesHeader, code uint32, rows int, select
 			if row >= rows {
 				break
 			}
-			if readUint32Code(header.data, header.width, row) == code {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return err
+			}
+			if got == code {
 				out[wordIndex] |= uint64(1) << uint(bit)
 			}
 			word &^= uint64(1) << uint(bit)
 		}
 	}
+	return nil
 }
 
-func applyCodeSetRangeRows(header uint32CodesHeader, codeBits []uint64, out []uint64, start int, end int) {
+func applyCodeSetRangeRows(header uint32CodesHeader, codeBits []uint64, out []uint64, start int, end int) error {
 	for row := start; row < end; row++ {
-		if uint32CodeSetContains(codeBits, readUint32Code(header.data, header.width, row)) {
+		got, err := readValidUint32Code(header, row)
+		if err != nil {
+			return err
+		}
+		if uint32CodeSetContains(codeBits, got) {
 			out[row/64] |= uint64(1) << uint(row%64)
 		}
 	}
+	return nil
 }
 
-func applyCodeSetBitmapRows(header uint32CodesHeader, codeBits []uint64, rows int, selectedWords []uint64, out []uint64) {
+func applyCodeSetBitmapRows(header uint32CodesHeader, codeBits []uint64, rows int, selectedWords []uint64, out []uint64) error {
 	for wordIndex, word := range selectedWords {
 		for word != 0 {
 			bit := bits.TrailingZeros64(word)
@@ -354,12 +425,25 @@ func applyCodeSetBitmapRows(header uint32CodesHeader, codeBits []uint64, rows in
 			if row >= rows {
 				break
 			}
-			if uint32CodeSetContains(codeBits, readUint32Code(header.data, header.width, row)) {
+			got, err := readValidUint32Code(header, row)
+			if err != nil {
+				return err
+			}
+			if uint32CodeSetContains(codeBits, got) {
 				out[wordIndex] |= uint64(1) << uint(bit)
 			}
 			word &^= uint64(1) << uint(bit)
 		}
 	}
+	return nil
+}
+
+func readValidUint32Code(header uint32CodesHeader, row int) (uint32, error) {
+	code := readUint32Code(header.data, header.width, row)
+	if code >= header.cardinality {
+		return 0, fmt.Errorf("typedcolumn: code %d outside cardinality %d", code, header.cardinality)
+	}
+	return code, nil
 }
 
 const uint32CodeSelectionRangeLimit = 8

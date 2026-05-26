@@ -39,6 +39,24 @@ func TestTypedColumnStringScanEqualityPredicate1785(t *testing.T) {
 	}
 }
 
+func TestTypedColumnStringScanVerifyIntegrityUsesFullTypedAsset1846(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"like", "share", "like"})
+
+	result, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Value: "like", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityVerify})
+	if err != nil {
+		t.Fatalf("RunTypedColumnStringPredicateScan: %v", err)
+	}
+	assertTypedColumnStringScanValues1785(t, result, []string{"like", "like"})
+	if result.Diagnostics.FullAssetReads == 0 || result.Diagnostics.FullAssetReads != result.Diagnostics.DirectTypedColumnAssetReads {
+		t.Fatalf("diagnostics=%+v want verify mode to read/checksum full typed-column assets", result.Diagnostics)
+	}
+	if result.Diagnostics.KernelBlocks == 0 || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentMaterializations != 0 {
+		t.Fatalf("diagnostics=%+v want prepared dictionary kernel without row/document materialization", result.Diagnostics)
+	}
+}
+
 func TestTypedColumnStringScanInListCategoryPreparedDictionary1846(t *testing.T) {
 	d, col := setupTypedColumnStringScanCollection1785(t)
 	defer func() { _ = d.Close() }()
@@ -96,6 +114,20 @@ func TestTypedColumnStringScanLexicalPrefixUnsupported1846(t *testing.T) {
 	}
 	if !result.Diagnostics.Fallback || result.Diagnostics.DirectTypedColumnAssetReads != 0 || result.Diagnostics.KernelBlocks != 0 || len(result.Rows) != 0 {
 		t.Fatalf("result=%+v want unsafe lexical prefix rejected before numeric code scan", result)
+	}
+}
+
+func TestTypedColumnStringScanUnknownKindFailsFast1846(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"apple", "banana"})
+
+	result, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Kind: TypedColumnStringPredicateScanKind("contains"), Value: "a"})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "unsupported kind") {
+		t.Fatalf("unknown kind err=%v want explicit unsupported kind", err)
+	}
+	if len(result.Rows) != 0 || result.Diagnostics.DirectTypedColumnAssetReads != 0 || result.Diagnostics.KernelBlocks != 0 {
+		t.Fatalf("result=%+v want fail-fast before prepared scan", result)
 	}
 }
 

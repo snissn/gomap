@@ -1,6 +1,9 @@
 package typedcolumn
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestUint32CodeSelectionParityShapes(t *testing.T) {
 	codes := make([]uint32, 130)
@@ -64,6 +67,48 @@ func TestUint32CodeSelectionParityShapes(t *testing.T) {
 			}
 			if gotRows := gotSelection.AppendRows(nil); !equalCodeRows(gotRows, wantRows) {
 				t.Fatalf("SelectUint32CodesIn rows=%v want %v shape=%+v", gotRows, wantRows, gotSelection.Shape())
+			}
+		})
+	}
+}
+
+func TestUint32CodeSelectionRejectsStoredCodeOutsideCardinality(t *testing.T) {
+	codes := []uint32{0, 1, 5, 2}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone})
+	granule, err := builder.BuildUint32Codes(codes, 8)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes: %v", err)
+	}
+	payload := append([]byte(nil), granule.Payload...)
+	if len(payload) < 2 || payload[0] != 1 {
+		t.Fatalf("unexpected test payload header: %v", payload[:min(len(payload), 4)])
+	}
+	payload[1] = 4 // Lower the encoded cardinality below stored code 5.
+	granule.Payload = payload
+	selection := mustCodeSelection(NewAllRowSelection(len(codes)))
+	var reader GranuleReader
+	var scratch Uint32CodeSelectionScratch
+	for name, run := range map[string]func() error{
+		"CountUint32Code": func() error {
+			_, err := reader.CountUint32Code(granule, selection, 1)
+			return err
+		},
+		"CountUint32CodesIn": func() error {
+			_, err := reader.CountUint32CodesIn(granule, selection, []uint32{1, 2}, &scratch)
+			return err
+		},
+		"SelectUint32Code": func() error {
+			_, err := reader.SelectUint32Code(granule, selection, 1, &scratch)
+			return err
+		},
+		"SelectUint32CodesIn": func() error {
+			_, err := reader.SelectUint32CodesIn(granule, selection, []uint32{1, 2}, &scratch)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); err == nil || !strings.Contains(err.Error(), "outside cardinality") {
+				t.Fatalf("err=%v want outside cardinality", err)
 			}
 		})
 	}

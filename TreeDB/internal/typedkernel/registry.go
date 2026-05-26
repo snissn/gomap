@@ -15,14 +15,16 @@ import (
 type AggregateOp = columnsemantics.Operation
 
 const (
-	OpCountRows         AggregateOp = columnsemantics.OpCountRows
-	OpCountNonNull      AggregateOp = columnsemantics.OpCountNonNull
-	OpSum               AggregateOp = columnsemantics.OpSum
-	OpAvg               AggregateOp = columnsemantics.OpAvg
-	OpMin               AggregateOp = columnsemantics.OpMin
-	OpMax               AggregateOp = columnsemantics.OpMax
-	OpBoolCounts        AggregateOp = columnsemantics.OpBoolCounts
-	OpDictionaryGroupBy AggregateOp = columnsemantics.OpDictionaryGroupBy
+	OpCountRows               AggregateOp = columnsemantics.OpCountRows
+	OpCountNonNull            AggregateOp = columnsemantics.OpCountNonNull
+	OpSum                     AggregateOp = columnsemantics.OpSum
+	OpAvg                     AggregateOp = columnsemantics.OpAvg
+	OpMin                     AggregateOp = columnsemantics.OpMin
+	OpMax                     AggregateOp = columnsemantics.OpMax
+	OpBoolCounts              AggregateOp = columnsemantics.OpBoolCounts
+	OpDictionaryGroupBy       AggregateOp = columnsemantics.OpDictionaryGroupBy
+	OpDictionaryCount         AggregateOp = columnsemantics.OpDictionaryCount
+	OpDictionaryCountDistinct AggregateOp = columnsemantics.OpDictionaryCountDistinct
 )
 
 // AggregateResult keeps row-count and value-count semantics distinct. For
@@ -251,7 +253,7 @@ func (entry KernelSpec) matches(op AggregateOp, desc columnsemantics.Descriptor,
 
 func isAggregateOp(op AggregateOp) bool {
 	switch op {
-	case OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpBoolCounts, OpDictionaryGroupBy:
+	case OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpBoolCounts, OpDictionaryGroupBy, OpDictionaryCount, OpDictionaryCountDistinct:
 		return true
 	default:
 		return false

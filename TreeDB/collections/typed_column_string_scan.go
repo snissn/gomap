@@ -97,7 +97,12 @@ func validateTypedColumnStringPredicateScanRequest(req TypedColumnStringPredicat
 	if req.Column == "" {
 		return errors.New("collections: typed-column string predicate scan requires column")
 	}
-	return nil
+	switch req.Kind {
+	case "", TypedColumnStringPredicateEqual, TypedColumnStringPredicateInList, TypedColumnStringPredicateCategory, TypedColumnStringPredicatePrefix, TypedColumnStringPredicateLexicalRange:
+		return nil
+	default:
+		return fmt.Errorf("%w: typed-column string predicate scan unsupported kind %q", ErrColumnQueryPlanUnsupported, req.Kind)
+	}
 }
 
 func typedColumnStringPredicateUnsupportedColumnError(column string, col ColumnStoreColumn) error {
@@ -207,6 +212,8 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 		}
 	}
 	var rawScratch []byte
+	var typedRawScratch []byte
+	useTargetedRanges := typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity)
 	validatedRefs := make(map[ColumnAssetRef]struct{}, len(view.AssetRefs))
 	for _, physical := range view.AssetRefs {
 		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
@@ -214,12 +221,25 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 		}
 		typedRef := refsByGeneration[physical.Ref.Generation]
 		result.Diagnostics.PartsConsidered++
-		if err := typedColumnStringEnsureFullAssetValidated(&readCache, typedRef.Ref, req.ColumnAssetReadIntegrity, validatedRefs, &result.Diagnostics); err != nil {
-			return result, fmt.Errorf("collections: typed-column string predicate validate generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
-		}
 		result.Diagnostics.DirectTypedColumnAssetReads++
-		readRange := func(offset int, length int, section bool) ([]byte, error) {
-			return typedColumnStringReadRange(&readCache, typedRef.Ref, offset, length, section, &result.Diagnostics)
+		var readRange typedColumnPreparedRangeReader
+		if useTargetedRanges {
+			if err := typedColumnStringEnsureFullAssetValidated(&readCache, typedRef.Ref, req.ColumnAssetReadIntegrity, validatedRefs, &result.Diagnostics); err != nil {
+				return result, fmt.Errorf("collections: typed-column string predicate validate generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			}
+			readRange = func(offset int, length int, section bool) ([]byte, error) {
+				return typedColumnStringReadRange(&readCache, typedRef.Ref, offset, length, section, &result.Diagnostics)
+			}
+		} else {
+			var err error
+			typedRawScratch, err = typedColumnStringReadFullAsset(&readCache, typedRef.Ref, typedRawScratch, &result.Diagnostics)
+			if err != nil {
+				return result, fmt.Errorf("collections: typed-column string predicate read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			}
+			fullRaw := typedRawScratch
+			readRange = func(offset int, length int, section bool) ([]byte, error) {
+				return typedColumnStringReadFullAssetRange(fullRaw, offset, length, section, &result.Diagnostics)
+			}
 		}
 		requests := typedColumnStringPreparedColumnRequests(adapterColumn, op)
 		preparedPart, partDiag, err := typedColumnPreparePartStateFromRanges(typedRef.Ref, physical.Ref, typedRef.Rows, physical.Rows, fields, cfg.SchemaHash, requests, readRange, nil)
@@ -329,6 +349,50 @@ func typedColumnStringPredicateValues(req TypedColumnStringPredicateScanRequest)
 	default:
 		return nil
 	}
+}
+
+func typedColumnStringUseTargetedRanges(integrity ColumnAssetReadIntegrity) bool {
+	switch integrity {
+	case ColumnAssetReadIntegrityCachedVerify, ColumnAssetReadIntegritySkipChecksums:
+		return true
+	default:
+		return false
+	}
+}
+
+func typedColumnStringReadFullAsset(readCache *columnPhysicalAssetReadCache, ref ColumnAssetRef, dst []byte, diag *TypedColumnStringPredicateScanDiagnostics) ([]byte, error) {
+	if readCache == nil {
+		return nil, errors.New("collections: typed-column string full asset read requires cache")
+	}
+	raw, err := readCache.read(ref, dst)
+	if diag != nil {
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
+	}
+	if err != nil {
+		return dst, err
+	}
+	if diag != nil {
+		diag.FullAssetReads++
+		diag.FullAssetBytes += uint64(len(raw))
+		diag.PhysicalBytesScanned += int64(len(raw))
+	}
+	return raw, nil
+}
+
+func typedColumnStringReadFullAssetRange(raw []byte, offset int, length int, section bool, diag *TypedColumnStringPredicateScanDiagnostics) ([]byte, error) {
+	if offset < 0 || length <= 0 || offset > len(raw) || length > len(raw)-offset {
+		return nil, fmt.Errorf("collections: typed-column string full asset range offset=%d length=%d raw=%d", offset, length, len(raw))
+	}
+	out := raw[offset : offset+length]
+	if diag != nil {
+		if section {
+			diag.SectionBytesRead += uint64(len(out))
+		} else {
+			diag.RangeBytesRead += uint64(len(out))
+		}
+	}
+	return out, nil
 }
 
 func typedColumnStringEnsureFullAssetValidated(readCache *columnPhysicalAssetReadCache, ref ColumnAssetRef, integrity ColumnAssetReadIntegrity, validated map[ColumnAssetRef]struct{}, diag *TypedColumnStringPredicateScanDiagnostics) error {
