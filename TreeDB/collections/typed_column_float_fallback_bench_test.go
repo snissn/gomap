@@ -39,8 +39,8 @@ func BenchmarkTypedColumnFloatFallback(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					result = runTypedColumnFloatFallback(cells, tc.valueType, bc.predicate)
 				}
-				elapsed := time.Since(start)
 				b.StopTimer()
+				elapsed := time.Since(start)
 				typedColumnFloatFallbackBenchSink = result
 				if result.RowsScanned != preview.RowsScanned || result.RowsMatched != preview.RowsMatched || result.NaNRows != preview.NaNRows {
 					b.Fatalf("result=%+v preview=%+v", result, preview)
