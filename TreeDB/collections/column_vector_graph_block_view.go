@@ -483,10 +483,11 @@ func columnVectorGraphLittleEndianUint32DirectView(raw []byte, count int) ([]uin
 	if count == 0 {
 		return nil, true
 	}
-	if !columnPhysicalNativeLittleEndian || uintptr(unsafe.Pointer(&raw[0]))%4 != 0 {
+	ptr := unsafe.Pointer(unsafe.SliceData(raw))
+	if !columnPhysicalNativeLittleEndian || uintptr(ptr)%unsafe.Alignof(uint32(0)) != 0 {
 		return nil, false
 	}
-	return unsafe.Slice((*uint32)(unsafe.Pointer(&raw[0])), count), true
+	return unsafe.Slice((*uint32)(ptr), count), true
 }
 
 func (v *columnVectorGraphBlockView) adjacencyLittleEndian() bool {
