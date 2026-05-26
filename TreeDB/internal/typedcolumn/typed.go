@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"sort"
 )
 
 const (
@@ -64,6 +65,57 @@ func (r *GranuleReader) CountTrueBool(g EncodedGranule) (int, error) {
 		return 0, err
 	}
 	return countTrueBoolPayload(raw, g.Rows)
+}
+
+// BoolSelectionScratch owns caller/session-scoped temporary storage for bool
+// predicate selections. Returned selections from SelectBool may alias this
+// scratch until the next use.
+type BoolSelectionScratch struct {
+	Rows   []int
+	Ranges []RowRange
+	Bitmap []uint64
+}
+
+// CountBool counts rows in selection whose bool payload equals value. Bitpack
+// payloads use popcount over selected bit ranges/words; RLE payloads aggregate
+// matching runs without materializing []bool.
+func (r *GranuleReader) CountBool(g EncodedGranule, selection RowSelection, value bool) (int, error) {
+	if g.Encoding != EncodingBoolBitpackRLE {
+		return 0, fmt.Errorf("typedcolumn: bool count got encoding %d", g.Encoding)
+	}
+	if err := validateBoolSelectionRows(g.Rows, selection); err != nil {
+		return 0, err
+	}
+	if selection.IsEmpty() {
+		return 0, nil
+	}
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return 0, err
+	}
+	return countBoolPayloadSelection(raw, g.Rows, selection, value)
+}
+
+// SelectBool returns the subset of selection whose bool payload equals value.
+// The returned selection may alias scratch when scratch is non-nil.
+func (r *GranuleReader) SelectBool(g EncodedGranule, selection RowSelection, value bool, scratch *BoolSelectionScratch) (RowSelection, error) {
+	if g.Encoding != EncodingBoolBitpackRLE {
+		return RowSelection{}, fmt.Errorf("typedcolumn: bool select got encoding %d", g.Encoding)
+	}
+	if err := validateBoolSelectionRows(g.Rows, selection); err != nil {
+		return RowSelection{}, err
+	}
+	if selection.IsEmpty() {
+		return NewEmptyRowSelection(g.Rows)
+	}
+	if scratch == nil {
+		scratch = &BoolSelectionScratch{}
+	}
+	raw, err := r.decompressPayload(g)
+	if err != nil {
+		return RowSelection{}, err
+	}
+	return selectBoolPayload(raw, g.Rows, selection, value, scratch)
 }
 
 // BuildNullableInt64 returns a granule whose payload aliases builder-owned
@@ -390,16 +442,7 @@ func countTrueBoolPayload(raw []byte, rows int) (int, error) {
 		if len(mask) != need {
 			return 0, fmt.Errorf("typedcolumn: bool bitpack bytes=%d want=%d", len(mask), need)
 		}
-		count := 0
-		fullBytes := rows / 8
-		for _, b := range mask[:fullBytes] {
-			count += bits.OnesCount8(b)
-		}
-		if rows%8 != 0 {
-			last := mask[fullBytes] & byte((1<<uint(rows%8))-1)
-			count += bits.OnesCount8(last)
-		}
-		return count, nil
+		return countBoolBitpackRange(mask, 0, rows), nil
 	case boolPayloadRLE:
 		value, data, err := parseBoolRLEHeader(raw)
 		if err != nil {
@@ -432,6 +475,491 @@ func countTrueBoolPayload(raw []byte, rows int) (int, error) {
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported bool payload mode %d", raw[0])
 	}
+}
+
+func validateBoolSelectionRows(rows int, selection RowSelection) error {
+	if err := validateGranuleDecodeRows(rows); err != nil {
+		return err
+	}
+	if selection.Rows() != rows {
+		return fmt.Errorf("typedcolumn: bool selection rows=%d want %d", selection.Rows(), rows)
+	}
+	return nil
+}
+
+func countBoolPayloadSelection(raw []byte, rows int, selection RowSelection, value bool) (int, error) {
+	if len(raw) == 0 {
+		return 0, errors.New("typedcolumn: missing bool payload mode")
+	}
+	switch raw[0] {
+	case boolPayloadBitpack:
+		mask := raw[1:]
+		need, err := bitmapBytesChecked(rows)
+		if err != nil {
+			return 0, err
+		}
+		if len(mask) != need {
+			return 0, fmt.Errorf("typedcolumn: bool bitpack bytes=%d want=%d", len(mask), need)
+		}
+		trueCount := countBoolBitpackSelection(mask, rows, selection)
+		if value {
+			return trueCount, nil
+		}
+		return selection.Count() - trueCount, nil
+	case boolPayloadRLE:
+		return countBoolRLESelection(raw, rows, selection, value)
+	default:
+		return 0, fmt.Errorf("typedcolumn: unsupported bool payload mode %d", raw[0])
+	}
+}
+
+func countBoolBitpackSelection(mask []byte, rows int, selection RowSelection) int {
+	switch selection.Kind() {
+	case RowSelectionEmpty:
+		return 0
+	case RowSelectionAll:
+		return countBoolBitpackRange(mask, 0, rows)
+	case RowSelectionRange:
+		start, end, _ := selection.SingleRange()
+		return countBoolBitpackRange(mask, start, end)
+	case RowSelectionRanges:
+		count := 0
+		for _, r := range selection.Ranges() {
+			count += countBoolBitpackRange(mask, r.Start, r.End)
+		}
+		return count
+	case RowSelectionBitmap:
+		count := 0
+		for wordIndex, selected := range selection.BitmapWords() {
+			if selected == 0 {
+				continue
+			}
+			word := boolBitpackWord(mask, wordIndex, rows)
+			count += bits.OnesCount64(word & selected)
+		}
+		return count
+	case RowSelectionSparse:
+		count := 0
+		for _, row := range selection.SparseRows() {
+			if bitmapBit(mask, row) {
+				count++
+			}
+		}
+		return count
+	default:
+		return 0
+	}
+}
+
+func countBoolBitpackRange(mask []byte, start int, end int) int {
+	if start < 0 || end < start {
+		return 0
+	}
+	count := 0
+	for start < end && start%8 != 0 {
+		if bitmapBit(mask, start) {
+			count++
+		}
+		start++
+	}
+	for start+8 <= end {
+		count += bits.OnesCount8(mask[start/8])
+		start += 8
+	}
+	for start < end {
+		if bitmapBit(mask, start) {
+			count++
+		}
+		start++
+	}
+	return count
+}
+
+func boolBitpackWord(mask []byte, wordIndex int, rows int) uint64 {
+	byteStart := wordIndex * 8
+	if byteStart >= len(mask) {
+		return 0
+	}
+	byteEnd := min(byteStart+8, len(mask))
+	var word uint64
+	for i, b := range mask[byteStart:byteEnd] {
+		word |= uint64(b) << uint(i*8)
+	}
+	if padding := rows % 64; padding != 0 && wordIndex == rowSelectionBitmapWords(rows)-1 {
+		word &= uint64(1<<uint(padding)) - 1
+	}
+	return word
+}
+
+func countBoolRLESelection(raw []byte, rows int, selection RowSelection, want bool) (int, error) {
+	value, data, err := parseBoolRLEHeader(raw)
+	if err != nil {
+		return 0, err
+	}
+	row := 0
+	count := 0
+	for len(data) > 0 && row < rows {
+		run, n := binary.Uvarint(data)
+		if n <= 0 {
+			return 0, errors.New("typedcolumn: malformed bool rle run")
+		}
+		if run == 0 || run > uint64(rows-row) {
+			return 0, errors.New("typedcolumn: invalid bool rle run")
+		}
+		runStart := row
+		runEnd := row + int(run)
+		if value == want {
+			count += countSelectionInRange(selection, runStart, runEnd)
+		}
+		row = runEnd
+		value = !value
+		data = data[n:]
+	}
+	if row != rows {
+		return 0, fmt.Errorf("typedcolumn: bool rle rows=%d want=%d", row, rows)
+	}
+	if len(data) != 0 {
+		return 0, errors.New("typedcolumn: trailing bool rle bytes")
+	}
+	return count, nil
+}
+
+func countSelectionInRange(selection RowSelection, start int, end int) int {
+	if end <= start || selection.IsEmpty() {
+		return 0
+	}
+	switch selection.Kind() {
+	case RowSelectionAll:
+		return end - start
+	case RowSelectionRange:
+		selStart, selEnd, _ := selection.SingleRange()
+		return max(0, min(end, selEnd)-max(start, selStart))
+	case RowSelectionRanges:
+		count := 0
+		for _, r := range selection.Ranges() {
+			if r.End <= start {
+				continue
+			}
+			if r.Start >= end {
+				break
+			}
+			count += max(0, min(end, r.End)-max(start, r.Start))
+		}
+		return count
+	case RowSelectionBitmap:
+		return countBitmapSelectionRange(selection.BitmapWords(), start, end)
+	case RowSelectionSparse:
+		sparse := selection.SparseRows()
+		lo := sort.SearchInts(sparse, start)
+		hi := sort.SearchInts(sparse, end)
+		return hi - lo
+	default:
+		return 0
+	}
+}
+
+func countBitmapSelectionRange(words []uint64, start int, end int) int {
+	if end <= start {
+		return 0
+	}
+	count := 0
+	for start < end && start%64 != 0 {
+		if words[start/64]&(uint64(1)<<uint(start%64)) != 0 {
+			count++
+		}
+		start++
+	}
+	for start+64 <= end {
+		count += bits.OnesCount64(words[start/64])
+		start += 64
+	}
+	for start < end {
+		if words[start/64]&(uint64(1)<<uint(start%64)) != 0 {
+			count++
+		}
+		start++
+	}
+	return count
+}
+
+func selectBoolPayload(raw []byte, rows int, selection RowSelection, value bool, scratch *BoolSelectionScratch) (RowSelection, error) {
+	if len(raw) == 0 {
+		return RowSelection{}, errors.New("typedcolumn: missing bool payload mode")
+	}
+	switch raw[0] {
+	case boolPayloadBitpack:
+		mask := raw[1:]
+		need, err := bitmapBytesChecked(rows)
+		if err != nil {
+			return RowSelection{}, err
+		}
+		if len(mask) != need {
+			return RowSelection{}, fmt.Errorf("typedcolumn: bool bitpack bytes=%d want=%d", len(mask), need)
+		}
+		return selectBoolBitpack(mask, rows, selection, value, scratch)
+	case boolPayloadRLE:
+		return selectBoolRLE(raw, rows, selection, value, scratch)
+	default:
+		return RowSelection{}, fmt.Errorf("typedcolumn: unsupported bool payload mode %d", raw[0])
+	}
+}
+
+func selectBoolBitpack(mask []byte, rows int, selection RowSelection, value bool, scratch *BoolSelectionScratch) (RowSelection, error) {
+	switch selection.Kind() {
+	case RowSelectionEmpty:
+		return NewEmptyRowSelection(rows)
+	case RowSelectionSparse:
+		scratch.Rows = scratch.Rows[:0]
+		for _, row := range selection.SparseRows() {
+			if bitmapBit(mask, row) == value {
+				scratch.Rows = append(scratch.Rows, row)
+			}
+		}
+		return boolRowsSelection(rows, scratch)
+	default:
+		words := rowSelectionBitmapWords(rows)
+		if cap(scratch.Bitmap) < words {
+			scratch.Bitmap = make([]uint64, words)
+		} else {
+			scratch.Bitmap = scratch.Bitmap[:words]
+			for i := range scratch.Bitmap {
+				scratch.Bitmap[i] = 0
+			}
+		}
+		applyBoolBitpackSelection(mask, rows, selection, value, scratch.Bitmap)
+		return NewBitmapRowSelectionNoCopy(rows, scratch.Bitmap)
+	}
+}
+
+func applyBoolBitpackSelection(mask []byte, rows int, selection RowSelection, value bool, out []uint64) {
+	applyRange := func(start, end int) {
+		for row := start; row < end; row++ {
+			if bitmapBit(mask, row) == value {
+				out[row/64] |= uint64(1) << uint(row%64)
+			}
+		}
+	}
+	switch selection.Kind() {
+	case RowSelectionAll:
+		applyRange(0, rows)
+	case RowSelectionRange:
+		start, end, _ := selection.SingleRange()
+		applyRange(start, end)
+	case RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			applyRange(r.Start, r.End)
+		}
+	case RowSelectionBitmap:
+		for wordIndex, selected := range selection.BitmapWords() {
+			if selected == 0 {
+				continue
+			}
+			word := boolBitpackWord(mask, wordIndex, rows)
+			if !value {
+				word = ^word
+				if padding := rows % 64; padding != 0 && wordIndex == rowSelectionBitmapWords(rows)-1 {
+					word &= uint64(1<<uint(padding)) - 1
+				}
+			}
+			out[wordIndex] = selected & word
+		}
+	}
+}
+
+func selectBoolRLE(raw []byte, rows int, selection RowSelection, want bool, scratch *BoolSelectionScratch) (RowSelection, error) {
+	value, data, err := parseBoolRLEHeader(raw)
+	if err != nil {
+		return RowSelection{}, err
+	}
+	if selection.Kind() == RowSelectionBitmap || selection.Kind() == RowSelectionSparse {
+		return selectBoolRLEByRows(value, data, rows, selection, want, scratch)
+	}
+	scratch.Ranges = scratch.Ranges[:0]
+	row := 0
+	for len(data) > 0 && row < rows {
+		run, n := binary.Uvarint(data)
+		if n <= 0 {
+			return RowSelection{}, errors.New("typedcolumn: malformed bool rle run")
+		}
+		if run == 0 || run > uint64(rows-row) {
+			return RowSelection{}, errors.New("typedcolumn: invalid bool rle run")
+		}
+		runStart := row
+		runEnd := row + int(run)
+		if value == want {
+			appendSelectionRangeIntersections(selection, runStart, runEnd, scratch)
+		}
+		row = runEnd
+		value = !value
+		data = data[n:]
+	}
+	if row != rows {
+		return RowSelection{}, fmt.Errorf("typedcolumn: bool rle rows=%d want=%d", row, rows)
+	}
+	if len(data) != 0 {
+		return RowSelection{}, errors.New("typedcolumn: trailing bool rle bytes")
+	}
+	return NewRangesRowSelectionNoCopy(rows, scratch.Ranges)
+}
+
+func appendSelectionRangeIntersections(selection RowSelection, start int, end int, scratch *BoolSelectionScratch) {
+	appendRange := func(a, b int) {
+		if a < b {
+			scratch.Ranges = append(scratch.Ranges, RowRange{Start: a, End: b})
+		}
+	}
+	switch selection.Kind() {
+	case RowSelectionAll:
+		appendRange(start, end)
+	case RowSelectionRange:
+		selStart, selEnd, _ := selection.SingleRange()
+		appendRange(max(start, selStart), min(end, selEnd))
+	case RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			if r.End <= start {
+				continue
+			}
+			if r.Start >= end {
+				break
+			}
+			appendRange(max(start, r.Start), min(end, r.End))
+		}
+	}
+}
+
+func selectBoolRLEByRows(value bool, data []byte, rows int, selection RowSelection, want bool, scratch *BoolSelectionScratch) (RowSelection, error) {
+	if selection.Kind() == RowSelectionBitmap {
+		words := rowSelectionBitmapWords(rows)
+		if cap(scratch.Bitmap) < words {
+			scratch.Bitmap = make([]uint64, words)
+		} else {
+			scratch.Bitmap = scratch.Bitmap[:words]
+			for i := range scratch.Bitmap {
+				scratch.Bitmap[i] = 0
+			}
+		}
+		row := 0
+		for len(data) > 0 && row < rows {
+			run, n := binary.Uvarint(data)
+			if n <= 0 {
+				return RowSelection{}, errors.New("typedcolumn: malformed bool rle run")
+			}
+			if run == 0 || run > uint64(rows-row) {
+				return RowSelection{}, errors.New("typedcolumn: invalid bool rle run")
+			}
+			runEnd := row + int(run)
+			if value == want {
+				copyBitmapRangeIntersection(scratch.Bitmap, selection.BitmapWords(), row, runEnd)
+			}
+			row = runEnd
+			value = !value
+			data = data[n:]
+		}
+		if row != rows {
+			return RowSelection{}, fmt.Errorf("typedcolumn: bool rle rows=%d want=%d", row, rows)
+		}
+		if len(data) != 0 {
+			return RowSelection{}, errors.New("typedcolumn: trailing bool rle bytes")
+		}
+		return NewBitmapRowSelectionNoCopy(rows, scratch.Bitmap)
+	}
+	scratch.Rows = scratch.Rows[:0]
+	row := 0
+	sparse := selection.SparseRows()
+	sparseIndex := 0
+	for len(data) > 0 && row < rows {
+		run, n := binary.Uvarint(data)
+		if n <= 0 {
+			return RowSelection{}, errors.New("typedcolumn: malformed bool rle run")
+		}
+		if run == 0 || run > uint64(rows-row) {
+			return RowSelection{}, errors.New("typedcolumn: invalid bool rle run")
+		}
+		runEnd := row + int(run)
+		for sparseIndex < len(sparse) && sparse[sparseIndex] < row {
+			sparseIndex++
+		}
+		if value == want {
+			for sparseIndex < len(sparse) && sparse[sparseIndex] < runEnd {
+				scratch.Rows = append(scratch.Rows, sparse[sparseIndex])
+				sparseIndex++
+			}
+		}
+		row = runEnd
+		value = !value
+		data = data[n:]
+	}
+	if row != rows {
+		return RowSelection{}, fmt.Errorf("typedcolumn: bool rle rows=%d want=%d", row, rows)
+	}
+	if len(data) != 0 {
+		return RowSelection{}, errors.New("typedcolumn: trailing bool rle bytes")
+	}
+	return boolRowsSelection(rows, scratch)
+}
+
+func copyBitmapRangeIntersection(dst []uint64, src []uint64, start int, end int) {
+	for row := start; row < end; row++ {
+		word := row / 64
+		bit := uint(row % 64)
+		if src[word]&(uint64(1)<<bit) != 0 {
+			dst[word] |= uint64(1) << bit
+		}
+	}
+}
+
+const boolSelectionRangeLimit = 8
+
+func boolRowsSelection(rows int, scratch *BoolSelectionScratch) (RowSelection, error) {
+	selected := scratch.Rows
+	if len(selected) == 0 {
+		return NewEmptyRowSelection(rows)
+	}
+	if len(selected) == rows {
+		return NewAllRowSelection(rows)
+	}
+	if isContiguousBoolRows(selected) {
+		return NewRangeRowSelection(rows, selected[0], selected[len(selected)-1]+1)
+	}
+	scratch.Ranges = scratch.Ranges[:0]
+	start, prev := selected[0], selected[0]
+	for _, row := range selected[1:] {
+		if row == prev+1 {
+			prev = row
+			continue
+		}
+		scratch.Ranges = append(scratch.Ranges, RowRange{Start: start, End: prev + 1})
+		start, prev = row, row
+	}
+	scratch.Ranges = append(scratch.Ranges, RowRange{Start: start, End: prev + 1})
+	if len(scratch.Ranges) <= boolSelectionRangeLimit {
+		return NewRangesRowSelectionNoCopy(rows, scratch.Ranges)
+	}
+	if len(selected) >= 64 && len(selected)*4 >= rows*3 {
+		words := rowSelectionBitmapWords(rows)
+		if cap(scratch.Bitmap) < words {
+			scratch.Bitmap = make([]uint64, words)
+		} else {
+			scratch.Bitmap = scratch.Bitmap[:words]
+			for i := range scratch.Bitmap {
+				scratch.Bitmap[i] = 0
+			}
+		}
+		for _, row := range selected {
+			scratch.Bitmap[row/64] |= uint64(1) << uint(row%64)
+		}
+		return NewBitmapRowSelectionNoCopy(rows, scratch.Bitmap)
+	}
+	return NewSparseRowSelectionNoCopy(rows, selected)
+}
+
+func isContiguousBoolRows(rows []int) bool {
+	for i := 1; i < len(rows); i++ {
+		if rows[i] != rows[i-1]+1 {
+			return false
+		}
+	}
+	return len(rows) != 0
 }
 
 func boolRLEPayloadLen(values []bool) int {

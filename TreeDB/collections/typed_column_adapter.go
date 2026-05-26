@@ -1778,6 +1778,7 @@ type typedColumnInt64PredicateAggregateScanScratch struct {
 	predicateBitmap []uint64
 	visibilityRows  []int
 	selection       typedcolumn.RowSelectionScratch
+	boolSelection   typedcolumn.BoolSelectionScratch
 	kernel          typedkernel.Scratch
 }
 

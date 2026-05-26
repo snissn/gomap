@@ -21,21 +21,26 @@ const (
 	OpAvg          AggregateOp = columnsemantics.OpAvg
 	OpMin          AggregateOp = columnsemantics.OpMin
 	OpMax          AggregateOp = columnsemantics.OpMax
+	OpBoolCounts   AggregateOp = columnsemantics.OpBoolCounts
 )
 
 // AggregateResult keeps row-count and value-count semantics distinct. For
 // CountRows, Rows is the row count. For CountNonNull and value aggregates,
-// NonNulls is the number of values included in the aggregate. HasValue is false
-// for empty min/max/avg inputs.
+// NonNulls is the number of values included in the aggregate. For OpBoolCounts,
+// Rows and NonNulls are the selected non-null bool rows while TrueCount and
+// FalseCount partition those rows. HasValue is false for empty min/max/avg
+// inputs.
 type AggregateResult struct {
-	Op       AggregateOp
-	Rows     int64
-	NonNulls int64
-	Sum      int64
-	Avg      float64
-	Min      int64
-	Max      int64
-	HasValue bool
+	Op         AggregateOp
+	Rows       int64
+	NonNulls   int64
+	TrueCount  int64
+	FalseCount int64
+	Sum        int64
+	Avg        float64
+	Min        int64
+	Max        int64
+	HasValue   bool
 }
 
 // ReduceRequest is the concrete hot-loop input for one selected block. Rows is
@@ -44,10 +49,13 @@ type AggregateResult struct {
 // empty selections. Int64Cursor is used by streaming int64 kernels; callers
 // provide either Int64Values or Int64Cursor for value aggregates, not both.
 type ReduceRequest struct {
-	Rows        int
-	Selection   typedcolumn.RowSelection
-	Int64Values []int64
-	Int64Cursor *typedcolumn.Int64Cursor
+	Rows           int
+	Selection      typedcolumn.RowSelection
+	Int64Values    []int64
+	Int64Cursor    *typedcolumn.Int64Cursor
+	BoolGranule    typedcolumn.EncodedGranule
+	HasBoolGranule bool
+	BoolReader     *typedcolumn.GranuleReader
 }
 
 // Scratch is caller/session-owned reusable storage for future kernels. It is
@@ -55,6 +63,7 @@ type ReduceRequest struct {
 type Scratch struct {
 	Selection typedcolumn.RowSelectionScratch
 	Int64     []int64
+	Bool      typedcolumn.BoolSelectionScratch
 }
 
 // ReduceFunc runs a concrete reducer after registry dispatch. Implementations
@@ -96,6 +105,13 @@ var defaultEntries = [...]KernelSpec{
 		Physical: typedcolumn.ColumnTypeInt64,
 		Ops:      []AggregateOp{OpCountNonNull, OpSum, OpAvg, OpMin, OpMax},
 		Reduce:   reduceInt64Aggregate,
+	},
+	{
+		Name:     "bool.counts.v1",
+		Logical:  columnsemantics.LogicalBool,
+		Physical: typedcolumn.ColumnTypeBool,
+		Ops:      []AggregateOp{OpCountNonNull, OpBoolCounts},
+		Reduce:   reduceBoolCounts,
 	},
 }
 
@@ -233,7 +249,7 @@ func (entry KernelSpec) matches(op AggregateOp, desc columnsemantics.Descriptor,
 
 func isAggregateOp(op AggregateOp) bool {
 	switch op {
-	case OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax:
+	case OpCountRows, OpCountNonNull, OpSum, OpAvg, OpMin, OpMax, OpBoolCounts:
 		return true
 	default:
 		return false
