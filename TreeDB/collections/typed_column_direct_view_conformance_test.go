@@ -13,6 +13,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/columnlayout"
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -162,6 +163,32 @@ func TestTypedColumnRawInt64FloatCarriersAreNotNativeScalarDirectViews(t *testin
 		}
 		if capability.Status != columnsemantics.StatusUnsupported || capability.Reason != columnsemantics.ReasonFloatRawInt64BitPattern {
 			t.Fatalf("%s direct scalar capability=%+v want raw-int64 rejection", valueType, capability)
+		}
+	}
+}
+
+func TestTypedColumnNativeScalarFloatFixedWidthCandidates(t *testing.T) {
+	cases := []struct {
+		valueType ColumnStoreValueType
+		wantType  typedcolumn.ColumnType
+		wantEnc   typedcolumn.Encoding
+	}{
+		{valueType: ColumnStoreValueFloat32, wantType: typedcolumn.ColumnTypeFloat32, wantEnc: typedcolumn.EncodingRawFloat32},
+		{valueType: ColumnStoreValueDouble, wantType: typedcolumn.ColumnTypeFloat64, wantEnc: typedcolumn.EncodingRawFloat64},
+	}
+	for _, tc := range cases {
+		field := typedColumnAdapterField(string(tc.valueType), tc.valueType)
+		field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+		column, err := typedColumnAdapterMapField(field)
+		if err != nil {
+			t.Fatalf("typedColumnAdapterMapField(%s little_endian): %v", tc.valueType, err)
+		}
+		if column.Definition.Type != tc.wantType || column.Definition.Encoding != tc.wantEnc {
+			t.Fatalf("%s native type/encoding=(%s,%s), want (%s,%s)", tc.valueType, column.Definition.Type, column.Definition.Encoding, tc.wantType, tc.wantEnc)
+		}
+		caps := typedColumnLayoutCapabilitiesForAdapterColumn(column)
+		if !caps.DirectView.Eligible || caps.DirectView.Reason != columnlayout.ReasonSupported {
+			t.Fatalf("%s native direct-view candidate caps=%+v", tc.valueType, caps.DirectView)
 		}
 	}
 }

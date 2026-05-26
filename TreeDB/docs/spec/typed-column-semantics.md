@@ -19,35 +19,44 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | --- | --- | --- | --- |
 | `bool` | `bool` | `bool_bitpack_rle` | equality/counts supported; broad scalar range is unsupported (`bool_range_unsupported`). |
 | `int64` | `int64` | `delta_varint` by default; explicit `fixed_width_encoding: "little_endian"` selects uncompressed `raw_int64`; double-delta remains a valid typedcolumn encoding but is not the adapter default | equality, ordered range, count rows/non-null, sum/avg/min/max, min/max stats, sum stats, equality pruning, and ordered-range pruning are supported for non-null int64 semantics. Durable sum/count stats are gated by the stats envelope in `typed-column-stats.md`; durable value-row pruning metadata is gated by `typed-column-pruning.md`. Physical reducer/direct-view/pruning eligibility is additionally gated by `typed-column-layout-capabilities.md` and `typed-column-direct-view-alignment.md`. |
-| `float32` | `int64` | `raw_int64` carrying `math.Float32bits` | raw bit patterns do **not** provide int64 ordered range, sum, avg, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Count rows/count non-null may be supported because they do not inspect carrier ordering or arithmetic. Equality/inequality/in-list are explicit prepare-time fallback (`native_float_layout_missing`) until native float policy and layout exist. |
-| `double` | `int64` | `raw_int64` carrying `math.Float64bits` | same raw-bit restriction as `float32`. |
+| `float32` | default `int64` carrier; native `float32` when `fixed_width_encoding: "little_endian"` is selected | compatibility `raw_int64` carrying `math.Float32bits`; native `raw_float32` little-endian IEEE-754 bits | raw int64 bit patterns do **not** provide int64 ordered range, sum, avg, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Native `raw_float32` is a bit-preserving direct scalar payload candidate; equality/range/numeric aggregate/stats/pruning semantics remain explicit fallback/unsupported until the scalar float type-family work defines NaN, signed-zero, infinity, and accumulation policy. |
+| `double` | default `int64` carrier; native `float64` when `fixed_width_encoding: "little_endian"` is selected | compatibility `raw_int64` carrying `math.Float64bits`; native `raw_float64` little-endian IEEE-754 bits | same raw-bit restriction as `float32`; native `raw_float64` is a bit-preserving direct scalar payload candidate without enabling numeric float fast paths yet. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
 | `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null plus vector direct-payload, similarity, dot-product, and vector-metric capabilities are explicit prepare-time entries for specialized vector kernels. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
 | `adjacency_list` | `adjacency_list` | `raw_uint32_dense` | count rows/non-null plus adjacency graph traversal and adjacency-metric capabilities are explicit prepare-time entries for specialized graph kernels. Direct payload views are fallback/deferred to #1901 (`adjacency_capability_deferred`). Scalar range/sum/min/max/stats/pruning shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
 
 ## Scalar float fail-closed policy
 
-Current scalar `float32` and `double` typed-column storage is a preservation
-carrier, not a numeric float layout. The adapter stores raw IEEE-754 bit patterns
-inside an `int64` physical column so reconstruction can round-trip values, but
-those carrier integers are never a proof of float-domain ordering, equality, or
-arithmetic semantics.
+Default scalar `float32` and `double` typed-column storage remains a
+preservation carrier, not a numeric float layout. The adapter stores raw
+IEEE-754 bit patterns inside an `int64` physical column so reconstruction can
+round-trip values, but those carrier integers are never a proof of float-domain
+ordering, equality, direct-view eligibility, or arithmetic semantics. When a
+non-null `typed_column_part` scalar float explicitly selects
+`fixed_width_encoding: "little_endian"`, the payload uses native raw
+`raw_float32`/`raw_float64` bytes and preserves IEEE-754 bits exactly, including
+NaN payloads and signed zero. That native layout is a payload/direct-view
+candidate for downstream certification/readers, not a float-domain numeric
+semantics implementation.
 
-Until a native scalar float section is introduced through a separate design,
-semantic admission is:
+Semantic admission is:
 
 - `count_rows` and `count_non_null`: supported as checked `int64` counts because
   they only count rows and do not inspect float bit ordering or arithmetic;
 - equality, inequality, and in-list: fallback only. A future implementation must
   define whether equality is bit-exact or IEEE numeric equality, how NaN payloads
   and quiet/signaling NaNs compare, and whether `+0` and `-0` are equal;
-- ordered range, min, max, sum, avg, stats min/max/sum, equality/range pruning,
-  and direct scalar value carriers: unsupported for raw bit carriers with
-  `float_raw_int64_bit_pattern`;
+- ordered range, min, max, sum, avg, stats min/max/sum, equality/range pruning:
+  unsupported for raw bit carriers with `float_raw_int64_bit_pattern` and still
+  deferred for native raw float layouts until scalar float numeric policy lands;
+- direct scalar value carriers: unsupported for raw int64 float carriers; native
+  raw float layouts may expose bit-preserving scalar payload candidates after
+  the downstream direct-view safety checks in `typed-column-direct-view-alignment.md`;
 - nullable/default float carriers use the same nullable/default wrapper contract
   as other `nullable_int64` carriers: count/null operations may be supported, but
   value predicates and value aggregates fallback until a kernel explicitly
-  composes value semantics with null/default masks.
+  composes value semantics with null/default masks. Native nullable scalar float
+  encodings are not part of the #1737 payload phase.
 
 Required future float policy before enabling native float-domain stats, pruning,
 or reducers:
@@ -164,6 +173,8 @@ and every current `typedcolumn.Encoding`:
 - `bool_bitpack_rle`
 - `low_cardinality_uint32`
 - `raw_float32_vector`
+- `raw_float32`
+- `raw_float64`
 - `raw_uint32_dense`
 
 ## Future scalar numeric-width admission rules

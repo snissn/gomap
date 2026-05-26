@@ -36,9 +36,9 @@ time.
 | TreeDB declared type | adapter / #1755 publication status | Representation |
 | --- | --- | --- |
 | `bool` | represented | `typedcolumn.ColumnTypeBool` bitpack/RLE encoding. |
-| `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint by default. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` int64 column selects uncompressed `raw_int64`. |
-| `float32` | represented | Raw int64 column carrying `math.Float32bits` in the low 32 bits until native float sections land; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
-| `double` / `float64` | represented | Raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
+| `int64` | represented | `typedcolumn.ColumnTypeInt64` delta-varint by default. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` int64 column selects uncompressed `raw_int64` little-endian payload bytes. |
+| `float32` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float32bits` in the low 32 bits; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` float32 column selects native uncompressed `raw_float32` little-endian IEEE-754 payload bytes. |
+| `double` / `float64` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` double column selects native uncompressed `raw_float64` little-endian IEEE-754 payload bytes. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
 | `adjacency_list` | represented | Fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row; direct-view certification is deferred/fallback-only for this stack (#1901). |
@@ -101,7 +101,16 @@ cache with `mappedresource.ClassTypedColumnAsset` when a manager is supplied.
 retained-payload split/restore helpers as an internal test seam. It does not alter
 production retained-payload behavior.
 
-## Dense Section Safety (#1756)
+## Fixed-Width Payload Safety (#1737/#1756)
+
+When `fixed_width_encoding: "little_endian"` is selected on non-null scalar
+`typed_column_part` fields, `int64`, `float32`, and `double` use native
+uncompressed little-endian raw payload sections (`raw_int64`, `raw_float32`, and
+`raw_float64`). Native scalar float payloads preserve IEEE-754 bits exactly,
+including NaN payloads, non-canonical NaNs, infinities, finite extrema, and
+`+0`/`-0`. Metadata/control records, nullable/default wrappers, compression
+payloads, sortable keys, and physical row assets are outside this native scalar
+payload rule.
 
 `float32_vector` typed-column data is stored as uncompressed raw little-endian
 `float32` payloads. `adjacency_list` typed-column data is stored as uncompressed
@@ -113,7 +122,9 @@ and actual Go pointer alignment at view construction time. Readers must validate
 lifetime, range, length, endian mode, absolute offset alignment, source, and
 actual pointer alignment through #1736 `mappedresource` handles before exposing
 mmap direct typed views; heap-copy typed views and scratch decodes are safe
-fallbacks but not zero-copy speedup evidence.
+fallbacks but not zero-copy speedup evidence. #1737 standardizes payload bytes
+and helpers only; production unsafe reader rollout remains in downstream #1886
+children.
 
 ## Query, Predicate, and Allocation Boundary
 

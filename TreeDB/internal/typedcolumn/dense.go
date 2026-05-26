@@ -1,10 +1,6 @@
 package typedcolumn
 
-import (
-	"encoding/binary"
-	"fmt"
-	"math"
-)
+import "fmt"
 
 // DenseFloat32Column is a row-major fixed-width float32 matrix section.
 type DenseFloat32Column struct {
@@ -143,35 +139,11 @@ func validateDenseElementCount(values int, rows int, elementsPerRow int, name st
 }
 
 func encodeFloat32DensePayload(dst []byte, values []float32) ([]byte, error) {
-	need, err := checkedMulInt(len(values), 4, "float32_vector raw bytes")
-	if err != nil {
-		return nil, err
-	}
-	if cap(dst) < need {
-		dst = make([]byte, need)
-	} else {
-		dst = dst[:need]
-	}
-	for i, value := range values {
-		binary.LittleEndian.PutUint32(dst[i*4:], math.Float32bits(value))
-	}
-	return dst, nil
+	return encodeFloat32Payload(dst, values)
 }
 
 func encodeUint32DensePayload(dst []byte, values []uint32) ([]byte, error) {
-	need, err := checkedMulInt(len(values), 4, "uint32 dense raw bytes")
-	if err != nil {
-		return nil, err
-	}
-	if cap(dst) < need {
-		dst = make([]byte, need)
-	} else {
-		dst = dst[:need]
-	}
-	for i, value := range values {
-		binary.LittleEndian.PutUint32(dst[i*4:], value)
-	}
-	return dst, nil
+	return encodeLittleEndian4Payload(dst, values, "uint32 dense")
 }
 
 func DecodeRawFloat32VectorPayload(dst []float32, raw []byte, rows int, elementsPerRow int) ([]float32, error) {
@@ -182,14 +154,9 @@ func DecodeRawFloat32VectorPayload(dst []float32, raw []byte, rows int, elements
 	if err != nil {
 		return nil, err
 	}
-	out := dst[:0]
-	if cap(out) < elements {
-		out = make([]float32, elements)
-	} else {
-		out = out[:elements]
-	}
+	out := resizeFixedWidthValues(dst, elements)
 	for i := range out {
-		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+		out[i] = float32FromLittleEndian(raw[i*4:])
 	}
 	return out, nil
 }
@@ -202,14 +169,9 @@ func DecodeRawUint32DensePayload(dst []uint32, raw []byte, rows int, elementsPer
 	if err != nil {
 		return nil, err
 	}
-	out := dst[:0]
-	if cap(out) < elements {
-		out = make([]uint32, elements)
-	} else {
-		out = out[:elements]
-	}
+	out := resizeFixedWidthValues(dst, elements)
 	for i := range out {
-		out[i] = binary.LittleEndian.Uint32(raw[i*4:])
+		out[i] = readLittleEndianUint32(raw[i*4:])
 	}
 	return out, nil
 }

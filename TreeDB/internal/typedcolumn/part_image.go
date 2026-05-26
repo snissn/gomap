@@ -1000,6 +1000,10 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 4, nil
 	case ColumnTypeAdjacencyList:
 		return 5, nil
+	case ColumnTypeFloat32:
+		return 6, nil
+	case ColumnTypeFloat64:
+		return 7, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

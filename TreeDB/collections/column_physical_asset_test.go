@@ -376,8 +376,8 @@ func TestColumnPhysicalAssetVersionSelectionValidatesAllFixedWidthEncodings(t *t
 		{Name: "embedding_inv_norm", Path: "embedding_inv_norm", ValueType: ColumnStoreValueFloat32, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
 	}
 	_, err := columnPhysicalAssetVersionForColumns(columns)
-	if err == nil || !strings.Contains(err.Error(), "column[1]") || !strings.Contains(err.Error(), "unsupported") {
-		t.Fatalf("columnPhysicalAssetVersionForColumns err=%v want later fixed-width validation failure", err)
+	if err == nil || !strings.Contains(err.Error(), "column[1]") || !strings.Contains(err.Error(), "typed_column_part-only") {
+		t.Fatalf("columnPhysicalAssetVersionForColumns err=%v want typed-column-only scalar fixed-width validation failure", err)
 	}
 }
 

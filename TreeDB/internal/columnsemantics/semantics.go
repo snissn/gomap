@@ -179,11 +179,11 @@ func LogicalTypes() []LogicalType {
 }
 
 func ColumnTypes() []typedcolumn.ColumnType {
-	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList}
+	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList}
 }
 
 func Encodings() []typedcolumn.Encoding {
-	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense}
+	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64}
 }
 
 func IsKnownLogicalType(t LogicalType) bool {
@@ -285,6 +285,10 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		case typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingNullableInt64:
 			return ReasonSupported, true
 		}
+	case typedcolumn.ColumnTypeFloat32:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32
+	case typedcolumn.ColumnTypeFloat64:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat64
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeAdjacencyList:
@@ -343,18 +347,44 @@ func floatCapability(desc Descriptor, op Operation) Capability {
 	if desc.Physical == typedcolumn.ColumnTypeInt64 && desc.Encoding == typedcolumn.EncodingRawInt64 {
 		switch op {
 		case OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
-			return Unsupported(op, ReasonFloatRawInt64BitPattern, "raw int64 float bit patterns do not provide numeric float semantics; NaN, signed-zero, infinity, and precision/accumulation policy is deferred to a native float layout")
+			return Unsupported(op, ReasonFloatRawInt64BitPattern, "raw int64 float bit patterns do not provide numeric float semantics; NaN, signed-zero, infinity, and precision/accumulation policy requires native float encoding")
 		case OpAllRows:
 			return Supported(op)
 		case OpCountRows, OpCountNonNull:
 			return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 		case OpEquality, OpInequality, OpInList:
-			return Fallback(op, ReasonNativeFloatLayoutMissing, "native float equality semantics require NaN, signed-zero, infinity, and precision/accumulation rules plus a float layout")
+			return Fallback(op, ReasonNativeFloatLayoutMissing, "native float equality semantics require NaN, signed-zero, infinity, and precision/accumulation rules")
 		default:
 			return Unsupported(op, ReasonNativeFloatLayoutMissing, "native float semantic capability is not implemented; NaN, signed-zero, infinity, and precision/accumulation policy is deferred")
 		}
 	}
-	return Unsupported(op, ReasonLogicalPhysicalMismatch, "current float columns are only represented as raw int64 bit-pattern carriers")
+	if desc.Logical == LogicalFloat32 && (desc.Physical != typedcolumn.ColumnTypeFloat32 || desc.Encoding != typedcolumn.EncodingRawFloat32) {
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "float32 semantics require native float32 physical type and raw_float32 encoding")
+	}
+	if desc.Logical == LogicalDouble && (desc.Physical != typedcolumn.ColumnTypeFloat64 || desc.Encoding != typedcolumn.EncodingRawFloat64) {
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "double semantics require native float64 physical type and raw_float64 encoding")
+	}
+	if (desc.Logical != LogicalFloat32 || desc.Physical != typedcolumn.ColumnTypeFloat32 || desc.Encoding != typedcolumn.EncodingRawFloat32) && (desc.Logical != LogicalDouble || desc.Physical != typedcolumn.ColumnTypeFloat64 || desc.Encoding != typedcolumn.EncodingRawFloat64) {
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "native float semantics require matching float32/float64 physical encoding")
+	}
+	scalar := "float64"
+	if desc.Logical == LogicalFloat32 {
+		scalar = "float32"
+	}
+	switch op {
+	case OpAllRows, OpDirectScalarValueCarrier:
+		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpEquality, OpInequality, OpInList:
+		return Fallback(op, ReasonNativeFloatLayoutMissing, scalar+" equality semantics over NaN payloads and signed-zero cases are deferred to the scalar float type-family slice")
+	case OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange:
+		return Unsupported(op, ReasonNativeFloatLayoutMissing, scalar+" numeric semantics over NaNs, infinities, signed-zero cases, and accumulation policy are deferred to the scalar float type-family slice")
+	case OpIsNull, OpIsNotNull:
+		return Unsupported(op, ReasonNotNullable, "non-null "+scalar+" column")
+	default:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a native float semantic capability")
+	}
 }
 
 func stringCapability(desc Descriptor, op Operation) Capability {

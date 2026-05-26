@@ -50,6 +50,44 @@ func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterMapFieldSelectsNativeScalarFixedWidthEncoding(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		valueType ColumnStoreValueType
+		wantType  typedcolumn.ColumnType
+		wantEnc   typedcolumn.Encoding
+	}{
+		{name: "int64", valueType: ColumnStoreValueInt64, wantType: typedcolumn.ColumnTypeInt64, wantEnc: typedcolumn.EncodingRawInt64},
+		{name: "float32", valueType: ColumnStoreValueFloat32, wantType: typedcolumn.ColumnTypeFloat32, wantEnc: typedcolumn.EncodingRawFloat32},
+		{name: "double", valueType: ColumnStoreValueDouble, wantType: typedcolumn.ColumnTypeFloat64, wantEnc: typedcolumn.EncodingRawFloat64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			field := typedColumnAdapterField(tc.name, tc.valueType)
+			field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+			col, err := typedColumnAdapterMapField(field)
+			if err != nil {
+				t.Fatalf("typedColumnAdapterMapField: %v", err)
+			}
+			if col.Definition.Type != tc.wantType || col.Definition.Encoding != tc.wantEnc || col.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+				t.Fatalf("column=%+v want type=%s encoding=%s fixed_width=%s", col, tc.wantType, tc.wantEnc, ColumnFixedWidthEncodingLittleEndian)
+			}
+		})
+	}
+}
+
+func TestTypedColumnAdapterMapFieldRejectsInvalidScalarFixedWidthEncoding(t *testing.T) {
+	field := typedColumnAdapterField("score", ColumnStoreValueFloat32)
+	field.FixedWidthEncoding = ColumnFixedWidthEncoding("future")
+	if _, err := typedColumnAdapterMapField(field); err == nil || !strings.Contains(err.Error(), "unsupported float32 fixed_width_encoding") {
+		t.Fatalf("typedColumnAdapterMapField unsupported err=%v want fixed_width_encoding", err)
+	}
+	field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	field.Nullable = true
+	if _, err := typedColumnAdapterMapField(field); err == nil || !strings.Contains(err.Error(), "nullable float32 raw fixed-width encoding is unsupported") {
+		t.Fatalf("typedColumnAdapterMapField nullable err=%v want nullable rejection", err)
+	}
+}
+
 func TestTypedColumnAdapterMapFieldPreservesVectorAndAdjacencyFixedWidthEncoding(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -124,6 +162,75 @@ func TestTypedColumnAdapterRoundTripFloat64(t *testing.T) {
 		if math.Float64bits(got[i].Double) != math.Float64bits(want[i]) {
 			t.Fatalf("float64[%d]=%v want %v all=%+v", i, got[i].Double, want[i], got)
 		}
+	}
+}
+
+func TestTypedColumnAdapterRoundTripNativeFixedWidthScalars(t *testing.T) {
+	t.Run("float32 raw bits", func(t *testing.T) {
+		wantBits := []uint32{0x00000000, 0x80000000, 0x7f800000, 0xff800000, 0x7f7fffff, 0xff7fffff, 0x7fc12345, 0x7fa12345}
+		values := make([]columnDeclaredValue, len(wantBits))
+		for i, bits := range wantBits {
+			values[i] = columnDeclaredValue{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(bits)}
+		}
+		field := typedColumnAdapterField("score", ColumnStoreValueFloat32)
+		field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+		got := typedColumnAdapterRoundTrip(t, field, values)
+		for i, want := range wantBits {
+			if gotBits := math.Float32bits(got[i].Float32); gotBits != want {
+				t.Fatalf("float32[%d] bits=0x%08x want 0x%08x all=%+v", i, gotBits, want, got)
+			}
+		}
+	})
+	t.Run("double raw bits", func(t *testing.T) {
+		wantBits := []uint64{0x0000000000000000, 0x8000000000000000, 0x7ff0000000000000, 0xfff0000000000000, 0x7fefffffffffffff, 0xffefffffffffffff, 0x7ff8000000000042, 0x7ff0000000000042}
+		values := make([]columnDeclaredValue, len(wantBits))
+		for i, bits := range wantBits {
+			values[i] = columnDeclaredValue{Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(bits)}
+		}
+		field := typedColumnAdapterField("ratio", ColumnStoreValueDouble)
+		field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+		got := typedColumnAdapterRoundTrip(t, field, values)
+		for i, want := range wantBits {
+			if gotBits := math.Float64bits(got[i].Double); gotBits != want {
+				t.Fatalf("double[%d] bits=0x%016x want 0x%016x all=%+v", i, gotBits, want, got)
+			}
+		}
+	})
+}
+
+func TestTypedColumnAdapterNativeFixedWidthScalarByteFixtures(t *testing.T) {
+	f32Field := typedColumnAdapterField("score", ColumnStoreValueFloat32)
+	f32Field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	f32Part := typedColumnAdapterBuildPart(t, f32Field, []columnDeclaredValue{
+		{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x7fc12345)},
+		{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x80000000)},
+	})
+	f32Image, err := f32Part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage float32: %v", err)
+	}
+	f32Section := typedColumnAdapterFindColumnSection(t, f32Image, "score")
+	f32Raw := f32Image.Bytes[f32Section.Offset : f32Section.Offset+f32Section.Length]
+	wantF32 := []byte{0x45, 0x23, 0xc1, 0x7f, 0x00, 0x00, 0x00, 0x80}
+	if !bytes.Equal(f32Raw, wantF32) {
+		t.Fatalf("native float32 bytes=% x want % x", f32Raw, wantF32)
+	}
+
+	f64Field := typedColumnAdapterField("ratio", ColumnStoreValueDouble)
+	f64Field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	f64Part := typedColumnAdapterBuildPart(t, f64Field, []columnDeclaredValue{
+		{Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x7ff8000000000042)},
+		{Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x8000000000000000)},
+	})
+	f64Image, err := f64Part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage double: %v", err)
+	}
+	f64Section := typedColumnAdapterFindColumnSection(t, f64Image, "ratio")
+	f64Raw := f64Image.Bytes[f64Section.Offset : f64Section.Offset+f64Section.Length]
+	wantF64 := []byte{0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80}
+	if !bytes.Equal(f64Raw, wantF64) {
+		t.Fatalf("native double bytes=% x want % x", f64Raw, wantF64)
 	}
 }
 
@@ -1151,6 +1258,20 @@ func TestTypedColumnAdapterImageOwnerMismatchFailsClosed(t *testing.T) {
 	mismatch.Owner = TypedStorageOwnerRowAsset
 	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "owner=\"typed_row_asset\" want \"typed_column_part\"") {
 		t.Fatalf("partFromImage owner mismatch err=%v want owner mismatch", err)
+	}
+}
+
+func TestTypedColumnAdapterImageFixedWidthEncodingMismatchFailsClosed(t *testing.T) {
+	field := typedColumnAdapterField("score", ColumnStoreValueFloat32)
+	field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{{Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x7fc12345)}})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	mismatch := typedColumnAdapterField("score", ColumnStoreValueFloat32)
+	if _, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{PartID: 1, Fields: []TypedStorageField{mismatch}}, image); err == nil || !strings.Contains(err.Error(), "schema mismatch") {
+		t.Fatalf("partFromImage fixed_width mismatch err=%v want schema mismatch", err)
 	}
 }
 

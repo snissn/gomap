@@ -21,6 +21,8 @@ const (
 	ColumnTypeInt64              ColumnType = "int64"
 	ColumnTypeLowCardinalityCode ColumnType = "low_cardinality_code"
 	ColumnTypeBool               ColumnType = "bool"
+	ColumnTypeFloat32            ColumnType = "float32"
+	ColumnTypeFloat64            ColumnType = "float64"
 	ColumnTypeFloat32Vector      ColumnType = "float32_vector"
 	ColumnTypeAdjacencyList      ColumnType = "adjacency_list"
 )
@@ -93,6 +95,8 @@ type Batch struct {
 	Nulls          map[string][]bool
 	Defaults       map[string][]bool
 	DefaultValues  map[string]int64
+	Float32Columns map[string][]float32
+	Float64Columns map[string][]float64
 	Float32Vectors map[string][]float32
 	Uint32Vectors  map[string][]uint32
 }
@@ -177,6 +181,7 @@ type ColumnPartBuilder struct {
 	nulls    []bool
 	defaults []bool
 	float32s []float32
+	float64s []float64
 	u32dense []uint32
 	builder  *GranuleBuilder
 }
@@ -627,8 +632,8 @@ func normalizeOptions(opts Options) (Options, error) {
 	if !ok {
 		return Options{}, fmt.Errorf("typedcolumn: logical primary key column %s is not declared", opts.LogicalPrimaryKey.Columns[0])
 	}
-	if primaryKeyDefinition.Type == ColumnTypeFloat32Vector || primaryKeyDefinition.Type == ColumnTypeAdjacencyList {
-		return Options{}, fmt.Errorf("typedcolumn: logical primary key column %s type=%s is not scalar", opts.LogicalPrimaryKey.Columns[0], primaryKeyDefinition.Type)
+	if !isInt64SortCarrier(primaryKeyDefinition.Type) {
+		return Options{}, fmt.Errorf("typedcolumn: logical primary key column %s type=%s is not scalar/int64 sort carrier", opts.LogicalPrimaryKey.Columns[0], primaryKeyDefinition.Type)
 	}
 	for i := range opts.SortKey.Columns {
 		c := &opts.SortKey.Columns[i]
@@ -639,8 +644,8 @@ func normalizeOptions(opts Options) (Options, error) {
 		if !ok {
 			return Options{}, fmt.Errorf("typedcolumn: sort key column %s is not declared", c.Column)
 		}
-		if def.Type == ColumnTypeFloat32Vector || def.Type == ColumnTypeAdjacencyList {
-			return Options{}, fmt.Errorf("typedcolumn: sort key column %s type=%s is not scalar", c.Column, def.Type)
+		if !isInt64SortCarrier(def.Type) {
+			return Options{}, fmt.Errorf("typedcolumn: sort key column %s type=%s is not scalar/int64 sort carrier", c.Column, def.Type)
 		}
 		if c.Direction == "" {
 			c.Direction = SortKeyAsc
@@ -708,6 +713,26 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Encoding != EncodingBoolBitpackRLE && def.Encoding != EncodingNullableInt64 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported bool encoding %s for %s", def.Encoding, def.Name)
 		}
+	case ColumnTypeFloat32:
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawFloat32
+		}
+		if def.Encoding != EncodingRawFloat32 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported float32 encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32 column %s requires uncompressed raw sections", def.Name)
+		}
+	case ColumnTypeFloat64:
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawFloat64
+		}
+		if def.Encoding != EncodingRawFloat64 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported float64 encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float64 column %s requires uncompressed raw sections", def.Name)
+		}
 	case ColumnTypeFloat32Vector:
 		if def.FixedWidthElements <= 0 {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires positive fixed-width elements", def.Name)
@@ -759,6 +784,28 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 	for _, def := range defs {
 		declared[def.Name] = struct{}{}
 		switch def.Type {
+		case ColumnTypeFloat32:
+			values, ok := batch.Float32Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing float32 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
+		case ColumnTypeFloat64:
+			values, ok := batch.Float64Columns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing float64 column %s", def.Name)
+			}
+			if rows == 0 {
+				rows = len(values)
+			}
+			if len(values) != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, len(values), rows)
+			}
 		case ColumnTypeFloat32Vector:
 			values, ok := batch.Float32Vectors[def.Name]
 			if !ok {
@@ -848,6 +895,16 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 		}
 		if _, ok := nullableDeclared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: nullable metadata supplied for non-nullable column %s", name)
+		}
+	}
+	for name := range batch.Float32Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared float32 column %s", name)
+		}
+	}
+	for name := range batch.Float64Columns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared float64 column %s", name)
 		}
 	}
 	for name := range batch.Float32Vectors {
@@ -992,6 +1049,20 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 	cfg := Config{Encoding: def.Encoding, Compression: def.Compression}
 	b.builder.Reset(cfg)
 	switch def.Type {
+	case ColumnTypeFloat32:
+		sourceValues := batch.Float32Columns[def.Name]
+		b.float32s = ensureFloat32Len(b.float32s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.float32s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildFloat32(b.float32s)
+	case ColumnTypeFloat64:
+		sourceValues := batch.Float64Columns[def.Name]
+		b.float64s = ensureFloat64Len(b.float64s[:0], end-start)
+		for row := start; row < end; row++ {
+			b.float64s[row-start] = sourceValues[b.order[row]]
+		}
+		return b.builder.BuildFloat64(b.float64s)
 	case ColumnTypeFloat32Vector:
 		sourceValues := batch.Float32Vectors[def.Name]
 		values, err := b.gatherFloat32Dense(sourceValues, def.FixedWidthElements, start, end)
@@ -1053,6 +1124,15 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 		return b.builder.BuildBool(b.bools)
 	default:
 		return EncodedGranule{}, fmt.Errorf("typedcolumn: unsupported column type %s", def.Type)
+	}
+}
+
+func isInt64SortCarrier(t ColumnType) bool {
+	switch t {
+	case ColumnTypeInt64, ColumnTypeLowCardinalityCode, ColumnTypeBool:
+		return true
+	default:
+		return false
 	}
 }
 

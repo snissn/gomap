@@ -449,6 +449,16 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 	case EncodingRawInt64:
 		direct := def.Compression == CompressionNone && logicalType == "int64"
 		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8, direct: direct, stats: direct, pruning: direct}
+	case EncodingRawFloat32:
+		// Native scalar float payload bytes are fixed-width little-endian, but unsafe
+		// direct-view reader integration/certification is deferred to the follow-up
+		// direct-view tasks in the active stack.
+		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4}
+	case EncodingRawFloat64:
+		// Native scalar float payload bytes are fixed-width little-endian, but unsafe
+		// direct-view reader integration/certification is deferred to the follow-up
+		// direct-view tasks in the active stack.
+		return columnPartContractLayout{elementSize: 8, alignment: 8, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 8}
 	case EncodingRawFloat32Vector:
 		direct := def.Compression == CompressionNone && logicalType == "float32_vector"
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, stats: direct, pruning: direct}

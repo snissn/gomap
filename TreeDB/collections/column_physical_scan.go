@@ -1986,6 +1986,9 @@ func parseColumnPhysicalAssetScanHeader(raw []byte, ref ColumnAssetRef, expected
 			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(ColumnStoreValueType(string(valueType))) {
 				return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", colIdx, string(valueType))
 			}
+			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && columnStoreValueTypeHasScalarFixedWidthPayload(ColumnStoreValueType(string(valueType))) {
+				return columnPhysicalAssetScanHeader{}, 0, 0, fmt.Errorf("column physical asset column[%d] scalar fixed_width_encoding unsupported for value_type %q", colIdx, string(valueType))
+			}
 		}
 		if cur.err != nil {
 			return columnPhysicalAssetScanHeader{}, 0, 0, cur.err
