@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const columnDictionaryHourCountMaxGroups = 1 << 20
+const columnDictionaryHourCountMaxGroups = 1 << 16
 
 type columnDictionaryHourCountRunner struct {
 	groupColumn          string
@@ -38,12 +38,25 @@ func prepareColumnDictionaryHourCountRunner(view columnPhysicalScanSnapshotView,
 	if !columnDictionaryInt64GroupColumnsEligible(view, req) {
 		return nil, nil
 	}
+	runner := &columnDictionaryHourCountRunner{
+		groupColumn: req.GroupColumn,
+		valueColumn: req.ValueColumn,
+		assets:      make([]columnDictionaryHourCountAsset, 0, len(view.AssetRefs)),
+	}
+	if len(view.AssetRefs) == 0 {
+		if _, err := columnPhysicalQueryPredicateSpecs(view.Config, req); err != nil {
+			return nil, err
+		}
+		runner.predicateDiagnostics = newColumnPhysicalQueryPredicateDiagnosticPlan(req)
+		runner.initScratch()
+		return runner, nil
+	}
 	groupByPart := columnDictionaryCodeSnapshotsByPart(view, req.GroupColumn)
 	valueByPart := columnInt64ValueSnapshotsByPart(view, req.ValueColumn)
 	if len(groupByPart) == 0 || len(valueByPart) == 0 || !columnDictionaryInt64GroupSnapshotsCoverParts(view, groupByPart, valueByPart) {
 		return nil, nil
 	}
-	runner := &columnDictionaryHourCountRunner{
+	runner = &columnDictionaryHourCountRunner{
 		groupColumn: req.GroupColumn,
 		valueColumn: req.ValueColumn,
 		assets:      make([]columnDictionaryHourCountAsset, 0, len(view.AssetRefs)),
@@ -103,9 +116,6 @@ func prepareColumnDictionaryHourCountRunner(view columnPhysicalScanSnapshotView,
 		})
 		runner.assetBytes += groupSnapshot.AssetRef.Length + valueSnapshot.AssetRef.Length
 	}
-	if len(runner.assets) == 0 || len(runner.groupDict) == 0 {
-		return nil, nil
-	}
 	runner.initScratch()
 	return runner, nil
 }
@@ -129,6 +139,9 @@ func (r *columnDictionaryHourCountRunner) run(view columnPhysicalScanSnapshotVie
 		var predicates *columnDictionaryPredicateAsset
 		if len(r.predicateAssets) != 0 {
 			predicates = &r.predicateAssets[assetIdx]
+			if predicates.rejectsAll {
+				continue
+			}
 		}
 		for rowIdx, groupCode := range asset.groupCodes {
 			rows++

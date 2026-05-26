@@ -2108,7 +2108,7 @@ func TestColumnPhysicalQueryGroupHourCountQ31858(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery absent q3: %v", err)
 	}
-	if len(result.Groups) != 0 || result.Diagnostics.RowsScanned != len(events) || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.ReduceRows != 0 {
+	if len(result.Groups) != 0 || result.Diagnostics.RowsScanned != 0 || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.ReduceRows != 0 {
 		t.Fatalf("absent q3 result=%+v diagnostics=%+v", result.Groups, result.Diagnostics)
 	}
 	absentRunner, err := collection.PrepareColumnPhysicalQuery(absent)
@@ -2120,7 +2120,7 @@ func TestColumnPhysicalQueryGroupHourCountQ31858(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepared absent q3: %v", err)
 	}
-	if len(preparedAbsent.Groups) != 0 || preparedAbsent.Diagnostics.RowsScanned != len(events) || preparedAbsent.Diagnostics.RowsMatched != 0 || preparedAbsent.Diagnostics.ReduceRows != 0 {
+	if len(preparedAbsent.Groups) != 0 || preparedAbsent.Diagnostics.RowsScanned != 0 || preparedAbsent.Diagnostics.RowsMatched != 0 || preparedAbsent.Diagnostics.ReduceRows != 0 {
 		t.Fatalf("prepared absent q3 result=%+v diagnostics=%+v", preparedAbsent.Groups, preparedAbsent.Diagnostics)
 	}
 }
