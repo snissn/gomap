@@ -128,7 +128,7 @@ func TestCapabilityNativeScalarFloatMatrixPreservesCarrierButDefersNumericSemant
 		}
 		for _, op := range []Operation{OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
 			cap := CapabilityFor(desc, op)
-			if cap.Status != StatusUnsupported || cap.Reason != ReasonNativeFloatLayoutMissing || !strings.Contains(cap.Message, "NaN") || !strings.Contains(cap.Message, "signed zero") {
+			if cap.Status != StatusUnsupported || cap.Reason != ReasonNativeFloatLayoutMissing || !strings.Contains(cap.Message, "NaN") || !strings.Contains(cap.Message, "signed-zero") {
 				t.Fatalf("%s %s capability=%+v want explicit native-float numeric deferral", tc.logical, op, cap)
 			}
 		}

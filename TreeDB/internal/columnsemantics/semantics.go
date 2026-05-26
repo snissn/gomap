@@ -377,9 +377,9 @@ func floatCapability(desc Descriptor, op Operation) Capability {
 	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpEquality, OpInequality, OpInList:
-		return Fallback(op, ReasonNativeFloatLayoutMissing, scalar+" equality semantics over NaN payloads and signed zeroes are deferred to the scalar float type-family slice")
+		return Fallback(op, ReasonNativeFloatLayoutMissing, scalar+" equality semantics over NaN payloads and signed-zero cases are deferred to the scalar float type-family slice")
 	case OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange:
-		return Unsupported(op, ReasonNativeFloatLayoutMissing, scalar+" numeric semantics over NaNs, infinities, signed zeroes, and accumulation policy are deferred to the scalar float type-family slice")
+		return Unsupported(op, ReasonNativeFloatLayoutMissing, scalar+" numeric semantics over NaNs, infinities, signed-zero cases, and accumulation policy are deferred to the scalar float type-family slice")
 	case OpIsNull, OpIsNotNull:
 		return Unsupported(op, ReasonNotNullable, "non-null "+scalar+" column")
 	default:
