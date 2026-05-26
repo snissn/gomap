@@ -1043,11 +1043,11 @@ func (c *columnPhysicalAssetReadCache) close() error {
 		c.scratch = nil
 	}
 	if c.file != nil {
-		if c.file.file != nil {
-			c.fileCloses++
-		}
+		hadFile := c.file.file != nil
 		if err := c.file.close(); err != nil && closeErr == nil {
 			closeErr = err
+		} else if err == nil && hadFile {
+			c.fileCloses++
 		}
 		c.file = nil
 	}
@@ -1055,11 +1055,11 @@ func (c *columnPhysicalAssetReadCache) close() error {
 		if reader == nil {
 			continue
 		}
-		if reader.file != nil {
-			c.fileCloses++
-		}
+		hadFile := reader.file != nil
 		if err := reader.close(); err != nil && closeErr == nil {
 			closeErr = err
+		} else if err == nil && hadFile {
+			c.fileCloses++
 		}
 		delete(c.files, fileID)
 	}

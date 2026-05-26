@@ -500,13 +500,13 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 		readIntegrity,
 		v.rowAssetReadCache,
 	)
-	response.Stats.VisibilityNanos = time.Since(visibleStart).Nanoseconds()
-	response.Stats.VisibilityScans++
-	response.Stats.VisibilityRowsScanned = uint64(visible.Diagnostics.RowsScanned)
-	response.Stats.VisibilityRows = uint64(len(visible.Rows))
-	response.Stats.VisibilityPhysicalBytes = visible.Diagnostics.PhysicalBytesScanned
+	out.Stats.VisibilityNanos = time.Since(visibleStart).Nanoseconds()
+	out.Stats.VisibilityScans++
+	out.Stats.VisibilityRowsScanned = uint64(visible.Diagnostics.RowsScanned)
+	out.Stats.VisibilityRows = uint64(len(visible.Rows))
+	out.Stats.VisibilityPhysicalBytes = visible.Diagnostics.PhysicalBytesScanned
 	if err != nil {
-		return response, err
+		return out, err
 	}
 	visibleByID := make(map[string]columnPhysicalVisibleRow, len(visible.Rows))
 	for _, row := range visible.Rows {
@@ -520,59 +520,59 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
 	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
 	var documentArena []byte
-	for i := range response.Results {
-		if !response.Results[i].Found {
+	for i := range out.Results {
+		if !out.Results[i].Found {
 			continue
 		}
-		row, ok := visibleByID[string(response.Results[i].ID)]
+		row, ok := visibleByID[string(out.Results[i].ID)]
 		if !ok {
-			return response, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(response.Results[i].ID))
+			return out, fmt.Errorf("collections: column reconstruction missing visible physical row for id %q", string(out.Results[i].ID))
 		}
 		if row.Deleted {
-			return response, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(response.Results[i].ID))
+			return out, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(out.Results[i].ID))
 		}
 		rowRef := documentRowRefFromVisibleRow(row)
 		if expected != nil && expected[i] != nil {
 			if err := validateDocumentRowRefMatchesVisibleRow(*expected[i], row); err != nil {
-				return response, err
+				return out, err
 			}
 			rowRef.DocumentID = append(rowRef.DocumentID[:0], expected[i].DocumentID...)
 		}
-		response.Results[i].RowRef = rowRef
+		out.Results[i].RowRef = rowRef
 
 		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
 		typedStart := time.Now()
 		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch)
 		typedElapsed := time.Since(typedStart)
 		if err != nil {
-			return response, err
+			return out, err
 		}
 		if len(typedValues.Values) > 0 || columnStoreHasTypedColumnPartOwners(cfg) {
-			response.Stats.TypedColumnRows++
+			out.Stats.TypedColumnRows++
 		}
 		afterCacheHits, afterCacheMisses, afterPartLoads, afterPartDecodes := typedColumnCacheCounters(typedColumnCache)
-		response.Stats.TypedColumnCacheHits += deltaUint64(beforeCacheHits, afterCacheHits)
-		response.Stats.TypedColumnCacheMisses += deltaUint64(beforeCacheMisses, afterCacheMisses)
-		response.Stats.TypedColumnPartLoads += deltaUint64(beforePartLoads, afterPartLoads)
-		response.Stats.TypedColumnPartDecodes += deltaUint64(beforePartDecodes, afterPartDecodes)
-		response.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
+		out.Stats.TypedColumnCacheHits += deltaUint64(beforeCacheHits, afterCacheHits)
+		out.Stats.TypedColumnCacheMisses += deltaUint64(beforeCacheMisses, afterCacheMisses)
+		out.Stats.TypedColumnPartLoads += deltaUint64(beforePartLoads, afterPartLoads)
+		out.Stats.TypedColumnPartDecodes += deltaUint64(beforePartDecodes, afterPartDecodes)
+		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
 
 		reconstructStart := time.Now()
 		fullValues, err := mergeColumnReconstructionValuesInto(cfg, row.Values, typedValues.Values, mergeScratch)
 		if err != nil {
-			return response, err
+			return out, err
 		}
 		reconstructed, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained[i], row, fullValues)
 		if err != nil {
-			return response, err
+			return out, err
 		}
-		response.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
-		response.Stats.JSONReconstructionRows++
-		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &response.Results[i])
-		response.Stats.DocumentsFetched++
-		response.Stats.DocumentBytes += uint64(len(response.Results[i].Document))
+		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
+		out.Stats.JSONReconstructionRows++
+		documentArena = appendDocumentFetchOwnedBytes(documentArena, reconstructed, &out.Results[i])
+		out.Stats.DocumentsFetched++
+		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
 	}
-	return response, nil
+	return out, nil
 }
 
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {
