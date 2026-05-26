@@ -122,8 +122,28 @@ type VectorIndexSearchStats struct {
 	DocumentJSONReconstructionRows uint64 `json:"document_json_reconstruction_rows,omitempty"`
 	// DocumentJSONReconstructionNanos attributes JSON merge/serialization time.
 	DocumentJSONReconstructionNanos uint64 `json:"document_json_reconstruction_nanos,omitempty"`
-	// DocumentRowRefFallbackScans counts row-ref requests served by the interim target-ID scan path.
+	// DocumentRowLocatorBuilds counts snapshot-derived row-locator map builds.
+	DocumentRowLocatorBuilds uint64 `json:"document_row_locator_builds,omitempty"`
+	// DocumentRowLocatorLookups counts document-id to row-ref locator lookups.
+	DocumentRowLocatorLookups uint64 `json:"document_row_locator_lookups,omitempty"`
+	// DocumentRowLocatorMisses counts locator lookups with no latest-visible row.
+	DocumentRowLocatorMisses uint64 `json:"document_row_locator_misses,omitempty"`
+	// DocumentRowLocatorRowsScanned counts physical rows scanned to build locator maps.
+	DocumentRowLocatorRowsScanned uint64 `json:"document_row_locator_rows_scanned,omitempty"`
+	// DocumentRowLocatorPhysicalBytes counts physical bytes scanned to build locator maps.
+	DocumentRowLocatorPhysicalBytes uint64 `json:"document_row_locator_physical_bytes,omitempty"`
+	// DocumentRowLocatorNanos attributes row-locator map build time.
+	DocumentRowLocatorNanos uint64 `json:"document_row_locator_nanos,omitempty"`
+	// DocumentPointRowFetches counts direct row-ref point fetch attempts.
+	DocumentPointRowFetches uint64 `json:"document_point_row_fetches,omitempty"`
+	// DocumentPointRowDecodes counts physical rows decoded by direct row-ref point fetch.
+	DocumentPointRowDecodes uint64 `json:"document_point_row_decodes,omitempty"`
+	// DocumentRowRefFallbackScans counts row-ref requests served by an explicit scan fallback.
 	DocumentRowRefFallbackScans uint64 `json:"document_row_ref_fallback_scans,omitempty"`
+	// DocumentRowRefUnsupported counts unsupported row-ref materialization states.
+	DocumentRowRefUnsupported uint64 `json:"document_row_ref_unsupported,omitempty"`
+	// DocumentRowRefValidationFailures counts row-ref fail-closed validation failures.
+	DocumentRowRefValidationFailures uint64 `json:"document_row_ref_validation_failures,omitempty"`
 	// DocumentAssetMmapHits counts document materializer typed-row/typed-column asset reads served from mmap-backed views.
 	DocumentAssetMmapHits uint64 `json:"document_asset_mmap_hits,omitempty"`
 	// DocumentAssetReadAtFallbacks counts document materializer asset reads that fell back to heap/read-at.
@@ -445,9 +465,36 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		for i := range results {
 			ids[i] = results[i].ID
 		}
-		documents, err := s.documentView.FetchDocumentsByID(ids, DocumentFetchOptions{})
-		if err != nil {
-			return response, err
+		var documents DocumentFetchResponse
+		var err error
+		if columnStoreCanReconstructDocument(s.catalog.meta) {
+			rowRefs, lookupErr := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+			if lookupErr != nil {
+				return response, lookupErr
+			}
+			if err := addDocumentMaterializationStatsToVectorStats(&response.Stats, rowRefs.Stats); err != nil {
+				return response, err
+			}
+			if len(rowRefs.Results) != len(response.Results) {
+				return response, errors.New("collections: vector index document row-ref result count mismatch")
+			}
+			refs := make([]DocumentRowRef, len(rowRefs.Results))
+			for i := range rowRefs.Results {
+				if !rowRefs.Results[i].Found {
+					return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
+				}
+				refs[i] = rowRefs.Results[i].RowRef
+			}
+			documents, err = s.documentView.FetchDocumentsByRowRef(refs, DocumentFetchOptions{})
+			if err != nil {
+				return response, err
+			}
+		} else {
+			response.Stats.DocumentRowRefUnsupported++
+			documents, err = s.documentView.FetchDocumentsByID(ids, DocumentFetchOptions{})
+			if err != nil {
+				return response, err
+			}
 		}
 		if len(documents.Results) != len(response.Results) {
 			return response, errors.New("collections: vector index document materializer result count mismatch")

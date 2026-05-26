@@ -157,12 +157,70 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) {
 		t.Fatalf("DocumentsFetched=%d want %d", got.Stats.DocumentsFetched, len(got.Results))
 	}
+	if got.Stats.DocumentRowLocatorLookups != uint64(len(got.Results)) || got.Stats.DocumentRowLocatorMisses != 0 || got.Stats.DocumentPointRowFetches != uint64(len(got.Results)) || got.Stats.DocumentPointRowDecodes != uint64(len(got.Results)) {
+		t.Fatalf("stats=%+v want row-locator lookup and point row fetch per document", got.Stats)
+	}
+	if got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 || got.Stats.DocumentVisibilityRowsScanned != 0 {
+		t.Fatalf("stats=%+v want IncludeDocuments to avoid row-ref scan fallback on supported manifest", got.Stats)
+	}
 	documentBefore := append([]byte(nil), got.Results[0].Document...)
 	if _, err := col.SearchVectorIndex(opts); err != nil {
 		t.Fatalf("second SearchVectorIndex: %v", err)
 	}
 	if !bytes.Equal(got.Results[0].Document, documentBefore) {
 		t.Fatalf("top result document changed after a later search; want response-owned bytes")
+	}
+}
+
+func TestSearchVectorIndexColumnGraphRetainedFullDocumentsFallbackV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 0)
+	cfg := columnGraphRebuildColumnStoreConfigV2A(3)
+	cfg.RetainedPayload = ColumnRetainedPayloadFull
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	insertColumnGraphRebuildRowsV2A(t, col, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            []float32{1, 0, 0},
+		TopK:             1,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	if len(got.Results) != 1 || string(got.Results[0].ID) != "doc-a" {
+		t.Fatalf("results=%+v want doc-a", got.Results)
+	}
+	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-a")
+	if got.Stats.DocumentRowRefUnsupported != 1 || got.Stats.DocumentPointRowFetches != 0 || got.Stats.DocumentVisibilityScans != 0 || got.Stats.DocumentsFetched != 1 {
+		t.Fatalf("stats=%+v want retained-full fallback without row-ref point fetch", got.Stats)
 	}
 }
 
@@ -273,6 +331,9 @@ func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T
 	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-a")
 	if got.Stats.DocumentsFetched != 1 {
 		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
+	}
+	if got.Stats.DocumentRowLocatorLookups != 1 || got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentPointRowDecodes != 1 || got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 {
+		t.Fatalf("stats=%+v want prepared IncludeDocuments to use row refs and point fetches", got.Stats)
 	}
 	if searcher.documentView == nil || searcher.documentView.assetScopeKind != mappedresource.ScopePreparedSearch {
 		t.Fatalf("document view=%+v want prepared_search scope", searcher.documentView)
@@ -1217,6 +1278,17 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.DocumentTypedColumnNanos), "doc_typed_column_ns/search")
 	b.ReportMetric(float64(stats.DocumentJSONReconstructionRows), "doc_json_reconstruction_rows/search")
 	b.ReportMetric(float64(stats.DocumentJSONReconstructionNanos), "doc_json_reconstruction_ns/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorBuilds), "doc_row_locator_builds/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorLookups), "doc_row_locator_lookups/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorMisses), "doc_row_locator_misses/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorRowsScanned), "doc_row_locator_rows_scanned/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorPhysicalBytes), "doc_row_locator_physical_B/search")
+	b.ReportMetric(float64(stats.DocumentRowLocatorNanos), "doc_row_locator_ns/search")
+	b.ReportMetric(float64(stats.DocumentPointRowFetches), "doc_point_row_fetches/search")
+	b.ReportMetric(float64(stats.DocumentPointRowDecodes), "doc_point_row_decodes/search")
+	b.ReportMetric(float64(stats.DocumentRowRefFallbackScans), "doc_row_ref_fallback_scans/search")
+	b.ReportMetric(float64(stats.DocumentRowRefUnsupported), "doc_row_ref_unsupported/search")
+	b.ReportMetric(float64(stats.DocumentRowRefValidationFailures), "doc_row_ref_validation_failures/search")
 	b.ReportMetric(float64(stats.DocumentAssetMmapHits), "doc_asset_mmap_hits/search")
 	b.ReportMetric(float64(stats.DocumentAssetReadAtFallbacks), "doc_asset_readat_fallbacks/search")
 	b.ReportMetric(float64(stats.DocumentAssetFileOpens), "doc_asset_file_opens/search")
