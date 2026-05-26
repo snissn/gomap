@@ -525,7 +525,6 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 		return err
 	}
 	stats.Candidates++
-	stats.VisitedNodes++
 	candidate := columnVectorGraphSearchCandidate{
 		ordinal: ordinal,
 		score:   score,
@@ -549,6 +548,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 	if stats != nil {
 		stats.ScoreBatches++
 		stats.OrdinalsGrouped++
+		stats.VisitedNodes++
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
 		stats.BlockViewBuilds = plan.builds

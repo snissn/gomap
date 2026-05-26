@@ -145,14 +145,40 @@ func TestColumnVectorGraphNativeSearchCountersReportPayloadBytesC3(t *testing.T)
 	if err != nil {
 		t.Fatalf("SearchCosine: %v", err)
 	}
-	if stats.CandidateRows != uint64(len(rows)) || stats.VisitedNodes != stats.Candidates || stats.VisitedEdges != stats.Edges {
-		t.Fatalf("stats=%+v want candidate-row and visited graph counters", stats)
+	if stats.CandidateRows != uint64(len(rows)) || stats.VisitedNodes < stats.Candidates || stats.VisitedEdges != stats.Edges {
+		t.Fatalf("stats=%+v want candidate-row and non-undercounting visited graph counters", stats)
 	}
 	if got, want := stats.VectorBytesRead, stats.CandidateFetches*uint64(def.Dimensions)*4; got != want {
 		t.Fatalf("vector bytes read=%d want candidate_fetches*dims*4=%d stats=%+v", got, want, stats)
 	}
 	if stats.AdjacencyBytesRead == 0 || stats.AdjacencyDirectViews+stats.AdjacencyScratchDecodes == 0 {
 		t.Fatalf("stats=%+v want adjacency byte and direct/scratch counters", stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchCountsUpperLayerVisitedNodesC3(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-entry"), Vector: []float32{0, 1}, InvNorm: 1, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 2, 1, 1}},
+		{ID: []byte("doc-upper-best"), Vector: []float32{1, 0}, InvNorm: 1},
+		{ID: []byte("doc-base-neighbor"), Vector: []float32{0.2, 0.8}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(t, 2, 2, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine([]float32{1, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 1 {
+		t.Fatalf("results=%+v want upper-layer greedy entry ordinal 1", got)
+	}
+	if stats.Candidates != 1 || stats.VisitedNodes <= stats.Candidates || stats.CandidateFetches <= stats.Candidates {
+		t.Fatalf("stats=%+v want upper-layer scoring counted as visited node fetches", stats)
 	}
 }
 

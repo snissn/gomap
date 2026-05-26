@@ -69,7 +69,7 @@ type VectorIndexSearchStats struct {
 	Candidates uint64 `json:"candidates,omitempty"`
 	// Edges is the number of graph edges considered by graph search.
 	Edges uint64 `json:"edges,omitempty"`
-	// VisitedNodes is the operation-specific graph node visit counter. It aliases Candidates for current column_graph search.
+	// VisitedNodes is the operation-specific graph node score/evaluation visit counter. It includes upper-layer probes and may exceed Candidates.
 	VisitedNodes uint64 `json:"visited_nodes,omitempty"`
 	// VisitedEdges is the operation-specific graph edge visit counter. It aliases Edges for current column_graph search.
 	VisitedEdges uint64 `json:"visited_edges,omitempty"`

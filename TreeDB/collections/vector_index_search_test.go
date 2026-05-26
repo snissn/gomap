@@ -53,8 +53,8 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	if got.Stats.Candidates == 0 || got.Stats.CandidateFetches == 0 || got.Stats.ResultFetches < uint64(len(got.Results)) {
 		t.Fatalf("stats=%+v want public search to expose non-zero native graph traversal/result accounting", got.Stats)
 	}
-	if got.Stats.CandidateRows != uint64(len(rows)) || got.Stats.VisitedNodes != got.Stats.Candidates || got.Stats.VisitedEdges != got.Stats.Edges || got.Stats.VectorBytesRead == 0 || got.Stats.AdjacencyBytesRead == 0 {
-		t.Fatalf("stats=%+v want public operation-specific candidate row, visited graph, vector-byte, and adjacency-byte counters", got.Stats)
+	if got.Stats.CandidateRows != uint64(len(rows)) || got.Stats.VisitedNodes < got.Stats.Candidates || got.Stats.VisitedEdges != got.Stats.Edges || got.Stats.VectorBytesRead == 0 || got.Stats.AdjacencyBytesRead == 0 {
+		t.Fatalf("stats=%+v want public operation-specific candidate row, non-undercounting visited graph, vector-byte, and adjacency-byte counters", got.Stats)
 	}
 	if got.Stats.DocumentsFetched != 0 {
 		t.Fatalf("DocumentsFetched=%d want no document fetch without IncludeDocuments", got.Stats.DocumentsFetched)
