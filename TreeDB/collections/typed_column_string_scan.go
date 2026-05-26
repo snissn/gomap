@@ -98,7 +98,12 @@ func validateTypedColumnStringPredicateScanRequest(req TypedColumnStringPredicat
 		return errors.New("collections: typed-column string predicate scan requires column")
 	}
 	switch req.Kind {
-	case "", TypedColumnStringPredicateEqual, TypedColumnStringPredicateInList, TypedColumnStringPredicateCategory, TypedColumnStringPredicatePrefix, TypedColumnStringPredicateLexicalRange:
+	case "", TypedColumnStringPredicateEqual, TypedColumnStringPredicatePrefix, TypedColumnStringPredicateLexicalRange:
+		return nil
+	case TypedColumnStringPredicateInList, TypedColumnStringPredicateCategory:
+		if req.Value != "" {
+			return fmt.Errorf("%w: typed-column string predicate scan %s uses Values for targets; Value is ambiguous for empty-string members", ErrColumnQueryPlanUnsupported, req.Kind)
+		}
 		return nil
 	default:
 		return fmt.Errorf("%w: typed-column string predicate scan unsupported kind %q", ErrColumnQueryPlanUnsupported, req.Kind)
@@ -341,11 +346,7 @@ func typedColumnStringPredicateValues(req TypedColumnStringPredicateScanRequest)
 	case "", TypedColumnStringPredicateEqual:
 		return []string{req.Value}
 	case TypedColumnStringPredicateInList, TypedColumnStringPredicateCategory:
-		values := append([]string(nil), req.Values...)
-		if req.Value != "" {
-			values = append(values, req.Value)
-		}
-		return values
+		return append([]string(nil), req.Values...)
 	default:
 		return nil
 	}

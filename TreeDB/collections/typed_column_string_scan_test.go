@@ -82,6 +82,23 @@ func TestTypedColumnStringScanInListCategoryPreparedDictionary1846(t *testing.T)
 	}
 }
 
+func TestTypedColumnStringScanInListEmptyStringUsesValues1846(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"", "like", "comment"})
+
+	result, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Kind: TypedColumnStringPredicateInList, Values: []string{"", "comment"}})
+	if err != nil {
+		t.Fatalf("RunTypedColumnStringPredicateScan empty-string in-list: %v", err)
+	}
+	assertTypedColumnStringScanValues1785(t, result, []string{"", "comment"})
+
+	_, err = col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Kind: TypedColumnStringPredicateInList, Value: "like"})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "uses Values") {
+		t.Fatalf("Value-form in-list err=%v want explicit Values-only rejection", err)
+	}
+}
+
 func TestTypedColumnStringScanVisibilityDeleteComposition1846(t *testing.T) {
 	d, col := setupTypedColumnStringScanCollection1785(t)
 	defer func() { _ = d.Close() }()
