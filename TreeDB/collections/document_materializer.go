@@ -13,7 +13,11 @@ import (
 
 // DocumentFetchOptions configures snapshot-bound document materialization. The
 // zero value preserves Collection.Get-style full-document output and verified
-// column-asset reads.
+// column-asset reads. Projection paths are explicit JSON top-level fields:
+// IncludePaths is an allowlist when non-empty, ExcludePaths wins over includes,
+// missing fields are ignored, and present JSON null values are preserved. The
+// same projection contract is applied to retained payload fields, typed-row
+// asset fields, and typed-column-part fields.
 type DocumentFetchOptions struct {
 	// IncludePaths is an optional allowlist of top-level JSON fields to return.
 	// When non-empty, fields not listed here are skipped. Nested projection paths

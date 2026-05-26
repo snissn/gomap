@@ -454,6 +454,35 @@ func TestCollectionReadViewProjectionValidationMatrix1875(t *testing.T) {
 	}
 }
 
+func TestCollectionReadViewProjectionPlainJSONAndFormatValidation1875(t *testing.T) {
+	d, col := newDocumentProjectionPlainJSONCollection1875(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.Insert([]byte("doc-a"), []byte(`{"kind":"plain","embedding":[1,2,3],"payload":"retained","note":null}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	projected, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{IncludePaths: []string{"kind", "note"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID plain JSON projection: %v", err)
+	}
+	assertJSONMapEqual1875(t, projected.Results[0].Document, map[string]any{"kind": "plain", "note": nil})
+	if projected.Stats.FieldsReconstructed != 2 || projected.Stats.FieldsSkipped != 2 || projected.Stats.OutputBytes != projected.Stats.DocumentBytes {
+		t.Fatalf("plain JSON projection stats=%+v want reconstructed/skipped/output counters", projected.Stats)
+	}
+	fullJSON, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{Format: DocumentFormatJSON})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID JSON format: %v", err)
+	}
+	assertJSONMapEqual1875(t, fullJSON.Results[0].Document, map[string]any{"kind": "plain", "embedding": []any{float64(1), float64(2), float64(3)}, "payload": "retained", "note": nil})
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{Format: DocumentFormatBSON}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("FetchDocumentsByID unsupported format err=%v want fail closed", err)
+	}
+}
+
 func TestCollectionReadViewProjectionExcludeEmbeddingAndIncludeMetadata1875(t *testing.T) {
 	d, col := newDocumentProjectionVectorTestCollection1875(t, TypedStorageOwnerRowAsset)
 	defer func() { _ = d.Close() }()
@@ -1024,6 +1053,26 @@ func newDocumentProjectionTestCollection1875(t testing.TB) (*backenddb.DB, *Coll
 	cfg.AggregateMetadata = nil
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return d, col
+}
+
+func newDocumentProjectionPlainJSONCollection1875(t testing.TB) (*backenddb.DB, *Collection) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
 		_ = d.Close()
 		t.Fatalf("CreateCollection: %v", err)
 	}
