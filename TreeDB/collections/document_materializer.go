@@ -635,7 +635,7 @@ func (v *CollectionReadView) validateDocumentRowRefLatest(ref DocumentRowRef, st
 	return nil
 }
 
-func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projected []string, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
+func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
 	if stats != nil {
 		stats.PointRowFetches++
 	}
@@ -649,10 +649,6 @@ func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapsh
 	}
 	if ref.RowIndex < 0 || ref.RowIndex >= len(block.rowOffsets) {
 		return columnPhysicalVisibleRow{}, fmt.Errorf("collections: document row ref for id %q row_index=%d outside physical rows=%d", string(ref.DocumentID), ref.RowIndex, len(block.rowOffsets))
-	}
-	projection, err := v.pointRowScanProjection(view, projected)
-	if err != nil {
-		return columnPhysicalVisibleRow{}, err
 	}
 	reader := &columnPhysicalRowReader{view: view, projection: projection}
 	row, err := reader.decodeRowFromBlock(block, ref.RowIndex, ref.RowIndex, scratch)
@@ -902,6 +898,10 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
 	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
 	typedProjection := documentProjectionTypedColumnPartSelection(cfg, selectedColumns)
+	pointProjection, err := v.pointRowScanProjection(view, rowProjection)
+	if err != nil {
+		return out, err
+	}
 	typedColumnCache := v.typedColumnReconstructionCacheForConfig(cfg)
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
 	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
@@ -918,7 +918,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 				return out, err
 			}
 		}
-		row, err := v.fetchDocumentPointRow(view, refs[i], rowProjection, &rowScratch, &out.Stats)
+		row, err := v.fetchDocumentPointRow(view, refs[i], pointProjection, &rowScratch, &out.Stats)
 		if err != nil {
 			out.Stats.RowRefValidationFailures++
 			return out, err

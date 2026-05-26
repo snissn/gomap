@@ -222,7 +222,9 @@ func TestSearchVectorIndexColumnGraphProjectedDocuments1875(t *testing.T) {
 		if _, ok := doc["embedding"]; ok {
 			t.Fatalf("projected document[%d]=%s retained embedding", i, projected.Results[i].Document)
 		}
-		if doc["did"] == "" || doc["kind"] != "vector" {
+		did, didOK := doc["did"].(string)
+		kind, kindOK := doc["kind"].(string)
+		if !didOK || did == "" || !kindOK || kind != "vector" {
 			t.Fatalf("projected document[%d]=%v want selected metadata fields", i, doc)
 		}
 	}

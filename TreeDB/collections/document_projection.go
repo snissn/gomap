@@ -136,7 +136,7 @@ func documentProjectionTypedColumnPartSelection(cfg ColumnStoreConfig, selected 
 		}
 	}
 	if typedCount == 0 {
-		return nil
+		return []bool{}
 	}
 	out := make([]bool, typedCount)
 	typedIdx := 0
