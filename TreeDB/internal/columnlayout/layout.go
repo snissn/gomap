@@ -708,6 +708,9 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 	if c.Layout.LengthMultipleBytes > 0 && g.RawBytes%c.Layout.LengthMultipleBytes != 0 {
 		return fmt.Errorf("columnlayout: raw bytes=%d not multiple of %d: %s", g.RawBytes, c.Layout.LengthMultipleBytes, ReasonLengthMultipleMismatch)
 	}
+	if c.Layout.FixedWidth && (c.Layout.ElementWidthBytes <= 0 || c.Layout.ElementsPerRow <= 0) {
+		return fmt.Errorf("columnlayout: invalid fixed-width contract width=%d elements_per_row=%d: %s", c.Layout.ElementWidthBytes, c.Layout.ElementsPerRow, ReasonFixedWidthElementsRequired)
+	}
 	if g.Rows == 0 {
 		if g.RawBytes != 0 || g.StoredBytes != 0 {
 			return fmt.Errorf("columnlayout: zero-row payload raw=%d stored=%d want 0: %s", g.RawBytes, g.StoredBytes, ReasonRawLengthRowCountMismatch)
@@ -719,9 +722,6 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 			return fmt.Errorf("columnlayout: variable-width payload has zero raw/stored bytes raw=%d stored=%d", g.RawBytes, g.StoredBytes)
 		}
 		return nil
-	}
-	if c.Layout.ElementWidthBytes <= 0 || c.Layout.ElementsPerRow <= 0 {
-		return fmt.Errorf("columnlayout: invalid fixed-width contract width=%d elements_per_row=%d: %s", c.Layout.ElementWidthBytes, c.Layout.ElementsPerRow, ReasonFixedWidthElementsRequired)
 	}
 	elements, err := checkedMul(g.Rows, c.Layout.ElementsPerRow, "fixed-width elements")
 	if err != nil {

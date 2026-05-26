@@ -183,8 +183,13 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 			t.Fatalf("missing vector dims semantic %s cap=%+v want %s", op, cap, ReasonFixedWidthElementsRequired)
 		}
 	}
-	if err := missingVectorDims.ValidateGranule(typedcolumn.EncodedGranule{Rows: 1, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4}); err == nil || !strings.Contains(err.Error(), string(ReasonFixedWidthElementsRequired)) {
-		t.Fatalf("missing vector dims ValidateGranule err=%v want %s", err, ReasonFixedWidthElementsRequired)
+	for _, granule := range []typedcolumn.EncodedGranule{
+		{Rows: 0, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0},
+		{Rows: 1, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4},
+	} {
+		if err := missingVectorDims.ValidateGranule(granule); err == nil || !strings.Contains(err.Error(), string(ReasonFixedWidthElementsRequired)) {
+			t.Fatalf("missing vector dims ValidateGranule rows=%d err=%v want %s", granule.Rows, err, ReasonFixedWidthElementsRequired)
+		}
 	}
 
 	adjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, FixedWidthElements: 8})
@@ -220,7 +225,12 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 			t.Fatalf("missing adjacency degree semantic %s cap=%+v want %s", op, cap, ReasonFixedWidthElementsRequired)
 		}
 	}
-	if err := missingAdjacencyDegree.ValidateGranule(typedcolumn.EncodedGranule{Rows: 1, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4}); err == nil || !strings.Contains(err.Error(), string(ReasonFixedWidthElementsRequired)) {
-		t.Fatalf("missing adjacency degree ValidateGranule err=%v want %s", err, ReasonFixedWidthElementsRequired)
+	for _, granule := range []typedcolumn.EncodedGranule{
+		{Rows: 0, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0},
+		{Rows: 1, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4},
+	} {
+		if err := missingAdjacencyDegree.ValidateGranule(granule); err == nil || !strings.Contains(err.Error(), string(ReasonFixedWidthElementsRequired)) {
+			t.Fatalf("missing adjacency degree ValidateGranule rows=%d err=%v want %s", granule.Rows, err, ReasonFixedWidthElementsRequired)
+		}
 	}
 }
