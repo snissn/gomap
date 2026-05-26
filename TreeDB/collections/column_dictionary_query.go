@@ -249,11 +249,11 @@ func (r *columnDictionaryCodeGroupCountRunner) run(view columnPhysicalScanSnapsh
 	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = columnPhysicalQueryProjectedColumnCount(req)
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 1)
 	diag.ScheduledGranules = len(r.assets)
 	diag.DecodedBlocks = len(r.assets)
 	diag.DirectReduceBlocks = len(r.assets)
-	diag.DictionaryCodeHits = len(r.assets) + r.predicateCodeHit
+	diag.DictionaryCodeHits = len(r.assets)
 	diag.PredicateDictionaryCodeHits = r.predicateCodeHit
 	diag.RowsScanned = rows
 	diag.PhysicalBytesScanned = r.assetBytes + r.predicateBytes
@@ -685,11 +685,11 @@ func (r *columnDictionaryCodeGroupCountDistinctRunner) run(view columnPhysicalSc
 	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = columnPhysicalQueryProjectedColumnCount(req)
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 2)
 	diag.ScheduledGranules = len(r.assets)
 	diag.DecodedBlocks = len(r.assets)
 	diag.DirectReduceBlocks = len(r.assets)
-	diag.DictionaryCodeHits = len(r.assets)*2 + r.predicateCodeHit
+	diag.DictionaryCodeHits = len(r.assets)
 	diag.PredicateDictionaryCodeHits = r.predicateCodeHit
 	diag.RowsScanned = rows
 	diag.PhysicalBytesScanned = r.assetBytes + r.predicateBytes

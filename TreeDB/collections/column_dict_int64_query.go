@@ -332,11 +332,11 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 	sortColumnPhysicalQueryGroupsByKey(r.result)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = columnPhysicalQueryProjectedColumnCount(req)
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 2)
 	diag.ScheduledGranules = len(r.assets)
 	diag.DecodedBlocks = len(r.assets)
 	diag.DirectReduceBlocks = len(r.assets)
-	diag.DictionaryCodeHits = len(r.assets) + r.predicateCodeHit
+	diag.DictionaryCodeHits = len(r.assets)
 	diag.PredicateDictionaryCodeHits = r.predicateCodeHit
 	diag.Int64ValueHits = len(r.assets)
 	diag.RowsScanned = rows

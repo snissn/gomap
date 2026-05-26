@@ -42,10 +42,11 @@ type columnDictionaryPredicateAsset struct {
 }
 
 type columnPhysicalQueryPredicateDiagnosticPlan struct {
-	columns  []string
-	kinds    []string
-	count    int
-	literals int
+	columns          []string
+	kinds            []string
+	count            int
+	literals         int
+	projectedColumns int
 }
 
 func columnPhysicalQueryHasPredicates(req ColumnPhysicalQueryRequest) bool {
@@ -249,14 +250,13 @@ func columnDictionaryPredicateAssetHits(assets []columnDictionaryPredicateAsset)
 }
 
 func newColumnPhysicalQueryPredicateDiagnosticPlan(req ColumnPhysicalQueryRequest) columnPhysicalQueryPredicateDiagnosticPlan {
+	plan := columnPhysicalQueryPredicateDiagnosticPlan{projectedColumns: columnPhysicalQueryProjectedColumnCount(req)}
 	if len(req.Predicates) == 0 {
-		return columnPhysicalQueryPredicateDiagnosticPlan{}
+		return plan
 	}
-	plan := columnPhysicalQueryPredicateDiagnosticPlan{
-		columns: make([]string, 0, len(req.Predicates)),
-		kinds:   make([]string, 0, len(req.Predicates)),
-		count:   len(req.Predicates),
-	}
+	plan.columns = make([]string, 0, len(req.Predicates))
+	plan.kinds = make([]string, 0, len(req.Predicates))
+	plan.count = len(req.Predicates)
 	for _, predicate := range req.Predicates {
 		plan.columns = append(plan.columns, predicate.Column)
 		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
@@ -280,6 +280,13 @@ func applyColumnPhysicalQueryPredicateDiagnostics(diag *ColumnPhysicalQueryDiagn
 	diag.PredicateCount = plan.count
 	diag.RowsMatched = matchedRows
 	diag.PredicateDictionaryCodeHits = dictionaryHits
+}
+
+func columnPhysicalQueryDiagnosticProjectedColumns(plan columnPhysicalQueryPredicateDiagnosticPlan, fallback int) int {
+	if plan.projectedColumns > 0 {
+		return plan.projectedColumns
+	}
+	return fallback
 }
 
 func columnPhysicalQueryProjectedColumnCount(req ColumnPhysicalQueryRequest) int {

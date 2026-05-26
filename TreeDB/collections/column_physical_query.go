@@ -207,6 +207,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	var metadata *columnAggregateMetadataRunner
 	var exec *columnPhysicalQueryExecutor
 	if req.AggregateMetadataName != "" && columnPhysicalQueryHasPredicates(req) {
+		_ = readCache.close()
 		return nil, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
 	}
 	if req.AggregateMetadataName != "" {
