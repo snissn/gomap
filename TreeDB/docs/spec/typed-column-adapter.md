@@ -4,7 +4,9 @@ Status: current implementation note for issues #1754, #1755, #1756, and #1783 un
 Typed-column schema/version evolution and migration policy is defined in
 `typed-column-schema-evolution.md`. Logical capability status and admission
 rules are defined in `typed-column-semantics.md`; physical layout/codec
-capabilities are defined in `typed-column-layout-capabilities.md`.
+capabilities are defined in `typed-column-layout-capabilities.md`; aligned
+fixed-width direct-view certification rules are defined in
+`typed-column-direct-view-alignment.md`.
 
 `TreeDB/collections/typed_column_adapter.go` adapts the transplanted
 `TreeDB/internal/typedcolumn` data plane to TreeDB typed-storage field metadata,
@@ -38,8 +40,8 @@ time.
 | `float32` | represented | Raw int64 column carrying `math.Float32bits` in the low 32 bits until native float sections land; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
 | `double` / `float64` | represented | Raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
-| `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row. |
-| `adjacency_list` | represented | Fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. |
+| `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
+| `adjacency_list` | represented | Fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row; direct-view certification is deferred/fallback-only for this stack (#1901). |
 
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit
@@ -104,11 +106,14 @@ production retained-payload behavior.
 `float32_vector` typed-column data is stored as uncompressed raw little-endian
 `float32` payloads. `adjacency_list` typed-column data is stored as uncompressed
 raw little-endian `uint32` payloads with exactly `adjacency_degree` elements per
-row. The `typedcolumn` image builder keeps all sections aligned to
-8-byte boundaries, which is sufficient for `float32` and `uint32` mappedresource
-direct views. Readers must validate lifetime, range, length, endian mode, and
-alignment through #1736 `mappedresource` handles before exposing direct typed
-views; misaligned direct views fall back to heap/scratch decode or fail closed.
+row, but adjacency direct views are deferred to #1901. The `typedcolumn` image
+builder keeps sections relatively aligned; current direct-view eligibility also
+requires absolute storage alignment (`asset_ref.offset + section/block offset`)
+and actual Go pointer alignment at view construction time. Readers must validate
+lifetime, range, length, endian mode, absolute offset alignment, source, and
+actual pointer alignment through #1736 `mappedresource` handles before exposing
+mmap direct typed views; heap-copy typed views and scratch decodes are safe
+fallbacks but not zero-copy speedup evidence.
 
 ## Query, Predicate, and Allocation Boundary
 
@@ -148,7 +153,9 @@ schema, or fail-closed validation.
 
 The only production `TreeDB/collections` file that imports
 `TreeDB/internal/typedcolumn` is the adapter seam. Publication/reopen logic calls
-through that seam. Query/vector search integration remains deferred to later
-issues `#1757`/`#1782`/`#1790`; this path publishes fixed-dimension
-`float32_vector` and fixed-degree `adjacency_list` values but does not switch
-native vector graph search to typed-column parts or add SIMD acceleration.
+through that seam. Query/vector search integration remains staged through later issues. The active
+#1886 stack consumes certified typed-column `float32_vector` payloads, while
+physical row-asset direct views are deferred to #1897 and adjacency direct-view
+certification is deferred to #1901. This path publishes fixed-dimension
+`float32_vector` and fixed-degree `adjacency_list` values but does not make
+adjacency mmap direct views part of the current stack.

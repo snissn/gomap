@@ -30,18 +30,24 @@ const (
 type Reason string
 
 const (
-	ReasonSupported                  Reason = "supported"
-	ReasonUnsupportedOperation       Reason = "unsupported_operation"
-	ReasonLayoutCapability           Reason = "layout_capability"
-	ReasonNotWriterCertified         Reason = "writer_certification_missing"
-	ReasonCompressed                 Reason = "compressed"
-	ReasonVariableWidth              Reason = "variable_width"
-	ReasonNullableWrapper            Reason = "nullable_default_wrapper"
-	ReasonWrongEndian                Reason = "wrong_endian"
-	ReasonLengthMultipleMismatch     Reason = "length_multiple_mismatch"
-	ReasonPayloadLengthMismatch      Reason = "payload_length_mismatch"
-	ReasonRowCountMismatch           Reason = "row_count_mismatch"
-	ReasonDimensionMismatch          Reason = "dimension_mismatch"
+	ReasonSupported               Reason = "supported"
+	ReasonUnsupportedOperation    Reason = "unsupported_operation"
+	ReasonLayoutCapability        Reason = "layout_capability"
+	ReasonNotWriterCertified      Reason = "writer_certification_missing"
+	ReasonCompressed              Reason = "compressed"
+	ReasonVariableWidth           Reason = "variable_width"
+	ReasonNullableWrapper         Reason = "nullable_default_wrapper"
+	ReasonWrongEndian             Reason = "wrong_endian"
+	ReasonLengthMultipleMismatch  Reason = "length_multiple_mismatch"
+	ReasonPayloadLengthMismatch   Reason = "payload_length_mismatch"
+	ReasonRowCountMismatch        Reason = "row_count_mismatch"
+	ReasonDimensionMismatch       Reason = "dimension_mismatch"
+	ReasonAbsoluteOffsetUnaligned Reason = "absolute_offset_unaligned"
+	ReasonActualPointerUnaligned  Reason = "actual_pointer_unaligned"
+	ReasonDirectViewDeferred      Reason = "direct_view_deferred"
+	// ReasonUnaligned is retained for compatibility with older diagnostics;
+	// new direct-view validation distinguishes absolute storage offset alignment
+	// from actual Go pointer alignment.
 	ReasonUnaligned                  Reason = "unaligned"
 	ReasonNilHandle                  Reason = "nil_handle"
 	ReasonStaleHandle                Reason = "stale_handle"
@@ -100,6 +106,35 @@ type Plan struct {
 
 func (p Plan) Status() Status        { return Status{Path: p.Path, Reason: p.Reason, Message: p.Message} }
 func (p Plan) DirectCandidate() bool { return p.Path == PathDirectView && p.Reason == ReasonSupported }
+
+// Counter identifies a stable direct-view/fallback accounting bucket.
+type Counter string
+
+const (
+	CounterMmapDirectView          Counter = "mmap_direct_view"
+	CounterHeapCopyTypedView       Counter = "heap_copy_typed_view"
+	CounterScratchDecode           Counter = "scratch_decode"
+	CounterStreamingFallback       Counter = "streaming_fallback"
+	CounterCertificationFailure    Counter = "certification_failure"
+	CounterAbsoluteOffsetUnaligned Counter = "absolute_offset_unaligned"
+	CounterActualPointerUnaligned  Counter = "actual_pointer_unaligned"
+	CounterStaleHandle             Counter = "stale_handle"
+)
+
+// CounterVocabulary returns the stable counter names that benchmark/reporting
+// code should use when distinguishing zero-copy mmap views from safe fallbacks.
+func CounterVocabulary() []Counter {
+	return []Counter{
+		CounterMmapDirectView,
+		CounterHeapCopyTypedView,
+		CounterScratchDecode,
+		CounterStreamingFallback,
+		CounterCertificationFailure,
+		CounterAbsoluteOffsetUnaligned,
+		CounterActualPointerUnaligned,
+		CounterStaleHandle,
+	}
+}
 
 // Counters is a small shared accounting shape for prepared scans and future
 // kernels. It is caller-owned; there is no package-global cache.
@@ -208,10 +243,9 @@ func DenseFloat32VectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, dim
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalFloat32Vector, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.EncodingRawFloat32Vector, 4, dims)
 }
 
-// AdjacencyListPlan selects a direct-view candidate only for writer-certified
-// raw little-endian adjacency_list sections with the requested fixed degree.
-// Callers must still validate each column/block payload and handle lifetime
-// before exposing the returned []uint32.
+// AdjacencyListPlan intentionally defers adjacency direct views for the active
+// #1893/#1886 stack. It preserves the same fail-closed validation vocabulary so
+// #1901 can enable writer-certified raw little-endian adjacency sections later.
 func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree int) Plan {
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            columnsemantics.LogicalAdjacencyList,
@@ -277,6 +311,8 @@ func statusFromLayoutCapability(cap columnlayout.Capability) Status {
 		reason = ReasonVariableWidth
 	case columnlayout.ReasonNullDefaultWrapperRequired:
 		reason = ReasonNullableWrapper
+	case columnlayout.ReasonAdjacencyDirectViewDeferred:
+		reason = ReasonDirectViewDeferred
 	case columnlayout.ReasonOperationUnsupported:
 		reason = ReasonUnsupportedOperation
 	}
@@ -293,6 +329,12 @@ type DirectViewBlockRequest struct {
 	Block         typedcolumn.ColumnPartLayoutContractBlock
 	Rows          int
 	PayloadBytes  int
+	// AssetOffset is the absolute byte offset of the containing asset in its
+	// mapped storage segment. Direct-view eligibility requires
+	// AssetOffset+Block.PayloadOffset to satisfy Certification.Alignment; relative
+	// image-local alignment alone is not sufficient.
+	AssetOffset    int64
+	HasAssetOffset bool
 }
 
 // DirectViewColumnRequest validates a complete fixed-width column-data section
@@ -302,6 +344,12 @@ type DirectViewColumnRequest struct {
 	Certification typedcolumn.ColumnPartLayoutContractColumn
 	Rows          int
 	PayloadBytes  int
+	// AssetOffset is the absolute byte offset of the containing asset in its
+	// mapped storage segment. Direct-view eligibility requires
+	// AssetOffset+Certification.Section.Offset and each block payload offset to
+	// satisfy Certification.Alignment.
+	AssetOffset    int64
+	HasAssetOffset bool
 }
 
 func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
@@ -322,7 +370,10 @@ func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
 		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("section_length=%d multiple=%d", cert.Section.Length, cert.LengthMultiple))
 	}
 	if cert.Alignment <= 0 || cert.Section.Offset%cert.Alignment != 0 {
-		return StreamingStatus(ReasonUnaligned, fmt.Sprintf("section_offset=%d alignment=%d", cert.Section.Offset, cert.Alignment))
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("section_offset=%d alignment=%d", cert.Section.Offset, cert.Alignment))
+	}
+	if status := validateAbsoluteDirectViewOffset(req.HasAssetOffset, req.AssetOffset, cert.Section.Offset, cert.Alignment, "section"); !status.Direct() {
+		return status
 	}
 	elementsPerRow := req.Plan.ElementsPerRow
 	if elementsPerRow <= 0 {
@@ -352,9 +403,9 @@ func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
 			return UnsupportedStatus(ReasonValidationFailed, fmt.Sprintf("block %d payload_offset=%d want %d", i, block.PayloadOffset, nextPayloadOffset))
 		}
 		if cert.Alignment <= 0 || block.PayloadOffset%cert.Alignment != 0 {
-			return StreamingStatus(ReasonUnaligned, fmt.Sprintf("block %d payload_offset=%d alignment=%d", i, block.PayloadOffset, cert.Alignment))
+			return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("block %d payload_offset=%d alignment=%d", i, block.PayloadOffset, cert.Alignment))
 		}
-		status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: req.Plan, Certification: cert, Block: block, Rows: block.RowCount, PayloadBytes: block.PayloadLength})
+		status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: req.Plan, Certification: cert, Block: block, Rows: block.RowCount, PayloadBytes: block.PayloadLength, AssetOffset: req.AssetOffset, HasAssetOffset: req.HasAssetOffset})
 		if !status.Direct() {
 			return status
 		}
@@ -396,7 +447,10 @@ func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
 		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("payload=%d raw=%d multiple=%d", block.PayloadLength, block.RawBytes, cert.LengthMultiple))
 	}
 	if cert.Alignment <= 0 || block.PayloadOffset%cert.Alignment != 0 {
-		return StreamingStatus(ReasonUnaligned, fmt.Sprintf("payload_offset=%d alignment=%d", block.PayloadOffset, cert.Alignment))
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("payload_offset=%d alignment=%d", block.PayloadOffset, cert.Alignment))
+	}
+	if status := validateAbsoluteDirectViewOffset(req.HasAssetOffset, req.AssetOffset, block.PayloadOffset, cert.Alignment, "payload"); !status.Direct() {
+		return status
 	}
 	elementsPerRow := req.Plan.ElementsPerRow
 	if elementsPerRow <= 0 {
@@ -408,6 +462,23 @@ func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
 	}
 	if block.PayloadLength != want || block.RawBytes != want || block.StoredBytes != want {
 		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("payload/raw/stored=(%d,%d,%d) want rows=%d*elements=%d*width=%d=%d", block.PayloadLength, block.RawBytes, block.StoredBytes, req.Rows, elementsPerRow, req.Plan.ElementSize, want))
+	}
+	return DirectStatus()
+}
+
+func validateAbsoluteDirectViewOffset(hasAssetOffset bool, assetOffset int64, payloadOffset int, alignment int, label string) Status {
+	if !hasAssetOffset {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("%s absolute asset offset missing", label))
+	}
+	if assetOffset < 0 {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("%s asset_offset=%d", label, assetOffset))
+	}
+	if payloadOffset < 0 || assetOffset > int64(^uint64(0)>>1)-int64(payloadOffset) {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("%s absolute offset overflow asset=%d payload=%d", label, assetOffset, payloadOffset))
+	}
+	absolute := assetOffset + int64(payloadOffset)
+	if alignment <= 0 || absolute%int64(alignment) != 0 {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("%s absolute_offset=%d asset_offset=%d payload_offset=%d alignment=%d", label, absolute, assetOffset, payloadOffset, alignment))
 	}
 	return DirectStatus()
 }
@@ -585,7 +656,7 @@ func classifyViewError(err error) Status {
 	case errors.Is(err, mappedresource.ErrDirectViewReleasedHandle):
 		return UnsupportedStatus(ReasonStaleHandle, msg)
 	case errors.Is(err, mappedresource.ErrDirectViewUnaligned):
-		return StreamingStatus(ReasonUnaligned, msg)
+		return StreamingStatus(ReasonActualPointerUnaligned, msg)
 	case errors.Is(err, mappedresource.ErrDirectViewWrongEndian):
 		return StreamingStatus(ReasonWrongEndian, msg)
 	case errors.Is(err, mappedresource.ErrDirectViewLengthMultiple):

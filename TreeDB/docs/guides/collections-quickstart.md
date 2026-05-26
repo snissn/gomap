@@ -19,7 +19,7 @@ the section explicitly says **illustrative snippet**.
 | Flexible document, point reads | Retained document | Simplest, schema-flexible, no typed-storage ownership decisions. |
 | Declared scalar fields, point reconstruction | Typed-row asset | Compact typed row path while keeping reconstruction straightforward. |
 | Int64 range aggregate/filter | Typed-column part | Min/max pruning and aggregate scan can avoid document and row materialization. |
-| Vector search payloads | Typed-column dense section | Contiguous vector bytes, direct-view capable after lifetime/range/endian/length/alignment validation. |
+| Vector search payloads | Typed-column dense section | Contiguous vector bytes, mmap direct-view capable only after certification plus lifetime/range/endian/length/absolute-offset/actual-pointer alignment validation. |
 | Mixed metadata + vector | Typed-column vectors plus typed-row or retained-document metadata | Separates candidate scoring from final fetch and keeps metadata placement tied to query shape. |
 
 ## Field-ownership best practice

@@ -480,7 +480,7 @@ func typedColumnInt64DirectViewFallbackAllowed(status typeddecode.Status) bool {
 		return false
 	}
 	switch status.Reason {
-	case typeddecode.ReasonUnaligned, typeddecode.ReasonHandleSourceUnsupported, typeddecode.ReasonWrongEndian, typeddecode.ReasonNotWriterCertified:
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonActualPointerUnaligned, typeddecode.ReasonUnaligned, typeddecode.ReasonHandleSourceUnsupported, typeddecode.ReasonWrongEndian, typeddecode.ReasonNotWriterCertified:
 		return true
 	default:
 		return false
@@ -699,7 +699,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 			if block.Index < 0 || block.Index >= len(preparedColumn.Certification.Blocks) {
 				return false, fmt.Errorf("collections: typed-column int64 aggregate direct-view block index=%d outside certification blocks=%d", block.Index, len(preparedColumn.Certification.Blocks))
 			}
-			blockStatus := typeddecode.ValidateDirectViewBlock(typeddecode.DirectViewBlockRequest{Plan: columnPlan, Certification: preparedColumn.Certification, Block: preparedColumn.Certification.Blocks[block.Index], Rows: granule.Rows, PayloadBytes: len(payload)})
+			blockStatus := typeddecode.ValidateDirectViewBlock(typeddecode.DirectViewBlockRequest{Plan: columnPlan, Certification: preparedColumn.Certification, Block: preparedColumn.Certification.Blocks[block.Index], Rows: granule.Rows, PayloadBytes: len(payload), AssetOffset: int64(ref.Offset), HasAssetOffset: true})
 			if blockStatus.Direct() {
 				values, viewStatus := typeddecode.Int64View(s.resourceManager, handle, typeddecode.ResourceViewOptions{ExpectedElements: granule.Rows, RequireMapped: true})
 				recordTypedColumnInt64DirectViewStatus(&result.Diagnostics, viewStatus)

@@ -193,12 +193,21 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	}
 
 	adjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, FixedWidthElements: 8})
-	for _, op := range []Operation{OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
+	if adjacency.DirectView.Eligible {
+		t.Fatalf("adjacency caps=%+v want direct view deferred", adjacency)
+	}
+	if cap := adjacency.Supports(OpAdjacencyDirectView); cap.Supported() || cap.Reason != ReasonAdjacencyDirectViewDeferred {
+		t.Fatalf("adjacency direct cap=%+v want %s", cap, ReasonAdjacencyDirectViewDeferred)
+	}
+	for _, op := range []Operation{OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
 		if cap := adjacency.Supports(op); !cap.Supported() {
 			t.Fatalf("adjacency %s cap=%+v want supported", op, cap)
 		}
 	}
-	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyDirectPayload, columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyMetrics} {
+	if cap := adjacency.SupportsSemanticOperation(columnsemantics.OpAdjacencyDirectPayload); cap.Supported() || cap.Reason != ReasonAdjacencyDirectViewDeferred {
+		t.Fatalf("adjacency semantic direct cap=%+v want non-direct %s", cap, ReasonAdjacencyDirectViewDeferred)
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyMetrics} {
 		if cap := adjacency.SupportsSemanticOperation(op); !cap.Supported() {
 			t.Fatalf("adjacency semantic %s cap=%+v want supported", op, cap)
 		}

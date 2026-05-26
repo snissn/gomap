@@ -20,7 +20,7 @@ func TestInt64DirectViewPlanAndHandleValidation(t *testing.T) {
 	if !plan.DirectCandidate() {
 		t.Fatalf("plan=%+v want direct candidate", plan)
 	}
-	blockStatus := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: cert.Blocks[0], Rows: rows, PayloadBytes: rows * 8})
+	blockStatus := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: cert.Blocks[0], Rows: rows, PayloadBytes: rows * 8, AssetOffset: 0, HasAssetOffset: true})
 	if !blockStatus.Direct() {
 		t.Fatalf("block status=%+v want direct", blockStatus)
 	}
@@ -57,37 +57,37 @@ func TestDirectViewValidationFailsClosedForLengthRowEndianAndNullable(t *testing
 	truncated.PayloadLength = 15
 	truncated.RawBytes = 15
 	truncated.StoredBytes = 15
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: truncated, Rows: 2, PayloadBytes: 15}); status.Reason != ReasonLengthMultipleMismatch {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: truncated, Rows: 2, PayloadBytes: 15, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonLengthMultipleMismatch {
 		t.Fatalf("truncated status=%+v want %s", status, ReasonLengthMultipleMismatch)
 	}
 
 	wrongRows := cert.Blocks[0]
 	wrongRows.RowCount = 3
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: wrongRows, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonRowCountMismatch {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: wrongRows, Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonRowCountMismatch {
 		t.Fatalf("row status=%+v want %s", status, ReasonRowCountMismatch)
 	}
 	wrongBytes := cert.Blocks[0]
 	wrongBytes.StoredBytes = 8
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: wrongBytes, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonPayloadLengthMismatch {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: wrongBytes, Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonPayloadLengthMismatch {
 		t.Fatalf("byte contract status=%+v want %s", status, ReasonPayloadLengthMismatch)
 	}
 
 	wrongEndian := cert
 	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: wrongEndian, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16}); status.Reason != ReasonWrongEndian {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: wrongEndian, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonWrongEndian {
 		t.Fatalf("endian status=%+v want %s", status, ReasonWrongEndian)
 	}
 
 	nullable := cert
 	nullable.NullMaskPresent = true
 	nullable.NullCount = 1
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: nullable, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16}); status.Reason != ReasonNullableWrapper {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: nullable, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonNullableWrapper {
 		t.Fatalf("nullable status=%+v want %s", status, ReasonNullableWrapper)
 	}
 
 	compressed := cert
 	compressed.Compression = typedcolumn.CompressionSnappy
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: compressed, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16}); status.Reason != ReasonCompressed {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: compressed, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonCompressed {
 		t.Fatalf("compressed status=%+v want %s", status, ReasonCompressed)
 	}
 }
@@ -128,8 +128,8 @@ func TestDirectViewHandleRejectsUnalignedHeapAndStale(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireBytes mapped: %v", err)
 	}
-	if _, status := Int64View(mgr, h, ResourceViewOptions{ExpectedElements: 2, RequireMapped: true}); status.Reason != ReasonUnaligned {
-		t.Fatalf("unaligned status=%+v want %s", status, ReasonUnaligned)
+	if _, status := Int64View(mgr, h, ResourceViewOptions{ExpectedElements: 2, RequireMapped: true}); status.Reason != ReasonActualPointerUnaligned {
+		t.Fatalf("unaligned status=%+v want %s", status, ReasonActualPointerUnaligned)
 	}
 	_ = h.Release()
 	if _, status := Int64View(mgr, h, ResourceViewOptions{ExpectedElements: 2, RequireMapped: true}); status.Reason != ReasonStaleHandle {
@@ -159,12 +159,12 @@ func TestInt64DeltaPlanUsesStreamingNotDirectView(t *testing.T) {
 func TestDenseDirectViewBlockValidatesDimensionsAndLength(t *testing.T) {
 	cert := testFloat32VectorDirectCert(2, 4)
 	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 4, ElementsPerRow: 4, Alignment: 4, Rows: 2}
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 32}); !status.Direct() {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 32, AssetOffset: 0, HasAssetOffset: true}); !status.Direct() {
 		t.Fatalf("dense status=%+v want direct", status)
 	}
 	wrongDims := plan
 	wrongDims.ElementsPerRow = 3
-	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: wrongDims, Certification: cert, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 32}); status.Reason != ReasonDimensionMismatch {
+	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: wrongDims, Certification: cert, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 32, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonDimensionMismatch {
 		t.Fatalf("dimension status=%+v want %s", status, ReasonDimensionMismatch)
 	}
 }
@@ -175,7 +175,7 @@ func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAn
 	if !plan.DirectCandidate() {
 		t.Fatalf("plan=%+v want direct candidate", plan)
 	}
-	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 24}
+	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 24, AssetOffset: 0, HasAssetOffset: true}
 	if status := ValidateDirectViewColumn(columnReq); !status.Direct() {
 		t.Fatalf("column status=%+v want direct", status)
 	}
@@ -195,13 +195,13 @@ func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAn
 	}
 
 	wrongDims := DenseFloat32VectorPlan(cert, 2)
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongDims, Certification: cert, Rows: 2, PayloadBytes: 24}); status.Reason != ReasonDimensionMismatch {
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongDims, Certification: cert, Rows: 2, PayloadBytes: 24, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonDimensionMismatch {
 		t.Fatalf("dims status=%+v want %s", status, ReasonDimensionMismatch)
 	}
 	wrongEndian := cloneDirectViewCert(cert)
 	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
 	wrongEndianPlan := DenseFloat32VectorPlan(wrongEndian, 3)
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongEndianPlan, Certification: wrongEndian, Rows: 2, PayloadBytes: 24}); status.Reason != ReasonWrongEndian {
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongEndianPlan, Certification: wrongEndian, Rows: 2, PayloadBytes: 24, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonWrongEndian {
 		t.Fatalf("endian status=%+v want %s", status, ReasonWrongEndian)
 	}
 	truncated := cloneDirectViewCert(cert)
@@ -209,12 +209,12 @@ func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAn
 	truncated.Blocks[0].PayloadLength = 23
 	truncated.Blocks[0].RawBytes = 23
 	truncated.Blocks[0].StoredBytes = 23
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: truncated, Rows: 2, PayloadBytes: 23}); status.Reason != ReasonLengthMultipleMismatch {
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: truncated, Rows: 2, PayloadBytes: 23, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonLengthMultipleMismatch {
 		t.Fatalf("truncated status=%+v want %s", status, ReasonLengthMultipleMismatch)
 	}
 	corrupt := cloneDirectViewCert(cert)
 	corrupt.Blocks[0].StoredBytes = 20
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: corrupt, Rows: 2, PayloadBytes: 24}); status.Reason != ReasonPayloadLengthMismatch {
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: corrupt, Rows: 2, PayloadBytes: 24, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonPayloadLengthMismatch {
 		t.Fatalf("corrupt status=%+v want %s", status, ReasonPayloadLengthMismatch)
 	}
 	if _, status := DenseFloat32VectorView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 5, RequireMapped: true}); status.Reason != ReasonRowCountMismatch {
@@ -226,8 +226,8 @@ func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAn
 	if err != nil {
 		t.Fatalf("AcquireBytes misaligned vector: %v", err)
 	}
-	if _, status := DenseFloat32VectorView(mgr, mh, columnReq, ResourceViewOptions{ExpectedElements: 6, RequireMapped: true}); status.Reason != ReasonUnaligned {
-		t.Fatalf("unaligned status=%+v want %s", status, ReasonUnaligned)
+	if _, status := DenseFloat32VectorView(mgr, mh, columnReq, ResourceViewOptions{ExpectedElements: 6, RequireMapped: true}); status.Reason != ReasonActualPointerUnaligned {
+		t.Fatalf("unaligned status=%+v want %s", status, ReasonActualPointerUnaligned)
 	}
 	_ = mh.Release()
 	if err := h.Release(); err != nil {
@@ -238,69 +238,15 @@ func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAn
 	}
 }
 
-func TestAdjacencyDirectViewValidationCoversDegreeLengthEndianAlignmentAndLifetime(t *testing.T) {
+func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 	cert := testAdjacencyDirectCert(2, 2)
 	plan := AdjacencyListPlan(cert, 2)
-	if !plan.DirectCandidate() {
-		t.Fatalf("plan=%+v want direct candidate", plan)
+	if plan.DirectCandidate() || plan.Reason != ReasonDirectViewDeferred {
+		t.Fatalf("plan=%+v want deferred non-direct adjacency", plan)
 	}
-	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 16}
-	if status := ValidateDirectViewColumn(columnReq); !status.Direct() {
-		t.Fatalf("adjacency column status=%+v want direct", status)
-	}
-
-	raw := alignedBytes(4, 16)
-	for i, value := range []uint32{7, 11, 13, 17} {
-		binary.LittleEndian.PutUint32(raw[i*4:], value)
-	}
-	mgr := mappedresource.NewManager()
-	h, err := mgr.AcquireBytes(testKeyWithPart(12, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "typeddecode adjacency"})
-	if err != nil {
-		t.Fatalf("AcquireBytes adjacency: %v", err)
-	}
-	view, status := AdjacencyListView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 4, RequireMapped: true})
-	if !status.Direct() || len(view) != 4 || view[0] != 7 || view[3] != 17 {
-		t.Fatalf("adjacency view=%v status=%+v", view, status)
-	}
-
-	wrongDegree := AdjacencyListPlan(cert, 3)
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongDegree, Certification: cert, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonDimensionMismatch {
-		t.Fatalf("degree status=%+v want %s", status, ReasonDimensionMismatch)
-	}
-	wrongEndian := cloneDirectViewCert(cert)
-	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
-	wrongEndianPlan := AdjacencyListPlan(wrongEndian, 2)
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongEndianPlan, Certification: wrongEndian, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonWrongEndian {
-		t.Fatalf("endian status=%+v want %s", status, ReasonWrongEndian)
-	}
-	truncated := cloneDirectViewCert(cert)
-	truncated.Section.Length = 15
-	truncated.Blocks[0].PayloadLength = 15
-	truncated.Blocks[0].RawBytes = 15
-	truncated.Blocks[0].StoredBytes = 15
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: truncated, Rows: 2, PayloadBytes: 15}); status.Reason != ReasonLengthMultipleMismatch {
-		t.Fatalf("truncated status=%+v want %s", status, ReasonLengthMultipleMismatch)
-	}
-	corrupt := cloneDirectViewCert(cert)
-	corrupt.Blocks[0].Compression = typedcolumn.CompressionSnappy
-	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: corrupt, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonValidationFailed {
-		t.Fatalf("corrupt status=%+v want %s", status, ReasonValidationFailed)
-	}
-
-	misalignedRaw := alignedBytes(4, 17)[1:17]
-	mh, err := mgr.AcquireBytes(testKeyWithPart(13, int64(len(misalignedRaw))), testScope(), mappedresource.SourceMapped, misalignedRaw, mappedresource.AcquireOptions{Reason: "typeddecode adjacency misaligned"})
-	if err != nil {
-		t.Fatalf("AcquireBytes misaligned adjacency: %v", err)
-	}
-	if _, status := AdjacencyListView(mgr, mh, columnReq, ResourceViewOptions{ExpectedElements: 4, RequireMapped: true}); status.Reason != ReasonUnaligned {
-		t.Fatalf("unaligned status=%+v want %s", status, ReasonUnaligned)
-	}
-	_ = mh.Release()
-	if err := h.Release(); err != nil {
-		t.Fatalf("Release adjacency: %v", err)
-	}
-	if _, status := AdjacencyListView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 4, RequireMapped: true}); status.Reason != ReasonStaleHandle {
-		t.Fatalf("stale status=%+v want %s", status, ReasonStaleHandle)
+	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}
+	if status := ValidateDirectViewColumn(columnReq); status.Path != PathUnsupported || status.Reason != ReasonDirectViewDeferred {
+		t.Fatalf("adjacency status=%+v want deferred unsupported", status)
 	}
 }
 

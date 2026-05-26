@@ -433,7 +433,7 @@ func adjacencyCapability(desc Descriptor, op Operation) Capability {
 	case OpCountRows, OpCountNonNull:
 		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 	case OpAdjacencyDirectPayload:
-		return Supported(op)
+		return Fallback(op, ReasonAdjacencyCapabilityDeferred, "adjacency_list direct payload views are deferred to #1901")
 	case OpAdjacencyTraversal:
 		return SupportedResult(op, ResultSemantics{ResultType: "candidate row selection", Accumulator: "specialized graph traversal", GroupKey: "adjacency ordinal"})
 	case OpAdjacencyMetrics:

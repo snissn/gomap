@@ -4,9 +4,10 @@ Status: pre-alpha internal contract for typed-column prepare/read planning. Sema
 operation support remains defined in `typed-column-semantics.md`; this document
 covers the physical layout/codec contract that decides whether a semantic
 operation may use a direct view, safe fixed-width reducer, streaming decoder,
-stats payload, or pruning metadata. The stats envelope and payload contract is
-specified in `typed-column-stats.md`; durable pruning metadata is specified in
-`typed-column-pruning.md`.
+stats payload, or pruning metadata. The aligned direct-view safety contract and
+counter vocabulary are specified in `typed-column-direct-view-alignment.md`. The
+stats envelope and payload contract is specified in `typed-column-stats.md`;
+durable pruning metadata is specified in `typed-column-pruning.md`.
 
 The implementation lives in `TreeDB/internal/columnlayout`. Capability keys are
 not just encodings. A key includes:
@@ -28,7 +29,7 @@ not just encodings. A key includes:
 | `bool` | `bool` + `bool_bitpack_rle` | Bool-specific counts/equality; scalar range remains unsupported by semantics. |
 | `float32`/`double` | current `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 direct-view, numeric aggregate/range, stats, or pruning capabilities. Native float layouts must define NaN, signed-zero, infinity, endian, width, direct-view lifetime, and stats/pruning rules before enabling numeric fast paths. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
-| `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Fixed-width little-endian dense rows with explicit adjacency direct-payload, graph traversal, and adjacency-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
+| `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Fixed-width little-endian dense payload bytes, but direct-view certification is deferred/fallback-only for the active #1886 stack (#1901). Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
 
 Nullable/default wrappers expose null and default-mask dependencies separately
 from carrier-value capabilities. Value predicates and aggregates over nullable
@@ -77,7 +78,8 @@ counts, dictionary section identity/order/collation fields, and capability flags
 for direct-view, streaming reducer, stats, and pruning shortcuts.
 
 The writer validates the contract before returning the image. Fixed-width direct
-view candidates must be uncompressed, little-endian, aligned, exact-length
+view candidates must be uncompressed, little-endian, aligned by absolute storage
+offset (`asset_ref.offset + section/block payload offset`), exact-length
 (`rows * fixed_width_elements * element_size`) for every block, and tied to the
 expected collection logical type. Missing or mismatched logical type metadata
 disables direct/streaming certification instead of being treated as compatible.
@@ -108,10 +110,14 @@ Current validation is at prepare plus payload-read boundaries:
 4. hot row loops consume concrete prepared plans and must not call generic
    capability interfaces per row.
 
-Prepared int64 diagnostics include `DirectViewCertified`, `StreamingCertified`,
-`StatsCertified`, `PruningCertified`, `CertificationFailures`, and
-`CertificationFailureReason`, alongside mapped/heap/decoded/materialized byte
-counters. When durable stats are consumed, block diagnostics distinguish
+Prepared diagnostics must distinguish `mmap_direct_view`,
+`heap_copy_typed_view`, `scratch_decode`, `streaming_fallback`,
+`certification_failure`, `absolute_offset_unaligned`, `actual_pointer_unaligned`,
+`stale_handle`, and per-reason fallback counts. Prepared int64 diagnostics also
+include `DirectViewCertified`, `StreamingCertified`, `StatsCertified`,
+`PruningCertified`, `CertificationFailures`, and `CertificationFailureReason`,
+alongside mapped/heap/decoded/materialized byte counters. When durable stats are
+consumed, block diagnostics distinguish
 `StatsBlocks`/`StatsFullCoveredBlocks`/`StatsRows` from `BlocksDecoded` and
 `Kernel*` counters; stats misses and unsupported selection shapes increment
 `StatsFallbackBlocks`. Pruning metadata validation is prepare-time and emits
@@ -141,7 +147,8 @@ New layouts should declare unsupported operations explicitly. Examples:
 - float layouts must not inherit int64 bit-pattern ordering or sum semantics;
 - bool layouts should expose bool-specific counts/equality rather than broad
   scalar range;
-- vector and adjacency layouts expose only vector/graph-specific capabilities
-  (direct payload, similarity/dot-product/vector metrics, adjacency traversal,
-  and adjacency metrics) and reject scalar aggregate/range shortcuts unless a
+- vector layouts expose vector-specific direct payload, similarity/dot-product,
+  and vector metrics; adjacency direct payloads are deferred to #1901 while
+  adjacency traversal/metrics continue through decoded/fallback payloads;
+  vector/adjacency layouts reject scalar aggregate/range shortcuts unless a
   future issue implements and tests them through the shared substrate.

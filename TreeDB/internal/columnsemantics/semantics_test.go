@@ -252,11 +252,14 @@ func TestCapabilityVectorAndAdjacencySpecificOperationsAreExplicit(t *testing.T)
 	}
 
 	adjacency := Descriptor{Logical: LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense}
-	for _, op := range []Operation{OpAdjacencyTraversal, OpAdjacencyDirectPayload, OpAdjacencyMetrics} {
+	for _, op := range []Operation{OpAdjacencyTraversal, OpAdjacencyMetrics} {
 		cap := CapabilityFor(adjacency, op)
 		if cap.Status != StatusSupported || cap.Reason != ReasonSupported || cap.Phase != PhasePrepare {
 			t.Fatalf("adjacency %s capability=%+v want supported", op, cap)
 		}
+	}
+	if cap := CapabilityFor(adjacency, OpAdjacencyDirectPayload); cap.Status != StatusFallback || cap.Reason != ReasonAdjacencyCapabilityDeferred || cap.Phase != PhasePrepare {
+		t.Fatalf("adjacency direct payload capability=%+v want deferred fallback", cap)
 	}
 	if cap := CapabilityFor(adjacency, OpVectorSimilarity); cap.Status != StatusUnsupported || cap.Reason != ReasonOperationUnsupported {
 		t.Fatalf("adjacency vector similarity capability=%+v want operation unsupported", cap)
@@ -271,6 +274,7 @@ func TestCapabilityReasonCodesAreStable(t *testing.T) {
 		ReasonNullableCarrierAggregateSemantics:   "nullable_carrier_aggregate_semantics",
 		ReasonVectorScalarOperationUnsupported:    "vector_scalar_operation_unsupported",
 		ReasonAdjacencyScalarOperationUnsupported: "adjacency_scalar_operation_unsupported",
+		ReasonAdjacencyCapabilityDeferred:         "adjacency_capability_deferred",
 		ReasonStatsPayloadUnsupported:             "stats_payload_unsupported",
 		ReasonPruningPayloadUnsupported:           "pruning_payload_unsupported",
 	}

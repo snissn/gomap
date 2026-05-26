@@ -431,7 +431,7 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 	}
 	span := v.adjSpans[rowIndex]
 	if span.count == 0 {
-		return nil, scratch, true, nil
+		return nil, scratch, false, nil
 	}
 	if v.adjacencyDirectView {
 		adjacency, ok := columnVectorGraphLittleEndianUint32DirectView(v.block.raw[span.start:span.end], span.count)
@@ -466,14 +466,11 @@ func (v *columnVectorGraphBlockView) adjacency(rowIndex int, scratch []uint32) (
 }
 
 func columnVectorGraphBlockViewAdjacencyDirectView(reader *columnVectorGraphPhysicalRowReader) bool {
-	if !columnPhysicalNativeLittleEndian || reader == nil || reader.reader == nil {
-		return false
-	}
-	cols := reader.reader.view.Config.Columns
-	if len(cols) <= columnVectorGraphPhysicalRowValueAdjacency {
-		return false
-	}
-	return cols[columnVectorGraphPhysicalRowValueAdjacency].FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian
+	// Physical row-asset direct views are deferred to #1897 and adjacency direct
+	// views are deferred to #1901. Keep little-endian payload decode
+	// compatibility, but do not classify row-asset adjacency spans as
+	// current-stack mmap direct views.
+	return false
 }
 
 func columnVectorGraphLittleEndianUint32DirectView(raw []byte, count int) ([]uint32, bool) {

@@ -404,7 +404,7 @@ func validateColumnVectorGraphTypedColumnDenseVectorSection(part *typedcolumn.Co
 		return fmt.Errorf("typed_column_part vector section rows=%d length=%d want rows=%d length=%d", section.Rows, section.Length, rows, wantBytes)
 	}
 	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
-	status := typeddecode.ValidateDirectViewColumn(typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length})
+	status := typeddecode.ValidateDirectViewColumn(typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: int64(0), HasAssetOffset: true})
 	if !status.Direct() {
 		return fmt.Errorf("typed_column_part vector direct-view validation failed: %s", status.String())
 	}
@@ -493,8 +493,8 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 		return nil, nil, false, false, err
 	}
 	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
-	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length}
-	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements})
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: int64(ref.Offset), HasAssetOffset: true}
+	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
 	if viewStatus.Direct() {
 		return values, handle, true, false, nil
 	}
@@ -509,7 +509,7 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 			_ = handle.Release()
 			return nil, nil, false, false, errors.Join(firstErr, checksumErr)
 		}
-		values, viewStatus = typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements})
+		values, viewStatus = typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
 		if viewStatus.Direct() {
 			return values, handle, true, false, nil
 		}

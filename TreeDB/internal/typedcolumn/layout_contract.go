@@ -453,8 +453,9 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		direct := def.Compression == CompressionNone && logicalType == "float32_vector"
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, stats: direct, pruning: direct}
 	case EncodingRawUint32Dense:
-		direct := def.Compression == CompressionNone && logicalType == "adjacency_list"
-		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct, pruning: direct}
+		// adjacency_list payload bytes are little-endian dense uint32, but certified
+		// adjacency direct views are deferred to #1901 for the active #1886 stack.
+		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 		streaming := def.Compression == CompressionNone && logicalType == "int64"
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}

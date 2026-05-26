@@ -50,18 +50,15 @@ func TestTypedColumnVectorDenseMisalignedFallsBackOrFailsClosed(t *testing.T) {
 	}
 }
 
-func TestTypedColumnAdjacencyDirectViewAligned(t *testing.T) {
+func TestTypedColumnAdjacencyLittleEndianPayloadFixture(t *testing.T) {
 	image := mustDenseVectorAdjacencyImage1756(t)
 	section := mustColumnDataSection1756(t, image, "neighbors")
-	mgr := mappedresource.NewManager()
-	h := mustAcquireImageSectionBytes1756(t, mgr, image, section, image.SectionBytesMust1756(t, section))
-	defer h.Release()
-	view, err := mgr.Uint32View(h)
+	values, err := DecodeRawUint32DensePayload(nil, image.SectionBytesMust1756(t, section), 2, 2)
 	if err != nil {
-		t.Fatalf("Uint32View aligned: %v", err)
+		t.Fatalf("DecodeRawUint32DensePayload: %v", err)
 	}
-	if !slices.Equal(view, []uint32{1, 2, 0, 2}) {
-		t.Fatalf("adjacency view=%v", view)
+	if !slices.Equal(values, []uint32{1, 2, 0, 2}) {
+		t.Fatalf("adjacency payload values=%v", values)
 	}
 }
 

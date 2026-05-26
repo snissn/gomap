@@ -1077,17 +1077,19 @@ func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterRes
 		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter image missing layout certification for column %q", column.Definition.Name)
 	}
 	plan := typeddecode.AdjacencyListPlan(certColumn, degree)
-	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length}
-	if status := typeddecode.ValidateDirectViewColumn(directReq); !status.Direct() {
-		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q adjacency direct-view validation: %s", column.Definition.Name, status.String())
-	}
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: 0, HasAssetOffset: true}
+	certStatus := typeddecode.ValidateDirectViewColumn(directReq)
 	h, err := reader.AcquireSection(section)
 	if err != nil {
 		return typedColumnAdapterDenseUint32ResourceView{}, err
 	}
-	values, viewStatus := typeddecode.AdjacencyListView(reader.Manager, h, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expected})
-	if viewStatus.Direct() {
-		return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: values, Handle: h, Direct: true}, nil
+	viewStatus := certStatus
+	if certStatus.Direct() {
+		values, status := typeddecode.AdjacencyListView(reader.Manager, h, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expected, RequireMapped: true})
+		viewStatus = status
+		if viewStatus.Direct() {
+			return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: values, Handle: h, Direct: true}, nil
+		}
 	}
 	viewErr := fmt.Errorf("collections: typed-column adapter column %q adjacency direct-view validation: %s", column.Definition.Name, viewStatus.String())
 	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
@@ -1108,7 +1110,7 @@ func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterRes
 
 func typedColumnDenseDecodeFallbackAllowed(status typeddecode.Status) bool {
 	switch status.Reason {
-	case typeddecode.ReasonUnaligned, typeddecode.ReasonWrongEndian, typeddecode.ReasonHandleSourceUnsupported:
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonActualPointerUnaligned, typeddecode.ReasonUnaligned, typeddecode.ReasonWrongEndian, typeddecode.ReasonHandleSourceUnsupported, typeddecode.ReasonNotWriterCertified, typeddecode.ReasonDirectViewDeferred:
 		return true
 	default:
 		return false
