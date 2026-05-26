@@ -114,7 +114,9 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 		{name: "q4_min_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}},
 		{name: "q5_span_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}},
 		{name: "q4_metadata_min_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}},
+		{name: "q4_metadata_top3_min_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3, TopKOrder: collections.ColumnPhysicalQueryTopKInt64Asc, SkipEmptyGroupKey: true}},
 		{name: "q5_metadata_span_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us"}},
+		{name: "q5_metadata_top3_span_by_user", req: collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3, TopKOrder: collections.ColumnPhysicalQueryTopKInt64Desc, SkipEmptyGroupKey: true}},
 	}
 	for _, q := range queries {
 		q := q
@@ -384,6 +386,9 @@ func reportTreeDBJSONBenchColumnStoreCompareMetrics(b *testing.B, reducedRows in
 	b.ReportMetric(float64(diag.DecodedMetadataBytes), "decoded_metadata_bytes/op")
 	b.ReportMetric(float64(diag.RowMaterializations), "row_materializations/op")
 	b.ReportMetric(float64(diag.DocumentMaterializations), "document_materializations/op")
+	b.ReportMetric(float64(diag.TopKLimit), "topk_limit/op")
+	b.ReportMetric(float64(diag.TopKCandidates), "topk_candidates/op")
+	b.ReportMetric(float64(diag.ResultShapeNanos), "result_shape_ns/op")
 }
 
 func jsonBenchCompareDirSize(root string) int64 {
