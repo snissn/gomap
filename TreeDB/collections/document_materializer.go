@@ -477,7 +477,6 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		readIntegrity = ColumnAssetReadIntegrityVerify
 	}
 	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
-		response.Stats.RowRefUnsupported++
 		return response, err
 	}
 	assetCountersBefore := v.assetCounters()
@@ -485,7 +484,6 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 		addDocumentMaterializerAssetCounterDeltas(&response.Stats, assetCountersBefore, v.assetCounters())
 	}()
 	if err := v.ensureDocumentRowLocator(cfg, readIntegrity, &response.Stats); err != nil {
-		response.Stats.RowRefUnsupported++
 		return response, err
 	}
 	var idArena []byte
@@ -850,7 +848,6 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 		readIntegrity = ColumnAssetReadIntegrityVerify
 	}
 	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
-		out.Stats.RowRefUnsupported++
 		return out, err
 	}
 	assetCountersBefore := v.assetCounters()
@@ -859,12 +856,10 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	}()
 	view, err := v.materializerColumnSnapshotView(cfg)
 	if err != nil {
-		out.Stats.RowRefUnsupported++
 		return out, err
 	}
 	if view.MutationParts != 0 {
 		if err := v.ensureDocumentRowLocator(cfg, readIntegrity, &out.Stats); err != nil {
-			out.Stats.RowRefUnsupported++
 			return out, err
 		}
 	}
