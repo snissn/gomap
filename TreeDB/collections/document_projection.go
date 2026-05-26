@@ -16,12 +16,15 @@ func documentFetchOptionsHasProjection(opts DocumentFetchOptions) bool {
 }
 
 func normalizeDocumentFetchProjection(meta CollectionMeta, opts DocumentFetchOptions) (*documentProjection, error) {
-	if opts.Format != "" && opts.Format != DocumentFormatJSON {
-		return nil, fmt.Errorf("collections: document fetch format %q is not supported", opts.Format)
-	}
 	documentFormat := normalizedDocumentFormat(meta.Options.DocumentFormat)
-	if opts.Format == DocumentFormatJSON && documentFormat != DocumentFormatJSON {
-		return nil, fmt.Errorf("collections: document fetch format %q requires JSON-compatible stored documents, got %q", opts.Format, documentFormat)
+	if opts.Format != "" {
+		requestedFormat, err := normalizeDocumentFormat(opts.Format)
+		if err != nil {
+			return nil, err
+		}
+		if requestedFormat != documentFormat {
+			return nil, fmt.Errorf("collections: document fetch format %q requires stored document format %q, got %q", requestedFormat, requestedFormat, documentFormat)
+		}
 	}
 	if !documentFetchOptionsHasProjection(opts) {
 		return nil, nil

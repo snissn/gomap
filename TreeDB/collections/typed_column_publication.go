@@ -304,10 +304,12 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCachePr
 		}
 		return typedColumnPartVisibleValues{Values: values}, nil
 	}
-	selectionKey := documentProjectionKey(selected)
-	if cache != nil && cache.SelectionKey != selectionKey {
-		cache.Parts = make(map[uint64]typedColumnPartDecodedValues)
-		cache.SelectionKey = selectionKey
+	if cache != nil {
+		selectionKey := documentProjectionKey(selected)
+		if cache.SelectionKey != selectionKey {
+			cache.Parts = make(map[uint64]typedColumnPartDecodedValues)
+			cache.SelectionKey = selectionKey
+		}
 	}
 	var decoded typedColumnPartDecodedValues
 	var ok bool

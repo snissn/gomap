@@ -164,7 +164,9 @@ func mergeColumnReconstructionValuesProjectedInto(cfg ColumnStoreConfig, rowValu
 		values = make([]columnDeclaredValue, len(cfg.Columns))
 	} else {
 		values = dst[:len(cfg.Columns)]
-		clear(values)
+		if selected != nil {
+			clear(values)
+		}
 	}
 	rowIdx := 0
 	typedIdx := 0

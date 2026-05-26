@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testing.T) {
@@ -478,8 +479,47 @@ func TestCollectionReadViewProjectionPlainJSONAndFormatValidation1875(t *testing
 		t.Fatalf("FetchDocumentsByID JSON format: %v", err)
 	}
 	assertJSONMapEqual1875(t, fullJSON.Results[0].Document, map[string]any{"kind": "plain", "embedding": []any{float64(1), float64(2), float64(3)}, "payload": "retained", "note": nil})
-	if _, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{Format: DocumentFormatBSON}); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("FetchDocumentsByID unsupported format err=%v want fail closed", err)
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{Format: DocumentFormatBSON}); err == nil || !strings.Contains(err.Error(), "requires stored document format") {
+		t.Fatalf("FetchDocumentsByID mismatched format err=%v want fail closed", err)
+	}
+}
+
+func TestCollectionReadViewFetchFormatBSONNoProjection1875(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "bson_docs", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("bson_docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc := mustBSONCollectionDocument(t, bson.D{{Key: "_id", Value: "doc-b"}, {Key: "kind", Value: "bson"}, {Key: "score", Value: int32(7)}})
+	if _, err := col.Insert([]byte("doc-b"), doc); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	got, err := view.FetchDocumentsByID([][]byte{[]byte("doc-b")}, DocumentFetchOptions{Format: DocumentFormatBSON})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID BSON format: %v", err)
+	}
+	if len(got.Results) != 1 || !got.Results[0].Found {
+		t.Fatalf("FetchDocumentsByID BSON result=%+v want found result", got.Results)
+	}
+	if !bytes.Equal(got.Results[0].Document, doc) {
+		t.Fatalf("FetchDocumentsByID BSON doc=%x want raw BSON %x", got.Results[0].Document, doc)
+	}
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("doc-b")}, DocumentFetchOptions{Format: DocumentFormatBSON, ExcludePaths: []string{"score"}}); err == nil || !strings.Contains(err.Error(), "document projection requires JSON") {
+		t.Fatalf("FetchDocumentsByID BSON projection err=%v want fail closed", err)
 	}
 }
 
