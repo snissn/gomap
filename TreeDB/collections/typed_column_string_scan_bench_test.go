@@ -170,9 +170,18 @@ func BenchmarkTypedColumnStringPredicatePreparedHot(b *testing.B) {
 			if warm.RowsMatched != runner.expectedMatches {
 				b.Fatalf("warm rows_matched=%d want %d diagnostics=%+v", warm.RowsMatched, runner.expectedMatches, warm)
 			}
+			stopHotProfile := startTypedColumnStringPredicateHotProfile(b)
+			profileStopped := false
+			stopProfile := func() {
+				if profileStopped {
+					return
+				}
+				profileStopped = true
+				stopHotProfile()
+			}
+			defer stopProfile()
 			b.ReportAllocs()
 			b.ResetTimer()
-			stopHotProfile := startTypedColumnStringPredicateHotProfile(b)
 			benchStart := time.Now()
 			var diag typedColumnStringPredicateBenchDiagnostics
 			for i := 0; i < b.N; i++ {
@@ -182,7 +191,7 @@ func BenchmarkTypedColumnStringPredicatePreparedHot(b *testing.B) {
 				}
 			}
 			b.StopTimer()
-			stopHotProfile()
+			stopProfile()
 			if diag.RowsMatched != runner.expectedMatches {
 				b.Fatalf("rows_matched=%d want %d diagnostics=%+v", diag.RowsMatched, runner.expectedMatches, diag)
 			}
@@ -707,10 +716,14 @@ func startTypedColumnStringPredicateHotProfile(b *testing.B) func() {
 	runtime.MemProfileRate = 1
 	runtime.GC()
 	if err := pprof.StartCPUProfile(cpu); err != nil {
+		runtime.MemProfileRate = oldRate
 		_ = cpu.Close()
 		b.Fatalf("start hot cpu profile: %v", err)
 	}
 	return func() {
+		defer func() {
+			runtime.MemProfileRate = oldRate
+		}()
 		pprof.StopCPUProfile()
 		if err := cpu.Close(); err != nil {
 			b.Fatalf("close hot cpu profile: %v", err)
@@ -727,7 +740,6 @@ func startTypedColumnStringPredicateHotProfile(b *testing.B) func() {
 		if err := allocs.Close(); err != nil {
 			b.Fatalf("close hot allocs profile: %v", err)
 		}
-		runtime.MemProfileRate = oldRate
 	}
 }
 

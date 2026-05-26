@@ -2217,8 +2217,13 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 		result.Diagnostics.BlocksDecoded++
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(block.PayloadLength + idBlock.Descriptor.StoredBytes)
 		result.Diagnostics.RowsScanned += block.Descriptor.RowCount
+		var forEachErr error
 		selection.ForEach(func(row int) {
+			if forEachErr != nil {
+				return
+			}
 			if row < 0 || row >= len(ids) {
+				forEachErr = fmt.Errorf("typed-column string predicate selection row=%d outside ids=%d first_row=%d rows=%d", row, len(ids), block.Descriptor.FirstRow, block.Descriptor.RowCount)
 				return
 			}
 			matchedValue := valueByCode[codes[0]]
@@ -2236,6 +2241,9 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 			result.Diagnostics.RowsMatched++
 			result.Diagnostics.CodesMatched++
 		})
+		if forEachErr != nil {
+			return false, forEachErr
+		}
 	}
 	return !decodedAny && len(preparedColumn.BlockPlans) != 0, nil
 }
