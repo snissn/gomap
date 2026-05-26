@@ -74,6 +74,7 @@ const (
 	ReasonAdjacencyScalarUnsupported  ReasonCode = "layout_adjacency_scalar_unsupported"
 	ReasonStatsPayloadUnsupported     ReasonCode = "layout_stats_payload_unsupported"
 	ReasonPruningPayloadUnsupported   ReasonCode = "layout_pruning_payload_unsupported"
+	ReasonFixedWidthElementsRequired  ReasonCode = "layout_fixed_width_elements_required"
 	ReasonOperationUnsupported        ReasonCode = "layout_operation_unsupported"
 )
 
@@ -304,6 +305,11 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.Layout.Endian = EndianLittle
 		caps.Layout.AlignmentBytes = 4
 		caps.Layout.LengthMultipleBytes = 4
+		if desc.FixedWidthElements <= 0 {
+			caps.Layout.ElementsPerRow = 0
+			caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 4, EndianLittle, 4)
+			break
+		}
 		caps.DirectView = directView(desc, 4, EndianLittle, 4)
 		if desc.Logical == columnsemantics.LogicalFloat32Vector && desc.Physical == typedcolumn.ColumnTypeFloat32Vector {
 			caps.Reducers.VectorMetrics = true
@@ -317,6 +323,11 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.Layout.Endian = EndianLittle
 		caps.Layout.AlignmentBytes = 4
 		caps.Layout.LengthMultipleBytes = 4
+		if desc.FixedWidthElements <= 0 {
+			caps.Layout.ElementsPerRow = 0
+			caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 4, EndianLittle, 4)
+			break
+		}
 		caps.DirectView = directView(desc, 4, EndianLittle, 4)
 		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
 			caps.Reducers.AdjacencyMetrics = true
@@ -333,6 +344,22 @@ func rawInt64NonInt64DirectViewReason(desc Descriptor) ReasonCode {
 		return ReasonFloatBitPatternNotNumeric
 	}
 	return ReasonLogicalPhysicalMismatch
+}
+
+func denseFixedWidthElementsRequiredDirectView(desc Descriptor, width int, endian Endian, align int) DirectViewCapability {
+	return DirectViewCapability{
+		Eligible:             false,
+		Reason:               ReasonFixedWidthElementsRequired,
+		Endian:               endian,
+		WidthBytes:           width,
+		AlignmentBytes:       align,
+		RequiresUncompressed: true,
+		RequiresRowCount:     true,
+		RequiresNoNulls:      true,
+		RequiresNoDefaults:   true,
+		Lifetime:             "caller-owned prepared/session resource handle",
+		ValidationBoundary:   "prepare_and_payload_read",
+	}
 }
 
 func directView(desc Descriptor, width int, endian Endian, align int) DirectViewCapability {
@@ -388,12 +415,20 @@ func (c Capabilities) Supports(op Operation) Capability {
 		switch op {
 		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar aggregate/range shortcuts")
+		case OpVectorDirectView, OpVectorSimilarity, OpVectorMetricReducer:
+			if c.Descriptor.FixedWidthElements <= 0 {
+				return Unsupported(op, ReasonFixedWidthElementsRequired, "vector layouts require positive fixed_width_elements/vector_dims")
+			}
 		}
 	}
 	if c.Descriptor.Logical == columnsemantics.LogicalAdjacencyList {
 		switch op {
 		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonAdjacencyScalarUnsupported, "adjacency layouts reject scalar aggregate/range shortcuts")
+		case OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer:
+			if c.Descriptor.FixedWidthElements <= 0 {
+				return Unsupported(op, ReasonFixedWidthElementsRequired, "adjacency layouts require positive fixed_width_elements/adjacency_degree")
+			}
 		}
 	}
 
@@ -686,7 +721,7 @@ func (c Capabilities) validateGranuleLengths(g typedcolumn.EncodedGranule) error
 		return nil
 	}
 	if c.Layout.ElementWidthBytes <= 0 || c.Layout.ElementsPerRow <= 0 {
-		return fmt.Errorf("columnlayout: invalid fixed-width contract width=%d elements_per_row=%d", c.Layout.ElementWidthBytes, c.Layout.ElementsPerRow)
+		return fmt.Errorf("columnlayout: invalid fixed-width contract width=%d elements_per_row=%d: %s", c.Layout.ElementWidthBytes, c.Layout.ElementsPerRow, ReasonFixedWidthElementsRequired)
 	}
 	elements, err := checkedMul(g.Rows, c.Layout.ElementsPerRow, "fixed-width elements")
 	if err != nil {
