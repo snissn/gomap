@@ -62,6 +62,65 @@ Ownership rules:
 - The retained document can still hold source text or metadata, but do not treat
   a retained duplicate embedding as the search source of truth.
 
+## Retained-payload final-fetch policy
+
+For vector-heavy responses, start with `ColumnRetainedPayloadNonColumn`. It keeps
+residual/non-column fields in the primary retained payload, reconstructs declared
+typed fields from typed storage when callers need full documents, and avoids
+storing a second copy of declared typed fields such as `embedding` in the primary
+row value. This is the storage-efficient full-document path.
+
+For projection-oriented responses, also use `ColumnRetainedPayloadNonColumn` and
+apply `DocumentFetchOptions` projection, especially `ExcludePaths: []string{"embedding"}`
+when the response does not return embeddings. This is the post-#1875 baseline and
+is the recommended default starting point for vector search APIs that fetch top-k
+documents but normally suppress the vector payload.
+
+`ColumnRetainedPayloadFull` is supported for latency-oriented compatibility: the
+full retained document can be fetched directly from the primary root/value-log
+record without typed-storage JSON reconstruction. It duplicates storage with the
+typed assets, so choose it only after local post-projection benchmarks prove it
+wins for a workload that really needs full documents. Full-retained projection is
+not a cheap projection path: it still fetches and decodes the full retained JSON
+before applying the projection.
+
+`ColumnRetainedPayloadNone` is storage-minimal but should be used only when
+non-column retained fields are not needed. Final documents reconstructed under
+this policy omit residual fields such as source body text or display-only tags.
+
+Account for bytes and write amplification explicitly when comparing policies:
+input document bytes, retained-payload bytes, typed-column/typed-row asset bytes,
+graph asset bytes, total DB directory bytes, and write amplification
+(`db_dir_B_total / input_doc_B_total`). Value-log pointers referenced by primary
+rows are persistent storage managed by reachability, GC, and rewrite/compaction;
+they are not ephemeral WAL records or transient large-value records. See the
+[value-log lifecycle spec](../spec/value-log-lifecycle.md) for storage-lifetime
+rules.
+
+Recommended retained-payload policy matrix command:
+
+```sh
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkOpenVectorIndexSearcherColumnGraphRetainedPayloadPolicy1876$' \
+  -benchmem \
+  -benchtime=500ms \
+  -count=5
+```
+
+The benchmark opens/builds the fixture and reusable searcher outside the timed
+loop, then times steady-state search plus top-k document fetch. Report
+`doc_fetch_ns/search`, typed-column counters, JSON reconstruction counters,
+`output_B/search`, retained/input/storage byte counters, and
+`write_amplification`. The #1876 retained-payload policy matrix did not justify
+making full-retained payloads a new default latency preset: non-column plus
+embedding exclusion was fastest among document-producing modes, while
+full-retained full documents reduced allocations but had higher `ns/op` and
+duplicated storage.
+The matrix should be rerun after document reconstruction optimizations land;
+[#1887](https://github.com/snissn/gomap/issues/1887) remains a pending follow-up
+before making stronger default recommendations.
+
 ## Runnable smoke demo
 
 Run a deterministic synthetic close/reopen demo:
