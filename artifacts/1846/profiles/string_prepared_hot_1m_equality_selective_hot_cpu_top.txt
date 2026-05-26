@@ -1,35 +1,34 @@
 File: collections.test
 Type: cpu
-Time: 2026-05-25 16:37:30 HST
-Duration: 4.68s, Total samples = 3.98s (84.98%)
-Showing nodes accounting for 3.96s, 99.50% of 3.98s total
-Dropped 4 nodes (cum <= 0.02s)
+Time: 2026-05-25 16:45:30 HST
+Duration: 4.78s, Total samples = 3.93s (82.25%)
+Showing nodes accounting for 3.83s, 97.46% of 3.93s total
+Dropped 21 nodes (cum <= 0.02s)
       flat  flat%   sum%        cum   cum%
-     1.16s 29.15% 29.15%      1.19s 29.90%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.contiguousBitmapRange
-     1.09s 27.39% 56.53%      2.02s 50.75%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.applyCodeRangeRows
-     0.92s 23.12% 79.65%      0.93s 23.37%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.readValidUint32Code
-     0.68s 17.09% 96.73%      0.69s 17.34%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.decodeInt64Payload
-     0.04s  1.01% 97.74%      0.04s  1.01%  runtime.asyncPreempt
-     0.03s  0.75% 98.49%      0.03s  0.75%  runtime.duffcopy
-     0.03s  0.75% 99.25%      0.03s  0.75%  runtime.pthread_cond_signal
-     0.01s  0.25% 99.50%      0.03s  0.75%  github.com/snissn/gomap/TreeDB/internal/columnlayout.Capabilities.ValidateGranule
-         0     0% 99.50%      3.95s 99.25%  github.com/snissn/gomap/TreeDB/collections.(*typedColumnStringPredicatePreparedHotRunner).scan
-         0     0% 99.50%      3.95s 99.25%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot.func1
-         0     0% 99.50%      3.95s 99.25%  github.com/snissn/gomap/TreeDB/collections.scanTypedColumnStringPreparedPartWithVisibility
-         0     0% 99.50%      0.04s  1.01%  github.com/snissn/gomap/TreeDB/internal/columnlayout.Capabilities.ValidateGranulePayload
-         0     0% 99.50%      0.69s 17.34%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).DecodeInt64Into
-         0     0% 99.50%      3.21s 80.65%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).SelectUint32Code
-         0     0% 99.50%      1.19s 29.90%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.NewBitmapRowSelectionNoCopy (inline)
-         0     0% 99.50%      1.19s 29.90%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.makeBitmapRowSelectionNoCopy
-         0     0% 99.50%      3.21s 80.65%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.selectUint32CodeSelection
-         0     0% 99.50%      3.22s 80.90%  github.com/snissn/gomap/TreeDB/internal/typedkernel.SelectDictionaryCode
-         0     0% 99.50%      0.03s  0.75%  runtime.gopreempt_m (inline)
-         0     0% 99.50%      0.03s  0.75%  runtime.goschedImpl
-         0     0% 99.50%      0.03s  0.75%  runtime.morestack
-         0     0% 99.50%      0.03s  0.75%  runtime.newstack
-         0     0% 99.50%      0.03s  0.75%  runtime.notewakeup
-         0     0% 99.50%      0.03s  0.75%  runtime.semawakeup
-         0     0% 99.50%      0.03s  0.75%  runtime.startm
-         0     0% 99.50%      0.03s  0.75%  runtime.wakep
-         0     0% 99.50%      3.95s 99.25%  testing.(*B).launch
-         0     0% 99.50%      3.95s 99.25%  testing.(*B).runN
+     1.07s 27.23% 27.23%      2.08s 52.93%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.applyCodeRangeRows
+     0.99s 25.19% 52.42%      1.01s 25.70%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.readValidUint32Code
+     0.95s 24.17% 76.59%      0.98s 24.94%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.contiguousBitmapRange
+     0.58s 14.76% 91.35%      0.64s 16.28%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.decodeInt64Payload
+     0.11s  2.80% 94.15%      0.11s  2.80%  runtime.pthread_cond_signal
+     0.05s  1.27% 95.42%      0.05s  1.27%  runtime.asyncPreempt
+     0.04s  1.02% 96.44%      0.04s  1.02%  encoding/binary.littleEndian.Uint64 (inline)
+     0.02s  0.51% 96.95%      0.02s  0.51%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.readUint32Code (inline)
+     0.01s  0.25% 97.20%      3.77s 95.93%  github.com/snissn/gomap/TreeDB/collections.scanTypedColumnStringPreparedPartWithVisibility
+     0.01s  0.25% 97.46%         1s 25.45%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.makeBitmapRowSelectionNoCopy
+         0     0% 97.46%      3.77s 95.93%  github.com/snissn/gomap/TreeDB/collections.(*typedColumnStringPredicatePreparedHotRunner).scan
+         0     0% 97.46%      3.77s 95.93%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnStringPredicatePreparedHot.func1
+         0     0% 97.46%      0.64s 16.28%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).DecodeInt64Into
+         0     0% 97.46%      3.10s 78.88%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleReader).SelectUint32Code
+         0     0% 97.46%         1s 25.45%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.NewBitmapRowSelectionNoCopy (inline)
+         0     0% 97.46%      3.09s 78.63%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.selectUint32CodeSelection
+         0     0% 97.46%      3.11s 79.13%  github.com/snissn/gomap/TreeDB/internal/typedkernel.SelectDictionaryCode
+         0     0% 97.46%      0.14s  3.56%  runtime.gopreempt_m (inline)
+         0     0% 97.46%      0.14s  3.56%  runtime.goschedImpl
+         0     0% 97.46%      0.14s  3.56%  runtime.morestack
+         0     0% 97.46%      0.14s  3.56%  runtime.newstack
+         0     0% 97.46%      0.13s  3.31%  runtime.notewakeup
+         0     0% 97.46%      0.13s  3.31%  runtime.semawakeup
+         0     0% 97.46%      0.14s  3.56%  runtime.startm
+         0     0% 97.46%      0.14s  3.56%  runtime.wakep
+         0     0% 97.46%      3.77s 95.93%  testing.(*B).launch
+         0     0% 97.46%      3.77s 95.93%  testing.(*B).runN
