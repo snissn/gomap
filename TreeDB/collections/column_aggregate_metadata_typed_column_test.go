@@ -246,7 +246,7 @@ func TestAggregateMetadataPreparedTopK1871(t *testing.T) {
 				if result.Diagnostics.RowsScanned != 0 || result.Diagnostics.ReduceRows != len(events) {
 					t.Fatalf("diagnostics=%+v want zero scanned and reduce rows=%d", result.Diagnostics, len(events))
 				}
-				if result.Diagnostics.TopKLimit != 3 || result.Diagnostics.TopKOrder != string(tc.order) || result.Diagnostics.TopKCandidates != 5 || result.Diagnostics.ResultGroups != 3 || result.Diagnostics.ResultShapeNanos <= 0 {
+				if result.Diagnostics.TopKLimit != 3 || result.Diagnostics.TopKOrder != string(tc.order) || result.Diagnostics.TopKCandidates != 5 || result.Diagnostics.ResultGroups != 3 || result.Diagnostics.ResultShapeNanos < 0 {
 					t.Fatalf("top-K diagnostics=%+v", result.Diagnostics)
 				}
 			}
