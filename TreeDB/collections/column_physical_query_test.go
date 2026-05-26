@@ -2178,6 +2178,16 @@ func TestColumnPhysicalQueryPredicatesFailClosedForUnsupportedStates1869(t *test
 	if _, err := mutated.RunColumnPhysicalQuery(mutationReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "insert-only") {
 		t.Fatalf("mutation predicate err=%v want insert-only fail closed", err)
 	}
+	if _, err := mutated.PrepareColumnPhysicalQuery(mutationReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "insert-only") {
+		t.Fatalf("prepared mutation predicate err=%v want insert-only fail closed", err)
+	}
+
+	multiRef, closeMulti := openColumnPhysicalInsertMultiGenerationFixtureM14B(t, 4)
+	defer closeMulti()
+	parallelReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind", Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "kind_00"}}}
+	if _, err := multiRef.RunColumnPhysicalQueryParallel(parallelReq, 4); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "parallel physical predicates") {
+		t.Fatalf("parallel predicate err=%v want fail-closed unsupported", err)
+	}
 }
 
 func assertColumnPhysicalPredicateResult1869(t *testing.T, result ColumnPhysicalQueryResult, wantScanned, wantMatched int, wantCount map[string]int, wantInt64 map[string]int64) {
@@ -2188,8 +2198,11 @@ func assertColumnPhysicalPredicateResult1869(t *testing.T, result ColumnPhysical
 	if result.Diagnostics.RowsScanned != wantScanned || result.Diagnostics.ReduceRows != wantMatched || result.Diagnostics.RowsMatched != wantMatched {
 		t.Fatalf("diagnostic rows scanned/matched/reduced=%d/%d/%d want %d/%d/%d diagnostics=%+v", result.Diagnostics.RowsScanned, result.Diagnostics.RowsMatched, result.Diagnostics.ReduceRows, wantScanned, wantMatched, wantMatched, result.Diagnostics)
 	}
-	if result.Diagnostics.PredicateCount == 0 || len(result.Diagnostics.PredicateColumns) != result.Diagnostics.PredicateCount || result.Diagnostics.PredicateDictionaryCodeHits == 0 {
+	if result.Diagnostics.PredicateCount == 0 || len(result.Diagnostics.PredicateColumns) != result.Diagnostics.PredicateCount {
 		t.Fatalf("missing predicate diagnostics: %+v", result.Diagnostics)
+	}
+	if wantMatched > 0 && result.Diagnostics.PredicateDictionaryCodeHits == 0 {
+		t.Fatalf("missing predicate dictionary code hits for matched rows: %+v", result.Diagnostics)
 	}
 	if len(wantCount) != 0 || wantCount != nil {
 		got := make(map[string]int, len(result.Groups))

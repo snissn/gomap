@@ -235,7 +235,7 @@ func (a columnDictionaryPredicateAsset) matches(rowIdx int) bool {
 		code := int(codes[rowIdx])
 		allowed := a.allowed[predicateIdx]
 		word := code / 64
-		if word < 0 || word >= len(allowed) || allowed[word]&(uint64(1)<<uint(code&63)) == 0 {
+		if word >= len(allowed) || allowed[word]&(uint64(1)<<uint(code&63)) == 0 {
 			return false
 		}
 	}
