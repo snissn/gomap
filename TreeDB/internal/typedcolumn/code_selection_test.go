@@ -114,6 +114,34 @@ func TestUint32CodeSelectionRejectsStoredCodeOutsideCardinality(t *testing.T) {
 	}
 }
 
+func TestUint32CodeCountRejectsUnsupportedSelectionShape(t *testing.T) {
+	codes := []uint32{0, 1, 2, 1}
+	builder := NewGranuleBuilder(Config{Encoding: EncodingLowCardinalityUint32, Compression: CompressionNone})
+	granule, err := builder.BuildUint32Codes(codes, 3)
+	if err != nil {
+		t.Fatalf("BuildUint32Codes: %v", err)
+	}
+	selection := RowSelection{rows: len(codes), kind: RowSelectionKind(99), count: 1}
+	var reader GranuleReader
+	var scratch Uint32CodeSelectionScratch
+	for name, run := range map[string]func() error{
+		"CountUint32Code": func() error {
+			_, err := reader.CountUint32Code(granule, selection, 1)
+			return err
+		},
+		"CountUint32CodesIn": func() error {
+			_, err := reader.CountUint32CodesIn(granule, selection, []uint32{1}, &scratch)
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); err == nil || !strings.Contains(err.Error(), "unsupported code row selection shape") {
+				t.Fatalf("err=%v want unsupported shape", err)
+			}
+		})
+	}
+}
+
 func TestAggregateArenaSelectedCodeReducers(t *testing.T) {
 	leftCodes := []uint32{0, 1, 2, 1, 3, 2, 1}
 	rightCodes := []uint32{3, 3, 2, 0, 1, 4}

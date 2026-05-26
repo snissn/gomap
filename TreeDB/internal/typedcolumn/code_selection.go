@@ -195,7 +195,7 @@ func countUint32CodeSelection(header uint32CodesHeader, selection RowSelection, 
 		}
 		return count, nil
 	default:
-		return 0, nil
+		return 0, fmt.Errorf("typedcolumn: unsupported code row selection shape %s", selection.Shape().Kind)
 	}
 }
 
@@ -264,7 +264,7 @@ func countUint32CodeSetSelection(header uint32CodesHeader, selection RowSelectio
 		}
 		return count, nil
 	default:
-		return 0, nil
+		return 0, fmt.Errorf("typedcolumn: unsupported code row selection shape %s", selection.Shape().Kind)
 	}
 }
 
