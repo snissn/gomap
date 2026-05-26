@@ -523,6 +523,24 @@ fixed-degree `adjacency_list` fields as uncompressed row-major little-endian
 dense `uint32` sections whose element count per row is `adjacency_degree`;
 adjacency direct-view certification remains deferred to #1901.
 
+As of the #1895 pre-alpha format update, newly written `typed_column_part` images
+carry a writer-built `layout_contract` section. The contract may mark only raw
+non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
+and fixed-dimension `raw_float32_vector` typed-column payload sections as
+`DirectViewCertified`. The contract records section/block offsets, lengths,
+checksums, element size, endian, length multiple, row count, fixed elements per
+row, and null/default exclusion. Image padding bytes are deterministic zero bytes
+and are included in serialized-image byte accounting. When a typed-column-part
+asset contains an active direct-view-certified candidate, the column asset segment
+writer/appender also emits deterministic zero prefix padding as needed so the
+absolute storage addresses (`asset_ref.offset + section/block payload offset`)
+satisfy the declared alignment; this segment prefix padding is outside the asset
+payload/checksum but is part of segment file size and appender offset accounting.
+Old or manually constructed typed-column assets without a valid layout contract,
+or refs whose absolute offsets are misaligned, fail closed in certified/prepared
+paths. TreeDB is pre-alpha, so rebuilding old DB directories is preferred over
+on-disk migration scaffolding for this format change.
+
 Nullable scalar typed-column support uses nullable int64 carrier granules for
 bool, int64, float32, double/float64, and low-cardinality string fields. A
 nullable scalar column uses the `nullable_int64` encoding. Each granule payload

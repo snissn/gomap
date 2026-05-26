@@ -1,11 +1,14 @@
 # Typed-Column Aligned Fixed-Width Direct-View Contract (#1893)
 
-Status: pre-alpha safety contract and conformance target for the #1886 stack.
-This document defines when TreeDB column-store bytes may be exposed as typed Go
-slices without copying. It is a contract/harness spec only; writer padding and
-reader fast-path rollout are owned by later issues. The #1737 payload phase adds
-native little-endian scalar float payload encodings and shared fixed-width
-helpers without enabling production unsafe reader direct views.
+Status: pre-alpha safety contract, writer-certification target, and conformance
+baseline for the #1886 stack. This document defines when TreeDB column-store
+bytes may be exposed as typed Go slices without copying. Issue #1895 lands the
+writer side for typed-column-part fixed-width payloads: aligned image sections,
+deterministic segment-prefix padding, and writer-certified layout contracts for
+the active fixed-width candidates. Reader fast-path consumption remains owned by
+later #1886 issues. The #1737 payload phase added native little-endian scalar
+float payload encodings and shared fixed-width helpers without enabling
+production unsafe reader direct views.
 
 ## Scope and non-goals
 
@@ -24,6 +27,36 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
 as current-stack mmap direct-view evidence.
+
+## Writer certification and padding (#1895)
+
+New typed-column-part images include a `layout_contract` section. For the active
+writer-certified columns above, `DirectViewCertified` is set only for raw,
+non-null, non-default, uncompressed, little-endian fixed-width payload sections
+whose contract records:
+
+- logical value type and typedcolumn physical type/encoding;
+- element size, required alignment, endian, length multiple, row count, and
+  fixed elements per row for dense vector rows;
+- section offset/length/checksum and every block payload offset/length;
+- zero null/default counts and no null/default mask flags; and
+- descriptor, manifest, row-count, and checksum identity matching the image.
+
+The writer pads image sections with deterministic zero bytes, and typed-column
+part segment writers prepend deterministic zero padding before direct-view
+candidates when the current segment offset would make
+`asset_ref.offset + section.offset` or `asset_ref.offset + block.payload_offset`
+unaligned. Current active candidates require at most 8-byte absolute alignment.
+Segment-prefix padding is not part of the asset ref payload/checksum, but it is
+part of the segment file size and appender offset progression; tests assert the
+bytes are zero and that multiple typed-column-part assets in the same segment
+remain aligned.
+
+`DirectViewCertified` remains false for bool bitpack/RLE, strings/dictionaries,
+nullable/default wrappers, compressed payloads, variable-width delta layouts,
+physical row assets, and adjacency direct views. Synthetic or legacy refs that
+start at a misaligned segment offset must fail closed or use fallback planning
+even when their image-local layout contract is otherwise valid.
 
 ## Storage owner and consumer matrix
 
@@ -73,7 +106,9 @@ later writer/reader PRs only when the same fail-closed behavior is preserved.
 - Absolute storage alignment: `asset_ref.offset + section.offset` and
   `asset_ref.offset + block.payload_offset` must satisfy the required alignment.
   Relative section-local alignment is insufficient because an aligned image can
-  be appended at an unaligned segment offset.
+  be appended at an unaligned segment offset. For #1895 typed-column-part
+  writers, the segment/appender layer supplies deterministic zero prefix padding
+  before active direct-view candidates so newly written assets satisfy this rule.
 
 ### Fallback-only/deferred encodings
 

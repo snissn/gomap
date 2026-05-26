@@ -70,7 +70,7 @@ selected only by explicit little-endian fixed-width metadata and use
 `raw_float32`/`raw_float64`; those layouts are payload/direct-view candidates but
 float numeric equality/range/aggregate/stats/pruning semantics remain deferred.
 
-## Writer-certified layout contracts (#1850)
+## Writer-certified layout contracts (#1895)
 
 Newly written `typed_column_part` images include one `layout_contract` section in
 addition to the descriptor and column-data sections. The contract is versioned
@@ -86,11 +86,15 @@ The writer validates the contract before returning the image. Fixed-width direct
 view candidates must be uncompressed, little-endian, aligned by absolute storage
 offset (`asset_ref.offset + section/block payload offset`), exact-length
 (`rows * fixed_width_elements * element_size`) for every block, and tied to the
-expected collection logical type. Missing or mismatched logical type metadata
-disables direct/streaming certification instead of being treated as compatible.
-Variable-width or wrapper layouts may certify streaming metadata, but nullable/default carrier
-values do not become value-fast-path eligible just because mask metadata exists.
-String dictionary contracts record dictionary identity; lexical ordering remains
+expected collection logical type. For the #1895 typed-column-part writer, the
+segment/appender layer adds deterministic zero prefix padding before active
+candidate assets so newly written refs satisfy the absolute-offset rule; image
+padding remains deterministic and included in serialized-image accounting.
+Missing or mismatched logical type metadata disables direct/streaming
+certification instead of being treated as compatible. Variable-width or wrapper
+layouts may certify streaming metadata, but nullable/default carrier values do
+not become value-fast-path eligible just because mask metadata exists. String
+dictionary contracts record dictionary identity; lexical ordering remains
 unsupported unless an explicit dictionary order plus collation proof is present.
 
 Prepared readers validate the contract once per immutable asset ref/session and
