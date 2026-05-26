@@ -26,7 +26,7 @@ not just encodings. A key includes:
 | `int64` | `int64` + `raw_int64` + `compression=none` | Optional explicit fixed-width little-endian layout. Safe byte-loop reducer/range predicate and value-row pruning metadata are allowed after row-count and length validation. Direct-view metadata is declared for future use, but #1849 owns zero-copy typed views. |
 | `string` | `low_cardinality_code` + `low_cardinality_uint32` | Dictionary-code equality/group support. Lexical range/pruning is unsupported unless dictionary order and collation proof are present. |
 | `bool` | `bool` + `bool_bitpack_rle` | Bool-specific counts/equality; scalar range remains unsupported by semantics. |
-| `float32`/`double` | current `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 numeric aggregate/range/pruning. Native float layouts must define NaN, signed-zero, infinity, endian, width, and stats rules before enabling numeric fast paths. |
+| `float32`/`double` | current `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 direct-view, numeric aggregate/range, stats, or pruning capabilities. Native float layouts must define NaN, signed-zero, infinity, endian, width, direct-view lifetime, and stats/pruning rules before enabling numeric fast paths. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with vector-specific capabilities. Scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Fixed-width little-endian dense rows with graph/adjacency-specific capabilities. Scalar aggregate/range shortcuts are rejected. |
 
@@ -59,7 +59,10 @@ Raw int64 validation requires:
 The prepared int64 aggregate path consults semantic capabilities first and then
 layout capabilities. For raw int64 it uses a safe little-endian byte-loop reducer
 and predicate cursor; it does not use unsafe pointer casts or expose zero-copy
-views. Delta-varint continues to use the streaming decode path.
+views. Delta-varint continues to use the streaming decode path. Raw int64
+carriers for scalar floats fail closed at both layers: they preserve bits for
+reconstruction, but they are not direct int64 views and cannot certify int64
+numeric reducers, stats, or pruning metadata.
 
 ## Writer-certified layout contracts (#1850)
 

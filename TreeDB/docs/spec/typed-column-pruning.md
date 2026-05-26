@@ -65,7 +65,11 @@ Use requires all of the following:
 
 Bool/string/float/vector/adjacency payloads are intentionally deferred. They
 must define type-native value semantics rather than reusing int64 carrier
-ordering or aggregates.
+ordering or aggregates. In particular, current scalar `float32`/`double` raw
+`int64` bit carriers never advertise `pruning.equality` or
+`pruning.ordered_range`: equality and range pruning need a native float-domain
+contract for NaN payloads, signed zero, infinities, and precision/rounding before
+any payload can be trusted.
 
 ## Diagnostics and fallback
 

@@ -90,16 +90,38 @@ func TestCapabilityValidationRejectsWrongEncodingCompressionAndRows(t *testing.T
 	}
 }
 
-func TestNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testing.T) {
-	floatBits := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalFloat32, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone})
-	if cap := floatBits.Supports(OpInt64NumericReducer); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
-		t.Fatalf("float int64 reducer cap=%+v want %s", cap, ReasonFloatBitPatternNotNumeric)
+func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testing.T) {
+	for _, logical := range []columnsemantics.LogicalType{columnsemantics.LogicalFloat32, columnsemantics.LogicalDouble} {
+		floatBits := CapabilitiesFor(Descriptor{Logical: logical, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone})
+		if floatBits.DirectView.Eligible || floatBits.Reducers.Int64FixedWidthRaw || floatBits.Reducers.Int64NumericAggregate || floatBits.Stats.MinMax || floatBits.Stats.Sum || floatBits.Pruning.OrderedMinMax || floatBits.Pruning.ValueRows {
+			t.Fatalf("%s raw-bit caps advertise unsafe int64 semantics: %+v", logical, floatBits)
+		}
+		for _, op := range []Operation{OpDirectView, OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpScalarNumericAggregate} {
+			if cap := floatBits.Supports(op); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
+				t.Fatalf("%s %s cap=%+v want %s", logical, op, cap, ReasonFloatBitPatternNotNumeric)
+			}
+		}
+		for _, op := range []columnsemantics.Operation{columnsemantics.OpEquality, columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpAvg, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpStatsMinMax, columnsemantics.OpStatsSum, columnsemantics.OpPruneEquality, columnsemantics.OpPruneOrderedRange, columnsemantics.OpDirectScalarValueCarrier} {
+			if cap := floatBits.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
+				t.Fatalf("%s semantic %s cap=%+v want %s", logical, op, cap, ReasonFloatBitPatternNotNumeric)
+			}
+		}
+		for _, op := range []columnsemantics.Operation{columnsemantics.OpAllRows, columnsemantics.OpCountRows, columnsemantics.OpCountNonNull} {
+			if cap := floatBits.SupportsSemanticOperation(op); !cap.Supported() {
+				t.Fatalf("%s semantic %s cap=%+v want supported count/all rows", logical, op, cap)
+			}
+		}
 	}
-	if cap := floatBits.Supports(OpInt64RangePredicate); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
-		t.Fatalf("float range cap=%+v want %s", cap, ReasonFloatBitPatternNotNumeric)
+
+	nullableFloat := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalFloat32, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingNullableInt64, Compression: typedcolumn.CompressionNone, Nullable: true, Defaultable: true})
+	if !nullableFloat.Wrappers.CarrierAggregateUnsafe || nullableFloat.Stats.MinMax || nullableFloat.Stats.Sum || nullableFloat.Pruning.ValueRows {
+		t.Fatalf("nullable float caps=%+v want wrapper fallback with stats/pruning disabled", nullableFloat)
 	}
-	if cap := floatBits.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonFloatBitPatternNotNumeric {
-		t.Fatalf("float direct scalar cap=%+v want %s", cap, ReasonFloatBitPatternNotNumeric)
+	if cap := nullableFloat.SupportsSemanticOperation(columnsemantics.OpCountNonNull); !cap.Supported() {
+		t.Fatalf("nullable float count non-null cap=%+v want supported", cap)
+	}
+	if cap := nullableFloat.SupportsSemanticOperation(columnsemantics.OpSum); cap.Status != columnsemantics.StatusFallback || cap.Reason != ReasonNullDefaultWrapperRequired {
+		t.Fatalf("nullable float sum cap=%+v want wrapper fallback", cap)
 	}
 
 	dict := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalString, Physical: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Compression: typedcolumn.CompressionNone, Dictionary: true})

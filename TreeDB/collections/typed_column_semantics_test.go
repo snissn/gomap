@@ -84,6 +84,77 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 	}
 }
 
+func TestTypedColumnSemanticAdapterFloatFallbackContract(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		valueType ColumnStoreValueType
+	}{
+		{name: "float32", valueType: ColumnStoreValueFloat32},
+		{name: "double", valueType: ColumnStoreValueDouble},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			column, err := typedColumnAdapterMapField(semanticField("score", tc.valueType))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if column.Definition.Type != typedcolumn.ColumnTypeInt64 || column.Definition.Encoding != typedcolumn.EncodingRawInt64 || !column.Definition.StatsDisabled {
+				t.Fatalf("float column definition=%+v want raw int64 carrier with stats disabled", column.Definition)
+			}
+			for _, op := range []columnsemantics.Operation{columnsemantics.OpEquality, columnsemantics.OpInequality, columnsemantics.OpInList} {
+				cap, err := typedColumnAdapterCapability(column, op)
+				if err != nil || cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonNativeFloatLayoutMissing || !strings.Contains(cap.Message, "NaN") || !strings.Contains(cap.Message, "signed-zero") || !strings.Contains(cap.Message, "infinity") || !strings.Contains(cap.Message, "precision/accumulation") {
+					t.Fatalf("%s %s capability=%+v err=%v want explicit float fallback", tc.name, op, cap, err)
+				}
+			}
+			for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpAvg, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpStatsMinMax, columnsemantics.OpStatsSum, columnsemantics.OpPruneEquality, columnsemantics.OpPruneOrderedRange, columnsemantics.OpDirectScalarValueCarrier} {
+				cap, err := typedColumnAdapterCapability(column, op)
+				if err != nil || cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonFloatRawInt64BitPattern {
+					t.Fatalf("%s %s capability=%+v err=%v want raw-bit fail closed", tc.name, op, cap, err)
+				}
+				requireErr := requireTypedColumnAdapterCapability(column, op, "float fail-closed")
+				if !errors.Is(requireErr, ErrColumnQueryPlanUnsupported) || !strings.Contains(requireErr.Error(), string(columnsemantics.ReasonFloatRawInt64BitPattern)) {
+					t.Fatalf("%s %s require err=%v want semantic capability rejection", tc.name, op, requireErr)
+				}
+			}
+			for _, op := range []columnsemantics.Operation{columnsemantics.OpCountRows, columnsemantics.OpCountNonNull} {
+				cap, err := typedColumnAdapterCapability(column, op)
+				if err != nil || cap.Status != columnsemantics.StatusSupported || cap.Result.ResultType != "int64" {
+					t.Fatalf("%s %s capability=%+v err=%v want supported count", tc.name, op, cap, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTypedColumnSemanticAdapterNullableFloatFallbackContract(t *testing.T) {
+	for _, valueType := range []ColumnStoreValueType{ColumnStoreValueFloat32, ColumnStoreValueDouble} {
+		field := semanticField("maybe_score", valueType)
+		field.Nullable = true
+		column, err := typedColumnAdapterMapField(field)
+		if err != nil {
+			t.Fatalf("typedColumnAdapterMapField(%s): %v", valueType, err)
+		}
+		if column.Definition.Encoding != typedcolumn.EncodingNullableInt64 || !column.Definition.StatsDisabled {
+			t.Fatalf("nullable float definition=%+v want nullable carrier with stats disabled", column.Definition)
+		}
+		for _, op := range []columnsemantics.Operation{columnsemantics.OpCountRows, columnsemantics.OpCountNonNull, columnsemantics.OpIsNull, columnsemantics.OpIsNotNull} {
+			if cap, _ := typedColumnAdapterCapability(column, op); cap.Status != columnsemantics.StatusSupported {
+				t.Fatalf("%s %s capability=%+v want supported count/null operation", valueType, op, cap)
+			}
+		}
+		for _, op := range []columnsemantics.Operation{columnsemantics.OpEquality, columnsemantics.OpOrderedRange, columnsemantics.OpDirectScalarValueCarrier} {
+			if cap, _ := typedColumnAdapterCapability(column, op); cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonNullableCarrierValueSemantics {
+				t.Fatalf("%s %s capability=%+v want nullable value fallback", valueType, op, cap)
+			}
+		}
+		for _, op := range []columnsemantics.Operation{columnsemantics.OpSum, columnsemantics.OpAvg, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpStatsMinMax, columnsemantics.OpStatsSum, columnsemantics.OpPruneEquality, columnsemantics.OpPruneOrderedRange} {
+			if cap, _ := typedColumnAdapterCapability(column, op); cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonNullableCarrierAggregateSemantics {
+				t.Fatalf("%s %s capability=%+v want nullable aggregate fallback", valueType, op, cap)
+			}
+		}
+	}
+}
+
 func TestTypedColumnAdapterPrepareInt64SemanticCapabilityRejectsFloatRawInt64Carrier(t *testing.T) {
 	field := semanticField("score", ColumnStoreValueFloat32)
 	_, _, _, err := typedColumnAdapterPrepareInt64PredicateScanPart([]TypedStorageField{field}, nil, 0, 0, 0, 0, "score")

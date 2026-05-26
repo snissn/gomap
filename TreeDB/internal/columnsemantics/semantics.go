@@ -338,15 +338,15 @@ func floatCapability(desc Descriptor, op Operation) Capability {
 	if desc.Physical == typedcolumn.ColumnTypeInt64 && desc.Encoding == typedcolumn.EncodingRawInt64 {
 		switch op {
 		case OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
-			return Unsupported(op, ReasonFloatRawInt64BitPattern, "raw int64 float bit patterns do not provide numeric float semantics")
+			return Unsupported(op, ReasonFloatRawInt64BitPattern, "raw int64 float bit patterns do not provide numeric float semantics; NaN, signed-zero, infinity, and precision/accumulation policy is deferred to a native float layout")
 		case OpAllRows:
 			return Supported(op)
 		case OpCountRows, OpCountNonNull:
 			return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
 		case OpEquality, OpInequality, OpInList:
-			return Fallback(op, ReasonNativeFloatLayoutMissing, "native float equality semantics require NaN/signed-zero rules and a float layout")
+			return Fallback(op, ReasonNativeFloatLayoutMissing, "native float equality semantics require NaN, signed-zero, infinity, and precision/accumulation rules plus a float layout")
 		default:
-			return Unsupported(op, ReasonNativeFloatLayoutMissing, "native float semantic capability is not implemented")
+			return Unsupported(op, ReasonNativeFloatLayoutMissing, "native float semantic capability is not implemented; NaN, signed-zero, infinity, and precision/accumulation policy is deferred")
 		}
 	}
 	return Unsupported(op, ReasonLogicalPhysicalMismatch, "current float columns are only represented as raw int64 bit-pattern carriers")

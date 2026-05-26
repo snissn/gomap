@@ -2,6 +2,7 @@ package columnsemantics
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -81,19 +82,48 @@ func TestCapabilityBoolSupportsEqualityButRejectsRangeSemantics(t *testing.T) {
 	}
 }
 
-func TestCapabilityFloatRawInt64DoesNotClaimInt64NumericSemantics(t *testing.T) {
+func TestCapabilityFloatRawInt64MatrixFailsClosed(t *testing.T) {
 	for _, logical := range []LogicalType{LogicalFloat32, LogicalDouble} {
 		desc := Descriptor{Logical: logical, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64}
+		for _, op := range []Operation{OpEquality, OpInequality, OpInList} {
+			cap := CapabilityFor(desc, op)
+			if cap.Status != StatusFallback || cap.Reason != ReasonNativeFloatLayoutMissing || !strings.Contains(cap.Message, "NaN") || !strings.Contains(cap.Message, "signed-zero") || !strings.Contains(cap.Message, "infinity") || !strings.Contains(cap.Message, "precision/accumulation") {
+				t.Fatalf("%s %s capability=%+v want explicit native-float policy fallback", logical, op, cap)
+			}
+		}
 		for _, op := range []Operation{OpOrderedRange, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier} {
 			cap := CapabilityFor(desc, op)
-			if cap.Status != StatusUnsupported || cap.Reason != ReasonFloatRawInt64BitPattern {
-				t.Fatalf("%s %s status=%s reason=%s", logical, op, cap.Status, cap.Reason)
+			if cap.Status != StatusUnsupported || cap.Reason != ReasonFloatRawInt64BitPattern || !strings.Contains(cap.Message, "NaN") || !strings.Contains(cap.Message, "signed-zero") || !strings.Contains(cap.Message, "infinity") || !strings.Contains(cap.Message, "precision/accumulation") {
+				t.Fatalf("%s %s capability=%+v want raw-bit numeric fail-closed policy", logical, op, cap)
 			}
 		}
 		for _, op := range []Operation{OpCountRows, OpCountNonNull} {
 			cap := CapabilityFor(desc, op)
-			if cap.Status != StatusSupported || cap.Result.ResultType != "int64" {
+			if cap.Status != StatusSupported || cap.Result.ResultType != "int64" || cap.Result.OverflowPolicy != "checked row count" {
 				t.Fatalf("%s %s capability=%+v", logical, op, cap)
+			}
+		}
+	}
+}
+
+func TestCapabilityNullableFloatRawBitCarrierFallbacksAreExplicit(t *testing.T) {
+	for _, logical := range []LogicalType{LogicalFloat32, LogicalDouble} {
+		desc := Descriptor{Logical: logical, Physical: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingNullableInt64, Nullable: true}
+		for _, op := range []Operation{OpCountRows, OpCountNonNull, OpIsNull, OpIsNotNull} {
+			if cap := CapabilityFor(desc, op); cap.Status != StatusSupported {
+				t.Fatalf("%s %s capability=%+v want supported count/null operation", logical, op, cap)
+			}
+		}
+		for _, op := range []Operation{OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange} {
+			cap := CapabilityFor(desc, op)
+			if cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierAggregateSemantics {
+				t.Fatalf("%s %s capability=%+v want nullable aggregate fallback", logical, op, cap)
+			}
+		}
+		for _, op := range []Operation{OpEquality, OpOrderedRange, OpDirectScalarValueCarrier} {
+			cap := CapabilityFor(desc, op)
+			if cap.Status != StatusFallback || cap.Reason != ReasonNullableCarrierValueSemantics {
+				t.Fatalf("%s %s capability=%+v want nullable value fallback", logical, op, cap)
 			}
 		}
 	}

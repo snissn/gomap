@@ -62,7 +62,12 @@ The envelope is type-neutral; payload semantics are not.
   proof.
 - Float payloads require native float layout and explicit NaN, signed-zero,
   infinity, precision, and sum/min/max rules. Raw int64 bit patterns must not use
-  int64 numeric stats.
+  int64 numeric stats and must not advertise `aggregate.sum`, `aggregate.avg`,
+  `aggregate.min`, `aggregate.max`, `stats.min_max`, or `stats.sum`. A future
+  float payload must state whether NaNs are propagated, ignored, bucketed, or
+  rejected; how `+0`/`-0` affect min/max; how infinities participate in ranges
+  and aggregates; and what accumulator/result precision and rounding policy is
+  used.
 - Vector and adjacency payloads must be vector/graph-specific metadata or index
   sketches and must reject scalar aggregate assumptions.
 

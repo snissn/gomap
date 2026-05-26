@@ -238,7 +238,11 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.Layout.Endian = EndianLittle
 		caps.Layout.AlignmentBytes = 8
 		caps.Layout.LengthMultipleBytes = 8
-		caps.DirectView = directView(desc, 8, EndianLittle, 8)
+		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 {
+			caps.DirectView = directView(desc, 8, EndianLittle, 8)
+		} else {
+			caps.DirectView = DirectViewCapability{Eligible: false, Reason: rawInt64NonInt64DirectViewReason(desc), Endian: EndianLittle, WidthBytes: 8, AlignmentBytes: 8, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare_and_payload_read"}
+		}
 		if desc.Logical == columnsemantics.LogicalInt64 && desc.Physical == typedcolumn.ColumnTypeInt64 && desc.Compression == typedcolumn.CompressionNone && !caps.Wrappers.Nullable {
 			caps.Reducers.Int64FixedWidthRaw = true
 			caps.Reducers.Int64NumericAggregate = true
@@ -316,6 +320,13 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonUnsupportedEncoding, ValidationBoundary: "prepare"}
 	}
 	return caps
+}
+
+func rawInt64NonInt64DirectViewReason(desc Descriptor) ReasonCode {
+	if desc.Logical == columnsemantics.LogicalFloat32 || desc.Logical == columnsemantics.LogicalDouble {
+		return ReasonFloatBitPatternNotNumeric
+	}
+	return ReasonLogicalPhysicalMismatch
 }
 
 func directView(desc Descriptor, width int, endian Endian, align int) DirectViewCapability {

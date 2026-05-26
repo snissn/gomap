@@ -59,9 +59,20 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			physical: typedcolumn.ColumnTypeInt64,
 			encoding: typedcolumn.EncodingRawInt64,
 			checks: []capabilityCheck{
-				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
-				{op: columnsemantics.OpDirectScalarValueCarrier, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
 				{op: columnsemantics.OpEquality, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonNativeFloatLayoutMissing},
+				{op: columnsemantics.OpInList, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonNativeFloatLayoutMissing},
+				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpCountNonNull, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpMin, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpAvg, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpStatsMinMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpStatsSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpPruneEquality, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpPruneOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpDirectScalarValueCarrier, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
 			},
 		},
 		{
@@ -71,9 +82,20 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			physical: typedcolumn.ColumnTypeInt64,
 			encoding: typedcolumn.EncodingRawInt64,
 			checks: []capabilityCheck{
+				{op: columnsemantics.OpEquality, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonNativeFloatLayoutMissing},
+				{op: columnsemantics.OpInList, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonNativeFloatLayoutMissing},
+				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpCountNonNull, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
 				{op: columnsemantics.OpMin, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
-				{op: columnsemantics.OpInList, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonNativeFloatLayoutMissing},
+				{op: columnsemantics.OpMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpAvg, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpStatsMinMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpStatsSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpPruneEquality, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpPruneOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
+				{op: columnsemantics.OpDirectScalarValueCarrier, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonFloatRawInt64BitPattern},
 			},
 		},
 		{
@@ -197,6 +219,9 @@ func TestTypedColumnAdapterSemanticConformanceSmallRows(t *testing.T) {
 	for _, name := range []string{"score32", "score64", typedColumnAdapterPrimaryIDColumn} {
 		if _, ok := part.Part.ColumnStats.Int64Column(name); ok {
 			t.Fatalf("column %q emitted int64 stats despite non-int64 semantics: %+v", name, part.Part.ColumnStats)
+		}
+		if _, ok := part.Part.PruningMetadata.Int64Column(name); ok {
+			t.Fatalf("column %q emitted int64 pruning despite non-int64 semantics: %+v", name, part.Part.PruningMetadata)
 		}
 	}
 	if got := part.Dictionary["kind"]; got["alpha"] != 0 || got["beta"] != 1 {
