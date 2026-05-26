@@ -26,8 +26,10 @@ const (
 
 // AggregateResult keeps row-count and value-count semantics distinct. For
 // CountRows, Rows is the row count. For CountNonNull and value aggregates,
-// NonNulls is the number of values included in the aggregate. HasValue is false
-// for empty min/max/avg inputs.
+// NonNulls is the number of values included in the aggregate. For OpBoolCounts,
+// Rows and NonNulls are the selected non-null bool rows while TrueCount and
+// FalseCount partition those rows. HasValue is false for empty min/max/avg
+// inputs.
 type AggregateResult struct {
 	Op         AggregateOp
 	Rows       int64

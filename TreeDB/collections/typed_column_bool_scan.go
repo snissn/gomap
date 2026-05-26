@@ -68,13 +68,17 @@ func (c *Collection) RunTypedColumnBoolPredicateAggregate(req TypedColumnBoolPre
 	if hintDeclared && columnStoreColumnIsTypedColumnPart(hintColumn) && (hintColumn.ValueType != ColumnStoreValueBool || hintColumn.Nullable) {
 		return TypedColumnBoolPredicateAggregateResult{}, typedColumnBoolPredicateUnsupportedColumnError(req.Column, hintColumn)
 	}
+	hintTypedColumnOwner := hintDeclared && hintColumn.ValueType == ColumnStoreValueBool && columnStoreColumnIsTypedColumnPart(hintColumn)
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
 	if closeView != nil {
 		defer closeView()
 	}
 	if err != nil {
+		if hintTypedColumnOwner {
+			return TypedColumnBoolPredicateAggregateResult{}, err
+		}
 		_ = hintCfg
-		return TypedColumnBoolPredicateAggregateResult{}, err
+		return TypedColumnBoolPredicateAggregateResult{}, fmt.Errorf("%w: typed-column bool predicate aggregate requires enabled typed_column_part column store", ErrColumnQueryPlanUnsupported)
 	}
 	cfg := view.FullConfig
 	if !cfg.Enabled {
@@ -555,8 +559,8 @@ func (s *TypedColumnBoolPredicateAggregateSession) runFullAssetAggregatePart(typ
 	if err != nil {
 		return rawScratch, fmt.Errorf("collections: typed-column bool predicate aggregate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 	}
-	if adapterPart.Part.Descriptor.SchemaVersion != uint32(s.schemaHash) || adapterPart.Part.Descriptor.RowCount != typedRef.Rows || adapterPart.Part.Descriptor.RowCount != physical.Rows {
-		return rawScratch, fmt.Errorf("collections: typed_column_part bool aggregate image/ref mismatch rows=%d typed_manifest_rows=%d physical_rows=%d schema=%d want %d", adapterPart.Part.Descriptor.RowCount, typedRef.Rows, physical.Rows, adapterPart.Part.Descriptor.SchemaVersion, uint32(s.schemaHash))
+	if adapterPart.Part.Descriptor.PartID != typedRef.Ref.PartID || adapterPart.Part.Descriptor.SchemaVersion != uint32(s.schemaHash) || adapterPart.Part.Descriptor.RowCount != typedRef.Rows || adapterPart.Part.Descriptor.RowCount != physical.Rows {
+		return rawScratch, fmt.Errorf("collections: typed_column_part bool aggregate image/ref mismatch part_id=%d typed_ref_part_id=%d rows=%d typed_manifest_rows=%d physical_rows=%d schema=%d want %d", adapterPart.Part.Descriptor.PartID, typedRef.Ref.PartID, adapterPart.Part.Descriptor.RowCount, typedRef.Rows, physical.Rows, adapterPart.Part.Descriptor.SchemaVersion, uint32(s.schemaHash))
 	}
 	return rawScratch, s.scanFullAggregatePart(typedRef, physical, adapterPart.Part, result)
 }
