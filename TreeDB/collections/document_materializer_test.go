@@ -675,6 +675,9 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if view.pointRowRefs != nil {
 		t.Fatalf("pointRowRefs=%v want nil after row asset cache rebuild", view.pointRowRefs)
 	}
+	if view.pointRowProjection != nil {
+		t.Fatalf("pointRowProjection=%v want nil after row asset cache rebuild", view.pointRowProjection)
+	}
 	if len(view.pointRowBlocks) != 0 {
 		t.Fatalf("pointRowBlocks=%d want empty after row asset cache rebuild", len(view.pointRowBlocks))
 	}

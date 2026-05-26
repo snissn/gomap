@@ -281,6 +281,7 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 			v.rowLocator = nil
 			v.columnSnapshotView = nil
 			v.pointRowRefs = nil
+			v.pointRowProjection = nil
 			if err := v.rowAssetReadCache.close(); err != nil {
 				return err
 			}
