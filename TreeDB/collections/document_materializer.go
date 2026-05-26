@@ -35,6 +35,8 @@ type DocumentRowRef struct {
 
 // DocumentFetchResult is one materialized document result. ID and Document are
 // response-owned slices. Missing documents have Found=false and Document=nil.
+// RowRef is populated only when typed-storage reconstruction found a visible
+// physical row; it is zero for retained-payload-only results.
 type DocumentFetchResult struct {
 	ID       []byte
 	Document []byte
@@ -214,7 +216,7 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 	}
 	var idArena []byte
 	retained := make([][]byte, len(ids))
-	foundIDs := make([][]byte, 0, len(ids))
+	foundCount := 0
 	for i, id := range ids {
 		if len(id) == 0 {
 			return response, fmt.Errorf("collections: document id at position %d cannot be empty", i)
@@ -233,12 +235,15 @@ func (v *CollectionReadView) fetchDocumentsByID(ids [][]byte, expected []*Docume
 		}
 		response.Results[i].Found = true
 		retained[i] = value
-		foundIDs = append(foundIDs, id)
+		foundCount++
 		response.Stats.RetainedPayloadFetches++
 		response.Stats.RetainedPayloadBytes += uint64(len(value))
 	}
-	if len(foundIDs) == 0 {
+	if foundCount == 0 {
 		return response, nil
+	}
+	if expected != nil && !columnStoreCanReconstructDocument(v.catalog.meta) {
+		return response, errors.New("collections: document row ref materialization requires typed-storage reconstruction support")
 	}
 	if !columnStoreCanReconstructDocument(v.catalog.meta) {
 		var documentArena []byte
@@ -350,6 +355,10 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 
 func appendDocumentFetchOwnedBytes(arena []byte, src []byte, result *DocumentFetchResult) []byte {
 	if result == nil {
+		return arena
+	}
+	if len(src) == 0 {
+		result.Document = []byte{}
 		return arena
 	}
 	start := len(arena)

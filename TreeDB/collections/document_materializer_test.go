@@ -73,6 +73,35 @@ func TestCollectionReadViewFetchDocumentsByIDColumnReconstructionParity(t *testi
 	}
 }
 
+func TestCollectionReadViewFetchDocumentsByRowRefRequiresTypedStorage(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "plain", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("plain")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.Insert([]byte("e1"), []byte(`{"name":"plain"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	_, err = view.FetchDocumentsByRowRef([]DocumentRowRef{{DocumentID: []byte("e1"), RowIndex: 0}}, DocumentFetchOptions{})
+	if err == nil || !strings.Contains(err.Error(), "typed-storage reconstruction") {
+		t.Fatalf("FetchDocumentsByRowRef err=%v want typed-storage reconstruction error", err)
+	}
+}
+
 func TestCollectionReadViewClosedAndNilFailClosed(t *testing.T) {
 	var nilView *CollectionReadView
 	if _, err := nilView.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil || !strings.Contains(err.Error(), "nil collection read view") {
