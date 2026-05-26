@@ -288,10 +288,11 @@ GOWORK=off go test ./experiments/colgranule -run '^$' \
 
 `BenchmarkJSONBenchColumnStoreCompare` uses a synthetic, filter-degenerate
 JSONBench fixture where every row is `kind=commit`, `operation=create`, and
-`collection=app.bsky.feed.post`. This keeps the current TreeDB physical query API comparable
-to the older JSONBench Q1/Q2/Q4/Q5 kernels even though TreeDB does not yet expose
-the experiment's separate filter-column predicates in this query surface. Override
-row count with `TREEDB_JSONBENCH_COMPARE_ROWS=8192` for a smoke run.
+`collection=app.bsky.feed.post`. This keeps the current TreeDB physical query
+API comparable to the older JSONBench Q1/Q2/Q3-hour/Q4/Q5 kernels even though
+TreeDB does not yet expose the experiment's separate filter-column predicates in
+this query surface. Override row count with `TREEDB_JSONBENCH_COMPARE_ROWS=8192`
+for a smoke run.
 
 The current M5 compaction gate measures both full compaction and phase
 breakdowns for visible scanning, part rebuild, image serialization, asset

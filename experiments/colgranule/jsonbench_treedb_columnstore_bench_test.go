@@ -20,9 +20,10 @@ const defaultJSONBenchColumnStoreCompareBatchRows = 32768
 // BenchmarkJSONBenchColumnStoreCompare keeps the historical colgranule JSONBench
 // kernels and the current durable TreeDB column-store physical query path in one
 // benchmark matrix. The fixture is intentionally synthetic and filter-degenerate:
-// every row is kind=commit, operation=create, collection=app.bsky.feed.post. That makes the
-// current TreeDB physical query API (which does not yet expose JSONBench's
-// separate filter columns) comparable to the older colgranule Q1/Q2/Q4/Q5 shapes.
+// every row is kind=commit, operation=create, collection=app.bsky.feed.post.
+// That makes the current TreeDB physical query API (which does not yet expose
+// JSONBench's separate filter columns) comparable to the older colgranule
+// Q1/Q2/Q3-hour/Q4/Q5 shapes.
 func BenchmarkJSONBenchColumnStoreCompare(b *testing.B) {
 	rows := jsonBenchColumnStoreCompareRows(b)
 	ds := syntheticJSONBenchPostOnlyCompareDataset(rows)
