@@ -39,6 +39,66 @@ func TestTypedColumnStringScanEqualityPredicate1785(t *testing.T) {
 	}
 }
 
+func TestTypedColumnStringScanInListCategoryPreparedDictionary1846(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"like", "share", "comment"})
+	insertTypedColumnStringScanRows1785(t, col, []string{"alpha", "comment", "like"})
+
+	inList, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Kind: TypedColumnStringPredicateInList, Values: []string{"like", "comment"}})
+	if err != nil {
+		t.Fatalf("RunTypedColumnStringPredicateScan in-list: %v", err)
+	}
+	assertTypedColumnStringScanValues1785(t, inList, []string{"like", "comment", "comment", "like"})
+	if inList.Diagnostics.KernelBlocks == 0 || inList.Diagnostics.CodesMatched != 4 || inList.Diagnostics.RowMaterializations != 0 {
+		t.Fatalf("in-list diagnostics=%+v want prepared dictionary-code kernels without string materialization", inList.Diagnostics)
+	}
+
+	category, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Kind: TypedColumnStringPredicateCategory, Values: []string{"share", "alpha"}})
+	if err != nil {
+		t.Fatalf("RunTypedColumnStringPredicateScan category: %v", err)
+	}
+	assertTypedColumnStringScanValues1785(t, category, []string{"share", "alpha"})
+	if category.Diagnostics.KernelBlocks == 0 || category.Diagnostics.CodesMatched != 2 {
+		t.Fatalf("category diagnostics=%+v want dictionary-code kernel path", category.Diagnostics)
+	}
+}
+
+func TestTypedColumnStringScanVisibilityDeleteComposition1846(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"like", "share", "like"})
+	if deleted, err := col.DeleteDocument([]byte("e000002_like")); err != nil || !deleted {
+		t.Fatalf("DeleteDocument deleted=%v err=%v", deleted, err)
+	}
+
+	result, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Value: "like"})
+	if err != nil {
+		t.Fatalf("RunTypedColumnStringPredicateScan: %v", err)
+	}
+	assertTypedColumnStringScanValues1785(t, result, []string{"like"})
+	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.SelectionCompositions == 0 {
+		t.Fatalf("diagnostics=%+v want latest-row visibility/delete composition", result.Diagnostics)
+	}
+	if len(result.Rows) != 1 || string(result.Rows[0].DocumentID) != "e000000_like" {
+		t.Fatalf("rows=%+v want only non-deleted like", result.Rows)
+	}
+}
+
+func TestTypedColumnStringScanLexicalPrefixUnsupported1846(t *testing.T) {
+	d, col := setupTypedColumnStringScanCollection1785(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnStringScanRows1785(t, col, []string{"apple", "banana"})
+
+	result, err := col.RunTypedColumnStringPredicateScan(TypedColumnStringPredicateScanRequest{Column: "kind", Kind: TypedColumnStringPredicatePrefix, Prefix: "a"})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "dictionary_order_unproven") {
+		t.Fatalf("prefix err=%v want dictionary-order fallback", err)
+	}
+	if !result.Diagnostics.Fallback || result.Diagnostics.DirectTypedColumnAssetReads != 0 || result.Diagnostics.KernelBlocks != 0 || len(result.Rows) != 0 {
+		t.Fatalf("result=%+v want unsafe lexical prefix rejected before numeric code scan", result)
+	}
+}
+
 func TestTypedColumnStringScanNoMatchAllPruned1785(t *testing.T) {
 	d, col := setupTypedColumnStringScanCollection1785(t)
 	defer func() { _ = d.Close() }()

@@ -6,12 +6,28 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+)
+
+type TypedColumnStringPredicateScanKind string
+
+const (
+	TypedColumnStringPredicateEqual        TypedColumnStringPredicateScanKind = "equal"
+	TypedColumnStringPredicateInList       TypedColumnStringPredicateScanKind = "in_list"
+	TypedColumnStringPredicateCategory     TypedColumnStringPredicateScanKind = "category"
+	TypedColumnStringPredicatePrefix       TypedColumnStringPredicateScanKind = "prefix"
+	TypedColumnStringPredicateLexicalRange TypedColumnStringPredicateScanKind = "lexical_range"
 )
 
 type TypedColumnStringPredicateScanRequest struct {
 	Column                   string
+	Kind                     TypedColumnStringPredicateScanKind
 	Value                    string
+	Values                   []string
+	Prefix                   string
+	Low                      string
+	High                     string
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
@@ -118,11 +134,30 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 	diag := typedColumnStringPredicateDiagnosticsFromView(view)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
 	fields := columnStoreTypedColumnPartFields(cfg)
-	if ok, err := typedColumnAdapterHasStringPredicateColumn(fields, req.Column); err != nil {
+	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, req.Column)
+	if err != nil {
 		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, err
-	} else if !ok {
+	}
+	if !ok {
 		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, fmt.Errorf("%w: typed-column string predicate scan column %q is not owned by typed_column_part", ErrColumnQueryPlanUnsupported, req.Column)
 	}
+	op := typedColumnStringPredicateSemanticOperation(req)
+	if op == columnsemantics.OpStringPrefix || op == columnsemantics.OpStringLexicalRange {
+		cap, _ := typedColumnAdapterCapability(adapterColumn, op)
+		diag.Fallback = true
+		diag.FallbackReason = cap.Error()
+		if diag.FallbackReason == "" {
+			diag.FallbackReason = string(columnsemantics.ReasonDictionaryOrderUnproven)
+		}
+		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, fmt.Errorf("%w: typed-column string predicate scan column %q requires lexical string fallback: %s", ErrColumnQueryPlanUnsupported, req.Column, diag.FallbackReason)
+	}
+	if err := requireTypedColumnAdapterCapability(adapterColumn, op, fmt.Sprintf("typed-column string predicate scan column %q", req.Column)); err != nil {
+		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, op, fmt.Sprintf("typed-column string predicate scan column %q", req.Column)); err != nil {
+		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, err
+	}
+	queryValues := typedColumnStringPredicateValues(req)
 	refsByGeneration := make(map[uint64]columnManifestAssetRefForScan, len(view.TypedColumnPartRefs))
 	for _, ref := range view.TypedColumnPartRefs {
 		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
@@ -172,31 +207,41 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 		}
 	}
 	var rawScratch []byte
+	validatedRefs := make(map[ColumnAssetRef]struct{}, len(view.AssetRefs))
 	for _, physical := range view.AssetRefs {
 		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
 			continue
 		}
 		typedRef := refsByGeneration[physical.Ref.Generation]
 		result.Diagnostics.PartsConsidered++
-		raw, err := readCache.read(typedRef.Ref, rawScratch)
-		result.Diagnostics.SegmentFileCacheHits = readCache.hits
-		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
-		if err != nil {
-			return result, fmt.Errorf("collections: typed-column string predicate read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+		if err := typedColumnStringEnsureFullAssetValidated(&readCache, typedRef.Ref, req.ColumnAssetReadIntegrity, validatedRefs, &result.Diagnostics); err != nil {
+			return result, fmt.Errorf("collections: typed-column string predicate validate generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
-		rawScratch = raw
 		result.Diagnostics.DirectTypedColumnAssetReads++
-		result.Diagnostics.PhysicalBytesScanned += int64(len(raw))
-		prepared, err := typedColumnAdapterPrepareStringPredicateScanPart(fields, raw, typedRef.Ref.PartID, typedRef.Rows, physical.Rows, cfg.SchemaHash, req.Column, req.Value)
-		if err != nil {
-			return result, fmt.Errorf("collections: typed-column string predicate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+		readRange := func(offset int, length int, section bool) ([]byte, error) {
+			return typedColumnStringReadRange(&readCache, typedRef.Ref, offset, length, section, &result.Diagnostics)
 		}
-		result.Diagnostics.DecodedMetadataBytes += uint64(prepared.ManifestBytes)
-		result.Diagnostics.DictionaryBytesDecoded += uint64(prepared.DictionaryBytes)
-		if !prepared.QueryCodeFound {
-			if valueCol, ok := prepared.AdapterPart.Part.Columns[prepared.Column.Definition.Name]; ok {
-				result.Diagnostics.BlocksConsidered += len(valueCol.Blocks)
-				result.Diagnostics.BlocksPruned += len(valueCol.Blocks)
+		requests := typedColumnStringPreparedColumnRequests(adapterColumn, op)
+		preparedPart, partDiag, err := typedColumnPreparePartStateFromRanges(typedRef.Ref, physical.Ref, typedRef.Rows, physical.Rows, fields, cfg.SchemaHash, requests, readRange, nil)
+		if err != nil {
+			return result, fmt.Errorf("collections: typed-column string predicate prepare generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+		}
+		if partDiag.Fallback {
+			result.Diagnostics.Fallback = true
+			result.Diagnostics.FallbackReason = partDiag.FallbackReason
+			return result, fmt.Errorf("%w: %s", ErrColumnQueryPlanUnsupported, partDiag.FallbackReason)
+		}
+		typedColumnStringAddPreparedDiagnostics(&result.Diagnostics, partDiag)
+		preparedColumn := preparedPart.Columns[adapterColumn.Definition.Name]
+		codes, valueByCode, found, err := typedColumnStringResolvePreparedCodes(preparedColumn, queryValues)
+		if err != nil {
+			return result, fmt.Errorf("collections: typed-column string predicate dictionary resolve generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+		}
+		result.Diagnostics.DictionaryBytesDecoded += uint64(typedColumnPreparedPartDictionaryBytes(preparedPart))
+		if !found {
+			if preparedColumn != nil {
+				result.Diagnostics.BlocksConsidered += len(preparedColumn.BlockPlans)
+				result.Diagnostics.BlocksPruned += len(preparedColumn.BlockPlans)
 			}
 			result.Diagnostics.PartsPruned++
 			continue
@@ -210,7 +255,7 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 				return result, fmt.Errorf("collections: typed-column string predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
-		partPruned, err := scanTypedColumnStringPredicatePartWithVisibility(prepared.AdapterPart.Part, prepared.Column.Definition.Name, prepared.QueryCode, req.Value, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility, &scanScratch)
+		partPruned, err := scanTypedColumnStringPreparedPartWithVisibility(preparedPart, adapterColumn.Definition.Name, codes, valueByCode, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility, readRange, &scanScratch)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column string predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
@@ -252,6 +297,107 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 	result.Diagnostics.FallbackReads = int(stats.FallbackReads)
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, nil
+}
+
+func typedColumnStringPredicateSemanticOperation(req TypedColumnStringPredicateScanRequest) columnsemantics.Operation {
+	switch req.Kind {
+	case "", TypedColumnStringPredicateEqual:
+		return columnsemantics.OpDictionaryEquality
+	case TypedColumnStringPredicateInList:
+		return columnsemantics.OpDictionaryInList
+	case TypedColumnStringPredicateCategory:
+		return columnsemantics.OpDictionaryCategory
+	case TypedColumnStringPredicatePrefix:
+		return columnsemantics.OpStringPrefix
+	case TypedColumnStringPredicateLexicalRange:
+		return columnsemantics.OpStringLexicalRange
+	default:
+		return columnsemantics.OpUnknownPredicateKind
+	}
+}
+
+func typedColumnStringPredicateValues(req TypedColumnStringPredicateScanRequest) []string {
+	switch req.Kind {
+	case "", TypedColumnStringPredicateEqual:
+		return []string{req.Value}
+	case TypedColumnStringPredicateInList, TypedColumnStringPredicateCategory:
+		values := append([]string(nil), req.Values...)
+		if req.Value != "" {
+			values = append(values, req.Value)
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func typedColumnStringEnsureFullAssetValidated(readCache *columnPhysicalAssetReadCache, ref ColumnAssetRef, integrity ColumnAssetReadIntegrity, validated map[ColumnAssetRef]struct{}, diag *TypedColumnStringPredicateScanDiagnostics) error {
+	if integrity == ColumnAssetReadIntegritySkipChecksums {
+		return nil
+	}
+	if _, ok := validated[ref]; ok {
+		return nil
+	}
+	n, err := readCache.validateFullRef(ref)
+	if diag != nil {
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
+	}
+	if err != nil {
+		return err
+	}
+	validated[ref] = struct{}{}
+	if diag != nil {
+		diag.FullAssetReads++
+		diag.FullAssetBytes += uint64(n)
+		diag.PhysicalBytesScanned += int64(n)
+	}
+	return nil
+}
+
+func typedColumnStringReadRange(readCache *columnPhysicalAssetReadCache, ref ColumnAssetRef, offset int, length int, section bool, diag *TypedColumnStringPredicateScanDiagnostics) ([]byte, error) {
+	if offset < 0 || length <= 0 {
+		return nil, fmt.Errorf("collections: typed-column string range offset=%d length=%d is invalid", offset, length)
+	}
+	raw, _, err := readCache.readRangeHandle(ref, int64(offset), int64(length))
+	if diag != nil {
+		diag.SegmentFileCacheHits = readCache.hits
+		diag.SegmentFileCacheMisses = readCache.misses
+	}
+	if err != nil {
+		return nil, err
+	}
+	if diag != nil {
+		if readCache.lastView {
+			diag.MappedBytes += uint64(len(raw))
+		} else {
+			diag.HeapCopyBytes += uint64(len(raw))
+		}
+		if section {
+			diag.SectionBytesRead += uint64(len(raw))
+		} else {
+			diag.RangeBytesRead += uint64(len(raw))
+		}
+		diag.PhysicalBytesScanned += int64(len(raw))
+	}
+	return raw, nil
+}
+
+func typedColumnStringAddPreparedDiagnostics(diag *TypedColumnStringPredicateScanDiagnostics, src typedColumnPreparedStateDiagnostics) {
+	if diag == nil {
+		return
+	}
+	diag.DecodedMetadataBytes += src.ManifestBytes + src.DescriptorBytes + src.ContractBytes + src.DecodedMetadataBytes
+	diag.DirectViewCertified += src.DirectViewCertified
+	diag.StreamingCertified += src.StreamingCertified
+	diag.StatsCertified += src.StatsCertified
+	diag.PruningCertified += src.PruningCertified
+	diag.CertificationFailures += src.CertificationFailures
+	diag.CertificationFailureReason = src.CertificationFailureReason
+	diag.PruningFallbackBlocks += src.PruningFallbackBlocks
+	diag.PruningFallbackReason = src.PruningFallbackReason
+	diag.PruningValidationFailures += src.PruningValidationFailures
+	diag.PruningValidationFailureReason = src.PruningValidationFailureReason
 }
 
 func typedColumnStringPredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, matchedRows []TypedColumnStringPredicateScanRow) (map[int][]byte, error) {

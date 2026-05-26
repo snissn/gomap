@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -381,6 +382,13 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 	if err != nil || part == nil || diag.Fallback {
 		return part, diag, err
 	}
+	if typedColumnPreparedRequestsIncludeDictionaries(columnRequests) {
+		dictDiag, err := typedColumnAttachPreparedDictionaries(part, image, readRange, columnRequests)
+		typedColumnPreparedStateDiagnosticsAdd(&diag, dictDiag)
+		if err != nil {
+			return nil, diag, fmt.Errorf("collections: typed_column_part dictionary validation failed: %w", err)
+		}
+	}
 	if typedColumnPreparedRequestsIncludePruning(columnRequests) {
 		pruningDiag, err := typedColumnAttachPreparedPruning(part, image, readRange, columnRequests)
 		typedColumnPreparedStateDiagnosticsAdd(&diag, pruningDiag)
@@ -578,6 +586,15 @@ func buildTypedColumnPreparedColumnState(plan typedColumnPreparedColumnPlan, col
 		return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q consumed=%d section=%d", plan.Definition.Name, offset-section.Offset, section.Length)
 	}
 	return state, diag, nil
+}
+
+func typedColumnPreparedRequestsIncludeDictionaries(requests []typedColumnPreparedColumnRequest) bool {
+	for _, request := range requests {
+		if request.IncludeDictionaries {
+			return true
+		}
+	}
+	return false
 }
 
 func typedColumnPreparedRequestsIncludeStats(requests []typedColumnPreparedColumnRequest) bool {
@@ -782,6 +799,162 @@ func typedColumnPreparedCloneRowSelection(selection typedcolumn.RowSelection) (t
 	default:
 		return typedcolumn.RowSelection{}, fmt.Errorf("collections: typed-column prepared unsupported row selection shape %s", selection.Shape().Kind)
 	}
+}
+
+func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, image typedcolumn.ColumnPartImage, readRange typedColumnPreparedRangeReader, requests []typedColumnPreparedColumnRequest) (typedColumnPreparedStateDiagnostics, error) {
+	var diag typedColumnPreparedStateDiagnostics
+	if part == nil {
+		return diag, errors.New("collections: typed-column prepared dictionaries missing part")
+	}
+	section, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDictionaries)
+	if err != nil {
+		return diag, err
+	}
+	if readRange == nil {
+		return diag, errors.New("collections: typed-column prepared dictionaries require range reader")
+	}
+	raw, err := readRange(section.Offset, section.Length, true)
+	if err != nil {
+		return diag, err
+	}
+	diag.DecodedMetadataBytes += uint64(len(raw))
+	dictionaries, err := decodeTypedColumnPreparedDictionariesSection(raw)
+	if err != nil {
+		return diag, err
+	}
+	for _, request := range requests {
+		if !request.IncludeDictionaries {
+			continue
+		}
+		adapterColumn, err := typedColumnAdapterMapField(request.Field)
+		if err != nil {
+			return diag, err
+		}
+		column := part.Columns[adapterColumn.Definition.Name]
+		if column == nil {
+			return diag, fmt.Errorf("collections: typed-column prepared dictionaries missing column %q", adapterColumn.Definition.Name)
+		}
+		if err := validateTypedColumnAdapterMetadata(dictionaries, []typedColumnAdapterColumn{adapterColumn}); err != nil {
+			return diag, err
+		}
+		dict, ok := dictionaries[adapterColumn.Definition.Name]
+		if !ok {
+			return diag, fmt.Errorf("collections: typed-column prepared dictionaries missing dictionary for column %q", adapterColumn.Definition.Name)
+		}
+		if err := validateTypedColumnPreparedDictionaryForColumn(adapterColumn.Definition.Name, column.Column.Definition.Cardinality, dict); err != nil {
+			return diag, err
+		}
+		column.Dictionaries = dict
+	}
+	return diag, nil
+}
+
+type typedColumnPreparedDictionaryDecoder struct {
+	data []byte
+	off  int
+}
+
+func decodeTypedColumnPreparedDictionariesSection(raw []byte) (map[string]map[string]int64, error) {
+	dec := typedColumnPreparedDictionaryDecoder{data: raw}
+	count, err := dec.u32()
+	if err != nil {
+		return nil, err
+	}
+	if uint64(int(count)) != uint64(count) || int(count) > len(raw)/8+1 {
+		return nil, fmt.Errorf("collections: typed-column prepared dictionaries count=%d exceeds section bytes=%d", count, len(raw))
+	}
+	out := make(map[string]map[string]int64, int(count))
+	for i := 0; i < int(count); i++ {
+		name, err := dec.str()
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := out[name]; exists {
+			return nil, fmt.Errorf("collections: typed-column prepared duplicate dictionary %s", name)
+		}
+		entryCount, err := dec.u32()
+		if err != nil {
+			return nil, err
+		}
+		if uint64(int(entryCount)) != uint64(entryCount) || int(entryCount) > (len(raw)-dec.off)/12+1 {
+			return nil, fmt.Errorf("collections: typed-column prepared dictionary %s entries=%d exceeds remaining bytes=%d", name, entryCount, len(raw)-dec.off)
+		}
+		values := make(map[string]int64, int(entryCount))
+		codes := make(map[int64]string, int(entryCount))
+		for j := 0; j < int(entryCount); j++ {
+			code, err := dec.i64()
+			if err != nil {
+				return nil, err
+			}
+			value, err := dec.str()
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := values[value]; exists {
+				return nil, fmt.Errorf("collections: typed-column prepared duplicate dictionary value %s in %s", value, name)
+			}
+			if previous, exists := codes[code]; exists {
+				return nil, fmt.Errorf("collections: typed-column prepared duplicate dictionary code %d in %s for %q and %q", code, name, previous, value)
+			}
+			values[value] = code
+			codes[code] = value
+		}
+		out[name] = values
+	}
+	if dec.off != len(raw) {
+		return nil, fmt.Errorf("collections: typed-column prepared dictionaries trailing bytes=%d", len(raw)-dec.off)
+	}
+	return out, nil
+}
+
+func (d *typedColumnPreparedDictionaryDecoder) u32() (uint32, error) {
+	if len(d.data)-d.off < 4 {
+		return 0, fmt.Errorf("collections: typed-column prepared dictionary truncated u32 at offset=%d", d.off)
+	}
+	v := binary.LittleEndian.Uint32(d.data[d.off:])
+	d.off += 4
+	return v, nil
+}
+
+func (d *typedColumnPreparedDictionaryDecoder) i64() (int64, error) {
+	if len(d.data)-d.off < 8 {
+		return 0, fmt.Errorf("collections: typed-column prepared dictionary truncated i64 at offset=%d", d.off)
+	}
+	v := int64(binary.LittleEndian.Uint64(d.data[d.off:]))
+	d.off += 8
+	return v, nil
+}
+
+func (d *typedColumnPreparedDictionaryDecoder) str() (string, error) {
+	n, err := d.u32()
+	if err != nil {
+		return "", err
+	}
+	if uint64(int(n)) != uint64(n) || int(n) > len(d.data)-d.off {
+		return "", fmt.Errorf("collections: typed-column prepared dictionary string bytes=%d exceed remaining=%d", n, len(d.data)-d.off)
+	}
+	value := string(d.data[d.off : d.off+int(n)])
+	d.off += int(n)
+	return value, nil
+}
+
+func validateTypedColumnPreparedDictionaryForColumn(name string, cardinality uint32, dict map[string]int64) error {
+	if cardinality == 0 {
+		return fmt.Errorf("collections: typed-column prepared dictionary %s has zero cardinality", name)
+	}
+	seen := make([]bool, int(cardinality))
+	for value, code := range dict {
+		if code < 0 || uint64(code) >= uint64(cardinality) {
+			return fmt.Errorf("collections: typed-column prepared dictionary %s value %q code %d outside cardinality %d", name, value, code, cardinality)
+		}
+		seen[int(code)] = true
+	}
+	for code, ok := range seen {
+		if !ok {
+			return fmt.Errorf("collections: typed-column prepared missing dictionary code %d in %s", code, name)
+		}
+	}
+	return nil
 }
 
 func typedColumnPreparedPruningFallback(column *typedColumnPreparedColumnState, diag *typedColumnPreparedStateDiagnostics, reason string) {
