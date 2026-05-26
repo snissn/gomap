@@ -102,11 +102,15 @@ Inputs and versions:
 - ClickHouse rows loaded: 9,999,994 of 10,000,000 requested.
 - Tries: 3 query attempts.
 
-Artifacts on the run host (under `$OUT_DIR`):
+Reproduction artifacts are written under `$OUT_DIR`:
 
-- `preferred_10m_treedb_clickhouse_summary.md`
-- `treedb_10m_preferred/report.md`
-- `clickhouse_10m/result.json`
+- `preferred_summary.md`
+- `treedb/report.md`
+- `treedb/report.json`
+- `clickhouse/result.json`
+
+The source capture for the table below used equivalent prototype commands before
+the single-entry wrapper was merged; the result values are preserved here.
 
 ## Results
 
