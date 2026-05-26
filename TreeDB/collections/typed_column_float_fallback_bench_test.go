@@ -45,6 +45,15 @@ func BenchmarkTypedColumnFloatFallback(b *testing.B) {
 				if result.RowsScanned != preview.RowsScanned || result.RowsMatched != preview.RowsMatched || result.NaNRows != preview.NaNRows {
 					b.Fatalf("result=%+v preview=%+v", result, preview)
 				}
+				if bc.predicate.Kind == typedColumnFloatFallbackAll {
+					if result.NonNulls != preview.NonNulls || result.HasMinMax != preview.HasMinMax ||
+						!typedColumnFloatFallbackSameFloat64(result.Min, preview.Min) ||
+						!typedColumnFloatFallbackSameFloat64(result.Max, preview.Max) ||
+						!typedColumnFloatFallbackSameFloat64(result.Sum, preview.Sum) ||
+						!typedColumnFloatFallbackSameFloat64(result.Avg, preview.Avg) {
+						b.Fatalf("aggregate result=%+v preview=%+v", result, preview)
+					}
+				}
 				reportTypedColumnFloatFallbackBenchMetrics(b, result, elapsed, b.N)
 			})
 		}

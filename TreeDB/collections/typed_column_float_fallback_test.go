@@ -109,6 +109,52 @@ func TestTypedColumnFloatFallbackLogicalEdgeCases(t *testing.T) {
 	}
 }
 
+func TestTypedColumnFloatFallbackAggregateZeroAndFinitePrecision(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		valueType ColumnStoreValueType
+	}{
+		{name: "float32", valueType: ColumnStoreValueFloat32},
+		{name: "double", valueType: ColumnStoreValueDouble},
+	} {
+		t.Run(tc.name+"/canonical_zero", func(t *testing.T) {
+			for _, values := range [][]float64{
+				{math.Copysign(0, -1), 0},
+				{0, math.Copysign(0, -1)},
+			} {
+				result := runTypedColumnFloatFallback(typedColumnFloatFallbackCellsFromFloat64Values(tc.valueType, values), tc.valueType, typedColumnFloatFallbackPredicate{Kind: typedColumnFloatFallbackAll})
+				assertTypedColumnFloatFallbackCanonicalZeroMinMax(t, result)
+			}
+		})
+	}
+
+	t.Run("float32_widens_to_float64_sum", func(t *testing.T) {
+		values := []float64{1 << 24, 1, -(1 << 24)}
+		result := runTypedColumnFloatFallback(typedColumnFloatFallbackCellsFromFloat64Values(ColumnStoreValueFloat32, values), ColumnStoreValueFloat32, typedColumnFloatFallbackPredicate{Kind: typedColumnFloatFallbackAll})
+		if result.Sum != 1 || result.Avg != float64(1)/3 {
+			t.Fatalf("float32 fallback sum=%g avg=%g want widened float64 sum=1 avg=1/3", result.Sum, result.Avg)
+		}
+		if result.Min != -(1<<24) || result.Max != 1<<24 {
+			t.Fatalf("float32 fallback min=%g max=%g want finite min/max", result.Min, result.Max)
+		}
+	})
+
+	t.Run("double_accumulates_as_float64", func(t *testing.T) {
+		values := []float64{1e16, 1, -1e16}
+		var wantSum float64
+		for _, value := range values {
+			wantSum += value
+		}
+		result := runTypedColumnFloatFallback(typedColumnFloatFallbackCellsFromFloat64Values(ColumnStoreValueDouble, values), ColumnStoreValueDouble, typedColumnFloatFallbackPredicate{Kind: typedColumnFloatFallbackAll})
+		if result.Sum != wantSum || result.Avg != wantSum/3 {
+			t.Fatalf("double fallback sum=%g avg=%g want float64-accumulated sum=%g avg=%g", result.Sum, result.Avg, wantSum, wantSum/3)
+		}
+		if result.Min != -1e16 || result.Max != 1e16 {
+			t.Fatalf("double fallback min=%g max=%g want finite min/max", result.Min, result.Max)
+		}
+	})
+}
+
 func TestTypedColumnFloatFallbackNativeTypedColumnCapabilitiesFailClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -244,7 +290,7 @@ func buildTypedColumnFloatFallbackNullableCells(t *testing.T, valueType ColumnSt
 	for i, value := range values {
 		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i), Values: map[string]columnDeclaredValue{"score": value}}
 	}
-	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1848, RowsPerGranule: 2, Fields: []TypedStorageField{field}}, rows)
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 49, RowsPerGranule: 2, Fields: []TypedStorageField{field}}, rows)
 	if err != nil {
 		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
 	}
@@ -362,10 +408,10 @@ func runTypedColumnFloatFallback(cells []typedColumnFloatFallbackCell, valueType
 			result.Max = value
 			result.HasMinMax = true
 		} else {
-			if value < result.Min {
+			if typedColumnFloatFallbackLessForMin(value, result.Min) {
 				result.Min = value
 			}
-			if value > result.Max {
+			if typedColumnFloatFallbackGreaterForMax(value, result.Max) {
 				result.Max = value
 			}
 		}
@@ -375,6 +421,14 @@ func runTypedColumnFloatFallback(cells []typedColumnFloatFallbackCell, valueType
 		result.Avg = result.Sum / float64(result.NonNulls)
 	}
 	return result
+}
+
+func typedColumnFloatFallbackLessForMin(value, current float64) bool {
+	return value < current || (value == 0 && current == 0 && math.Signbit(value) && !math.Signbit(current))
+}
+
+func typedColumnFloatFallbackGreaterForMax(value, current float64) bool {
+	return value > current || (value == 0 && current == 0 && !math.Signbit(value) && math.Signbit(current))
 }
 
 func typedColumnFloatFallbackMatches(cell typedColumnFloatFallbackCell, valueType ColumnStoreValueType, predicate typedColumnFloatFallbackPredicate) bool {
@@ -450,6 +504,39 @@ func typedColumnFloatFallbackRangeFromNegativeInfToZero(valueType ColumnStoreVal
 		return typedColumnFloatFallbackPredicate{Kind: typedColumnFloatFallbackRange, Min32: float32(math.Inf(-1)), Max32: float32(math.Copysign(0, -1))}
 	}
 	return typedColumnFloatFallbackPredicate{Kind: typedColumnFloatFallbackRange, Min64: math.Inf(-1), Max64: math.Copysign(0, -1)}
+}
+
+func typedColumnFloatFallbackCellsFromFloat64Values(valueType ColumnStoreValueType, values []float64) []typedColumnFloatFallbackCell {
+	cells := make([]typedColumnFloatFallbackCell, len(values))
+	for i, value := range values {
+		cells[i] = typedColumnFloatFallbackCell{Present: true, Visible: true}
+		if valueType == ColumnStoreValueFloat32 {
+			cells[i].F32 = float32(value)
+		} else {
+			cells[i].F64 = value
+		}
+	}
+	return cells
+}
+
+func assertTypedColumnFloatFallbackCanonicalZeroMinMax(t *testing.T, result typedColumnFloatFallbackResult) {
+	t.Helper()
+	if !result.HasMinMax || result.Min != 0 || result.Max != 0 {
+		t.Fatalf("zero aggregate min=%v max=%v has=%v want zero min/max", result.Min, result.Max, result.HasMinMax)
+	}
+	if !math.Signbit(result.Min) || math.Float64bits(result.Min) != 0x8000000000000000 {
+		t.Fatalf("zero aggregate min bits=0x%016x signbit=%v want canonical -0", math.Float64bits(result.Min), math.Signbit(result.Min))
+	}
+	if math.Signbit(result.Max) || math.Float64bits(result.Max) != 0 {
+		t.Fatalf("zero aggregate max bits=0x%016x signbit=%v want canonical +0", math.Float64bits(result.Max), math.Signbit(result.Max))
+	}
+}
+
+func typedColumnFloatFallbackSameFloat64(left, right float64) bool {
+	if math.IsNaN(left) || math.IsNaN(right) {
+		return math.IsNaN(left) && math.IsNaN(right)
+	}
+	return math.Float64bits(left) == math.Float64bits(right)
 }
 
 func assertTypedColumnFloatFallbackDiagnostics(t *testing.T, valueType ColumnStoreValueType, kind typedColumnFloatFallbackPredicateKind, diag typedColumnFloatFallbackDiagnostics) {
