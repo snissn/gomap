@@ -99,6 +99,7 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 		t.Fatalf("vector plan=%+v want supported all-rows vector payload descriptor", vectorPlan)
 	}
 	assertPreparedPlanDependency(t, vectorPlan, typedcolumn.SectionDependencyVectorPayload)
+	assertPreparedPlanNoDependency(t, vectorPlan, typedcolumn.SectionDependencyValues)
 
 	adjacencyPlan, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
 		Field:                   TypedStorageField{Name: "neighbors", Path: "neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 8},
@@ -113,6 +114,7 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 		t.Fatalf("adjacency plan=%+v want supported all-rows adjacency payload descriptor", adjacencyPlan)
 	}
 	assertPreparedPlanDependency(t, adjacencyPlan, typedcolumn.SectionDependencyAdjacencyPayload)
+	assertPreparedPlanNoDependency(t, adjacencyPlan, typedcolumn.SectionDependencyValues)
 
 	vectorScalar, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
 		Field:     TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 4},
@@ -125,6 +127,36 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 	if vectorScalar.Capability.Status != columnsemantics.StatusUnsupported || vectorScalar.Capability.Reason != columnsemantics.ReasonVectorScalarOperationUnsupported {
 		t.Fatalf("vector scalar capability=%+v want #1843 unsupported scalar operation", vectorScalar.Capability)
 	}
+}
+
+func TestTypedColumnPreparedVectorAndAdjacencyPayloadDependenciesC3(t *testing.T) {
+	span, err := typedcolumn.NewRowSpan(0, 32)
+	if err != nil {
+		t.Fatalf("NewRowSpan: %v", err)
+	}
+	vectorPlan, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
+		Field:                TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 4},
+		Role:                 typedcolumn.ColumnRoleProjection,
+		Operation:            columnsemantics.OpAllRows,
+		IncludeVectorPayload: true,
+	}, span)
+	if err != nil {
+		t.Fatalf("describe vector payload: %v", err)
+	}
+	assertPreparedPlanDependency(t, vectorPlan, typedcolumn.SectionDependencyVectorPayload)
+	assertPreparedPlanNoDependency(t, vectorPlan, typedcolumn.SectionDependencyValues)
+
+	adjacencyPlan, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
+		Field:                   TypedStorageField{Name: "neighbors", Path: "neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 8},
+		Role:                    typedcolumn.ColumnRoleProjection,
+		Operation:               columnsemantics.OpAllRows,
+		IncludeAdjacencyPayload: true,
+	}, span)
+	if err != nil {
+		t.Fatalf("describe adjacency payload: %v", err)
+	}
+	assertPreparedPlanDependency(t, adjacencyPlan, typedcolumn.SectionDependencyAdjacencyPayload)
+	assertPreparedPlanNoDependency(t, adjacencyPlan, typedcolumn.SectionDependencyValues)
 }
 
 func TestTypedColumnPreparedColumnStateAllowsZeroLengthEmptyBlock(t *testing.T) {
@@ -317,4 +349,13 @@ func assertPreparedPlanDependency(t *testing.T, plan typedColumnPreparedColumnPl
 		}
 	}
 	t.Fatalf("plan dependencies=%+v missing kind %s", plan.Dependencies, kind)
+}
+
+func assertPreparedPlanNoDependency(t *testing.T, plan typedColumnPreparedColumnPlan, kind typedcolumn.SectionDependencyKind) {
+	t.Helper()
+	for _, dep := range plan.Dependencies {
+		if dep.Kind == kind {
+			t.Fatalf("plan dependencies=%+v unexpectedly included kind %s", plan.Dependencies, kind)
+		}
+	}
 }

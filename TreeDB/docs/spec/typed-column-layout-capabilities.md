@@ -27,8 +27,8 @@ not just encodings. A key includes:
 | `string` | `low_cardinality_code` + `low_cardinality_uint32` | Dictionary-code equality/group support. Lexical range/pruning is unsupported unless dictionary order and collation proof are present. |
 | `bool` | `bool` + `bool_bitpack_rle` | Bool-specific counts/equality; scalar range remains unsupported by semantics. |
 | `float32`/`double` | current `int64` + `raw_int64` bit-pattern carrier | Does not advertise int64 direct-view, numeric aggregate/range, stats, or pruning capabilities. Native float layouts must define NaN, signed-zero, infinity, endian, width, direct-view lifetime, and stats/pruning rules before enabling numeric fast paths. |
-| `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with vector-specific capabilities. Scalar aggregate/range shortcuts are rejected. |
-| `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Fixed-width little-endian dense rows with graph/adjacency-specific capabilities. Scalar aggregate/range shortcuts are rejected. |
+| `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
+| `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Fixed-width little-endian dense rows with explicit adjacency direct-payload, graph traversal, and adjacency-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
 
 Nullable/default wrappers expose null and default-mask dependencies separately
 from carrier-value capabilities. Value predicates and aggregates over nullable
@@ -141,6 +141,7 @@ New layouts should declare unsupported operations explicitly. Examples:
 - float layouts must not inherit int64 bit-pattern ordering or sum semantics;
 - bool layouts should expose bool-specific counts/equality rather than broad
   scalar range;
-- vector and adjacency layouts should expose vector/graph-specific capabilities
-  and reject scalar aggregate/range shortcuts unless a future issue implements
-  and tests them through the shared substrate.
+- vector and adjacency layouts expose only vector/graph-specific capabilities
+  (direct payload, similarity/dot-product/vector metrics, adjacency traversal,
+  and adjacency metrics) and reject scalar aggregate/range shortcuts unless a
+  future issue implements and tests them through the shared substrate.

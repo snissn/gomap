@@ -1,0 +1,142 @@
+File: collections.test
+Type: alloc_space
+Time: 2026-05-25 19:26:09 HST
+Showing nodes accounting for 5606.46MB, 93.35% of 6005.77MB total
+Dropped 302 nodes (cum <= 30.03MB)
+      flat  flat%   sum%        cum   cum%
+ 1293.61MB 21.54% 21.54%  1293.61MB 21.54%  fmt.Errorf
+ 1088.02MB 18.12% 39.66%  1344.02MB 22.38%  github.com/snissn/gomap/TreeDB/internal/commitlog.NewWriterWithOptions
+  516.83MB  8.61% 48.26%   516.83MB  8.61%  bytes.Clone (inline)
+     256MB  4.26% 52.52%      256MB  4.26%  bufio.NewWriterSize (inline)
+  233.50MB  3.89% 56.41%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/internal/mappedresource.ValidateDirectView
+  198.78MB  3.31% 59.72%   198.78MB  3.31%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).rerankFloat32CosineCandidatesFromNodesLocked
+  198.78MB  3.31% 63.03%   389.29MB  6.48%  encoding/json.(*decodeState).arrayInterface
+  182.63MB  3.04% 66.07%   182.63MB  3.04%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+  150.67MB  2.51% 68.58%   307.29MB  5.12%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).attachVectorSearchResultDocuments
+  127.11MB  2.12% 70.70%   218.12MB  3.63%  github.com/snissn/gomap/TreeDB/collections.vectorBenchmarkDocument
+  108.08MB  1.80% 72.50%   108.08MB  1.80%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).ValueCopy
+  107.13MB  1.78% 74.28%   107.13MB  1.78%  encoding/json.(*Decoder).refill
+      99MB  1.65% 75.93%      196MB  3.26%  encoding/json.(*decodeState).literalInterface
+      95MB  1.58% 77.51%       95MB  1.58%  encoding/json.(*decodeState).convertNumber
+   94.52MB  1.57% 79.09%    94.52MB  1.57%  github.com/snissn/gomap/TreeDB/collections.vectorFromJSONField
+   87.59MB  1.46% 80.54%    87.59MB  1.46%  bytes.growSlice
+   82.58MB  1.37% 81.92%    82.58MB  1.37%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).linkLayerLocked
+      78MB  1.30% 83.22%       78MB  1.30%  fmt.Sprintf
+   69.17MB  1.15% 84.37%    69.17MB  1.15%  github.com/snissn/gomap/TreeDB/db.newLeafPageReadCache (inline)
+   57.03MB  0.95% 85.32%   223.70MB  3.72%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).insertVectorLocked
+   55.02MB  0.92% 86.24%    56.02MB  0.93%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).newVectorIndexNodePrepared
+   46.56MB  0.78% 87.01%    51.56MB  0.86%  encoding/json.Marshal
+   46.06MB  0.77% 87.78%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/internal/commitlog.cloneBytesPreserveEmpty (inline)
+   42.56MB  0.71% 88.49%    98.97MB  1.65%  github.com/snissn/gomap/TreeDB/collections.newColumnPhysicalRowReaderFromSnapshotViewWithClose
+   39.53MB  0.66% 89.14%   571.98MB  9.52%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndexSearcher).Search
+   38.04MB  0.63% 89.78%   363.75MB  6.06%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openVectorIndexSearcher
+   27.01MB  0.45% 90.23%    74.02MB  1.23%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphPhysicalColumnStoreConfig
+   24.82MB  0.41% 90.64%   148.90MB  2.48%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).checkRecallExactBatch
+   24.03MB   0.4% 91.04%   982.30MB 16.36%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).Search
+   19.50MB  0.32% 91.37%   418.79MB  6.97%  encoding/json.(*decodeState).objectInterface
+      18MB   0.3% 91.67%    46.01MB  0.77%  github.com/snissn/gomap/TreeDB/collections.normalizeColumnStoreConfig
+   14.03MB  0.23% 91.90%   371.31MB  6.18%  github.com/snissn/gomap/TreeDB/collections.extractColumnDeclaredRowsFromJSONDocuments
+   14.01MB  0.23% 92.13%    75.01MB  1.25%  github.com/snissn/gomap/TreeDB/collections.loadColumnManifestRecordsFromRoot
+   13.51MB  0.22% 92.36%    44.79MB  0.75%  github.com/snissn/gomap/TreeDB/collections.prepareColumnVectorGraphPhysicalAsset
+   11.30MB  0.19% 92.55%   198.43MB  3.30%  github.com/snissn/gomap/TreeDB/collections.(*Collection).columnVectorGraphRowsFromCatalogSnapshot.func2
+      10MB  0.17% 92.71%   333.86MB  5.56%  github.com/snissn/gomap/TreeDB/collections.(*Collection).openColumnVectorGraphPhysicalRowReaderAtSnapshot
+    7.01MB  0.12% 92.83%   549.12MB  9.14%  github.com/snissn/gomap/TreeDB/collections.insertColumnGraphRebuildRowsV2A
+       7MB  0.12% 92.95%    41.91MB   0.7%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalRowReader).buildOrdinalRanges
+    6.51MB  0.11% 93.05%   226.12MB  3.77%  github.com/snissn/gomap/TreeDB/collections.vectorBenchmarkWriteBatch
+    6.14MB   0.1% 93.16%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex
+    3.50MB 0.058% 93.21%   209.04MB  3.48%  github.com/snissn/gomap/TreeDB/collections.(*Collection).columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot
+    2.70MB 0.045% 93.26%    48.89MB  0.81%  github.com/snissn/gomap/TreeDB/collections.buildColumnVectorGraphAdjacency
+    2.05MB 0.034% 93.29%   302.91MB  5.04%  github.com/snissn/gomap/TreeDB/collections.(*Collection).scanDocumentsFuncWithColumnReconstruction
+    1.50MB 0.025% 93.32%    65.07MB  1.08%  github.com/snissn/gomap/TreeDB/collections.reconstructColumnJSONDocument
+       1MB 0.017% 93.33%   434.79MB  7.24%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).rerankCandidates
+       1MB 0.017% 93.35%   395.79MB  6.59%  encoding/json.(*decodeState).valueInterface
+         0     0% 93.35%    81.55MB  1.36%  bytes.(*Buffer).Write
+         0     0% 93.35%    87.59MB  1.46%  bytes.(*Buffer).grow
+         0     0% 93.35%   526.42MB  8.77%  encoding/json.(*Decoder).Decode
+         0     0% 93.35%   107.63MB  1.79%  encoding/json.(*Decoder).readValue
+         0     0% 93.35%   418.79MB  6.97%  encoding/json.(*decodeState).object
+         0     0% 93.35%   418.79MB  6.97%  encoding/json.(*decodeState).unmarshal
+         0     0% 93.35%   418.79MB  6.97%  encoding/json.(*decodeState).value
+         0     0% 93.35%   303.09MB  5.05%  github.com/snissn/gomap/TreeDB/collections.(*Collection).BuildVectorIndex
+         0     0% 93.35%   183.63MB  3.06%  github.com/snissn/gomap/TreeDB/collections.(*Collection).GetInto
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatch
+         0     0% 93.35%   363.75MB  6.06%  github.com/snissn/gomap/TreeDB/collections.(*Collection).OpenVectorIndexSearcher (inline)
+         0     0% 93.35%   397.59MB  6.62%  github.com/snissn/gomap/TreeDB/collections.(*Collection).RebuildVectorIndex
+         0     0% 93.35%   427.17MB  7.11%  github.com/snissn/gomap/TreeDB/collections.(*Collection).ScanDocumentsFunc
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildColumnPublishPlanForCommandWALContext
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildColumnPublishPlanForCommandWALContext.func1
+         0     0% 93.35%   303.09MB  5.05%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildVectorIndex (inline)
+         0     0% 93.35%   303.09MB  5.05%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildVectorIndexPrepared
+         0     0% 93.35%   252.06MB  4.20%  github.com/snissn/gomap/TreeDB/collections.(*Collection).buildVectorIndexPrepared.func2
+         0     0% 93.35%   302.91MB  5.04%  github.com/snissn/gomap/TreeDB/collections.(*Collection).columnVectorGraphRowsFromCatalogSnapshot
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatch (inline)
+         0     0% 93.35%   301.94MB  5.03%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchNoIndex.func4
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntent.func1
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsForCommand
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetsForCommand
+         0     0% 93.35%   300.89MB  5.01%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaGroupMaybeColumn.func1
+         0     0% 93.35%   397.59MB  6.62%  github.com/snissn/gomap/TreeDB/collections.(*Collection).rebuildVectorIndexWithCommandWALIntent
+         0     0% 93.35%    44.79MB  0.75%  github.com/snissn/gomap/TreeDB/collections.(*Collection).rebuildVectorIndexWithCommandWALIntent.func1
+         0     0% 93.35%   301.94MB  5.03%  github.com/snissn/gomap/TreeDB/collections.(*Collection).withCommandWALPublishCoordinator
+         0     0% 93.35%   286.71MB  4.77%  github.com/snissn/gomap/TreeDB/collections.(*StoredDocumentJSONMaterializer).StoredDocumentJSON
+         0     0% 93.35%   153.47MB  2.56%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).CheckRecall
+         0     0% 93.35%    64.04MB  1.07%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).checkRecallExactBatch.func2
+         0     0% 93.35%    46.51MB  0.77%  github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetReadCache).read
+         0     0% 93.35%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphBlockView).adjacency
+         0     0% 93.35%  1532.39MB 25.52%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).SearchCosine
+         0     0% 93.35%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).expandCandidateAdjacencyLayer
+         0     0% 93.35%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/collections.(*columnVectorGraphPhysicalRowReader).rawCandidateAdjacencyWithDirectView
+         0     0% 93.35%   945.60MB 15.74%  github.com/snissn/gomap/TreeDB/collections.BenchmarkCollectionVectorIndexSearch
+         0     0% 93.35%   753.57MB 12.55%  github.com/snissn/gomap/TreeDB/collections.BenchmarkCollectionVectorIndexSearchInt8
+         0     0% 93.35%  1109.50MB 18.47%  github.com/snissn/gomap/TreeDB/collections.BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3
+         0     0% 93.35%  1097.01MB 18.27%  github.com/snissn/gomap/TreeDB/collections.BenchmarkColumnVectorGraphNativeSearchCosineV3
+         0     0% 93.35%   942.71MB 15.70%  github.com/snissn/gomap/TreeDB/collections.BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6
+         0     0% 93.35%  1145.46MB 19.07%  github.com/snissn/gomap/TreeDB/collections.BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderV4
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.BuildColumnPublishPlan
+         0     0% 93.35%  2206.51MB 36.74%  github.com/snissn/gomap/TreeDB/collections.benchmarkColumnVectorGraphNativeSearchCosineV3
+         0     0% 93.35%   183.13MB  3.05%  github.com/snissn/gomap/TreeDB/collections.collectionGetAppendAtCatalogRoot
+         0     0% 93.35%   187.14MB  3.12%  github.com/snissn/gomap/TreeDB/collections.columnRetainedPayloadFromJSONDocument
+         0     0% 93.35%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphLittleEndianUint32DirectView
+         0     0% 93.35%    50.01MB  0.83%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphManifestMatchStatus
+         0     0% 93.35%    50.01MB  0.83%  github.com/snissn/gomap/TreeDB/collections.columnVectorGraphManifestMatchesDefinition (inline)
+         0     0% 93.35%   199.65MB  3.32%  github.com/snissn/gomap/TreeDB/collections.decodeColumnJSONObject
+         0     0% 93.35%    55.29MB  0.92%  github.com/snissn/gomap/TreeDB/collections.encodeColumnPhysicalAsset
+         0     0% 93.35%    48.06MB   0.8%  github.com/snissn/gomap/TreeDB/collections.marshalColumnReconstructedJSONObject
+         0     0% 93.35%    48.06MB   0.8%  github.com/snissn/gomap/TreeDB/collections.marshalColumnReconstructedJSONObject.func1
+         0     0% 93.35%    98.97MB  1.65%  github.com/snissn/gomap/TreeDB/collections.newColumnPhysicalRowReaderFromSnapshotView (inline)
+         0     0% 93.35%  1395.16MB 23.23%  github.com/snissn/gomap/TreeDB/collections.openCollectionCommandWALDB
+         0     0% 93.35%  1451.60MB 24.17%  github.com/snissn/gomap/TreeDB/collections.openColumnGraphRebuildTestCollectionV2A
+         0     0% 93.35%   493.18MB  8.21%  github.com/snissn/gomap/TreeDB/collections.openColumnGraphTypedColumnVectorTestCollection1782
+         0     0% 93.35%  1198.42MB 19.95%  github.com/snissn/gomap/TreeDB/collections.openColumnVectorGraphNativeSearchBenchFixtureV3
+         0     0% 93.35%   264.87MB  4.41%  github.com/snissn/gomap/TreeDB/collections.openVectorBenchmarkCollection
+         0     0% 93.35%   264.87MB  4.41%  github.com/snissn/gomap/TreeDB/collections.openVectorBenchmarkCollectionWithIndexes
+         0     0% 93.35%    65.14MB  1.08%  github.com/snissn/gomap/TreeDB/collections.prepareColumnPublishAssets
+         0     0% 93.35%    44.79MB  0.75%  github.com/snissn/gomap/TreeDB/collections.prepareColumnVectorGraphRebuildManifest
+         0     0% 93.35%   184.18MB  3.07%  github.com/snissn/gomap/TreeDB/collections.prepareColumnWritePublishInputBeforeCommandWAL
+         0     0% 93.35%    65.07MB  1.08%  github.com/snissn/gomap/TreeDB/collections.reconstructColumnDocumentFromVisibleRowValues
+         0     0% 93.35%   529.74MB  8.82%  github.com/snissn/gomap/TreeDB/collections.retryInsertBatchMutation
+         0     0% 93.35%   381.23MB  6.35%  github.com/snissn/gomap/TreeDB/collections.vectorFromStoredDocument
+         0     0% 93.35%    35.87MB   0.6%  github.com/snissn/gomap/TreeDB/collections.writeManifestFloat32SliceWithEncoding
+         0     0% 93.35%    45.29MB  0.75%  github.com/snissn/gomap/TreeDB/db.(*DB).PublishOrderedRootDeltaGroupWithCommandWALContextRootBuilderAndSystemDeltaBuilder (inline)
+         0     0% 93.35%   116.71MB  1.94%  github.com/snissn/gomap/TreeDB/db.(*DB).PublishOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder (inline)
+         0     0% 93.35%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntent
+         0     0% 93.35%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/db.(*DB).appendPublicCommandWALIntent
+         0     0% 93.35%      162MB  2.70%  github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder
+         0     0% 93.35%   183.13MB  3.05%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).GetAppendAtRoot
+         0     0% 93.35%  1416.21MB 23.58%  github.com/snissn/gomap/TreeDB/db.Open
+         0     0% 93.35%  1415.21MB 23.56%  github.com/snissn/gomap/TreeDB/db.openWithLock
+         0     0% 93.35%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).AppendCommand
+         0     0% 93.35%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/internal/commitlog.DecodeCollectionInsertBatchByIDPayload
+         0     0% 93.35%  1344.52MB 22.39%  github.com/snissn/gomap/TreeDB/internal/commitlog.OpenCommandJournal
+         0     0% 93.35%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopeForEncode
+         0     0% 93.35%    46.06MB  0.77%  github.com/snissn/gomap/TreeDB/internal/commitlog.validateCommandEnvelopePayload
+         0     0% 93.35%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/internal/mappedresource.Uint32View
+         0     0% 93.35%  1527.12MB 25.43%  github.com/snissn/gomap/TreeDB/internal/typeddecode.Uint32ByteView
+         0     0% 93.35%   182.63MB  3.04%  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetAppend
+         0     0% 93.35%  5199.96MB 86.58%  testing.(*B).launch
+         0     0% 93.35%   793.89MB 13.22%  testing.(*B).run1.func1
+         0     0% 93.35%  5994.37MB 99.81%  testing.(*B).runN

@@ -151,17 +151,86 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	}
 
 	vector := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalFloat32Vector, Physical: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, FixedWidthElements: 3})
+	for _, op := range []Operation{OpVectorDirectView, OpVectorSimilarity, OpVectorMetricReducer} {
+		if cap := vector.Supports(op); !cap.Supported() {
+			t.Fatalf("vector %s cap=%+v want supported", op, cap)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpVectorDirectPayload, columnsemantics.OpVectorSimilarity, columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorMetrics} {
+		if cap := vector.SupportsSemanticOperation(op); !cap.Supported() {
+			t.Fatalf("vector semantic %s cap=%+v want supported", op, cap)
+		}
+	}
 	if cap := vector.Supports(OpScalarNumericAggregate); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
 		t.Fatalf("vector scalar cap=%+v want %s", cap, ReasonVectorScalarUnsupported)
 	}
-	if cap := vector.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
-		t.Fatalf("vector direct scalar cap=%+v want %s", cap, ReasonVectorScalarUnsupported)
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
+		if cap := vector.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonVectorScalarUnsupported {
+			t.Fatalf("vector semantic scalar %s cap=%+v want %s", op, cap, ReasonVectorScalarUnsupported)
+		}
 	}
+	missingVectorDims := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalFloat32Vector, Physical: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone})
+	if missingVectorDims.DirectView.Eligible || missingVectorDims.Layout.ElementsPerRow != 0 || missingVectorDims.Reducers.VectorMetrics || missingVectorDims.Pruning.VectorIndex {
+		t.Fatalf("missing vector dims caps=%+v want fail-closed no direct/vector metrics", missingVectorDims)
+	}
+	for _, op := range []Operation{OpVectorDirectView, OpVectorSimilarity, OpVectorMetricReducer} {
+		if cap := missingVectorDims.Supports(op); cap.Supported() || cap.Reason != ReasonFixedWidthElementsRequired {
+			t.Fatalf("missing vector dims %s cap=%+v want %s", op, cap, ReasonFixedWidthElementsRequired)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpVectorDirectPayload, columnsemantics.OpVectorSimilarity, columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorMetrics} {
+		if cap := missingVectorDims.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonFixedWidthElementsRequired {
+			t.Fatalf("missing vector dims semantic %s cap=%+v want %s", op, cap, ReasonFixedWidthElementsRequired)
+		}
+	}
+	for _, granule := range []typedcolumn.EncodedGranule{
+		{Rows: 0, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0},
+		{Rows: 1, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4},
+	} {
+		if err := missingVectorDims.ValidateGranule(granule); err == nil || !strings.Contains(err.Error(), string(ReasonFixedWidthElementsRequired)) {
+			t.Fatalf("missing vector dims ValidateGranule rows=%d err=%v want %s", granule.Rows, err, ReasonFixedWidthElementsRequired)
+		}
+	}
+
 	adjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, FixedWidthElements: 8})
+	for _, op := range []Operation{OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
+		if cap := adjacency.Supports(op); !cap.Supported() {
+			t.Fatalf("adjacency %s cap=%+v want supported", op, cap)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyDirectPayload, columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyMetrics} {
+		if cap := adjacency.SupportsSemanticOperation(op); !cap.Supported() {
+			t.Fatalf("adjacency semantic %s cap=%+v want supported", op, cap)
+		}
+	}
 	if cap := adjacency.Supports(OpInt64RangePredicate); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
 		t.Fatalf("adjacency scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
 	}
-	if cap := adjacency.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
-		t.Fatalf("adjacency direct scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
+		if cap := adjacency.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
+			t.Fatalf("adjacency semantic scalar %s cap=%+v want %s", op, cap, ReasonAdjacencyScalarUnsupported)
+		}
+	}
+	missingAdjacencyDegree := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone})
+	if missingAdjacencyDegree.DirectView.Eligible || missingAdjacencyDegree.Layout.ElementsPerRow != 0 || missingAdjacencyDegree.Reducers.AdjacencyMetrics || missingAdjacencyDegree.Pruning.AdjacencyIndex {
+		t.Fatalf("missing adjacency degree caps=%+v want fail-closed no direct/adjacency metrics", missingAdjacencyDegree)
+	}
+	for _, op := range []Operation{OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
+		if cap := missingAdjacencyDegree.Supports(op); cap.Supported() || cap.Reason != ReasonFixedWidthElementsRequired {
+			t.Fatalf("missing adjacency degree %s cap=%+v want %s", op, cap, ReasonFixedWidthElementsRequired)
+		}
+	}
+	for _, op := range []columnsemantics.Operation{columnsemantics.OpAdjacencyDirectPayload, columnsemantics.OpAdjacencyTraversal, columnsemantics.OpAdjacencyMetrics} {
+		if cap := missingAdjacencyDegree.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonFixedWidthElementsRequired {
+			t.Fatalf("missing adjacency degree semantic %s cap=%+v want %s", op, cap, ReasonFixedWidthElementsRequired)
+		}
+	}
+	for _, granule := range []typedcolumn.EncodedGranule{
+		{Rows: 0, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: 0, StoredBytes: 0},
+		{Rows: 1, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: 4, StoredBytes: 4},
+	} {
+		if err := missingAdjacencyDegree.ValidateGranule(granule); err == nil || !strings.Contains(err.Error(), string(ReasonFixedWidthElementsRequired)) {
+			t.Fatalf("missing adjacency degree ValidateGranule rows=%d err=%v want %s", granule.Rows, err, ReasonFixedWidthElementsRequired)
+		}
 	}
 }

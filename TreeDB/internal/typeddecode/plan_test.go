@@ -2,6 +2,7 @@ package typeddecode
 
 import (
 	"encoding/binary"
+	"math"
 	"testing"
 	"unsafe"
 
@@ -156,11 +157,7 @@ func TestInt64DeltaPlanUsesStreamingNotDirectView(t *testing.T) {
 }
 
 func TestDenseDirectViewBlockValidatesDimensionsAndLength(t *testing.T) {
-	cert := typedcolumn.ColumnPartLayoutContractColumn{
-		Name: "vec", LogicalType: "float32_vector", Type: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone,
-		Rows: 2, FixedWidthElements: 4, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: true,
-	}
-	cert.Blocks = []typedcolumn.ColumnPartLayoutContractBlock{{RowCount: 2, Encoding: cert.Encoding, Compression: cert.Compression, RawBytes: 32, StoredBytes: 32, PayloadLength: 32}}
+	cert := testFloat32VectorDirectCert(2, 4)
 	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 4, ElementsPerRow: 4, Alignment: 4, Rows: 2}
 	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 32}); !status.Direct() {
 		t.Fatalf("dense status=%+v want direct", status)
@@ -169,6 +166,164 @@ func TestDenseDirectViewBlockValidatesDimensionsAndLength(t *testing.T) {
 	wrongDims.ElementsPerRow = 3
 	if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: wrongDims, Certification: cert, Block: cert.Blocks[0], Rows: 2, PayloadBytes: 32}); status.Reason != ReasonDimensionMismatch {
 		t.Fatalf("dimension status=%+v want %s", status, ReasonDimensionMismatch)
+	}
+}
+
+func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAndLifetime(t *testing.T) {
+	cert := testFloat32VectorDirectCert(2, 3)
+	plan := DenseFloat32VectorPlan(cert, 3)
+	if !plan.DirectCandidate() {
+		t.Fatalf("plan=%+v want direct candidate", plan)
+	}
+	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 24}
+	if status := ValidateDirectViewColumn(columnReq); !status.Direct() {
+		t.Fatalf("column status=%+v want direct", status)
+	}
+
+	raw := alignedBytes(4, 24)
+	for i, value := range []float32{1, 2, 3, 4, 5, 6} {
+		binary.LittleEndian.PutUint32(raw[i*4:], math.Float32bits(value))
+	}
+	mgr := mappedresource.NewManager()
+	h, err := mgr.AcquireBytes(testKeyWithPart(10, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "typeddecode dense vector"})
+	if err != nil {
+		t.Fatalf("AcquireBytes vector: %v", err)
+	}
+	view, status := DenseFloat32VectorView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 6, RequireMapped: true})
+	if !status.Direct() || len(view) != 6 || view[0] != 1 || view[5] != 6 {
+		t.Fatalf("vector view=%v status=%+v", view, status)
+	}
+
+	wrongDims := DenseFloat32VectorPlan(cert, 2)
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongDims, Certification: cert, Rows: 2, PayloadBytes: 24}); status.Reason != ReasonDimensionMismatch {
+		t.Fatalf("dims status=%+v want %s", status, ReasonDimensionMismatch)
+	}
+	wrongEndian := cloneDirectViewCert(cert)
+	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
+	wrongEndianPlan := DenseFloat32VectorPlan(wrongEndian, 3)
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongEndianPlan, Certification: wrongEndian, Rows: 2, PayloadBytes: 24}); status.Reason != ReasonWrongEndian {
+		t.Fatalf("endian status=%+v want %s", status, ReasonWrongEndian)
+	}
+	truncated := cloneDirectViewCert(cert)
+	truncated.Section.Length = 23
+	truncated.Blocks[0].PayloadLength = 23
+	truncated.Blocks[0].RawBytes = 23
+	truncated.Blocks[0].StoredBytes = 23
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: truncated, Rows: 2, PayloadBytes: 23}); status.Reason != ReasonLengthMultipleMismatch {
+		t.Fatalf("truncated status=%+v want %s", status, ReasonLengthMultipleMismatch)
+	}
+	corrupt := cloneDirectViewCert(cert)
+	corrupt.Blocks[0].StoredBytes = 20
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: corrupt, Rows: 2, PayloadBytes: 24}); status.Reason != ReasonPayloadLengthMismatch {
+		t.Fatalf("corrupt status=%+v want %s", status, ReasonPayloadLengthMismatch)
+	}
+	if _, status := DenseFloat32VectorView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 5, RequireMapped: true}); status.Reason != ReasonRowCountMismatch {
+		t.Fatalf("expected-elements status=%+v want %s", status, ReasonRowCountMismatch)
+	}
+
+	misalignedRaw := alignedBytes(4, 25)[1:25]
+	mh, err := mgr.AcquireBytes(testKeyWithPart(11, int64(len(misalignedRaw))), testScope(), mappedresource.SourceMapped, misalignedRaw, mappedresource.AcquireOptions{Reason: "typeddecode dense vector misaligned"})
+	if err != nil {
+		t.Fatalf("AcquireBytes misaligned vector: %v", err)
+	}
+	if _, status := DenseFloat32VectorView(mgr, mh, columnReq, ResourceViewOptions{ExpectedElements: 6, RequireMapped: true}); status.Reason != ReasonUnaligned {
+		t.Fatalf("unaligned status=%+v want %s", status, ReasonUnaligned)
+	}
+	_ = mh.Release()
+	if err := h.Release(); err != nil {
+		t.Fatalf("Release vector: %v", err)
+	}
+	if _, status := DenseFloat32VectorView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 6, RequireMapped: true}); status.Reason != ReasonStaleHandle {
+		t.Fatalf("stale status=%+v want %s", status, ReasonStaleHandle)
+	}
+}
+
+func TestAdjacencyDirectViewValidationCoversDegreeLengthEndianAlignmentAndLifetime(t *testing.T) {
+	cert := testAdjacencyDirectCert(2, 2)
+	plan := AdjacencyListPlan(cert, 2)
+	if !plan.DirectCandidate() {
+		t.Fatalf("plan=%+v want direct candidate", plan)
+	}
+	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 16}
+	if status := ValidateDirectViewColumn(columnReq); !status.Direct() {
+		t.Fatalf("adjacency column status=%+v want direct", status)
+	}
+
+	raw := alignedBytes(4, 16)
+	for i, value := range []uint32{7, 11, 13, 17} {
+		binary.LittleEndian.PutUint32(raw[i*4:], value)
+	}
+	mgr := mappedresource.NewManager()
+	h, err := mgr.AcquireBytes(testKeyWithPart(12, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "typeddecode adjacency"})
+	if err != nil {
+		t.Fatalf("AcquireBytes adjacency: %v", err)
+	}
+	view, status := AdjacencyListView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 4, RequireMapped: true})
+	if !status.Direct() || len(view) != 4 || view[0] != 7 || view[3] != 17 {
+		t.Fatalf("adjacency view=%v status=%+v", view, status)
+	}
+
+	wrongDegree := AdjacencyListPlan(cert, 3)
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongDegree, Certification: cert, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonDimensionMismatch {
+		t.Fatalf("degree status=%+v want %s", status, ReasonDimensionMismatch)
+	}
+	wrongEndian := cloneDirectViewCert(cert)
+	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
+	wrongEndianPlan := AdjacencyListPlan(wrongEndian, 2)
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: wrongEndianPlan, Certification: wrongEndian, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonWrongEndian {
+		t.Fatalf("endian status=%+v want %s", status, ReasonWrongEndian)
+	}
+	truncated := cloneDirectViewCert(cert)
+	truncated.Section.Length = 15
+	truncated.Blocks[0].PayloadLength = 15
+	truncated.Blocks[0].RawBytes = 15
+	truncated.Blocks[0].StoredBytes = 15
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: truncated, Rows: 2, PayloadBytes: 15}); status.Reason != ReasonLengthMultipleMismatch {
+		t.Fatalf("truncated status=%+v want %s", status, ReasonLengthMultipleMismatch)
+	}
+	corrupt := cloneDirectViewCert(cert)
+	corrupt.Blocks[0].Compression = typedcolumn.CompressionSnappy
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: corrupt, Rows: 2, PayloadBytes: 16}); status.Reason != ReasonValidationFailed {
+		t.Fatalf("corrupt status=%+v want %s", status, ReasonValidationFailed)
+	}
+
+	misalignedRaw := alignedBytes(4, 17)[1:17]
+	mh, err := mgr.AcquireBytes(testKeyWithPart(13, int64(len(misalignedRaw))), testScope(), mappedresource.SourceMapped, misalignedRaw, mappedresource.AcquireOptions{Reason: "typeddecode adjacency misaligned"})
+	if err != nil {
+		t.Fatalf("AcquireBytes misaligned adjacency: %v", err)
+	}
+	if _, status := AdjacencyListView(mgr, mh, columnReq, ResourceViewOptions{ExpectedElements: 4, RequireMapped: true}); status.Reason != ReasonUnaligned {
+		t.Fatalf("unaligned status=%+v want %s", status, ReasonUnaligned)
+	}
+	_ = mh.Release()
+	if err := h.Release(); err != nil {
+		t.Fatalf("Release adjacency: %v", err)
+	}
+	if _, status := AdjacencyListView(mgr, h, columnReq, ResourceViewOptions{ExpectedElements: 4, RequireMapped: true}); status.Reason != ReasonStaleHandle {
+		t.Fatalf("stale status=%+v want %s", status, ReasonStaleHandle)
+	}
+}
+
+func cloneDirectViewCert(cert typedcolumn.ColumnPartLayoutContractColumn) typedcolumn.ColumnPartLayoutContractColumn {
+	cert.Blocks = append([]typedcolumn.ColumnPartLayoutContractBlock(nil), cert.Blocks...)
+	return cert
+}
+
+func testFloat32VectorDirectCert(rows, dims int) typedcolumn.ColumnPartLayoutContractColumn {
+	bytes := rows * dims * 4
+	return typedcolumn.ColumnPartLayoutContractColumn{
+		Name: "vec", LogicalType: "float32_vector", Type: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, FixedWidthElements: dims, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: true,
+		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{FirstRow: 0, RowCount: rows, Encoding: typedcolumn.EncodingRawFloat32Vector, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadOffset: 0, PayloadLength: bytes}},
+	}
+}
+
+func testAdjacencyDirectCert(rows, degree int) typedcolumn.ColumnPartLayoutContractColumn {
+	bytes := rows * degree * 4
+	return typedcolumn.ColumnPartLayoutContractColumn{
+		Name: "neighbors", LogicalType: "adjacency_list", Type: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, FixedWidthElements: degree, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: true,
+		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{FirstRow: 0, RowCount: rows, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadOffset: 0, PayloadLength: bytes}},
 	}
 }
 

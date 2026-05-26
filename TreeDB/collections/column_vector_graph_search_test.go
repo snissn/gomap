@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 const columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 = 8
@@ -119,6 +120,108 @@ func TestColumnVectorGraphNativeSearchCosineUsesPhysicalRowsV3(t *testing.T) {
 	readerStats := reader.Stats()
 	if readerStats.RowFetches != 0 || readerStats.BatchFetches != 0 || readerStats.RowsFetched != 0 {
 		t.Fatalf("reader stats=%+v want no generic row fetches for scoring or result IDs", readerStats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchCountersReportPayloadBytesC3(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+		{id: "doc-d", vector: []float32{1, 1, 0}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnVectorGraphNativeSearchScratch
+	_, stats, err := reader.SearchCosine([]float32{0, 0.2, 1}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: len(rows)}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if stats.CandidateRows != uint64(len(rows)) || stats.VisitedNodes < stats.Candidates || stats.VisitedEdges != stats.Edges {
+		t.Fatalf("stats=%+v want candidate-row and non-undercounting visited graph counters", stats)
+	}
+	if got, want := stats.VectorBytesRead, stats.CandidateFetches*uint64(def.Dimensions)*4; got != want {
+		t.Fatalf("vector bytes read=%d want candidate_fetches*dims*4=%d stats=%+v", got, want, stats)
+	}
+	if stats.AdjacencyBytesRead == 0 || stats.AdjacencyDirectViews+stats.AdjacencyScratchDecodes == 0 {
+		t.Fatalf("stats=%+v want adjacency byte and direct/scratch counters", stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchCountsUpperLayerVisitedNodesC3(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-entry"), Vector: []float32{0, 1}, InvNorm: 1, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 2, 1, 1}},
+		{ID: []byte("doc-upper-best"), Vector: []float32{1, 0}, InvNorm: 1},
+		{ID: []byte("doc-base-neighbor"), Vector: []float32{0.2, 0.8}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(t, 2, 2, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine([]float32{1, 0}, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 1}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	if len(got) != 1 || got[0].Ordinal != 1 {
+		t.Fatalf("results=%+v want upper-layer greedy entry ordinal 1", got)
+	}
+	if stats.Candidates != 1 || stats.VisitedNodes <= stats.Candidates || stats.CandidateFetches <= stats.Candidates {
+		t.Fatalf("stats=%+v want upper-layer scoring counted as visited node fetches", stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchComposesCandidateSelectionC3(t *testing.T) {
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-outside-best"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1, 2, 3}},
+		{ID: []byte("doc-selected-low"), Vector: []float32{0, 1, 0}, InvNorm: 1},
+		{ID: []byte("doc-outside-mid"), Vector: []float32{0.8, 0.2, 0}, InvNorm: 1},
+		{ID: []byte("doc-selected-best"), Vector: []float32{0.9, 0.1, 0}, InvNorm: 1},
+	}
+	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, rows)
+	defer func() { _ = d.Close() }()
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	predicate, err := typedcolumn.NewSparseRowSelection(len(rows), []int{0, 1, 3})
+	if err != nil {
+		t.Fatalf("NewSparseRowSelection predicate: %v", err)
+	}
+	visibility, err := typedcolumn.NewSparseRowSelection(len(rows), []int{1, 2, 3})
+	if err != nil {
+		t.Fatalf("NewSparseRowSelection visibility: %v", err)
+	}
+	var selectionScratch typedcolumn.RowSelectionScratch
+	candidateRows, hasCandidateRows, err := composeColumnVectorGraphCandidateRowSelection(len(rows), &predicate, &visibility, &selectionScratch)
+	if err != nil {
+		t.Fatalf("composeColumnVectorGraphCandidateRowSelection: %v", err)
+	}
+	if !hasCandidateRows || candidateRows.Count() != 2 || candidateRows.Contains(0) || !candidateRows.Contains(1) || !candidateRows.Contains(3) {
+		t.Fatalf("candidate selection=%+v rows=%v want visible predicate intersection {1,3}", candidateRows.Shape(), candidateRows.AppendRows(nil))
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: len(rows), CandidateRows: candidateRows, HasCandidateRows: hasCandidateRows}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine filtered: %v", err)
+	}
+	if len(got) != 2 || got[0].Ordinal != 3 || got[1].Ordinal != 1 {
+		t.Fatalf("filtered results=%+v want selected ordinals [3 1] only", got)
+	}
+	if stats.CandidateRows != 2 || stats.Candidates != 2 || stats.VectorBytesRead != stats.CandidateFetches*uint64(def.Dimensions)*4 {
+		t.Fatalf("filtered stats=%+v want two candidate rows and vector-byte accounting", stats)
 	}
 }
 
@@ -711,8 +814,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 			b.Fatalf("SearchCosine returned no results")
 		}
 		columnPhysicalScanBenchSum += int64(got[0].Ordinal)
+		searchStats.CandidateRows += stats.CandidateRows
 		searchStats.Candidates += stats.Candidates
 		searchStats.Edges += stats.Edges
+		searchStats.VisitedNodes += stats.VisitedNodes
+		searchStats.VisitedEdges += stats.VisitedEdges
+		searchStats.VectorBytesRead += stats.VectorBytesRead
+		searchStats.AdjacencyBytesRead += stats.AdjacencyBytesRead
 		searchStats.CandidateFetches += stats.CandidateFetches
 		searchStats.ExpansionFetches += stats.ExpansionFetches
 		searchStats.ResultFetches += stats.ResultFetches
@@ -796,8 +904,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			firstErr.Store(fmt.Sprintf(format, args...))
 		}
 	}
+	var totalCandidateRows atomic.Uint64
 	var totalCandidates atomic.Uint64
 	var totalEdges atomic.Uint64
+	var totalVisitedNodes atomic.Uint64
+	var totalVisitedEdges atomic.Uint64
+	var totalVectorBytesRead atomic.Uint64
+	var totalAdjacencyBytesRead atomic.Uint64
 	var totalCandidateFetches atomic.Uint64
 	var totalExpansionFetches atomic.Uint64
 	var totalResultFetches atomic.Uint64
@@ -845,8 +958,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 				continue
 			}
 			localSink += int64(got[0].Ordinal)
+			localStats.CandidateRows += stats.CandidateRows
 			localStats.Candidates += stats.Candidates
 			localStats.Edges += stats.Edges
+			localStats.VisitedNodes += stats.VisitedNodes
+			localStats.VisitedEdges += stats.VisitedEdges
+			localStats.VectorBytesRead += stats.VectorBytesRead
+			localStats.AdjacencyBytesRead += stats.AdjacencyBytesRead
 			localStats.CandidateFetches += stats.CandidateFetches
 			localStats.ExpansionFetches += stats.ExpansionFetches
 			localStats.ResultFetches += stats.ResultFetches
@@ -867,8 +985,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.TypedColumnDeniedResources = stats.TypedColumnDeniedResources
 		}
 		sink.Add(localSink)
+		totalCandidateRows.Add(localStats.CandidateRows)
 		totalCandidates.Add(localStats.Candidates)
 		totalEdges.Add(localStats.Edges)
+		totalVisitedNodes.Add(localStats.VisitedNodes)
+		totalVisitedEdges.Add(localStats.VisitedEdges)
+		totalVectorBytesRead.Add(localStats.VectorBytesRead)
+		totalAdjacencyBytesRead.Add(localStats.AdjacencyBytesRead)
 		totalCandidateFetches.Add(localStats.CandidateFetches)
 		totalExpansionFetches.Add(localStats.ExpansionFetches)
 		totalResultFetches.Add(localStats.ResultFetches)
@@ -900,8 +1023,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		stats = addColumnPhysicalRowReaderStatsV3(stats, worker.reader.Stats())
 	}
 	reportColumnGraphNativeSearchBenchMetricsV3(b, b.N, baseStats, stats, columnVectorGraphNativeSearchStats{
+		CandidateRows:              totalCandidateRows.Load(),
 		Candidates:                 totalCandidates.Load(),
 		Edges:                      totalEdges.Load(),
+		VisitedNodes:               totalVisitedNodes.Load(),
+		VisitedEdges:               totalVisitedEdges.Load(),
+		VectorBytesRead:            totalVectorBytesRead.Load(),
+		AdjacencyBytesRead:         totalAdjacencyBytesRead.Load(),
 		CandidateFetches:           totalCandidateFetches.Load(),
 		ExpansionFetches:           totalExpansionFetches.Load(),
 		ResultFetches:              totalResultFetches.Load(),
@@ -1090,8 +1218,13 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	}
 	b.ReportMetric(float64(stats.Rows), "graph_rows")
 	b.ReportMetric(float64(stats.Granules), "graph_granules")
+	b.ReportMetric(float64(searchStats.CandidateRows)/float64(n), "candidate_rows/search")
 	b.ReportMetric(float64(searchStats.Candidates)/float64(n), "candidates/search")
 	b.ReportMetric(float64(searchStats.Edges)/float64(n), "edges/search")
+	b.ReportMetric(float64(searchStats.VisitedNodes)/float64(n), "visited_nodes/search")
+	b.ReportMetric(float64(searchStats.VisitedEdges)/float64(n), "visited_edges/search")
+	b.ReportMetric(float64(searchStats.VectorBytesRead)/float64(n), "vector_B/search")
+	b.ReportMetric(float64(searchStats.AdjacencyBytesRead)/float64(n), "adjacency_B/search")
 	if searchStats.Candidates > 0 {
 		b.ReportMetric(float64(searchStats.Edges)/float64(searchStats.Candidates), "edges/node")
 	}

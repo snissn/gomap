@@ -393,6 +393,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1782 is the scoped production vector graph reader that consumes
 		// validated typed-column dense vector sections through mappedresource.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_typed_column.go")): {},
+		// #1848 keeps vector graph candidate filtering on the shared row-selection
+		// substrate without exposing generic scalar typed-column scans.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {

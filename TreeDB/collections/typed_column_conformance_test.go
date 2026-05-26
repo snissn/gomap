@@ -118,8 +118,15 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			encoding: typedcolumn.EncodingRawFloat32Vector,
 			checks: []capabilityCheck{
 				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpVectorDirectPayload, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpVectorSimilarity, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpVectorDotProduct, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpVectorMetrics, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpEquality, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonVectorScalarOperationUnsupported},
-				{op: columnsemantics.OpVectorSimilarity, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonVectorCapabilityDeferred},
+				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonVectorScalarOperationUnsupported},
+				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonVectorScalarOperationUnsupported},
+				{op: columnsemantics.OpMin, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonVectorScalarOperationUnsupported},
+				{op: columnsemantics.OpMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonVectorScalarOperationUnsupported},
 			},
 		},
 		{
@@ -130,8 +137,13 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			encoding: typedcolumn.EncodingRawUint32Dense,
 			checks: []capabilityCheck{
 				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpAdjacencyDirectPayload, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpAdjacencyTraversal, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpAdjacencyMetrics, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
 				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
-				{op: columnsemantics.OpVectorMetrics, status: columnsemantics.StatusFallback, reason: columnsemantics.ReasonAdjacencyCapabilityDeferred},
+				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
+				{op: columnsemantics.OpMin, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
+				{op: columnsemantics.OpMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
 			},
 		},
 	}

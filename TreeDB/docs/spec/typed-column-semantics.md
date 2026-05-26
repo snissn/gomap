@@ -22,8 +22,8 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | `float32` | `int64` | `raw_int64` carrying `math.Float32bits` | raw bit patterns do **not** provide int64 ordered range, sum, avg, min/max, stats, pruning, or direct scalar value semantics (`float_raw_int64_bit_pattern`). Count rows/count non-null may be supported because they do not inspect carrier ordering or arithmetic. Equality/inequality/in-list are explicit prepare-time fallback (`native_float_layout_missing`) until native float policy and layout exist. |
 | `double` | `int64` | `raw_int64` carrying `math.Float64bits` | same raw-bit restriction as `float32`. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
-| `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null supported for the non-null carrier; vector-specific capabilities are explicit/deferred. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
-| `adjacency_list` | `adjacency_list` | `raw_uint32_dense` | count rows/non-null supported for the non-null carrier; graph/vector-specific capabilities are explicit/deferred. Scalar shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
+| `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null plus vector direct-payload, similarity, dot-product, and vector-metric capabilities are explicit prepare-time entries for specialized vector kernels. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
+| `adjacency_list` | `adjacency_list` | `raw_uint32_dense` | count rows/non-null plus adjacency direct-payload, graph traversal, and adjacency-metric capabilities are explicit prepare-time entries for specialized graph kernels. Scalar range/sum/min/max/stats/pruning shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
 
 ## Scalar float fail-closed policy
 
@@ -139,7 +139,11 @@ own payload semantics rather than reusing int64 carrier meanings. Dictionary and
 string range stats require dictionary-order plus collation proof. Float stats
 require native float layout plus NaN/signed-zero/infinity and precision rules.
 Vector/adjacency stats must be vector/graph-specific metadata, not scalar
-aggregate shortcuts.
+aggregate shortcuts. Current vector entries cover direct payload access,
+similarity scoring, dot-product kernels, and vector metrics; current adjacency
+entries cover direct adjacency payload access, graph traversal/neighborhood
+planning, and adjacency metrics. These entries do not admit scalar range,
+sum/avg, min, max, int64 stats, or int64 pruning semantics.
 
 ## typedcolumn coverage
 

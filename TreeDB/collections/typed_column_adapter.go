@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
@@ -1053,30 +1054,51 @@ func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterRes
 	if section.Encoding != typedcolumn.EncodingRawUint32Dense || section.Compression != typedcolumn.CompressionNone {
 		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q section encoding/compression mismatch", column.Definition.Name)
 	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(reader.Image)
+	if err != nil {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q layout certification: %w", column.Definition.Name, err)
+	}
+	certColumn, ok := certification.Column(column.Definition.Name)
+	if !ok {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter image missing layout certification for column %q", column.Definition.Name)
+	}
+	plan := typeddecode.AdjacencyListPlan(certColumn, degree)
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length}
+	if status := typeddecode.ValidateDirectViewColumn(directReq); !status.Direct() {
+		return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q adjacency direct-view validation: %s", column.Definition.Name, status.String())
+	}
 	h, err := reader.AcquireSection(section)
 	if err != nil {
 		return typedColumnAdapterDenseUint32ResourceView{}, err
 	}
-	values, viewErr := typedColumnAdapterUint32View(reader.Manager, h)
-	if viewErr == nil {
-		if len(values) != expected {
-			_ = h.Release()
-			return typedColumnAdapterDenseUint32ResourceView{}, fmt.Errorf("collections: typed-column adapter column %q dense uint32 values=%d want %d", column.Definition.Name, len(values), expected)
-		}
+	values, viewStatus := typeddecode.AdjacencyListView(reader.Manager, h, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expected})
+	if viewStatus.Direct() {
 		return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: values, Handle: h, Direct: true}, nil
+	}
+	viewErr := fmt.Errorf("collections: typed-column adapter column %q adjacency direct-view validation: %s", column.Definition.Name, viewStatus.String())
+	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
+		_ = h.Release()
+		return typedColumnAdapterDenseUint32ResourceView{}, viewErr
 	}
 	decoded, decodeErr := typedcolumn.DecodeRawUint32DensePayload(nil, h.Bytes(), rows, degree)
 	releaseErr := h.Release()
 	if decodeErr != nil {
-		if releaseErr != nil {
-			decodeErr = errors.Join(decodeErr, releaseErr)
-		}
+		decodeErr = errors.Join(viewErr, decodeErr, releaseErr)
 		return typedColumnAdapterDenseUint32ResourceView{}, decodeErr
 	}
 	if releaseErr != nil {
-		return typedColumnAdapterDenseUint32ResourceView{}, releaseErr
+		return typedColumnAdapterDenseUint32ResourceView{}, errors.Join(viewErr, releaseErr)
 	}
 	return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: decoded, Direct: false}, nil
+}
+
+func typedColumnDenseDecodeFallbackAllowed(status typeddecode.Status) bool {
+	switch status.Reason {
+	case typeddecode.ReasonUnaligned, typeddecode.ReasonWrongEndian, typeddecode.ReasonHandleSourceUnsupported:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r typedColumnAdapterResourceReader) AcquireSection(section typedcolumn.ColumnPartImageSection) (*mappedresource.Handle, error) {
@@ -1138,12 +1160,13 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	if err != nil || !ok {
 		return ok, err
 	}
-	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
 			return false, err
 		}
-	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		if adapterColumn.Field.Nullable {
+			return false, fmt.Errorf("%w: typed-column int64 predicate column %q nullable=true is unsupported", ErrColumnQueryPlanUnsupported, column)
+		}
 		return false, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
@@ -1205,12 +1228,10 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
 	}
-	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 			return nil, typedColumnAdapterColumn{}, 0, err
 		}
-	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
@@ -1325,12 +1346,13 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 	if !ok {
 		return nil, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", column)
 	}
-	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 			return nil, err
 		}
-	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
@@ -1533,12 +1555,13 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate %s column %q is not owned by typed_column_part", operation, column)
 	}
-	if adapterColumn.Definition.Type == typedcolumn.ColumnTypeInt64 && adapterColumn.Field.ValueType != ColumnStoreValueInt64 {
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate %s column %q", operation, column)); err != nil {
 			return nil, typedColumnAdapterColumn{}, 0, err
 		}
-	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		if adapterColumn.Field.Nullable {
+			return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q nullable=true is unsupported", ErrColumnQueryPlanUnsupported, operation, column)
+		}
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, operation, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate %s column %q", operation, column)); err != nil {

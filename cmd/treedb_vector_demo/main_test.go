@@ -143,7 +143,7 @@ func TestExecuteColumnGraphTopKSmoke(t *testing.T) {
 	if res.BatchSize != defaultVectorBatchSize {
 		t.Fatalf("batch_size=%d want default %d", res.BatchSize, defaultVectorBatchSize)
 	}
-	if res.VectorDirectViews == 0 || res.TypedColumnFallbacks != 0 {
+	if res.VectorDirectViews == 0 || res.TypedColumnFallbacks != 0 || res.VectorBytesRead == 0 || res.AdjacencyBytesRead == 0 || res.VisitedNodes == 0 {
 		t.Fatalf("typed-column vector counters missing/fallback: %+v", res)
 	}
 }
@@ -171,8 +171,8 @@ func TestExecuteMetadataFilterCountsFilteredVectors(t *testing.T) {
 	if res.ScoredVectors != wantScored {
 		t.Fatalf("scored_vectors=%d want %d", res.ScoredVectors, wantScored)
 	}
-	if res.Candidates != wantScored {
-		t.Fatalf("candidates=%d want %d", res.Candidates, wantScored)
+	if res.CandidateRows != wantScored || res.Candidates != wantScored || res.VisitedNodes != wantScored || res.VectorBytesRead == 0 {
+		t.Fatalf("filtered counters candidate_rows=%d candidates=%d visited=%d vector_bytes=%d want scored %d", res.CandidateRows, res.Candidates, res.VisitedNodes, res.VectorBytesRead, wantScored)
 	}
 	if res.CandidatesPerSearch != float64(64/8) {
 		t.Fatalf("candidates_per_search=%f want %f", res.CandidatesPerSearch, float64(64/8))
