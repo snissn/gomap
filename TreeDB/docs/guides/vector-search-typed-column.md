@@ -118,9 +118,8 @@ embedding exclusion was fastest among document-producing modes, while
 full-retained full documents reduced allocations but had higher `ns/op` and
 duplicated storage.
 The matrix should be rerun after document reconstruction optimizations land;
-[#1888](https://github.com/snissn/gomap/issues/1888) is included in the current
-mainline baseline, while [#1887](https://github.com/snissn/gomap/issues/1887)
-remains a pending follow-up before making stronger default recommendations.
+[#1887](https://github.com/snissn/gomap/issues/1887) remains a pending follow-up
+before making stronger default recommendations.
 
 ## Runnable smoke demo
 
