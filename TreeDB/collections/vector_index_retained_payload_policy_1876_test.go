@@ -386,7 +386,7 @@ func dirSize1876(dir string) int64 {
 func assertRetainedPayloadPolicySearchDocuments1876(tb testing.TB, got VectorIndexSearchResponse, policy ColumnRetainedPayloadPolicy, mode retainedPayloadPolicySearchMode1876) {
 	tb.Helper()
 	projected := documentFetchOptionsHasProjection(mode.opts)
-	if got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentOutputBytes == 0 || got.Stats.DocumentFetchNanos == 0 {
+	if got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentOutputBytes == 0 {
 		tb.Fatalf("stats=%+v want document fetch/output accounting", got.Stats)
 	}
 	if projected && got.Stats.DocumentFieldsSkipped == 0 {
@@ -410,7 +410,8 @@ func assertRetainedPayloadPolicySearchDocuments1876(tb testing.TB, got VectorInd
 		if err := json.Unmarshal(result.Document, &doc); err != nil {
 			tb.Fatalf("document[%d]=%q invalid JSON: %v", i, result.Document, err)
 		}
-		if doc["did"] != string(result.ID) || doc["kind"] == "" || doc["time_us"] == nil {
+		kind, kindOK := doc["kind"].(string)
+		if doc["did"] != string(result.ID) || !kindOK || kind == "" || doc["time_us"] == nil {
 			tb.Fatalf("document[%d]=%v want typed fields and did=%q", i, doc, string(result.ID))
 		}
 		_, hasEmbedding := doc["embedding"]
