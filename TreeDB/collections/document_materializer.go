@@ -887,10 +887,6 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			out.Stats.RowRefValidationFailures++
 			return out, err
 		}
-		if row.Deleted {
-			out.Stats.RowRefValidationFailures++
-			return out, fmt.Errorf("collections: document row ref for id %q points at deleted row", string(refs[i].DocumentID))
-		}
 		rowRef := documentRowRefFromVisibleRow(row)
 		rowRef.DocumentID = out.Results[i].ID
 		out.Results[i].RowRef = rowRef

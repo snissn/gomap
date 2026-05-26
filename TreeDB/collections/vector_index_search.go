@@ -465,26 +465,36 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		for i := range results {
 			ids[i] = results[i].ID
 		}
-		rowRefs, err := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
-		if err != nil {
-			return response, err
-		}
-		if err := addDocumentMaterializationStatsToVectorStats(&response.Stats, rowRefs.Stats); err != nil {
-			return response, err
-		}
-		if len(rowRefs.Results) != len(response.Results) {
-			return response, errors.New("collections: vector index document row-ref result count mismatch")
-		}
-		refs := make([]DocumentRowRef, len(rowRefs.Results))
-		for i := range rowRefs.Results {
-			if !rowRefs.Results[i].Found {
-				return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
+		var documents DocumentFetchResponse
+		var err error
+		if columnStoreCanReconstructDocument(s.catalog.meta) {
+			rowRefs, lookupErr := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+			if lookupErr != nil {
+				return response, lookupErr
 			}
-			refs[i] = rowRefs.Results[i].RowRef
-		}
-		documents, err := s.documentView.FetchDocumentsByRowRef(refs, DocumentFetchOptions{})
-		if err != nil {
-			return response, err
+			if err := addDocumentMaterializationStatsToVectorStats(&response.Stats, rowRefs.Stats); err != nil {
+				return response, err
+			}
+			if len(rowRefs.Results) != len(response.Results) {
+				return response, errors.New("collections: vector index document row-ref result count mismatch")
+			}
+			refs := make([]DocumentRowRef, len(rowRefs.Results))
+			for i := range rowRefs.Results {
+				if !rowRefs.Results[i].Found {
+					return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
+				}
+				refs[i] = rowRefs.Results[i].RowRef
+			}
+			documents, err = s.documentView.FetchDocumentsByRowRef(refs, DocumentFetchOptions{})
+			if err != nil {
+				return response, err
+			}
+		} else {
+			response.Stats.DocumentRowRefUnsupported++
+			documents, err = s.documentView.FetchDocumentsByID(ids, DocumentFetchOptions{})
+			if err != nil {
+				return response, err
+			}
 		}
 		if len(documents.Results) != len(response.Results) {
 			return response, errors.New("collections: vector index document materializer result count mismatch")

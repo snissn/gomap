@@ -172,6 +172,58 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	}
 }
 
+func TestSearchVectorIndexColumnGraphRetainedFullDocumentsFallbackV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 0)
+	cfg := columnGraphRebuildColumnStoreConfigV2A(3)
+	cfg.RetainedPayload = ColumnRetainedPayloadFull
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	if _, err := NewCollectionManager(d).CreateCollection(&meta); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	insertColumnGraphRebuildRowsV2A(t, col, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	got, err := col.SearchVectorIndex(VectorIndexSearchOptions{
+		IndexName:        def.Name,
+		Query:            []float32{1, 0, 0},
+		TopK:             1,
+		EfSearch:         len(rows),
+		IncludeDocuments: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchVectorIndex: %v", err)
+	}
+	if len(got.Results) != 1 || string(got.Results[0].ID) != "doc-a" {
+		t.Fatalf("results=%+v want doc-a", got.Results)
+	}
+	assertVectorIndexSearchDocumentDIDV4(t, got.Results[0].Document, "doc-a")
+	if got.Stats.DocumentRowRefUnsupported != 1 || got.Stats.DocumentPointRowFetches != 0 || got.Stats.DocumentVisibilityScans != 0 || got.Stats.DocumentsFetched != 1 {
+		t.Fatalf("stats=%+v want retained-full fallback without row-ref point fetch", got.Stats)
+	}
+}
+
 func TestSearchVectorIndexFlushesBufferedWritesBeforeSnapshotV4(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{
 		Dir:                    t.TempDir(),

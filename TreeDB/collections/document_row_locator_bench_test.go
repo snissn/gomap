@@ -56,6 +56,9 @@ func benchmarkCollectionReadViewFetchDocumentsByRowRefMaterializerRows1874(b *te
 		if err != nil {
 			b.Fatalf("FetchDocumentsByRowRef: %v", err)
 		}
+		if len(got.Results) == 0 {
+			b.Fatalf("FetchDocumentsByRowRef returned 0 results")
+		}
 		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
 	}
 	b.StopTimer()
@@ -118,6 +121,9 @@ func benchmarkSearchVectorIndexColumnGraphNativeReaderWithDocumentsRows1874(b *t
 		if err != nil {
 			b.Fatalf("SearchVectorIndex: %v", err)
 		}
+		if len(got.Results) == 0 {
+			b.Fatalf("SearchVectorIndex returned 0 results")
+		}
 		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
 	}
 	b.StopTimer()
@@ -176,6 +182,9 @@ func benchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsRows187
 		got, err := searcher.Search(opts)
 		if err != nil {
 			b.Fatalf("Search: %v", err)
+		}
+		if len(got.Results) == 0 {
+			b.Fatalf("Search returned 0 results")
 		}
 		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
 	}
