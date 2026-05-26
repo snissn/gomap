@@ -65,24 +65,18 @@ input files are loaded.
 
 TreeDB runs only the preferred/server-shaped rows:
 
-| Query | TreeDB row in summary[^layout] | Timed behavior |
+| Query | TreeDB row in summary | Timed behavior |
 | --- | --- | --- |
-| q1 | `column-store-prepared` | prepared physical group-count by event |
-| q2 | `column-store-prepared` | prepared physical count + distinct user count |
-| q3 | `column-store-prepared` | prepared physical event + hour count |
+| q1 | `column-store-prepared`* | prepared physical group-count by event |
+| q2 | `column-store-prepared`* | prepared physical count + distinct user count |
+| q3 | `column-store-prepared`* | prepared physical event + hour count |
 | q4 | `column-store-prepared-metadata` | aggregate metadata Top-K min post time |
 | q5 | `column-store-prepared-metadata` | aggregate metadata Top-K activity span |
 
-[^layout]: Current JSONBench internally uses the
-`column-store-prepared-metadata` layout key for q1..q5; q1/q2/q3 are relabelled
-here for semantic clarity because they do not use aggregate metadata. Track the
-explicit-layout cleanup in gomap issue #1889.
-
-Current JSONBench stores q1/q2/q3 under the
-`column-store-prepared-metadata` storage-layout string because that layout
-prepares all physical runners and only q4/q5 declare aggregate metadata. The
-summary relabels q1/q2/q3 to `column-store-prepared` to make the semantics
-explicit.
+* Current JSONBench internally stores q1/q2/q3 under the
+`column-store-prepared-metadata` layout key; this experiment relabels those rows
+to `column-store-prepared` because only q4/q5 declare aggregate metadata. Track
+the explicit-layout cleanup in gomap issue #1889.
 
 ClickHouse runs the standard JSONBench `clickhouse/queries.sql` against a
 `clickhouse local --path` MergeTree database using `JSONAsObject`.
@@ -116,7 +110,7 @@ Artifacts on the run host (under `$OUT_DIR`):
 
 ## Results
 
-| system/layout | query | best | query rows/s | scanned rows | storage | load | TreeDB vs ClickHouse |
+| system/layout | query | best | effective query rows/s | scanned rows | storage | load | TreeDB vs ClickHouse |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | TreeDB `column-store-prepared` | q1 | 0.0122s | 822.9M | 10.0M | 1.11 GiB | 54.754s | 2.1x faster |
 | ClickHouse JSON | q1 | 0.0260s | 384.6M | 10.0M | 986.82 MiB | 52.632s | baseline |
