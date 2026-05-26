@@ -116,6 +116,25 @@ Key counters: `metadata_hits/op`, `metadata_decoded_bytes/op`,
 Top-K result shaping for int64 min/max/span results; this keeps all-groups
 semantics unchanged unless callers set `TopK` and `TopKOrder`.
 
+### JSONBench q3 grouped-hour physical reducer
+
+`ColumnPhysicalQueryGroupHourCount` covers the narrow q3-shaped physical reducer:
+dictionary string predicates, a dictionary string group column, and UTC hour
+extracted from an int64 timestamp column. The supported insert-only sidecar path
+scans dictionary-code and int64 assets directly, reports zero document/row
+materializations, and emits groups keyed by `Key` plus `Hour`.
+
+The low-level comparison harness exposes this as
+`q3_group_hour_count`:
+
+```sh
+TREEDB_JSONBENCH_COMPARE_ROWS=1000000 \
+  go test ./experiments/colgranule \
+    -run '^$' \
+    -bench '^BenchmarkJSONBenchColumnStoreCompare/rows_1000000/treedb_column_store_prepared/q3_group_hour_count$' \
+    -benchmem -benchtime=5x -count=1
+```
+
 ### Selecting #1808 matrix shapes and distributions
 
 Use the benchmark environment variables to cover shapes beyond the default

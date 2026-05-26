@@ -2020,6 +2020,111 @@ func TestColumnPhysicalQueryDictionaryPredicatesJSONBenchShapes1869(t *testing.T
 	}
 }
 
+func TestColumnPhysicalQueryGroupHourCountQ31858(t *testing.T) {
+	base := int64(1_700_000_000_000_000)
+	events := []columnPhysicalPredicateEvent1869{
+		{ID: "e1", Kind: "commit", Operation: "create", Event: "post", Did: "did_a", TimeUS: base + 0*columnPhysicalQueryHourUS},
+		{ID: "e2", Kind: "commit", Operation: "create", Event: "post", Did: "did_b", TimeUS: base + 0*columnPhysicalQueryHourUS + 1},
+		{ID: "e3", Kind: "commit", Operation: "create", Event: "post", Did: "did_c", TimeUS: base + 1*columnPhysicalQueryHourUS},
+		{ID: "e4", Kind: "commit", Operation: "create", Event: "like", Did: "did_d", TimeUS: base + 1*columnPhysicalQueryHourUS},
+		{ID: "e5", Kind: "commit", Operation: "delete", Event: "post", Did: "did_e", TimeUS: base + 2*columnPhysicalQueryHourUS},
+		{ID: "e6", Kind: "identity", Operation: "create", Event: "post", Did: "did_f", TimeUS: base + 3*columnPhysicalQueryHourUS},
+		{ID: "e7", Kind: "commit", Operation: "create", Event: "repost", Did: "did_g", TimeUS: base + 23*columnPhysicalQueryHourUS},
+	}
+	collection, closeFn := openColumnPhysicalPredicateFixture1869(t, events)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupHourCount,
+		GroupColumn: "event",
+		ValueColumn: "time_us",
+		Predicates: []ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+			{Column: "event", Kind: ColumnPhysicalQueryPredicateInList, Values: []string{"post", "like"}},
+		},
+	}
+	want := map[string]int{
+		fmt.Sprintf("like/%02d", columnPhysicalQueryUTCHour(base+1*columnPhysicalQueryHourUS)): 1,
+		fmt.Sprintf("post/%02d", columnPhysicalQueryUTCHour(base+0*columnPhysicalQueryHourUS)): 2,
+		fmt.Sprintf("post/%02d", columnPhysicalQueryUTCHour(base+1*columnPhysicalQueryHourUS)): 1,
+	}
+	assertQ3 := func(t *testing.T, result ColumnPhysicalQueryResult) {
+		t.Helper()
+		got := make(map[string]int, len(result.Groups))
+		for _, group := range result.Groups {
+			got[fmt.Sprintf("%s/%02d", group.Key, group.Hour)] = group.Count
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("q3 groups=%v want %v full=%+v", got, want, result.Groups)
+		}
+		if result.Diagnostics.RowsScanned != len(events) || result.Diagnostics.RowsMatched != 4 || result.Diagnostics.ReduceRows != 4 || result.Diagnostics.DocumentMaterializations != 0 || result.Diagnostics.RowMaterializations != 0 {
+			t.Fatalf("diagnostics=%+v want scanned=%d matched/reduced=4 no materialization", result.Diagnostics, len(events))
+		}
+		if result.Diagnostics.PredicateCount != 3 || result.Diagnostics.DictionaryCodeHits == 0 || result.Diagnostics.Int64ValueHits == 0 {
+			t.Fatalf("q3 sidecar diagnostics=%+v", result.Diagnostics)
+		}
+	}
+
+	t.Run("one-shot", func(t *testing.T) {
+		result, err := collection.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery q3: %v", err)
+		}
+		assertQ3(t, result)
+	})
+	t.Run("prepared", func(t *testing.T) {
+		runner, err := collection.PrepareColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("PrepareColumnPhysicalQuery q3: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		for i := 0; i < 2; i++ {
+			result, err := runner.Run()
+			if err != nil {
+				t.Fatalf("prepared q3 run %d: %v", i, err)
+			}
+			assertQ3(t, result)
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		req  ColumnPhysicalQueryRequest
+		want string
+	}{
+		{name: "missing group", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupHourCount, ValueColumn: "time_us"}, want: "group column is required"},
+		{name: "missing value", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupHourCount, GroupColumn: "event"}, want: "value column is required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := collection.PrepareColumnPhysicalQuery(tc.req); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("PrepareColumnPhysicalQuery err=%v want ErrColumnQueryPlanUnsupported containing %q", err, tc.want)
+			}
+		})
+	}
+
+	absent := req
+	absent.Predicates = []ColumnPhysicalQueryPredicate{{Column: "event", Value: "missing"}}
+	result, err := collection.RunColumnPhysicalQuery(absent)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery absent q3: %v", err)
+	}
+	if len(result.Groups) != 0 || result.Diagnostics.RowsScanned != 0 || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.ReduceRows != 0 {
+		t.Fatalf("absent q3 result=%+v diagnostics=%+v", result.Groups, result.Diagnostics)
+	}
+	absentRunner, err := collection.PrepareColumnPhysicalQuery(absent)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery absent q3: %v", err)
+	}
+	defer func() { _ = absentRunner.Close() }()
+	preparedAbsent, err := absentRunner.Run()
+	if err != nil {
+		t.Fatalf("prepared absent q3: %v", err)
+	}
+	if len(preparedAbsent.Groups) != 0 || preparedAbsent.Diagnostics.RowsScanned != 0 || preparedAbsent.Diagnostics.RowsMatched != 0 || preparedAbsent.Diagnostics.ReduceRows != 0 {
+		t.Fatalf("prepared absent q3 result=%+v diagnostics=%+v", preparedAbsent.Groups, preparedAbsent.Diagnostics)
+	}
+}
+
 func TestColumnPhysicalQueryGroupCountAndDistinctFused1870(t *testing.T) {
 	events := []columnPhysicalPredicateEvent1869{
 		{ID: "e1", Kind: "commit", Operation: "create", Event: "post", Did: "did_a", TimeUS: 1},
@@ -2232,6 +2337,7 @@ func BenchmarkColumnPhysicalQueryDictionaryPredicates1869(b *testing.B) {
 		{name: "q2_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commitCreate}},
 		{name: "q2_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
 		{name: "q2_fused_count_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
+		{name: "q3_group_hour_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupHourCount, GroupColumn: "event", ValueColumn: "time_us", Predicates: postCreate}},
 		{name: "q4_min", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", Predicates: postCreate}},
 		{name: "q5_span", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", Predicates: postCreate}},
 	}
