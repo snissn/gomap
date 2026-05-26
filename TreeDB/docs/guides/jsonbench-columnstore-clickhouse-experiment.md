@@ -52,7 +52,7 @@ RUN_CLICKHOUSE=0 ./run_preferred_columnstore_clickhouse_compare.sh
 
 Primary outputs:
 
-- `preferred_summary.md` — compact TreeDB-vs-ClickHouse table.
+- `preferred_10m_treedb_clickhouse_summary.md` — compact TreeDB-vs-ClickHouse table.
 - `treedb/report.md`, `treedb/report.json` — TreeDB JSONBench report.
 - `clickhouse/result.json` — ClickHouse JSONBench-compatible result.
 
@@ -85,7 +85,6 @@ ClickHouse runs the standard JSONBench `clickhouse/queries.sql` against a
 
 Run host:
 
-- Host: `mikers@192.168.0.185` (`mikers-B560-DS3H-AC-Y1`).
 - CPU: `11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz`, 6 cores / 12
   threads.
 - RAM: 31 GiB.
@@ -100,11 +99,11 @@ Inputs and versions:
 - ClickHouse rows loaded: 9,999,994 of 10,000,000 requested.
 - Tries: 3 query attempts.
 
-Artifacts on the run host:
+Artifacts on the run host (under `$OUT_DIR`):
 
-- `/home/mikers/jsonbench_runs/preferred_10m_20260526_220848/preferred_10m_treedb_clickhouse_summary.md`
-- `/home/mikers/jsonbench_runs/preferred_10m_20260526_220848/treedb_10m_preferred/report.md`
-- `/home/mikers/jsonbench_runs/preferred_10m_20260526_220848/clickhouse_10m/result.json`
+- `preferred_10m_treedb_clickhouse_summary.md`
+- `treedb_10m_preferred/report.md`
+- `clickhouse_10m/result.json`
 
 ## Results
 
