@@ -100,7 +100,7 @@ TreeDB column_graph native-reader demo
 db_dir=/tmp/treedb-column-graph-demo rows=1024 dims=128 degree=16 top_k=10 ef_search=128
 rebuild status=column_graph_loaded loaded=true reason=
 search path=column_graph_native_reader status=column_graph_loaded loaded=true results=10 include_docs=false
-stats candidates=... edges=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0
+stats candidate_rows=... candidates=... edges=... visited_nodes=... visited_edges=... vector_B=... adjacency_B=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0
 result[0] id=doc-000000 ordinal=0 score=1.000000
 ```
 
@@ -156,7 +156,8 @@ Report and compare:
 
 - searches/s or ns/op,
 - `B/op` and `allocs/op`,
-- candidates/search and edges/search,
+- candidate_rows/search, candidates/search, edges/search, visited_nodes/search, and visited_edges/search,
+- vector_B/search and adjacency_B/search,
 - row_fetches/search, batch_fetches/search, rows_fetched/search,
 - cache_hits/search, cache_misses/search, cache_hit_ratio,
 - decoded_blocks/search, granules_touched/search, physical_B/search,

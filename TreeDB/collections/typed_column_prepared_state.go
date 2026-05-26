@@ -257,11 +257,18 @@ func typedColumnDescribePreparedColumn(req typedColumnPreparedColumnRequest, spa
 
 func typedColumnPreparedDependenciesForRequest(req typedColumnPreparedColumnRequest, def typedcolumn.ColumnDefinition, span typedcolumn.RowSpan) ([]typedcolumn.SectionDependencyDescriptor, error) {
 	deps := make([]typedcolumn.SectionDependencyDescriptor, 0, 8)
-	values, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyValues, typedcolumn.ColumnPartImageSectionColumnData, span, true)
-	if err != nil {
-		return nil, err
+	// Vector and adjacency operations name their dense payload dependency
+	// explicitly. Do not also add the generic scalar "values" dependency: callers
+	// use these descriptors to plan narrow section reads, and vector/graph paths
+	// must not look like scalar row-loop consumers.
+	includeValues := !req.IncludeVectorPayload && !req.IncludeAdjacencyPayload
+	if includeValues {
+		values, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyValues, typedcolumn.ColumnPartImageSectionColumnData, span, true)
+		if err != nil {
+			return nil, err
+		}
+		deps = append(deps, values)
 	}
-	deps = append(deps, values)
 	if req.IncludePruning {
 		dep, err := typedcolumn.NewSectionDependency(req.Role, def.Name, def.Type, typedcolumn.SectionDependencyPruningMetadata, typedcolumn.ColumnPartImageSectionPruningMetadata, span, false)
 		if err != nil {

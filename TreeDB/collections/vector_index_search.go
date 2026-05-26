@@ -63,10 +63,20 @@ type VectorIndexSearchResult struct {
 // counters are per-search deltas unless the field starts with Open; Open*
 // counters describe the bound reader setup performed before Search.
 type VectorIndexSearchStats struct {
+	// CandidateRows is the candidate row domain after any internal row-selection/visibility composition.
+	CandidateRows uint64 `json:"candidate_rows,omitempty"`
 	// Candidates is the number of candidate nodes scored by graph search.
 	Candidates uint64 `json:"candidates,omitempty"`
 	// Edges is the number of graph edges considered by graph search.
 	Edges uint64 `json:"edges,omitempty"`
+	// VisitedNodes is the operation-specific graph node visit counter. It aliases Candidates for current column_graph search.
+	VisitedNodes uint64 `json:"visited_nodes,omitempty"`
+	// VisitedEdges is the operation-specific graph edge visit counter. It aliases Edges for current column_graph search.
+	VisitedEdges uint64 `json:"visited_edges,omitempty"`
+	// VectorBytesRead is the logical vector payload bytes read while scoring candidates.
+	VectorBytesRead uint64 `json:"vector_bytes_read,omitempty"`
+	// AdjacencyBytesRead is the logical adjacency payload bytes read while expanding graph nodes.
+	AdjacencyBytesRead uint64 `json:"adjacency_bytes_read,omitempty"`
 	// CandidateFetches is the per-search count of vector row fetches for scored candidates.
 	CandidateFetches uint64 `json:"candidate_fetches,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
@@ -104,6 +114,10 @@ type VectorIndexSearchStats struct {
 	VectorDirectViews uint64 `json:"vector_direct_views,omitempty"`
 	// VectorScratchDecodes is the per-search count of candidate vectors served from scratch/fallback decoded vectors.
 	VectorScratchDecodes uint64 `json:"vector_scratch_decodes,omitempty"`
+	// AdjacencyDirectViews is the per-search count of adjacency payloads served from validated direct views.
+	AdjacencyDirectViews uint64 `json:"adjacency_direct_views,omitempty"`
+	// AdjacencyScratchDecodes is the per-search count of adjacency payloads served from scratch/fallback decodes.
+	AdjacencyScratchDecodes uint64 `json:"adjacency_scratch_decodes,omitempty"`
 	// TypedColumnMappedBytes is the typed-column mapped-resource mapped byte total backing the bound vector source.
 	TypedColumnMappedBytes uint64 `json:"typed_column_mapped_bytes,omitempty"`
 	// TypedColumnHeapCopyBytes is the typed-column mapped-resource heap-copy byte total backing the bound vector source.
@@ -517,8 +531,13 @@ func deltaInt64(before, after int64) int64 {
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
 	return VectorIndexSearchStats{
+		CandidateRows:              searchStats.CandidateRows,
 		Candidates:                 searchStats.Candidates,
 		Edges:                      searchStats.Edges,
+		VisitedNodes:               searchStats.VisitedNodes,
+		VisitedEdges:               searchStats.VisitedEdges,
+		VectorBytesRead:            searchStats.VectorBytesRead,
+		AdjacencyBytesRead:         searchStats.AdjacencyBytesRead,
 		CandidateFetches:           searchStats.CandidateFetches,
 		ExpansionFetches:           searchStats.ExpansionFetches,
 		ResultFetches:              searchStats.ResultFetches,
@@ -535,6 +554,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		OpenPhysicalBytesRead:      readerStats.OpenPhysicalBytesRead,
 		VectorDirectViews:          searchStats.VectorDirectViews,
 		VectorScratchDecodes:       searchStats.VectorScratchDecodes,
+		AdjacencyDirectViews:       searchStats.AdjacencyDirectViews,
+		AdjacencyScratchDecodes:    searchStats.AdjacencyScratchDecodes,
 		TypedColumnMappedBytes:     searchStats.TypedColumnMappedBytes,
 		TypedColumnHeapCopyBytes:   searchStats.TypedColumnHeapCopyBytes,
 		TypedColumnDecodedBytes:    searchStats.TypedColumnDecodedBytes,

@@ -53,6 +53,9 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	if got.Stats.Candidates == 0 || got.Stats.CandidateFetches == 0 || got.Stats.ResultFetches < uint64(len(got.Results)) {
 		t.Fatalf("stats=%+v want public search to expose non-zero native graph traversal/result accounting", got.Stats)
 	}
+	if got.Stats.CandidateRows != uint64(len(rows)) || got.Stats.VisitedNodes != got.Stats.Candidates || got.Stats.VisitedEdges != got.Stats.Edges || got.Stats.VectorBytesRead == 0 || got.Stats.AdjacencyBytesRead == 0 {
+		t.Fatalf("stats=%+v want public operation-specific candidate row, visited graph, vector-byte, and adjacency-byte counters", got.Stats)
+	}
 	if got.Stats.DocumentsFetched != 0 {
 		t.Fatalf("DocumentsFetched=%d want no document fetch without IncludeDocuments", got.Stats.DocumentsFetched)
 	}
@@ -1089,14 +1092,21 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	// Callers pass one representative search/setup sample captured outside the
 	// timer; these labels are intentionally per-search or per-open, not averaged
 	// over b.N. Keep aggregation out of the hot benchmark loop.
+	b.ReportMetric(float64(stats.CandidateRows), "candidate_rows/search")
 	b.ReportMetric(float64(stats.Candidates), "candidates/search")
 	b.ReportMetric(float64(stats.Edges), "edges/search")
+	b.ReportMetric(float64(stats.VisitedNodes), "visited_nodes/search")
+	b.ReportMetric(float64(stats.VisitedEdges), "visited_edges/search")
+	b.ReportMetric(float64(stats.VectorBytesRead), "vector_B/search")
+	b.ReportMetric(float64(stats.AdjacencyBytesRead), "adjacency_B/search")
 	if stats.Candidates > 0 {
 		b.ReportMetric(float64(stats.Edges)/float64(stats.Candidates), "edges/node")
 	}
 	b.ReportMetric(float64(stats.CandidateFetches), "candidate_fetches/search")
 	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")
 	b.ReportMetric(float64(stats.ResultFetches), "result_fetches/search")
+	b.ReportMetric(float64(stats.AdjacencyDirectViews), "adjacency_direct_views/search")
+	b.ReportMetric(float64(stats.AdjacencyScratchDecodes), "adjacency_scratch_decodes/search")
 	b.ReportMetric(float64(stats.RowFetches), "row_fetches/search")
 	b.ReportMetric(float64(stats.BatchFetches), "batch_fetches/search")
 	b.ReportMetric(float64(stats.RowsFetched), "rows_fetched/search")

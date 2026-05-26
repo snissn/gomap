@@ -87,8 +87,13 @@ type result struct {
 	SearchMillis              float64     `json:"search_ms"`
 	FetchMillis               float64     `json:"fetch_ms"`
 	OpsPerSecond              float64     `json:"ops_sec"`
+	CandidateRows             uint64      `json:"candidate_rows"`
 	Candidates                uint64      `json:"candidates"`
 	CandidatesPerSearch       float64     `json:"candidates_per_search"`
+	VisitedNodes              uint64      `json:"visited_nodes"`
+	VisitedEdges              uint64      `json:"visited_edges"`
+	VectorBytesRead           uint64      `json:"vector_bytes_read"`
+	AdjacencyBytesRead        uint64      `json:"adjacency_bytes_read"`
 	ScoredVectors             uint64      `json:"scored_vectors"`
 	DocsFetched               uint64      `json:"docs_fetched"`
 	DocumentBytes             uint64      `json:"document_bytes"`
@@ -98,6 +103,8 @@ type result struct {
 	PhysicalBytesRead         int64       `json:"physical_bytes_read"`
 	VectorDirectViews         uint64      `json:"vector_direct_views"`
 	VectorScratchDecodes      uint64      `json:"vector_scratch_decodes"`
+	AdjacencyDirectViews      uint64      `json:"adjacency_direct_views"`
+	AdjacencyScratchDecodes   uint64      `json:"adjacency_scratch_decodes"`
 	TypedColumnFallbacks      uint64      `json:"typed_column_fallbacks"`
 	ProfileDir                string      `json:"profile_dir,omitempty"`
 	CPUProfile                string      `json:"cpu_profile,omitempty"`
@@ -503,11 +510,18 @@ func runColumnGraphQueries(col *collections.Collection, queries []queryFixture, 
 		if len(got.Results) == 0 {
 			return fmt.Errorf("query %s returned no results", q.Name)
 		}
+		res.CandidateRows += got.Stats.CandidateRows
 		res.Candidates += got.Stats.Candidates
+		res.VisitedNodes += got.Stats.VisitedNodes
+		res.VisitedEdges += got.Stats.VisitedEdges
+		res.VectorBytesRead += got.Stats.VectorBytesRead
+		res.AdjacencyBytesRead += got.Stats.AdjacencyBytesRead
 		res.ScoredVectors += got.Stats.CandidateFetches
 		res.PhysicalBytesRead += got.Stats.PhysicalBytesRead
 		res.VectorDirectViews += got.Stats.VectorDirectViews
 		res.VectorScratchDecodes += got.Stats.VectorScratchDecodes
+		res.AdjacencyDirectViews += got.Stats.AdjacencyDirectViews
+		res.AdjacencyScratchDecodes += got.Stats.AdjacencyScratchDecodes
 		res.TypedColumnFallbacks += got.Stats.TypedColumnFallbacks
 		res.MappedBytesPeak = max(res.MappedBytesPeak, got.Stats.TypedColumnMappedBytes)
 		res.HeapCopyBytesPeak = max(res.HeapCopyBytesPeak, got.Stats.TypedColumnHeapCopyBytes)
@@ -549,7 +563,10 @@ func runExactFilteredQueries(col *collections.Collection, rows []vectorRow, quer
 		if len(hits) == 0 {
 			return fmt.Errorf("query %s returned no exact filtered results", q.Name)
 		}
+		res.CandidateRows += uint64(filteredRows)
 		res.Candidates += uint64(filteredRows)
+		res.VisitedNodes += uint64(filteredRows)
+		res.VectorBytesRead += uint64(filteredRows * len(q.Vector) * 4)
 		res.ScoredVectors += uint64(filteredRows)
 		if i == 0 {
 			res.FirstResults = hits
@@ -723,7 +740,7 @@ func writeProfileArtifacts(dir string, res *result) error {
 func summaryMarkdown(res result) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# TreeDB vector demo summary\n\n")
-	fmt.Fprintf(&b, "- preset: `%s`\n- vectors: `%s`\n- metadata: `%s`\n- rows: `%d`\n- dims: `%d`\n- queries: `%d`\n- top_k: `%d`\n- batch_size: `%d`\n- search_path: `%s`\n- setup_ms: `%.3f`\n- search_ms: `%.3f`\n- fetch_ms: `%.3f`\n- ops_sec: `%.2f`\n- docs_fetched: `%d`\n- mapped_bytes_peak: `%d`\n- heap_copy_bytes_peak: `%d`\n- decoded_bytes_peak: `%d`\n", res.Preset, res.VectorMode, res.MetadataMode, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath, res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond, res.DocsFetched, res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak)
+	fmt.Fprintf(&b, "- preset: `%s`\n- vectors: `%s`\n- metadata: `%s`\n- rows: `%d`\n- dims: `%d`\n- queries: `%d`\n- top_k: `%d`\n- batch_size: `%d`\n- search_path: `%s`\n- setup_ms: `%.3f`\n- search_ms: `%.3f`\n- fetch_ms: `%.3f`\n- ops_sec: `%.2f`\n- candidate_rows: `%d`\n- visited_nodes: `%d`\n- visited_edges: `%d`\n- vector_bytes_read: `%d`\n- adjacency_bytes_read: `%d`\n- docs_fetched: `%d`\n- mapped_bytes_peak: `%d`\n- heap_copy_bytes_peak: `%d`\n- decoded_bytes_peak: `%d`\n", res.Preset, res.VectorMode, res.MetadataMode, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath, res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond, res.CandidateRows, res.VisitedNodes, res.VisitedEdges, res.VectorBytesRead, res.AdjacencyBytesRead, res.DocsFetched, res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak)
 	fmt.Fprintf(&b, "\nArtifacts: `vector_demo_cpu.pprof`, `vector_demo_allocs.pprof`, `vector_demo_summary.json`, `vector_demo_summary.md`.\n")
 	return b.String()
 }
@@ -733,8 +750,8 @@ func printText(w io.Writer, res result) {
 	fmt.Fprintf(w, "preset=%s vectors=%s metadata=%s metadata_filter=%t final_fetch=%t\n", res.Preset, res.VectorMode, res.MetadataMode, res.MetadataFilter, res.FinalFetch)
 	fmt.Fprintf(w, "db_dir=%s rows=%d dims=%d queries=%d top_k=%d batch_size=%d search_path=%s\n", res.Dir, res.Rows, res.Dims, res.Queries, res.TopK, res.BatchSize, res.SearchPath)
 	fmt.Fprintf(w, "setup_ms=%.3f search_ms=%.3f fetch_ms=%.3f ops_sec=%.2f\n", res.SetupMillis, res.SearchMillis, res.FetchMillis, res.OpsPerSecond)
-	fmt.Fprintf(w, "candidates=%d candidates_per_search=%.2f scored_vectors=%d docs_fetched=%d document_bytes=%d\n", res.Candidates, res.CandidatesPerSearch, res.ScoredVectors, res.DocsFetched, res.DocumentBytes)
-	fmt.Fprintf(w, "mapped_bytes_peak=%d heap_copy_bytes_peak=%d decoded_bytes_peak=%d physical_bytes_read=%d vector_direct_views=%d vector_scratch_decodes=%d typed_column_fallbacks=%d\n", res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak, res.PhysicalBytesRead, res.VectorDirectViews, res.VectorScratchDecodes, res.TypedColumnFallbacks)
+	fmt.Fprintf(w, "candidate_rows=%d candidates=%d candidates_per_search=%.2f visited_nodes=%d visited_edges=%d scored_vectors=%d docs_fetched=%d document_bytes=%d\n", res.CandidateRows, res.Candidates, res.CandidatesPerSearch, res.VisitedNodes, res.VisitedEdges, res.ScoredVectors, res.DocsFetched, res.DocumentBytes)
+	fmt.Fprintf(w, "vector_bytes_read=%d adjacency_bytes_read=%d mapped_bytes_peak=%d heap_copy_bytes_peak=%d decoded_bytes_peak=%d physical_bytes_read=%d vector_direct_views=%d vector_scratch_decodes=%d adjacency_direct_views=%d adjacency_scratch_decodes=%d typed_column_fallbacks=%d\n", res.VectorBytesRead, res.AdjacencyBytesRead, res.MappedBytesPeak, res.HeapCopyBytesPeak, res.DecodedBytesPeak, res.PhysicalBytesRead, res.VectorDirectViews, res.VectorScratchDecodes, res.AdjacencyDirectViews, res.AdjacencyScratchDecodes, res.TypedColumnFallbacks)
 	if res.MetadataFilterDescription != "" {
 		fmt.Fprintf(w, "metadata_filter_description=%s\n", res.MetadataFilterDescription)
 	}

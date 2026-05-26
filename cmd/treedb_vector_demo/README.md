@@ -26,6 +26,8 @@ Use `-final-fetch` to time full-document fetch after top-k selection. Use
 scoring while still publishing typed-column vector assets because public
 `column_graph` metadata predicates are not wired yet.
 
+Text, JSON, and markdown summaries include operation-specific vector search counters such as candidate rows, visited nodes/edges, vector payload bytes, adjacency payload bytes, and direct/scratch decode counts.
+
 When `-profile-dir` is set, the command writes:
 
 - `vector_demo_cpu.pprof`
