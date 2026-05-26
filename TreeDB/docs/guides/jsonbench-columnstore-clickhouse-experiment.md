@@ -18,7 +18,8 @@ against ClickHouse for JSONBench q1..q5:
 
 ## Reproduction entry point
 
-The reproduction entry point lives in JSONBench:
+The reproduction entry point lives in JSONBench main at or after merge commit
+`9a60981712a5c685ebc0c8e059f65eb022b55251`:
 
 ```sh
 cd /path/to/JSONBench/treedb
@@ -52,7 +53,7 @@ RUN_CLICKHOUSE=0 ./run_preferred_columnstore_clickhouse_compare.sh
 
 Primary outputs:
 
-- `preferred_10m_treedb_clickhouse_summary.md` — compact TreeDB-vs-ClickHouse table.
+- `preferred_summary.md` — compact TreeDB-vs-ClickHouse table.
 - `treedb/report.md`, `treedb/report.json` — TreeDB JSONBench report.
 - `clickhouse/result.json` — ClickHouse JSONBench-compatible result.
 
@@ -64,13 +65,18 @@ input files are loaded.
 
 TreeDB runs only the preferred/server-shaped rows:
 
-| Query | TreeDB row in summary | Timed behavior |
+| Query | TreeDB row in summary[^layout] | Timed behavior |
 | --- | --- | --- |
 | q1 | `column-store-prepared` | prepared physical group-count by event |
 | q2 | `column-store-prepared` | prepared physical count + distinct user count |
 | q3 | `column-store-prepared` | prepared physical event + hour count |
 | q4 | `column-store-prepared-metadata` | aggregate metadata Top-K min post time |
 | q5 | `column-store-prepared-metadata` | aggregate metadata Top-K activity span |
+
+[^layout]: Current JSONBench internally uses the
+`column-store-prepared-metadata` layout key for q1..q5; q1/q2/q3 are relabelled
+here for semantic clarity because they do not use aggregate metadata. Track the
+explicit-layout cleanup in gomap issue #1889.
 
 Current JSONBench stores q1/q2/q3 under the
 `column-store-prepared-metadata` storage-layout string because that layout
@@ -92,7 +98,10 @@ Run host:
 
 Inputs and versions:
 
-- JSONBench commit: `5fca4d68f3f06909de0cc87b2f012bc3583a3170`.
+- JSONBench benchmark commit for the captured run: `5fca4d68f3f06909de0cc87b2f012bc3583a3170`.
+  The single-entry reproduction wrapper was added afterward in JSONBench merge
+  commit `9a60981712a5c685ebc0c8e059f65eb022b55251` and reproduces the same
+  command shape.
 - gomap commit: `29dd3cb3857baff8b7889c21b8be30957f9e9bc2`.
 - ClickHouse version: `26.4.2.10`.
 - TreeDB rows loaded: 10,000,000.
@@ -107,7 +116,7 @@ Artifacts on the run host (under `$OUT_DIR`):
 
 ## Results
 
-| system/layout | query | best | loaded rows/s | scanned rows | storage | load | TreeDB vs ClickHouse |
+| system/layout | query | best | query rows/s | scanned rows | storage | load | TreeDB vs ClickHouse |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | TreeDB `column-store-prepared` | q1 | 0.0122s | 822.9M | 10.0M | 1.11 GiB | 54.754s | 2.1x faster |
 | ClickHouse JSON | q1 | 0.0260s | 384.6M | 10.0M | 986.82 MiB | 52.632s | baseline |
@@ -117,8 +126,18 @@ Artifacts on the run host (under `$OUT_DIR`):
 | ClickHouse JSON | q3 | 0.1060s | 94.3M | 10.0M | 986.82 MiB | 52.632s | baseline |
 | TreeDB `column-store-prepared-metadata` | q4 | 0.0100s | 996.4M logical | 0 | 3.10 GiB | 124.950s | 8.9x faster |
 | ClickHouse JSON | q4 | 0.0890s | 112.4M | 10.0M | 986.82 MiB | 52.632s | baseline |
-| TreeDB `column-store-prepared-metadata` | q5 | 0.0098s | 1.02B logical | 0 | 3.10 GiB | 125.455s | 6.8x faster |
+| TreeDB `column-store-prepared-metadata` | q5 | 0.0098s | 1,017.9M logical | 0 | 3.10 GiB | 125.455s | 6.8x faster |
 | ClickHouse JSON | q5 | 0.0670s | 149.3M | 10.0M | 986.82 MiB | 52.632s | baseline |
+
+TreeDB attempts:
+
+| query | attempts | best | median |
+| ---: | --- | ---: | ---: |
+| q1 | 0.0125s, 0.0122s, 0.0124s | 0.0122s | 0.0124s |
+| q2 | 0.0527s, 0.0527s, 0.0518s | 0.0518s | 0.0527s |
+| q3 | 0.1223s, 0.1201s, 0.1201s | 0.1201s | 0.1201s |
+| q4 | 0.0102s, 0.0100s, 0.0101s | 0.0100s | 0.0101s |
+| q5 | 0.0103s, 0.0099s, 0.0098s | 0.0098s | 0.0099s |
 
 ClickHouse attempts:
 
@@ -136,7 +155,7 @@ ClickHouse attempts:
 - q3 is close but ClickHouse is slightly faster in this run.
 - TreeDB q4/q5 are much faster because they use aggregate metadata and scan no
   base rows during the timed query. The rows/s value for those rows is logical
-  loaded rows/s, not scanned rows/s.
+  query throughput over loaded rows, not scanned rows/s.
 - TreeDB load time is per query-shaped cell. q4/q5 have extra aggregate
   metadata construction cost during load.
 
