@@ -1094,7 +1094,7 @@ func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterRes
 
 func typedColumnDenseDecodeFallbackAllowed(status typeddecode.Status) bool {
 	switch status.Reason {
-	case typeddecode.ReasonUnaligned, typeddecode.ReasonHandleSourceUnsupported:
+	case typeddecode.ReasonUnaligned, typeddecode.ReasonWrongEndian, typeddecode.ReasonHandleSourceUnsupported:
 		return true
 	default:
 		return false
@@ -1160,9 +1160,12 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	if err != nil || !ok {
 		return ok, err
 	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
 			return false, err
+		}
+		if adapterColumn.Field.Nullable {
+			return false, fmt.Errorf("%w: typed-column int64 predicate column %q nullable=true is unsupported", ErrColumnQueryPlanUnsupported, column)
 		}
 		return false, fmt.Errorf("%w: typed-column int64 predicate column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, column)
 	}
@@ -1552,9 +1555,12 @@ func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw
 	if !ok {
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("collections: typed-column int64 predicate %s column %q is not owned by typed_column_part", operation, column)
 	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
 		if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate %s column %q", operation, column)); err != nil {
 			return nil, typedColumnAdapterColumn{}, 0, err
+		}
+		if adapterColumn.Field.Nullable {
+			return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q nullable=true is unsupported", ErrColumnQueryPlanUnsupported, operation, column)
 		}
 		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate %s column %q is not encoded as int64", ErrColumnQueryPlanUnsupported, operation, column)
 	}

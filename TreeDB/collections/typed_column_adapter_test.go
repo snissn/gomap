@@ -16,6 +16,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 var typedColumnNullableBenchSink1784 int64
@@ -987,6 +988,15 @@ func TestTypedColumnAdapterAdjacencyDenseDirectViewAndFallback(t *testing.T) {
 		t.Fatalf("Release: %v", err)
 	}
 	assertTypedColumnAdapterNoActive(t, mgr)
+}
+
+func TestTypedColumnAdapterDenseDecodeFallbackAllowsHostEndianMismatch(t *testing.T) {
+	if !typedColumnDenseDecodeFallbackAllowed(typeddecode.StreamingStatus(typeddecode.ReasonWrongEndian, "host endian mismatch")) {
+		t.Fatalf("wrong-endian direct-view status should allow safe little-endian decode fallback")
+	}
+	if typedColumnDenseDecodeFallbackAllowed(typeddecode.UnsupportedStatus(typeddecode.ReasonPayloadLengthMismatch, "short payload")) {
+		t.Fatalf("payload length mismatch must fail closed, not decode fallback")
+	}
 }
 
 func TestTypedColumnAdapterTypedViewsValidateFixedWidth(t *testing.T) {
