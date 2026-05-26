@@ -84,6 +84,7 @@ type ColumnDefinition struct {
 	Cardinality        uint32
 	FixedWidthElements int
 	CodecBlockRows     int
+	StatsDisabled      bool
 }
 
 type Batch struct {
@@ -103,6 +104,8 @@ type ColumnPart struct {
 	Marks             []SortKeyMark
 	Locators          map[int64]RowLocator
 	AggregateMetadata map[string]AggregateMetadata
+	ColumnStats       ColumnPartStats
+	PruningMetadata   ColumnPartPruning
 }
 
 type ColumnPartDescriptor struct {
@@ -246,6 +249,16 @@ func (b *ColumnPartBuilder) Build(partID uint64, batch Batch) (*ColumnPart, erro
 	if err := b.buildAggregateMetadata(part, batch); err != nil {
 		return nil, err
 	}
+	stats, err := buildColumnPartStats(part)
+	if err != nil {
+		return nil, err
+	}
+	part.ColumnStats = stats
+	pruning, err := buildColumnPartPruning(part)
+	if err != nil {
+		return nil, err
+	}
+	part.PruningMetadata = pruning
 	return part, nil
 }
 

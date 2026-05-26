@@ -268,6 +268,18 @@ func NormalizeTypedStorageLayout(in TypedStorageLayout) (TypedStorageLayout, err
 			}
 			return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: unsupported for value_type %q", name, field.ValueType)
 		}
+		if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault && field.ValueType == ColumnStoreValueInt64 {
+			name := field.Name
+			if name == "" {
+				name = field.Path
+			}
+			if field.Owner != TypedStorageOwnerColumnPart {
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: int64 raw fixed-width encoding requires owner %q", name, TypedStorageOwnerColumnPart)
+			}
+			if field.Nullable {
+				return TypedStorageLayout{}, fmt.Errorf("collections: invalid typed-storage field %q fixed_width_encoding: nullable int64 raw fixed-width encoding is unsupported", name)
+			}
+		}
 		if prior, ok := seenPaths[field.Path]; ok {
 			return TypedStorageLayout{}, fmt.Errorf("collections: overlapping authoritative typed-storage owners for field path %q: %s and %s", field.Path, prior, field.Owner)
 		}

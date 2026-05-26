@@ -11,6 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typedkernel"
 )
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
@@ -115,6 +116,24 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	if err != nil {
 		return typedColumnAdapterColumn{}, err
 	}
+	if field.FixedWidthEncoding != "" {
+		switch field.ValueType {
+		case ColumnStoreValueInt64:
+			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported int64 fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.FixedWidthEncoding)
+			}
+			if field.Nullable {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: nullable int64 raw fixed-width encoding is unsupported", errTypedColumnAdapterUnsupportedType)
+			}
+			mapping.Encoding = typedcolumn.EncodingRawInt64
+		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+			if field.FixedWidthEncoding != ColumnFixedWidthEncodingLittleEndian {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported %s fixed_width_encoding=%q", errTypedColumnAdapterUnsupportedType, field.ValueType, field.FixedWidthEncoding)
+			}
+		default:
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: fixed_width_encoding is unsupported for value_type=%s", errTypedColumnAdapterUnsupportedType, field.ValueType)
+		}
+	}
 	if field.Nullable {
 		switch field.ValueType {
 		case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
@@ -144,6 +163,7 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		Encoding:       mapping.Encoding,
 		Compression:    typedcolumn.CompressionNone,
 		CompressionSet: true,
+		StatsDisabled:  field.ValueType != ColumnStoreValueInt64,
 	}
 	switch field.ValueType {
 	case ColumnStoreValueFloat32Vector:
@@ -223,6 +243,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 		Encoding:       typedcolumn.EncodingRawInt64,
 		Compression:    typedcolumn.CompressionNone,
 		CompressionSet: true,
+		StatsDisabled:  true,
 	})
 	for _, column := range columns {
 		defs = append(defs, column.Definition)
@@ -473,7 +494,13 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	if p == nil || p.Part == nil {
 		return typedcolumn.ColumnPartImage{}, errors.New("collections: nil typed-column adapter part")
 	}
-	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary})
+	logicalTypes := map[string]string{typedColumnAdapterPrimaryIDColumn: string(columnsemantics.LogicalInt64)}
+	for _, column := range p.Columns {
+		if logical, ok := columnStoreSemanticLogicalType(column.Field.ValueType); ok {
+			logicalTypes[column.Definition.Name] = string(logical)
+		}
+	}
+	return typedcolumn.BuildColumnPartImage(p.Part, typedcolumn.ColumnPartImageOptions{Dictionaries: p.Dictionary, LayoutLogicalTypes: logicalTypes})
 }
 
 func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValues, error) {
@@ -1090,6 +1117,9 @@ func typedColumnAdapterHasInt64PredicateColumn(fields []TypedStorageField, colum
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
 		return false, err
 	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, columnsemantics.OpOrderedRange, fmt.Sprintf("typed-column int64 predicate column %q", column)); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -1148,10 +1178,13 @@ func typedColumnAdapterPrepareInt64PredicateAggregatePart(fields []TypedStorageF
 			return nil, typedColumnAdapterColumn{}, 0, err
 		}
 	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
-		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return nil, typedColumnAdapterColumn{}, 0, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, typedColumnAdapterColumn{}, 0, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 		return nil, typedColumnAdapterColumn{}, 0, err
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
@@ -1265,13 +1298,19 @@ func typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromSections(fi
 			return nil, err
 		}
 	}
-	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 || adapterColumn.Definition.Encoding != typedcolumn.EncodingDeltaVarint || adapterColumn.Definition.Compression != typedcolumn.CompressionNone {
-		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not encoded as non-null scalar int64", ErrColumnQueryPlanUnsupported, column)
+	if adapterColumn.Field.ValueType != ColumnStoreValueInt64 || adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return nil, fmt.Errorf("%w: typed-column int64 predicate aggregate column %q is not a non-null scalar int64 typed-column", ErrColumnQueryPlanUnsupported, column)
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 		return nil, err
 	}
 	if err := requireTypedColumnAdapterCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, typedColumnInt64PredicateSemanticOperation(req.Kind), fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
+		return nil, err
+	}
+	if err := requireTypedColumnLayoutCapability(adapterColumn, columnsemantics.OpSum, fmt.Sprintf("typed-column int64 predicate aggregate column %q", column)); err != nil {
 		return nil, err
 	}
 	if image.PartID != refPartID || image.Rows != typedRows || image.Rows != physicalRows {
@@ -1732,11 +1771,15 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibility(part *typedcolumn.
 type typedColumnInt64PredicateAggregateScanScratch struct {
 	// GranuleReader only retains decode/decompression scratch and is safe to
 	// reuse across immutable typed-column parts within the session lifetime.
-	reader         typedcolumn.GranuleReader
-	values         []int64
-	predicateRows  []int
-	visibilityRows []int
-	selection      typedcolumn.RowSelectionScratch
+	reader          typedcolumn.GranuleReader
+	values          []int64
+	predicateRows   []int
+	predicateRanges []typedcolumn.RowRange
+	predicateBitmap []uint64
+	visibilityRows  []int
+	selection       typedcolumn.RowSelectionScratch
+	boolSelection   typedcolumn.BoolSelectionScratch
+	kernel          typedkernel.Scratch
 }
 
 func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {
@@ -1820,7 +1863,65 @@ func typedColumnInt64PredicateAggregateBlockSelection(req TypedColumnInt64Predic
 			scratch.predicateRows = append(scratch.predicateRows, i)
 		}
 	}
-	return typedcolumn.NewSparseRowSelectionNoCopy(rows, scratch.predicateRows)
+	return typedColumnInt64PredicateRowsSelection(rows, scratch)
+}
+
+const typedColumnInt64PredicateSelectionRangeLimit = 8
+
+func typedColumnInt64PredicateRowsSelection(rows int, scratch *typedColumnInt64PredicateAggregateScanScratch) (typedcolumn.RowSelection, error) {
+	if scratch == nil {
+		return typedcolumn.NewEmptyRowSelection(rows)
+	}
+	selected := scratch.predicateRows
+	if len(selected) == 0 {
+		return typedcolumn.NewEmptyRowSelection(rows)
+	}
+	if len(selected) == rows {
+		return typedcolumn.NewAllRowSelection(rows)
+	}
+	if isContiguousIntRows(selected) {
+		return typedcolumn.NewRangeRowSelection(rows, selected[0], selected[len(selected)-1]+1)
+	}
+
+	scratch.predicateRanges = scratch.predicateRanges[:0]
+	start, prev := selected[0], selected[0]
+	for _, row := range selected[1:] {
+		if row == prev+1 {
+			prev = row
+			continue
+		}
+		scratch.predicateRanges = append(scratch.predicateRanges, typedcolumn.RowRange{Start: start, End: prev + 1})
+		start, prev = row, row
+	}
+	scratch.predicateRanges = append(scratch.predicateRanges, typedcolumn.RowRange{Start: start, End: prev + 1})
+	if len(scratch.predicateRanges) <= typedColumnInt64PredicateSelectionRangeLimit {
+		return typedcolumn.NewRangesRowSelectionNoCopy(rows, scratch.predicateRanges)
+	}
+	if len(selected) >= 64 && len(selected)*4 >= rows*3 {
+		words := (rows + 63) / 64
+		if cap(scratch.predicateBitmap) < words {
+			scratch.predicateBitmap = make([]uint64, words)
+		} else {
+			scratch.predicateBitmap = scratch.predicateBitmap[:words]
+			for i := range scratch.predicateBitmap {
+				scratch.predicateBitmap[i] = 0
+			}
+		}
+		for _, row := range selected {
+			scratch.predicateBitmap[row/64] |= uint64(1) << uint(row%64)
+		}
+		return typedcolumn.NewBitmapRowSelectionNoCopy(rows, scratch.predicateBitmap)
+	}
+	return typedcolumn.NewSparseRowSelectionNoCopy(rows, selected)
+}
+
+func isContiguousIntRows(rows []int) bool {
+	for i := 1; i < len(rows); i++ {
+		if rows[i] != rows[i-1]+1 {
+			return false
+		}
+	}
+	return len(rows) != 0
 }
 
 func typedColumnInt64PredicateCoversGranule(req TypedColumnInt64PredicateScanRequest, g typedcolumn.EncodedGranule) bool {

@@ -24,7 +24,10 @@ const (
 	ColumnPartImageSectionSortKeyMarks      ColumnPartImageSectionKind = "sort_key_marks"
 	ColumnPartImageSectionRowLocators       ColumnPartImageSectionKind = "row_locators"
 	ColumnPartImageSectionAggregateMetadata ColumnPartImageSectionKind = "aggregate_metadata"
+	ColumnPartImageSectionColumnStats       ColumnPartImageSectionKind = "column_stats"
+	ColumnPartImageSectionPruningMetadata   ColumnPartImageSectionKind = "pruning_metadata"
 	ColumnPartImageSectionDictionaries      ColumnPartImageSectionKind = "dictionaries"
+	ColumnPartImageSectionLayoutContract    ColumnPartImageSectionKind = "layout_contract"
 	ColumnPartImageSectionColumnData        ColumnPartImageSectionKind = "column_data"
 	ColumnPartImageSectionPadding           ColumnPartImageSectionKind = "padding"
 )
@@ -38,13 +41,19 @@ const (
 	ColumnPartImageCategoryMarks             ColumnPartImageSectionCategory = "marks"
 	ColumnPartImageCategoryLocators          ColumnPartImageSectionCategory = "locators"
 	ColumnPartImageCategoryAggregateMetadata ColumnPartImageSectionCategory = "aggregate_metadata"
+	ColumnPartImageCategoryColumnStats       ColumnPartImageSectionCategory = "column_stats"
+	ColumnPartImageCategoryPruningMetadata   ColumnPartImageSectionCategory = "pruning_metadata"
 	ColumnPartImageCategoryDictionaries      ColumnPartImageSectionCategory = "dictionaries"
+	ColumnPartImageCategoryLayoutContract    ColumnPartImageSectionCategory = "layout_contract"
 	ColumnPartImageCategoryDeclaredColumns   ColumnPartImageSectionCategory = "declared_columns"
 	ColumnPartImageCategoryPadding           ColumnPartImageSectionCategory = "padding"
 )
 
 type ColumnPartImageOptions struct {
-	Dictionaries map[string]map[string]int64
+	Dictionaries        map[string]map[string]int64
+	LayoutLogicalTypes  map[string]string
+	DictionaryOrder     map[string]bool
+	DictionaryCollation map[string]string
 }
 
 type ColumnPartImage struct {
@@ -106,6 +115,8 @@ func (p *ColumnPart) WithImagePayloads(image ColumnPartImage) (*ColumnPart, erro
 		return nil, err
 	}
 	out := *p
+	out.ColumnStats = cloneColumnPartStats(p.ColumnStats)
+	out.PruningMetadata = cloneColumnPartPruning(p.PruningMetadata)
 	out.Columns = make(map[string]ColumnPartColumn, len(p.Columns))
 	for name, column := range p.Columns {
 		outColumn := column
@@ -263,6 +274,7 @@ func comparablePartColumnDefinitionForImage(imageDefinition ColumnDefinition, pa
 func comparableColumnDefinition(def ColumnDefinition) ColumnDefinition {
 	def.CodecBlockRows = 0
 	def.Compression = 0
+	def.StatsDisabled = false
 	return def
 }
 
@@ -321,10 +333,19 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 	if err := b.addAggregateMetadataSections(); err != nil {
 		return ColumnPartImage{}, err
 	}
+	if err := b.addColumnStatsSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addPruningMetadataSection(); err != nil {
+		return ColumnPartImage{}, err
+	}
 	if err := b.addDictionarySection(); err != nil {
 		return ColumnPartImage{}, err
 	}
 	if err := b.addColumnDataSections(); err != nil {
+		return ColumnPartImage{}, err
+	}
+	if err := b.addLayoutContractSection(); err != nil {
 		return ColumnPartImage{}, err
 	}
 
@@ -341,14 +362,18 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 		out = append(out, make([]byte, section.section.Offset-len(out))...)
 		out = append(out, section.data...)
 	}
-	return ColumnPartImage{
+	image := ColumnPartImage{
 		Version:       columnPartImageVersion,
 		PartID:        b.part.Descriptor.PartID,
 		Rows:          b.part.Descriptor.RowCount,
 		ManifestBytes: len(manifest),
 		Sections:      sections,
 		Bytes:         out,
-	}, nil
+	}
+	if _, err := CertifyColumnPartLayoutContractFromImage(image); err != nil {
+		return ColumnPartImage{}, fmt.Errorf("typedcolumn: writer-certified layout contract validation: %w", err)
+	}
+	return image, nil
 }
 
 func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageSection, []byte, error) {
@@ -369,6 +394,9 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 			b.sections[i].section.Length = len(b.sections[i].data)
 			sections[i] = b.sections[i].section
 			offset += len(b.sections[i].data)
+		}
+		if err := b.refreshLayoutContractSection(sections, len(manifest)); err != nil {
+			return nil, nil, err
 		}
 		finalManifest, err := encodeColumnPartImageManifest(b.part, sections, len(manifest))
 		if err != nil {
@@ -615,6 +643,44 @@ func (b *columnPartImageBuilder) addAggregateMetadataSections() error {
 	return nil
 }
 
+func (b *columnPartImageBuilder) addColumnStatsSection() error {
+	data, err := encodeColumnPartStatsSection(b.part.ColumnStats)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionColumnStats,
+		Category: ColumnPartImageCategoryColumnStats,
+		Name:     "column_stats",
+		Rows:     b.part.Descriptor.RowCount,
+		Granules: len(b.part.Descriptor.Granules),
+		Blocks:   countColumnBlocks(b.part.Descriptor),
+	}, data)
+	return nil
+}
+
+func (b *columnPartImageBuilder) addPruningMetadataSection() error {
+	data, err := encodeColumnPartPruningSection(b.part.PruningMetadata)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	b.appendSection(ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionPruningMetadata,
+		Category: ColumnPartImageCategoryPruningMetadata,
+		Name:     "column_pruning",
+		Rows:     b.part.Descriptor.RowCount,
+		Granules: len(b.part.Descriptor.Granules),
+		Blocks:   countColumnBlocks(b.part.Descriptor),
+	}, data)
+	return nil
+}
+
 func (b *columnPartImageBuilder) addDictionarySection() error {
 	if len(b.opts.Dictionaries) == 0 {
 		return nil
@@ -681,6 +747,57 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 			Compression: column.Definition.Compression,
 		}, data)
 	}
+	return nil
+}
+
+func (b *columnPartImageBuilder) addLayoutContractSection() error {
+	data, err := encodeColumnPartLayoutContract(b.part, b.opts, b.sections, 0)
+	if err != nil {
+		return err
+	}
+	section := ColumnPartImageSection{
+		Kind:     ColumnPartImageSectionLayoutContract,
+		Category: ColumnPartImageCategoryLayoutContract,
+		Name:     "writer_layout_contract",
+		Rows:     b.part.Descriptor.RowCount,
+		Granules: len(b.part.Descriptor.Granules),
+		Blocks:   countColumnBlocks(b.part.Descriptor),
+	}
+	insert := len(b.sections)
+	for i, existing := range b.sections {
+		if existing.section.Kind == ColumnPartImageSectionColumnData {
+			insert = i
+			break
+		}
+	}
+	entry := columnPartImageSectionData{section: section, data: data}
+	b.sections = append(b.sections, columnPartImageSectionData{})
+	copy(b.sections[insert+1:], b.sections[insert:])
+	b.sections[insert] = entry
+	return nil
+}
+
+func (b *columnPartImageBuilder) refreshLayoutContractSection(sections []ColumnPartImageSection, manifestBytes int) error {
+	idx := -1
+	for i := range b.sections {
+		if b.sections[i].section.Kind == ColumnPartImageSectionLayoutContract {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("typedcolumn: missing layout contract section")
+	}
+	data, err := encodeColumnPartLayoutContract(b.part, b.opts, b.sections, manifestBytes)
+	if err != nil {
+		return err
+	}
+	if len(data) != len(b.sections[idx].data) {
+		return fmt.Errorf("typedcolumn: layout contract bytes changed from %d to %d during layout", len(b.sections[idx].data), len(data))
+	}
+	b.sections[idx].data = data
+	b.sections[idx].section.Length = len(data)
+	sections[idx] = b.sections[idx].section
 	return nil
 }
 
@@ -904,6 +1021,9 @@ var columnPartImageSectionCodes = []columnPartImageSectionCode{
 	{kind: ColumnPartImageSectionDictionaries, kindCode: 6, category: ColumnPartImageCategoryDictionaries, categoryCode: 6},
 	{kind: ColumnPartImageSectionColumnData, kindCode: 7, category: ColumnPartImageCategoryDeclaredColumns, categoryCode: 7},
 	{kind: ColumnPartImageSectionManifest, kindCode: 8, category: ColumnPartImageCategoryManifest, categoryCode: 8},
+	{kind: ColumnPartImageSectionLayoutContract, kindCode: 9, category: ColumnPartImageCategoryLayoutContract, categoryCode: 9},
+	{kind: ColumnPartImageSectionColumnStats, kindCode: 10, category: ColumnPartImageCategoryColumnStats, categoryCode: 10},
+	{kind: ColumnPartImageSectionPruningMetadata, kindCode: 11, category: ColumnPartImageCategoryPruningMetadata, categoryCode: 11},
 }
 
 func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) (uint16, error) {

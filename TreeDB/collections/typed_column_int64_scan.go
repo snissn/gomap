@@ -71,31 +71,63 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	SelectionSparseBlocks int
 	SelectionCompositions int
 
-	DirectTypedColumnAssetReads int
-	FullAssetReads              int
-	FallbackReads               int
-	CodesMatched                int
-	DictionaryBytesDecoded      uint64
-	FullAssetBytes              uint64
-	SectionBytesRead            uint64
-	RangeBytesRead              uint64
-	MappedBytes                 uint64
-	HeapCopyBytes               uint64
-	DecodedMetadataBytes        uint64
-	DecodedHeapCopyBytes        uint64
-	PhysicalBytesScanned        int64
-	RowLocatorDecodes           int
-	PhysicalRowIDLookups        int
-	PhysicalRowAssetReads       int
-	RowMaterializations         int
-	DocumentMaterializations    int
-	DocumentReconstructions     int
-	SegmentFileCacheHits        uint64
-	SegmentFileCacheMisses      uint64
-	ColumnAssetReadIntegrity    string
-	Fallback                    bool
-	FallbackReason              string
-	ScanNanos                   int64
+	DirectTypedColumnAssetReads    int
+	FullAssetReads                 int
+	FallbackReads                  int
+	CodesMatched                   int
+	DictionaryBytesDecoded         uint64
+	FullAssetBytes                 uint64
+	SectionBytesRead               uint64
+	RangeBytesRead                 uint64
+	MappedBytes                    uint64
+	HeapCopyBytes                  uint64
+	DecodedMetadataBytes           uint64
+	DecodedHeapCopyBytes           uint64
+	MaterializedBytes              uint64
+	FastDecodeDirectViewPlans      int
+	FastDecodeStreamingPlans       int
+	FastDecodeMaterializePlans     int
+	FastDecodeUnsupportedPlans     int
+	DirectViewSuccesses            int
+	DirectViewFailures             int
+	KernelBlocks                   int
+	KernelFullCoveredBlocks        int
+	KernelSelectedBlocks           int
+	KernelCursorBlocks             int
+	KernelFallbackBlocks           int
+	StatsBlocks                    int
+	StatsFullCoveredBlocks         int
+	StatsFallbackBlocks            int
+	StatsRows                      int
+	PruningBlocks                  int
+	PruningRows                    int
+	PruningFallbackBlocks          int
+	PruningFallbackReason          string
+	StatsFallbackReason            string
+	StatsValidationFailures        int
+	StatsValidationFailureReason   string
+	PruningValidationFailures      int
+	PruningValidationFailureReason string
+	FastDecodeFallbackReason       string
+	DirectViewCertified            int
+	StreamingCertified             int
+	StatsCertified                 int
+	PruningCertified               int
+	CertificationFailures          int
+	CertificationFailureReason     string
+	PhysicalBytesScanned           int64
+	RowLocatorDecodes              int
+	PhysicalRowIDLookups           int
+	PhysicalRowAssetReads          int
+	RowMaterializations            int
+	DocumentMaterializations       int
+	DocumentReconstructions        int
+	SegmentFileCacheHits           uint64
+	SegmentFileCacheMisses         uint64
+	ColumnAssetReadIntegrity       string
+	Fallback                       bool
+	FallbackReason                 string
+	ScanNanos                      int64
 }
 
 type TypedColumnInt64PredicateScanResult struct {
@@ -122,10 +154,11 @@ type TypedColumnInt64PredicateAggregateSession struct {
 	closeView          func()
 	req                TypedColumnInt64PredicateAggregateRequest
 	fields             []TypedStorageField
+	aggregateColumn    typedColumnAdapterColumn
 	schemaHash         uint64
 	refsByGeneration   map[uint64]columnManifestAssetRefForScan
 	validatedRefs      map[ColumnAssetRef]struct{}
-	targetedPartCache  map[ColumnAssetRef]*typedColumnInt64AggregateTargetedPart
+	preparedState      *typedColumnPreparedScanState
 	aggregateScratch   typedColumnInt64PredicateAggregateScanScratch
 	readCache          columnPhysicalAssetReadCache
 	resourceManager    *mappedresource.Manager
@@ -563,7 +596,12 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDirect(view columnPhys
 		return TypedColumnInt64PredicateAggregateResult{Diagnostics: diag}, err
 	}
 	defer func() { _ = session.Close() }()
-	return session.run(start, session.prepareDiagnostics)
+	includeDiagnostics := session.prepareDiagnostics
+	includeDiagnostics.PruningBlocks = 0
+	includeDiagnostics.PruningRows = 0
+	includeDiagnostics.PruningFallbackBlocks = 0
+	includeDiagnostics.PruningFallbackReason = ""
+	return session.run(start, includeDiagnostics)
 }
 
 func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(view columnPhysicalScanSnapshotView, closeView func(), req TypedColumnInt64PredicateAggregateRequest) (*TypedColumnInt64PredicateAggregateSession, TypedColumnInt64PredicateScanDiagnostics, error) {
@@ -577,6 +615,13 @@ func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(vi
 	if ok, err := typedColumnAdapterHasInt64PredicateColumn(fields, req.Column); err != nil {
 		return nil, diag, err
 	} else if !ok {
+		return nil, diag, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", req.Column)
+	}
+	aggregateColumn, ok, err := typedColumnInt64PredicateAdapterColumn(fields, req.Column)
+	if err != nil {
+		return nil, diag, err
+	}
+	if !ok {
 		return nil, diag, fmt.Errorf("collections: typed-column int64 predicate aggregate column %q is not owned by typed_column_part", req.Column)
 	}
 	refsByGeneration, err := typedColumnInt64PredicateAggregateRefsByGeneration(view)
@@ -608,32 +653,46 @@ func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(vi
 	}
 
 	session := &TypedColumnInt64PredicateAggregateSession{
-		view:              view,
-		closeView:         closeView,
-		req:               req,
-		fields:            fields,
-		schemaHash:        cfg.SchemaHash,
-		refsByGeneration:  refsByGeneration,
-		validatedRefs:     make(map[ColumnAssetRef]struct{}, len(refsByGeneration)),
-		targetedPartCache: make(map[ColumnAssetRef]*typedColumnInt64AggregateTargetedPart, len(refsByGeneration)),
-		readCache:         readCache,
-		resourceManager:   mgr,
+		view:             view,
+		closeView:        closeView,
+		req:              req,
+		fields:           fields,
+		aggregateColumn:  aggregateColumn,
+		schemaHash:       cfg.SchemaHash,
+		refsByGeneration: refsByGeneration,
+		validatedRefs:    make(map[ColumnAssetRef]struct{}, len(refsByGeneration)),
+		readCache:        readCache,
+		resourceManager:  mgr,
+	}
+	if session.useTargetedAggregateRanges() {
+		if err := session.prepareTargetedAggregateState(); err != nil {
+			if session.preparedState != nil {
+				session.preparedState.close()
+			}
+			_ = session.readCache.close()
+			return nil, diag, err
+		}
 	}
 	if view.MutationParts != 0 {
 		beforeStats := mgr.Stats()
 		beforeHits := session.readCache.hits
 		beforeMisses := session.readCache.misses
-		resolver, err := buildTypedColumnLatestRowResolver(view, &session.readCache, &session.prepareDiagnostics)
+		var resolverDiagnostics TypedColumnInt64PredicateScanDiagnostics
+		resolver, err := buildTypedColumnLatestRowResolver(view, &session.readCache, &resolverDiagnostics)
 		if err != nil {
+			if session.preparedState != nil {
+				session.preparedState.close()
+			}
 			_ = session.readCache.close()
 			return nil, diag, err
 		}
 		afterStats := mgr.Stats()
-		session.prepareDiagnostics.SegmentFileCacheHits = session.readCache.hits - beforeHits
-		session.prepareDiagnostics.SegmentFileCacheMisses = session.readCache.misses - beforeMisses
-		session.prepareDiagnostics.MappedBytes = afterStats.TotalMappedBytes - beforeStats.TotalMappedBytes
-		session.prepareDiagnostics.HeapCopyBytes = afterStats.TotalHeapCopyBytes - beforeStats.TotalHeapCopyBytes
-		session.prepareDiagnostics.FallbackReads = int(afterStats.FallbackReads - beforeStats.FallbackReads)
+		resolverDiagnostics.SegmentFileCacheHits = session.readCache.hits - beforeHits
+		resolverDiagnostics.SegmentFileCacheMisses = session.readCache.misses - beforeMisses
+		resolverDiagnostics.MappedBytes = afterStats.TotalMappedBytes - beforeStats.TotalMappedBytes
+		resolverDiagnostics.HeapCopyBytes = afterStats.TotalHeapCopyBytes - beforeStats.TotalHeapCopyBytes
+		resolverDiagnostics.FallbackReads = int(afterStats.FallbackReads - beforeStats.FallbackReads)
+		addTypedColumnInt64PredicateAggregateDiagnostics(&session.prepareDiagnostics, resolverDiagnostics)
 		session.resolver = resolver
 	}
 	return session, diag, nil
@@ -667,6 +726,13 @@ func (s *TypedColumnInt64PredicateAggregateSession) Close() error {
 	}
 	s.closed = true
 	s.aggregateScratch = typedColumnInt64PredicateAggregateScanScratch{}
+	if s.preparedState != nil {
+		s.preparedState.close()
+	}
+	s.refsByGeneration = nil
+	s.validatedRefs = nil
+	s.resolver = nil
+	s.view = columnPhysicalScanSnapshotView{}
 	var closeErr error
 	if err := s.readCache.close(); err != nil {
 		closeErr = err
@@ -794,41 +860,11 @@ func (s *TypedColumnInt64PredicateAggregateSession) runFullAssetAggregatePart(ty
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) runTargetedAggregatePart(typedRef columnManifestAssetRefForScan, physical columnManifestAssetRefForScan, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) error {
-	if err := s.ensureCachedVerifyFullAssetValidated(typedRef.Ref, result, updateCacheDeltas); err != nil {
-		return fmt.Errorf("collections: typed-column int64 predicate aggregate validate generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+	preparedPart, ok := typedColumnPreparedStatePart(s.preparedState, typedRef.Ref)
+	if !ok || preparedPart == nil {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate missing prepared state generation=%d part_id=%d", typedRef.Ref.Generation, typedRef.Ref.PartID)
 	}
-	targetedPart, metadataBytes, err := s.targetedAggregatePart(typedRef, physical, result, updateCacheDeltas)
-	if err != nil {
-		return fmt.Errorf("collections: typed-column int64 predicate aggregate decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
-	}
-	readPayload := func(offset int, length int) ([]byte, error) {
-		return s.readTypedColumnRange(typedRef.Ref, offset, length, false, result, updateCacheDeltas)
-	}
-	adapterPart, adapterColumn, err := targetedPart.instantiate(readPayload)
-	if err != nil {
-		return fmt.Errorf("collections: typed-column int64 predicate aggregate payload generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
-	}
-	result.Diagnostics.DirectTypedColumnAssetReads++
-	result.Diagnostics.DecodedMetadataBytes += uint64(metadataBytes)
-	return s.scanPreparedAggregatePart(typedRef, physical, adapterPart, adapterColumn, result)
-}
-
-func (s *TypedColumnInt64PredicateAggregateSession) targetedAggregatePart(typedRef columnManifestAssetRefForScan, physical columnManifestAssetRefForScan, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) (*typedColumnInt64AggregateTargetedPart, int, error) {
-	if s.targetedPartCache == nil {
-		s.targetedPartCache = make(map[ColumnAssetRef]*typedColumnInt64AggregateTargetedPart)
-	}
-	if targetedPart, ok := s.targetedPartCache[typedRef.Ref]; ok {
-		return targetedPart, 0, nil
-	}
-	readRange := func(offset int, length int, section bool) ([]byte, error) {
-		return s.readTypedColumnRange(typedRef.Ref, offset, length, section, result, updateCacheDeltas)
-	}
-	targetedPart, err := typedColumnAdapterPrepareInt64PredicateAggregateTargetedPartFromRanges(s.fields, typedRef.Ref.Length, typedRef.Ref.PartID, typedRef.Rows, physical.Rows, s.schemaHash, s.req.Column, typedColumnInt64PredicateAggregateScanRequest(s.req), readRange)
-	if err != nil {
-		return nil, 0, err
-	}
-	s.targetedPartCache[typedRef.Ref] = targetedPart
-	return targetedPart, targetedPart.manifestBytes, nil
+	return s.scanPreparedAggregateStatePart(typedRef, physical, preparedPart, result, updateCacheDeltas)
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) ensureCachedVerifyFullAssetValidated(ref ColumnAssetRef, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) error {
@@ -851,13 +887,18 @@ func (s *TypedColumnInt64PredicateAggregateSession) ensureCachedVerifyFullAssetV
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) readTypedColumnRange(ref ColumnAssetRef, offset int, length int, section bool, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) ([]byte, error) {
+	raw, _, err := s.readTypedColumnRangeHandle(ref, offset, length, section, result, updateCacheDeltas)
+	return raw, err
+}
+
+func (s *TypedColumnInt64PredicateAggregateSession) readTypedColumnRangeHandle(ref ColumnAssetRef, offset int, length int, section bool, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) ([]byte, *mappedresource.Handle, error) {
 	if offset < 0 || length <= 0 {
-		return nil, fmt.Errorf("collections: typed-column range offset=%d length=%d is invalid", offset, length)
+		return nil, nil, fmt.Errorf("collections: typed-column range offset=%d length=%d is invalid", offset, length)
 	}
-	raw, err := s.readCache.readRange(ref, int64(offset), int64(length))
+	raw, handle, err := s.readCache.readRangeHandle(ref, int64(offset), int64(length))
 	updateCacheDeltas()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if s.readCache.lastView {
 		result.Diagnostics.MappedBytes += uint64(len(raw))
@@ -870,7 +911,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) readTypedColumnRange(ref Col
 		result.Diagnostics.RangeBytesRead += uint64(len(raw))
 	}
 	result.Diagnostics.PhysicalBytesScanned += int64(len(raw))
-	return raw, nil
+	return raw, handle, nil
 }
 
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregatePart(typedRef columnManifestAssetRefForScan, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, adapterColumn typedColumnAdapterColumn, result *TypedColumnInt64PredicateAggregateResult) error {
@@ -925,6 +966,50 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.HeapCopyBytes += src.HeapCopyBytes
 	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
 	dst.DecodedHeapCopyBytes += src.DecodedHeapCopyBytes
+	dst.MaterializedBytes += src.MaterializedBytes
+	dst.FastDecodeDirectViewPlans += src.FastDecodeDirectViewPlans
+	dst.FastDecodeStreamingPlans += src.FastDecodeStreamingPlans
+	dst.FastDecodeMaterializePlans += src.FastDecodeMaterializePlans
+	dst.FastDecodeUnsupportedPlans += src.FastDecodeUnsupportedPlans
+	dst.DirectViewSuccesses += src.DirectViewSuccesses
+	dst.DirectViewFailures += src.DirectViewFailures
+	dst.KernelBlocks += src.KernelBlocks
+	dst.KernelFullCoveredBlocks += src.KernelFullCoveredBlocks
+	dst.KernelSelectedBlocks += src.KernelSelectedBlocks
+	dst.KernelCursorBlocks += src.KernelCursorBlocks
+	dst.KernelFallbackBlocks += src.KernelFallbackBlocks
+	dst.StatsBlocks += src.StatsBlocks
+	dst.StatsFullCoveredBlocks += src.StatsFullCoveredBlocks
+	dst.StatsFallbackBlocks += src.StatsFallbackBlocks
+	dst.StatsRows += src.StatsRows
+	dst.PruningBlocks += src.PruningBlocks
+	dst.PruningRows += src.PruningRows
+	dst.PruningFallbackBlocks += src.PruningFallbackBlocks
+	if src.PruningFallbackReason != "" {
+		dst.PruningFallbackReason = src.PruningFallbackReason
+	}
+	if src.StatsFallbackReason != "" {
+		dst.StatsFallbackReason = src.StatsFallbackReason
+	}
+	dst.StatsValidationFailures += src.StatsValidationFailures
+	if src.StatsValidationFailureReason != "" {
+		dst.StatsValidationFailureReason = src.StatsValidationFailureReason
+	}
+	dst.PruningValidationFailures += src.PruningValidationFailures
+	if src.PruningValidationFailureReason != "" {
+		dst.PruningValidationFailureReason = src.PruningValidationFailureReason
+	}
+	if src.FastDecodeFallbackReason != "" {
+		dst.FastDecodeFallbackReason = src.FastDecodeFallbackReason
+	}
+	dst.DirectViewCertified += src.DirectViewCertified
+	dst.StreamingCertified += src.StreamingCertified
+	dst.StatsCertified += src.StatsCertified
+	dst.PruningCertified += src.PruningCertified
+	dst.CertificationFailures += src.CertificationFailures
+	if src.CertificationFailureReason != "" {
+		dst.CertificationFailureReason = src.CertificationFailureReason
+	}
 	dst.PhysicalBytesScanned += src.PhysicalBytesScanned
 	dst.RowLocatorDecodes += src.RowLocatorDecodes
 	dst.PhysicalRowIDLookups += src.PhysicalRowIDLookups
@@ -1064,6 +1149,7 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDocumentFallback(req T
 	_, err := c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		result.Diagnostics.RowMaterializations++
 		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.MaterializedBytes += uint64(len(record.ID) + len(record.Document))
 		result.Diagnostics.FallbackReads++
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
 		if err != nil {
@@ -1105,6 +1191,7 @@ func (c *Collection) runTypedColumnInt64PredicateScanDocumentFallback(req TypedC
 	_, err := c.ScanDocumentsFunc(maxCollectionInt, func(record DocumentRecord) (bool, error) {
 		result.Diagnostics.RowMaterializations++
 		result.Diagnostics.DocumentMaterializations++
+		result.Diagnostics.MaterializedBytes += uint64(len(record.ID) + len(record.Document))
 		result.Diagnostics.FallbackReads++
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(fallbackCfg, []columnWriteDocument{{ID: record.ID, Document: record.Document}})
 		if err != nil {

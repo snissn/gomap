@@ -14,6 +14,7 @@ ROWS="${ROWS:-4096}"
 SMOKE_SHAPES="${SMOKE_SHAPES:-selective_range_1pct}"
 SMOKE_DISTS="${SMOKE_DISTS:-clustered_monotonic}"
 SMOKE_READ_INTEGRITY="${SMOKE_READ_INTEGRITY:-cached_verify}"
+SMOKE_LAYOUTS="${SMOKE_LAYOUTS:-delta_varint}"
 SMOKE_INCLUDE_FALLBACK="${SMOKE_INCLUDE_FALLBACK:-true}"
 BENCHTIME="${BENCHTIME:-1x}"
 COUNT="${COUNT:-1}"
@@ -22,6 +23,7 @@ ROWS_1M="${ROWS_1M:-1048576}"
 SHAPES_1M="${SHAPES_1M:-no_filter,exact,tiny,range_1pct,range_10pct,all_pruned,all_match,tail}"
 DISTS_1M="${DISTS_1M:-clustered,reverse,partial_clustered,random,hotspot}"
 READ_INTEGRITY_1M="${READ_INTEGRITY_1M:-cached_verify}"
+LAYOUTS_1M="${LAYOUTS_1M:-delta_varint}"
 INCLUDE_FALLBACK_1M="${INCLUDE_FALLBACK_1M:-false}"
 BENCHTIME_1M="${BENCHTIME_1M:-3x}"
 COUNT_1M="${COUNT_1M:-1}"
@@ -30,6 +32,7 @@ PROFILE_ROWS="${PROFILE_ROWS:-$ROWS}"
 PROFILE_SHAPE="${PROFILE_SHAPE:-selective_range_1pct}"
 PROFILE_DIST="${PROFILE_DIST:-clustered_monotonic}"
 PROFILE_READ_INTEGRITY="${PROFILE_READ_INTEGRITY:-cached_verify}"
+PROFILE_LAYOUT="${PROFILE_LAYOUT:-delta_varint}"
 PROFILE_BENCHTIME="${PROFILE_BENCHTIME:-$BENCHTIME}"
 PROFILE_COUNT="${PROFILE_COUNT:-1}"
 
@@ -74,16 +77,25 @@ canonical_read_integrity() {
 	esac
 }
 
+canonical_layout_path() {
+	case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+		delta|delta_varint|"") printf '%s' "typed_column_part" ;;
+		raw|raw_int64|fixed|fixed_width) printf '%s' "typed_column_part_raw_int64" ;;
+		*) return 1 ;;
+	esac
+}
+
 run_bench() {
 	local name=$1
 	local rows=$2
 	local shapes=$3
 	local dists=$4
 	local read_integrity=$5
-	local include_fallback=$6
-	local benchtime=$7
-	local count=$8
-	local bench_regex=$9
+	local layouts=$6
+	local include_fallback=$7
+	local benchtime=$8
+	local count=$9
+	local bench_regex=${10}
 	local dir="$RUN_DIR/$name"
 	mkdir -p "$dir"
 	cat >"$dir/env.txt" <<EOF
@@ -91,6 +103,7 @@ TREEDB_TYPED_COLUMN_BENCH_ROWS=$rows
 TREEDB_TYPED_COLUMN_BENCH_SHAPES=$shapes
 TREEDB_TYPED_COLUMN_BENCH_DISTS=$dists
 TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY=$read_integrity
+TREEDB_TYPED_COLUMN_BENCH_LAYOUTS=$layouts
 TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=$include_fallback
 BENCHTIME=$benchtime
 COUNT=$count
@@ -103,6 +116,7 @@ EOF
 		export TREEDB_TYPED_COLUMN_BENCH_SHAPES="$shapes"
 		export TREEDB_TYPED_COLUMN_BENCH_DISTS="$dists"
 		export TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY="$read_integrity"
+		export TREEDB_TYPED_COLUMN_BENCH_LAYOUTS="$layouts"
 		export TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK="$include_fallback"
 		go test -run '^$' \
 			-bench "$bench_regex" \
@@ -116,11 +130,15 @@ EOF
 run_hot_profile() {
 	local dir="$RUN_DIR/hot_query_profile"
 	mkdir -p "$dir"
-	local shape dist read_integrity bench_regex cpu_profile alloc_profile
+	local shape dist read_integrity layout_path bench_regex cpu_profile alloc_profile
 	shape=$(canonical_shape "$PROFILE_SHAPE")
 	dist=$(canonical_dist "$PROFILE_DIST")
 	read_integrity=$(canonical_read_integrity "$PROFILE_READ_INTEGRITY")
-	bench_regex="^BenchmarkTypedColumnInt64PredicateAggregate/rows_${PROFILE_ROWS}/dist_${dist}/path_typed_column_part/shape_${shape}/timed_prepared_session_hot_scan/read_integrity_${read_integrity}/execution_serial/predicate_count_sum_avg$"
+	layout_path=$(canonical_layout_path "$PROFILE_LAYOUT") || {
+		echo "unsupported PROFILE_LAYOUT: $PROFILE_LAYOUT" >&2
+		exit 1
+	}
+	bench_regex="^BenchmarkTypedColumnInt64PredicateAggregate/rows_${PROFILE_ROWS}/dist_${dist}/path_${layout_path}/shape_${shape}/timed_prepared_session_hot_scan/read_integrity_${read_integrity}/execution_serial/predicate_count_sum_avg$"
 	cpu_profile="$dir/hot_query_cpu.pprof"
 	alloc_profile="$dir/process_allocs.pprof"
 	cat >"$dir/env.txt" <<EOF
@@ -128,6 +146,7 @@ TREEDB_TYPED_COLUMN_BENCH_ROWS=$PROFILE_ROWS
 TREEDB_TYPED_COLUMN_BENCH_SHAPES=$shape
 TREEDB_TYPED_COLUMN_BENCH_DISTS=$dist
 TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY=$PROFILE_READ_INTEGRITY
+TREEDB_TYPED_COLUMN_BENCH_LAYOUTS=$PROFILE_LAYOUT
 TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false
 TREEDB_TYPED_COLUMN_BENCH_HOT_CPU_PROFILE=$cpu_profile
 BENCHTIME=$PROFILE_BENCHTIME
@@ -146,6 +165,7 @@ EOF
 		export TREEDB_TYPED_COLUMN_BENCH_SHAPES="$shape"
 		export TREEDB_TYPED_COLUMN_BENCH_DISTS="$dist"
 		export TREEDB_TYPED_COLUMN_BENCH_READ_INTEGRITY="$PROFILE_READ_INTEGRITY"
+		export TREEDB_TYPED_COLUMN_BENCH_LAYOUTS="$PROFILE_LAYOUT"
 		export TREEDB_TYPED_COLUMN_BENCH_INCLUDE_FALLBACK=false
 		export TREEDB_TYPED_COLUMN_BENCH_HOT_CPU_PROFILE="$cpu_profile"
 		"${args[@]}"
@@ -179,16 +199,18 @@ Primary artifacts:
 
 The hot CPU profile uses the benchmark-owned
 \`TREEDB_TYPED_COLUMN_BENCH_HOT_CPU_PROFILE\` boundary around the prepared-session
-\`Run\` loop. The allocation profile is Go test process-wide; use benchmark
-\`B/op\` and \`allocs/op\` as the hot-loop allocation signal.
+\`Run\` loop. Set \`PROFILE_LAYOUT=raw_int64\` to profile the #1838 raw
+fixed-width path; set \`SMOKE_LAYOUTS\`/\`LAYOUTS_1M\` to \`delta,raw\` or
+\`all\` for layout comparisons. The allocation profile is Go test process-wide;
+use benchmark \`B/op\` and \`allocs/op\` as the hot-loop allocation signal.
 EOF
 
 if is_true "$RUN_SMOKE"; then
-	run_bench "smoke" "$ROWS" "$SMOKE_SHAPES" "$SMOKE_DISTS" "$SMOKE_READ_INTEGRITY" "$SMOKE_INCLUDE_FALLBACK" "$BENCHTIME" "$COUNT" '^BenchmarkTypedColumnInt64PredicateAggregate$'
+	run_bench "smoke" "$ROWS" "$SMOKE_SHAPES" "$SMOKE_DISTS" "$SMOKE_READ_INTEGRITY" "$SMOKE_LAYOUTS" "$SMOKE_INCLUDE_FALLBACK" "$BENCHTIME" "$COUNT" '^BenchmarkTypedColumnInt64PredicateAggregate$'
 fi
 
 if is_true "$RUN_1M"; then
-	run_bench "matrix_1m" "$ROWS_1M" "$SHAPES_1M" "$DISTS_1M" "$READ_INTEGRITY_1M" "$INCLUDE_FALLBACK_1M" "$BENCHTIME_1M" "$COUNT_1M" '^BenchmarkTypedColumnInt64PredicateAggregate$'
+	run_bench "matrix_1m" "$ROWS_1M" "$SHAPES_1M" "$DISTS_1M" "$READ_INTEGRITY_1M" "$LAYOUTS_1M" "$INCLUDE_FALLBACK_1M" "$BENCHTIME_1M" "$COUNT_1M" '^BenchmarkTypedColumnInt64PredicateAggregate$'
 fi
 
 if is_true "$RUN_HOT_PROFILE"; then

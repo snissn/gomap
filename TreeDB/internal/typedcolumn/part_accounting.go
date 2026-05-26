@@ -32,7 +32,10 @@ type ColumnPartByteAccounting struct {
 	MarkBytes               int                                    `json:"mark_bytes"`
 	SortKeyMetadataBytes    int                                    `json:"sort_key_metadata_bytes"`
 	AggregateMetadataBytes  int                                    `json:"aggregate_metadata_bytes"`
+	ColumnStatsBytes        int                                    `json:"column_stats_bytes"`
+	PruningMetadataBytes    int                                    `json:"pruning_metadata_bytes"`
 	DescriptorBytes         int                                    `json:"descriptor_bytes"`
+	LayoutContractBytes     int                                    `json:"layout_contract_bytes"`
 	LocatorBytes            int                                    `json:"locator_bytes"`
 	TotalStoredBytes        int                                    `json:"total_stored_bytes"`
 	BytesPerRow             float64                                `json:"bytes_per_row"`
@@ -171,6 +174,8 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 	out.MarkBytes = estimateSortKeyMarkBytes(p.Marks)
 	out.SortKeyMetadataBytes = estimateSortKeyMetadataBytes(p.Descriptor.SortKey)
 	out.AggregateMetadataBytes = aggregateMetadataStoredBytes(p.AggregateMetadata)
+	out.ColumnStatsBytes = columnStatsStoredBytes(p.ColumnStats)
+	out.PruningMetadataBytes = columnPruningStoredBytes(p.PruningMetadata)
 	out.DescriptorBytes = estimateColumnPartDescriptorBytes(p.Descriptor)
 	out.LocatorBytes = len(p.Locators) * rowLocatorBytes
 	for _, compression := range compressionByKey {
@@ -217,7 +222,10 @@ func (p *ColumnPart) ByteAccountingFromImage(image ColumnPartImage) ColumnPartBy
 	out.MarkBytes = image.CategoryBytes(ColumnPartImageCategoryMarks)
 	out.SortKeyMetadataBytes = image.CategoryBytes(ColumnPartImageCategorySortKeyMetadata)
 	out.AggregateMetadataBytes = image.CategoryBytes(ColumnPartImageCategoryAggregateMetadata)
+	out.ColumnStatsBytes = image.CategoryBytes(ColumnPartImageCategoryColumnStats)
+	out.PruningMetadataBytes = image.CategoryBytes(ColumnPartImageCategoryPruningMetadata)
 	out.DescriptorBytes = image.CategoryBytes(ColumnPartImageCategoryDescriptor)
+	out.LayoutContractBytes = image.CategoryBytes(ColumnPartImageCategoryLayoutContract)
 	out.LocatorBytes = image.CategoryBytes(ColumnPartImageCategoryLocators)
 	out.SerializedSections = image.SectionByteAccounting()
 	out.RecomputeTotals()
@@ -241,7 +249,10 @@ func (a ColumnPartByteAccounting) CategoryBytes() int {
 		a.MarkBytes +
 		a.SortKeyMetadataBytes +
 		a.AggregateMetadataBytes +
+		a.ColumnStatsBytes +
+		a.PruningMetadataBytes +
 		a.DescriptorBytes +
+		a.LayoutContractBytes +
 		a.LocatorBytes
 }
 
@@ -293,6 +304,22 @@ func aggregateMetadataStoredBytes(metadata map[string]AggregateMetadata) int {
 		}
 	}
 	return total
+}
+
+func columnStatsStoredBytes(stats ColumnPartStats) int {
+	raw, err := encodeColumnPartStatsSection(stats)
+	if err != nil {
+		return 0
+	}
+	return len(raw)
+}
+
+func columnPruningStoredBytes(pruning ColumnPartPruning) int {
+	raw, err := encodeColumnPartPruningSection(pruning)
+	if err != nil {
+		return 0
+	}
+	return len(raw)
 }
 
 type columnCompressionKey struct {

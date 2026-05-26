@@ -18,15 +18,16 @@ import (
 )
 
 const (
-	columnAssetManagerAssetsDirName     = "assets"
-	columnAssetManagerSegmentsDirName   = "segments"
-	columnAssetManagerIndexesDirName    = "indexes"
-	columnAssetManagerPreparedDirName   = "prepared"
-	columnAssetManagerQuarantineDirName = "quarantine"
-	columnAssetManagerTempDirName       = "tmp"
-	columnAssetSegmentFilePrefix        = "segment-"
-	columnAssetSegmentFileSuffix        = ".tca"
-	columnAssetM12ASegmentFileID        = uint32(1)
+	columnAssetManagerAssetsDirName        = "assets"
+	columnAssetManagerSegmentsDirName      = "segments"
+	columnAssetManagerIndexesDirName       = "indexes"
+	columnAssetManagerPreparedDirName      = "prepared"
+	columnAssetManagerQuarantineDirName    = "quarantine"
+	columnAssetManagerTempDirName          = "tmp"
+	columnAssetSegmentFilePrefix           = "segment-"
+	columnAssetSegmentFileSuffix           = ".tca"
+	columnAssetM12ASegmentFileID           = uint32(1)
+	columnAssetDirectViewSegmentFileIDBase = uint32(1 << 20)
 )
 
 const columnAssetSegmentWriteLockStripes = 64
@@ -276,7 +277,41 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 }
 
 func writeTypedColumnPartAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	if columnStoreConfigHasDirectViewFixedWidthColumn(cfg) {
+		fileID, err := directViewTypedColumnSegmentFileID(generation)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, fileID)
+	}
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID)
+}
+
+func columnStoreConfigHasDirectViewFixedWidthColumn(cfg ColumnStoreConfig) bool {
+	for _, column := range cfg.Columns {
+		if !columnStoreColumnIsTypedColumnPart(column) || column.Nullable {
+			continue
+		}
+		switch column.ValueType {
+		case ColumnStoreValueInt64:
+			if column.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian {
+				return true
+			}
+		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+			if column.VectorDims > 0 || column.ValueType == ColumnStoreValueAdjacencyList {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func directViewTypedColumnSegmentFileID(generation uint64) (uint32, error) {
+	base := uint64(columnAssetDirectViewSegmentFileIDBase)
+	if generation == 0 || generation > uint64(^uint32(0))-base {
+		return 0, fmt.Errorf("collections: typed-column direct-view generation=%d cannot form segment file id", generation)
+	}
+	return uint32(base + generation), nil
 }
 
 func writeColumnAggregateMetadataAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
@@ -384,6 +419,9 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	}
 	maxFileID := uint32(0)
 	for _, segment := range segments {
+		if segment.fileID >= columnAssetDirectViewSegmentFileIDBase {
+			continue
+		}
 		if segment.fileID > maxFileID {
 			maxFileID = segment.fileID
 		}
@@ -391,8 +429,8 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if maxFileID < columnAssetM12ASegmentFileID {
 		maxFileID = columnAssetM12ASegmentFileID
 	}
-	if maxFileID == ^uint32(0) {
-		return 0, errors.New("collections: column asset segment file_id exhausted")
+	if maxFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
+		return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 	}
 	return maxFileID + 1, nil
 }
@@ -442,8 +480,9 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 
 func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
 	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
-		if cache.nextFileID == 0 {
-			return 0, errors.New("collections: column asset segment file_id exhausted")
+		if cache.nextFileID == 0 || cache.nextFileID >= columnAssetDirectViewSegmentFileIDBase {
+			cache.nextFileID = 0
+			return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 		}
 		return cache.nextFileID, nil
 	}
@@ -473,7 +512,7 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 	}
 	cache.segmentDir = cleanSegmentDir
 	cache.valid = true
-	if allocatedFileID == ^uint32(0) {
+	if allocatedFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
 		cache.nextFileID = 0
 		return
 	}
@@ -1014,7 +1053,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 				return nil, err
 			}
-			if err := c.trackResourceRead(ref, raw, mappedresource.SourceMapped, ""); err != nil {
+			if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceMapped, ""); err != nil {
 				return nil, err
 			}
 			c.lastView = true
@@ -1041,7 +1080,7 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if c.returnViews {
 		fallback = mappedresource.FallbackReadAt
 	}
-	if err := c.trackResourceRead(ref, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
+	if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
 		return nil, err
 	}
 	return raw, nil
@@ -1079,61 +1118,68 @@ func (c *columnPhysicalAssetReadCache) validateFullRef(ref ColumnAssetRef) (int,
 }
 
 func (c *columnPhysicalAssetReadCache) readRange(ref ColumnAssetRef, relativeOffset int64, length int64) ([]byte, error) {
+	raw, _, err := c.readRangeHandle(ref, relativeOffset, length)
+	return raw, err
+}
+
+func (c *columnPhysicalAssetReadCache) readRangeHandle(ref ColumnAssetRef, relativeOffset int64, length int64) ([]byte, *mappedresource.Handle, error) {
 	if c == nil {
-		return nil, errors.New("collections: nil column physical asset read cache")
+		return nil, nil, errors.New("collections: nil column physical asset read cache")
 	}
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if ref.Namespace != c.namespace {
-		return nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
+		return nil, nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
 	}
 	if relativeOffset < 0 || length <= 0 {
-		return nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d is invalid", relativeOffset, length)
+		return nil, nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d is invalid", relativeOffset, length)
 	}
 	end := relativeOffset + length
 	if end < relativeOffset || end > ref.Length {
-		return nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d outside ref length=%d", relativeOffset, length, ref.Length)
+		return nil, nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d outside ref length=%d", relativeOffset, length, ref.Length)
 	}
 	if ref.Offset > int64(^uint64(0)>>1)-relativeOffset {
-		return nil, fmt.Errorf("collections: column physical asset range base offset=%d relative=%d overflows", ref.Offset, relativeOffset)
+		return nil, nil, fmt.Errorf("collections: column physical asset range base offset=%d relative=%d overflows", ref.Offset, relativeOffset)
 	}
 	rangeRef := ref
 	rangeRef.Offset = ref.Offset + relativeOffset
 	rangeRef.Length = length
 	reader, err := c.fileForRef(ref)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if c.lastView {
 		c.lastView = false
 	}
 	if c.returnViews {
 		if raw, ok, err := reader.readView(rangeRef); err != nil {
-			return nil, err
+			return nil, nil, err
 		} else if ok {
-			if err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceMapped, ""); err != nil {
-				return nil, err
+			handle, err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceMapped, "")
+			if err != nil {
+				return nil, nil, err
 			}
 			c.lastView = true
-			return raw, nil
+			return raw, handle, nil
 		}
 	}
 	if length > int64(maxCollectionInt) {
-		return nil, fmt.Errorf("collections: column physical asset range length=%d overflows int", length)
+		return nil, nil, fmt.Errorf("collections: column physical asset range length=%d overflows int", length)
 	}
 	raw, err := readColumnPhysicalAssetFromFileWithChecksum(reader.file, rangeRef, make([]byte, int(length)), false)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var fallback mappedresource.FallbackReason
 	if c.returnViews {
 		fallback = mappedresource.FallbackReadAt
 	}
-	if err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
-		return nil, err
+	handle, err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceHeapCopy, fallback)
+	if err != nil {
+		return nil, nil, err
 	}
-	return raw, nil
+	return raw, handle, nil
 }
 
 func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) error {
@@ -1151,13 +1197,13 @@ func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref Column
 	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
 }
 
-func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw []byte, source mappedresource.Source, fallback mappedresource.FallbackReason) error {
+func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw []byte, source mappedresource.Source, fallback mappedresource.FallbackReason) (*mappedresource.Handle, error) {
 	if c == nil || c.resourceManager == nil {
-		return nil
+		return nil, nil
 	}
 	key := mappedResourceKeyForColumnAssetRef(ref)
 	if key.Length != int64(len(raw)) {
-		return fmt.Errorf("collections: column asset mapped-resource key length=%d raw bytes=%d", key.Length, len(raw))
+		return nil, fmt.Errorf("collections: column asset mapped-resource key length=%d raw bytes=%d", key.Length, len(raw))
 	}
 	scope := c.resourceScope
 	if scope.Kind == "" {
@@ -1173,7 +1219,7 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 	if source == mappedresource.SourceMapped {
 		for _, handle := range c.resourceHandles {
 			if handle != nil && !handle.Released() && handle.Source() == source && handle.Key().Equal(key) {
-				return nil
+				return handle, nil
 			}
 		}
 	}
@@ -1184,7 +1230,7 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 		// heap handle active. Mapped view handles remain pinned until cache close,
 		// with duplicate keys deduplicated above.
 		if err := c.releaseResourceHandlesBySource(mappedresource.SourceHeapCopy); err != nil {
-			return err
+			return nil, err
 		}
 		if len(raw) != 0 {
 			// AcquireBytes requires immutable bytes for the handle lifetime. Syscall
@@ -1201,10 +1247,10 @@ func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw
 		ResourceRoot:   c.rootDir,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.resourceHandles = append(c.resourceHandles, handle)
-	return nil
+	return handle, nil
 }
 
 func mappedResourceKeyForColumnAssetRef(ref ColumnAssetRef) mappedresource.Key {
