@@ -54,9 +54,12 @@ remain aligned.
 
 `DirectViewCertified` remains false for bool bitpack/RLE, strings/dictionaries,
 nullable/default wrappers, compressed payloads, variable-width delta layouts,
-physical row assets, and adjacency direct views. Synthetic or legacy refs that
-start at a misaligned segment offset must fail closed or use fallback planning
-even when their image-local layout contract is otherwise valid.
+physical row assets, and adjacency direct views. The adapter's internal
+`__treedb_primary_id` row-locator column is also not a #1895 certified value
+column; only declared `ColumnStoreValue*` typed-column-part fields may be active
+writer certification targets. Synthetic or legacy refs that start at a
+misaligned segment offset must fail closed or use fallback planning even when
+their image-local layout contract is otherwise valid.
 
 ## Storage owner and consumer matrix
 

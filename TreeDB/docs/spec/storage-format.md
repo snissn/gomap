@@ -527,9 +527,11 @@ As of the #1895 pre-alpha format update, newly written `typed_column_part` image
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
 and fixed-dimension `raw_float32_vector` typed-column payload sections as
-`DirectViewCertified`. The contract records section/block offsets, lengths,
-checksums, element size, endian, length multiple, row count, fixed elements per
-row, and null/default exclusion. Image padding bytes are deterministic zero bytes
+`DirectViewCertified`; the adapter-internal `__treedb_primary_id` row-locator
+column is not a declared-value direct-view certification target. The contract
+records section/block offsets, lengths, checksums, element size, endian, length
+multiple, row count, fixed elements per row, and null/default exclusion. Image
+padding bytes are deterministic zero bytes
 and are included in serialized-image byte accounting. When a typed-column-part
 asset contains an active direct-view-certified candidate, the column asset segment
 writer/appender also emits deterministic zero prefix padding as needed so the

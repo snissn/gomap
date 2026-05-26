@@ -305,6 +305,13 @@ func TestTypedColumnDirectViewWriterStorageAccounting1895(t *testing.T) {
 			if got := column.DirectViewCertified; got != tc.wantDirect {
 				t.Fatalf("%s DirectViewCertified=%v want %v contract=%+v", tc.fixture, got, tc.wantDirect, column)
 			}
+			wantCertifiedColumns := 0
+			if tc.wantDirect {
+				wantCertifiedColumns = 1
+			}
+			if cert.DirectViewCertified != wantCertifiedColumns {
+				t.Fatalf("%s certified columns=%d want %d (declared target only; internal primary-id must not certify)", tc.fixture, cert.DirectViewCertified, wantCertifiedColumns)
+			}
 			if tc.wantDeferred && classification.Support != typedColumnDirectViewDeferredFallbackOnly {
 				t.Fatalf("%s classification=%+v want deferred fallback", tc.fixture, classification)
 			}

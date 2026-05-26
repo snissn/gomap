@@ -1792,6 +1792,32 @@ func TestColumnAssetTypedColumnPartDirectViewAppenderPaddingAlignment(t *testing
 	}
 }
 
+func TestColumnAssetTypedColumnPartFallbackSegmentsDoNotCertifyInternalPrimaryID(t *testing.T) {
+	field := TypedStorageField{Name: "flag", Path: "flag", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueBool}
+	cfg := columnAssetTypedColumnPartDirectViewTestConfig(t, "events_bool_fallback", field)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	payloads := [][]byte{
+		columnAssetTypedColumnPartDirectViewTestImage(t, field, []columnDeclaredValue{{Type: ColumnStoreValueBool, Present: true, Bool: true}, {Type: ColumnStoreValueBool, Present: true, Bool: false}, {Type: ColumnStoreValueBool, Present: true, Bool: true}}),
+		columnAssetTypedColumnPartDirectViewTestImage(t, field, []columnDeclaredValue{{Type: ColumnStoreValueBool, Present: true, Bool: false}, {Type: ColumnStoreValueBool, Present: true, Bool: false}}),
+	}
+	firstRef, err := writeTypedColumnPartAssetToManager(root, cfg, payloads[0], 31, 1)
+	if err != nil {
+		t.Fatalf("first writeTypedColumnPartAssetToManager: %v", err)
+	}
+	secondRef, err := writeTypedColumnPartAssetToManager(root, cfg, payloads[1], 32, 2)
+	if err != nil {
+		t.Fatalf("second writeTypedColumnPartAssetToManager: %v", err)
+	}
+	if firstRef.FileID != columnAssetM12ASegmentFileID || secondRef.FileID != columnAssetM12ASegmentFileID {
+		t.Fatalf("fallback refs first=%+v second=%+v want regular shared segment", firstRef, secondRef)
+	}
+	if secondRef.Offset != firstRef.Offset+firstRef.Length {
+		t.Fatalf("fallback second offset=%d want immediately after first end=%d", secondRef.Offset, firstRef.Offset+firstRef.Length)
+	}
+	assertColumnAssetNoDirectViewCertificationForTest(t, payloads[0], "flag", typedColumnAdapterPrimaryIDColumn)
+	assertColumnAssetNoDirectViewCertificationForTest(t, payloads[1], "flag", typedColumnAdapterPrimaryIDColumn)
+}
+
 func columnAssetDirectViewAlignmentTestPayloads(t *testing.T) (ColumnStoreConfig, [][]byte) {
 	t.Helper()
 	field := TypedStorageField{Name: "count", Path: "count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}
@@ -1846,6 +1872,30 @@ func assertColumnAssetDirectViewAlignedTypedPartRef(t *testing.T, ref ColumnAsse
 	for i, block := range cert.Blocks {
 		if (ref.Offset+int64(block.PayloadOffset))%int64(cert.Alignment) != 0 {
 			t.Fatalf("block[%d] absolute payload offset ref=%d payload=%d alignment=%d", i, ref.Offset, block.PayloadOffset, cert.Alignment)
+		}
+	}
+}
+
+func assertColumnAssetNoDirectViewCertificationForTest(t *testing.T, payload []byte, columns ...string) {
+	t.Helper()
+	image, err := typedcolumn.ParseColumnPartImage(payload)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	if certification.DirectViewCertified != 0 {
+		t.Fatalf("certification direct-view columns=%d want none for fallback-only typed-column part", certification.DirectViewCertified)
+	}
+	for _, column := range columns {
+		cert, ok := certification.Column(column)
+		if !ok {
+			t.Fatalf("missing contract column %q", column)
+		}
+		if cert.DirectViewCertified {
+			t.Fatalf("column %q contract=%+v want no direct-view certification", column, cert)
 		}
 	}
 }
