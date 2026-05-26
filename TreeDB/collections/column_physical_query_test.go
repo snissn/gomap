@@ -2188,6 +2188,14 @@ func TestColumnPhysicalQueryPredicatesFailClosedForUnsupportedStates1869(t *test
 	if _, err := multiRef.RunColumnPhysicalQueryParallel(parallelReq, 4); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "parallel physical predicates") {
 		t.Fatalf("parallel predicate err=%v want fail-closed unsupported", err)
 	}
+
+	hourReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us", Predicates: []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "kind_00"}}}
+	if _, err := reopened.RunColumnPhysicalQuery(hourReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "hour-count physical predicates") {
+		t.Fatalf("hour-count predicate err=%v want specific fail-closed unsupported", err)
+	}
+	if _, err := reopened.PrepareColumnPhysicalQuery(hourReq); !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "hour-count physical predicates") {
+		t.Fatalf("prepared hour-count predicate err=%v want specific fail-closed unsupported", err)
+	}
 }
 
 func assertColumnPhysicalPredicateResult1869(t *testing.T, result ColumnPhysicalQueryResult, wantScanned, wantMatched int, wantCount map[string]int, wantInt64 map[string]int64) {

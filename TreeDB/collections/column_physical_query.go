@@ -210,6 +210,10 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
 	}
+	if req.Kind == ColumnPhysicalQueryHourCount && columnPhysicalQueryHasPredicates(req) {
+		_ = readCache.close()
+		return nil, fmt.Errorf("%w: hour-count physical predicates require a fused grouped-hour reducer", ErrColumnQueryPlanUnsupported)
+	}
 	if req.AggregateMetadataName != "" {
 		metadata, err = prepareColumnAggregateMetadataRunner(view, req, &readCache)
 		if err != nil {
