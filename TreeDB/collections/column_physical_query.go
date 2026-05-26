@@ -229,6 +229,11 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			return nil, fmt.Errorf("%w: prepared aggregate metadata query requires metadata assets", ErrColumnQueryPlanUnsupported)
 		}
 	} else if !columnPhysicalQueryHasPredicates(req) && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
+		// ColumnPhysicalQueryGroupCountAndDistinct intentionally skips the
+		// columnPhysicalQueryHasPredicates/no-predicate direct executor path:
+		// newColumnPhysicalQueryExecutor does not implement fused q2 semantics, so
+		// prepared execution must use the dictionary sidecar runner unless direct
+		// fused support is added and validated here.
 		exec, err = newColumnPhysicalQueryExecutor(view.Config, req)
 		if err != nil {
 			_ = readCache.close()

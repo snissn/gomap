@@ -2065,6 +2065,12 @@ func TestColumnPhysicalQueryGroupCountAndDistinctFused1870(t *testing.T) {
 		}
 		assertFused(t, result)
 	})
+	t.Run("parallel fail closed", func(t *testing.T) {
+		_, err := collection.RunColumnPhysicalQueryParallel(req, 4)
+		if !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+			t.Fatalf("RunColumnPhysicalQueryParallel fused q2 err=%v want ErrColumnQueryPlanUnsupported", err)
+		}
+	})
 	t.Run("prepared", func(t *testing.T) {
 		runner, err := collection.PrepareColumnPhysicalQuery(req)
 		if err != nil {
