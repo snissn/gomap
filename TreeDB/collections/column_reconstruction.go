@@ -203,6 +203,7 @@ func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, value
 }
 
 func reconstructColumnJSONDocumentProjected(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	projectionActive := projection.active()
 	var obj map[string]any
 	var err error
 	if len(bytes.TrimSpace(retained)) == 0 {
@@ -217,27 +218,48 @@ func reconstructColumnJSONDocumentProjected(cfg ColumnStoreConfig, retained []by
 		return nil, fmt.Errorf("collections: column reconstruction values=%d columns=%d", len(values), len(cfg.Columns))
 	}
 	declared := make([]columnReconstructedDeclaredValue, len(cfg.Columns))
-	for i, col := range cfg.Columns {
-		if projection.active() && !projection.wantsPath(col.Path) {
-			if stats != nil {
-				stats.FieldsSkipped++
+	if projectionActive {
+		for i, col := range cfg.Columns {
+			if !projection.wantsPath(col.Path) {
+				if stats != nil {
+					stats.FieldsSkipped++
+				}
+				continue
 			}
-			continue
-		}
-		raw, err := columnDeclaredValueToJSON(values[i])
-		if err != nil {
-			return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
-		}
-		declared[i] = columnReconstructedDeclaredValue{
-			Value:   raw,
-			Present: values[i].Present,
-		}
-		if !values[i].Present {
-			continue
-		}
-		if strings.Contains(col.Path, ".") {
-			if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
+			raw, err := columnDeclaredValueToJSON(values[i])
+			if err != nil {
 				return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+			}
+			declared[i] = columnReconstructedDeclaredValue{
+				Value:   raw,
+				Present: values[i].Present,
+			}
+			if !values[i].Present {
+				continue
+			}
+			if strings.Contains(col.Path, ".") {
+				if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
+					return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+				}
+			}
+		}
+	} else {
+		for i, col := range cfg.Columns {
+			raw, err := columnDeclaredValueToJSON(values[i])
+			if err != nil {
+				return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+			}
+			declared[i] = columnReconstructedDeclaredValue{
+				Value:   raw,
+				Present: values[i].Present,
+			}
+			if !values[i].Present {
+				continue
+			}
+			if strings.Contains(col.Path, ".") {
+				if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
+					return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+				}
 			}
 		}
 	}
@@ -258,10 +280,12 @@ func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[st
 }
 
 func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	projectionActive := projection.active()
 	var b bytes.Buffer
 	b.WriteByte('{')
 	written := make(map[string]struct{}, len(cfg.Columns))
 	first := true
+	reconstructed := uint64(0)
 	writeField := func(key string, value any) error {
 		if !first {
 			b.WriteByte(',')
@@ -278,33 +302,46 @@ func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retain
 		b.Write(keyBytes)
 		b.WriteByte(':')
 		b.Write(valueBytes)
-		if stats != nil {
-			stats.FieldsReconstructed++
-		}
+		reconstructed++
 		return nil
 	}
-	for i, col := range cfg.Columns {
-		if strings.Contains(col.Path, ".") {
-			continue
-		}
-		if projection.active() && !projection.wantsPath(col.Path) {
+	if projectionActive {
+		for i, col := range cfg.Columns {
+			if strings.Contains(col.Path, ".") {
+				continue
+			}
+			if !projection.wantsPath(col.Path) {
+				written[col.Path] = struct{}{}
+				continue
+			}
+			if !declared[i].Present {
+				continue
+			}
+			if err := writeField(col.Path, declared[i].Value); err != nil {
+				return nil, err
+			}
 			written[col.Path] = struct{}{}
-			continue
 		}
-		if !declared[i].Present {
-			continue
+	} else {
+		for i, col := range cfg.Columns {
+			if strings.Contains(col.Path, ".") {
+				continue
+			}
+			if !declared[i].Present {
+				continue
+			}
+			if err := writeField(col.Path, declared[i].Value); err != nil {
+				return nil, err
+			}
+			written[col.Path] = struct{}{}
 		}
-		if err := writeField(col.Path, declared[i].Value); err != nil {
-			return nil, err
-		}
-		written[col.Path] = struct{}{}
 	}
 	keys := make([]string, 0, len(retained))
 	for key := range retained {
 		if _, ok := written[key]; ok {
 			continue
 		}
-		if projection.active() && !projection.wantsPath(key) {
+		if projectionActive && !projection.wantsPath(key) {
 			if stats != nil {
 				stats.FieldsSkipped++
 			}
@@ -319,6 +356,9 @@ func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retain
 		}
 	}
 	b.WriteByte('}')
+	if stats != nil {
+		stats.FieldsReconstructed += reconstructed
+	}
 	return b.Bytes(), nil
 }
 
@@ -335,7 +375,7 @@ func marshalProjectedJSONObject(obj map[string]any, projection *documentProjecti
 	b.WriteByte('{')
 	keys := make([]string, 0, len(obj))
 	for key := range obj {
-		if projection.active() && !projection.wantsPath(key) {
+		if !projection.wantsPath(key) {
 			if stats != nil {
 				stats.FieldsSkipped++
 			}
@@ -359,11 +399,11 @@ func marshalProjectedJSONObject(obj map[string]any, projection *documentProjecti
 		b.Write(keyBytes)
 		b.WriteByte(':')
 		b.Write(valueBytes)
-		if stats != nil {
-			stats.FieldsReconstructed++
-		}
 	}
 	b.WriteByte('}')
+	if stats != nil {
+		stats.FieldsReconstructed += uint64(len(keys))
+	}
 	return b.Bytes(), nil
 }
 
