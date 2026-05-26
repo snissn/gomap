@@ -44,8 +44,11 @@ type VectorIndexSearcherSearchOptions struct {
 	TopK int
 	// EfSearch bounds graph exploration. Zero uses the persisted index default.
 	EfSearch int
-	// IncludeDocuments materializes full documents after top-k selection.
+	// IncludeDocuments materializes documents after top-k selection.
 	IncludeDocuments bool
+	// DocumentFetchOptions controls optional projected final-fetch materialization.
+	// It is used only when IncludeDocuments is true; the zero value returns full documents.
+	DocumentFetchOptions DocumentFetchOptions
 }
 
 // VectorIndexSearchResult is one public vector-index search hit.
@@ -90,6 +93,12 @@ type VectorIndexSearchStats struct {
 	DocumentsMissing uint64 `json:"documents_missing,omitempty"`
 	// DocumentBytes is the materialized response document byte count.
 	DocumentBytes uint64 `json:"document_bytes,omitempty"`
+	// DocumentOutputBytes is the materialized response document byte count attributed to projection/materialization output.
+	DocumentOutputBytes uint64 `json:"document_output_bytes,omitempty"`
+	// DocumentFieldsReconstructed counts top-level fields emitted into response documents.
+	DocumentFieldsReconstructed uint64 `json:"document_fields_reconstructed,omitempty"`
+	// DocumentFieldsSkipped counts declared or retained top-level fields skipped by projection.
+	DocumentFieldsSkipped uint64 `json:"document_fields_skipped,omitempty"`
 	// DocumentFetchNanos attributes end-to-end post-top-k document fetch/materialization time.
 	DocumentFetchNanos uint64 `json:"document_fetch_nanos,omitempty"`
 	// DocumentRetainedFetches counts primary retained-payload fetches for document materialization.
@@ -254,10 +263,11 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		return response, err
 	}
 	response, err = searcher.Search(VectorIndexSearcherSearchOptions{
-		Query:            opts.Query,
-		TopK:             opts.TopK,
-		EfSearch:         opts.EfSearch,
-		IncludeDocuments: opts.IncludeDocuments,
+		Query:                opts.Query,
+		TopK:                 opts.TopK,
+		EfSearch:             opts.EfSearch,
+		IncludeDocuments:     opts.IncludeDocuments,
+		DocumentFetchOptions: opts.DocumentFetchOptions,
 	})
 	documentView := searcher.documentView
 	if closeErr := searcher.Close(); err == nil && closeErr != nil {
@@ -421,6 +431,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return response, err
 	}
+	if !opts.IncludeDocuments && documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
+		return response, errors.New("collections: vector index document projection requires IncludeDocuments")
+	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:     opts.TopK,
@@ -465,10 +478,11 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		for i := range results {
 			ids[i] = results[i].ID
 		}
+		documentFetchOptions := opts.DocumentFetchOptions
 		var documents DocumentFetchResponse
 		var err error
 		if columnStoreCanReconstructDocument(s.catalog.meta) {
-			rowRefs, lookupErr := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{})
+			rowRefs, lookupErr := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{ColumnAssetReadIntegrity: documentFetchOptions.ColumnAssetReadIntegrity})
 			if lookupErr != nil {
 				return response, lookupErr
 			}
@@ -485,13 +499,13 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 				}
 				refs[i] = rowRefs.Results[i].RowRef
 			}
-			documents, err = s.documentView.FetchDocumentsByRowRef(refs, DocumentFetchOptions{})
+			documents, err = s.documentView.FetchDocumentsByRowRef(refs, documentFetchOptions)
 			if err != nil {
 				return response, err
 			}
 		} else {
 			response.Stats.DocumentRowRefUnsupported++
-			documents, err = s.documentView.FetchDocumentsByID(ids, DocumentFetchOptions{})
+			documents, err = s.documentView.FetchDocumentsByID(ids, documentFetchOptions)
 			if err != nil {
 				return response, err
 			}

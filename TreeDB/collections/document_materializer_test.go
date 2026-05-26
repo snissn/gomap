@@ -3,7 +3,9 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -376,6 +378,138 @@ func TestCollectionReadViewBoundSnapshotIgnoresLaterWrites(t *testing.T) {
 	}
 }
 
+func TestCollectionReadViewProjectionValidationMatrix1875(t *testing.T) {
+	d, col := newDocumentProjectionTestCollection1875(t)
+	defer func() { _ = d.Close() }()
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("e1"), []byte("e2")},
+		[][]byte{
+			[]byte(`{"row_id":1,"row_maybe":null,"kind":"alpha","score":1.5,"typed_maybe":null,"payload":"retained-a","note":null,"extra":{"nested":true}}`),
+			[]byte(`{"row_id":2,"row_maybe":7,"kind":"beta","score":2.5,"typed_maybe":"present","payload":"retained-b","note":"kept","extra":{"nested":false}}`),
+		},
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+
+	got, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{IncludePaths: []string{"payload", "row_id", "kind", "typed_maybe", "row_maybe", "note"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID include projection: %v", err)
+	}
+	assertJSONMapEqual1875(t, got.Results[0].Document, map[string]any{
+		"row_id":      float64(1),
+		"row_maybe":   nil,
+		"kind":        "alpha",
+		"typed_maybe": nil,
+		"payload":     "retained-a",
+		"note":        nil,
+	})
+	if got.Stats.OutputBytes != got.Stats.DocumentBytes || got.Stats.FieldsReconstructed != 6 || got.Stats.FieldsSkipped == 0 {
+		t.Fatalf("stats=%+v want output bytes, six reconstructed fields, and skipped fields", got.Stats)
+	}
+
+	precedence, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{IncludePaths: []string{"kind", "payload"}, ExcludePaths: []string{"kind"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID precedence projection: %v", err)
+	}
+	assertJSONMapEqual1875(t, precedence.Results[0].Document, map[string]any{"payload": "retained-a"})
+
+	missing, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{IncludePaths: []string{"missing", "payload"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID missing projection: %v", err)
+	}
+	assertJSONMapEqual1875(t, missing.Results[0].Document, map[string]any{"payload": "retained-a"})
+
+	retainedNested, err := view.FetchDocumentsByID([][]byte{[]byte("e2")}, DocumentFetchOptions{IncludePaths: []string{"extra"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID retained nested top-level projection: %v", err)
+	}
+	assertJSONMapEqual1875(t, retainedNested.Results[0].Document, map[string]any{"extra": map[string]any{"nested": false}})
+
+	if _, err := view.FetchDocumentsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{IncludePaths: []string{"extra.nested"}}); err == nil || !strings.Contains(err.Error(), "nested paths") {
+		t.Fatalf("nested projection err=%v want fail-closed nested path rejection", err)
+	}
+
+	refs, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e2")}, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatalf("LookupDocumentRowRefsByID: %v", err)
+	}
+	rowRefProjected, err := view.FetchDocumentsByRowRef([]DocumentRowRef{refs.Results[0].RowRef}, DocumentFetchOptions{ExcludePaths: []string{"score", "extra"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByRowRef projected: %v", err)
+	}
+	rowRefDoc := decodeJSONDocumentMap1875(t, rowRefProjected.Results[0].Document)
+	if _, ok := rowRefDoc["score"]; ok {
+		t.Fatalf("row-ref projection retained excluded score: %s", rowRefProjected.Results[0].Document)
+	}
+	if _, ok := rowRefDoc["extra"]; ok {
+		t.Fatalf("row-ref projection retained excluded extra: %s", rowRefProjected.Results[0].Document)
+	}
+	if rowRefProjected.Stats.PointRowFetches != 1 || rowRefProjected.Stats.FieldsSkipped == 0 {
+		t.Fatalf("row-ref projection stats=%+v want point fetch and skipped fields", rowRefProjected.Stats)
+	}
+}
+
+func TestCollectionReadViewProjectionExcludeEmbeddingAndIncludeMetadata1875(t *testing.T) {
+	d, col := newDocumentProjectionVectorTestCollection1875(t, TypedStorageOwnerRowAsset)
+	defer func() { _ = d.Close() }()
+	if _, err := col.Insert([]byte("doc-a"), []byte(`{"row_id":1,"kind":"vector","did":"doc-a","embedding":[1,0,0],"payload":"retained"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	got, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{ExcludePaths: []string{"embedding"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID exclude embedding: %v", err)
+	}
+	doc := decodeJSONDocumentMap1875(t, got.Results[0].Document)
+	if _, ok := doc["embedding"]; ok {
+		t.Fatalf("exclude embedding document=%s", got.Results[0].Document)
+	}
+	if doc["did"] != "doc-a" || doc["kind"] != "vector" || doc["payload"] != "retained" {
+		t.Fatalf("exclude embedding document=%v want metadata and retained payload", doc)
+	}
+	selected, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{IncludePaths: []string{"did", "kind"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID include metadata: %v", err)
+	}
+	assertJSONMapEqual1875(t, selected.Results[0].Document, map[string]any{"kind": "vector", "did": "doc-a"})
+	if selected.Stats.FieldsSkipped == 0 || selected.Stats.FieldsReconstructed != 2 {
+		t.Fatalf("include metadata stats=%+v want skipped fields and two reconstructed fields", selected.Stats)
+	}
+}
+
+func TestCollectionReadViewProjectionTypedColumnPartEmbeddingSkip1875(t *testing.T) {
+	d, col := newDocumentProjectionVectorTestCollection1875(t, TypedStorageOwnerColumnPart)
+	defer func() { _ = d.Close() }()
+	if _, err := col.Insert([]byte("doc-a"), []byte(`{"row_id":1,"kind":"vector","did":"doc-a","embedding":[1,0,0],"payload":"retained"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	got, err := view.FetchDocumentsByID([][]byte{[]byte("doc-a")}, DocumentFetchOptions{ExcludePaths: []string{"embedding"}})
+	if err != nil {
+		t.Fatalf("FetchDocumentsByID typed-column exclude embedding: %v", err)
+	}
+	doc := decodeJSONDocumentMap1875(t, got.Results[0].Document)
+	if _, ok := doc["embedding"]; ok {
+		t.Fatalf("typed-column exclude embedding document=%s", got.Results[0].Document)
+	}
+	if got.Stats.TypedColumnRows != 1 || got.Stats.FieldsSkipped == 0 {
+		t.Fatalf("typed-column projection stats=%+v want typed-column row and skipped embedding", got.Stats)
+	}
+}
+
 func TestCollectionReadViewResponseDocumentsAreOwned(t *testing.T) {
 	d, col := newDocumentMaterializerTestCollection(t)
 	defer func() { _ = d.Close() }()
@@ -719,6 +853,78 @@ func BenchmarkCollectionReadViewFetchDocumentsByIDMaterializerReadAtFallback(b *
 	benchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b, true)
 }
 
+func BenchmarkCollectionReadViewFetchDocumentsByIDMaterializerProjection1875(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		opts DocumentFetchOptions
+	}{
+		{name: "full", opts: DocumentFetchOptions{}},
+		{name: "exclude_embedding", opts: DocumentFetchOptions{ExcludePaths: []string{"embedding"}}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			benchmarkCollectionReadViewFetchDocumentsByIDMaterializerProjection1875(b, tc.opts)
+		})
+	}
+}
+
+func benchmarkCollectionReadViewFetchDocumentsByIDMaterializerProjection1875(b *testing.B, opts DocumentFetchOptions) {
+	b.Helper()
+	const (
+		rows = 1024
+		dims = 128
+	)
+	d, col := newDocumentProjectionVectorTestCollectionWithDims1875(b, TypedStorageOwnerRowAsset, dims)
+	defer func() { _ = d.Close() }()
+	ids := make([][]byte, rows)
+	docs := make([][]byte, rows)
+	for i := 0; i < rows; i++ {
+		vector := make([]float32, dims)
+		for j := range vector {
+			vector[j] = float32((i+j)%17) / 17
+		}
+		raw, err := json.Marshal(map[string]any{
+			"row_id":    int64(i),
+			"kind":      "vector",
+			"did":       fmt.Sprintf("doc-%04d", i),
+			"embedding": vector,
+			"payload":   fmt.Sprintf("retained-%d", i),
+		})
+		if err != nil {
+			b.Fatalf("json.Marshal row %d: %v", i, err)
+		}
+		ids[i] = []byte(fmt.Sprintf("doc-%04d", i))
+		docs[i] = raw
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		b.Fatalf("InsertBatch: %v", err)
+	}
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		b.Fatalf("OpenCollectionReadView: %v", err)
+	}
+	defer func() { _ = view.Close() }()
+	fetchIDs := [][]byte{ids[37], ids[128], ids[255], ids[512], ids[700], ids[900], ids[1000], ids[3], ids[44], ids[88]}
+	if _, err := view.FetchDocumentsByID(fetchIDs, opts); err != nil {
+		b.Fatalf("warm FetchDocumentsByID: %v", err)
+	}
+	measured, err := view.FetchDocumentsByID(fetchIDs, opts)
+	if err != nil {
+		b.Fatalf("measure FetchDocumentsByID: %v", err)
+	}
+	stats := measured.Stats
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := view.FetchDocumentsByID(fetchIDs, opts)
+		if err != nil {
+			b.Fatalf("FetchDocumentsByID: %v", err)
+		}
+		vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
+	}
+	b.StopTimer()
+	reportDocumentMaterializerBenchMetrics(b, stats)
+}
+
 func benchmarkCollectionReadViewFetchDocumentsByIDMaterializer(b *testing.B, forceReadAtFallback bool) {
 	b.Helper()
 	const rows = 1024
@@ -765,6 +971,9 @@ func reportDocumentMaterializerBenchMetrics(b *testing.B, stats DocumentMaterial
 	b.Helper()
 	b.ReportMetric(float64(stats.DocumentsFetched), "docs_fetched/fetch")
 	b.ReportMetric(float64(stats.DocumentBytes), "doc_B/fetch")
+	b.ReportMetric(float64(stats.OutputBytes), "output_B/fetch")
+	b.ReportMetric(float64(stats.FieldsReconstructed), "fields_reconstructed/fetch")
+	b.ReportMetric(float64(stats.FieldsSkipped), "fields_skipped/fetch")
 	b.ReportMetric(float64(stats.FetchNanos), "fetch_ns/fetch")
 	b.ReportMetric(float64(stats.RetainedPayloadFetches), "retained_fetches/fetch")
 	b.ReportMetric(float64(stats.VisibilityRowsScanned), "visibility_rows_scanned/fetch")
@@ -794,6 +1003,87 @@ func reportDocumentMaterializerBenchMetrics(b *testing.B, stats DocumentMaterial
 	b.ReportMetric(float64(stats.AssetFileOpens), "asset_file_opens/fetch")
 	b.ReportMetric(float64(stats.AssetFileCloses), "asset_file_closes/fetch")
 	b.ReportMetric(float64(stats.AssetActiveHandles), "asset_active_handles")
+}
+
+func newDocumentProjectionTestCollection1875(t testing.TB) (*backenddb.DB, *Collection) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "row_maybe", Path: "row_maybe", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset, Nullable: true},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		{Name: "score", Path: "score", ValueType: ColumnStoreValueDouble, Owner: TypedStorageOwnerColumnPart},
+		{Name: "typed_maybe", Path: "typed_maybe", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Nullable: true, Dictionary: true},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return d, col
+}
+
+func newDocumentProjectionVectorTestCollection1875(t testing.TB, embeddingOwner TypedStorageFieldOwner) (*backenddb.DB, *Collection) {
+	t.Helper()
+	return newDocumentProjectionVectorTestCollectionWithDims1875(t, embeddingOwner, 3)
+}
+
+func newDocumentProjectionVectorTestCollectionWithDims1875(t testing.TB, embeddingOwner TypedStorageFieldOwner, dims int) (*backenddb.DB, *Collection) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, Owner: embeddingOwner, VectorDims: dims},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	return d, col
+}
+
+func decodeJSONDocumentMap1875(t testing.TB, raw []byte) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("document=%q is not valid JSON: %v", raw, err)
+	}
+	return out
+}
+
+func assertJSONMapEqual1875(t testing.TB, raw []byte, want map[string]any) {
+	t.Helper()
+	got := decodeJSONDocumentMap1875(t, raw)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("document=%s decoded=%v want %v", raw, got, want)
+	}
 }
 
 func newDocumentMaterializerTestCollection(t testing.TB) (*backenddb.DB, *Collection) {

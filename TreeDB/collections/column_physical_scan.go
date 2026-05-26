@@ -512,7 +512,7 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 	for i := range outputByColumn {
 		outputByColumn[i] = -1
 	}
-	if len(projected) == 0 {
+	if projected == nil {
 		for i := range cfg.Columns {
 			outputByColumn[i] = i
 		}
@@ -520,6 +520,13 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 			outputByColumn: outputByColumn,
 			values:         make([]columnDeclaredValue, len(cfg.Columns)),
 			count:          len(cfg.Columns),
+		}, nil
+	}
+	if len(projected) == 0 {
+		return columnPhysicalScanProjection{
+			outputByColumn: outputByColumn,
+			values:         nil,
+			count:          0,
 		}, nil
 	}
 	for outIdx, name := range projected {

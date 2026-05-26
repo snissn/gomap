@@ -247,11 +247,12 @@ func (set typedColumnPartSet) primaryRef() (columnManifestAssetRefForScan, bool)
 }
 
 type typedColumnPartReconstructionCache struct {
-	Parts      map[uint64]typedColumnPartDecodedValues
-	Fields     []TypedStorageField
-	Refs       map[uint64]columnManifestAssetRefForScan
-	RefsLoaded bool
-	ReadCache  *columnPhysicalAssetReadCache
+	Parts        map[uint64]typedColumnPartDecodedValues
+	Fields       []TypedStorageField
+	Refs         map[uint64]columnManifestAssetRefForScan
+	RefsLoaded   bool
+	ReadCache    *columnPhysicalAssetReadCache
+	SelectionKey string
 
 	CacheHits        uint64
 	CacheMisses      uint64
@@ -268,6 +269,10 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotWithCache(snap 
 }
 
 func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache *typedColumnPartReconstructionCache, dst []columnDeclaredValue) (typedColumnPartVisibleValues, error) {
+	return c.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(snap, manifestRootID, cfg, physicalRow, cache, dst, nil)
+}
+
+func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(snap *backenddb.Snapshot, manifestRootID uint64, cfg ColumnStoreConfig, physicalRow columnPhysicalVisibleRow, cache *typedColumnPartReconstructionCache, dst []columnDeclaredValue, selected []bool) (typedColumnPartVisibleValues, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
 		return typedColumnPartVisibleValues{}, nil
 	}
@@ -283,8 +288,26 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(s
 	if len(fields) == 0 {
 		return typedColumnPartVisibleValues{}, nil
 	}
+	if selected != nil && len(selected) != len(fields) {
+		return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction projection fields=%d want %d", len(selected), len(fields))
+	}
 	if physicalRow.Deleted {
 		return typedColumnPartVisibleValues{}, nil
+	}
+	if selected != nil && !documentProjectionHasSelectedTypedColumn(selected) {
+		values := dst
+		if cap(values) < len(fields) {
+			values = make([]columnDeclaredValue, len(fields))
+		} else {
+			values = values[:len(fields)]
+			clear(values)
+		}
+		return typedColumnPartVisibleValues{Values: values}, nil
+	}
+	selectionKey := documentProjectionKey(selected)
+	if cache != nil && cache.SelectionKey != selectionKey {
+		cache.Parts = make(map[uint64]typedColumnPartDecodedValues)
+		cache.SelectionKey = selectionKey
 	}
 	var decoded typedColumnPartDecodedValues
 	var ok bool
@@ -337,7 +360,7 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCache(s
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
-		decoded, err = part.scanDecodedValues()
+		decoded, err = part.scanDecodedValuesSelected(selected)
 		var closeErr error
 		if closeReadCache {
 			closeErr = readCache.close()

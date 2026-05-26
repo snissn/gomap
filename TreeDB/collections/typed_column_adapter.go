@@ -512,8 +512,15 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 }
 
 func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValues, error) {
+	return p.scanDecodedValuesSelected(nil)
+}
+
+func (p *typedColumnAdapterPart) scanDecodedValuesSelected(selected []bool) (typedColumnPartDecodedValues, error) {
 	if p == nil || p.Part == nil {
 		return typedColumnPartDecodedValues{}, errors.New("collections: nil typed-column adapter part")
+	}
+	if selected != nil && len(selected) != len(p.Columns) {
+		return typedColumnPartDecodedValues{}, fmt.Errorf("collections: typed-column adapter projection columns=%d want %d", len(selected), len(p.Columns))
 	}
 	ids, err := p.scanInt64ColumnValues(typedColumnAdapterPrimaryIDColumn)
 	if err != nil {
@@ -521,6 +528,9 @@ func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValu
 	}
 	values := make([][]columnDeclaredValue, len(p.Columns))
 	for i, column := range p.Columns {
+		if selected != nil && !selected[i] {
+			continue
+		}
 		columnValues, err := p.scanColumnValues(column.Definition.Name)
 		if err != nil {
 			return typedColumnPartDecodedValues{}, err
@@ -546,6 +556,10 @@ func (d typedColumnPartDecodedValues) valuesForRowInto(rowIdx int, dst []columnD
 		dst = dst[:len(d.Values)]
 	}
 	for i := range d.Values {
+		if d.Values[i] == nil {
+			dst[i] = columnDeclaredValue{}
+			continue
+		}
 		if rowIdx >= len(d.Values[i]) {
 			return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside field[%d] rows=%d", rowIdx, i, len(d.Values[i]))
 		}

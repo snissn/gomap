@@ -137,10 +137,14 @@ func reconstructColumnDocumentFromVisibleRow(cfg ColumnStoreConfig, retained []b
 }
 
 func reconstructColumnDocumentFromVisibleRowValues(cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue) ([]byte, error) {
+	return reconstructColumnDocumentFromVisibleRowValuesProjected(cfg, retained, row, values, nil, nil)
+}
+
+func reconstructColumnDocumentFromVisibleRowValuesProjected(cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
 	if row.Deleted {
 		return nil, errors.New("collections: column reconstruction latest physical row is deleted")
 	}
-	return reconstructColumnJSONDocument(cfg, retained, values)
+	return reconstructColumnJSONDocumentProjected(cfg, retained, values, projection, stats)
 }
 
 func mergeColumnReconstructionValues(cfg ColumnStoreConfig, rowValues, typedColumnValues []columnDeclaredValue) ([]columnDeclaredValue, error) {
@@ -148,17 +152,28 @@ func mergeColumnReconstructionValues(cfg ColumnStoreConfig, rowValues, typedColu
 }
 
 func mergeColumnReconstructionValuesInto(cfg ColumnStoreConfig, rowValues, typedColumnValues, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	return mergeColumnReconstructionValuesProjectedInto(cfg, rowValues, typedColumnValues, nil, dst)
+}
+
+func mergeColumnReconstructionValuesProjectedInto(cfg ColumnStoreConfig, rowValues, typedColumnValues []columnDeclaredValue, selected []bool, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	if selected != nil && len(selected) != len(cfg.Columns) {
+		return nil, fmt.Errorf("collections: column reconstruction projection columns=%d want %d", len(selected), len(cfg.Columns))
+	}
 	var values []columnDeclaredValue
 	if cap(dst) < len(cfg.Columns) {
 		values = make([]columnDeclaredValue, len(cfg.Columns))
 	} else {
 		values = dst[:len(cfg.Columns)]
+		clear(values)
 	}
 	rowIdx := 0
 	typedIdx := 0
 	for i, col := range cfg.Columns {
 		switch columnStoreColumnOwnerOrRowAsset(col) {
 		case TypedStorageOwnerRowAsset:
+			if selected != nil && !selected[i] {
+				continue
+			}
 			if rowIdx >= len(rowValues) {
 				return nil, fmt.Errorf("collections: column reconstruction missing typed_row_asset value for column %q", col.Name)
 			}
@@ -184,6 +199,10 @@ func mergeColumnReconstructionValuesInto(cfg ColumnStoreConfig, rowValues, typed
 }
 
 func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue) ([]byte, error) {
+	return reconstructColumnJSONDocumentProjected(cfg, retained, values, nil, nil)
+}
+
+func reconstructColumnJSONDocumentProjected(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
 	var obj map[string]any
 	var err error
 	if len(bytes.TrimSpace(retained)) == 0 {
@@ -199,6 +218,12 @@ func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, value
 	}
 	declared := make([]columnReconstructedDeclaredValue, len(cfg.Columns))
 	for i, col := range cfg.Columns {
+		if projection.active() && !projection.wantsPath(col.Path) {
+			if stats != nil {
+				stats.FieldsSkipped++
+			}
+			continue
+		}
 		raw, err := columnDeclaredValueToJSON(values[i])
 		if err != nil {
 			return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
@@ -216,7 +241,7 @@ func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, value
 			}
 		}
 	}
-	out, err := marshalColumnReconstructedJSONObject(cfg, obj, declared)
+	out, err := marshalColumnReconstructedJSONObjectProjected(cfg, obj, declared, projection, stats)
 	if err != nil {
 		return nil, fmt.Errorf("collections: encode reconstructed column payload: %w", err)
 	}
@@ -229,6 +254,10 @@ type columnReconstructedDeclaredValue struct {
 }
 
 func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue) ([]byte, error) {
+	return marshalColumnReconstructedJSONObjectProjected(cfg, retained, declared, nil, nil)
+}
+
+func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
 	var b bytes.Buffer
 	b.WriteByte('{')
 	written := make(map[string]struct{}, len(cfg.Columns))
@@ -249,10 +278,17 @@ func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[st
 		b.Write(keyBytes)
 		b.WriteByte(':')
 		b.Write(valueBytes)
+		if stats != nil {
+			stats.FieldsReconstructed++
+		}
 		return nil
 	}
 	for i, col := range cfg.Columns {
 		if strings.Contains(col.Path, ".") {
+			continue
+		}
+		if projection.active() && !projection.wantsPath(col.Path) {
+			written[col.Path] = struct{}{}
 			continue
 		}
 		if !declared[i].Present {
@@ -268,12 +304,63 @@ func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[st
 		if _, ok := written[key]; ok {
 			continue
 		}
+		if projection.active() && !projection.wantsPath(key) {
+			if stats != nil {
+				stats.FieldsSkipped++
+			}
+			continue
+		}
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
 		if err := writeField(key, retained[key]); err != nil {
 			return nil, err
+		}
+	}
+	b.WriteByte('}')
+	return b.Bytes(), nil
+}
+
+func projectJSONDocument(raw []byte, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	obj, err := decodeColumnJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	return marshalProjectedJSONObject(obj, projection, stats)
+}
+
+func marshalProjectedJSONObject(obj map[string]any, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		if projection.active() && !projection.wantsPath(key) {
+			if stats != nil {
+				stats.FieldsSkipped++
+			}
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		if i != 0 {
+			b.WriteByte(',')
+		}
+		keyBytes, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		valueBytes, err := json.Marshal(obj[key])
+		if err != nil {
+			return nil, err
+		}
+		b.Write(keyBytes)
+		b.WriteByte(':')
+		b.Write(valueBytes)
+		if stats != nil {
+			stats.FieldsReconstructed++
 		}
 	}
 	b.WriteByte('}')
