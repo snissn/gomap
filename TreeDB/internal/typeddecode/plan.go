@@ -973,9 +973,9 @@ func Uint32OffsetsListView(mgr *mappedresource.Manager, offsetsHandle *mappedres
 		return nil, nil, status
 	}
 	offsetsOpts := opts
-	offsetsOpts.ExpectedElements = req.offsetsCount()
+	offsetsOpts.ExpectedElements = -1
 	valuesOpts := opts
-	valuesOpts.ExpectedElements = req.valuesCount()
+	valuesOpts.ExpectedElements = -1
 	offsets, status := Uint64View(mgr, offsetsHandle, offsetsOpts)
 	if !status.Direct() {
 		return nil, nil, status

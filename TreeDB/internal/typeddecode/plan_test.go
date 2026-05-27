@@ -457,6 +457,17 @@ func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
 	if _, _, status := Uint32OffsetsListView(mgr, misalignedHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true}); status.Reason != ReasonActualPointerUnaligned {
 		t.Fatalf("misaligned status=%+v want %s", status, ReasonActualPointerUnaligned)
 	}
+
+	truncatedValuesRaw := alignedBytes(4, 4)
+	binary.LittleEndian.PutUint32(truncatedValuesRaw, 7)
+	truncatedValuesHandle, err := mgr.AcquireBytes(testKeyWithPart(191605, int64(len(truncatedValuesRaw))), testScope(), mappedresource.SourceMapped, truncatedValuesRaw, mappedresource.AcquireOptions{Reason: "offsets-list truncated values"})
+	if err != nil {
+		t.Fatalf("AcquireBytes truncated values: %v", err)
+	}
+	defer truncatedValuesHandle.Release()
+	if _, _, status := Uint32OffsetsListView(mgr, offsetsHandle, truncatedValuesHandle, req, ResourceViewOptions{RequireMapped: true}); status.Reason != ReasonValuesLengthMismatch {
+		t.Fatalf("truncated values status=%+v want %s", status, ReasonValuesLengthMismatch)
+	}
 }
 
 func TestAdjacencyOffsetsListDirectViewFailsClosed(t *testing.T) {
