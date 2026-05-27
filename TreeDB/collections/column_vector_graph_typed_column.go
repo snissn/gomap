@@ -524,8 +524,8 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}
 	if err := validateColumnVectorGraphTypedColumnHandleChecksum(handle, sectionChecksum); err != nil {
-		_ = handle.Release()
-		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
+		releaseErr := handle.Release()
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", errors.Join(err, releaseErr)
 	}
 	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
 	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: int64(ref.Offset), HasAssetOffset: true}
@@ -535,8 +535,8 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 func columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, directReq typeddecode.DirectViewColumnRequest, rows, dims int) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
 	expectedElements, err := typedColumnAdapterDenseElements(rows, dims)
 	if err != nil {
-		_ = handle.Release()
-		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
+		releaseErr := handle.Release()
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", errors.Join(err, releaseErr)
 	}
 	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
 	if viewStatus.Direct() {
@@ -551,12 +551,12 @@ func columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager *mappedreso
 		}
 		fallbackReason = heapStatus.Reason
 		if !typedColumnDenseDecodeFallbackAllowed(heapStatus) {
-			_ = handle.Release()
-			return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, errors.Join(firstErr, fmt.Errorf("float32 dense vector heap typed-view validation: %s", heapStatus.String()))
+			releaseErr := handle.Release()
+			return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, errors.Join(firstErr, fmt.Errorf("float32 dense vector heap typed-view validation: %s", heapStatus.String()), releaseErr)
 		}
 	} else if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
-		_ = handle.Release()
-		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, firstErr
+		releaseErr := handle.Release()
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, errors.Join(firstErr, releaseErr)
 	}
 	bytes := handle.Bytes()
 	decoded, decodeErr := typedcolumn.DecodeRawFloat32VectorPayload(nil, bytes, rows, dims)
