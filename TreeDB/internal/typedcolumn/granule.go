@@ -29,6 +29,11 @@ const (
 	EncodingRawUint32Dense
 	EncodingRawFloat32
 	EncodingRawFloat64
+	// EncodingRawUint32OffsetsList is the spec-only v1 variable-length
+	// adjacency/list primitive: little-endian uint64 offsets plus little-endian
+	// uint32 values. Writers and unsafe direct-view readers are intentionally
+	// deferred to #1915/#1916.
+	EncodingRawUint32OffsetsList
 )
 
 func (e Encoding) String() string {
@@ -53,6 +58,8 @@ func (e Encoding) String() string {
 		return "raw_float32"
 	case EncodingRawFloat64:
 		return "raw_float64"
+	case EncodingRawUint32OffsetsList:
+		return "raw_uint32_offsets_list"
 	default:
 		return fmt.Sprintf("encoding_%d", e)
 	}

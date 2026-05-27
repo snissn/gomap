@@ -55,28 +55,30 @@ const (
 type ReasonCode string
 
 const (
-	ReasonSupported                   ReasonCode = "supported"
-	ReasonUnknownLogicalType          ReasonCode = "layout_unknown_logical_type"
-	ReasonUnsupportedPhysicalType     ReasonCode = "layout_unsupported_physical_type"
-	ReasonUnsupportedEncoding         ReasonCode = "layout_unsupported_encoding"
-	ReasonUnsupportedCompression      ReasonCode = "layout_unsupported_compression"
-	ReasonLogicalPhysicalMismatch     ReasonCode = "layout_logical_physical_mismatch"
-	ReasonEncodingPhysicalMismatch    ReasonCode = "layout_encoding_physical_mismatch"
-	ReasonVariableWidthNoDirectView   ReasonCode = "layout_variable_width_no_direct_view"
-	ReasonCompressedDirectView        ReasonCode = "layout_compressed_direct_view"
-	ReasonLengthMultipleMismatch      ReasonCode = "layout_length_multiple_mismatch"
-	ReasonRawLengthRowCountMismatch   ReasonCode = "layout_raw_length_row_count_mismatch"
-	ReasonNullDefaultWrapperRequired  ReasonCode = "layout_null_default_wrapper_required"
-	ReasonDictionaryOrderUnproven     ReasonCode = "layout_dictionary_order_unproven"
-	ReasonDictionaryCollationUnproven ReasonCode = "layout_dictionary_collation_unproven"
-	ReasonFloatBitPatternNotNumeric   ReasonCode = "layout_float_bit_pattern_not_numeric"
-	ReasonVectorScalarUnsupported     ReasonCode = "layout_vector_scalar_unsupported"
-	ReasonAdjacencyScalarUnsupported  ReasonCode = "layout_adjacency_scalar_unsupported"
-	ReasonAdjacencyDirectViewDeferred ReasonCode = "layout_adjacency_direct_view_deferred"
-	ReasonStatsPayloadUnsupported     ReasonCode = "layout_stats_payload_unsupported"
-	ReasonPruningPayloadUnsupported   ReasonCode = "layout_pruning_payload_unsupported"
-	ReasonFixedWidthElementsRequired  ReasonCode = "layout_fixed_width_elements_required"
-	ReasonOperationUnsupported        ReasonCode = "layout_operation_unsupported"
+	ReasonSupported                              ReasonCode = "supported"
+	ReasonUnknownLogicalType                     ReasonCode = "layout_unknown_logical_type"
+	ReasonUnsupportedPhysicalType                ReasonCode = "layout_unsupported_physical_type"
+	ReasonUnsupportedEncoding                    ReasonCode = "layout_unsupported_encoding"
+	ReasonUnsupportedCompression                 ReasonCode = "layout_unsupported_compression"
+	ReasonLogicalPhysicalMismatch                ReasonCode = "layout_logical_physical_mismatch"
+	ReasonEncodingPhysicalMismatch               ReasonCode = "layout_encoding_physical_mismatch"
+	ReasonVariableWidthNoDirectView              ReasonCode = "layout_variable_width_no_direct_view"
+	ReasonCompressedDirectView                   ReasonCode = "layout_compressed_direct_view"
+	ReasonLengthMultipleMismatch                 ReasonCode = "layout_length_multiple_mismatch"
+	ReasonRawLengthRowCountMismatch              ReasonCode = "layout_raw_length_row_count_mismatch"
+	ReasonNullDefaultWrapperRequired             ReasonCode = "layout_null_default_wrapper_required"
+	ReasonDictionaryOrderUnproven                ReasonCode = "layout_dictionary_order_unproven"
+	ReasonDictionaryCollationUnproven            ReasonCode = "layout_dictionary_collation_unproven"
+	ReasonFloatBitPatternNotNumeric              ReasonCode = "layout_float_bit_pattern_not_numeric"
+	ReasonVectorScalarUnsupported                ReasonCode = "layout_vector_scalar_unsupported"
+	ReasonAdjacencyScalarUnsupported             ReasonCode = "layout_adjacency_scalar_unsupported"
+	ReasonAdjacencyDirectViewDeferred            ReasonCode = "layout_adjacency_direct_view_deferred"
+	ReasonAdjacencyOffsetsListDirectViewDeferred ReasonCode = "layout_adjacency_offsets_list_direct_view_deferred"
+	ReasonAdjacencyOffsetsListRuntimeDeferred    ReasonCode = "layout_adjacency_offsets_list_runtime_deferred"
+	ReasonStatsPayloadUnsupported                ReasonCode = "layout_stats_payload_unsupported"
+	ReasonPruningPayloadUnsupported              ReasonCode = "layout_pruning_payload_unsupported"
+	ReasonFixedWidthElementsRequired             ReasonCode = "layout_fixed_width_elements_required"
+	ReasonOperationUnsupported                   ReasonCode = "layout_operation_unsupported"
 )
 
 // Descriptor is the layout/codec key. It deliberately includes both logical and
@@ -353,11 +355,18 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 			caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 4, EndianLittle, 4)
 			break
 		}
-		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "deferred to #1901", ValidationBoundary: "prepare"}
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "dense fixed-degree adjacency direct views remain fallback/compatibility; #1901 v1 target is raw_uint32_offsets_list", ValidationBoundary: "prepare"}
 		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
 			caps.Reducers.AdjacencyMetrics = true
 			caps.Pruning.AdjacencyIndex = true
 		}
+	case typedcolumn.EncodingRawUint32OffsetsList:
+		caps.Layout.Kind = LayoutVariableWidth
+		caps.Layout.VariableWidth = true
+		caps.Layout.ElementsPerRow = 0
+		caps.Layout.ElementWidthBytes = 4
+		caps.Layout.Endian = EndianLittle
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyOffsetsListDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "offsets-list writer/reader/search integration deferred to #1915+", ValidationBoundary: "prepare"}
 	default:
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonUnsupportedEncoding, ValidationBoundary: "prepare"}
 	}
@@ -451,8 +460,16 @@ func (c Capabilities) Supports(op Operation) Capability {
 		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonAdjacencyScalarUnsupported, "adjacency layouts reject scalar aggregate/range shortcuts")
 		case OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer:
-			if c.Descriptor.FixedWidthElements <= 0 {
-				return Unsupported(op, ReasonFixedWidthElementsRequired, "adjacency layouts require positive fixed_width_elements/adjacency_degree")
+			switch c.Descriptor.Encoding {
+			case typedcolumn.EncodingRawUint32Dense:
+				if c.Descriptor.FixedWidthElements <= 0 {
+					return Unsupported(op, ReasonFixedWidthElementsRequired, "dense adjacency layouts require positive fixed_width_elements/adjacency_degree")
+				}
+			case typedcolumn.EncodingRawUint32OffsetsList:
+				if op == OpAdjacencyDirectView {
+					return Unsupported(op, ReasonAdjacencyOffsetsListDirectViewDeferred, "raw_uint32_offsets_list direct views are specified but deferred to #1916")
+				}
+				return Unsupported(op, ReasonAdjacencyOffsetsListRuntimeDeferred, "raw_uint32_offsets_list writer/fallback reader/search integration is deferred to #1915+")
 			}
 		}
 	}
@@ -696,7 +713,7 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeAdjacencyList:
-		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense || encoding == typedcolumn.EncodingRawUint32OffsetsList
 	}
 	return ReasonEncodingPhysicalMismatch, false
 }

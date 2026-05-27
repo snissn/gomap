@@ -100,7 +100,7 @@ func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 		{ValueType: ColumnStoreValueDouble, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Reason: "default compatibility carrier stores raw int64 float64 bit patterns; fixed_width_encoding little_endian selects native raw_float64"},
 		{ValueType: ColumnStoreValueString, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Reason: "stored as dictionary codes with dictionary section metadata"},
 		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Reason: "stored as fixed-dim dense little-endian float32 sections"},
-		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections"},
+		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections by default; explicit adjacency_layout uint32_offsets_list is the #1914 variable-list target but writer support is deferred"},
 	}
 }
 
@@ -198,10 +198,17 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		}
 		def.FixedWidthElements = field.VectorDims
 	case ColumnStoreValueAdjacencyList:
-		if field.AdjacencyDegree <= 0 {
-			return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q adjacency_list requires positive adjacency_degree", field.Path)
+		switch field.AdjacencyLayout {
+		case ColumnAdjacencyListLayoutUint32OffsetsList:
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: adjacency_list field %q adjacency_layout %q writer support deferred to #1915", errTypedColumnAdapterUnsupportedType, field.Path, field.AdjacencyLayout)
+		case ColumnAdjacencyListLayoutFixedDense:
+			if field.AdjacencyDegree <= 0 {
+				return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q adjacency_list requires positive adjacency_degree", field.Path)
+			}
+			def.FixedWidthElements = field.AdjacencyDegree
+		default:
+			return typedColumnAdapterColumn{}, fmt.Errorf("%w: unsupported adjacency_list layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
 		}
-		def.FixedWidthElements = field.AdjacencyDegree
 	}
 	return typedColumnAdapterColumn{Field: field, Definition: def, FixedWidthEncoding: field.FixedWidthEncoding}, nil
 }

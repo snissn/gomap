@@ -176,6 +176,32 @@ func TestTypedStorageLayoutTypedColumnAdjacencySupportedWithDegree(t *testing.T)
 	}
 }
 
+func TestTypedStorageLayoutAdjacencyOffsetsListSelectorSpecOnly(t *testing.T) {
+	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
+		Collection: "events",
+		Fields: []TypedStorageField{{
+			Name:            "embedding_neighbors",
+			Path:            "embedding_neighbors",
+			Owner:           TypedStorageOwnerColumnPart,
+			ValueType:       ColumnStoreValueAdjacencyList,
+			AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout: %v", err)
+	}
+	field := layout.Fields[0]
+	if field.AdjacencyLayout != ColumnAdjacencyListLayoutUint32OffsetsList || field.AdjacencyDegree != 0 {
+		t.Fatalf("normalized offsets-list field=%+v", field)
+	}
+	if err := layout.EnsureReadSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) || !strings.Contains(err.Error(), "#1915") {
+		t.Fatalf("EnsureReadSupported err=%v want #1915 fail-closed", err)
+	}
+	if err := layout.EnsurePublicationSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) || !strings.Contains(err.Error(), "#1915") {
+		t.Fatalf("EnsurePublicationSupported err=%v want #1915 fail-closed", err)
+	}
+}
+
 func TestTypedStorageLayoutTypedColumnAdjacencyRequiresDegreeAndNonNullable(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -185,6 +211,9 @@ func TestTypedStorageLayoutTypedColumnAdjacencyRequiresDegreeAndNonNullable(t *t
 		{name: "missing_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList}, want: "adjacency_degree"},
 		{name: "row_asset_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 16}, want: "only adjacency_list typed_column_part fields may set adjacency_degree"},
 		{name: "nullable", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, Nullable: true, AdjacencyDegree: 16}, want: "nullable adjacency_list"},
+		{name: "offsets_list_with_degree", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList, AdjacencyDegree: 16}, want: "must be zero for adjacency_layout"},
+		{name: "offsets_list_row_asset", field: TypedStorageField{Name: "embedding_neighbors", Path: "embedding_neighbors", ValueType: ColumnStoreValueAdjacencyList, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}, want: "uint32_offsets_list requires owner"},
+		{name: "adjacency_layout_non_adjacency", field: TypedStorageField{Name: "count", Path: "count", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueInt64, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}, want: "only adjacency_list fields may set adjacency_layout"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NormalizeTypedStorageLayout(TypedStorageLayout{Collection: "events", Fields: []TypedStorageField{tc.field}})

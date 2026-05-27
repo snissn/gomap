@@ -372,6 +372,38 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "nullable adjacency_list",
 		},
 		{
+			name: "offsets list selector requires typed column owner",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}},
+			},
+			want: "uint32_offsets_list requires owner",
+		},
+		{
+			name: "offsets list selector rejects dense degree",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList, AdjacencyDegree: 16}},
+			},
+			want: "must be zero for adjacency_layout",
+		},
+		{
+			name: "offsets list selector rejects fixed width encoding",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian}},
+			},
+			want: "fixed_width_encoding",
+		},
+		{
+			name: "adjacency layout selector rejects non adjacency",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "count", Path: "count", ValueType: ColumnStoreValueInt64, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}},
+			},
+			want: "only adjacency_list columns may set adjacency_layout",
+		},
+		{
 			name: "float32 column rejects dims",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,
@@ -630,6 +662,33 @@ func TestColumnStoreAdjacencyFixedWidthEncodingNormalizes(t *testing.T) {
 	}
 	if got := meta.Options.ColumnStore.Columns[0].FixedWidthEncoding; got != ColumnFixedWidthEncodingLittleEndian {
 		t.Fatalf("adjacency fixed_width_encoding=%q want %q", got, ColumnFixedWidthEncodingLittleEndian)
+	}
+}
+
+func TestColumnStoreAdjacencyOffsetsListLayoutNormalizesSpecOnly(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	col := meta.Options.ColumnStore.Columns[0]
+	if col.AdjacencyLayout != ColumnAdjacencyListLayoutUint32OffsetsList || col.AdjacencyDegree != 0 || col.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+		t.Fatalf("normalized adjacency offsets-list column=%+v", col)
+	}
+
+	dense := testColumnStoreConfig(nil)
+	dense.Columns = []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, AdjacencyDegree: 16}}
+	dense.SortKey = nil
+	dense.AggregateMetadata = nil
+	denseMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events_dense", Options: CollectionOptions{ColumnStore: dense}})
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta dense: %v", err)
+	}
+	if meta.Options.ColumnStore.SchemaHash == denseMeta.Options.ColumnStore.SchemaHash {
+		t.Fatalf("schema hash did not include adjacency_layout selector: offsets=%x dense=%x", meta.Options.ColumnStore.SchemaHash, denseMeta.Options.ColumnStore.SchemaHash)
 	}
 }
 

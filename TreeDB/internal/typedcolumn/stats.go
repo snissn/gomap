@@ -695,7 +695,7 @@ func decodeStatsEncoding(code uint16) (Encoding, error) {
 	}
 	encoding := Encoding(code)
 	switch encoding {
-	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense, EncodingRawFloat32, EncodingRawFloat64:
+	case EncodingRawInt64, EncodingDeltaVarint, EncodingDoubleDeltaVarint, EncodingNullableInt64, EncodingBoolBitpackRLE, EncodingLowCardinalityUint32, EncodingRawFloat32Vector, EncodingRawUint32Dense, EncodingRawFloat32, EncodingRawFloat64, EncodingRawUint32OffsetsList:
 		return encoding, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unknown column stats envelope encoding=%d", code)
