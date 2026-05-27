@@ -741,6 +741,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		AssetRef:               prepared.Ref,
 		AssetBytes:             prepared.Bytes,
 	}
+	graph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceFromPrepared(graph, prepared.Layer0AdjacencySource)
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -881,10 +882,12 @@ func nextColumnVectorGraphPartID(records []columnManifestRecord, namespace strin
 		if err != nil {
 			continue
 		}
-		if graph.AssetRef.Namespace != namespace {
-			continue
+		if graph.AssetRef.Namespace == namespace {
+			next = nextColumnVectorGraphPartIDAfter(next, graph.AssetRef.PartID)
 		}
-		next = nextColumnVectorGraphPartIDAfter(next, graph.AssetRef.PartID)
+		if graph.Layer0AdjacencySource.Present && graph.Layer0AdjacencySource.Ref.Namespace == namespace {
+			next = nextColumnVectorGraphPartIDAfter(next, graph.Layer0AdjacencySource.Ref.PartID)
+		}
 	}
 	return next
 }

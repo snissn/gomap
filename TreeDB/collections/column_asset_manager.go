@@ -279,7 +279,7 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 }
 
 func writeTypedColumnPartAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
-	if columnStoreConfigHasDirectViewFixedWidthColumn(cfg) {
+	if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
 		fileID, err := directViewTypedColumnSegmentFileID(generation)
 		if err != nil {
 			return ColumnAssetRef{}, err
@@ -289,7 +289,7 @@ func writeTypedColumnPartAssetToManager(rootDir string, cfg ColumnStoreConfig, p
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID)
 }
 
-func columnStoreConfigHasDirectViewFixedWidthColumn(cfg ColumnStoreConfig) bool {
+func columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg ColumnStoreConfig) bool {
 	for _, column := range cfg.Columns {
 		if !columnStoreColumnIsTypedColumnPart(column) || column.Nullable {
 			continue
@@ -301,6 +301,10 @@ func columnStoreConfigHasDirectViewFixedWidthColumn(cfg ColumnStoreConfig) bool 
 			}
 		case ColumnStoreValueFloat32Vector:
 			if column.VectorDims > 0 {
+				return true
+			}
+		case ColumnStoreValueAdjacencyList:
+			if column.AdjacencyLayout == ColumnAdjacencyListLayoutUint32OffsetsList {
 				return true
 			}
 		}
@@ -602,6 +606,14 @@ func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, 
 }
 
 func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
+	alignment := int64(0)
+	if a != nil {
+		alignment = columnAssetSegmentPayloadAlignment(kind, a.cfg)
+	}
+	return a.appendKindWithAlignment(payload, kind, generation, partID, alignment)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []byte, kind ColumnAssetKind, generation, partID uint64, alignment int64) (ColumnAssetRef, error) {
 	if a == nil || a.file == nil {
 		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
 	}
@@ -614,7 +626,6 @@ func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind Col
 	if generation == 0 || partID == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
 	}
-	alignment := columnAssetSegmentPayloadAlignment(kind, a.cfg)
 	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
 	if padding > 0 {
 		written, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
@@ -652,7 +663,7 @@ func columnAssetSegmentPayloadAlignment(kind ColumnAssetKind, cfg ColumnStoreCon
 	case ColumnAssetKindTCS1DictionaryCodes:
 		return dictionaryCodesDirectViewAssetAlignment
 	case ColumnAssetKindTCS1TypedColumnPart:
-		if columnStoreConfigHasDirectViewFixedWidthColumn(cfg) {
+		if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
 			return typedColumnPartDirectViewAssetAlignment
 		}
 	}

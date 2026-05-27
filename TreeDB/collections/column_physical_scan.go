@@ -832,22 +832,11 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 				if err != nil {
 					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
 				}
-				if graph.AssetRef.Generation > snapshot.Generation {
-					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: column vector graph asset generation=%d is newer than active manifest generation=%d", graph.AssetRef.Generation, snapshot.Generation)
-				}
-				if graph.BaseManifestGeneration != graph.AssetRef.Generation {
-					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: column vector graph base manifest generation=%d does not match asset generation=%d", graph.BaseManifestGeneration, graph.AssetRef.Generation)
-				}
-				if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
-					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
-				}
-				if graph.AssetRef.Namespace != cfg.AssetManager.Namespace {
-					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, fmt.Errorf("collections: column vector graph asset namespace=%q want %q", graph.AssetRef.Namespace, cfg.AssetManager.Namespace)
-				}
-				if err := validateColumnAssetRefForPlan(graph.AssetRef); err != nil {
+				refs, err := columnVectorGraphManifestAssetRefsForScan(graph, snapshot.Generation, cfg.AssetManager.Namespace)
+				if err != nil {
 					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
 				}
-				graphRefs = append(graphRefs, graph.AssetRef)
+				graphRefs = append(graphRefs, refs...)
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)

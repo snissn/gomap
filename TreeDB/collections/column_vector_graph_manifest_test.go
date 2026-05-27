@@ -67,6 +67,91 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("decode corrupt err=%v want trailing-bytes failure", err)
 	}
+	shortSourceHeader := append([]byte(nil), encoded...)
+	shortSourceHeader = append(shortSourceHeader, 0, 0, 0, 0, 0)
+	if _, err := decodeColumnVectorGraphManifestRecord(shortSourceHeader); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("decode short source header err=%v want trailing-bytes failure", err)
+	}
+}
+
+func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", *baseCfg, def)
+	if err != nil {
+		t.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	sourceCfg, _, err := columnVectorGraphLayer0AdjacencySourceColumnStoreConfig("docs", *baseCfg, def)
+	if err != nil {
+		t.Fatalf("columnVectorGraphLayer0AdjacencySourceColumnStoreConfig: %v", err)
+	}
+	// CRC32/checksum identity values can legitimately be zero; the
+	// generation/part/file/offset/length tuple still carries asset identity.
+	graphRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 4, FileID: 1, Offset: 128, Length: 2048, Checksum: 0}
+	sourceRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 5, FileID: 1009, Offset: 0, Length: 1024, Checksum: 0}
+	snapshot := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: 9,
+		BaseManifestChecksum:   0xabcddcba,
+		BaseSchemaHash:         baseCfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               3,
+		AssetRef:               graphRef,
+		AssetBytes:             graphRef.Length,
+		Layer0AdjacencySource: columnVectorGraphLayer0AdjacencySourceSnapshot{
+			Present:                true,
+			Schema:                 columnVectorGraphLayer0AdjacencySourceSchema,
+			ColumnName:             columnVectorGraphLayer0AdjacencySourceColumnName,
+			ValueType:              string(ColumnStoreValueAdjacencyList),
+			Encoding:               "raw_uint32_offsets_list",
+			Layer:                  0,
+			SourceSchemaHash:       sourceCfg.SchemaHash,
+			RowCount:               3,
+			ValuesCount:            4,
+			OffsetsBytes:           32,
+			ValuesBytes:            16,
+			PaddingBytes:           7,
+			Ref:                    sourceRef,
+			AssetBytes:             sourceRef.Length,
+			BaseManifestGeneration: 9,
+			BaseManifestChecksum:   0xabcddcba,
+			BaseSchemaHash:         baseCfg.SchemaHash,
+			GraphSchemaHash:        graphCfg.SchemaHash,
+			GraphAssetGeneration:   graphRef.Generation,
+			GraphAssetPartID:       graphRef.PartID,
+			GraphAssetFileID:       graphRef.FileID,
+			GraphAssetOffset:       graphRef.Offset,
+			GraphAssetLength:       graphRef.Length,
+			GraphAssetChecksum:     graphRef.Checksum,
+		},
+	}
+	encoded, err := encodeColumnVectorGraphManifestRecord(snapshot)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	decoded, err := decodeColumnVectorGraphManifestRecord(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	if decoded != snapshot {
+		t.Fatalf("decoded=%+v want %+v", decoded, snapshot)
+	}
+	for _, cut := range []int{1, 8} {
+		truncated := append([]byte(nil), encoded[:len(encoded)-cut]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(truncated); err == nil || !strings.Contains(err.Error(), "short column manifest") {
+			t.Fatalf("decode source truncated by %d err=%v want short manifest failure", cut, err)
+		}
+	}
 }
 
 func TestColumnVectorGraphPhysicalConfigUsesLittleEndianVectorOnlyM1C(t *testing.T) {

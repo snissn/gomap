@@ -499,7 +499,10 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has negative fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
 			}
 			if column.FixedWidthElements == 0 && !columnDescriptorAllBlocksEncoding(column, EncodingRawUint32OffsetsList) {
-				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements unless encoding=%s", column.Name, column.Type, EncodingRawUint32OffsetsList)
+				zeroRowOffsetsList := desc.RowCount == 0 && len(column.Blocks) == 0 && partColumn.Definition.Encoding == EncodingRawUint32OffsetsList
+				if !zeroRowOffsetsList {
+					return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements unless encoding=%s", column.Name, column.Type, EncodingRawUint32OffsetsList)
+				}
 			}
 		default:
 			if column.FixedWidthElements != 0 {
