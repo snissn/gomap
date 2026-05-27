@@ -157,7 +157,7 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 			if err != nil {
 				return ColumnPhysicalQueryResult{}, true, err
 			}
-			groupPayload = columnDictionaryCodesAssetPayload{rowCount: len(decoded.Codes), offset: 0}
+			groupPayload = columnDictionaryCodesAssetPayload{rowCount: len(decoded.Codes)}
 			groupCodes = decoded.Codes
 			localToGlobal, ok = reducer.translateDictionary(decoded.Dictionary)
 		} else {
@@ -179,7 +179,10 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 			if dictCur.err != nil {
 				return ColumnPhysicalQueryResult{}, true, dictCur.err
 			}
-			groupPayload = columnDictionaryCodesAssetPayload{rowCount: rowCount, offset: dictCur.pos}
+			groupPayload, err = columnDictionaryCodesPayloadAfterDictionary(groupRaw, groupSnapshot.AssetRef, &dictCur, rowCount)
+			if err != nil {
+				return ColumnPhysicalQueryResult{}, true, err
+			}
 		}
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
@@ -203,21 +206,17 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 				rows++
 			}
 		} else {
-			groupCur := manifestCursor{raw: groupRaw, pos: groupPayload.offset}
-			for i := 0; i < groupPayload.rowCount; i++ {
-				localCode := groupCur.u32()
+			localCodes, _, err := viewColumnDictionaryCodesPayload(groupRaw, groupPayload)
+			if err != nil {
+				return ColumnPhysicalQueryResult{}, true, err
+			}
+			for i, localCode := range localCodes {
 				localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
 				if !ok {
 					return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
 				}
 				reducer.reduceValue(localToGlobal[localIdx], int64(valueCur.u64()))
 				rows++
-			}
-			if groupCur.err != nil {
-				return ColumnPhysicalQueryResult{}, true, groupCur.err
-			}
-			if groupCur.pos != len(groupRaw) {
-				return ColumnPhysicalQueryResult{}, true, errors.New("collections: trailing bytes in dictionary codes asset")
 			}
 		}
 		if valueCur.err != nil {

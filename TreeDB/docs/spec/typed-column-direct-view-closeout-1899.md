@@ -30,7 +30,7 @@ Each declared `ColumnStoreValueType` has one final #1886 closeout status:
 | `int64` | Covered as a typed-column-part fixed-width scalar direct-view candidate when raw, non-null, uncompressed, little-endian, writer-certified, absolutely aligned, and read-time validated. |
 | `float32` | Covered as a native typed-column-part scalar direct-view candidate for raw little-endian IEEE-754 payloads. Raw-int64 compatibility carriers remain fallback-only and are not direct-view evidence. |
 | `double` | Covered as a native typed-column-part scalar direct-view candidate for raw little-endian IEEE-754 payloads. Raw-int64 compatibility carriers remain fallback-only and are not direct-view evidence. |
-| `string` | Safe fallback only. Variable-width values, dictionaries, and dictionary codes are not string direct-view payloads in this stack. |
+| `string` | Safe fallback only for declared string values and dictionary string tables in this stack. Dictionary-code derived sidecar row payloads are a separate post-#1899 little-endian `uint32` direct-view sidecar format. |
 | `float32_vector` | Covered as a typed-column-part dense fixed-dimension vector direct-view candidate for raw row-major little-endian payloads, including the column-graph typed-column vector source. |
 | `adjacency_list` | Safe-deferred fallback only. Durable fixed-degree payload publication may exist, but certified direct views are deferred to #1901. |
 
@@ -46,7 +46,7 @@ check in this document before exposing an unsafe typed view.
 | `int64` | `typed_column_part` | generic typed-column readers | Active for certified raw little-endian scalar payloads. | `mmap_direct_view` is valid zero-copy evidence only when source is mapped and checks pass. |
 | `float32` | `typed_column_part` | generic typed-column readers | Active for certified native raw little-endian scalar payloads. | Raw-int64 compatibility carriers are fallback-only and not direct-view evidence. |
 | `double` | `typed_column_part` | generic typed-column readers | Active for certified native raw little-endian scalar payloads. | Raw-int64 compatibility carriers are fallback-only and not direct-view evidence. |
-| `string` | `typed_column_part` | generic typed-column readers | Fallback-only. | Variable-width values, dictionaries, and dictionary codes are not direct-view payloads. |
+| `string` | `typed_column_part` | generic typed-column readers | Fallback-only. | Variable-width values and dictionary string tables are not direct-view payloads; dictionary-code derived sidecars use a separate fixed-width `uint32` sidecar contract. |
 | `float32_vector` | `typed_column_part` | generic typed-column readers | Active for certified fixed-dimension row-major little-endian payloads. | Use direct/fallback counters and row/dimension checks to separate mmap evidence from heap or scratch fallback. |
 | `float32_vector` | `typed_column_part` | `column_graph` typed-column vector source | Active for certified fixed-dimension row-major little-endian payloads. | Counts may demonstrate vector-source mmap direct coverage; adjacency and row assets are excluded from current-stack wins. |
 | `adjacency_list` | `typed_column_part` | adjacency consumers | Deferred/fallback-only to #1901. | Existing durable payload and fixtures may verify byte format and corruption handling, not current mmap direct-view speedup. |

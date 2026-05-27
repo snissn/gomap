@@ -122,7 +122,11 @@ semantics unchanged unless callers set `TopK` and `TopKOrder`.
 dictionary string predicates, a dictionary string group column, and UTC hour
 extracted from an int64 timestamp column. The supported insert-only sidecar path
 scans dictionary-code and int64 assets directly, reports zero document/row
-materializations, and emits groups keyed by `Key` plus `Hour`.
+materializations, and emits groups keyed by `Key` plus `Hour`. Dictionary-code
+sidecars use a version-2 row-code payload: manifest-style metadata/dictionary
+headers followed by zero padding and an aligned little-endian `uint32` stream, so
+row-touching dictionary reducers can use the shared payload-view helper instead
+of per-row manifest big-endian decoding.
 
 The low-level comparison harness exposes this as
 `q3_group_hour_count`:

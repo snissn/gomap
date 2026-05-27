@@ -504,6 +504,21 @@ values   declared column values
 M12C and later decoders may read version 1 as `Deleted=false` for pre-v2 assets.
 Writers emit version 2.
 
+Dictionary-code derived sidecars referenced by
+`ColumnAssetRef.Kind = tcs1_dictionary_codes` use asset magic `TCDC`. Version 2
+keeps the manifest-style big-endian header, collection/namespace/generation,
+schema, column identity, dictionary strings, cardinality, and row-count fields,
+but the row-code payload is no longer a manifest `uint32` stream. Writers add
+deterministic zero padding after the dictionary strings until the row payload is
+4-byte aligned, then emit exactly `row_count * 4` bytes of little-endian `uint32`
+local dictionary codes. Segment writers also prefix-pad dictionary-code assets so
+`asset_ref.offset + payload_offset` is 4-byte aligned for mmap direct-view
+consumers. Readers fail closed on non-zero payload padding, payload-length or
+row-count mismatch, absolute misalignment, codes outside dictionary cardinality,
+checksum mismatch when requested, or unsupported versions. Version 1
+big-endian/manifold row-code payloads are intentionally rejected by current
+pre-alpha readers; rebuild old DB directories instead of migrating in place.
+
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
 images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
 Issue `#1755` scalar path represents bool, int64, float32, double/float64, and

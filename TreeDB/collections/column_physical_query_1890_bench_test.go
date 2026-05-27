@@ -70,6 +70,34 @@ func BenchmarkColumnPhysicalQueryQ1DirectPrepared1890(b *testing.B) {
 		reportColumnPhysicalQueryQ1BenchmarkMetrics1890(b, scannedRows, reducedRows, resultGroups, physicalBytes)
 	})
 
+	b.Run("prepare_only", func(b *testing.B) {
+		previewRunner, err := fixture.PrepareColumnPhysicalQuery(req)
+		if err != nil {
+			b.Fatalf("preview PrepareColumnPhysicalQuery: %v", err)
+		}
+		preview, err := previewRunner.Run()
+		if closeErr := previewRunner.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			b.Fatalf("preview prepare/run/close: %v", err)
+		}
+		validateColumnPhysicalQueryQ1BenchmarkResult1890(b, preview)
+		reportColumnPhysicalQueryQ1BenchmarkShape1890(b, preview)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			runner, err := fixture.PrepareColumnPhysicalQuery(req)
+			if err != nil {
+				b.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+			}
+			if err := runner.Close(); err != nil {
+				b.Fatalf("runner Close: %v", err)
+			}
+		}
+	})
+
 	b.Run("prepared_runner_Run", func(b *testing.B) {
 		runner, err := fixture.PrepareColumnPhysicalQuery(req)
 		if err != nil {
@@ -92,6 +120,48 @@ func BenchmarkColumnPhysicalQueryQ1DirectPrepared1890(b *testing.B) {
 			result, err := runner.Run()
 			if err != nil {
 				b.Fatalf("runner Run: %v", err)
+			}
+			validateColumnPhysicalQueryQ1BenchmarkResult1890(b, result)
+			diag := result.Diagnostics
+			scannedRows += int64(diag.RowsScanned)
+			reducedRows += int64(diag.ReduceRows)
+			resultGroups += int64(diag.ResultGroups)
+			physicalBytes += diag.PhysicalBytesScanned
+		}
+		reportColumnPhysicalQueryQ1BenchmarkMetrics1890(b, scannedRows, reducedRows, resultGroups, physicalBytes)
+	})
+
+	b.Run("prepare_run_close", func(b *testing.B) {
+		previewRunner, err := fixture.PrepareColumnPhysicalQuery(req)
+		if err != nil {
+			b.Fatalf("preview PrepareColumnPhysicalQuery: %v", err)
+		}
+		preview, err := previewRunner.Run()
+		if closeErr := previewRunner.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			b.Fatalf("preview prepare/run/close: %v", err)
+		}
+		validateColumnPhysicalQueryQ1BenchmarkResult1890(b, preview)
+		reportColumnPhysicalQueryQ1BenchmarkShape1890(b, preview)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		var scannedRows, reducedRows, resultGroups int64
+		var physicalBytes int64
+		for i := 0; i < b.N; i++ {
+			runner, err := fixture.PrepareColumnPhysicalQuery(req)
+			if err != nil {
+				b.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+			}
+			result, runErr := runner.Run()
+			closeErr := runner.Close()
+			if runErr != nil {
+				b.Fatalf("runner Run: %v", runErr)
+			}
+			if closeErr != nil {
+				b.Fatalf("runner Close: %v", closeErr)
 			}
 			validateColumnPhysicalQueryQ1BenchmarkResult1890(b, result)
 			diag := result.Diagnostics
