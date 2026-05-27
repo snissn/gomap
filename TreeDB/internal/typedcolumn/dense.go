@@ -411,8 +411,10 @@ func uint32OffsetsListColumnInto(offsetsDst []uint64, valuesDst []uint32, rows i
 	}
 	outValues := valuesDst[:0]
 	var reader GranuleReader
+	var offsetsScratch []uint64
+	var valuesScratch []uint32
 	for _, block := range column.Blocks {
-		decoded, err := reader.DecodeUint32OffsetsListInto(nil, nil, block.Granule)
+		decoded, err := reader.DecodeUint32OffsetsListInto(offsetsScratch[:0], valuesScratch[:0], block.Granule)
 		if err != nil {
 			return RawUint32OffsetsList{}, err
 		}
@@ -428,6 +430,8 @@ func uint32OffsetsListColumnInto(offsetsDst []uint64, valuesDst []uint32, rows i
 			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: offsets-list values exceed host int")
 		}
 		outValues = append(outValues, decoded.Values...)
+		offsetsScratch = decoded.Offsets
+		valuesScratch = decoded.Values
 		for i := 0; i < decoded.Rows; i++ {
 			outOffsets[first+i] = base + decoded.Offsets[i]
 		}
