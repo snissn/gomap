@@ -1396,6 +1396,77 @@ func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderWithDocumentsExclude
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 }
 
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b, false, DocumentFetchOptions{})
+}
+
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocumentsV4(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b, true, DocumentFetchOptions{})
+}
+
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocumentsExcludeEmbedding1875(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b, true, DocumentFetchOptions{ExcludePaths: []string{"embedding"}})
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	b.Helper()
+	const (
+		rows     = 1024
+		dims     = 128
+		m        = 16
+		topK     = 10
+		efSearch = 128
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		b.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+	query := append([]float32(nil), input[37].vector...)
+	opts := VectorIndexSearcherSearchOptions{
+		Query:                query,
+		TopK:                 topK,
+		EfSearch:             efSearch,
+		IncludeDocuments:     includeDocuments,
+		DocumentFetchOptions: fetchOptions,
+	}
+	if _, err := searcher.Search(opts); err != nil {
+		b.Fatalf("warm Search: %v", err)
+	}
+	measuredStats, err := searcher.Search(opts)
+	if err != nil {
+		b.Fatalf("measure Search stats: %v", err)
+	}
+	stats := measuredStats.Stats
+	if stats.TypedColumnFallbacks != 0 || stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 {
+		b.Fatalf("typed-column benchmark stats=%+v want active typed-column vector source counters", stats)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := searcher.Search(opts)
+		if err != nil {
+			b.Fatalf("Search: %v", err)
+		}
+		if includeDocuments {
+			vectorSearchBenchSinkOrdinalV4 += len(got.Results[0].Document)
+		} else {
+			vectorSearchBenchSinkOrdinalV4 += got.Results[0].Ordinal
+		}
+	}
+	b.StopTimer()
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
+}
+
 func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B) {
 	const (
 		rows = 1024
@@ -1464,8 +1535,38 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.CandidateFetches), "candidate_fetches/search")
 	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")
 	b.ReportMetric(float64(stats.ResultFetches), "result_fetches/search")
+	b.ReportMetric(float64(stats.VectorDirectViews), "vector_direct_views/search")
+	b.ReportMetric(float64(stats.VectorMmapDirectViews), "vector_mmap_direct/search")
+	b.ReportMetric(float64(stats.VectorHeapCopyTypedViews), "vector_heap_copy_typed_view/search")
+	b.ReportMetric(float64(stats.VectorScratchDecodes), "vector_scratch_decode/search")
+	b.ReportMetric(float64(stats.VectorScratchDecodes), "vector_scratch_decodes/search")
+	b.ReportMetric(float64(stats.VectorCertificationFailures), "vector_certification_failures/search")
+	b.ReportMetric(float64(stats.VectorAbsoluteOffsetUnaligned), "vector_absolute_offset_unaligned/search")
+	b.ReportMetric(float64(stats.VectorActualPointerUnaligned), "vector_actual_pointer_unaligned/search")
+	b.ReportMetric(float64(stats.VectorStaleHandles), "vector_stale_handles/search")
 	b.ReportMetric(float64(stats.AdjacencyDirectViews), "adjacency_direct_views/search")
+	b.ReportMetric(float64(stats.AdjacencyMmapDirectViews), "adjacency_mmap_direct/search")
+	b.ReportMetric(float64(stats.AdjacencyHeapCopyTypedViews), "adjacency_heap_copy_typed_view/search")
+	b.ReportMetric(float64(stats.AdjacencyScratchDecodes), "adjacency_scratch_decode/search")
 	b.ReportMetric(float64(stats.AdjacencyScratchDecodes), "adjacency_scratch_decodes/search")
+	if stats.VectorMmapDirectViews > 0 {
+		b.ReportMetric(1, "typed_column_vector_source_mmap")
+	}
+	if stats.VectorHeapCopyTypedViews > 0 {
+		b.ReportMetric(1, "typed_column_vector_source_heap_copy")
+	}
+	if stats.VectorScratchDecodes > 0 && stats.TypedColumnDecodedBytes > 0 {
+		b.ReportMetric(1, "typed_column_vector_source_scratch")
+	}
+	if stats.TypedColumnFallbacks > 0 {
+		b.ReportMetric(1, "typed_column_vector_source_fallback")
+	}
+	b.ReportMetric(float64(stats.TypedColumnMappedBytes), "typed_column_mapped_B")
+	b.ReportMetric(float64(stats.TypedColumnHeapCopyBytes), "typed_column_heap_copy_B")
+	b.ReportMetric(float64(stats.TypedColumnDecodedBytes), "typed_column_decoded_derived_B")
+	b.ReportMetric(float64(stats.TypedColumnActiveHandles), "typed_column_active_handles")
+	b.ReportMetric(float64(stats.TypedColumnDeniedResources), "typed_column_denied_resources")
+	b.ReportMetric(float64(stats.TypedColumnFallbacks), "typed_column_vector_fallbacks/search")
 	b.ReportMetric(float64(stats.RowFetches), "row_fetches/search")
 	b.ReportMetric(float64(stats.BatchFetches), "batch_fetches/search")
 	b.ReportMetric(float64(stats.RowsFetched), "rows_fetched/search")

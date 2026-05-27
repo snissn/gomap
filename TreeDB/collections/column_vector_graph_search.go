@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 // Keep modest scratch overgrowth to avoid realloc churn when callers vary
@@ -40,32 +41,40 @@ type columnVectorGraphNativeSearchOptions struct {
 }
 
 type columnVectorGraphNativeSearchStats struct {
-	CandidateRows              uint64
-	Candidates                 uint64
-	Edges                      uint64
-	VisitedNodes               uint64
-	VisitedEdges               uint64
-	VectorBytesRead            uint64
-	AdjacencyBytesRead         uint64
-	CandidateFetches           uint64
-	ExpansionFetches           uint64
-	ResultFetches              uint64
-	ScoreBatches               uint64
-	OrdinalsGrouped            uint64
-	BlockViewHits              uint64
-	BlockViewMisses            uint64
-	BlockViewBuilds            uint64
-	AdjacencyExpansions        uint64
-	AdjacencyScratchDecodes    uint64
-	AdjacencyDirectViews       uint64
-	VectorDirectViews          uint64
-	VectorScratchDecodes       uint64
-	TypedColumnMappedBytes     uint64
-	TypedColumnHeapCopyBytes   uint64
-	TypedColumnDecodedBytes    uint64
-	TypedColumnActiveHandles   int64
-	TypedColumnDeniedResources uint64
-	TypedColumnFallbacks       uint64
+	CandidateRows                 uint64
+	Candidates                    uint64
+	Edges                         uint64
+	VisitedNodes                  uint64
+	VisitedEdges                  uint64
+	VectorBytesRead               uint64
+	AdjacencyBytesRead            uint64
+	CandidateFetches              uint64
+	ExpansionFetches              uint64
+	ResultFetches                 uint64
+	ScoreBatches                  uint64
+	OrdinalsGrouped               uint64
+	BlockViewHits                 uint64
+	BlockViewMisses               uint64
+	BlockViewBuilds               uint64
+	AdjacencyExpansions           uint64
+	AdjacencyScratchDecodes       uint64
+	AdjacencyDirectViews          uint64
+	AdjacencyMmapDirectViews      uint64
+	AdjacencyHeapCopyTypedViews   uint64
+	VectorDirectViews             uint64
+	VectorMmapDirectViews         uint64
+	VectorHeapCopyTypedViews      uint64
+	VectorScratchDecodes          uint64
+	VectorCertificationFailures   uint64
+	VectorAbsoluteOffsetUnaligned uint64
+	VectorActualPointerUnaligned  uint64
+	VectorStaleHandles            uint64
+	TypedColumnMappedBytes        uint64
+	TypedColumnHeapCopyBytes      uint64
+	TypedColumnDecodedBytes       uint64
+	TypedColumnActiveHandles      int64
+	TypedColumnDeniedResources    uint64
+	TypedColumnFallbacks          uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -547,15 +556,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 		stats.BlockViewBuilds = plan.builds
 	}
 	var vector []float32
-	if typedVector, direct, ok := r.typedVectorForOrdinal(ordinal); ok {
+	if typedVector, outcome, fallbackReason, ok := r.typedVectorForOrdinal(ordinal); ok {
 		vector = typedVector
-		if stats != nil {
-			if direct {
-				stats.VectorDirectViews++
-			} else {
-				stats.VectorScratchDecodes++
-			}
-		}
+		recordColumnVectorGraphVectorSourceStats(stats, outcome, fallbackReason)
 	} else {
 		scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
 		var vectorScratch []float32
@@ -600,6 +603,40 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan 
 	return layerAdjacency, nil
 }
 
+func recordColumnVectorGraphVectorSourceStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphTypedColumnVectorOutcome, fallbackReason typeddecode.Reason) {
+	if stats == nil {
+		return
+	}
+	switch outcome {
+	case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+		stats.VectorMmapDirectViews++
+		stats.VectorDirectViews++
+	case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
+		stats.VectorHeapCopyTypedViews++
+	case columnVectorGraphTypedColumnVectorOutcomeScratchDecode:
+		stats.VectorScratchDecodes++
+	default:
+		stats.VectorScratchDecodes++
+	}
+	recordColumnVectorGraphVectorFallbackReasonStats(stats, fallbackReason)
+}
+
+func recordColumnVectorGraphVectorFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
+	if stats == nil || reason == "" || reason == typeddecode.ReasonSupported {
+		return
+	}
+	switch reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonUnaligned:
+		stats.VectorAbsoluteOffsetUnaligned++
+	case typeddecode.ReasonActualPointerUnaligned:
+		stats.VectorActualPointerUnaligned++
+	case typeddecode.ReasonStaleHandle:
+		stats.VectorStaleHandles++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonValidationFailed:
+		stats.VectorCertificationFailures++
+	}
+}
+
 func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, direct bool) {
 	if stats == nil {
 		return
@@ -610,6 +647,7 @@ func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeS
 	}
 	if direct {
 		stats.AdjacencyDirectViews++
+		stats.AdjacencyMmapDirectViews++
 	} else {
 		stats.AdjacencyScratchDecodes++
 	}
