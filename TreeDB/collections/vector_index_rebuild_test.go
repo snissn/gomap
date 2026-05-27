@@ -1133,6 +1133,20 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 		}
 		columnGraphRebuildBenchSinkV2A = status
 	}
+	b.StopTimer()
+	elapsed := b.Elapsed().Seconds()
+	if elapsed > 0 {
+		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
+	}
+	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(b, d, "docs", def)
+	b.ReportMetric(float64(graph.AssetBytes), "graph_asset_B/op")
+	b.ReportMetric(float64(columnVectorGraphStorageBytes(graph)), "graph_total_storage_B/op")
+	if graph.Layer0AdjacencySource.Present {
+		b.ReportMetric(float64(graph.Layer0AdjacencySource.AssetBytes), "layer0_source_B/op")
+		b.ReportMetric(float64(graph.Layer0AdjacencySource.OffsetsBytes), "layer0_offsets_B/op")
+		b.ReportMetric(float64(graph.Layer0AdjacencySource.ValuesBytes), "layer0_values_B/op")
+		b.ReportMetric(float64(graph.Layer0AdjacencySource.PaddingBytes), "layer0_padding_B/op")
+	}
 }
 
 type columnGraphRebuildInputRowV2A struct {
