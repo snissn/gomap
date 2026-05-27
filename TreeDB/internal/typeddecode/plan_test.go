@@ -410,6 +410,11 @@ func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
 		binary.LittleEndian.PutUint32(valuesRaw[i*4:], v)
 	}
 	mgr := mappedresource.NewManager()
+	t.Cleanup(func() {
+		if stats := mgr.Stats(); stats.ActiveHandles != 0 {
+			t.Fatalf("active handles after cleanup: stats=%+v", stats)
+		}
+	})
 	offsetsHandle, err := mgr.AcquireBytes(testKeyWithPart(191601, int64(len(offsetsRaw))), testScope(), mappedresource.SourceMapped, offsetsRaw, mappedresource.AcquireOptions{Reason: "offsets-list offsets"})
 	if err != nil {
 		t.Fatalf("AcquireBytes offsets: %v", err)
