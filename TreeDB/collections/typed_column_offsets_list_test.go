@@ -42,12 +42,13 @@ func TestTypedColumnAdjacencyOffsetsListReopen1915(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCollection: %v", err)
 	}
-	ids := [][]byte{[]byte("r0"), []byte("r1"), []byte("r2"), []byte("r3")}
+	ids := [][]byte{[]byte("r0"), []byte("r1"), []byte("r2"), []byte("r3"), []byte("r4")}
 	docs := [][]byte{
 		[]byte(`{"neighbors":[],"label":"zero"}`),
 		[]byte(`{"neighbors":[7,8],"label":"two"}`),
 		[]byte(`{"neighbors":[],"label":"empty"}`),
 		[]byte(`{"neighbors":[9,10,11],"label":"three"}`),
+		[]byte(`{"neighbors":[42],"label":"one"}`),
 	}
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
@@ -74,6 +75,7 @@ func TestTypedColumnAdjacencyOffsetsListReopen1915(t *testing.T) {
 		"r1": []any{float64(7), float64(8)},
 		"r2": []any{},
 		"r3": []any{float64(9), float64(10), float64(11)},
+		"r4": []any{float64(42)},
 	}
 	for _, id := range ids {
 		assertTypedColumnOffsetsListNeighbors(t, reopenedCol, id, want[string(id)])
