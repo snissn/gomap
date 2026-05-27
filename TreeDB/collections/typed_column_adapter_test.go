@@ -383,6 +383,290 @@ func TestTypedColumnAdapterRoundTripAdjacencyOffsetsList1915(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterUint32OffsetsListDirectViewReader1916(t *testing.T) {
+	part, column, image, offsetsSection, valuesSection, offsetsRaw, valuesRaw := typedColumnAdapterOffsetsListDirectFixture(t)
+	_ = part
+	path := filepath.Join(t.TempDir(), "offsets-list.tcs1")
+	if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-offsets-list", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: false}
+	view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(reader, column, image.Rows)
+	if err != nil {
+		t.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
+	}
+	if !view.Direct || view.HeapCopy || view.Scratch || view.OffsetsHandle == nil || view.ValuesHandle == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewMmapDirect {
+		_ = view.Close()
+		t.Fatalf("view=%+v want mmap direct with pinned handles", view)
+	}
+	if !slices.Equal(view.Offsets, []uint64{0, 0, 2, 2, 5}) || !slices.Equal(view.Values, []uint32{7, 8, 9, 10, 11}) {
+		_ = view.Close()
+		t.Fatalf("offsets=%v values=%v", view.Offsets, view.Values)
+	}
+	if len(offsetsRaw) != offsetsSection.Length || len(valuesRaw) != valuesSection.Length {
+		t.Fatalf("fixture raw lengths offsets=%d/%d values=%d/%d", len(offsetsRaw), offsetsSection.Length, len(valuesRaw), valuesSection.Length)
+	}
+	if stats := mgr.Stats(); stats.ActiveHandles != 2 || stats.DirectViewSuccesses != 2 || stats.DirectViewFailures != 0 {
+		_ = view.Close()
+		t.Fatalf("stats=%+v want two active mmap direct handles", stats)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if stats := mgr.Stats(); stats.TotalReleases != 2 {
+		t.Fatalf("stats=%+v want exactly two releases after idempotent Close", stats)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
+}
+
+func TestTypedColumnAdapterUint32OffsetsListDirectViewClassifications1916(t *testing.T) {
+	_, _, image, offsetsSection, valuesSection, offsetsRaw, valuesRaw := typedColumnAdapterOffsetsListDirectFixture(t)
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	base, ok := certification.Column("neighbors")
+	if !ok {
+		t.Fatal("missing neighbors certification")
+	}
+	alignedOffsets := typedColumnAdapterAlignedCopy(offsetsRaw, int(unsafe.Alignof(uint64(0))))
+	alignedValues := typedColumnAdapterAlignedCopy(valuesRaw, int(unsafe.Alignof(uint32(0))))
+
+	t.Run("heap copy typed view is not mmap direct", func(t *testing.T) {
+		mgr := mappedresource.NewManager()
+		offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, mappedresource.SourceHeapCopy, "offsets")
+		valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceHeapCopy, "values")
+		view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+		if err != nil {
+			t.Fatalf("open heap view: %v", err)
+		}
+		if view.Direct || !view.HeapCopy || view.Class.Class != typedColumnAdapterUint32OffsetsListViewHeapCopyTyped {
+			_ = view.Close()
+			t.Fatalf("view=%+v want heap-copy typed view classification", view)
+		}
+		if stats := mgr.Stats(); stats.DirectViewSuccesses != 0 || stats.DirectViewFailures != 0 {
+			_ = view.Close()
+			t.Fatalf("heap-copy typed view counted as mmap direct manager stats=%+v", stats)
+		}
+		if err := view.Close(); err != nil {
+			t.Fatalf("Close heap view: %v", err)
+		}
+		assertTypedColumnAdapterNoActive(t, mgr)
+	})
+
+	for _, tc := range []struct {
+		name          string
+		offsetsSource mappedresource.Source
+		valuesSource  mappedresource.Source
+		class         typedColumnAdapterUint32OffsetsListViewClass
+	}{
+		{name: "source unsupported offsets", offsetsSource: mappedresource.SourceDerivedMetadata, valuesSource: mappedresource.SourceMapped, class: typedColumnAdapterUint32OffsetsListViewSourceUnsupported},
+		{name: "source unsupported values", offsetsSource: mappedresource.SourceMapped, valuesSource: mappedresource.SourceDerivedMetadata, class: typedColumnAdapterUint32OffsetsListViewSourceUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := mappedresource.NewManager()
+			offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, tc.offsetsSource, "offsets")
+			valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, tc.valuesSource, "values")
+			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+			if err == nil || view.Class.Class != tc.class {
+				t.Fatalf("view=%+v err=%v want class=%s", view, err, tc.class)
+			}
+			_ = offsetsHandle.Release()
+			_ = valuesHandle.Release()
+			assertTypedColumnAdapterNoActive(t, mgr)
+		})
+	}
+
+	for _, tc := range []struct {
+		name            string
+		misalignOffsets bool
+		misalignValues  bool
+	}{
+		{name: "actual pointer unaligned offsets", misalignOffsets: true},
+		{name: "actual pointer unaligned values", misalignValues: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := mappedresource.NewManager()
+			offRaw := alignedOffsets
+			valRaw := alignedValues
+			if tc.misalignOffsets {
+				offRaw = typedColumnAdapterMisalignedCopy(offsetsRaw, int(unsafe.Alignof(uint64(0))))
+			}
+			if tc.misalignValues {
+				valRaw = typedColumnAdapterMisalignedCopy(valuesRaw, int(unsafe.Alignof(uint32(0))))
+			}
+			offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, offRaw, mappedresource.SourceMapped, "offsets")
+			valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, valRaw, mappedresource.SourceMapped, "values")
+			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+			if err != nil || !view.Scratch || view.Class.Class != typedColumnAdapterUint32OffsetsListViewActualPointerUnaligned {
+				t.Fatalf("view=%+v err=%v want scratch actual-pointer classification", view, err)
+			}
+			_ = offsetsHandle.Release()
+			_ = valuesHandle.Release()
+			assertTypedColumnAdapterNoActive(t, mgr)
+		})
+	}
+
+	for _, tc := range []struct {
+		name           string
+		releaseOffsets bool
+		releaseValues  bool
+	}{
+		{name: "stale offsets", releaseOffsets: true},
+		{name: "stale values", releaseValues: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := mappedresource.NewManager()
+			offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, mappedresource.SourceMapped, "offsets")
+			valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceMapped, "values")
+			if tc.releaseOffsets {
+				_ = offsetsHandle.Release()
+			}
+			if tc.releaseValues {
+				_ = valuesHandle.Release()
+			}
+			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+			if err == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewStaleHandle {
+				t.Fatalf("view=%+v err=%v want stale classification", view, err)
+			}
+			_ = offsetsHandle.Release()
+			_ = valuesHandle.Release()
+			assertTypedColumnAdapterNoActive(t, mgr)
+		})
+	}
+}
+
+func TestTypedColumnAdapterUint32OffsetsListPartialOpenFailureCleansUp1916(t *testing.T) {
+	_, column, image, _, valuesSection, _, _ := typedColumnAdapterOffsetsListDirectFixture(t)
+	path := filepath.Join(t.TempDir(), "truncated-offsets-list.tcs1")
+	if err := os.WriteFile(path, image.Bytes[:valuesSection.Offset], 0o600); err != nil {
+		t.Fatalf("write truncated image: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-offsets-list-partial", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: false}
+	view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(reader, column, image.Rows)
+	if err == nil {
+		_ = view.Close()
+		t.Fatalf("AcquireUint32OffsetsListColumnView truncated values err=nil, want partial open failure")
+	}
+	if stats := mgr.Stats(); stats.ActiveHandles != 0 || stats.TotalAcquires != 1 || stats.TotalReleases != 1 {
+		t.Fatalf("stats=%+v want offsets handle released exactly once after values acquire failure", stats)
+	}
+	assertTypedColumnAdapterNoActive(t, mgr)
+}
+
+func TestTypedColumnAdapterUint32OffsetsListCertificationAndShapeFailures1916(t *testing.T) {
+	_, _, image, offsetsSection, valuesSection, offsetsRaw, valuesRaw := typedColumnAdapterOffsetsListDirectFixture(t)
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	base, ok := certification.Column("neighbors")
+	if !ok {
+		t.Fatal("missing neighbors certification")
+	}
+	alignedOffsets := typedColumnAdapterAlignedCopy(offsetsRaw, int(unsafe.Alignof(uint64(0))))
+	alignedValues := typedColumnAdapterAlignedCopy(valuesRaw, int(unsafe.Alignof(uint32(0))))
+
+	certCases := []struct {
+		name  string
+		edit  func(*typedcolumn.ColumnPartLayoutContractColumn)
+		class typedColumnAdapterUint32OffsetsListViewClass
+	}{
+		{name: "missing certification", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DirectViewCertified = false }, class: typedColumnAdapterUint32OffsetsListViewCertificationFailure},
+		{name: "wrong logical", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.LogicalType = "int64" }, class: typedColumnAdapterUint32OffsetsListViewValidationFailure},
+		{name: "wrong type", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Type = typedcolumn.ColumnTypeInt64 }, class: typedColumnAdapterUint32OffsetsListViewValidationFailure},
+		{name: "wrong encoding", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Encoding = typedcolumn.EncodingRawUint32Dense }, class: typedColumnAdapterUint32OffsetsListViewValidationFailure},
+		{name: "wrong endian", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) {
+			c.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
+		}, class: typedColumnAdapterUint32OffsetsListViewCertificationFailure},
+	}
+	for _, tc := range certCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := base
+			tc.edit(&cert)
+			mgr := mappedresource.NewManager()
+			offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, mappedresource.SourceMapped, "offsets")
+			valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceMapped, "values")
+			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, cert, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+			if tc.name == "missing certification" || tc.name == "wrong endian" {
+				if err != nil || !view.Scratch || view.Class.Class != tc.class {
+					t.Fatalf("view=%+v err=%v want scratch class=%s", view, err, tc.class)
+				}
+			} else if err == nil || view.Class.Class != tc.class {
+				t.Fatalf("view=%+v err=%v want failure class=%s", view, err, tc.class)
+			}
+			_ = offsetsHandle.Release()
+			_ = valuesHandle.Release()
+			assertTypedColumnAdapterNoActive(t, mgr)
+		})
+	}
+
+	t.Run("length count mismatch", func(t *testing.T) {
+		mgr := mappedresource.NewManager()
+		offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, mappedresource.SourceMapped, "offsets")
+		valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceMapped, "values")
+		view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length-8, valuesSection.Length, offsetsHandle, valuesHandle)
+		if err == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewValidationFailure {
+			t.Fatalf("view=%+v err=%v want length/count validation failure", view, err)
+		}
+		_ = offsetsHandle.Release()
+		_ = valuesHandle.Release()
+		assertTypedColumnAdapterNoActive(t, mgr)
+	})
+
+	for _, tc := range []struct {
+		name string
+		edit func(*typedcolumn.ColumnPartLayoutContractColumn)
+	}{
+		{name: "absolute offset unaligned offsets", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.OffsetsSection.Offset = 4 }},
+		{name: "absolute offset unaligned values", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.ValuesSection.Offset = 26 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert := base
+			tc.edit(&cert)
+			mgr := mappedresource.NewManager()
+			offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, mappedresource.SourceMapped, "offsets")
+			valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceMapped, "values")
+			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, cert, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+			if err != nil || !view.Scratch || view.Class.Class != typedColumnAdapterUint32OffsetsListViewAbsoluteOffsetUnaligned {
+				t.Fatalf("view=%+v err=%v want absolute-offset scratch classification", view, err)
+			}
+			_ = offsetsHandle.Release()
+			_ = valuesHandle.Release()
+			assertTypedColumnAdapterNoActive(t, mgr)
+		})
+	}
+
+	shapeCases := []struct {
+		name    string
+		offsets []uint64
+		values  []uint32
+	}{
+		{name: "offsets start", offsets: []uint64{1, 1, 2, 2, 5}, values: []uint32{7, 8, 9, 10, 11}},
+		{name: "offsets non monotonic", offsets: []uint64{0, 3, 2, 2, 5}, values: []uint32{7, 8, 9, 10, 11}},
+		{name: "final offset", offsets: []uint64{0, 0, 2, 2, 6}, values: []uint32{7, 8, 9, 10, 11}},
+	}
+	for _, tc := range shapeCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := mappedresource.NewManager()
+			offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, typedColumnAdapterAlignedCopy(typedColumnAdapterMustOffsetsListOffsets(t, tc.offsets), int(unsafe.Alignof(uint64(0)))), mappedresource.SourceMapped, "offsets")
+			valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, typedColumnAdapterAlignedCopy(typedColumnAdapterMustOffsetsListValues(t, tc.values), int(unsafe.Alignof(uint32(0)))), mappedresource.SourceMapped, "values")
+			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+			if err == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewValidationFailure {
+				t.Fatalf("view=%+v err=%v want validation failure", view, err)
+			}
+			_ = offsetsHandle.Release()
+			_ = valuesHandle.Release()
+			assertTypedColumnAdapterNoActive(t, mgr)
+		})
+	}
+}
+
 func TestTypedColumnAdapterAdjacencyRequiresDegreeAndLength(t *testing.T) {
 	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
 	if _, err := typedColumnAdapterMapField(field); err == nil || !strings.Contains(err.Error(), "adjacency_degree") {
@@ -1874,6 +2158,151 @@ func BenchmarkTypedColumnAdjacencyDenseFallbackScan(b *testing.B) {
 	typedColumnAdapterAdjacencyBenchSink = sink
 }
 
+func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) {
+	const rowsN = 8192
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	rows := make([]typedColumnAdapterRow, rowsN)
+	for i := range rows {
+		degree := i % 9
+		neighbors := make([]uint32, degree)
+		for j := range neighbors {
+			neighbors[j] = uint32((i*17 + j) & 0xffff)
+		}
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{
+			"neighbors": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: neighbors},
+		}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1916, RowsPerGranule: rowsN, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		b.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		b.Fatalf("buildImage: %v", err)
+	}
+	column, ok := part.columnByName("neighbors")
+	if !ok {
+		b.Fatalf("missing adapter column")
+	}
+	offsetsSection, valuesSection, ok := typedColumnAdapterColumnOffsetsListSections(image, "neighbors")
+	if !ok {
+		b.Fatalf("missing offsets-list sections")
+	}
+	offsetsRaw, err := image.SectionBytes(offsetsSection)
+	if err != nil {
+		b.Fatalf("offsets SectionBytes: %v", err)
+	}
+	valuesRaw, err := image.SectionBytes(valuesSection)
+	if err != nil {
+		b.Fatalf("values SectionBytes: %v", err)
+	}
+	path := filepath.Join(b.TempDir(), "offsets-list.tcs1")
+	if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
+		b.Fatalf("write image: %v", err)
+	}
+	reader := typedColumnAdapterResourceReader{Image: image, Path: path, Namespace: "typed-column-offsets-list-bench", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: false}
+
+	b.Run("mmap_direct_open_prepare", func(b *testing.B) {
+		mgr := mappedresource.NewManager()
+		benchReader := reader
+		benchReader.Manager = mgr
+		b.ReportAllocs()
+		b.ResetTimer()
+		var mmapDirect uint64
+		for i := 0; i < b.N; i++ {
+			view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(benchReader, column, image.Rows)
+			if err != nil {
+				b.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
+			}
+			if !view.Direct {
+				_ = view.Close()
+				b.Fatalf("view class=%+v want mmap direct", view.Class)
+			}
+			mmapDirect++
+			if err := view.Close(); err != nil {
+				b.Fatalf("Close: %v", err)
+			}
+		}
+		b.ReportMetric(float64(mmapDirect)/float64(b.N), "mmap_direct/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(0, "scratch_decode/op")
+	})
+
+	b.Run("scratch_fallback_decode_prepare", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		var scratchDecode uint64
+		for i := 0; i < b.N; i++ {
+			decoded, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
+			if err != nil {
+				b.Fatalf("DecodeRawUint32OffsetsListFallback: %v", err)
+			}
+			scratchDecode++
+			typedColumnAdapterAdjacencyBenchSink += uint64(len(decoded.Offsets) + len(decoded.Values))
+		}
+		b.ReportMetric(0, "mmap_direct/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(float64(scratchDecode)/float64(b.N), "scratch_decode/op")
+	})
+
+	b.Run("mmap_direct_iterate_rows", func(b *testing.B) {
+		mgr := mappedresource.NewManager()
+		benchReader := reader
+		benchReader.Manager = mgr
+		view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(benchReader, column, image.Rows)
+		if err != nil {
+			b.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
+		}
+		defer view.Close()
+		b.ReportAllocs()
+		b.SetBytes(int64(len(view.Values) * 4))
+		b.ResetTimer()
+		var sink uint64
+		var mmapDirect uint64
+		for i := 0; i < b.N; i++ {
+			mmapDirect++
+			sink += typedColumnAdapterSumUint32OffsetsListRows(view.Offsets, view.Values, view.Rows)
+		}
+		b.ReportMetric(float64(mmapDirect)/float64(b.N), "mmap_direct/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(0, "scratch_decode/op")
+		typedColumnAdapterAdjacencyBenchSink = sink
+	})
+
+	b.Run("scratch_fallback_decode_iterate_rows", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(valuesRaw)))
+		b.ResetTimer()
+		var sink uint64
+		var scratchDecode uint64
+		for i := 0; i < b.N; i++ {
+			decoded, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
+			if err != nil {
+				b.Fatalf("DecodeRawUint32OffsetsListFallback: %v", err)
+			}
+			scratchDecode++
+			sink += typedColumnAdapterSumUint32OffsetsListRows(decoded.Offsets, decoded.Values, decoded.Rows)
+		}
+		b.ReportMetric(0, "mmap_direct/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(float64(scratchDecode)/float64(b.N), "scratch_decode/op")
+		typedColumnAdapterAdjacencyBenchSink = sink
+	})
+}
+
+func typedColumnAdapterSumUint32OffsetsListRows(offsets []uint64, values []uint32, rows int) uint64 {
+	var sum uint64
+	for row := 0; row < rows; row++ {
+		begin := int(offsets[row])
+		end := int(offsets[row+1])
+		for _, value := range values[begin:end] {
+			sum += uint64(value)
+		}
+	}
+	return sum
+}
+
 func BenchmarkTypedColumnAdapterNullableScanValues(b *testing.B) {
 	const rowCount = 8192
 	field := typedColumnAdapterNullableField("count", ColumnStoreValueInt64)
@@ -2046,6 +2475,87 @@ func typedColumnAdapterAcquireBytes(t *testing.T, mgr *mappedresource.Manager, s
 		t.Fatalf("AcquireBytes(%s): %v", kind, err)
 	}
 	return h
+}
+
+func typedColumnAdapterAcquireBytesSource(t *testing.T, mgr *mappedresource.Manager, data []byte, source mappedresource.Source, kind string) *mappedresource.Handle {
+	t.Helper()
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "typed-column-adapter-offsets-list", Namespace: "typed-column-adapter-test"}
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: scope.Namespace, Kind: kind, FileID: 1, Length: int64(len(data))}
+	h, err := mgr.AcquireBytes(key, scope, source, data, mappedresource.AcquireOptions{Reason: kind, ValidationMode: mappedresource.ValidationVerify})
+	if err != nil {
+		t.Fatalf("AcquireBytes(%s/%s): %v", kind, source, err)
+	}
+	return h
+}
+
+func typedColumnAdapterOffsetsListDirectFixture(t *testing.T) (*typedColumnAdapterPart, typedColumnAdapterColumn, typedcolumn.ColumnPartImage, typedcolumn.ColumnPartImageSection, typedcolumn.ColumnPartImageSection, []byte, []byte) {
+	t.Helper()
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: nil},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{7, 8}},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: nil},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{9, 10, 11}},
+	}
+	part := typedColumnAdapterBuildPart(t, field, values)
+	column, ok := part.columnByName("neighbors")
+	if !ok {
+		t.Fatal("missing neighbors column")
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage offsets-list: %v", err)
+	}
+	offsetsSection, valuesSection, ok := typedColumnAdapterColumnOffsetsListSections(image, "neighbors")
+	if !ok {
+		t.Fatalf("missing offsets-list sections in %+v", image.Sections)
+	}
+	offsetsRaw, err := image.SectionBytes(offsetsSection)
+	if err != nil {
+		t.Fatalf("offsets SectionBytes: %v", err)
+	}
+	valuesRaw, err := image.SectionBytes(valuesSection)
+	if err != nil {
+		t.Fatalf("values SectionBytes: %v", err)
+	}
+	return part, column, image, offsetsSection, valuesSection, offsetsRaw, valuesRaw
+}
+
+func typedColumnAdapterAlignedCopy(src []byte, align int) []byte {
+	out := typedColumnAdapterAlignedBytes(len(src), align)
+	copy(out, src)
+	return out
+}
+
+func typedColumnAdapterMisalignedCopy(src []byte, align int) []byte {
+	buf := make([]byte, len(src)+align+1)
+	for off := 1; off <= align; off++ {
+		candidate := buf[off : off+len(src)]
+		if uintptr(unsafe.Pointer(unsafe.SliceData(candidate)))%uintptr(align) != 0 {
+			copy(candidate, src)
+			return candidate
+		}
+	}
+	panic("no misaligned offset found")
+}
+
+func typedColumnAdapterMustOffsetsListOffsets(t *testing.T, offsets []uint64) []byte {
+	t.Helper()
+	raw, err := typedcolumn.EncodeRawUint32OffsetsListOffsets(nil, offsets)
+	if err != nil {
+		t.Fatalf("EncodeRawUint32OffsetsListOffsets: %v", err)
+	}
+	return raw
+}
+
+func typedColumnAdapterMustOffsetsListValues(t *testing.T, values []uint32) []byte {
+	t.Helper()
+	raw, err := typedcolumn.EncodeRawUint32OffsetsListValues(nil, values)
+	if err != nil {
+		t.Fatalf("EncodeRawUint32OffsetsListValues: %v", err)
+	}
+	return raw
 }
 
 func assertTypedColumnAdapterNoActive(t testing.TB, mgr *mappedresource.Manager) {
