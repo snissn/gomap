@@ -2100,30 +2100,7 @@ func typedColumnAdapterColumnDataSection(image typedcolumn.ColumnPartImage, colu
 }
 
 func typedColumnAdapterColumnOffsetsListSections(image typedcolumn.ColumnPartImage, column string) (typedcolumn.ColumnPartImageSection, typedcolumn.ColumnPartImageSection, bool) {
-	var offsets typedcolumn.ColumnPartImageSection
-	var values typedcolumn.ColumnPartImageSection
-	foundOffsets := false
-	foundValues := false
-	for _, section := range image.Sections {
-		if section.Column != column {
-			continue
-		}
-		switch section.Kind {
-		case typedcolumn.ColumnPartImageSectionColumnOffsets:
-			if foundOffsets {
-				return typedcolumn.ColumnPartImageSection{}, typedcolumn.ColumnPartImageSection{}, false
-			}
-			offsets = section
-			foundOffsets = true
-		case typedcolumn.ColumnPartImageSectionColumnValues:
-			if foundValues {
-				return typedcolumn.ColumnPartImageSection{}, typedcolumn.ColumnPartImageSection{}, false
-			}
-			values = section
-			foundValues = true
-		}
-	}
-	return offsets, values, foundOffsets && foundValues
+	return image.ColumnOffsetsListSections(column)
 }
 
 func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {

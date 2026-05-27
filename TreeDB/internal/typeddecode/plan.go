@@ -291,8 +291,11 @@ func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities
 	if cert.Endian != typedcolumn.ColumnPartLayoutEndianLittle {
 		return MaterializeStatus(ReasonWrongEndian, fmt.Sprintf("endian=%s", cert.Endian))
 	}
-	if cert.ElementSize != 4 || cert.Alignment <= 0 || cert.Alignment < 4 || cert.LengthMultiple <= 0 || cert.LengthMultiple%4 != 0 || cert.FixedWidthElements != 0 {
-		return MaterializeStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d alignment=%d length_multiple=%d fixed_width_elements=%d", cert.ElementSize, cert.Alignment, cert.LengthMultiple, cert.FixedWidthElements))
+	if cert.ElementSize != 4 || cert.Alignment <= 0 || cert.Alignment < 4 || cert.LengthMultiple <= 0 || cert.LengthMultiple%4 != 0 {
+		return MaterializeStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d alignment=%d length_multiple=%d", cert.ElementSize, cert.Alignment, cert.LengthMultiple))
+	}
+	if cert.FixedWidthElements != 0 {
+		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("fixed_width_elements=%d want variable-width offsets list", cert.FixedWidthElements))
 	}
 	if cap := layout.Supports(columnlayout.OpAdjacencyDirectView); !cap.Supported() {
 		return statusFromLayoutCapability(cap)

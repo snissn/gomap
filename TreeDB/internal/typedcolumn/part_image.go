@@ -234,6 +234,12 @@ func (i ColumnPartImage) columnOffsetsListSections(column string) (ColumnPartIma
 	return offsets, values, foundOffsets && foundValues
 }
 
+// ColumnOffsetsListSections returns the unique offsets and values sections for
+// the named offsets-list column.
+func (i ColumnPartImage) ColumnOffsetsListSections(column string) (ColumnPartImageSection, ColumnPartImageSection, bool) {
+	return i.columnOffsetsListSections(column)
+}
+
 func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart) error {
 	descriptorSection, err := image.singleSection(ColumnPartImageSectionDescriptor)
 	if err != nil {
