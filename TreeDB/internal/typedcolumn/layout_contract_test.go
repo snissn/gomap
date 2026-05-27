@@ -12,22 +12,25 @@ func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T
 	if err != nil {
 		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
 	}
-	for _, name := range []string{"id", "value", "embedding"} {
-		column, ok := cert.Column(name)
-		if !ok {
-			t.Fatalf("missing certified column %q", name)
-		}
-		if !column.DirectViewCertified {
-			t.Fatalf("column %q contract=%+v want direct-view certified", name, column)
-		}
-		if column.Endian != ColumnPartLayoutEndianLittle || column.Alignment <= 0 || column.Section.Offset%column.Alignment != 0 {
-			t.Fatalf("column %q endian/alignment=(%s,%d) section_offset=%d", name, column.Endian, column.Alignment, column.Section.Offset)
-		}
-		for i, block := range column.Blocks {
-			if block.PayloadOffset%column.Alignment != 0 || block.PayloadLength%column.LengthMultiple != 0 {
-				t.Fatalf("column %q block %d payload offset/length=(%d,%d) alignment=%d multiple=%d", name, i, block.PayloadOffset, block.PayloadLength, column.Alignment, column.LengthMultiple)
-			}
-		}
+	for _, tc := range []struct {
+		name               string
+		logicalType        string
+		columnType         ColumnType
+		encoding           Encoding
+		elementSize        int
+		alignment          int
+		lengthMultiple     int
+		fixedWidthElements int
+		sectionLength      int
+		blockLengths       []int
+	}{
+		{name: "id", logicalType: "int64", columnType: ColumnTypeInt64, encoding: EncodingRawInt64, elementSize: 8, alignment: 8, lengthMultiple: 8, sectionLength: 24, blockLengths: []int{16, 8}},
+		{name: "value", logicalType: "int64", columnType: ColumnTypeInt64, encoding: EncodingRawInt64, elementSize: 8, alignment: 8, lengthMultiple: 8, sectionLength: 24, blockLengths: []int{16, 8}},
+		{name: "score32", logicalType: "float32", columnType: ColumnTypeFloat32, encoding: EncodingRawFloat32, elementSize: 4, alignment: 4, lengthMultiple: 4, sectionLength: 12, blockLengths: []int{8, 4}},
+		{name: "score64", logicalType: "double", columnType: ColumnTypeFloat64, encoding: EncodingRawFloat64, elementSize: 8, alignment: 8, lengthMultiple: 8, sectionLength: 24, blockLengths: []int{16, 8}},
+		{name: "embedding", logicalType: "float32_vector", columnType: ColumnTypeFloat32Vector, encoding: EncodingRawFloat32Vector, elementSize: 4, alignment: 4, lengthMultiple: 4, fixedWidthElements: 3, sectionLength: 36, blockLengths: []int{24, 12}},
+	} {
+		assertLayoutContractDirectColumn(t, image, cert, tc.name, tc.logicalType, tc.columnType, tc.encoding, tc.elementSize, tc.alignment, tc.lengthMultiple, tc.fixedWidthElements, tc.sectionLength, tc.blockLengths)
 	}
 	neighbors, ok := cert.Column("neighbors")
 	if !ok {
@@ -36,8 +39,58 @@ func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T
 	if neighbors.DirectViewCertified || neighbors.Endian != ColumnPartLayoutEndianLittle || neighbors.ElementSize != 4 || neighbors.Alignment != 4 {
 		t.Fatalf("neighbors contract=%+v want little-endian payload metadata but no direct-view certification", neighbors)
 	}
-	if cert.DirectViewCertified < 3 {
-		t.Fatalf("direct-view certified=%d want at least 3", cert.DirectViewCertified)
+	if cert.DirectViewCertified != 5 {
+		t.Fatalf("direct-view certified=%d want exactly 5 active fixed-width columns", cert.DirectViewCertified)
+	}
+}
+
+func assertLayoutContractDirectColumn(t *testing.T, image ColumnPartImage, cert ColumnPartLayoutCertification, name string, logicalType string, columnType ColumnType, encoding Encoding, elementSize int, alignment int, lengthMultiple int, fixedWidthElements int, sectionLength int, blockLengths []int) {
+	t.Helper()
+	column, ok := cert.Column(name)
+	if !ok {
+		t.Fatalf("missing certified column %q", name)
+	}
+	if !column.DirectViewCertified {
+		t.Fatalf("column %q contract=%+v want direct-view certified", name, column)
+	}
+	if column.LogicalType != logicalType || column.Type != columnType || column.Encoding != encoding || column.Compression != CompressionNone {
+		t.Fatalf("column %q identity=(%q,%s,%s,%s) want (%q,%s,%s,%s)", name, column.LogicalType, column.Type, column.Encoding, column.Compression, logicalType, columnType, encoding, CompressionNone)
+	}
+	if column.Rows != image.Rows || column.FixedWidthElements != fixedWidthElements || column.ElementSize != elementSize || column.Alignment != alignment || column.Endian != ColumnPartLayoutEndianLittle || column.LengthMultiple != lengthMultiple {
+		t.Fatalf("column %q layout rows/fixed/elem/align/endian/multiple=(%d,%d,%d,%d,%s,%d) want (%d,%d,%d,%d,%s,%d)", name, column.Rows, column.FixedWidthElements, column.ElementSize, column.Alignment, column.Endian, column.LengthMultiple, image.Rows, fixedWidthElements, elementSize, alignment, ColumnPartLayoutEndianLittle, lengthMultiple)
+	}
+	if column.NullMaskPresent || column.DefaultMaskPresent || column.NullCount != 0 || column.DefaultCount != 0 {
+		t.Fatalf("column %q null/default contract=%+v want non-null/non-default direct view", name, column)
+	}
+	section, ok := image.columnDataSection(name)
+	if !ok {
+		t.Fatalf("missing image section for column %q", name)
+	}
+	if section.Offset%alignment != 0 || column.Section.Offset != section.Offset || column.Section.Length != section.Length || column.Section.Length != sectionLength || section.Rows != image.Rows || section.Encoding != encoding || section.Compression != CompressionNone {
+		t.Fatalf("column %q section contract=(%d,%d) image=(%d,%d rows=%d enc=%s comp=%s) want length=%d align=%d", name, column.Section.Offset, column.Section.Length, section.Offset, section.Length, section.Rows, section.Encoding, section.Compression, sectionLength, alignment)
+	}
+	if len(column.Blocks) != len(blockLengths) {
+		t.Fatalf("column %q blocks=%d want %d", name, len(column.Blocks), len(blockLengths))
+	}
+	offset := section.Offset
+	firstRow := 0
+	for i, wantLength := range blockLengths {
+		block := column.Blocks[i]
+		wantRows := wantLength / elementSize
+		if fixedWidthElements > 0 {
+			wantRows /= fixedWidthElements
+		}
+		if block.FirstRow != firstRow || block.RowCount != wantRows || block.Encoding != encoding || block.Compression != CompressionNone || block.RawBytes != wantLength || block.StoredBytes != wantLength || block.PayloadOffset != offset || block.PayloadLength != wantLength || block.NullCount != 0 || block.DefaultCount != 0 {
+			t.Fatalf("column %q block %d=%+v want first_row=%d rows=%d encoding=%s payload=(%d,%d) bytes=%d", name, i, block, firstRow, wantRows, encoding, offset, wantLength, wantLength)
+		}
+		if block.PayloadOffset%alignment != 0 || block.PayloadLength%lengthMultiple != 0 {
+			t.Fatalf("column %q block %d payload offset/length=(%d,%d) alignment=%d multiple=%d", name, i, block.PayloadOffset, block.PayloadLength, alignment, lengthMultiple)
+		}
+		offset += wantLength
+		firstRow += wantRows
+	}
+	if offset != section.Offset+section.Length || firstRow != image.Rows {
+		t.Fatalf("column %q consumed offset=%d rows=%d want offset=%d rows=%d", name, offset, firstRow, section.Offset+section.Length, image.Rows)
 	}
 }
 
@@ -93,6 +146,14 @@ func TestColumnPartLayoutContractCorruptionFailsClosed(t *testing.T) {
 			want: "payload offset/length",
 		},
 		{
+			name: "direct_flag",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "score32")
+				column.DirectViewCertified = false
+			},
+			want: "capability flags",
+		},
+		{
 			name: "encoding",
 			edit: func(c *ColumnPartLayoutContract) {
 				column := mustLayoutContractColumnPtr(t, c, "value")
@@ -117,12 +178,44 @@ func TestColumnPartLayoutContractCorruptionFailsClosed(t *testing.T) {
 			want: "endian",
 		},
 		{
+			name: "element_size",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "score32")
+				column.ElementSize = 8
+			},
+			want: "element/alignment/endian/length",
+		},
+		{
+			name: "length_multiple",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "score32")
+				column.LengthMultiple = 8
+			},
+			want: "element/alignment/endian/length",
+		},
+		{
 			name: "alignment",
 			edit: func(c *ColumnPartLayoutContract) {
 				column := mustLayoutContractColumnPtr(t, c, "value")
 				column.Alignment = 4
 			},
 			want: "alignment",
+		},
+		{
+			name: "block_row_count",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "score64")
+				column.Blocks[0].RowCount++
+			},
+			want: "row span",
+		},
+		{
+			name: "null_mask_flag",
+			edit: func(c *ColumnPartLayoutContract) {
+				column := mustLayoutContractColumnPtr(t, c, "score64")
+				column.NullMaskPresent = true
+			},
+			want: "null/default mask flags",
 		},
 		{
 			name: "fixed_width_elements",
@@ -244,6 +337,8 @@ func mustLayoutContractFixedWidthPart(t *testing.T) *ColumnPart {
 		Columns: []ColumnDefinition{
 			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
 			{Name: "value", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true},
+			{Name: "score32", Type: ColumnTypeFloat32, Encoding: EncodingRawFloat32, Compression: CompressionNone, CompressionSet: true},
+			{Name: "score64", Type: ColumnTypeFloat64, Encoding: EncodingRawFloat64, Compression: CompressionNone, CompressionSet: true},
 			{Name: "embedding", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 3},
 			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Encoding: EncodingRawUint32Dense, Compression: CompressionNone, CompressionSet: true, FixedWidthElements: 2},
 		},
@@ -254,6 +349,8 @@ func mustLayoutContractFixedWidthPart(t *testing.T) *ColumnPart {
 	}, Batch{
 		Rows:           3,
 		Columns:        map[string][]int64{"id": {3, 1, 2}, "value": {30, 10, 20}},
+		Float32Columns: map[string][]float32{"score32": {3.25, 1.25, 2.25}},
+		Float64Columns: map[string][]float64{"score64": {30.5, 10.5, 20.5}},
 		Float32Vectors: map[string][]float32{"embedding": {3, 0, 0, 1, 0, 0, 2, 0, 0}},
 		Uint32Vectors:  map[string][]uint32{"neighbors": {30, 31, 10, 11, 20, 21}},
 	})
@@ -268,6 +365,8 @@ func mustLayoutContractFixedWidthImage(t *testing.T) ColumnPartImage {
 	image, err := BuildColumnPartImage(mustLayoutContractFixedWidthPart(t), ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{
 		"id":        "int64",
 		"value":     "int64",
+		"score32":   "float32",
+		"score64":   "double",
 		"embedding": "float32_vector",
 		"neighbors": "adjacency_list",
 	}})

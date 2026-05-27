@@ -215,6 +215,11 @@ func TestTypedColumnAdapterNativeFixedWidthScalarByteFixtures(t *testing.T) {
 	if !bytes.Equal(f32Raw, wantF32) {
 		t.Fatalf("native float32 bytes=% x want % x", f32Raw, wantF32)
 	}
+	f32Cert, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(f32Image)
+	if err != nil {
+		t.Fatalf("certify float32 image: %v", err)
+	}
+	assertTypedColumnAdapterNativeScalarDirectViewContract(t, f32Cert, f32Section, "score", "float32", typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32, 4, 4, len(wantF32))
 
 	f64Field := typedColumnAdapterField("ratio", ColumnStoreValueDouble)
 	f64Field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
@@ -231,6 +236,35 @@ func TestTypedColumnAdapterNativeFixedWidthScalarByteFixtures(t *testing.T) {
 	wantF64 := []byte{0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80}
 	if !bytes.Equal(f64Raw, wantF64) {
 		t.Fatalf("native double bytes=% x want % x", f64Raw, wantF64)
+	}
+	f64Cert, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(f64Image)
+	if err != nil {
+		t.Fatalf("certify double image: %v", err)
+	}
+	assertTypedColumnAdapterNativeScalarDirectViewContract(t, f64Cert, f64Section, "ratio", "double", typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64, 8, 8, len(wantF64))
+}
+
+func assertTypedColumnAdapterNativeScalarDirectViewContract(t *testing.T, cert typedcolumn.ColumnPartLayoutCertification, section typedcolumn.ColumnPartImageSection, name string, logicalType string, columnType typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int, alignment int, payloadLength int) {
+	t.Helper()
+	column, ok := cert.Column(name)
+	if !ok {
+		t.Fatalf("missing certified column %q", name)
+	}
+	if !column.DirectViewCertified || column.LogicalType != logicalType || column.Type != columnType || column.Encoding != encoding || column.Compression != typedcolumn.CompressionNone {
+		t.Fatalf("column %q contract=%+v want native scalar direct-view identity (%q,%s,%s)", name, column, logicalType, columnType, encoding)
+	}
+	if column.Section.Offset != section.Offset || column.Section.Length != section.Length || column.Section.Length != payloadLength || column.ElementSize != elementSize || column.Alignment != alignment || column.Endian != typedcolumn.ColumnPartLayoutEndianLittle || column.LengthMultiple != elementSize || column.FixedWidthElements != 0 || column.Rows != section.Rows {
+		t.Fatalf("column %q section/layout=%+v image_section=%+v want element=%d align=%d payload=%d", name, column, section, elementSize, alignment, payloadLength)
+	}
+	if section.Offset%alignment != 0 || section.Length%elementSize != 0 || column.NullMaskPresent || column.DefaultMaskPresent || column.NullCount != 0 || column.DefaultCount != 0 {
+		t.Fatalf("column %q direct-view invariants contract=%+v image_section=%+v", name, column, section)
+	}
+	if len(column.Blocks) != 1 {
+		t.Fatalf("column %q blocks=%d want 1", name, len(column.Blocks))
+	}
+	block := column.Blocks[0]
+	if block.FirstRow != 0 || block.RowCount != section.Rows || block.Encoding != encoding || block.Compression != typedcolumn.CompressionNone || block.RawBytes != payloadLength || block.StoredBytes != payloadLength || block.PayloadOffset != section.Offset || block.PayloadLength != payloadLength || block.NullCount != 0 || block.DefaultCount != 0 {
+		t.Fatalf("column %q block=%+v section=%+v want exact native scalar payload length=%d", name, block, section, payloadLength)
 	}
 }
 

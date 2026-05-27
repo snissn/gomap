@@ -542,7 +542,11 @@ func (p *typedColumnAdapterPart) buildImage() (typedcolumn.ColumnPartImage, erro
 	if p == nil || p.Part == nil {
 		return typedcolumn.ColumnPartImage{}, errors.New("collections: nil typed-column adapter part")
 	}
-	logicalTypes := map[string]string{typedColumnAdapterPrimaryIDColumn: string(columnsemantics.LogicalInt64)}
+	// The adapter primary-id column is an internal row locator, not a declared
+	// ColumnStoreValueInt64 field. Leave it out of direct-view certification so
+	// fallback-only declared typed-column parts do not publish an internal
+	// direct-view claim that the segment writer intentionally does not align for.
+	logicalTypes := make(map[string]string, len(p.Columns))
 	for _, column := range p.Columns {
 		if logical, ok := columnStoreSemanticLogicalType(column.Field.ValueType); ok {
 			logicalTypes[column.Definition.Name] = string(logical)

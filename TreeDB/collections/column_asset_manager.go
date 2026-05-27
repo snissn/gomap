@@ -33,6 +33,7 @@ const (
 const columnAssetSegmentWriteLockStripes = 64
 const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 const columnAssetVerifiedChecksumCacheSlots = 4096
+const typedColumnPartDirectViewAssetAlignment = 8
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
@@ -293,12 +294,12 @@ func columnStoreConfigHasDirectViewFixedWidthColumn(cfg ColumnStoreConfig) bool 
 			continue
 		}
 		switch column.ValueType {
-		case ColumnStoreValueInt64:
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble:
 			if column.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian {
 				return true
 			}
-		case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
-			if column.VectorDims > 0 || column.ValueType == ColumnStoreValueAdjacencyList {
+		case ColumnStoreValueFloat32Vector:
+			if column.VectorDims > 0 {
 				return true
 			}
 		}
@@ -390,6 +391,18 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	offset, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
 		return ColumnAssetRef{}, err
+	}
+	alignment := columnAssetSegmentPayloadAlignment(kind, cfg)
+	padding := columnAssetSegmentPrefixPadding(offset, alignment)
+	if padding > 0 {
+		written, err := writeColumnAssetSegmentZeroPadding(file, padding)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		if written != padding {
+			return ColumnAssetRef{}, io.ErrShortWrite
+		}
+		offset += int64(padding)
 	}
 	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
@@ -600,6 +613,20 @@ func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind Col
 	if generation == 0 || partID == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
 	}
+	alignment := columnAssetSegmentPayloadAlignment(kind, a.cfg)
+	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
+	if padding > 0 {
+		written, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
+		a.offset += int64(written)
+		if err != nil {
+			a.failed = true
+			return ColumnAssetRef{}, err
+		}
+		if written != padding {
+			a.failed = true
+			return ColumnAssetRef{}, io.ErrShortWrite
+		}
+	}
 	ref := ColumnAssetRef{
 		Kind:       kind,
 		Namespace:  a.cfg.AssetManager.Namespace,
@@ -617,6 +644,49 @@ func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind Col
 		return ColumnAssetRef{}, err
 	}
 	return ref, nil
+}
+
+func columnAssetSegmentPayloadAlignment(kind ColumnAssetKind, cfg ColumnStoreConfig) int64 {
+	if kind != ColumnAssetKindTCS1TypedColumnPart || !columnStoreConfigHasDirectViewFixedWidthColumn(cfg) {
+		return 0
+	}
+	return typedColumnPartDirectViewAssetAlignment
+}
+
+func columnAssetSegmentPrefixPadding(offset int64, alignment int64) int {
+	if alignment <= 1 {
+		return 0
+	}
+	rem := offset % alignment
+	if rem == 0 {
+		return 0
+	}
+	return int(alignment - rem)
+}
+
+func writeColumnAssetSegmentZeroPadding(w io.Writer, length int) (int, error) {
+	if length <= 0 {
+		return 0, nil
+	}
+	var zeros [typedColumnPartDirectViewAssetAlignment]byte
+	written := 0
+	for written < length {
+		chunk := length - written
+		if chunk > len(zeros) {
+			chunk = len(zeros)
+		}
+		n, err := w.Write(zeros[:chunk])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
 }
 
 func writeColumnAssetSegmentPayload(w io.Writer, payload []byte) (int, error) {

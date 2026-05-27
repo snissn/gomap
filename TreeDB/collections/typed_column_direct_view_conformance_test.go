@@ -193,6 +193,143 @@ func TestTypedColumnNativeScalarFloatFixedWidthCandidates(t *testing.T) {
 	}
 }
 
+func TestTypedColumnDirectViewWriterStorageAccounting1895(t *testing.T) {
+	cases := []struct {
+		fixture      string
+		field        TypedStorageField
+		values       []columnDeclaredValue
+		rows         int
+		dims         int
+		wantDirect   bool
+		wantFallback bool
+		wantDeferred bool
+		note         string
+	}{
+		{
+			fixture:      "bool_bitpack_rle",
+			field:        typedColumnAdapterField("flag", ColumnStoreValueBool),
+			values:       []columnDeclaredValue{{Type: ColumnStoreValueBool, Present: true, Bool: true}, {Type: ColumnStoreValueBool, Present: true, Bool: false}, {Type: ColumnStoreValueBool, Present: true, Bool: true}},
+			rows:         3,
+			wantFallback: true,
+			note:         "fallback_only_bool_bitpack_rle",
+		},
+		{
+			fixture: "int64_raw_fixed_width",
+			field: func() TypedStorageField {
+				field := typedColumnAdapterField("count", ColumnStoreValueInt64)
+				field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+				return field
+			}(),
+			values:     []columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 10}, {Type: ColumnStoreValueInt64, Present: true, Int64: 20}, {Type: ColumnStoreValueInt64, Present: true, Int64: 30}},
+			rows:       3,
+			wantDirect: true,
+			note:       "raw_int64_direct_view_certified",
+		},
+		{
+			fixture: "float32_native_raw_fixed_width",
+			field: func() TypedStorageField {
+				field := typedColumnAdapterField("score32", ColumnStoreValueFloat32)
+				field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+				return field
+			}(),
+			values:     []columnDeclaredValue{{Type: ColumnStoreValueFloat32, Present: true, Float32: 1.25}, {Type: ColumnStoreValueFloat32, Present: true, Float32: -0}, {Type: ColumnStoreValueFloat32, Present: true, Float32: math.Float32frombits(0x7fc01234)}},
+			rows:       3,
+			wantDirect: true,
+			note:       "native_raw_float32_direct_view_certified",
+		},
+		{
+			fixture: "double_native_raw_fixed_width",
+			field: func() TypedStorageField {
+				field := typedColumnAdapterField("score64", ColumnStoreValueDouble)
+				field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+				return field
+			}(),
+			values:     []columnDeclaredValue{{Type: ColumnStoreValueDouble, Present: true, Double: 1.25}, {Type: ColumnStoreValueDouble, Present: true, Double: -0}, {Type: ColumnStoreValueDouble, Present: true, Double: math.Float64frombits(0x7ff8000000001234)}},
+			rows:       3,
+			wantDirect: true,
+			note:       "native_raw_float64_direct_view_certified",
+		},
+		{
+			fixture:      "string_dictionary_codes",
+			field:        typedColumnAdapterField("kind", ColumnStoreValueString),
+			values:       []columnDeclaredValue{{Type: ColumnStoreValueString, Present: true, String: "alpha"}, {Type: ColumnStoreValueString, Present: true, String: "beta"}, {Type: ColumnStoreValueString, Present: true, String: "alpha"}},
+			rows:         3,
+			wantFallback: true,
+			note:         "fallback_only_string_dictionary",
+		},
+		{
+			fixture: "float32_vector_fixed_dim",
+			field: func() TypedStorageField {
+				field := typedColumnAdapterField("embedding", ColumnStoreValueFloat32Vector)
+				field.VectorDims = 3
+				return field
+			}(),
+			values:     []columnDeclaredValue{{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 0, 0}}, {Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{0, 1, 0}}, {Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{0, 0, 1}}},
+			rows:       3,
+			dims:       3,
+			wantDirect: true,
+			note:       "row_major_raw_float32_vector_direct_view_certified",
+		},
+		{
+			fixture: "adjacency_deferred",
+			field: func() TypedStorageField {
+				field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+				field.AdjacencyDegree = 2
+				return field
+			}(),
+			values:       []columnDeclaredValue{{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2}}, {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{2, 3}}, {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{3, 4}}},
+			rows:         3,
+			dims:         2,
+			wantFallback: true,
+			wantDeferred: true,
+			note:         "deferred_to_1901_no_direct_view_certification",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.fixture, func(t *testing.T) {
+			part := typedColumnAdapterBuildPart(t, tc.field, tc.values)
+			image, err := part.buildImage()
+			if err != nil {
+				t.Fatalf("buildImage: %v", err)
+			}
+			accounting := part.Part.ByteAccountingFromImage(image)
+			cert, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+			if err != nil {
+				t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+			}
+			column, ok := cert.Column(tc.field.Name)
+			if !ok {
+				t.Fatalf("missing contract column %q", tc.field.Name)
+			}
+			classification := typedColumnDirectViewClassificationFor(tc.field.ValueType, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric)
+			if got := column.DirectViewCertified; got != tc.wantDirect {
+				t.Fatalf("%s DirectViewCertified=%v want %v contract=%+v", tc.fixture, got, tc.wantDirect, column)
+			}
+			wantCertifiedColumns := 0
+			if tc.wantDirect {
+				wantCertifiedColumns = 1
+			}
+			if cert.DirectViewCertified != wantCertifiedColumns {
+				t.Fatalf("%s certified columns=%d want %d (declared target only; internal primary-id must not certify)", tc.fixture, cert.DirectViewCertified, wantCertifiedColumns)
+			}
+			if tc.wantDeferred && classification.Support != typedColumnDirectViewDeferredFallbackOnly {
+				t.Fatalf("%s classification=%+v want deferred fallback", tc.fixture, classification)
+			}
+			if tc.wantFallback && column.DirectViewCertified {
+				t.Fatalf("%s fallback fixture unexpectedly direct-certified: %+v", tc.fixture, column)
+			}
+			if accounting.SerializedImageBytes != image.TotalBytes() || accounting.SerializedPaddingBytes != image.PaddingBytes() || accounting.LayoutContractBytes != image.CategoryBytes(typedcolumn.ColumnPartImageCategoryLayoutContract) || accounting.TotalStoredBytes != image.TotalBytes() {
+				t.Fatalf("%s accounting=%+v image_bytes=%d padding=%d contract=%d", tc.fixture, accounting, image.TotalBytes(), image.PaddingBytes(), image.CategoryBytes(typedcolumn.ColumnPartImageCategoryLayoutContract))
+			}
+			segmentPrefixPadding := 0
+			if tc.wantDirect {
+				segmentPrefixPadding = columnAssetSegmentPrefixPadding(1, typedColumnPartDirectViewAssetAlignment)
+			}
+			t.Logf("storage_table fixture=%s type=%s rows=%d dims=%d image_bytes=%d contract_bytes=%d image_padding_bytes=%d segment_prefix_padding_bytes=%d total_padding_bytes=%d direct_view_certified=%t fallback_only=%t deferred=%t note=%s", tc.fixture, tc.field.ValueType, tc.rows, tc.dims, image.TotalBytes(), accounting.LayoutContractBytes, accounting.SerializedPaddingBytes, segmentPrefixPadding, accounting.SerializedPaddingBytes+segmentPrefixPadding, column.DirectViewCertified, tc.wantFallback, tc.wantDeferred, tc.note)
+		})
+	}
+}
+
 func TestTypedColumnDirectViewFailClosedFixtures(t *testing.T) {
 	cert := directViewConformanceVectorCert(2, 3)
 	plan := typeddecode.DenseFloat32VectorPlan(cert, 3)

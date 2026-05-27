@@ -1417,6 +1417,167 @@ func TestColumnAssetReachabilityPlanClassifiesFullCandidateSegmentReclaimableM15
 	}
 }
 
+func TestColumnAssetReachabilityDirectViewPrefixPaddingIsKnown1895(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	fileID, err := directViewTypedColumnSegmentFileID(41)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)), make([]byte, 49), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	seed := ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: namespaceName, Generation: 41, PartID: 90, FileID: fileID, Offset: 0, Length: 1}
+	first := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 41, PartID: 1, FileID: fileID, Offset: 8, Length: 25}
+	second := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 41, PartID: 2, FileID: fileID, Offset: 40, Length: 9}
+	input := columnAssetReachabilityInput{rootDir: root, collection: "events", namespace: namespaceName, detailed: true, segmentDetails: true}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{seed, first}, ColumnAssetReachabilitySourceActiveManifest); err != nil {
+		t.Fatalf("add protected refs: %v", err)
+	}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{second}, ColumnAssetReachabilitySourceCandidate); err != nil {
+		t.Fatalf("add candidate ref: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || plan.Segments.Mixed != 1 || plan.Segments.Unknown != 0 || plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("plan complete=%t segments=%+v want one complete mixed segment with deterministic padding known", plan.Complete, plan.Segments)
+	}
+	if plan.Segments.BytesProtected != 33 || plan.Segments.BytesReclaimable != 16 || plan.RewriteDebtBytes != 16 {
+		t.Fatalf("segment bytes protected=%d reclaimable=%d rewrite=%d want protected=33 reclaimable=16 rewrite=16", plan.Segments.BytesProtected, plan.Segments.BytesReclaimable, plan.RewriteDebtBytes)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].UnknownBytes != 0 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentMixed {
+		t.Fatalf("segment entries=%+v want mixed with no unknown padding bytes", plan.SegmentEntries)
+	}
+	if plan.Refs.BytesProtected != seed.Length+first.Length || plan.Refs.BytesReclaimable != second.Length {
+		t.Fatalf("ref bytes=%+v want payload-only ref accounting", plan.Refs)
+	}
+}
+
+func TestColumnAssetReachabilityRewriteSegmentPrefixPaddingIsKnown1895(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	const fileID = uint32(22)
+	if fileID >= columnAssetDirectViewSegmentFileIDBase {
+		t.Fatalf("test file_id=%d unexpectedly in direct-view reserved band", fileID)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)), make([]byte, 49), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	seed := ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: namespaceName, Generation: 51, PartID: 90, FileID: fileID, Offset: 0, Length: 1}
+	first := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 51, PartID: 1, FileID: fileID, Offset: 8, Length: 25}
+	second := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 51, PartID: 2, FileID: fileID, Offset: 40, Length: 9}
+	input := columnAssetReachabilityInput{rootDir: root, collection: "events", namespace: namespaceName, detailed: true, segmentDetails: true}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{seed, first}, ColumnAssetReachabilitySourceActiveManifest); err != nil {
+		t.Fatalf("add protected refs: %v", err)
+	}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{second}, ColumnAssetReachabilitySourceCandidate); err != nil {
+		t.Fatalf("add candidate ref: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if !plan.Complete || plan.Segments.Mixed != 1 || plan.Segments.Unknown != 0 || plan.Segments.BytesUnknown != 0 {
+		t.Fatalf("plan complete=%t segments=%+v want regular rewrite segment padding known", plan.Complete, plan.Segments)
+	}
+	if plan.Segments.BytesProtected != 33 || plan.Segments.BytesReclaimable != 16 || plan.RewriteDebtBytes != 16 {
+		t.Fatalf("segment bytes protected=%d reclaimable=%d rewrite=%d want protected=33 reclaimable=16 rewrite=16", plan.Segments.BytesProtected, plan.Segments.BytesReclaimable, plan.RewriteDebtBytes)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].UnknownBytes != 0 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentMixed {
+		t.Fatalf("segment entries=%+v want mixed with no unknown padding bytes", plan.SegmentEntries)
+	}
+	if plan.Refs.BytesProtected != seed.Length+first.Length || plan.Refs.BytesReclaimable != second.Length {
+		t.Fatalf("ref bytes=%+v want payload-only ref accounting", plan.Refs)
+	}
+}
+
+func TestColumnAssetReachabilityNonZeroPrefixPaddingGapStaysUnknown1895(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	fileID, err := directViewTypedColumnSegmentFileID(52)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	segment := make([]byte, 33)
+	for i := 1; i < 8; i++ {
+		segment[i] = 0xa5
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)), segment, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	seed := ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: namespaceName, Generation: 52, PartID: 90, FileID: fileID, Offset: 0, Length: 1}
+	typed := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 52, PartID: 1, FileID: fileID, Offset: 8, Length: 25}
+	input := columnAssetReachabilityInput{rootDir: root, collection: "events", namespace: namespaceName, detailed: true, segmentDetails: true}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{seed, typed}, ColumnAssetReachabilitySourceActiveManifest); err != nil {
+		t.Fatalf("add refs: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown != 7 {
+		t.Fatalf("plan complete=%t segments=%+v want non-zero padding-sized gap unknown", plan.Complete, plan.Segments)
+	}
+}
+
+func TestColumnAssetReachabilityDirectViewPaddingWindowDoesNotHideLargeGaps1895(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	fileID, err := directViewTypedColumnSegmentFileID(42)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)), make([]byte, 41), 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	seed := ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: namespaceName, Generation: 42, PartID: 90, FileID: fileID, Offset: 0, Length: 1}
+	typed := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 42, PartID: 1, FileID: fileID, Offset: 16, Length: 25}
+	input := columnAssetReachabilityInput{rootDir: root, collection: "events", namespace: namespaceName, detailed: true, segmentDetails: true}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{seed, typed}, ColumnAssetReachabilitySourceActiveManifest); err != nil {
+		t.Fatalf("add refs: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown != 15 {
+		t.Fatalf("plan complete=%t segments=%+v want full 15-byte non-padding gap unknown", plan.Complete, plan.Segments)
+	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].UnknownBytes != 15 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown {
+		t.Fatalf("segment entries=%+v want unknown large gap", plan.SegmentEntries)
+	}
+}
+
 func TestColumnAssetReachabilityByteAccountingSaturatesM15A(t *testing.T) {
 	if got := addColumnAssetReachabilityBytes(math.MaxInt64-3, 2); got != math.MaxInt64-1 {
 		t.Fatalf("non-overflow add=%d want %d", got, int64(math.MaxInt64-1))

@@ -447,12 +447,23 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFal
 	if imageRows != len(rows) {
 		t.Fatalf("image rows=%d want %d", imageRows, len(rows))
 	}
-	if _, err := writeColumnAssetToManagerSegment(d.ColumnAssetRootDir(), *cfg, []byte{0}, ColumnAssetKindTCS1TypedColumnPart, 1, 99, columnAssetM12ASegmentFileID); err != nil {
-		t.Fatalf("write misalignment prefix: %v", err)
-	}
-	ref, err := writeColumnAssetToManagerSegment(d.ColumnAssetRootDir(), *cfg, imageBytes, ColumnAssetKindTCS1TypedColumnPart, 1, typedColumnPartAssetPartID, columnAssetM12ASegmentFileID)
+	namespace, err := columnAssetManagerNamespaceForRoot(d.ColumnAssetRootDir(), cfg.AssetManager.Namespace)
 	if err != nil {
-		t.Fatalf("write typed_column_part: %v", err)
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		t.Fatalf("ensureColumnAssetManagerNamespace: %v", err)
+	}
+	// Bypass the writer-side appender padding to simulate a legacy/synthetic
+	// misaligned ref; readers must fail closed or scratch-decode this shape.
+	ref := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: cfg.AssetManager.Namespace, Generation: 1, PartID: typedColumnPartAssetPartID, FileID: columnAssetM12ASegmentFileID, Offset: 1, Length: int64(len(imageBytes)), Checksum: page.Checksum(imageBytes)}
+	assetPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	legacyMisaligned := append([]byte{0}, imageBytes...)
+	if err := os.WriteFile(assetPath, legacyMisaligned, 0o600); err != nil {
+		t.Fatalf("write legacy misaligned typed_column_part: %v", err)
 	}
 	if ref.Offset%4 == 0 {
 		t.Fatalf("test setup ref offset=%d is aligned; want misaligned dense section", ref.Offset)
