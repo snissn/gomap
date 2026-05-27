@@ -3990,6 +3990,19 @@ func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *te
 	if _, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &readCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
 		t.Fatalf("group-count-distinct err=%v want manifest row mismatch", err)
 	}
+	viewReadCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new view column asset read cache: %v", err)
+	}
+	viewReadCache.returnViews = true
+	defer func() {
+		if err := viewReadCache.close(); err != nil {
+			t.Fatalf("view read cache close: %v", err)
+		}
+	}()
+	if _, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &viewReadCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
+		t.Fatalf("group-count-distinct one-shot ok=%v err=%v want manifest row mismatch", ok, err)
+	}
 }
 
 func TestColumnDictionaryCodeDistinctSeenWordsRejectsOverflowM1634(t *testing.T) {

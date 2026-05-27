@@ -790,6 +790,9 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
 		}
+		if groupRows != part.Rows {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: group dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", groupRows, part.Rows, groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
+		}
 		distinctRaw, err := readCache.read(distinctSnapshot.AssetRef, scratch)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn, err)
@@ -818,6 +821,9 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		distinctPayload, err := columnDictionaryCodesPayloadAfterDictionary(distinctRaw, distinctSnapshot.AssetRef, &distinctCur, distinctRows)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
+		}
+		if distinctRows != part.Rows {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: distinct dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", distinctRows, part.Rows, distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
 		}
 		if groupPayload.rowCount != distinctPayload.rowCount {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary code distinct row count mismatch group=%d distinct=%d", groupPayload.rowCount, distinctPayload.rowCount)
