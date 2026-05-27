@@ -39,6 +39,12 @@ type columnDictionaryPredicateAsset struct {
 	codes      [][]uint32
 	allowed    [][]uint64
 	rejectsAll bool
+	fastSafe   bool
+}
+
+type columnDictionaryPredicateFastPath struct {
+	codes   [][]uint32
+	allowed [][]uint64
 }
 
 type columnPhysicalQueryPredicateDiagnosticPlan struct {
@@ -216,6 +222,7 @@ func prepareColumnDictionaryPredicateAssets(view columnPhysicalScanSnapshotView,
 			asset.allowed[predicateIdx] = allowed
 			totalBytes += snapshot.AssetRef.Length
 		}
+		asset.fastSafe = true
 		assets = append(assets, asset)
 	}
 	return assets, totalBytes, nil
@@ -236,6 +243,50 @@ func (a columnDictionaryPredicateAsset) matches(rowIdx int) bool {
 		allowed := a.allowed[predicateIdx]
 		word := code / 64
 		if word >= len(allowed) || allowed[word]&(uint64(1)<<uint(code&63)) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *columnDictionaryPredicateAsset) fastPath(rowCount int) (columnDictionaryPredicateFastPath, bool) {
+	if a == nil || a.rejectsAll || !a.fastSafe || a.rowCount != rowCount || len(a.codes) != len(a.allowed) {
+		return columnDictionaryPredicateFastPath{}, false
+	}
+	for predicateIdx, codes := range a.codes {
+		if len(codes) != rowCount || len(a.allowed[predicateIdx]) == 0 && rowCount != 0 {
+			return columnDictionaryPredicateFastPath{}, false
+		}
+	}
+	return columnDictionaryPredicateFastPath{codes: a.codes, allowed: a.allowed}, true
+}
+
+func (p columnDictionaryPredicateFastPath) predicateCount() int {
+	return len(p.codes)
+}
+
+func (p columnDictionaryPredicateFastPath) matches1(rowIdx int) bool {
+	code := p.codes[0][rowIdx]
+	allowed := p.allowed[0]
+	return allowed[int(code>>6)]&(uint64(1)<<uint(code&63)) != 0
+}
+
+func (p columnDictionaryPredicateFastPath) matches2(rowIdx int) bool {
+	code0 := p.codes[0][rowIdx]
+	allowed0 := p.allowed[0]
+	if allowed0[int(code0>>6)]&(uint64(1)<<uint(code0&63)) == 0 {
+		return false
+	}
+	code1 := p.codes[1][rowIdx]
+	allowed1 := p.allowed[1]
+	return allowed1[int(code1>>6)]&(uint64(1)<<uint(code1&63)) != 0
+}
+
+func (p columnDictionaryPredicateFastPath) matches(rowIdx int) bool {
+	for predicateIdx, codes := range p.codes {
+		code := codes[rowIdx]
+		allowed := p.allowed[predicateIdx]
+		if allowed[int(code>>6)]&(uint64(1)<<uint(code&63)) == 0 {
 			return false
 		}
 	}

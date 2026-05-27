@@ -2328,12 +2328,14 @@ func BenchmarkColumnPhysicalQueryDictionaryPredicates1869(b *testing.B) {
 	}
 	collection, closeFn := openColumnPhysicalPredicateFixture1869(b, events)
 	defer closeFn()
+	commit := []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}}
 	commitCreate := []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}, {Column: "operation", Value: "create"}}
 	postCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{Column: "event", Value: "app.bsky.feed.post"})
 	cases := []struct {
 		name string
 		req  ColumnPhysicalQueryRequest
 	}{
+		{name: "q2_count_one_predicate", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commit}},
 		{name: "q2_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commitCreate}},
 		{name: "q2_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
 		{name: "q2_fused_count_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},

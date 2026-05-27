@@ -135,26 +135,64 @@ func (r *columnDictionaryHourCountRunner) run(view columnPhysicalScanSnapshotVie
 	clear(r.counts)
 	rows := 0
 	matched := 0
-	for assetIdx, asset := range r.assets {
-		var predicates *columnDictionaryPredicateAsset
-		if len(r.predicateAssets) != 0 {
-			predicates = &r.predicateAssets[assetIdx]
+	if len(r.predicateAssets) == 0 {
+		for _, asset := range r.assets {
+			rows += len(asset.groupCodes)
+			for rowIdx, groupCode := range asset.groupCodes {
+				hour := columnPhysicalQueryUTCHour(asset.values[rowIdx])
+				r.counts[int(groupCode)*24+hour]++
+			}
+		}
+		matched = rows
+	} else {
+		for assetIdx, asset := range r.assets {
+			predicates := &r.predicateAssets[assetIdx]
 			if predicates.rejectsAll {
 				continue
 			}
-		}
-		for rowIdx, groupCode := range asset.groupCodes {
-			rows++
-			if predicates != nil && !predicates.matches(rowIdx) {
+			rows += len(asset.groupCodes)
+			fast, ok := predicates.fastPath(len(asset.groupCodes))
+			if !ok {
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !predicates.matches(rowIdx) {
+						continue
+					}
+					hour := columnPhysicalQueryUTCHour(asset.values[rowIdx])
+					r.counts[int(groupCode)*24+hour]++
+					matched++
+				}
 				continue
 			}
-			hour := columnPhysicalQueryUTCHour(asset.values[rowIdx])
-			r.counts[int(groupCode)*24+hour]++
-			matched++
+			switch fast.predicateCount() {
+			case 1:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches1(rowIdx) {
+						continue
+					}
+					hour := columnPhysicalQueryUTCHour(asset.values[rowIdx])
+					r.counts[int(groupCode)*24+hour]++
+					matched++
+				}
+			case 2:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches2(rowIdx) {
+						continue
+					}
+					hour := columnPhysicalQueryUTCHour(asset.values[rowIdx])
+					r.counts[int(groupCode)*24+hour]++
+					matched++
+				}
+			default:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches(rowIdx) {
+						continue
+					}
+					hour := columnPhysicalQueryUTCHour(asset.values[rowIdx])
+					r.counts[int(groupCode)*24+hour]++
+					matched++
+				}
+			}
 		}
-	}
-	if len(r.predicateAssets) == 0 {
-		matched = rows
 	}
 	r.result = r.result[:0]
 	for code, key := range r.groupDict {

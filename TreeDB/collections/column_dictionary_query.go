@@ -232,12 +232,45 @@ func (r *columnDictionaryCodeGroupCountRunner) run(view columnPhysicalScanSnapsh
 		for assetIdx, asset := range r.assets {
 			predicates := &r.predicateAssets[assetIdx]
 			rows += len(asset.codes)
-			for rowIdx, code := range asset.codes {
-				if !predicates.matches(rowIdx) {
-					continue
+			if predicates.rejectsAll {
+				continue
+			}
+			fast, ok := predicates.fastPath(len(asset.codes))
+			if !ok {
+				for rowIdx, code := range asset.codes {
+					if !predicates.matches(rowIdx) {
+						continue
+					}
+					r.counts[code]++
+					matched++
 				}
-				r.counts[code]++
-				matched++
+				continue
+			}
+			switch fast.predicateCount() {
+			case 1:
+				for rowIdx, code := range asset.codes {
+					if !fast.matches1(rowIdx) {
+						continue
+					}
+					r.counts[code]++
+					matched++
+				}
+			case 2:
+				for rowIdx, code := range asset.codes {
+					if !fast.matches2(rowIdx) {
+						continue
+					}
+					r.counts[code]++
+					matched++
+				}
+			default:
+				for rowIdx, code := range asset.codes {
+					if !fast.matches(rowIdx) {
+						continue
+					}
+					r.counts[code]++
+					matched++
+				}
 			}
 		}
 	}
@@ -658,35 +691,124 @@ func (r *columnDictionaryCodeGroupCountDistinctRunner) run(view columnPhysicalSc
 	clear(r.seen)
 	rows := 0
 	matched := 0
-	for assetIdx, asset := range r.assets {
-		var predicates *columnDictionaryPredicateAsset
-		if len(r.predicateAssets) != 0 {
-			predicates = &r.predicateAssets[assetIdx]
-		}
-		for rowIdx, groupCode := range asset.groupCodes {
-			rows++
-			if predicates != nil && !predicates.matches(rowIdx) {
-				continue
-			}
-			if r.combined {
-				r.groupCounts[groupCode]++
-			}
-			distinctCode := asset.distinctCodes[rowIdx]
-			seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
-			mask := uint64(1) << (distinctCode & 63)
-			if r.seen[seenIdx]&mask == 0 {
-				r.seen[seenIdx] |= mask
+	if len(r.predicateAssets) == 0 {
+		for _, asset := range r.assets {
+			rows += len(asset.groupCodes)
+			for rowIdx, groupCode := range asset.groupCodes {
 				if r.combined {
-					r.groupDistinctCounts[groupCode]++
-				} else {
 					r.groupCounts[groupCode]++
 				}
+				distinctCode := asset.distinctCodes[rowIdx]
+				seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
+				mask := uint64(1) << (distinctCode & 63)
+				if r.seen[seenIdx]&mask == 0 {
+					r.seen[seenIdx] |= mask
+					if r.combined {
+						r.groupDistinctCounts[groupCode]++
+					} else {
+						r.groupCounts[groupCode]++
+					}
+				}
 			}
-			matched++
 		}
-	}
-	if len(r.predicateAssets) == 0 {
 		matched = rows
+	} else {
+		for assetIdx, asset := range r.assets {
+			predicates := &r.predicateAssets[assetIdx]
+			rows += len(asset.groupCodes)
+			if predicates.rejectsAll {
+				continue
+			}
+			fast, ok := predicates.fastPath(len(asset.groupCodes))
+			if !ok {
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !predicates.matches(rowIdx) {
+						continue
+					}
+					if r.combined {
+						r.groupCounts[groupCode]++
+					}
+					distinctCode := asset.distinctCodes[rowIdx]
+					seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
+					mask := uint64(1) << (distinctCode & 63)
+					if r.seen[seenIdx]&mask == 0 {
+						r.seen[seenIdx] |= mask
+						if r.combined {
+							r.groupDistinctCounts[groupCode]++
+						} else {
+							r.groupCounts[groupCode]++
+						}
+					}
+					matched++
+				}
+				continue
+			}
+			switch fast.predicateCount() {
+			case 1:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches1(rowIdx) {
+						continue
+					}
+					if r.combined {
+						r.groupCounts[groupCode]++
+					}
+					distinctCode := asset.distinctCodes[rowIdx]
+					seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
+					mask := uint64(1) << (distinctCode & 63)
+					if r.seen[seenIdx]&mask == 0 {
+						r.seen[seenIdx] |= mask
+						if r.combined {
+							r.groupDistinctCounts[groupCode]++
+						} else {
+							r.groupCounts[groupCode]++
+						}
+					}
+					matched++
+				}
+			case 2:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches2(rowIdx) {
+						continue
+					}
+					if r.combined {
+						r.groupCounts[groupCode]++
+					}
+					distinctCode := asset.distinctCodes[rowIdx]
+					seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
+					mask := uint64(1) << (distinctCode & 63)
+					if r.seen[seenIdx]&mask == 0 {
+						r.seen[seenIdx] |= mask
+						if r.combined {
+							r.groupDistinctCounts[groupCode]++
+						} else {
+							r.groupCounts[groupCode]++
+						}
+					}
+					matched++
+				}
+			default:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches(rowIdx) {
+						continue
+					}
+					if r.combined {
+						r.groupCounts[groupCode]++
+					}
+					distinctCode := asset.distinctCodes[rowIdx]
+					seenIdx := int(groupCode)*r.wordsPerGroup + int(distinctCode/64)
+					mask := uint64(1) << (distinctCode & 63)
+					if r.seen[seenIdx]&mask == 0 {
+						r.seen[seenIdx] |= mask
+						if r.combined {
+							r.groupDistinctCounts[groupCode]++
+						} else {
+							r.groupCounts[groupCode]++
+						}
+					}
+					matched++
+				}
+			}
+		}
 	}
 	r.resultGroups = r.resultGroups[:0]
 	for code, count := range r.groupCounts {
