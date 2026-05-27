@@ -466,27 +466,28 @@ func TestAdjacencyOffsetsListDirectViewFailsClosed(t *testing.T) {
 		t.Fatalf("base plan=%+v", plan)
 	}
 	planCases := []struct {
-		name string
-		edit func(*typedcolumn.ColumnPartLayoutContractColumn)
-		want Reason
+		name     string
+		edit     func(*typedcolumn.ColumnPartLayoutContractColumn)
+		want     Reason
+		wantPath Path
 	}{
-		{name: "missing_cert", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DirectViewCertified = false }, want: ReasonNotWriterCertified},
-		{name: "wrong_logical", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.LogicalType = "int64" }, want: ReasonValidationFailed},
-		{name: "wrong_type", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Type = typedcolumn.ColumnTypeInt64 }, want: ReasonValidationFailed},
-		{name: "wrong_encoding", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Encoding = typedcolumn.EncodingRawUint32Dense }, want: ReasonValidationFailed},
+		{name: "missing_cert", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DirectViewCertified = false }, want: ReasonNotWriterCertified, wantPath: PathMaterialize},
+		{name: "wrong_logical", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.LogicalType = "int64" }, want: ReasonValidationFailed, wantPath: PathUnsupported},
+		{name: "wrong_type", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Type = typedcolumn.ColumnTypeInt64 }, want: ReasonValidationFailed, wantPath: PathUnsupported},
+		{name: "wrong_encoding", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Encoding = typedcolumn.EncodingRawUint32Dense }, want: ReasonValidationFailed, wantPath: PathUnsupported},
 		{name: "wrong_endian", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) {
 			c.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
-		}, want: ReasonWrongEndian},
-		{name: "compressed", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Compression = typedcolumn.CompressionSnappy }, want: ReasonCompressed},
-		{name: "nullable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.NullMaskPresent = true; c.NullCount = 1 }, want: ReasonNullableWrapper},
-		{name: "defaultable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DefaultMaskPresent = true; c.DefaultCount = 1 }, want: ReasonNullableWrapper},
+		}, want: ReasonWrongEndian, wantPath: PathMaterialize},
+		{name: "compressed", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Compression = typedcolumn.CompressionSnappy }, want: ReasonCompressed, wantPath: PathUnsupported},
+		{name: "nullable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.NullMaskPresent = true; c.NullCount = 1 }, want: ReasonNullableWrapper, wantPath: PathUnsupported},
+		{name: "defaultable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DefaultMaskPresent = true; c.DefaultCount = 1 }, want: ReasonNullableWrapper, wantPath: PathUnsupported},
 	}
 	for _, tc := range planCases {
 		t.Run("plan_"+tc.name, func(t *testing.T) {
 			cert := cloneDirectViewCert(base)
 			tc.edit(&cert)
-			if got := AdjacencyOffsetsListPlan(cert); got.Reason != tc.want {
-				t.Fatalf("plan=%+v want reason %s", got, tc.want)
+			if got := AdjacencyOffsetsListPlan(cert); got.Reason != tc.want || got.Path != tc.wantPath {
+				t.Fatalf("plan=%+v want path=%s reason=%s", got, tc.wantPath, tc.want)
 			}
 		})
 	}

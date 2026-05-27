@@ -280,7 +280,7 @@ func validateDirectViewCertification(layout columnlayout.Capabilities, cert type
 
 func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn) Status {
 	if !cert.DirectViewCertified {
-		return StreamingStatus(ReasonNotWriterCertified, "column lacks writer-certified offsets-list direct-view contract")
+		return MaterializeStatus(ReasonNotWriterCertified, "column lacks writer-certified offsets-list direct-view contract")
 	}
 	if cert.Compression != typedcolumn.CompressionNone {
 		return UnsupportedStatus(ReasonCompressed, fmt.Sprintf("compression=%s", cert.Compression))
@@ -289,10 +289,10 @@ func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities
 		return UnsupportedStatus(ReasonNullableWrapper, "null/default masks must be separate from offsets-list direct view")
 	}
 	if cert.Endian != typedcolumn.ColumnPartLayoutEndianLittle {
-		return StreamingStatus(ReasonWrongEndian, fmt.Sprintf("endian=%s", cert.Endian))
+		return MaterializeStatus(ReasonWrongEndian, fmt.Sprintf("endian=%s", cert.Endian))
 	}
 	if cert.ElementSize != 4 || cert.Alignment <= 0 || cert.Alignment < 4 || cert.LengthMultiple <= 0 || cert.LengthMultiple%4 != 0 || cert.FixedWidthElements != 0 {
-		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d alignment=%d length_multiple=%d fixed_width_elements=%d", cert.ElementSize, cert.Alignment, cert.LengthMultiple, cert.FixedWidthElements))
+		return MaterializeStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d alignment=%d length_multiple=%d fixed_width_elements=%d", cert.ElementSize, cert.Alignment, cert.LengthMultiple, cert.FixedWidthElements))
 	}
 	if cap := layout.Supports(columnlayout.OpAdjacencyDirectView); !cap.Supported() {
 		return statusFromLayoutCapability(cap)
@@ -644,6 +644,10 @@ func ValidateUint32OffsetsListDirectView(req Uint32OffsetsListDirectViewRequest,
 	if status := ValidateUint32OffsetsListDirectViewSections(req); !status.Direct() {
 		return status
 	}
+	return validateUint32OffsetsListDirectViewTypedViews(req, offsets, values)
+}
+
+func validateUint32OffsetsListDirectViewTypedViews(req Uint32OffsetsListDirectViewRequest, offsets []uint64, values []uint32) Status {
 	if len(offsets) != req.offsetsCount() {
 		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets=%d want row_count+1=%d", len(offsets), req.offsetsCount()))
 	}
@@ -968,7 +972,7 @@ func Uint32OffsetsListView(mgr *mappedresource.Manager, offsetsHandle *mappedres
 	if !status.Direct() {
 		return nil, nil, status
 	}
-	if status := ValidateUint32OffsetsListDirectView(req, offsets, values); !status.Direct() {
+	if status := validateUint32OffsetsListDirectViewTypedViews(req, offsets, values); !status.Direct() {
 		return nil, nil, status
 	}
 	return offsets, values, DirectStatus()
