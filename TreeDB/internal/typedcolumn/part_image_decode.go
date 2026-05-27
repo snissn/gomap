@@ -2029,6 +2029,10 @@ func expectedImageSectionCategory(kind ColumnPartImageSectionKind) (ColumnPartIm
 		return ColumnPartImageCategoryLayoutContract, true
 	case ColumnPartImageSectionColumnData:
 		return ColumnPartImageCategoryDeclaredColumns, true
+	case ColumnPartImageSectionColumnOffsets:
+		return ColumnPartImageCategoryDeclaredColumnOffsets, true
+	case ColumnPartImageSectionColumnValues:
+		return ColumnPartImageCategoryDeclaredColumnValues, true
 	case ColumnPartImageSectionManifest:
 		return ColumnPartImageCategoryManifest, true
 	default:

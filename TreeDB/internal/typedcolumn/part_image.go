@@ -29,24 +29,28 @@ const (
 	ColumnPartImageSectionDictionaries      ColumnPartImageSectionKind = "dictionaries"
 	ColumnPartImageSectionLayoutContract    ColumnPartImageSectionKind = "layout_contract"
 	ColumnPartImageSectionColumnData        ColumnPartImageSectionKind = "column_data"
+	ColumnPartImageSectionColumnOffsets     ColumnPartImageSectionKind = "column_offsets"
+	ColumnPartImageSectionColumnValues      ColumnPartImageSectionKind = "column_values"
 	ColumnPartImageSectionPadding           ColumnPartImageSectionKind = "padding"
 )
 
 type ColumnPartImageSectionCategory string
 
 const (
-	ColumnPartImageCategoryManifest          ColumnPartImageSectionCategory = "manifest"
-	ColumnPartImageCategoryDescriptor        ColumnPartImageSectionCategory = "descriptor"
-	ColumnPartImageCategorySortKeyMetadata   ColumnPartImageSectionCategory = "sort_key_metadata"
-	ColumnPartImageCategoryMarks             ColumnPartImageSectionCategory = "marks"
-	ColumnPartImageCategoryLocators          ColumnPartImageSectionCategory = "locators"
-	ColumnPartImageCategoryAggregateMetadata ColumnPartImageSectionCategory = "aggregate_metadata"
-	ColumnPartImageCategoryColumnStats       ColumnPartImageSectionCategory = "column_stats"
-	ColumnPartImageCategoryPruningMetadata   ColumnPartImageSectionCategory = "pruning_metadata"
-	ColumnPartImageCategoryDictionaries      ColumnPartImageSectionCategory = "dictionaries"
-	ColumnPartImageCategoryLayoutContract    ColumnPartImageSectionCategory = "layout_contract"
-	ColumnPartImageCategoryDeclaredColumns   ColumnPartImageSectionCategory = "declared_columns"
-	ColumnPartImageCategoryPadding           ColumnPartImageSectionCategory = "padding"
+	ColumnPartImageCategoryManifest              ColumnPartImageSectionCategory = "manifest"
+	ColumnPartImageCategoryDescriptor            ColumnPartImageSectionCategory = "descriptor"
+	ColumnPartImageCategorySortKeyMetadata       ColumnPartImageSectionCategory = "sort_key_metadata"
+	ColumnPartImageCategoryMarks                 ColumnPartImageSectionCategory = "marks"
+	ColumnPartImageCategoryLocators              ColumnPartImageSectionCategory = "locators"
+	ColumnPartImageCategoryAggregateMetadata     ColumnPartImageSectionCategory = "aggregate_metadata"
+	ColumnPartImageCategoryColumnStats           ColumnPartImageSectionCategory = "column_stats"
+	ColumnPartImageCategoryPruningMetadata       ColumnPartImageSectionCategory = "pruning_metadata"
+	ColumnPartImageCategoryDictionaries          ColumnPartImageSectionCategory = "dictionaries"
+	ColumnPartImageCategoryLayoutContract        ColumnPartImageSectionCategory = "layout_contract"
+	ColumnPartImageCategoryDeclaredColumns       ColumnPartImageSectionCategory = "declared_columns"
+	ColumnPartImageCategoryDeclaredColumnOffsets ColumnPartImageSectionCategory = "declared_column_offsets"
+	ColumnPartImageCategoryDeclaredColumnValues  ColumnPartImageSectionCategory = "declared_column_values"
+	ColumnPartImageCategoryPadding               ColumnPartImageSectionCategory = "padding"
 )
 
 type ColumnPartImageOptions struct {
@@ -1028,6 +1032,8 @@ var columnPartImageSectionCodes = []columnPartImageSectionCode{
 	{kind: ColumnPartImageSectionLayoutContract, kindCode: 9, category: ColumnPartImageCategoryLayoutContract, categoryCode: 9},
 	{kind: ColumnPartImageSectionColumnStats, kindCode: 10, category: ColumnPartImageCategoryColumnStats, categoryCode: 10},
 	{kind: ColumnPartImageSectionPruningMetadata, kindCode: 11, category: ColumnPartImageCategoryPruningMetadata, categoryCode: 11},
+	{kind: ColumnPartImageSectionColumnOffsets, kindCode: 12, category: ColumnPartImageCategoryDeclaredColumnOffsets, categoryCode: 12},
+	{kind: ColumnPartImageSectionColumnValues, kindCode: 13, category: ColumnPartImageCategoryDeclaredColumnValues, categoryCode: 13},
 }
 
 func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) (uint16, error) {
