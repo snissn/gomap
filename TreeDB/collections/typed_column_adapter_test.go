@@ -461,6 +461,25 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewClassifications1916(t *tes
 		assertTypedColumnAdapterNoActive(t, mgr)
 	})
 
+	t.Run("mixed mmap heap-copy handles fall back to scratch", func(t *testing.T) {
+		mgr := mappedresource.NewManager()
+		offsetsHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedOffsets, mappedresource.SourceMapped, "offsets")
+		valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceHeapCopy, "values")
+		view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+		if err != nil || !view.Scratch || view.Direct || view.HeapCopy || view.Class.Class != typedColumnAdapterUint32OffsetsListViewSourceUnsupported {
+			t.Fatalf("view=%+v err=%v want source-unsupported scratch fallback", view, err)
+		}
+		if view.Class.Counter != typeddecode.CounterStreamingFallback || !slices.Contains(view.Class.Counters, typeddecode.CounterScratchDecode) {
+			t.Fatalf("class=%+v want source counter plus scratch counter", view.Class)
+		}
+		if !slices.Equal(view.Offsets, []uint64{0, 0, 2, 2, 5}) || !slices.Equal(view.Values, []uint32{7, 8, 9, 10, 11}) {
+			t.Fatalf("offsets=%v values=%v", view.Offsets, view.Values)
+		}
+		_ = offsetsHandle.Release()
+		_ = valuesHandle.Release()
+		assertTypedColumnAdapterNoActive(t, mgr)
+	})
+
 	for _, tc := range []struct {
 		name          string
 		offsetsSource mappedresource.Source
@@ -507,6 +526,9 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewClassifications1916(t *tes
 			view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
 			if err != nil || !view.Scratch || view.Class.Class != typedColumnAdapterUint32OffsetsListViewActualPointerUnaligned {
 				t.Fatalf("view=%+v err=%v want scratch actual-pointer classification", view, err)
+			}
+			if view.Class.Counter != typeddecode.CounterActualPointerUnaligned || !slices.Contains(view.Class.Counters, typeddecode.CounterScratchDecode) {
+				t.Fatalf("class=%+v want actual-pointer counter plus scratch counter", view.Class)
 			}
 			_ = offsetsHandle.Release()
 			_ = valuesHandle.Release()
@@ -2216,6 +2238,9 @@ func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) 
 		for i := 0; i < b.N; i++ {
 			view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(benchReader, column, image.Rows)
 			if err != nil {
+				if strings.Contains(err.Error(), "mmap unsupported") {
+					b.Skipf("mmap direct view unsupported on this platform: %v", err)
+				}
 				b.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
 			}
 			if !view.Direct {
@@ -2255,6 +2280,9 @@ func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) 
 		benchReader.Manager = mgr
 		view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(benchReader, column, image.Rows)
 		if err != nil {
+			if strings.Contains(err.Error(), "mmap unsupported") {
+				b.Skipf("mmap direct view unsupported on this platform: %v", err)
+			}
 			b.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
 		}
 		defer view.Close()

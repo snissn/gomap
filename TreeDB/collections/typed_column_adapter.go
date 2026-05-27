@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"slices"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -1558,7 +1559,15 @@ func typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr *mappedres
 	}
 	status = typeddecode.StreamingStatus(typeddecode.ReasonHandleSourceUnsupported, fmt.Sprintf("offsets_source=%s values_source=%s", offsetsHandle.Source(), valuesHandle.Source()))
 	class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+	if typedColumnAdapterUint32OffsetsListMixedMmapHeapCopySources(offsetsHandle.Source(), valuesHandle.Source()) {
+		return typedColumnAdapterDecodeUint32OffsetsListScratch(rows, offsetsHandle, valuesHandle, class)
+	}
 	return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+}
+
+func typedColumnAdapterUint32OffsetsListMixedMmapHeapCopySources(offsetsSource, valuesSource mappedresource.Source) bool {
+	return (offsetsSource == mappedresource.SourceMapped && valuesSource == mappedresource.SourceHeapCopy) ||
+		(offsetsSource == mappedresource.SourceHeapCopy && valuesSource == mappedresource.SourceMapped)
 }
 
 func typedColumnAdapterDecodeUint32OffsetsListScratch(rows int, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, class typedColumnAdapterUint32OffsetsListClassification) (typedColumnAdapterUint32OffsetsListResourceView, error) {
@@ -1569,7 +1578,11 @@ func typedColumnAdapterDecodeUint32OffsetsListScratch(rows int, offsetsHandle *m
 	}
 	if class.Class == "" {
 		class.Class = typedColumnAdapterUint32OffsetsListViewScratchDecode
+	}
+	if class.Counter == "" {
 		class.Counter = typeddecode.CounterScratchDecode
+	} else if class.Counter != typeddecode.CounterScratchDecode && !slices.Contains(class.Counters, typeddecode.CounterScratchDecode) {
+		class.Counters = append(class.Counters, typeddecode.CounterScratchDecode)
 	}
 	return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Offsets: decoded.Offsets, Values: decoded.Values, Scratch: true, Class: class}, nil
 }
@@ -1602,9 +1615,12 @@ func typedColumnAdapterClassifyUint32OffsetsListStatus(status typeddecode.Status
 	case typeddecode.ReasonOffsetsCountMismatch, typeddecode.ReasonOffsetsStartMismatch, typeddecode.ReasonOffsetsNonMonotonic, typeddecode.ReasonOffsetsGoIntRange, typeddecode.ReasonValuesLengthMismatch:
 		class.Class = typedColumnAdapterUint32OffsetsListViewValidationFailure
 		class.Counter = typeddecode.CounterOffsetsListValidation
+	case typeddecode.ReasonDirectViewDeferred:
+		class.Class = typedColumnAdapterUint32OffsetsListViewScratchDecode
+		class.Counter = typeddecode.CounterScratchDecode
 	default:
 		class.Class = typedColumnAdapterUint32OffsetsListViewValidationFailure
-		class.Counter = typeddecode.CounterScratchDecode
+		class.Counter = typeddecode.CounterOffsetsListValidation
 	}
 	return class
 }

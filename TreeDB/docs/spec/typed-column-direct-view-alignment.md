@@ -59,8 +59,8 @@ nullable/default wrappers, compressed payloads, variable-width delta layouts,
 physical row assets, and legacy dense adjacency rows. It is true for the
 explicit non-null, non-default, uncompressed `raw_uint32_offsets_list` adjacency
 primitive only when both global sections satisfy the offsets/value contract below.
-The adapter's internal `__treedb_primary_id` row-locator column is also not a
-#1895 certified value column; only declared `ColumnStoreValue*`
+The adapter's internal `__treedb_primary_id` row-locator column is also not an
+issue #1895 certified value column; only declared `ColumnStoreValue*`
 typed-column-part fields may be active writer certification targets. Synthetic
 or legacy refs that start at a misaligned segment offset must fail closed or use
 fallback planning even when their image-local layout contract is otherwise
@@ -205,7 +205,7 @@ Later writer/reader PRs must use these stable counter names and reason buckets:
 
 ## Baseline benchmark harness for later PRs
 
-#1916 claims primitive reader behavior only: certified direct-view prepare/open
+Issue #1916 claims primitive reader behavior only: certified direct-view prepare/open
 classification and allocation-free per-row offsets-list iteration after prepare.
 It does not claim a column_graph/search speedup. Later graph-consuming PRs
 should run focused baselines and final measurements with exact branch/commit,

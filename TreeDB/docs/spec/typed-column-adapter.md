@@ -55,7 +55,7 @@ uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
 "uint32_offsets_list"`; it must not be inferred from a missing degree and is
 supported by the safe #1915 writer/fallback reader path plus the #1916 certified
 primitive direct-view reader. Column-graph/search consumption remains deferred to
-#1917+. Serialized typed-column images publish offsets-list columns as one global
+issue #1917 and later. Serialized typed-column images publish offsets-list columns as one global
 `row_count + 1` little-endian `uint64` offsets section plus one global flattened
 `uint32` values section, even when the typed-column part has multiple codec
 blocks/granules.
