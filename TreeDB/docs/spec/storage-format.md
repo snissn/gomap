@@ -519,6 +519,20 @@ checksum mismatch when requested, or unsupported versions. Version 1
 big-endian/manifest row-code payloads are intentionally rejected by current
 pre-alpha readers; rebuild old DB directories instead of migrating in place.
 
+Dense int64 value derived sidecars referenced by
+`ColumnAssetRef.Kind = tcs1_int64_values` use asset magic `TCI8`. Version 2
+keeps the manifest-style big-endian header, collection/namespace/generation,
+schema, column identity, column index, and row-count fields, then adds
+zero padding until the row-value payload is 8-byte aligned. Writers then emit
+exactly `row_count * 8` bytes of little-endian two's-complement `int64` values.
+Segment writers prefix-pad int64 value assets so `asset_ref.offset +
+payload_offset` is 8-byte aligned for mmap direct-view consumers. Readers fail
+closed on non-zero payload padding, payload-length or row-count mismatch,
+absolute misalignment, checksum mismatch when requested, schema/ref/column
+mismatch, or unsupported versions. Version 1 big-endian/manifest row-value
+payloads are intentionally rejected by current pre-alpha readers; rebuild old DB
+directories instead of migrating in place.
+
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
 images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
 Issue `#1755` scalar path represents bool, int64, float32, double/float64, and

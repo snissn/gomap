@@ -88,13 +88,23 @@ func prepareColumnDictionaryHourCountRunner(view columnPhysicalScanSnapshotView,
 		if err != nil {
 			return nil, fmt.Errorf("collections: dictionary/hour values read generation=%d part_id=%d column=%q: %w", valueSnapshot.AssetRef.Generation, valueSnapshot.AssetRef.PartID, req.ValueColumn, err)
 		}
+		valueRawIsView := readCache.lastView
 		scratch = valueRaw
-		valueAsset, err := decodeColumnInt64ValuesAsset(valueRaw, valueSnapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, false)
+		_, valuePayload, err := decodeColumnInt64ValuesAssetPayload(valueRaw, valueSnapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, false)
 		if err != nil {
 			return nil, err
 		}
-		if len(groupAsset.Codes) != len(valueAsset.Values) || len(valueAsset.Values) != valueSnapshot.Rows {
-			return nil, fmt.Errorf("collections: dictionary/hour row count mismatch group=%d values=%d manifest=%d", len(groupAsset.Codes), len(valueAsset.Values), valueSnapshot.Rows)
+		if len(groupAsset.Codes) != valuePayload.rowCount || valuePayload.rowCount != valueSnapshot.Rows {
+			return nil, fmt.Errorf("collections: dictionary/hour row count mismatch group=%d values=%d manifest=%d", len(groupAsset.Codes), valuePayload.rowCount, valueSnapshot.Rows)
+		}
+		var values []int64
+		if valueRawIsView {
+			values, _, err = viewColumnInt64ValuesPayload(valueRaw, valuePayload)
+		} else {
+			values, err = copyColumnInt64ValuesPayload(valueRaw, valuePayload)
+		}
+		if err != nil {
+			return nil, err
 		}
 		groupCodes := make([]uint32, len(groupAsset.Codes))
 		for codeIdx, localCode := range groupAsset.Codes {
@@ -112,7 +122,7 @@ func prepareColumnDictionaryHourCountRunner(view columnPhysicalScanSnapshotView,
 		}
 		runner.assets = append(runner.assets, columnDictionaryHourCountAsset{
 			groupCodes: groupCodes,
-			values:     valueAsset.Values,
+			values:     values,
 		})
 		runner.assetBytes += groupSnapshot.AssetRef.Length + valueSnapshot.AssetRef.Length
 	}
