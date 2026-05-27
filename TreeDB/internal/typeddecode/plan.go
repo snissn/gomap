@@ -346,6 +346,9 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 // little-endian uint64 offsets plus little-endian uint32 values. It is spec-only
 // in this issue and therefore never returns a direct-view candidate.
 func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
+	}
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:     columnsemantics.LogicalAdjacencyList,
 		Physical:    typedcolumn.ColumnTypeAdjacencyList,
@@ -378,9 +381,6 @@ func ValidateUint32OffsetsListShape(req Uint32OffsetsListShapeRequest) Status {
 	wantOffsets := req.Rows + 1
 	if len(req.Offsets) != wantOffsets {
 		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets=%d want row_count+1=%d", len(req.Offsets), wantOffsets))
-	}
-	if len(req.Offsets) == 0 {
-		return UnsupportedStatus(ReasonOffsetsCountMismatch, "missing offsets")
 	}
 	maxIndex := uint64(maxInt)
 	if req.Offsets[0] != 0 {

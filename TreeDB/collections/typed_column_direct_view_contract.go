@@ -205,7 +205,7 @@ func typedColumnDirectViewConformanceMatrix() []typedColumnDirectViewClassificat
 	}
 
 	inventory := typedColumnDirectViewAllTypeInventory()
-	rows := make([]rowSpec, 0, len(inventory)*2+3)
+	rows := make([]rowSpec, 0, len(inventory)*2+4)
 	for _, valueType := range inventory {
 		rows = append(rows, rowSpec{valueType: valueType, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric})
 	}

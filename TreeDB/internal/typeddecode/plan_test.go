@@ -413,6 +413,10 @@ func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 	if offsetsPlan.ElementSize != 4 || offsetsPlan.Alignment != 4 {
 		t.Fatalf("offsets-list plan=%+v want uint32 value identity", offsetsPlan)
 	}
+	denseCert := testAdjacencyDirectCert(2, 2)
+	if plan := AdjacencyOffsetsListPlan(denseCert); plan.Reason != ReasonValidationFailed {
+		t.Fatalf("dense cert offsets-list plan=%+v want identity validation failure", plan)
+	}
 }
 
 var fixedWidthScalarDirectViewSink1899 float64
