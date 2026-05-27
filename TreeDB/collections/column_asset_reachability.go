@@ -214,6 +214,7 @@ type columnAssetReachabilityRange struct {
 	start  int64
 	end    int64
 	status ColumnAssetReachabilityStatus
+	kind   ColumnAssetKind
 }
 
 type columnAssetReachabilityRangeSet struct {
@@ -246,6 +247,7 @@ type columnAssetReachabilityInterval struct {
 type columnAssetReachabilitySegment struct {
 	fileID uint32
 	name   string
+	path   string
 	bytes  int64
 }
 
@@ -733,12 +735,12 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		if !canContributeRange {
 			return
 		}
-		start, end := columnAssetReachabilityRangeBoundsForRef(ref)
 		set := rangesByFile[ref.FileID]
 		set.appendRange(columnAssetReachabilityRange{
-			start:  start,
-			end:    end,
+			start:  ref.Offset,
+			end:    ref.Offset + ref.Length,
 			status: status,
+			kind:   ref.Kind,
 		})
 		rangesByFile[ref.FileID] = set
 	}
@@ -980,6 +982,16 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 			reclaimable = append(reclaimable, interval)
 		}
 	}
+	padding := deterministicColumnAssetReachabilityPaddingIntervals(segment, ranges)
+	for _, interval := range padding {
+		all = append(all, interval.interval)
+		switch interval.status {
+		case ColumnAssetReachabilityProtected:
+			protected = append(protected, interval.interval)
+		case ColumnAssetReachabilityReclaimable:
+			reclaimable = append(reclaimable, interval.interval)
+		}
+	}
 	allUnion := mergeColumnAssetReachabilityIntervals(all)
 	protectedUnion := mergeColumnAssetReachabilityIntervals(protected)
 	reclaimableUnion := subtractColumnAssetReachabilityIntervals(
@@ -1153,7 +1165,8 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			}
 		}
 		name := info.Name()
-		info, err := os.Lstat(columnAssetReachabilitySegmentPath(segmentDir, name))
+		path := columnAssetReachabilitySegmentPath(segmentDir, name)
+		info, err := os.Lstat(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -1163,9 +1176,9 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		fileID, ok := columnAssetReachabilitySegmentFileID(name)
 		appendSegment := func(bytes int64) {
 			if ok {
-				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, bytes: bytes})
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, path: path, bytes: bytes})
 			} else {
-				segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: bytes})
+				segments = append(segments, columnAssetReachabilitySegment{name: name, path: path, bytes: bytes})
 			}
 		}
 		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
@@ -1212,24 +1225,75 @@ func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace 
 		ref.Offset <= math.MaxInt64-ref.Length
 }
 
-func columnAssetReachabilityRangeBoundsForRef(ref ColumnAssetRef) (int64, int64) {
-	start := ref.Offset
-	end := ref.Offset + ref.Length
-	if columnAssetReachabilityRefHasDeterministicPrefixPadding(ref) {
-		paddingWindow := int64(typedColumnPartDirectViewAssetAlignment - 1)
-		if start > paddingWindow {
-			start -= paddingWindow
-		} else {
-			start = 0
-		}
-	}
-	return start, end
+type columnAssetReachabilityPaddingInterval struct {
+	interval columnAssetReachabilityInterval
+	status   ColumnAssetReachabilityStatus
 }
 
-func columnAssetReachabilityRefHasDeterministicPrefixPadding(ref ColumnAssetRef) bool {
-	return ref.Kind == ColumnAssetKindTCS1TypedColumnPart &&
-		typedColumnPartDirectViewAssetAlignment > 1 &&
-		ref.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0
+func deterministicColumnAssetReachabilityPaddingIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) []columnAssetReachabilityPaddingInterval {
+	if len(ranges) < 2 || typedColumnPartDirectViewAssetAlignment <= 1 || segment.path == "" {
+		return nil
+	}
+	clipped := make([]columnAssetReachabilityRange, 0, len(ranges))
+	for _, r := range ranges {
+		interval, _, ok := clipColumnAssetReachabilityRange(segment.bytes, r)
+		if !ok {
+			continue
+		}
+		clipped = append(clipped, columnAssetReachabilityRange{start: interval.start, end: interval.end, status: r.status, kind: r.kind})
+	}
+	if len(clipped) < 2 {
+		return nil
+	}
+	slices.SortFunc(clipped, func(a, b columnAssetReachabilityRange) int {
+		return compareColumnAssetReachabilityIntervalBounds(a.start, a.end, b.start, b.end)
+	})
+	out := make([]columnAssetReachabilityPaddingInterval, 0, len(clipped)-1)
+	coveredEnd := clipped[0].end
+	for _, r := range clipped[1:] {
+		if r.start > coveredEnd && columnAssetReachabilityRangeFollowsDeterministicZeroPadding(segment, coveredEnd, r) {
+			out = append(out, columnAssetReachabilityPaddingInterval{
+				interval: columnAssetReachabilityInterval{start: coveredEnd, end: r.start},
+				status:   r.status,
+			})
+		}
+		if r.end > coveredEnd {
+			coveredEnd = r.end
+		}
+	}
+	return out
+}
+
+func columnAssetReachabilityRangeFollowsDeterministicZeroPadding(segment columnAssetReachabilitySegment, previousEnd int64, r columnAssetReachabilityRange) bool {
+	if r.kind != ColumnAssetKindTCS1TypedColumnPart || r.start <= previousEnd || r.start%int64(typedColumnPartDirectViewAssetAlignment) != 0 {
+		return false
+	}
+	padding := int64(columnAssetSegmentPrefixPadding(previousEnd, typedColumnPartDirectViewAssetAlignment))
+	if padding == 0 || r.start-previousEnd != padding {
+		return false
+	}
+	return columnAssetReachabilitySegmentRangeIsZero(segment.path, previousEnd, padding)
+}
+
+func columnAssetReachabilitySegmentRangeIsZero(path string, offset, length int64) bool {
+	if path == "" || offset < 0 || length <= 0 || length > int64(typedColumnPartDirectViewAssetAlignment-1) {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	buf := make([]byte, length)
+	if _, err := file.ReadAt(buf, offset); err != nil {
+		return false
+	}
+	for _, b := range buf {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) ([]columnAssetReachabilityInterval, int) {
@@ -1263,6 +1327,7 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 		}
 		return covered, plan.outOfBoundsRefs
 	}
+	padding := deterministicColumnAssetReachabilityPaddingIntervals(segment, ranges)
 	slices.SortFunc(ranges, func(a, b columnAssetReachabilityRange) int {
 		return compareColumnAssetReachabilityIntervalBounds(a.start, a.end, b.start, b.end)
 	})
@@ -1294,6 +1359,9 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 	}
 	if haveCur {
 		covered = addColumnAssetReachabilityBytes(covered, cur.end-cur.start)
+	}
+	for _, interval := range padding {
+		covered = addColumnAssetReachabilityBytes(covered, interval.interval.end-interval.interval.start)
 	}
 	return covered, outOfBounds
 }

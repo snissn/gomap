@@ -1507,6 +1507,42 @@ func TestColumnAssetReachabilityRewriteSegmentPrefixPaddingIsKnown1895(t *testin
 	}
 }
 
+func TestColumnAssetReachabilityNonZeroPrefixPaddingGapStaysUnknown1895(t *testing.T) {
+	root := t.TempDir()
+	const namespaceName = "events/column-assets"
+	namespace, err := columnAssetManagerNamespaceForRoot(root, namespaceName)
+	if err != nil {
+		t.Fatalf("columnAssetManagerNamespaceForRoot: %v", err)
+	}
+	if err := os.MkdirAll(namespace.SegmentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll segment dir: %v", err)
+	}
+	fileID, err := directViewTypedColumnSegmentFileID(52)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	segment := make([]byte, 33)
+	for i := 1; i < 8; i++ {
+		segment[i] = 0xa5
+	}
+	if err := os.WriteFile(filepath.Join(namespace.SegmentDir, columnAssetSegmentFileName(fileID)), segment, 0o600); err != nil {
+		t.Fatalf("WriteFile segment: %v", err)
+	}
+	seed := ColumnAssetRef{Kind: ColumnAssetKindTCS1DictionaryCodes, Namespace: namespaceName, Generation: 52, PartID: 90, FileID: fileID, Offset: 0, Length: 1}
+	typed := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: namespaceName, Generation: 52, PartID: 1, FileID: fileID, Offset: 8, Length: 25}
+	input := columnAssetReachabilityInput{rootDir: root, collection: "events", namespace: namespaceName, detailed: true, segmentDetails: true}
+	if err := input.addRefs(context.Background(), []ColumnAssetRef{seed, typed}, ColumnAssetReachabilitySourceActiveManifest); err != nil {
+		t.Fatalf("add refs: %v", err)
+	}
+	plan, err := buildColumnAssetReachabilityPlan(context.Background(), input)
+	if err != nil {
+		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
+	}
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown != 7 {
+		t.Fatalf("plan complete=%t segments=%+v want non-zero padding-sized gap unknown", plan.Complete, plan.Segments)
+	}
+}
+
 func TestColumnAssetReachabilityDirectViewPaddingWindowDoesNotHideLargeGaps1895(t *testing.T) {
 	root := t.TempDir()
 	const namespaceName = "events/column-assets"
@@ -1534,10 +1570,10 @@ func TestColumnAssetReachabilityDirectViewPaddingWindowDoesNotHideLargeGaps1895(
 	if err != nil {
 		t.Fatalf("buildColumnAssetReachabilityPlan: %v", err)
 	}
-	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown != 8 {
-		t.Fatalf("plan complete=%t segments=%+v want 8 unknown bytes beyond deterministic padding window", plan.Complete, plan.Segments)
+	if plan.Complete || plan.Segments.Unknown != 1 || plan.Segments.BytesUnknown != 15 {
+		t.Fatalf("plan complete=%t segments=%+v want full 15-byte non-padding gap unknown", plan.Complete, plan.Segments)
 	}
-	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].UnknownBytes != 8 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown {
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].UnknownBytes != 15 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentUnknown {
 		t.Fatalf("segment entries=%+v want unknown large gap", plan.SegmentEntries)
 	}
 }
