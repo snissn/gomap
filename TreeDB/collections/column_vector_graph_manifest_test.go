@@ -69,6 +69,78 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", *baseCfg, def)
+	if err != nil {
+		t.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	sourceCfg, _, err := columnVectorGraphLayer0AdjacencySourceColumnStoreConfig("docs", *baseCfg, def)
+	if err != nil {
+		t.Fatalf("columnVectorGraphLayer0AdjacencySourceColumnStoreConfig: %v", err)
+	}
+	graphRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 4, FileID: 1, Offset: 128, Length: 2048, Checksum: 0x11112222}
+	sourceRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 5, FileID: 1009, Offset: 0, Length: 1024, Checksum: 0x33334444}
+	snapshot := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: 9,
+		BaseManifestChecksum:   0xabcddcba,
+		BaseSchemaHash:         baseCfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               3,
+		AssetRef:               graphRef,
+		AssetBytes:             graphRef.Length,
+		Layer0AdjacencySource: columnVectorGraphLayer0AdjacencySourceSnapshot{
+			Present:                true,
+			Schema:                 columnVectorGraphLayer0AdjacencySourceSchema,
+			ColumnName:             columnVectorGraphLayer0AdjacencySourceColumnName,
+			ValueType:              string(ColumnStoreValueAdjacencyList),
+			Encoding:               "raw_uint32_offsets_list",
+			Layer:                  0,
+			SourceSchemaHash:       sourceCfg.SchemaHash,
+			RowCount:               3,
+			ValuesCount:            4,
+			OffsetsBytes:           32,
+			ValuesBytes:            16,
+			PaddingBytes:           7,
+			Ref:                    sourceRef,
+			AssetBytes:             sourceRef.Length,
+			BaseManifestGeneration: 9,
+			BaseManifestChecksum:   0xabcddcba,
+			BaseSchemaHash:         baseCfg.SchemaHash,
+			GraphSchemaHash:        graphCfg.SchemaHash,
+			GraphAssetGeneration:   graphRef.Generation,
+			GraphAssetPartID:       graphRef.PartID,
+			GraphAssetFileID:       graphRef.FileID,
+			GraphAssetOffset:       graphRef.Offset,
+			GraphAssetLength:       graphRef.Length,
+			GraphAssetChecksum:     graphRef.Checksum,
+		},
+	}
+	encoded, err := encodeColumnVectorGraphManifestRecord(snapshot)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	decoded, err := decodeColumnVectorGraphManifestRecord(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	if decoded != snapshot {
+		t.Fatalf("decoded=%+v want %+v", decoded, snapshot)
+	}
+}
+
 func TestColumnVectorGraphPhysicalConfigUsesLittleEndianVectorOnlyM1C(t *testing.T) {
 	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
 	if err != nil {

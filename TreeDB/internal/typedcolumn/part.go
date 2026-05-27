@@ -948,9 +948,46 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 		}
 	}
 	if rows <= 0 {
+		if rows == 0 && batchAllowsZeroRowsForOffsetsList(batch, defs) {
+			return 0, nil
+		}
 		return 0, fmt.Errorf("typedcolumn: invalid part rows %d", rows)
 	}
 	return rows, nil
+}
+
+func batchAllowsZeroRowsForOffsetsList(batch Batch, defs []ColumnDefinition) bool {
+	hasOffsetsList := false
+	for _, def := range defs {
+		switch def.Type {
+		case ColumnTypeAdjacencyList:
+			if def.Encoding != EncodingRawUint32OffsetsList {
+				return false
+			}
+			list, ok := batch.Uint32OffsetsLists[def.Name]
+			if !ok || list.Rows != 0 || len(list.Offsets) != 1 || len(list.Values) != 0 || list.Offsets[0] != 0 {
+				return false
+			}
+			hasOffsetsList = true
+		case ColumnTypeFloat32:
+			if len(batch.Float32Columns[def.Name]) != 0 {
+				return false
+			}
+		case ColumnTypeFloat64:
+			if len(batch.Float64Columns[def.Name]) != 0 {
+				return false
+			}
+		case ColumnTypeFloat32Vector:
+			if len(batch.Float32Vectors[def.Name]) != 0 {
+				return false
+			}
+		default:
+			if len(batch.Columns[def.Name]) != 0 {
+				return false
+			}
+		}
+	}
+	return hasOffsetsList
 }
 
 func (b *ColumnPartBuilder) sortedOrder(batch Batch, rows int, pkColumn string) ([]int, error) {

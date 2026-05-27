@@ -302,6 +302,10 @@ func columnStoreConfigHasDirectViewFixedWidthColumn(cfg ColumnStoreConfig) bool 
 			if column.VectorDims > 0 {
 				return true
 			}
+		case ColumnStoreValueAdjacencyList:
+			if column.AdjacencyLayout == ColumnAdjacencyListLayoutUint32OffsetsList {
+				return true
+			}
 		}
 	}
 	return false

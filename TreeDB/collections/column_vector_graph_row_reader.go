@@ -215,6 +215,9 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
+	if err := validateColumnVectorGraphLayer0AdjacencySourceAsset(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph); err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(catalog.meta.Name, *cfg, def)
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err

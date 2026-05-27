@@ -476,30 +476,53 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 			patched[i] = record
 		}
 		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
-			oldRef, offsets, err := columnVectorGraphManifestAssetRefForPatch(record.value, expectedNamespace)
+			graph, err := decodeColumnVectorGraphManifestRecord(record.value)
 			if err != nil {
 				return nil, 0, err
 			}
-			newRef, ok := byOldRef[oldRef]
-			if !ok {
-				continue
+			changed := false
+			if newRef, ok := byOldRef[graph.AssetRef]; ok {
+				if !columnAssetRewriteSameLogicalRef(graph.AssetRef, newRef) {
+					return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph ref %+v to %+v", graph.AssetRef, newRef)
+				}
+				if err := validateColumnAssetRefForPlan(newRef); err != nil {
+					return nil, 0, err
+				}
+				graph.AssetRef = newRef
+				graph.AssetBytes = newRef.Length
+				if graph.Layer0AdjacencySource.Present {
+					graph.Layer0AdjacencySource.GraphAssetGeneration = newRef.Generation
+					graph.Layer0AdjacencySource.GraphAssetPartID = newRef.PartID
+					graph.Layer0AdjacencySource.GraphAssetFileID = newRef.FileID
+					graph.Layer0AdjacencySource.GraphAssetOffset = newRef.Offset
+					graph.Layer0AdjacencySource.GraphAssetLength = newRef.Length
+					graph.Layer0AdjacencySource.GraphAssetChecksum = newRef.Checksum
+				}
+				changed = true
+				count++
 			}
-			if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
-				return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph ref %+v to %+v", oldRef, newRef)
+			if graph.Layer0AdjacencySource.Present {
+				sourceRef := graph.Layer0AdjacencySource.Ref
+				if newRef, ok := byOldRef[sourceRef]; ok {
+					if !columnAssetRewriteSameLogicalRef(sourceRef, newRef) {
+						return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph layer-0 adjacency source ref %+v to %+v", sourceRef, newRef)
+					}
+					if err := validateColumnAssetRefForPlan(newRef); err != nil {
+						return nil, 0, err
+					}
+					graph.Layer0AdjacencySource.Ref = newRef
+					graph.Layer0AdjacencySource.AssetBytes = newRef.Length
+					changed = true
+					count++
+				}
 			}
-			if err := validateColumnAssetRefForPlan(newRef); err != nil {
-				return nil, 0, err
+			if changed {
+				value, err := encodeColumnVectorGraphManifestRecord(graph)
+				if err != nil {
+					return nil, 0, err
+				}
+				patched[i].value = value
 			}
-			value := record.value
-			if !inPlace {
-				value = bytes.Clone(record.value)
-			}
-			binary.BigEndian.PutUint64(value[offsets.fileID:], uint64(newRef.FileID))
-			binary.BigEndian.PutUint64(value[offsets.offset:], uint64(newRef.Offset))
-			binary.BigEndian.PutUint64(value[offsets.length:], uint64(newRef.Length))
-			binary.BigEndian.PutUint64(value[offsets.checksum:], uint64(newRef.Checksum))
-			patched[i].value = value
-			count++
 			continue
 		}
 		isPart := bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes)
