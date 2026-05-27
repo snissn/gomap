@@ -20,17 +20,66 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
-func TestTypedColumnDirectViewConformanceMatrixCoversCurrentValueTypes(t *testing.T) {
+type typedColumnDirectViewMatrixKey struct {
+	valueType ColumnStoreValueType
+	owner     typedColumnDirectViewStorageOwner
+	consumer  typedColumnDirectViewConsumerPath
+}
+
+func TestTypedColumnDirectViewAllTypeInventoryCoversCurrentValueTypesExactlyOnce(t *testing.T) {
 	fromSource := currentColumnStoreValueTypesFromSource(t)
-	seen := make(map[ColumnStoreValueType]bool, len(fromSource))
-	for _, row := range typedColumnDirectViewConformanceMatrix() {
-		if row.StorageOwner == typedColumnDirectViewStorageTypedColumnPart && row.Consumer == typedColumnDirectViewConsumerTypedColumnPartGeneric {
-			seen[row.ValueType] = true
-		}
+	counts := make(map[ColumnStoreValueType]int, len(fromSource))
+	for _, valueType := range typedColumnDirectViewAllTypeInventory() {
+		counts[valueType]++
 	}
 	for _, valueType := range fromSource {
-		if !seen[valueType] {
-			t.Fatalf("ColumnStoreValueType %s missing explicit direct-view classification", valueType)
+		if counts[valueType] != 1 {
+			t.Fatalf("ColumnStoreValueType %s inventory count=%d want exactly 1", valueType, counts[valueType])
+		}
+		delete(counts, valueType)
+	}
+	for valueType, count := range counts {
+		if count != 0 {
+			t.Fatalf("inventory includes unknown ColumnStoreValueType %s count=%d", valueType, count)
+		}
+	}
+}
+
+func TestTypedColumnDirectViewConformanceMatrixRowsAreExplicit(t *testing.T) {
+	expected := map[typedColumnDirectViewMatrixKey]typedColumnDirectViewSupport{}
+	for _, valueType := range typedColumnDirectViewAllTypeInventory() {
+		support := typedColumnDirectViewFallbackOnly
+		switch valueType {
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector:
+			support = typedColumnDirectViewActiveLittleEndianCandidate
+		case ColumnStoreValueAdjacencyList:
+			support = typedColumnDirectViewDeferredFallbackOnly
+		}
+		expected[typedColumnDirectViewMatrixKey{valueType: valueType, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}] = support
+		expected[typedColumnDirectViewMatrixKey{valueType: valueType, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetGeneric}] = typedColumnDirectViewDeferredFallbackOnly
+	}
+	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector}] = typedColumnDirectViewActiveLittleEndianCandidate
+	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetVector}] = typedColumnDirectViewDeferredFallbackOnly
+	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetAdjacency}] = typedColumnDirectViewDeferredFallbackOnly
+
+	seen := make(map[typedColumnDirectViewMatrixKey]bool, len(expected))
+	for _, row := range typedColumnDirectViewConformanceMatrix() {
+		key := typedColumnDirectViewMatrixKey{valueType: row.ValueType, owner: row.StorageOwner, consumer: row.Consumer}
+		want, ok := expected[key]
+		if !ok {
+			t.Fatalf("unexpected broad/nonsensical direct-view matrix row: %+v", row)
+		}
+		if seen[key] {
+			t.Fatalf("duplicate direct-view matrix row: %+v", row)
+		}
+		seen[key] = true
+		if row.Support != want {
+			t.Fatalf("matrix row %+v support=%s want %s", key, row.Support, want)
+		}
+	}
+	for key := range expected {
+		if !seen[key] {
+			t.Fatalf("missing explicit direct-view matrix row: %+v", key)
 		}
 	}
 }
@@ -66,6 +115,74 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 				t.Fatalf("classification=%+v want support=%s endian=%q size=%d align=%d follow_up=%d", got, tc.support, tc.endian, tc.size, tc.align, tc.followUp)
 			}
 		})
+	}
+}
+
+func TestTypedColumnDirectViewActiveRowsAreCertifiedSetOnly(t *testing.T) {
+	expectedActive := map[typedColumnDirectViewMatrixKey]bool{
+		{valueType: ColumnStoreValueInt64, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:         true,
+		{valueType: ColumnStoreValueFloat32, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:       true,
+		{valueType: ColumnStoreValueDouble, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:        true,
+		{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}: true,
+		{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector}: true,
+	}
+	seen := make(map[typedColumnDirectViewMatrixKey]bool, len(expectedActive))
+	for _, row := range typedColumnDirectViewConformanceMatrix() {
+		key := typedColumnDirectViewMatrixKey{valueType: row.ValueType, owner: row.StorageOwner, consumer: row.Consumer}
+		if row.Support == typedColumnDirectViewActiveLittleEndianCandidate {
+			if !expectedActive[key] {
+				t.Fatalf("unexpected active direct-view row: %+v", row)
+			}
+			seen[key] = true
+		}
+	}
+	for key := range expectedActive {
+		if !seen[key] {
+			t.Fatalf("missing active direct-view row: %+v", key)
+		}
+	}
+}
+
+func TestTypedColumnDirectViewRowAssetAndAdjacencyGuardrails(t *testing.T) {
+	for _, row := range typedColumnDirectViewConformanceMatrix() {
+		rowAsset := row.StorageOwner == typedColumnDirectViewStoragePhysicalRowAsset || row.Consumer == typedColumnDirectViewConsumerRowAssetGeneric || row.Consumer == typedColumnDirectViewConsumerRowAssetVector || row.Consumer == typedColumnDirectViewConsumerRowAssetAdjacency
+		adjacency := row.ValueType == ColumnStoreValueAdjacencyList || row.Consumer == typedColumnDirectViewConsumerRowAssetAdjacency
+		if rowAsset {
+			if row.Support != typedColumnDirectViewDeferredFallbackOnly || !typedColumnDirectViewHasFollowUp(row, 1897) {
+				t.Fatalf("row-asset row=%+v want deferred fallback linked to #1897", row)
+			}
+		}
+		if adjacency {
+			if row.Support != typedColumnDirectViewDeferredFallbackOnly || !typedColumnDirectViewHasFollowUp(row, 1901) {
+				t.Fatalf("adjacency row=%+v want deferred fallback linked to #1901", row)
+			}
+		}
+	}
+	if columnVectorGraphBlockViewAdjacencyDirectView(nil) {
+		t.Fatal("column_graph physical row adjacency unexpectedly enabled direct-view certification before #1897/#1901")
+	}
+
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyDegree = 2
+	field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	part := typedColumnAdapterBuildPart(t, field, []columnDeclaredValue{
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2}},
+		{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{3, 4}},
+	})
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage adjacency: %v", err)
+	}
+	cert, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage adjacency: %v", err)
+	}
+	column, ok := cert.Column("neighbors")
+	if !ok {
+		t.Fatal("missing adjacency contract column")
+	}
+	if cert.DirectViewCertified != 0 || column.DirectViewCertified {
+		t.Fatalf("adjacency direct-view certified=%d column=%+v want fallback-only/deferred until #1901", cert.DirectViewCertified, column)
 	}
 }
 
@@ -555,6 +672,13 @@ func TestTypedColumnDirectViewActualPointerStaleAndChecksumFailures(t *testing.T
 	if _, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(old); err == nil || !strings.Contains(err.Error(), "pre-alpha typed-column assets must be rebuilt") {
 		t.Fatalf("missing contract err=%v want old/non-certified fail-closed", err)
 	}
+}
+
+func typedColumnDirectViewHasFollowUp(row typedColumnDirectViewClassification, issue int) bool {
+	if row.FollowUpIssue == issue {
+		return true
+	}
+	return slices.Contains(row.FollowUpIssues, issue)
 }
 
 func currentColumnStoreValueTypesFromSource(t *testing.T) []ColumnStoreValueType {

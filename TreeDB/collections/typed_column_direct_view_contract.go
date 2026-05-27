@@ -54,6 +54,7 @@ type typedColumnDirectViewClassification struct {
 	NativeScalarPayload    bool
 	Reason                 string
 	FollowUpIssue          int
+	FollowUpIssues         []int
 }
 
 func typedColumnDirectViewSafetyChecks() []typedColumnDirectViewSafetyCheck {
@@ -78,6 +79,11 @@ func typedColumnDirectViewClassificationFor(valueType ColumnStoreValueType, owne
 		base.Support = typedColumnDirectViewDeferredFallbackOnly
 		base.Reason = "physical row assets are deferred to #1897"
 		base.FollowUpIssue = 1897
+		base.FollowUpIssues = []int{1897}
+		if valueType == ColumnStoreValueAdjacencyList || consumer == typedColumnDirectViewConsumerRowAssetAdjacency {
+			base.Reason = "physical row assets are deferred to #1897; adjacency_list direct-view certification is deferred to #1901"
+			base.FollowUpIssues = []int{1897, 1901}
+		}
 		return base
 	}
 	if valueType == ColumnStoreValueAdjacencyList {
@@ -88,6 +94,7 @@ func typedColumnDirectViewClassificationFor(valueType ColumnStoreValueType, owne
 		base.RequiresElementsPerRow = true
 		base.Reason = "adjacency_list direct-view certification is deferred to #1901"
 		base.FollowUpIssue = 1901
+		base.FollowUpIssues = []int{1901}
 		return base
 	}
 	switch valueType {
@@ -119,6 +126,9 @@ func typedColumnDirectViewClassificationFor(valueType ColumnStoreValueType, owne
 		base.Alignment = 4
 		base.RequiresElementsPerRow = true
 		base.Reason = "typed-column dense float32_vector little-endian fixed-width candidate"
+		if consumer == typedColumnDirectViewConsumerColumnGraphTypedVector {
+			base.Reason = "column_graph typed-column float32_vector source uses certified dense little-endian vector payloads"
+		}
 	case ColumnStoreValueBool:
 		base.Reason = "bool bitpack/RLE is not a dense fixed-width direct-view payload"
 	case ColumnStoreValueString:
@@ -133,8 +143,8 @@ func typedColumnDirectViewClassificationFor(valueType ColumnStoreValueType, owne
 	return base
 }
 
-func typedColumnDirectViewConformanceMatrix() []typedColumnDirectViewClassification {
-	valueTypes := []ColumnStoreValueType{
+func typedColumnDirectViewAllTypeInventory() []ColumnStoreValueType {
+	return []ColumnStoreValueType{
 		ColumnStoreValueBool,
 		ColumnStoreValueInt64,
 		ColumnStoreValueFloat32,
@@ -143,24 +153,32 @@ func typedColumnDirectViewConformanceMatrix() []typedColumnDirectViewClassificat
 		ColumnStoreValueFloat32Vector,
 		ColumnStoreValueAdjacencyList,
 	}
-	owners := []typedColumnDirectViewStorageOwner{
-		typedColumnDirectViewStorageTypedColumnPart,
-		typedColumnDirectViewStoragePhysicalRowAsset,
+}
+
+func typedColumnDirectViewConformanceMatrix() []typedColumnDirectViewClassification {
+	type rowSpec struct {
+		valueType ColumnStoreValueType
+		owner     typedColumnDirectViewStorageOwner
+		consumer  typedColumnDirectViewConsumerPath
 	}
-	consumers := []typedColumnDirectViewConsumerPath{
-		typedColumnDirectViewConsumerTypedColumnPartGeneric,
-		typedColumnDirectViewConsumerColumnGraphTypedVector,
-		typedColumnDirectViewConsumerRowAssetVector,
-		typedColumnDirectViewConsumerRowAssetAdjacency,
-		typedColumnDirectViewConsumerRowAssetGeneric,
+
+	inventory := typedColumnDirectViewAllTypeInventory()
+	rows := make([]rowSpec, 0, len(inventory)*2+3)
+	for _, valueType := range inventory {
+		rows = append(rows, rowSpec{valueType: valueType, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric})
 	}
-	out := make([]typedColumnDirectViewClassification, 0, len(valueTypes)*len(owners)*len(consumers))
-	for _, valueType := range valueTypes {
-		for _, owner := range owners {
-			for _, consumer := range consumers {
-				out = append(out, typedColumnDirectViewClassificationFor(valueType, owner, consumer))
-			}
-		}
+	rows = append(rows, rowSpec{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector})
+	for _, valueType := range inventory {
+		rows = append(rows, rowSpec{valueType: valueType, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetGeneric})
+	}
+	rows = append(rows,
+		rowSpec{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetVector},
+		rowSpec{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetAdjacency},
+	)
+
+	out := make([]typedColumnDirectViewClassification, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, typedColumnDirectViewClassificationFor(row.valueType, row.owner, row.consumer))
 	}
 	return out
 }
