@@ -424,6 +424,83 @@ func TestTypedColumnDirectViewFailClosedFixtures(t *testing.T) {
 	}
 }
 
+func TestTypedColumnScalarFloatDirectViewReaderValidation1896(t *testing.T) {
+	cases := []struct {
+		name      string
+		cert      typedcolumn.ColumnPartLayoutContractColumn
+		plan      func(typedcolumn.ColumnPartLayoutContractColumn) typeddecode.Plan
+		elemBytes int
+	}{
+		{name: "float32", cert: directViewConformanceScalarCert("score32", "float32", typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32, 3, 4), plan: typeddecode.Float32ScalarPlan, elemBytes: 4},
+		{name: "double", cert: directViewConformanceScalarCert("score64", "double", typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64, 3, 8), plan: typeddecode.Float64ScalarPlan, elemBytes: 8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := tc.plan(tc.cert)
+			valid := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: tc.cert, Rows: 3, PayloadBytes: 3 * tc.elemBytes, AssetOffset: 0, HasAssetOffset: true}
+			if status := typeddecode.ValidateDirectViewColumn(valid); !status.Direct() {
+				t.Fatalf("valid %s status=%+v want direct", tc.name, status)
+			}
+			checks := []struct {
+				name string
+				edit func(*typedcolumn.ColumnPartLayoutContractColumn, *typeddecode.DirectViewColumnRequest)
+				want typeddecode.Reason
+			}{
+				{name: "wrong endian", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn, _ *typeddecode.DirectViewColumnRequest) {
+					c.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
+				}, want: typeddecode.ReasonWrongEndian},
+				{name: "wrong length", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn, r *typeddecode.DirectViewColumnRequest) {
+					c.Section.Length--
+					c.Blocks[0].PayloadLength--
+					c.Blocks[0].RawBytes--
+					c.Blocks[0].StoredBytes--
+					r.PayloadBytes--
+				}, want: typeddecode.ReasonLengthMultipleMismatch},
+				{name: "wrong row count", edit: func(_ *typedcolumn.ColumnPartLayoutContractColumn, r *typeddecode.DirectViewColumnRequest) {
+					r.Rows = 2
+				}, want: typeddecode.ReasonRowCountMismatch},
+				{name: "absolute offset unaligned", edit: func(_ *typedcolumn.ColumnPartLayoutContractColumn, r *typeddecode.DirectViewColumnRequest) {
+					r.AssetOffset = 1
+				}, want: typeddecode.ReasonAbsoluteOffsetUnaligned},
+				{name: "missing absolute offset", edit: func(_ *typedcolumn.ColumnPartLayoutContractColumn, r *typeddecode.DirectViewColumnRequest) {
+					r.HasAssetOffset = false
+				}, want: typeddecode.ReasonAbsoluteOffsetUnaligned},
+				{name: "nullable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn, _ *typeddecode.DirectViewColumnRequest) {
+					c.NullMaskPresent = true
+					c.NullCount = 1
+				}, want: typeddecode.ReasonNullableWrapper},
+				{name: "default", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn, _ *typeddecode.DirectViewColumnRequest) {
+					c.DefaultMaskPresent = true
+					c.DefaultCount = 1
+				}, want: typeddecode.ReasonNullableWrapper},
+				{name: "compressed", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn, _ *typeddecode.DirectViewColumnRequest) {
+					c.Compression = typedcolumn.CompressionSnappy
+				}, want: typeddecode.ReasonCompressed},
+				{name: "not certified", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn, _ *typeddecode.DirectViewColumnRequest) {
+					c.DirectViewCertified = false
+				}, want: typeddecode.ReasonNotWriterCertified},
+			}
+			for _, check := range checks {
+				t.Run(check.name, func(t *testing.T) {
+					cert := cloneConformanceCert(tc.cert)
+					req := valid
+					req.Certification = cert
+					check.edit(&cert, &req)
+					req.Certification = cert
+					req.Plan = tc.plan(cert)
+					if status := typeddecode.ValidateDirectViewColumn(req); status.Reason != check.want {
+						t.Fatalf("status=%+v want %s", status, check.want)
+					}
+				})
+			}
+		})
+	}
+	rawInt64FloatCarrier := typedcolumn.ColumnPartLayoutContractColumn{Name: "score", LogicalType: "float32", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, Rows: 1, Section: typedcolumn.ColumnPartLayoutContractSection{Length: 8}, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true, Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{RowCount: 1, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 8, StoredBytes: 8, PayloadLength: 8}}}
+	if plan := typeddecode.Float32ScalarPlan(rawInt64FloatCarrier); plan.DirectCandidate() {
+		t.Fatalf("raw-int64 logical float carrier plan=%+v want fallback/non-direct", plan)
+	}
+}
+
 func TestTypedColumnDirectViewActualPointerStaleAndChecksumFailures(t *testing.T) {
 	cert := directViewConformanceVectorCert(2, 3)
 	plan := typeddecode.DenseFloat32VectorPlan(cert, 3)
@@ -501,6 +578,15 @@ func currentColumnStoreValueTypesFromSource(t *testing.T) []ColumnStoreValueType
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
+}
+
+func directViewConformanceScalarCert(name string, logical string, columnType typedcolumn.ColumnType, encoding typedcolumn.Encoding, rows int, elemBytes int) typedcolumn.ColumnPartLayoutContractColumn {
+	bytes := rows * elemBytes
+	return typedcolumn.ColumnPartLayoutContractColumn{
+		Name: name, LogicalType: logical, Type: columnType, Encoding: encoding, Compression: typedcolumn.CompressionNone,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Offset: 8, Length: bytes}, ElementSize: elemBytes, Alignment: elemBytes, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: elemBytes, DirectViewCertified: true,
+		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{FirstRow: 0, RowCount: rows, Encoding: encoding, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadOffset: 8, PayloadLength: bytes}},
+	}
 }
 
 func directViewConformanceVectorCert(rows, dims int) typedcolumn.ColumnPartLayoutContractColumn {

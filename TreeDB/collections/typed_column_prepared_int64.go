@@ -448,10 +448,16 @@ func recordTypedColumnInt64FastDecodePlan(diag *TypedColumnInt64PredicateScanDia
 		diag.FastDecodeDirectViewPlans++
 	case typeddecode.PathStreaming:
 		diag.FastDecodeStreamingPlans++
+		if plan.Reason != "" && plan.Reason != typeddecode.ReasonSupported {
+			recordTypedColumnInt64FallbackReasonCounter(diag, plan.Reason)
+		}
 	case typeddecode.PathMaterialize:
 		diag.FastDecodeMaterializePlans++
 	case typeddecode.PathUnsupported:
 		diag.FastDecodeUnsupportedPlans++
+		if plan.Reason != "" && plan.Reason != typeddecode.ReasonSupported {
+			recordTypedColumnInt64FallbackReasonCounter(diag, plan.Reason)
+		}
 	}
 	if plan.Reason != "" && plan.Reason != typeddecode.ReasonSupported {
 		diag.FastDecodeFallbackReason = string(plan.Reason)
@@ -459,16 +465,53 @@ func recordTypedColumnInt64FastDecodePlan(diag *TypedColumnInt64PredicateScanDia
 }
 
 func recordTypedColumnInt64DirectViewStatus(diag *TypedColumnInt64PredicateScanDiagnostics, status typeddecode.Status) {
+	recordTypedColumnInt64DirectViewStatusWithHandle(diag, status, nil)
+}
+
+func recordTypedColumnInt64DirectViewStatusWithHandle(diag *TypedColumnInt64PredicateScanDiagnostics, status typeddecode.Status, handle *mappedresource.Handle) {
 	if diag == nil {
 		return
 	}
 	if status.Direct() {
 		diag.DirectViewSuccesses++
+		if handle != nil && handle.Source() == mappedresource.SourceHeapCopy {
+			diag.FastDecodeHeapCopyTypedViews++
+		} else {
+			diag.FastDecodeMmapDirectViews++
+		}
 		return
 	}
 	diag.DirectViewFailures++
+	recordTypedColumnInt64FallbackReasonCounter(diag, status.Reason)
 	if status.Reason != "" && status.Reason != typeddecode.ReasonSupported {
 		diag.FastDecodeFallbackReason = string(status.Reason)
+	}
+}
+
+func recordTypedColumnInt64ScratchDecode(diag *TypedColumnInt64PredicateScanDiagnostics, reason typeddecode.Reason) {
+	if diag == nil {
+		return
+	}
+	diag.FastDecodeScratchDecodes++
+	if reason != "" && reason != typeddecode.ReasonSupported {
+		diag.FastDecodeStreamingFallbacks++
+		diag.FastDecodeFallbackReason = string(reason)
+	}
+}
+
+func recordTypedColumnInt64FallbackReasonCounter(diag *TypedColumnInt64PredicateScanDiagnostics, reason typeddecode.Reason) {
+	if diag == nil || reason == "" || reason == typeddecode.ReasonSupported {
+		return
+	}
+	switch reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonUnaligned:
+		diag.FastDecodeAbsoluteUnaligned++
+	case typeddecode.ReasonActualPointerUnaligned:
+		diag.FastDecodeActualUnaligned++
+	case typeddecode.ReasonStaleHandle:
+		diag.FastDecodeStaleHandles++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonValidationFailed:
+		diag.FastDecodeCertificationFailure++
 	}
 }
 
@@ -630,6 +673,51 @@ func addTypedColumnInt64AggregateStatsBlock(result *TypedColumnInt64PredicateAgg
 	return true, nil
 }
 
+func (s *TypedColumnInt64PredicateAggregateSession) addTypedColumnInt64AggregateTypedViewValues(result *TypedColumnInt64PredicateAggregateResult, preparedColumn *typedColumnPreparedColumnState, block *typedColumnPreparedBlockPlan, granule typedcolumn.EncodedGranule, values []int64, visibility *typedColumnLatestPhysicalPart) error {
+	if result == nil || preparedColumn == nil || block == nil {
+		return errors.New("collections: typed-column int64 aggregate typed-view path missing state")
+	}
+	result.Diagnostics.BlocksDecoded++
+	result.Diagnostics.RowsScanned += len(values)
+	selection := block.CandidateSelection
+	if block.NeedsPredicate {
+		predicateSelection, err := typedColumnInt64PredicateAggregateBlockSelection(typedColumnInt64PredicateAggregateScanRequest(s.req), granule, values, &s.aggregateScratch)
+		if err != nil {
+			return err
+		}
+		selection = predicateSelection
+		if !block.CandidateSelection.IsAll() {
+			composed, err := typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &predicateSelection, Visibility: &block.CandidateSelection}, &s.aggregateScratch.selection)
+			if err != nil {
+				return err
+			}
+			selection = composed
+			result.Diagnostics.SelectionCompositions++
+		}
+	}
+	if visibility != nil && !selection.IsEmpty() {
+		visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, &s.aggregateScratch)
+		if err != nil {
+			return err
+		}
+		composed, err := typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &s.aggregateScratch.selection)
+		if err != nil {
+			return err
+		}
+		selection = composed
+		result.Diagnostics.SelectionCompositions++
+	}
+	recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+	if selection.IsEmpty() {
+		return nil
+	}
+	if err := addTypedColumnInt64AggregateKernelValues(result, preparedColumn.AggregateReducer, values, selection, &s.aggregateScratch.kernel); err != nil {
+		return err
+	}
+	recordTypedColumnInt64KernelBlock(&result.Diagnostics, !block.NeedsPredicate && visibility == nil && selection.IsAll(), false)
+	return nil
+}
+
 func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnState(preparedColumn *typedColumnPreparedColumnState, ref ColumnAssetRef, visibility *typedColumnLatestPhysicalPart, result *TypedColumnInt64PredicateAggregateResult, updateCacheDeltas func()) (bool, error) {
 	if preparedColumn == nil {
 		return false, errors.New("collections: typed-column int64 predicate aggregate nil prepared column")
@@ -695,6 +783,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		if columnPlan.Path == typeddecode.PathUnsupported {
 			return false, fmt.Errorf("collections: typed-column int64 aggregate fast decode unsupported for column %q: %s", preparedColumn.Plan.Definition.Name, columnPlan.Status().String())
 		}
+		streamingFallbackReason := typeddecode.Reason("")
 		if columnPlan.DirectCandidate() {
 			if block.Index < 0 || block.Index >= len(preparedColumn.Certification.Blocks) {
 				return false, fmt.Errorf("collections: typed-column int64 aggregate direct-view block index=%d outside certification blocks=%d", block.Index, len(preparedColumn.Certification.Blocks))
@@ -702,55 +791,40 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 			blockStatus := typeddecode.ValidateDirectViewBlock(typeddecode.DirectViewBlockRequest{Plan: columnPlan, Certification: preparedColumn.Certification, Block: preparedColumn.Certification.Blocks[block.Index], Rows: granule.Rows, PayloadBytes: len(payload), AssetOffset: int64(ref.Offset), HasAssetOffset: true})
 			if blockStatus.Direct() {
 				values, viewStatus := typeddecode.Int64View(s.resourceManager, handle, typeddecode.ResourceViewOptions{ExpectedElements: granule.Rows, RequireMapped: true})
-				recordTypedColumnInt64DirectViewStatus(&result.Diagnostics, viewStatus)
+				recordTypedColumnInt64DirectViewStatusWithHandle(&result.Diagnostics, viewStatus, handle)
 				if viewStatus.Direct() {
 					decodedAny = true
-					result.Diagnostics.BlocksDecoded++
-					result.Diagnostics.RowsScanned += len(values)
-					selection := block.CandidateSelection
-					if block.NeedsPredicate {
-						predicateSelection, err := typedColumnInt64PredicateAggregateBlockSelection(typedColumnInt64PredicateAggregateScanRequest(s.req), granule, values, &s.aggregateScratch)
-						if err != nil {
-							return false, err
-						}
-						selection = predicateSelection
-						if !block.CandidateSelection.IsAll() {
-							selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &predicateSelection, Visibility: &block.CandidateSelection}, &s.aggregateScratch.selection)
-							if err != nil {
-								return false, err
-							}
-							result.Diagnostics.SelectionCompositions++
-						}
-					}
-					if visibility != nil && !selection.IsEmpty() {
-						visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, &s.aggregateScratch)
-						if err != nil {
-							return false, err
-						}
-						selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &s.aggregateScratch.selection)
-						if err != nil {
-							return false, err
-						}
-						result.Diagnostics.SelectionCompositions++
-					}
-					recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
-					if selection.IsEmpty() {
-						continue
-					}
-					if err := addTypedColumnInt64AggregateKernelValues(result, preparedColumn.AggregateReducer, values, selection, &s.aggregateScratch.kernel); err != nil {
+					if err := s.addTypedColumnInt64AggregateTypedViewValues(result, preparedColumn, block, granule, values, visibility); err != nil {
 						return false, err
 					}
-					recordTypedColumnInt64KernelBlock(&result.Diagnostics, !block.NeedsPredicate && visibility == nil && selection.IsAll(), false)
 					continue
 				}
-				if !typedColumnInt64DirectViewFallbackAllowed(viewStatus) {
+				if viewStatus.Reason == typeddecode.ReasonHandleSourceUnsupported {
+					heapValues, heapStatus := typeddecode.Int64View(s.resourceManager, handle, typeddecode.ResourceViewOptions{ExpectedElements: granule.Rows, RequireMapped: false})
+					if heapStatus.Direct() {
+						recordTypedColumnInt64DirectViewStatusWithHandle(&result.Diagnostics, heapStatus, handle)
+						decodedAny = true
+						if err := s.addTypedColumnInt64AggregateTypedViewValues(result, preparedColumn, block, granule, heapValues, visibility); err != nil {
+							return false, err
+						}
+						continue
+					}
+					recordTypedColumnInt64FallbackReasonCounter(&result.Diagnostics, heapStatus.Reason)
+					if !typedColumnInt64DirectViewFallbackAllowed(heapStatus) {
+						return false, fmt.Errorf("collections: typed-column int64 aggregate heap typed view failed closed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, heapStatus.String())
+					}
+					streamingFallbackReason = heapStatus.Reason
+				} else if !typedColumnInt64DirectViewFallbackAllowed(viewStatus) {
 					return false, fmt.Errorf("collections: typed-column int64 aggregate direct view failed closed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, viewStatus.String())
+				} else {
+					streamingFallbackReason = viewStatus.Reason
 				}
 			} else if !typedColumnInt64DirectViewFallbackAllowed(blockStatus) {
 				recordTypedColumnInt64DirectViewStatus(&result.Diagnostics, blockStatus)
 				return false, fmt.Errorf("collections: typed-column int64 aggregate direct-view contract failed for column %q block %d: %s", preparedColumn.Plan.Definition.Name, block.Index, blockStatus.String())
 			} else {
 				recordTypedColumnInt64DirectViewStatus(&result.Diagnostics, blockStatus)
+				streamingFallbackReason = blockStatus.Reason
 			}
 		}
 
@@ -759,6 +833,10 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		}
 		decodedAny = true
 		result.Diagnostics.BlocksDecoded++
+		if streamingFallbackReason == "" && columnPlan.Path == typeddecode.PathStreaming && columnPlan.Reason != typeddecode.ReasonVariableWidth {
+			streamingFallbackReason = columnPlan.Reason
+		}
+		recordTypedColumnInt64ScratchDecode(&result.Diagnostics, streamingFallbackReason)
 		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), granule, *block, preparedColumn.AggregateReducer, visibility, &s.aggregateScratch); err != nil {
 			return false, err
 		}

@@ -220,6 +220,39 @@ func TestTypedColumnAdapterNativeFixedWidthScalarByteFixtures(t *testing.T) {
 		t.Fatalf("certify float32 image: %v", err)
 	}
 	assertTypedColumnAdapterNativeScalarDirectViewContract(t, f32Cert, f32Section, "score", "float32", typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32, 4, 4, len(wantF32))
+	f32Path := filepath.Join(t.TempDir(), "f32.tcs1")
+	if err := os.WriteFile(f32Path, f32Image.Bytes, 0o600); err != nil {
+		t.Fatalf("write float32 image: %v", err)
+	}
+	f32Mgr := mappedresource.NewManager()
+	f32Reader := typedColumnAdapterResourceReader{Manager: f32Mgr, Image: f32Image, Path: f32Path, Namespace: "typed-column-adapter-f32", PartID: f32Image.PartID, PreferMapped: true, AllowHeapCopy: true}
+	f32Column, ok := f32Part.columnByName("score")
+	if !ok {
+		t.Fatalf("missing float32 adapter column")
+	}
+	f32View, err := typedColumnAdapterAcquireFloat32ScalarColumnView(f32Reader, f32Column, f32Image.Rows)
+	if err != nil {
+		t.Fatalf("AcquireFloat32ScalarColumnView: %v", err)
+	}
+	if len(f32View.Values) != 2 {
+		t.Fatalf("float32 view len=%d want 2", len(f32View.Values))
+	}
+	for i, want := range []uint32{0x7fc12345, 0x80000000} {
+		if got := math.Float32bits(f32View.Values[i]); got != want {
+			t.Fatalf("float32 direct view bits[%d]=0x%08x want 0x%08x", i, got, want)
+		}
+	}
+	if typedColumnInt64DirectViewSupportedForTest() {
+		if !f32View.Direct || f32View.Handle == nil {
+			t.Fatalf("float32 view=%+v want mapped direct view", f32View)
+		}
+		if err := f32View.Handle.Release(); err != nil {
+			t.Fatalf("release float32 view: %v", err)
+		}
+	} else if f32View.Direct {
+		t.Fatalf("float32 view direct on unsupported platform: %+v", f32View)
+	}
+	assertTypedColumnAdapterNoActive(t, f32Mgr)
 
 	f64Field := typedColumnAdapterField("ratio", ColumnStoreValueDouble)
 	f64Field.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
@@ -242,6 +275,39 @@ func TestTypedColumnAdapterNativeFixedWidthScalarByteFixtures(t *testing.T) {
 		t.Fatalf("certify double image: %v", err)
 	}
 	assertTypedColumnAdapterNativeScalarDirectViewContract(t, f64Cert, f64Section, "ratio", "double", typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64, 8, 8, len(wantF64))
+	f64Path := filepath.Join(t.TempDir(), "f64.tcs1")
+	if err := os.WriteFile(f64Path, f64Image.Bytes, 0o600); err != nil {
+		t.Fatalf("write float64 image: %v", err)
+	}
+	f64Mgr := mappedresource.NewManager()
+	f64Reader := typedColumnAdapterResourceReader{Manager: f64Mgr, Image: f64Image, Path: f64Path, Namespace: "typed-column-adapter-f64", PartID: f64Image.PartID, PreferMapped: true, AllowHeapCopy: true}
+	f64Column, ok := f64Part.columnByName("ratio")
+	if !ok {
+		t.Fatalf("missing float64 adapter column")
+	}
+	f64View, err := typedColumnAdapterAcquireFloat64ScalarColumnView(f64Reader, f64Column, f64Image.Rows)
+	if err != nil {
+		t.Fatalf("AcquireFloat64ScalarColumnView: %v", err)
+	}
+	if len(f64View.Values) != 2 {
+		t.Fatalf("float64 view len=%d want 2", len(f64View.Values))
+	}
+	for i, want := range []uint64{0x7ff8000000000042, 0x8000000000000000} {
+		if got := math.Float64bits(f64View.Values[i]); got != want {
+			t.Fatalf("float64 direct view bits[%d]=0x%016x want 0x%016x", i, got, want)
+		}
+	}
+	if typedColumnInt64DirectViewSupportedForTest() {
+		if !f64View.Direct || f64View.Handle == nil {
+			t.Fatalf("float64 view=%+v want mapped direct view", f64View)
+		}
+		if err := f64View.Handle.Release(); err != nil {
+			t.Fatalf("release float64 view: %v", err)
+		}
+	} else if f64View.Direct {
+		t.Fatalf("float64 view direct on unsupported platform: %+v", f64View)
+	}
+	assertTypedColumnAdapterNoActive(t, f64Mgr)
 }
 
 func assertTypedColumnAdapterNativeScalarDirectViewContract(t *testing.T, cert typedcolumn.ColumnPartLayoutCertification, section typedcolumn.ColumnPartImageSection, name string, logicalType string, columnType typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int, alignment int, payloadLength int) {
@@ -1114,6 +1180,17 @@ func TestTypedColumnAdapterAdjacencyDenseFallbackOnly(t *testing.T) {
 		t.Fatalf("write image: %v", err)
 	}
 	mgr := mappedresource.NewManager()
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	certColumn, ok := certification.Column("neighbors")
+	if !ok {
+		t.Fatal("missing adjacency layout certification")
+	}
+	if plan := typeddecode.AdjacencyListPlan(certColumn, field.AdjacencyDegree); plan.DirectCandidate() {
+		t.Fatalf("adjacency direct-view plan=%+v want fallback-only", plan)
+	}
 	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-adjacency", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: true}
 	view, err := typedColumnAdapterAcquireDenseUint32ColumnView(reader, column, image.Rows)
 	if err != nil {

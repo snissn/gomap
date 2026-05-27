@@ -120,6 +120,9 @@ func TestColumnVectorGraphTypedColumnVectorCloseReleasesHandles1782(t *testing.T
 	if stats := source.manager.Stats(); stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
 		t.Fatalf("stats after close=%+v want released typed-column handles", stats)
 	}
+	if vector, direct, ok := source.vectorForOrdinal(0); ok || direct || vector != nil {
+		t.Fatalf("vectorForOrdinal after close vector=%v direct=%t ok=%t want no newly exposed stale slice", vector, direct, ok)
+	}
 }
 
 func TestColumnVectorGraphTypedColumnVectorPinKeyUsesTypedColumnAssetRef1782(t *testing.T) {

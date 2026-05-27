@@ -1162,12 +1162,132 @@ func (r typedColumnAdapterResourceReader) ReadSection(section typedcolumn.Column
 	return bytes.Clone(h.Bytes()), nil
 }
 
+type typedColumnAdapterFloat32ScalarResourceView struct {
+	Rows   int
+	Values []float32
+	Handle *mappedresource.Handle
+	Direct bool
+}
+
+type typedColumnAdapterFloat64ScalarResourceView struct {
+	Rows   int
+	Values []float64
+	Handle *mappedresource.Handle
+	Direct bool
+}
+
 type typedColumnAdapterDenseUint32ResourceView struct {
 	Rows           int
 	ElementsPerRow int
 	Values         []uint32
 	Handle         *mappedresource.Handle
 	Direct         bool
+}
+
+func typedColumnAdapterAcquireFloat32ScalarColumnView(reader typedColumnAdapterResourceReader, column typedColumnAdapterColumn, rows int) (typedColumnAdapterFloat32ScalarResourceView, error) {
+	if column.Field.ValueType != ColumnStoreValueFloat32 || column.Definition.Type != typedcolumn.ColumnTypeFloat32 || column.Definition.Encoding != typedcolumn.EncodingRawFloat32 {
+		return typedColumnAdapterFloat32ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q is not native raw float32", column.Definition.Name)
+	}
+	if rows == 0 {
+		rows = reader.Image.Rows
+	}
+	section, found := typedColumnAdapterColumnDataSection(reader.Image, column.Definition.Name)
+	if !found {
+		return typedColumnAdapterFloat32ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter image missing column data section %q", column.Definition.Name)
+	}
+	if section.Encoding != typedcolumn.EncodingRawFloat32 || section.Compression != typedcolumn.CompressionNone {
+		return typedColumnAdapterFloat32ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q section encoding/compression mismatch", column.Definition.Name)
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(reader.Image)
+	if err != nil {
+		return typedColumnAdapterFloat32ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q layout certification: %w", column.Definition.Name, err)
+	}
+	certColumn, ok := certification.Column(column.Definition.Name)
+	if !ok {
+		return typedColumnAdapterFloat32ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter image missing layout certification for column %q", column.Definition.Name)
+	}
+	plan := typeddecode.Float32ScalarPlan(certColumn)
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: 0, HasAssetOffset: true}
+	certStatus := typeddecode.ValidateDirectViewColumn(directReq)
+	h, err := reader.AcquireSection(section)
+	if err != nil {
+		return typedColumnAdapterFloat32ScalarResourceView{}, err
+	}
+	viewStatus := certStatus
+	if certStatus.Direct() {
+		values, status := typeddecode.Float32ScalarView(reader.Manager, h, directReq, typeddecode.ResourceViewOptions{ExpectedElements: rows, RequireMapped: true})
+		viewStatus = status
+		if viewStatus.Direct() {
+			return typedColumnAdapterFloat32ScalarResourceView{Rows: rows, Values: values, Handle: h, Direct: true}, nil
+		}
+	}
+	viewErr := fmt.Errorf("collections: typed-column adapter column %q float32 direct-view validation: %s", column.Definition.Name, viewStatus.String())
+	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
+		_ = h.Release()
+		return typedColumnAdapterFloat32ScalarResourceView{}, viewErr
+	}
+	decoded, decodeErr := typedcolumn.DecodeRawFloat32Payload(nil, h.Bytes(), rows)
+	releaseErr := h.Release()
+	if decodeErr != nil {
+		return typedColumnAdapterFloat32ScalarResourceView{}, errors.Join(viewErr, decodeErr, releaseErr)
+	}
+	if releaseErr != nil {
+		return typedColumnAdapterFloat32ScalarResourceView{}, errors.Join(viewErr, releaseErr)
+	}
+	return typedColumnAdapterFloat32ScalarResourceView{Rows: rows, Values: decoded, Direct: false}, nil
+}
+
+func typedColumnAdapterAcquireFloat64ScalarColumnView(reader typedColumnAdapterResourceReader, column typedColumnAdapterColumn, rows int) (typedColumnAdapterFloat64ScalarResourceView, error) {
+	if column.Field.ValueType != ColumnStoreValueDouble || column.Definition.Type != typedcolumn.ColumnTypeFloat64 || column.Definition.Encoding != typedcolumn.EncodingRawFloat64 {
+		return typedColumnAdapterFloat64ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q is not native raw float64", column.Definition.Name)
+	}
+	if rows == 0 {
+		rows = reader.Image.Rows
+	}
+	section, found := typedColumnAdapterColumnDataSection(reader.Image, column.Definition.Name)
+	if !found {
+		return typedColumnAdapterFloat64ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter image missing column data section %q", column.Definition.Name)
+	}
+	if section.Encoding != typedcolumn.EncodingRawFloat64 || section.Compression != typedcolumn.CompressionNone {
+		return typedColumnAdapterFloat64ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q section encoding/compression mismatch", column.Definition.Name)
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(reader.Image)
+	if err != nil {
+		return typedColumnAdapterFloat64ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q layout certification: %w", column.Definition.Name, err)
+	}
+	certColumn, ok := certification.Column(column.Definition.Name)
+	if !ok {
+		return typedColumnAdapterFloat64ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter image missing layout certification for column %q", column.Definition.Name)
+	}
+	plan := typeddecode.Float64ScalarPlan(certColumn)
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: 0, HasAssetOffset: true}
+	certStatus := typeddecode.ValidateDirectViewColumn(directReq)
+	h, err := reader.AcquireSection(section)
+	if err != nil {
+		return typedColumnAdapterFloat64ScalarResourceView{}, err
+	}
+	viewStatus := certStatus
+	if certStatus.Direct() {
+		values, status := typeddecode.Float64ScalarView(reader.Manager, h, directReq, typeddecode.ResourceViewOptions{ExpectedElements: rows, RequireMapped: true})
+		viewStatus = status
+		if viewStatus.Direct() {
+			return typedColumnAdapterFloat64ScalarResourceView{Rows: rows, Values: values, Handle: h, Direct: true}, nil
+		}
+	}
+	viewErr := fmt.Errorf("collections: typed-column adapter column %q float64 direct-view validation: %s", column.Definition.Name, viewStatus.String())
+	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
+		_ = h.Release()
+		return typedColumnAdapterFloat64ScalarResourceView{}, viewErr
+	}
+	decoded, decodeErr := typedcolumn.DecodeRawFloat64Payload(nil, h.Bytes(), rows)
+	releaseErr := h.Release()
+	if decodeErr != nil {
+		return typedColumnAdapterFloat64ScalarResourceView{}, errors.Join(viewErr, decodeErr, releaseErr)
+	}
+	if releaseErr != nil {
+		return typedColumnAdapterFloat64ScalarResourceView{}, errors.Join(viewErr, releaseErr)
+	}
+	return typedColumnAdapterFloat64ScalarResourceView{Rows: rows, Values: decoded, Direct: false}, nil
 }
 
 func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterResourceReader, column typedColumnAdapterColumn, rows int) (typedColumnAdapterDenseUint32ResourceView, error) {
@@ -1943,6 +2063,7 @@ func scanTypedColumnInt64PredicatePartWithVisibility(part *typedcolumn.ColumnPar
 		}
 		decodedAny = true
 		result.Diagnostics.BlocksDecoded++
+		result.Diagnostics.FastDecodeScratchDecodes++
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes + idBlock.Granule.RawBytes)
 		result.Diagnostics.RowsScanned += len(values)
 		for i, v := range values {
@@ -2026,6 +2147,7 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *ty
 		}
 		decodedAny = true
 		result.Diagnostics.BlocksDecoded++
+		result.Diagnostics.FastDecodeScratchDecodes++
 		result.Diagnostics.DecodedHeapCopyBytes += uint64(g.RawBytes)
 		result.Diagnostics.RowsScanned += len(values)
 
