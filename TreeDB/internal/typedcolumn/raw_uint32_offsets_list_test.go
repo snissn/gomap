@@ -243,6 +243,20 @@ func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	if offsetsSection.Offset >= valuesSection.Offset {
 		t.Fatalf("section order offsets=%d values=%d", offsetsSection.Offset, valuesSection.Offset)
 	}
+	duplicateOffsetsImage := image
+	duplicateOffsetsImage.Sections = append(append([]ColumnPartImageSection(nil), image.Sections...), offsetsSection)
+	duplicateOffsetsImage.Bytes = append([]byte(nil), duplicateOffsetsImage.Bytes...)
+	for len(duplicateOffsetsImage.Bytes)%columnPartImageSectionAlignment != 0 {
+		duplicateOffsetsImage.Bytes = append(duplicateOffsetsImage.Bytes, 0)
+	}
+	duplicateOffsetsImage.Sections[len(duplicateOffsetsImage.Sections)-1].Offset = len(duplicateOffsetsImage.Bytes)
+	duplicateOffsetsImage.Bytes = append(duplicateOffsetsImage.Bytes, image.sectionBytes(offsetsSection)...)
+	if _, _, ok := duplicateOffsetsImage.columnOffsetsListSections("neighbors"); ok {
+		t.Fatalf("duplicate offsets-list sections unexpectedly selected")
+	}
+	if err := duplicateOffsetsImage.validateForRead(); err == nil || !strings.Contains(err.Error(), "column_offsets sections for column") {
+		t.Fatalf("duplicate offsets-list validateForRead err=%v", err)
+	}
 	if !bytes.Equal(image.sectionBytes(offsetsSection), mustOffsetsListOffsets(t, []uint64{0, 0, 2, 2, 5})) {
 		t.Fatalf("global offsets section bytes=%v", image.sectionBytes(offsetsSection))
 	}

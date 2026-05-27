@@ -2110,9 +2110,15 @@ func typedColumnAdapterColumnOffsetsListSections(image typedcolumn.ColumnPartIma
 		}
 		switch section.Kind {
 		case typedcolumn.ColumnPartImageSectionColumnOffsets:
+			if foundOffsets {
+				return typedcolumn.ColumnPartImageSection{}, typedcolumn.ColumnPartImageSection{}, false
+			}
 			offsets = section
 			foundOffsets = true
 		case typedcolumn.ColumnPartImageSectionColumnValues:
+			if foundValues {
+				return typedcolumn.ColumnPartImageSection{}, typedcolumn.ColumnPartImageSection{}, false
+			}
 			values = section
 			foundValues = true
 		}

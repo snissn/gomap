@@ -426,6 +426,15 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewReader1916(t *testing.T) {
 	assertTypedColumnAdapterNoActive(t, mgr)
 }
 
+func TestTypedColumnAdapterUint32OffsetsListDuplicateSectionsFailClosed1916(t *testing.T) {
+	_, _, image, offsetsSection, _, _, _ := typedColumnAdapterOffsetsListDirectFixture(t)
+	duplicate := image
+	duplicate.Sections = append(append([]typedcolumn.ColumnPartImageSection(nil), image.Sections...), offsetsSection)
+	if _, _, ok := typedColumnAdapterColumnOffsetsListSections(duplicate, "neighbors"); ok {
+		t.Fatalf("duplicate offsets-list sections unexpectedly selected")
+	}
+}
+
 func TestTypedColumnAdapterUint32OffsetsListDirectViewClassifications1916(t *testing.T) {
 	_, _, image, offsetsSection, valuesSection, offsetsRaw, valuesRaw := typedColumnAdapterOffsetsListDirectFixture(t)
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
