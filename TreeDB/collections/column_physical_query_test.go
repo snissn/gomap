@@ -2108,7 +2108,7 @@ func TestColumnPhysicalQueryGroupHourCountQ31858(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery absent q3: %v", err)
 	}
-	if len(result.Groups) != 0 || result.Diagnostics.RowsScanned != 0 || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.ReduceRows != 0 {
+	if len(result.Groups) != 0 || result.Diagnostics.RowsScanned != len(events) || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.ReduceRows != 0 {
 		t.Fatalf("absent q3 result=%+v diagnostics=%+v", result.Groups, result.Diagnostics)
 	}
 	absentRunner, err := collection.PrepareColumnPhysicalQuery(absent)
@@ -2120,7 +2120,7 @@ func TestColumnPhysicalQueryGroupHourCountQ31858(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepared absent q3: %v", err)
 	}
-	if len(preparedAbsent.Groups) != 0 || preparedAbsent.Diagnostics.RowsScanned != 0 || preparedAbsent.Diagnostics.RowsMatched != 0 || preparedAbsent.Diagnostics.ReduceRows != 0 {
+	if len(preparedAbsent.Groups) != 0 || preparedAbsent.Diagnostics.RowsScanned != len(events) || preparedAbsent.Diagnostics.RowsMatched != 0 || preparedAbsent.Diagnostics.ReduceRows != 0 {
 		t.Fatalf("prepared absent q3 result=%+v diagnostics=%+v", preparedAbsent.Groups, preparedAbsent.Diagnostics)
 	}
 }
@@ -2328,12 +2328,14 @@ func BenchmarkColumnPhysicalQueryDictionaryPredicates1869(b *testing.B) {
 	}
 	collection, closeFn := openColumnPhysicalPredicateFixture1869(b, events)
 	defer closeFn()
+	commit := []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}}
 	commitCreate := []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "commit"}, {Column: "operation", Value: "create"}}
 	postCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{Column: "event", Value: "app.bsky.feed.post"})
 	cases := []struct {
 		name string
 		req  ColumnPhysicalQueryRequest
 	}{
+		{name: "q2_count_one_predicate", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commit}},
 		{name: "q2_count", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event", Predicates: commitCreate}},
 		{name: "q2_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},
 		{name: "q2_fused_count_distinct", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "event", DistinctColumn: "did", Predicates: commitCreate}},

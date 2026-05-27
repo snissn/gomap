@@ -305,23 +305,64 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 	clear(r.seen)
 	rows := 0
 	matched := 0
-	for assetIdx, asset := range r.assets {
-		var predicates *columnDictionaryPredicateAsset
-		if len(r.predicateAssets) != 0 {
-			predicates = &r.predicateAssets[assetIdx]
+	if len(r.predicateAssets) == 0 {
+		for _, asset := range r.assets {
+			rows += len(asset.groupCodes)
+			for rowIdx, groupCode := range asset.groupCodes {
+				value := asset.values[rowIdx]
+				r.reduceValue(groupCode, value)
+			}
 		}
-		for rowIdx, groupCode := range asset.groupCodes {
-			rows++
-			if predicates != nil && !predicates.matches(rowIdx) {
+		matched = rows
+	} else {
+		for assetIdx, asset := range r.assets {
+			predicates := &r.predicateAssets[assetIdx]
+			rows += len(asset.groupCodes)
+			if predicates.rejectsAll {
 				continue
 			}
-			value := asset.values[rowIdx]
-			r.reduceValue(groupCode, value)
-			matched++
+			fast, ok := predicates.fastPath(len(asset.groupCodes))
+			if !ok {
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !predicates.matches(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+				continue
+			}
+			switch fast.predicateCount() {
+			case 1:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches1(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+			case 2:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches2(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+			default:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+			}
 		}
-	}
-	if len(r.predicateAssets) == 0 {
-		matched = rows
 	}
 	r.result = r.result[:0]
 	for code, key := range r.groupDict {
