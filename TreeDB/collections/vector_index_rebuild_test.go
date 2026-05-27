@@ -217,7 +217,7 @@ func TestColumnGraphRebuildPublishesEmptyNeighborLayer0Source1918(t *testing.T) 
 	}
 }
 
-func TestColumnGraphLayer0AdjacencySourceCorruptionFailsClosed1918(t *testing.T) {
+func TestColumnGraphLayer0AdjacencySourceCorruptionFallsBack1919(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0, 1, 0}},
@@ -238,12 +238,10 @@ func TestColumnGraphLayer0AdjacencySourceCorruptionFailsClosed1918(t *testing.T)
 			t.Fatalf("remove source segment: %v", err)
 		}
 		status, err := col.VectorIndexStatus(def.Name)
-		if err == nil {
-			t.Fatalf("VectorIndexStatus err=nil want missing source error")
+		if err != nil {
+			t.Fatalf("VectorIndexStatus with missing optional source: %v", err)
 		}
-		if status.State != VectorIndexStateColumnGraphUnavailable || status.Reason != VectorIndexReasonColumnGraphCorrupt || !status.RebuildNeeded || status.Loaded {
-			t.Fatalf("status=%+v want corrupt unavailable", status)
-		}
+		assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 	})
 
 	t.Run("wrong_row_count_identity", func(t *testing.T) {
@@ -259,8 +257,8 @@ func TestColumnGraphLayer0AdjacencySourceCorruptionFailsClosed1918(t *testing.T)
 		}
 		graph := graphManifestFromRecords1918(t, records, def)
 		graph.Layer0AdjacencySource.RowCount++
-		if columnVectorGraphManifestMatchesDefinition("docs", graph, def, *cfg, manifest, records) {
-			t.Fatal("graph manifest matched stale layer-0 source row_count")
+		if !columnVectorGraphManifestMatchesDefinition("docs", graph, def, *cfg, manifest, records) {
+			t.Fatal("graph manifest mismatch for stale optional layer-0 source row_count; row-asset graph should remain loaded")
 		}
 	})
 
@@ -303,12 +301,10 @@ func TestColumnGraphLayer0AdjacencySourceCorruptionFailsClosed1918(t *testing.T)
 		}
 		_ = cfg
 		status, err := col.VectorIndexStatus(def.Name)
-		if err == nil {
-			t.Fatalf("VectorIndexStatus err=nil want corrupt source error status=%+v", status)
+		if err != nil {
+			t.Fatalf("VectorIndexStatus with corrupt optional source: %v", err)
 		}
-		if status.State != VectorIndexStateColumnGraphUnavailable || status.Reason != VectorIndexReasonColumnGraphCorrupt || !status.RebuildNeeded || status.Loaded {
-			t.Fatalf("status=%+v want corrupt unavailable", status)
-		}
+		assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 	})
 }
 

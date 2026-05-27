@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -1467,6 +1470,125 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *tes
 	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
 }
 
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, false, DocumentFetchOptions{})
+}
+
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithDocumentsV4(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, true, DocumentFetchOptions{})
+}
+
+func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithDocumentsExcludeEmbedding1875(b *testing.B) {
+	benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, true, DocumentFetchOptions{ExcludePaths: []string{"embedding"}})
+}
+
+func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b *testing.B, includeDocuments bool, fetchOptions DocumentFetchOptions) {
+	b.Helper()
+	const (
+		rows     = 1024
+		dims     = 128
+		m        = 16
+		topK     = 10
+		efSearch = 128
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 {
+		workers = columnVectorGraphNativeSearchParallelBenchMaxWorkersV3
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	previousGOMAXPROCS := runtime.GOMAXPROCS(workers)
+	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
+	query := append([]float32(nil), input[37].vector...)
+	opts := VectorIndexSearcherSearchOptions{
+		Query:                query,
+		TopK:                 topK,
+		EfSearch:             efSearch,
+		IncludeDocuments:     includeDocuments,
+		DocumentFetchOptions: fetchOptions,
+	}
+	type preparedWorker struct {
+		searcher *VectorIndexSearcher
+	}
+	benchWorkers := make([]preparedWorker, workers)
+	for i := range benchWorkers {
+		searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+		if err != nil {
+			b.Fatalf("OpenVectorIndexSearcher worker %d: %v", i, err)
+		}
+		defer func() { _ = searcher.Close() }()
+		if _, err := searcher.Search(opts); err != nil {
+			b.Fatalf("warm Search worker %d: %v", i, err)
+		}
+		benchWorkers[i] = preparedWorker{searcher: searcher}
+	}
+	measuredStats, err := benchWorkers[0].searcher.Search(opts)
+	if err != nil {
+		b.Fatalf("measure Search stats: %v", err)
+	}
+	stats := measuredStats.Stats
+	if stats.TypedColumnFallbacks != 0 || stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 {
+		b.Fatalf("typed-column parallel benchmark stats=%+v want active typed-column vector source counters", stats)
+	}
+	var nextWorker atomic.Uint64
+	var sink atomic.Int64
+	var firstErr atomic.Value
+	var failed atomic.Bool
+	recordParallelErr := func(format string, args ...any) {
+		if failed.CompareAndSwap(false, true) {
+			firstErr.Store(fmt.Sprintf(format, args...))
+		}
+	}
+	b.SetParallelism(1)
+	b.ReportMetric(float64(workers), "parallel_workers")
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		workerIndex := int(nextWorker.Add(1)) - 1
+		if workerIndex < 0 || workerIndex >= len(benchWorkers) {
+			recordParallelErr("parallel worker requested more than %d prepared searchers", workers)
+			for pb.Next() {
+			}
+			return
+		}
+		searcher := benchWorkers[workerIndex].searcher
+		var localSink int64
+		for pb.Next() {
+			if failed.Load() {
+				continue
+			}
+			got, err := searcher.Search(opts)
+			if err != nil {
+				recordParallelErr("Search: %v", err)
+				continue
+			}
+			if len(got.Results) == 0 {
+				recordParallelErr("Search returned no results")
+				continue
+			}
+			if includeDocuments {
+				localSink += int64(len(got.Results[0].Document))
+			} else {
+				localSink += int64(got.Results[0].Ordinal)
+			}
+		}
+		sink.Add(localSink)
+	})
+	b.StopTimer()
+	if errValue := firstErr.Load(); errValue != nil {
+		b.Fatalf("%s", errValue.(string))
+	}
+	vectorSearchBenchSinkOrdinalV4 += int(sink.Load())
+	reportVectorIndexSearchBenchMetricsV4(b, b.N, stats, false)
+}
+
 func BenchmarkOpenVectorIndexSearcherColumnGraphNativeReaderSetupV6(b *testing.B) {
 	const (
 		rows = 1024
@@ -1547,6 +1669,12 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.AdjacencyDirectViews), "adjacency_direct_views/search")
 	b.ReportMetric(float64(stats.AdjacencyMmapDirectViews), "adjacency_mmap_direct/search")
 	b.ReportMetric(float64(stats.AdjacencyHeapCopyTypedViews), "adjacency_heap_copy_typed_view/search")
+	b.ReportMetric(float64(stats.AdjacencySourceUnavailable), "adjacency_source_unavailable/search")
+	b.ReportMetric(float64(stats.AdjacencySourceFallbacks), "adjacency_source_fallbacks/search")
+	b.ReportMetric(float64(stats.AdjacencyCertificationFailures), "adjacency_certification_failures/search")
+	b.ReportMetric(float64(stats.AdjacencyAbsoluteOffsetUnaligned), "adjacency_absolute_offset_unaligned/search")
+	b.ReportMetric(float64(stats.AdjacencyActualPointerUnaligned), "adjacency_actual_pointer_unaligned/search")
+	b.ReportMetric(float64(stats.AdjacencyStaleHandles), "adjacency_stale_handles/search")
 	b.ReportMetric(float64(stats.AdjacencyScratchDecodes), "adjacency_scratch_decode/search")
 	b.ReportMetric(float64(stats.AdjacencyScratchDecodes), "adjacency_scratch_decodes/search")
 	if stats.VectorMmapDirectViews > 0 {

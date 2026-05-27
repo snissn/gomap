@@ -213,19 +213,24 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 	snapshot.AssetRef.Checksum = uint32(checksum64)
 	snapshot.AssetBytes = int64(assetBytes64)
 	if cur.pos < len(raw) {
-		if len(raw)-cur.pos < 6 {
+		sourceCur := cur
+		if len(raw)-sourceCur.pos < 6 {
 			return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
 		}
-		source, err := decodeColumnVectorGraphLayer0AdjacencySource(&cur)
-		if err != nil {
-			return columnVectorGraphManifestSnapshot{}, err
+		if source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur); err == nil && sourceCur.pos == len(raw) {
+			if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
+				snapshot.Layer0AdjacencySource = source
+			}
+			cur = sourceCur
+		} else {
+			cur.pos = len(raw)
+			cur.err = nil
 		}
-		snapshot.Layer0AdjacencySource = source
 	}
 	if cur.pos != len(raw) {
 		return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
 	}
-	if err := validateColumnVectorGraphManifestSnapshot(snapshot); err != nil {
+	if err := validateColumnVectorGraphManifestSnapshotCore(snapshot); err != nil {
 		return columnVectorGraphManifestSnapshot{}, err
 	}
 	return snapshot, nil
@@ -343,6 +348,18 @@ func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVe
 }
 
 func validateColumnVectorGraphManifestSnapshot(snapshot columnVectorGraphManifestSnapshot) error {
+	if err := validateColumnVectorGraphManifestSnapshotCore(snapshot); err != nil {
+		return err
+	}
+	if snapshot.Layer0AdjacencySource.Present {
+		if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(snapshot.Layer0AdjacencySource); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateColumnVectorGraphManifestSnapshotCore(snapshot columnVectorGraphManifestSnapshot) error {
 	if err := ValidateIndexName(snapshot.IndexName); err != nil {
 		return fmt.Errorf("collections: invalid column vector graph manifest index name: %w", err)
 	}
@@ -381,11 +398,6 @@ func validateColumnVectorGraphManifestSnapshot(snapshot columnVectorGraphManifes
 	}
 	if snapshot.AssetBytes != snapshot.AssetRef.Length {
 		return fmt.Errorf("collections: column vector graph manifest asset bytes=%d does not match ref length=%d", snapshot.AssetBytes, snapshot.AssetRef.Length)
-	}
-	if snapshot.Layer0AdjacencySource.Present {
-		if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(snapshot.Layer0AdjacencySource); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -682,12 +694,10 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
-	if err := validateColumnVectorGraphLayer0AdjacencySourceAsset(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph); err != nil {
-		status.State = VectorIndexStateColumnGraphUnavailable
-		status.Reason = VectorIndexReasonColumnGraphCorrupt
-		status.RebuildNeeded = true
-		return columnGraphVectorIndexStatusError(status, err)
-	}
+	// The layer-0 adjacency source is an optional #1919 accelerator. Keep
+	// loaded-status gating tied to the canonical row-asset graph; search opens
+	// and validates the source independently and falls back to row assets when it
+	// is absent, corrupt, stale, or non-certified.
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	status.Stats = VectorIndexStats{
@@ -747,15 +757,9 @@ func columnVectorGraphManifestMatchStatus(collection string, graph columnVectorG
 	if graph.BaseManifestChecksum != baseChecksum {
 		return columnVectorGraphManifestMatchMismatch
 	}
-	if graph.Layer0AdjacencySource.Present {
-		sourceCfg, _, err := columnVectorGraphLayer0AdjacencySourceColumnStoreConfig(collection, cfg, def)
-		if err != nil {
-			return columnVectorGraphManifestMatchMismatch
-		}
-		if err := validateColumnVectorGraphLayer0AdjacencySourceMatchesGraph(graph, sourceCfg); err != nil {
-			return columnVectorGraphManifestMatchMismatch
-		}
-	}
+	// Layer-0 adjacency-source metadata is intentionally not part of the loaded
+	// graph match. A bad optional source disables only the direct adjacency fast
+	// path; the row-asset graph remains the canonical searchable index.
 	return columnVectorGraphManifestMatchLoaded
 }
 
@@ -843,26 +847,18 @@ func columnVectorGraphManifestAssetRefsForScan(graph columnVectorGraphManifestSn
 		return nil, err
 	}
 	refs := []ColumnAssetRef{graph.AssetRef}
-	if graph.Layer0AdjacencySource.Present {
-		source := graph.Layer0AdjacencySource
-		if source.Ref.Generation > activeGeneration {
-			return nil, fmt.Errorf("collections: column vector graph layer-0 adjacency source generation=%d is newer than active manifest generation=%d", source.Ref.Generation, activeGeneration)
-		}
-		if source.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
-			return nil, fmt.Errorf("collections: column vector graph layer-0 adjacency source kind=%q want %q", source.Ref.Kind, ColumnAssetKindTCS1TypedColumnPart)
-		}
-		if source.Ref.Namespace != expectedNamespace {
-			return nil, fmt.Errorf("collections: column vector graph layer-0 adjacency source namespace=%q want %q", source.Ref.Namespace, expectedNamespace)
-		}
-		if source.Ref.Generation != graph.BaseManifestGeneration {
-			return nil, fmt.Errorf("collections: column vector graph layer-0 adjacency source generation=%d does not match base manifest generation=%d", source.Ref.Generation, graph.BaseManifestGeneration)
-		}
-		if err := validateColumnAssetRefForPlan(source.Ref); err != nil {
-			return nil, err
-		}
-		refs = append(refs, source.Ref)
+	if graph.Layer0AdjacencySource.Present && columnVectorGraphLayer0AdjacencySourceRefEligibleForScan(graph, activeGeneration, expectedNamespace) {
+		refs = append(refs, graph.Layer0AdjacencySource.Ref)
 	}
 	return refs, nil
+}
+
+func columnVectorGraphLayer0AdjacencySourceRefEligibleForScan(graph columnVectorGraphManifestSnapshot, activeGeneration uint64, expectedNamespace string) bool {
+	source := graph.Layer0AdjacencySource
+	if !source.Present || source.Ref.Generation > activeGeneration || source.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart || source.Ref.Namespace != expectedNamespace || source.Ref.Generation != graph.BaseManifestGeneration {
+		return false
+	}
+	return validateColumnAssetRefForPlan(source.Ref) == nil
 }
 
 func validateColumnVectorGraphAssetRefAvailable(rootDir string, ref ColumnAssetRef) error {
