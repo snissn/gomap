@@ -193,21 +193,21 @@ func prepareColumnDictionaryPredicateAssets(view columnPhysicalScanSnapshotView,
 			if dictCur.err != nil {
 				return nil, 0, dictCur.err
 			}
-			cur := manifestCursor{raw: raw, pos: dictCur.pos}
+			payload, err := columnDictionaryCodesPayloadAfterDictionary(raw, snapshot.AssetRef, &dictCur, rowCount)
+			if err != nil {
+				return nil, 0, err
+			}
+			localCodes, _, err := viewColumnDictionaryCodesPayload(raw, payload)
+			if err != nil {
+				return nil, 0, err
+			}
 			codes := make([]uint32, rowCount)
-			for rowIdx := range codes {
-				localCode := cur.u32()
+			for rowIdx, localCode := range localCodes {
 				localIdx, ok := columnDictionaryCodeIndex(localCode, cardinality)
 				if !ok {
 					return nil, 0, fmt.Errorf("collections: physical predicate dictionary codes asset code[%d]=%d outside cardinality=%d", rowIdx, localCode, cardinality)
 				}
 				codes[rowIdx] = uint32(localIdx)
-			}
-			if cur.err != nil {
-				return nil, 0, cur.err
-			}
-			if cur.pos != len(raw) {
-				return nil, 0, errors.New("collections: trailing bytes in physical predicate dictionary codes asset")
 			}
 			if !matchedAnyCode {
 				asset.rejectsAll = true

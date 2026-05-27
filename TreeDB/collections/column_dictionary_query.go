@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"errors"
 	"fmt"
 	"time"
 )
@@ -183,25 +182,25 @@ func prepareColumnDictionaryCodeGroupCountRunner(view columnPhysicalScanSnapshot
 		if dictCur.err != nil {
 			return nil, dictCur.err
 		}
-		cur := manifestCursor{raw: raw, pos: dictCur.pos}
+		payload, err := columnDictionaryCodesPayloadAfterDictionary(raw, snapshot.AssetRef, &dictCur, rowCount)
+		if err != nil {
+			return nil, err
+		}
+		codes, _, err := viewColumnDictionaryCodesPayload(raw, payload)
+		if err != nil {
+			return nil, err
+		}
 		if rowCount > len(codeArena)-codeArenaOffset {
 			return nil, fmt.Errorf("collections: dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.GroupColumn)
 		}
 		translated := codeArena[codeArenaOffset : codeArenaOffset+rowCount]
 		codeArenaOffset += rowCount
-		for codeIdx := range translated {
-			localCode := cur.u32()
+		for codeIdx, localCode := range codes {
 			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
 			if !ok {
 				return nil, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", codeIdx, localCode, len(localToGlobal))
 			}
 			translated[codeIdx] = localToGlobal[localIdx]
-		}
-		if cur.err != nil {
-			return nil, cur.err
-		}
-		if cur.pos != len(raw) {
-			return nil, errors.New("collections: trailing bytes in dictionary codes asset")
 		}
 		runner.assets = append(runner.assets, columnDictionaryCodeGroupCountAsset{
 			codes: translated,
@@ -232,8 +231,8 @@ func (r *columnDictionaryCodeGroupCountRunner) run(view columnPhysicalScanSnapsh
 	} else {
 		for assetIdx, asset := range r.assets {
 			predicates := &r.predicateAssets[assetIdx]
+			rows += len(asset.codes)
 			for rowIdx, code := range asset.codes {
-				rows++
 				if !predicates.matches(rowIdx) {
 					continue
 				}
@@ -328,22 +327,22 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
-		cur := manifestCursor{raw: raw, pos: dictCur.pos}
-		for i := 0; i < rowCount; i++ {
-			localCode := cur.u32()
+		payload, err := columnDictionaryCodesPayloadAfterDictionary(raw, snapshot.AssetRef, &dictCur, rowCount)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
+		codes, _, err := viewColumnDictionaryCodesPayload(raw, payload)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
+		for i, localCode := range codes {
 			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
 			if !ok {
 				return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
 			}
 			reducer.counts[localToGlobal[localIdx]]++
-			rows++
 		}
-		if cur.err != nil {
-			return ColumnPhysicalQueryResult{}, true, cur.err
-		}
-		if cur.pos != len(raw) {
-			return ColumnPhysicalQueryResult{}, true, errors.New("collections: trailing bytes in dictionary codes asset")
-		}
+		rows += rowCount
 		assetBytes += snapshot.AssetRef.Length
 		blocks++
 	}
@@ -470,25 +469,25 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		if groupCur.err != nil {
 			return nil, groupCur.err
 		}
-		groupCodeCur := manifestCursor{raw: groupRaw, pos: groupCur.pos}
+		groupPayload, err := columnDictionaryCodesPayloadAfterDictionary(groupRaw, groupSnapshot.AssetRef, &groupCur, groupRows)
+		if err != nil {
+			return nil, err
+		}
+		groupLocalCodes, _, err := viewColumnDictionaryCodesPayload(groupRaw, groupPayload)
+		if err != nil {
+			return nil, err
+		}
 		if groupRows > len(groupCodeArena)-groupCodeArenaOffset {
 			return nil, fmt.Errorf("collections: group dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
 		}
 		groupCodes := groupCodeArena[groupCodeArenaOffset : groupCodeArenaOffset+groupRows]
 		groupCodeArenaOffset += groupRows
-		for codeIdx := range groupCodes {
-			groupCode := groupCodeCur.u32()
+		for codeIdx, groupCode := range groupLocalCodes {
 			groupIdx, ok := columnDictionaryCodeIndex(groupCode, len(groupLocal))
 			if !ok {
 				return nil, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", codeIdx, groupCode, len(groupLocal))
 			}
 			groupCodes[codeIdx] = groupLocal[groupIdx]
-		}
-		if groupCodeCur.err != nil {
-			return nil, groupCodeCur.err
-		}
-		if groupCodeCur.pos != len(groupRaw) {
-			return nil, errors.New("collections: trailing bytes in dictionary codes asset")
 		}
 
 		distinctRaw, err := readCache.read(distinctSnapshot.AssetRef, scratch)
@@ -536,25 +535,25 @@ func prepareColumnDictionaryCodeGroupCountDistinctRunner(view columnPhysicalScan
 		if !ok {
 			return nil, nil
 		}
-		distinctCodeCur := manifestCursor{raw: distinctRaw, pos: distinctCur.pos}
+		distinctPayload, err := columnDictionaryCodesPayloadAfterDictionary(distinctRaw, distinctSnapshot.AssetRef, &distinctCur, distinctRows)
+		if err != nil {
+			return nil, err
+		}
+		distinctLocalCodes, _, err := viewColumnDictionaryCodesPayload(distinctRaw, distinctPayload)
+		if err != nil {
+			return nil, err
+		}
 		if distinctRows > len(distinctCodeArena)-distinctCodeArenaOffset {
 			return nil, fmt.Errorf("collections: distinct dictionary codes asset rows exceed manifest sidecar rows generation=%d part_id=%d column=%q", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
 		}
 		distinctCodes := distinctCodeArena[distinctCodeArenaOffset : distinctCodeArenaOffset+distinctRows]
 		distinctCodeArenaOffset += distinctRows
-		for codeIdx := range distinctCodes {
-			distinctCode := distinctCodeCur.u32()
+		for codeIdx, distinctCode := range distinctLocalCodes {
 			distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, len(distinctLocal))
 			if !ok {
 				return nil, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", codeIdx, distinctCode, len(distinctLocal))
 			}
 			distinctCodes[codeIdx] = distinctLocal[distinctIdx]
-		}
-		if distinctCodeCur.err != nil {
-			return nil, distinctCodeCur.err
-		}
-		if distinctCodeCur.pos != len(distinctRaw) {
-			return nil, errors.New("collections: trailing bytes in dictionary codes asset")
 		}
 		runner.assets = append(runner.assets, columnDictionaryCodeGroupCountDistinctAsset{
 			groupCodes:    groupCodes,
@@ -787,7 +786,13 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
 		}
-		groupPayload := columnDictionaryCodesAssetPayload{rowCount: groupRows, offset: groupCur.pos}
+		groupPayload, err := columnDictionaryCodesPayloadAfterDictionary(groupRaw, groupSnapshot.AssetRef, &groupCur, groupRows)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
+		if groupRows != part.Rows {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: group dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", groupRows, part.Rows, groupSnapshot.AssetRef.Generation, groupSnapshot.AssetRef.PartID, req.GroupColumn)
+		}
 		distinctRaw, err := readCache.read(distinctSnapshot.AssetRef, scratch)
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes read generation=%d part_id=%d column=%q: %w", distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn, err)
@@ -813,7 +818,13 @@ func runColumnDictionaryCodeGroupCountDistinctOneShot(view columnPhysicalScanSna
 		if distinctCur.err != nil {
 			return ColumnPhysicalQueryResult{}, true, distinctCur.err
 		}
-		distinctPayload := columnDictionaryCodesAssetPayload{rowCount: distinctRows, offset: distinctCur.pos}
+		distinctPayload, err := columnDictionaryCodesPayloadAfterDictionary(distinctRaw, distinctSnapshot.AssetRef, &distinctCur, distinctRows)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
+		if distinctRows != part.Rows {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: distinct dictionary codes asset row count=%d want manifest rows=%d generation=%d part_id=%d column=%q", distinctRows, part.Rows, distinctSnapshot.AssetRef.Generation, distinctSnapshot.AssetRef.PartID, req.DistinctColumn)
+		}
 		if groupPayload.rowCount != distinctPayload.rowCount {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary code distinct row count mismatch group=%d distinct=%d", groupPayload.rowCount, distinctPayload.rowCount)
 		}
@@ -1010,14 +1021,22 @@ func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets(view
 		if distinctDictCur.err != nil {
 			return 0, distinctDictCur.err
 		}
-		groupCur := manifestCursor{raw: asset.groupRaw, pos: asset.groupPayload.offset}
-		distinctCur := manifestCursor{raw: asset.distinctRaw, pos: asset.distinctPayload.offset}
-		for i := 0; i < asset.groupPayload.rowCount; i++ {
-			groupLocal := groupCur.u32()
+		groupCodes, _, err := viewColumnDictionaryCodesPayload(asset.groupRaw, asset.groupPayload)
+		if err != nil {
+			return 0, err
+		}
+		distinctCodes, _, err := viewColumnDictionaryCodesPayload(asset.distinctRaw, asset.distinctPayload)
+		if err != nil {
+			return 0, err
+		}
+		if len(groupCodes) != len(distinctCodes) {
+			return 0, fmt.Errorf("collections: dictionary code distinct row count mismatch group=%d distinct=%d", len(groupCodes), len(distinctCodes))
+		}
+		for i, groupLocal := range groupCodes {
 			if int(groupLocal) >= len(groupMap) {
 				return 0, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, groupLocal, len(groupMap))
 			}
-			distinctLocal := distinctCur.u32()
+			distinctLocal := distinctCodes[i]
 			if int(distinctLocal) >= len(distinctMap) {
 				return 0, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, distinctLocal, len(distinctMap))
 			}
@@ -1030,18 +1049,6 @@ func (r *columnDictionaryCodeGroupCountDistinctOneShotReducer) reduceAssets(view
 				r.groupCounts[groupCode]++
 			}
 			rows++
-		}
-		if groupCur.err != nil {
-			return 0, groupCur.err
-		}
-		if distinctCur.err != nil {
-			return 0, distinctCur.err
-		}
-		if groupCur.pos != len(asset.groupRaw) {
-			return 0, errors.New("collections: trailing bytes in dictionary codes asset")
-		}
-		if distinctCur.pos != len(asset.distinctRaw) {
-			return 0, errors.New("collections: trailing bytes in dictionary codes asset")
 		}
 	}
 	return rows, nil

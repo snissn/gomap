@@ -23,12 +23,25 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueDouble` | yes, native scalar layout | 8-byte little-endian IEEE-754 bits. The current raw-`int64` float bit carrier is compatibility/fallback-only and must not certify native scalar float direct views. |
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
-| `ColumnStoreValueString` | no | string values, dictionaries, and dictionary codes are not string direct-view payloads. |
+| `ColumnStoreValueString` | no | string values and dictionary string tables are not string direct-view payloads. Derived dictionary-code sidecar row-code payloads are a separate `uint32` sidecar direct-view format. |
 | `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` primitive direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support, #1917 wires that reader through the adapter, and #1918 publishes a validated/reopenable layer-0 `column_graph` adjacency source. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; search traversal still uses row-asset adjacency until a later graph consumer switch. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
 as current-stack mmap direct-view evidence.
+
+Derived dictionary-code sidecars are outside the typed-column declared-value
+matrix but now follow the same fixed-width safety vocabulary: version-2
+`tcs1_dictionary_codes` assets keep manifest-style metadata/dictionary headers,
+then expose an exactly `rows * 4` little-endian `uint32` local-code payload after
+zero padding to 4-byte alignment. The sidecar writer pads both the asset payload
+(relative payload offset) and the segment prefix (absolute `asset_ref.offset +
+payload_offset`) so normal mmap reads can construct a `[]uint32` view on native
+little-endian hosts; readers still perform concrete pointer-alignment, length,
+row-count, cardinality, and schema/ref/checksum checks before using the view.
+Call sites are responsible for bounding the direct-view slice lifetime to the
+raw mmap/cache bytes it aliases, with a copy/fallback helper available when a
+caller needs owned data or the source is unsupported.
 
 ## Writer certification and padding (#1895)
 
