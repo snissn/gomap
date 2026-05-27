@@ -221,22 +221,26 @@ func (r *columnDictionaryCodeGroupCountRunner) run(view columnPhysicalScanSnapsh
 	clear(r.counts)
 	rows := 0
 	matched := 0
-	for assetIdx, asset := range r.assets {
-		var predicates *columnDictionaryPredicateAsset
-		if len(r.predicateAssets) != 0 {
-			predicates = &r.predicateAssets[assetIdx]
-		}
-		for rowIdx, code := range asset.codes {
-			rows++
-			if predicates != nil && !predicates.matches(rowIdx) {
-				continue
-			}
-			r.counts[code]++
-			matched++
-		}
-	}
 	if len(r.predicateAssets) == 0 {
+		for _, asset := range r.assets {
+			rows += len(asset.codes)
+			for _, code := range asset.codes {
+				r.counts[code]++
+			}
+		}
 		matched = rows
+	} else {
+		for assetIdx, asset := range r.assets {
+			predicates := &r.predicateAssets[assetIdx]
+			for rowIdx, code := range asset.codes {
+				rows++
+				if !predicates.matches(rowIdx) {
+					continue
+				}
+				r.counts[code]++
+				matched++
+			}
+		}
 	}
 	r.resultGroups = r.resultGroups[:0]
 	for code, count := range r.counts {

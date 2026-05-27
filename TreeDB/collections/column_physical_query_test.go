@@ -3024,6 +3024,130 @@ func TestColumnDictionaryCodeGroupCountOneShotFallbacks1890(t *testing.T) {
 	}
 }
 
+func TestColumnDictionaryCodeGroupCountRunnerNoPredicateFastPath1912(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(256)
+	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Fatalf("runner Close: %v", err)
+		}
+	}()
+	prepared, err := runner.Run()
+	if err != nil {
+		t.Fatalf("runner Run: %v", err)
+	}
+	if !equalColumnPhysicalQueryGroups(direct.Groups, prepared.Groups) {
+		t.Fatalf("direct groups=%+v want prepared %+v", direct.Groups, prepared.Groups)
+	}
+	wantCounts := map[string]int{"kind_00": 64, "kind_01": 64, "kind_02": 64, "kind_03": 64}
+	if got := columnPhysicalQueryGroupCountsM14B(prepared.Groups); !reflect.DeepEqual(got, wantCounts) {
+		t.Fatalf("prepared groups=%v want %v full=%+v", got, wantCounts, prepared.Groups)
+	}
+	diag := prepared.Diagnostics
+	if diag.RowsScanned != len(events) || diag.ReduceRows != len(events) {
+		t.Fatalf("prepared diagnostics rows scanned/reduced=%d/%d want %d/%d full=%+v", diag.RowsScanned, diag.ReduceRows, len(events), len(events), diag)
+	}
+	if diag.ScheduledGranules == 0 || diag.ScheduledGranules != diag.DecodedBlocks || diag.ScheduledGranules != diag.DirectReduceBlocks || diag.ScheduledGranules != diag.DictionaryCodeHits {
+		t.Fatalf("prepared block/code diagnostics=%+v want scheduled=decoded=direct_reduce=dictionary_hits>0", diag)
+	}
+	if diag.PhysicalBytesScanned <= 0 || diag.PhysicalBytesScanned != direct.Diagnostics.PhysicalBytesScanned {
+		t.Fatalf("prepared physical bytes=%d direct=%d diagnostics=%+v", diag.PhysicalBytesScanned, direct.Diagnostics.PhysicalBytesScanned, diag)
+	}
+	if diag.ResultGroups != len(prepared.Groups) || diag.ResultGroups != direct.Diagnostics.ResultGroups {
+		t.Fatalf("prepared result group diagnostics=%d len=%d direct=%d", diag.ResultGroups, len(prepared.Groups), direct.Diagnostics.ResultGroups)
+	}
+	if diag.PredicateCount != 0 || len(diag.PredicateColumns) != 0 || diag.PredicateDictionaryCodeHits != 0 || diag.RowsMatched != 0 {
+		t.Fatalf("prepared no-predicate diagnostics unexpectedly populated: %+v", diag)
+	}
+}
+
+func TestColumnDictionaryCodeGroupCountRunnerPredicateDiagnostics1912(t *testing.T) {
+	events := []columnPhysicalPredicateEvent1869{
+		{ID: "e1", Kind: "commit", Operation: "create", Event: "post", Did: "did_b", TimeUS: 1000},
+		{ID: "e2", Kind: "commit", Operation: "create", Event: "post", Did: "did_a", TimeUS: 2000},
+		{ID: "e3", Kind: "commit", Operation: "create", Event: "post", Did: "did_a", TimeUS: 500},
+		{ID: "e4", Kind: "commit", Operation: "delete", Event: "post", Did: "did_c", TimeUS: 10},
+		{ID: "e5", Kind: "identity", Operation: "create", Event: "post", Did: "did_d", TimeUS: 20},
+		{ID: "e6", Kind: "commit", Operation: "create", Event: "like", Did: "did_a", TimeUS: 3000},
+		{ID: "e7", Kind: "commit", Operation: "create", Event: "repost", Did: "did_b", TimeUS: 4000},
+		{ID: "e8", Kind: "commit", Operation: "create", Event: "post", Did: "did_b", TimeUS: 9000},
+	}
+	collection, closeFn := openColumnPhysicalPredicateFixture1869(t, events)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupCount,
+		GroupColumn: "event",
+		Predicates: []ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+		},
+	}
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery: %v", err)
+	}
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+	}
+	defer func() {
+		if err := runner.Close(); err != nil {
+			t.Fatalf("runner Close: %v", err)
+		}
+	}()
+	prepared, err := runner.Run()
+	if err != nil {
+		t.Fatalf("runner Run: %v", err)
+	}
+	if !equalColumnPhysicalQueryGroups(direct.Groups, prepared.Groups) {
+		t.Fatalf("direct groups=%+v want prepared %+v", direct.Groups, prepared.Groups)
+	}
+	wantCounts := map[string]int{"like": 1, "post": 4, "repost": 1}
+	if got := columnPhysicalQueryGroupCountsM14B(prepared.Groups); !reflect.DeepEqual(got, wantCounts) {
+		t.Fatalf("prepared groups=%v want %v full=%+v", got, wantCounts, prepared.Groups)
+	}
+
+	assertPredicateGroupCountDiagnostics := func(t *testing.T, name string, result ColumnPhysicalQueryResult) {
+		t.Helper()
+		diag := result.Diagnostics
+		if diag.RowsScanned != len(events) || diag.RowsMatched != 6 || diag.ReduceRows != 6 {
+			t.Fatalf("%s rows scanned/matched/reduced=%d/%d/%d want %d/6/6 full=%+v", name, diag.RowsScanned, diag.RowsMatched, diag.ReduceRows, len(events), diag)
+		}
+		if diag.ScheduledGranules == 0 || diag.ScheduledGranules != diag.DecodedBlocks || diag.ScheduledGranules != diag.DirectReduceBlocks || diag.ScheduledGranules != diag.DictionaryCodeHits {
+			t.Fatalf("%s block/code diagnostics=%+v want scheduled=decoded=direct_reduce=dictionary_hits>0", name, diag)
+		}
+		if diag.PredicateDictionaryCodeHits != diag.ScheduledGranules*len(req.Predicates) {
+			t.Fatalf("%s predicate code hits=%d want scheduled(%d)*predicates(%d) diagnostics=%+v", name, diag.PredicateDictionaryCodeHits, diag.ScheduledGranules, len(req.Predicates), diag)
+		}
+		if diag.PhysicalBytesScanned <= 0 {
+			t.Fatalf("%s physical bytes=%d diagnostics=%+v", name, diag.PhysicalBytesScanned, diag)
+		}
+		if diag.ResultGroups != len(result.Groups) || diag.ResultGroups != len(wantCounts) {
+			t.Fatalf("%s result group diagnostics=%d len=%d want=%d", name, diag.ResultGroups, len(result.Groups), len(wantCounts))
+		}
+		if diag.PredicateCount != len(req.Predicates) || !reflect.DeepEqual(diag.PredicateColumns, []string{"kind", "operation"}) || !reflect.DeepEqual(diag.PredicateKinds, []string{string(ColumnPhysicalQueryPredicateEqual), string(ColumnPhysicalQueryPredicateEqual)}) || diag.PredicateLiterals != len(req.Predicates) {
+			t.Fatalf("%s predicate diagnostics=%+v", name, diag)
+		}
+	}
+	assertPredicateGroupCountDiagnostics(t, "direct", direct)
+	assertPredicateGroupCountDiagnostics(t, "prepared", prepared)
+	if prepared.Diagnostics.PhysicalBytesScanned != direct.Diagnostics.PhysicalBytesScanned || prepared.Diagnostics.PredicateDictionaryCodeHits != direct.Diagnostics.PredicateDictionaryCodeHits {
+		t.Fatalf("prepared diagnostics=%+v direct diagnostics=%+v", prepared.Diagnostics, direct.Diagnostics)
+	}
+}
+
 func TestColumnPhysicalQueryDirectQ1MatchesPrepared1890(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(4096)
 	collection, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)
