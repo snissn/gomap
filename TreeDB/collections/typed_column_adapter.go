@@ -1252,9 +1252,10 @@ const (
 )
 
 type typedColumnAdapterUint32OffsetsListClassification struct {
-	Class   typedColumnAdapterUint32OffsetsListViewClass
-	Counter typeddecode.Counter
-	Status  typeddecode.Status
+	Class    typedColumnAdapterUint32OffsetsListViewClass
+	Counter  typeddecode.Counter
+	Counters []typeddecode.Counter
+	Status   typeddecode.Status
 }
 
 type typedColumnAdapterUint32OffsetsListResourceView struct {
@@ -1511,6 +1512,16 @@ func typedColumnAdapterAcquireUint32OffsetsListColumnView(reader typedColumnAdap
 }
 
 func typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr *mappedresource.Manager, certColumn typedcolumn.ColumnPartLayoutContractColumn, rows int, offsetsBytes int, valuesBytes int, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (typedColumnAdapterUint32OffsetsListResourceView, error) {
+	if offsetsHandle == nil || valuesHandle == nil {
+		status := typeddecode.StreamingStatus(typeddecode.ReasonNilHandle, "nil offsets-list handle")
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
+	if offsetsHandle.Released() || valuesHandle.Released() {
+		status := typeddecode.UnsupportedStatus(typeddecode.ReasonStaleHandle, "released offsets-list handle")
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
 	plan := typeddecode.AdjacencyOffsetsListPlan(certColumn)
 	directReq := typeddecode.Uint32OffsetsListDirectViewRequest{Plan: plan, Certification: certColumn, Rows: rows, OffsetsBytes: offsetsBytes, ValuesBytes: valuesBytes, AssetOffset: 0, HasAssetOffset: true}
 	status := typeddecode.ValidateUint32OffsetsListDirectViewSections(directReq)
@@ -1521,20 +1532,10 @@ func typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr *mappedres
 		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
 		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
 	}
-	if offsetsHandle == nil || valuesHandle == nil {
-		status = typeddecode.StreamingStatus(typeddecode.ReasonNilHandle, "nil offsets-list handle")
-		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
-		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
-	}
-	if offsetsHandle.Released() || valuesHandle.Released() {
-		status = typeddecode.UnsupportedStatus(typeddecode.ReasonStaleHandle, "released offsets-list handle")
-		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
-		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
-	}
 	if offsetsHandle.Source() == mappedresource.SourceMapped && valuesHandle.Source() == mappedresource.SourceMapped {
 		offsets, values, viewStatus := typeddecode.Uint32OffsetsListView(mgr, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: true})
 		if viewStatus.Direct() {
-			class := typedColumnAdapterUint32OffsetsListClassification{Class: typedColumnAdapterUint32OffsetsListViewMmapDirect, Counter: typeddecode.CounterMmapDirectView, Status: viewStatus}
+			class := typedColumnAdapterUint32OffsetsListClassification{Class: typedColumnAdapterUint32OffsetsListViewMmapDirect, Counter: typeddecode.CounterMmapDirectView, Counters: []typeddecode.Counter{typeddecode.CounterOffsetsMmapDirectView, typeddecode.CounterValuesMmapDirectView}, Status: viewStatus}
 			return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Offsets: offsets, Values: values, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, Direct: true, Class: class}, nil
 		}
 		if typedColumnUint32OffsetsListScratchFallbackAllowed(viewStatus) {
@@ -1546,7 +1547,7 @@ func typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr *mappedres
 	if offsetsHandle.Source() == mappedresource.SourceHeapCopy && valuesHandle.Source() == mappedresource.SourceHeapCopy {
 		offsets, values, viewStatus := typeddecode.Uint32OffsetsListView(nil, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: false})
 		if viewStatus.Direct() {
-			class := typedColumnAdapterUint32OffsetsListClassification{Class: typedColumnAdapterUint32OffsetsListViewHeapCopyTyped, Counter: typeddecode.CounterHeapCopyTypedView, Status: viewStatus}
+			class := typedColumnAdapterUint32OffsetsListClassification{Class: typedColumnAdapterUint32OffsetsListViewHeapCopyTyped, Counter: typeddecode.CounterHeapCopyTypedView, Counters: []typeddecode.Counter{typeddecode.CounterOffsetsHeapCopyTypedView, typeddecode.CounterValuesHeapCopyTypedView}, Status: viewStatus}
 			return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Offsets: offsets, Values: values, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, HeapCopy: true, Class: class}, nil
 		}
 		if typedColumnUint32OffsetsListScratchFallbackAllowed(viewStatus) {
