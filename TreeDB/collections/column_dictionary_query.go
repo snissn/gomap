@@ -231,8 +231,8 @@ func (r *columnDictionaryCodeGroupCountRunner) run(view columnPhysicalScanSnapsh
 	} else {
 		for assetIdx, asset := range r.assets {
 			predicates := &r.predicateAssets[assetIdx]
+			rows += len(asset.codes)
 			for rowIdx, code := range asset.codes {
-				rows++
 				if !predicates.matches(rowIdx) {
 					continue
 				}
