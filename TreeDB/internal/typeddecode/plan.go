@@ -278,6 +278,28 @@ func validateDirectViewCertification(layout columnlayout.Capabilities, cert type
 	return DirectStatus()
 }
 
+func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn) Status {
+	if !cert.DirectViewCertified {
+		return StreamingStatus(ReasonNotWriterCertified, "column lacks writer-certified offsets-list direct-view contract")
+	}
+	if cert.Compression != typedcolumn.CompressionNone {
+		return UnsupportedStatus(ReasonCompressed, fmt.Sprintf("compression=%s", cert.Compression))
+	}
+	if cert.NullMaskPresent || cert.DefaultMaskPresent || cert.NullCount != 0 || cert.DefaultCount != 0 {
+		return UnsupportedStatus(ReasonNullableWrapper, "null/default masks must be separate from offsets-list direct view")
+	}
+	if cert.Endian != typedcolumn.ColumnPartLayoutEndianLittle {
+		return StreamingStatus(ReasonWrongEndian, fmt.Sprintf("endian=%s", cert.Endian))
+	}
+	if cert.ElementSize != 4 || cert.Alignment <= 0 || cert.Alignment < 4 || cert.LengthMultiple <= 0 || cert.LengthMultiple%4 != 0 || cert.FixedWidthElements != 0 {
+		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d alignment=%d length_multiple=%d fixed_width_elements=%d", cert.ElementSize, cert.Alignment, cert.LengthMultiple, cert.FixedWidthElements))
+	}
+	if cap := layout.Supports(columnlayout.OpAdjacencyDirectView); !cap.Supported() {
+		return statusFromLayoutCapability(cap)
+	}
+	return DirectStatus()
+}
+
 // Float32ScalarPlan selects a direct-view candidate only for writer-certified
 // native raw little-endian float32 scalar sections. Raw-int64 compatibility
 // carriers for logical float32 remain non-native fallback layouts.
@@ -342,10 +364,12 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
 }
 
-// AdjacencyOffsetsListPlan records the #1901 v1 adjacency primitive identity:
-// little-endian uint64 offsets plus little-endian uint32 values. #1915 adds the
-// safe writer/fallback reader; unsafe direct-view candidates remain deferred.
+// AdjacencyOffsetsListPlan selects a direct-view candidate only for writer-
+// certified raw_uint32_offsets_list adjacency sections: little-endian uint64
+// offsets plus little-endian uint32 values. Graph/search/runtime consumption is
+// deliberately left to fallback callers; this only certifies the primitive view.
 func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
 	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
 		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
 	}
@@ -357,8 +381,10 @@ func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) P
 		Nullable:    cert.NullMaskPresent || cert.NullCount != 0,
 		Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0,
 	})
-	cap := layout.Supports(columnlayout.OpAdjacencyDirectView)
-	return Plan{Path: PathUnsupported, Reason: statusFromLayoutCapability(cap).Reason, Message: cap.Error(), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
+	if status := validateOffsetsListDirectViewCertification(layout, cert); !status.Direct() {
+		return Plan{Path: status.Path, Reason: status.Reason, Message: status.Message, ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
+	}
+	return plan
 }
 
 // Uint32OffsetsListShapeRequest validates the #1914 primitive shape without
@@ -527,6 +553,23 @@ type DirectViewColumnRequest struct {
 	HasAssetOffset bool
 }
 
+// Uint32OffsetsListDirectViewRequest validates split offsets/value sections for
+// raw_uint32_offsets_list. OffsetsBytes is the uint64 offsets-section byte
+// length; ValuesBytes is the uint32 flattened values-section byte length.
+type Uint32OffsetsListDirectViewRequest struct {
+	Plan          Plan
+	Certification typedcolumn.ColumnPartLayoutContractColumn
+	Rows          int
+	OffsetsBytes  int
+	ValuesBytes   int
+	// AssetOffset is the absolute byte offset of the containing asset in its
+	// mapped storage segment. Direct-view eligibility checks
+	// AssetOffset+OffsetsSection.Offset against 8-byte alignment and
+	// AssetOffset+ValuesSection.Offset against 4-byte alignment.
+	AssetOffset    int64
+	HasAssetOffset bool
+}
+
 func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
 	if !req.Plan.DirectCandidate() {
 		return req.Plan.Status()
@@ -595,6 +638,85 @@ func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
 		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("block_payload=%d request_payload=%d", totalPayload, req.PayloadBytes))
 	}
 	return DirectStatus()
+}
+
+func ValidateUint32OffsetsListDirectView(req Uint32OffsetsListDirectViewRequest, offsets []uint64, values []uint32) Status {
+	if status := ValidateUint32OffsetsListDirectViewSections(req); !status.Direct() {
+		return status
+	}
+	if len(offsets) != req.offsetsCount() {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets=%d want row_count+1=%d", len(offsets), req.offsetsCount()))
+	}
+	if len(values) != req.valuesCount() {
+		return UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("values=%d want values_bytes/4=%d", len(values), req.valuesCount()))
+	}
+	return ValidateUint32OffsetsListShape(Uint32OffsetsListShapeRequest{Rows: req.Rows, Offsets: offsets, Values: uint64(len(values))})
+}
+
+func ValidateUint32OffsetsListDirectViewSections(req Uint32OffsetsListDirectViewRequest) Status {
+	if !req.Plan.DirectCandidate() {
+		return req.Plan.Status()
+	}
+	cert := req.Certification
+	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return UnsupportedStatus(ReasonValidationFailed, fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList))
+	}
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: cert.Compression, Nullable: cert.NullMaskPresent || cert.NullCount != 0, Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0})
+	if status := validateOffsetsListDirectViewCertification(layout, cert); !status.Direct() {
+		return status
+	}
+	if !mappedresource.NativeLittleEndian() {
+		return StreamingStatus(ReasonWrongEndian, "raw_uint32_offsets_list direct view requires little-endian host")
+	}
+	if req.Rows < 0 || cert.Rows != req.Rows {
+		return StreamingStatus(ReasonRowCountMismatch, fmt.Sprintf("cert_rows=%d request_rows=%d", cert.Rows, req.Rows))
+	}
+	if req.Rows == int(^uint(0)>>1) {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, "row_count+1 offsets byte count overflow")
+	}
+	wantOffsets, ok := checkedMul3(req.Rows+1, 8, 1)
+	if !ok {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, "row_count+1 offsets byte count overflow")
+	}
+	if req.OffsetsBytes != cert.OffsetsSection.Length || req.OffsetsBytes != cert.OffsetsBytes {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("offsets_bytes=%d section_length=%d contract_offsets_bytes=%d", req.OffsetsBytes, cert.OffsetsSection.Length, cert.OffsetsBytes))
+	}
+	if req.OffsetsBytes != wantOffsets {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets_bytes=%d want (rows+1)*8=%d", req.OffsetsBytes, wantOffsets))
+	}
+	if req.ValuesBytes != cert.ValuesSection.Length || req.ValuesBytes != cert.ValuesBytes {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("values_bytes=%d section_length=%d contract_values_bytes=%d", req.ValuesBytes, cert.ValuesSection.Length, cert.ValuesBytes))
+	}
+	if req.ValuesBytes < 0 || req.ValuesBytes%4 != 0 {
+		return UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("values_bytes=%d want multiple of 4", req.ValuesBytes))
+	}
+	if cert.OffsetsSection.Offset%8 != 0 {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("offsets section_offset=%d alignment=8", cert.OffsetsSection.Offset))
+	}
+	if cert.ValuesSection.Offset%4 != 0 {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("values section_offset=%d alignment=4", cert.ValuesSection.Offset))
+	}
+	if status := validateAbsoluteDirectViewOffset(req.HasAssetOffset, req.AssetOffset, cert.OffsetsSection.Offset, 8, "offsets"); !status.Direct() {
+		return status
+	}
+	if status := validateAbsoluteDirectViewOffset(req.HasAssetOffset, req.AssetOffset, cert.ValuesSection.Offset, 4, "values"); !status.Direct() {
+		return status
+	}
+	return DirectStatus()
+}
+
+func (req Uint32OffsetsListDirectViewRequest) offsetsCount() int {
+	if req.Rows < 0 || req.Rows == int(^uint(0)>>1) {
+		return -1
+	}
+	return req.Rows + 1
+}
+
+func (req Uint32OffsetsListDirectViewRequest) valuesCount() int {
+	if req.ValuesBytes < 0 || req.ValuesBytes%4 != 0 {
+		return -1
+	}
+	return req.ValuesBytes / 4
 }
 
 func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
@@ -741,6 +863,21 @@ func Uint32View(mgr *mappedresource.Manager, h *mappedresource.Handle, opts Reso
 	return validateViewLen(view, opts.ExpectedElements, err)
 }
 
+func Uint64View(mgr *mappedresource.Manager, h *mappedresource.Handle, opts ResourceViewOptions) ([]uint64, Status) {
+	status := validateHandle(h, mappedresource.SourceMapped, opts.RequireMapped)
+	if !status.Direct() {
+		return nil, status
+	}
+	var view []uint64
+	var err error
+	if mgr != nil {
+		view, err = mgr.Uint64View(h)
+	} else {
+		view, err = mappedresource.Uint64View(h.Bytes())
+	}
+	return validateViewLen(view, opts.ExpectedElements, err)
+}
+
 // Float32ByteView validates and exposes immutable bytes as []float32 without a
 // mappedresource handle. Callers are responsible for tying the byte slice to an
 // explicit lifetime; handle-backed optimized paths should prefer Float32View,
@@ -756,6 +893,14 @@ func Float32ByteView(raw []byte, opts ResourceViewOptions) ([]float32, Status) {
 // AdjacencyListView.
 func Uint32ByteView(raw []byte, opts ResourceViewOptions) ([]uint32, Status) {
 	view, err := mappedresource.Uint32View(raw)
+	return validateViewLen(view, opts.ExpectedElements, err)
+}
+
+// Uint64ByteView validates and exposes immutable bytes as []uint64 without a
+// mappedresource handle. Callers are responsible for tying the byte slice to an
+// explicit lifetime; handle-backed optimized paths should prefer Uint64View.
+func Uint64ByteView(raw []byte, opts ResourceViewOptions) ([]uint64, Status) {
+	view, err := mappedresource.Uint64View(raw)
 	return validateViewLen(view, opts.ExpectedElements, err)
 }
 
@@ -805,6 +950,28 @@ func AdjacencyListView(mgr *mappedresource.Manager, h *mappedresource.Handle, re
 		return nil, status
 	}
 	return Uint32View(mgr, h, opts)
+}
+
+func Uint32OffsetsListView(mgr *mappedresource.Manager, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, req Uint32OffsetsListDirectViewRequest, opts ResourceViewOptions) ([]uint64, []uint32, Status) {
+	if status := ValidateUint32OffsetsListDirectViewSections(req); !status.Direct() {
+		return nil, nil, status
+	}
+	offsetsOpts := opts
+	offsetsOpts.ExpectedElements = req.offsetsCount()
+	valuesOpts := opts
+	valuesOpts.ExpectedElements = req.valuesCount()
+	offsets, status := Uint64View(mgr, offsetsHandle, offsetsOpts)
+	if !status.Direct() {
+		return nil, nil, status
+	}
+	values, status := Uint32View(mgr, valuesHandle, valuesOpts)
+	if !status.Direct() {
+		return nil, nil, status
+	}
+	if status := ValidateUint32OffsetsListDirectView(req, offsets, values); !status.Direct() {
+		return nil, nil, status
+	}
+	return offsets, values, DirectStatus()
 }
 
 func normalizeFixedWidthViewOptions(req DirectViewColumnRequest, opts ResourceViewOptions) (ResourceViewOptions, Status) {

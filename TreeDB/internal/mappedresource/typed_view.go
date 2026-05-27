@@ -11,6 +11,8 @@ var nativeLittleEndian = func() bool {
 	return *(*byte)(unsafe.Pointer(&value)) == 1
 }()
 
+func NativeLittleEndian() bool { return nativeLittleEndian }
+
 var (
 	ErrDirectViewNilHandle      = errors.New("mappedresource: nil handle")
 	ErrDirectViewReleasedHandle = errors.New("mappedresource: handle is released")
@@ -104,6 +106,18 @@ func Uint32View(data []byte) ([]uint32, error) {
 	return unsafe.Slice((*uint32)(unsafe.Pointer(unsafe.SliceData(data))), count), nil
 }
 
+// Uint64View exposes bytes as []uint64 after validation.
+func Uint64View(data []byte) ([]uint64, error) {
+	count, err := ValidateDirectView(data, DirectViewOptions{ElementSize: unsafe.Sizeof(uint64(0)), Alignment: unsafe.Alignof(uint64(0)), TypeName: "uint64", RequireLittleEndian: true})
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	return unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(data))), count), nil
+}
+
 // Int64View records direct-view success/failure in addition to validating.
 func (m *Manager) Int64View(h *Handle) ([]int64, error) {
 	data, err := liveHandleBytes(h)
@@ -148,6 +162,18 @@ func (m *Manager) Uint32View(h *Handle) ([]uint32, error) {
 		return nil, err
 	}
 	view, err := Uint32View(data)
+	m.recordDirectView(err)
+	return view, err
+}
+
+// Uint64View records direct-view success/failure in addition to validating.
+func (m *Manager) Uint64View(h *Handle) ([]uint64, error) {
+	data, err := liveHandleBytes(h)
+	if err != nil {
+		m.recordDirectView(err)
+		return nil, err
+	}
+	view, err := Uint64View(data)
 	m.recordDirectView(err)
 	return view, err
 }

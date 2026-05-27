@@ -260,7 +260,7 @@ func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing certified neighbors column")
 	}
-	if certColumn.OffsetsBytes != offsetsSection.Length || certColumn.ValuesBytes != valuesSection.Length || certColumn.DirectViewCertified {
+	if certColumn.OffsetsBytes != offsetsSection.Length || certColumn.ValuesBytes != valuesSection.Length || !certColumn.DirectViewCertified {
 		t.Fatalf("certified offsets-list column=%+v", certColumn)
 	}
 	for i, block := range certColumn.Blocks {

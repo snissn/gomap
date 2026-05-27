@@ -523,10 +523,11 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		// adjacency direct views are deferred to #1901 for the active #1886 stack.
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4}
 	case EncodingRawUint32OffsetsList:
-		// The fallback primitive is sectioned into uint64 offsets and uint32 values.
-		// Unsafe direct views remain deferred to #1916, so this records endian and
-		// value element identity without direct-view certification.
-		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4}
+		// The primitive is sectioned into uint64 offsets and uint32 values. The
+		// shared element identity is the value width; direct-view validation checks
+		// offsets-section (8-byte) and values-section (4-byte) alignment separately.
+		direct := def.Compression == CompressionNone && logicalType == "adjacency_list" && def.Type == ColumnTypeAdjacencyList && def.FixedWidthElements == 0
+		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 		streaming := def.Compression == CompressionNone && logicalType == "int64"
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}
@@ -660,8 +661,8 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 	if contract.ElementSize != expectedLayout.elementSize || contract.Alignment != expectedLayout.alignment || contract.Endian != expectedLayout.endian || contract.LengthMultiple != expectedLayout.lengthMultiple {
 		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list element/alignment/endian/length=(%d,%d,%s,%d) want (%d,%d,%s,%d)", columnDesc.Name, contract.ElementSize, contract.Alignment, contract.Endian, contract.LengthMultiple, expectedLayout.elementSize, expectedLayout.alignment, expectedLayout.endian, expectedLayout.lengthMultiple)
 	}
-	if contract.DirectViewCertified || contract.StreamingCertified || contract.StatsCertified || contract.PruningCertified {
-		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list capability flags direct=%v streaming=%v stats=%v pruning=%v want false", columnDesc.Name, contract.DirectViewCertified, contract.StreamingCertified, contract.StatsCertified, contract.PruningCertified)
+	if contract.DirectViewCertified != expectedLayout.direct || contract.StreamingCertified != expectedLayout.streaming || contract.StatsCertified != expectedLayout.stats || contract.PruningCertified != expectedLayout.pruning {
+		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list capability flags direct=%v streaming=%v stats=%v pruning=%v want direct=%v streaming=%v stats=%v pruning=%v", columnDesc.Name, contract.DirectViewCertified, contract.StreamingCertified, contract.StatsCertified, contract.PruningCertified, expectedLayout.direct, expectedLayout.streaming, expectedLayout.stats, expectedLayout.pruning)
 	}
 	if contract.Dictionary || contract.DictionarySection != (ColumnPartLayoutContractSection{}) {
 		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list dictionary metadata present", columnDesc.Name)
@@ -717,6 +718,17 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 	}
 	if contract.NullCount != nullCount || contract.DefaultCount != defaultCount || contract.NullMaskPresent || contract.DefaultMaskPresent || nullCount != 0 || defaultCount != 0 {
 		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list null/default counts=(%d,%d) flags=(%v,%v)", columnDesc.Name, contract.NullCount, contract.DefaultCount, contract.NullMaskPresent, contract.DefaultMaskPresent)
+	}
+	if contract.DirectViewCertified {
+		if contract.Endian != ColumnPartLayoutEndianLittle || contract.Compression != CompressionNone {
+			return fmt.Errorf("typedcolumn: layout contract column %s offsets-list direct-view endian/compression=(%s,%s)", columnDesc.Name, contract.Endian, contract.Compression)
+		}
+		if offsetsSection.Offset%8 != 0 || valuesSection.Offset%4 != 0 {
+			return fmt.Errorf("typedcolumn: layout contract column %s offsets-list direct-view alignment offsets=%d values=%d", columnDesc.Name, offsetsSection.Offset, valuesSection.Offset)
+		}
+		if offsetsSection.Length != expectedOffsetsBytes || valuesSection.Length%4 != 0 {
+			return fmt.Errorf("typedcolumn: layout contract column %s offsets-list direct-view length offsets=%d/%d values=%d", columnDesc.Name, offsetsSection.Length, expectedOffsetsBytes, valuesSection.Length)
+		}
 	}
 	return nil
 }

@@ -394,6 +394,140 @@ func TestUint32OffsetsListShapeValidation1914(t *testing.T) {
 	}
 }
 
+func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
+	cert := testAdjacencyOffsetsListSpecCert(2, 2)
+	plan := AdjacencyOffsetsListPlan(cert)
+	if !plan.DirectCandidate() {
+		t.Fatalf("plan=%+v want direct candidate", plan)
+	}
+	req := Uint32OffsetsListDirectViewRequest{Plan: plan, Certification: cert, Rows: 2, OffsetsBytes: 24, ValuesBytes: 8, AssetOffset: 0, HasAssetOffset: true}
+	offsetsRaw := alignedBytes(8, 24)
+	for i, v := range []uint64{0, 2, 2} {
+		binary.LittleEndian.PutUint64(offsetsRaw[i*8:], v)
+	}
+	valuesRaw := alignedBytes(4, 8)
+	for i, v := range []uint32{7, 8} {
+		binary.LittleEndian.PutUint32(valuesRaw[i*4:], v)
+	}
+	mgr := mappedresource.NewManager()
+	offsetsHandle, err := mgr.AcquireBytes(testKeyWithPart(191601, int64(len(offsetsRaw))), testScope(), mappedresource.SourceMapped, offsetsRaw, mappedresource.AcquireOptions{Reason: "offsets-list offsets"})
+	if err != nil {
+		t.Fatalf("AcquireBytes offsets: %v", err)
+	}
+	valuesHandle, err := mgr.AcquireBytes(testKeyWithPart(191602, int64(len(valuesRaw))), testScope(), mappedresource.SourceMapped, valuesRaw, mappedresource.AcquireOptions{Reason: "offsets-list values"})
+	if err != nil {
+		t.Fatalf("AcquireBytes values: %v", err)
+	}
+	offsets, values, status := Uint32OffsetsListView(mgr, offsetsHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true})
+	if !status.Direct() {
+		t.Fatalf("view status=%+v want direct", status)
+	}
+	if !equalUint64s(offsets, []uint64{0, 2, 2}) || !equalUint32s(values, []uint32{7, 8}) {
+		t.Fatalf("offsets=%v values=%v", offsets, values)
+	}
+	if stats := mgr.Stats(); stats.DirectViewSuccesses != 2 || stats.DirectViewFailures != 0 {
+		t.Fatalf("stats=%+v want two mmap direct-view successes", stats)
+	}
+
+	heapHandle, err := mgr.AcquireBytes(testKeyWithPart(191603, int64(len(offsetsRaw))), testScope(), mappedresource.SourceHeapCopy, offsetsRaw, mappedresource.AcquireOptions{Reason: "offsets-list heap"})
+	if err != nil {
+		t.Fatalf("AcquireBytes heap: %v", err)
+	}
+	if _, _, status := Uint32OffsetsListView(mgr, heapHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true}); status.Reason != ReasonHandleSourceUnsupported {
+		t.Fatalf("heap status=%+v want %s", status, ReasonHandleSourceUnsupported)
+	}
+	if stats := mgr.Stats(); stats.DirectViewSuccesses != 2 {
+		t.Fatalf("heap-copy typed view counted as mmap direct success: stats=%+v", stats)
+	}
+
+	misalignedOffsets := alignedBytes(8, len(offsetsRaw)+1)[1 : len(offsetsRaw)+1]
+	misalignedHandle, err := mgr.AcquireBytes(testKeyWithPart(191604, int64(len(misalignedOffsets))), testScope(), mappedresource.SourceMapped, misalignedOffsets, mappedresource.AcquireOptions{Reason: "offsets-list misaligned offsets"})
+	if err != nil {
+		t.Fatalf("AcquireBytes misaligned offsets: %v", err)
+	}
+	if _, _, status := Uint32OffsetsListView(mgr, misalignedHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true}); status.Reason != ReasonActualPointerUnaligned {
+		t.Fatalf("misaligned status=%+v want %s", status, ReasonActualPointerUnaligned)
+	}
+}
+
+func TestAdjacencyOffsetsListDirectViewFailsClosed(t *testing.T) {
+	base := testAdjacencyOffsetsListSpecCert(2, 2)
+	plan := AdjacencyOffsetsListPlan(base)
+	if !plan.DirectCandidate() {
+		t.Fatalf("base plan=%+v", plan)
+	}
+	planCases := []struct {
+		name string
+		edit func(*typedcolumn.ColumnPartLayoutContractColumn)
+		want Reason
+	}{
+		{name: "missing_cert", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DirectViewCertified = false }, want: ReasonNotWriterCertified},
+		{name: "wrong_logical", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.LogicalType = "int64" }, want: ReasonValidationFailed},
+		{name: "wrong_type", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Type = typedcolumn.ColumnTypeInt64 }, want: ReasonValidationFailed},
+		{name: "wrong_encoding", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Encoding = typedcolumn.EncodingRawUint32Dense }, want: ReasonValidationFailed},
+		{name: "wrong_endian", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) {
+			c.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
+		}, want: ReasonWrongEndian},
+		{name: "compressed", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Compression = typedcolumn.CompressionSnappy }, want: ReasonCompressed},
+		{name: "nullable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.NullMaskPresent = true; c.NullCount = 1 }, want: ReasonNullableWrapper},
+		{name: "defaultable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.DefaultMaskPresent = true; c.DefaultCount = 1 }, want: ReasonNullableWrapper},
+	}
+	for _, tc := range planCases {
+		t.Run("plan_"+tc.name, func(t *testing.T) {
+			cert := cloneDirectViewCert(base)
+			tc.edit(&cert)
+			if got := AdjacencyOffsetsListPlan(cert); got.Reason != tc.want {
+				t.Fatalf("plan=%+v want reason %s", got, tc.want)
+			}
+		})
+	}
+
+	validReq := Uint32OffsetsListDirectViewRequest{Plan: plan, Certification: base, Rows: 2, OffsetsBytes: 24, ValuesBytes: 8, AssetOffset: 0, HasAssetOffset: true}
+	validOffsets := []uint64{0, 1, 2}
+	validValues := []uint32{10, 20}
+	if status := ValidateUint32OffsetsListDirectView(validReq, validOffsets, validValues); !status.Direct() {
+		t.Fatalf("valid status=%+v", status)
+	}
+	validationCases := []struct {
+		name    string
+		req     Uint32OffsetsListDirectViewRequest
+		offsets []uint64
+		values  []uint32
+		want    Reason
+	}{
+		{name: "row_count", req: func() Uint32OffsetsListDirectViewRequest { r := validReq; r.Rows = 3; return r }(), offsets: validOffsets, values: validValues, want: ReasonRowCountMismatch},
+		{name: "offsets_length", req: func() Uint32OffsetsListDirectViewRequest { r := validReq; r.OffsetsBytes = 16; return r }(), offsets: validOffsets, values: validValues, want: ReasonPayloadLengthMismatch},
+		{name: "values_length_multiple", req: func() Uint32OffsetsListDirectViewRequest {
+			r := validReq
+			r.ValuesBytes = 7
+			r.Certification.ValuesBytes = 7
+			r.Certification.ValuesSection.Length = 7
+			return r
+		}(), offsets: validOffsets, values: validValues, want: ReasonValuesLengthMismatch},
+		{name: "offsets_absolute_alignment", req: func() Uint32OffsetsListDirectViewRequest {
+			r := validReq
+			r.Certification.OffsetsSection.Offset = 4
+			return r
+		}(), offsets: validOffsets, values: validValues, want: ReasonAbsoluteOffsetUnaligned},
+		{name: "values_absolute_alignment", req: func() Uint32OffsetsListDirectViewRequest {
+			r := validReq
+			r.Certification.ValuesSection.Offset = 26
+			return r
+		}(), offsets: validOffsets, values: validValues, want: ReasonAbsoluteOffsetUnaligned},
+		{name: "missing_asset_offset", req: func() Uint32OffsetsListDirectViewRequest { r := validReq; r.HasAssetOffset = false; return r }(), offsets: validOffsets, values: validValues, want: ReasonAbsoluteOffsetUnaligned},
+		{name: "offsets_start", req: validReq, offsets: []uint64{1, 1, 2}, values: validValues, want: ReasonOffsetsStartMismatch},
+		{name: "offsets_non_monotonic", req: validReq, offsets: []uint64{0, 2, 1}, values: validValues, want: ReasonOffsetsNonMonotonic},
+		{name: "final_offset", req: validReq, offsets: []uint64{0, 1, 3}, values: validValues, want: ReasonValuesLengthMismatch},
+	}
+	for _, tc := range validationCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if status := ValidateUint32OffsetsListDirectView(tc.req, tc.offsets, tc.values); status.Reason != tc.want {
+				t.Fatalf("status=%+v want %s", status, tc.want)
+			}
+		})
+	}
+}
+
 func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 	cert := testAdjacencyDirectCert(2, 2)
 	plan := AdjacencyListPlan(cert, 2)
@@ -407,8 +541,8 @@ func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 
 	offsetsCert := testAdjacencyOffsetsListSpecCert(2, 3)
 	offsetsPlan := AdjacencyOffsetsListPlan(offsetsCert)
-	if offsetsPlan.DirectCandidate() || offsetsPlan.Reason != ReasonDirectViewDeferred || offsetsPlan.ElementsPerRow != 0 {
-		t.Fatalf("offsets-list plan=%+v want explicit variable-list deferred non-direct", offsetsPlan)
+	if !offsetsPlan.DirectCandidate() || offsetsPlan.ElementsPerRow != 0 {
+		t.Fatalf("offsets-list plan=%+v want explicit variable-list direct candidate", offsetsPlan)
 	}
 	if offsetsPlan.ElementSize != 4 || offsetsPlan.Alignment != 4 {
 		t.Fatalf("offsets-list plan=%+v want uint32 value identity", offsetsPlan)
@@ -565,6 +699,30 @@ func cloneDirectViewCert(cert typedcolumn.ColumnPartLayoutContractColumn) typedc
 	return cert
 }
 
+func equalUint64s(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalUint32s(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func testFloat32ScalarDirectCert(rows int) typedcolumn.ColumnPartLayoutContractColumn {
 	bytes := rows * 4
 	return typedcolumn.ColumnPartLayoutContractColumn{
@@ -604,7 +762,16 @@ func testAdjacencyDirectCert(rows, degree int) typedcolumn.ColumnPartLayoutContr
 func testAdjacencyOffsetsListSpecCert(rows, values int) typedcolumn.ColumnPartLayoutContractColumn {
 	return typedcolumn.ColumnPartLayoutContractColumn{
 		Name: "neighbors", LogicalType: "adjacency_list", Type: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone,
-		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: (rows+1)*8 + values*4}, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: false,
+		Rows:                rows,
+		OffsetsSection:      typedcolumn.ColumnPartLayoutContractSection{Offset: 0, Length: (rows + 1) * 8},
+		ValuesSection:       typedcolumn.ColumnPartLayoutContractSection{Offset: (rows + 1) * 8, Length: values * 4},
+		OffsetsBytes:        (rows + 1) * 8,
+		ValuesBytes:         values * 4,
+		ElementSize:         4,
+		Alignment:           4,
+		Endian:              typedcolumn.ColumnPartLayoutEndianLittle,
+		LengthMultiple:      4,
+		DirectViewCertified: true,
 	}
 }
 

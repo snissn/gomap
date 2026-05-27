@@ -86,7 +86,24 @@ func TestDirectTypedViewsAcceptAlignedRanges(t *testing.T) {
 		t.Fatalf("Float64View len=%d err=%v", len(f64), err)
 	}
 
-	if stats := mgr.Stats(); stats.DirectViewSuccesses != 4 || stats.DirectViewFailures != 0 {
+	u64Bytes := alignedBytes(16, int(unsafe.Alignof(uint64(0))))
+	binary.LittleEndian.PutUint64(u64Bytes[0:8], uint64(19))
+	binary.LittleEndian.PutUint64(u64Bytes[8:16], uint64(23))
+	key.Length = int64(len(u64Bytes))
+	u64Handle, err := mgr.AcquireBytes(key, scope, SourceMapped, u64Bytes, AcquireOptions{Reason: "u64"})
+	if err != nil {
+		t.Fatalf("AcquireBytes u64: %v", err)
+	}
+	defer u64Handle.Release()
+	u64, err := mgr.Uint64View(u64Handle)
+	if err != nil {
+		t.Fatalf("Uint64View: %v", err)
+	}
+	if len(u64) != 2 || u64[0] != 19 || u64[1] != 23 {
+		t.Fatalf("Uint64View=%v", u64)
+	}
+
+	if stats := mgr.Stats(); stats.DirectViewSuccesses != 5 || stats.DirectViewFailures != 0 {
 		t.Fatalf("direct view stats=%+v", stats)
 	}
 }
