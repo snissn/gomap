@@ -1499,6 +1499,12 @@ func TestColumnAssetReachabilityRewriteSegmentPrefixPaddingIsKnown1895(t *testin
 	if plan.Segments.BytesProtected != 33 || plan.Segments.BytesReclaimable != 16 || plan.RewriteDebtBytes != 16 {
 		t.Fatalf("segment bytes protected=%d reclaimable=%d rewrite=%d want protected=33 reclaimable=16 rewrite=16", plan.Segments.BytesProtected, plan.Segments.BytesReclaimable, plan.RewriteDebtBytes)
 	}
+	if len(plan.SegmentEntries) != 1 || plan.SegmentEntries[0].UnknownBytes != 0 || plan.SegmentEntries[0].Status != ColumnAssetReachabilitySegmentMixed {
+		t.Fatalf("segment entries=%+v want mixed with no unknown padding bytes", plan.SegmentEntries)
+	}
+	if plan.Refs.BytesProtected != seed.Length+first.Length || plan.Refs.BytesReclaimable != second.Length {
+		t.Fatalf("ref bytes=%+v want payload-only ref accounting", plan.Refs)
+	}
 }
 
 func TestColumnAssetReachabilityDirectViewPaddingWindowDoesNotHideLargeGaps1895(t *testing.T) {
