@@ -430,11 +430,21 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewReader1916(t *testing.T) {
 }
 
 func TestTypedColumnAdapterUint32OffsetsListDuplicateSectionsFailClosed1916(t *testing.T) {
-	_, _, image, offsetsSection, _, _, _ := typedColumnAdapterOffsetsListDirectFixture(t)
-	duplicate := image
-	duplicate.Sections = append(append([]typedcolumn.ColumnPartImageSection(nil), image.Sections...), offsetsSection)
-	if _, _, ok := typedColumnAdapterColumnOffsetsListSections(duplicate, "neighbors"); ok {
-		t.Fatalf("duplicate offsets-list sections unexpectedly selected")
+	_, _, image, offsetsSection, valuesSection, _, _ := typedColumnAdapterOffsetsListDirectFixture(t)
+	for _, tc := range []struct {
+		name    string
+		section typedcolumn.ColumnPartImageSection
+	}{
+		{name: "offsets", section: offsetsSection},
+		{name: "values", section: valuesSection},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			duplicate := image
+			duplicate.Sections = append(append([]typedcolumn.ColumnPartImageSection(nil), image.Sections...), tc.section)
+			if _, _, ok := typedColumnAdapterColumnOffsetsListSections(duplicate, "neighbors"); ok {
+				t.Fatalf("duplicate %s offsets-list sections unexpectedly selected", tc.name)
+			}
+		})
 	}
 }
 
