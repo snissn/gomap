@@ -291,8 +291,11 @@ func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities
 	if cert.Endian != typedcolumn.ColumnPartLayoutEndianLittle {
 		return MaterializeStatus(ReasonWrongEndian, fmt.Sprintf("endian=%s", cert.Endian))
 	}
-	if cert.ElementSize != 4 || cert.Alignment <= 0 || cert.Alignment < 4 || cert.LengthMultiple <= 0 || cert.LengthMultiple%4 != 0 {
-		return MaterializeStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d alignment=%d length_multiple=%d", cert.ElementSize, cert.Alignment, cert.LengthMultiple))
+	if cert.ElementSize != 4 || cert.Alignment <= 0 || cert.Alignment < 4 {
+		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("element_size=%d alignment=%d", cert.ElementSize, cert.Alignment))
+	}
+	if cert.LengthMultiple <= 0 || cert.LengthMultiple%4 != 0 {
+		return MaterializeStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("length_multiple=%d", cert.LengthMultiple))
 	}
 	if cert.FixedWidthElements != 0 {
 		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("fixed_width_elements=%d want variable-width offsets list", cert.FixedWidthElements))

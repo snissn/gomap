@@ -368,10 +368,12 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.Layout.Endian = EndianLittle
 		caps.Layout.AlignmentBytes = 4
 		caps.Layout.LengthMultipleBytes = 4
-		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
+		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList && desc.FixedWidthElements == 0 {
 			caps.DirectView = directView(desc, 4, EndianLittle, 4)
 			caps.DirectView.Lifetime = "caller-owned prepared/session offsets and values resource handles"
 			caps.DirectView.ValidationBoundary = "prepare_and_offsets_values_read"
+		} else if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
+			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
 		} else {
 			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
 		}
@@ -474,6 +476,9 @@ func (c Capabilities) Supports(op Operation) Capability {
 					return Unsupported(op, ReasonFixedWidthElementsRequired, "dense adjacency layouts require positive fixed_width_elements/adjacency_degree")
 				}
 			case typedcolumn.EncodingRawUint32OffsetsList:
+				if c.Descriptor.FixedWidthElements != 0 {
+					return Unsupported(op, ReasonEncodingPhysicalMismatch, "raw_uint32_offsets_list adjacency layouts require fixed_width_elements=0")
+				}
 				if op != OpAdjacencyDirectView {
 					return Unsupported(op, ReasonAdjacencyOffsetsListRuntimeDeferred, "raw_uint32_offsets_list graph/search runtime integration is deferred to #1917+")
 				}

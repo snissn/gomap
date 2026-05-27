@@ -478,6 +478,8 @@ func TestAdjacencyOffsetsListDirectViewFailsClosed(t *testing.T) {
 		{name: "wrong_endian", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) {
 			c.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
 		}, want: ReasonWrongEndian, wantPath: PathMaterialize},
+		{name: "wrong_element_size", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.ElementSize = 8 }, want: ReasonDimensionMismatch, wantPath: PathMaterialize},
+		{name: "wrong_length_multiple", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.LengthMultiple = 6 }, want: ReasonLengthMultipleMismatch, wantPath: PathMaterialize},
 		{name: "fixed_width_elements", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.FixedWidthElements = 2 }, want: ReasonDimensionMismatch, wantPath: PathMaterialize},
 		{name: "compressed", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.Compression = typedcolumn.CompressionSnappy }, want: ReasonCompressed, wantPath: PathUnsupported},
 		{name: "nullable", edit: func(c *typedcolumn.ColumnPartLayoutContractColumn) { c.NullMaskPresent = true; c.NullCount = 1 }, want: ReasonNullableWrapper, wantPath: PathUnsupported},

@@ -250,6 +250,15 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	if cap := offsetsAdjacency.Supports(OpAdjacencyTraversal); cap.Supported() || cap.Reason != ReasonAdjacencyOffsetsListRuntimeDeferred {
 		t.Fatalf("offsets-list traversal cap=%+v want runtime deferred", cap)
 	}
+	offsetsAdjacencyWithFixedWidth := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone, FixedWidthElements: 2})
+	if offsetsAdjacencyWithFixedWidth.DirectView.Eligible || offsetsAdjacencyWithFixedWidth.DirectView.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("offsets-list fixed-width direct=%+v want %s", offsetsAdjacencyWithFixedWidth.DirectView, ReasonEncodingPhysicalMismatch)
+	}
+	for _, op := range []Operation{OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
+		if cap := offsetsAdjacencyWithFixedWidth.Supports(op); cap.Supported() || cap.Reason != ReasonEncodingPhysicalMismatch {
+			t.Fatalf("offsets-list fixed-width %s cap=%+v want %s", op, cap, ReasonEncodingPhysicalMismatch)
+		}
+	}
 	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
 		if cap := adjacency.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
 			t.Fatalf("adjacency semantic scalar %s cap=%+v want %s", op, cap, ReasonAdjacencyScalarUnsupported)
