@@ -17,6 +17,11 @@ func TestTypedColumnAdjacencyOffsetsListReopen1915(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open DB: %v", err)
 	}
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
 	cfg := &ColumnStoreConfig{
 		Enabled:         true,
 		RetainedPayload: ColumnRetainedPayloadNonColumn,
@@ -53,6 +58,7 @@ func TestTypedColumnAdjacencyOffsetsListReopen1915(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	d = nil
 
 	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {

@@ -543,7 +543,7 @@ little-endian identity, and separate section metadata/checksums for offsets
 (8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
 fallback reader into owned Go slices; unsafe direct-view readers,
 adapter-to-column_graph wiring, and graph search consumption remain deferred to
-#1916+.
+issue #1916 and later.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
