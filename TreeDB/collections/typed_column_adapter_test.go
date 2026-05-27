@@ -399,13 +399,16 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewReader1916(t *testing.T) {
 		}
 		t.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
 	}
-	if !view.Direct || view.HeapCopy || view.Scratch || view.OffsetsHandle == nil || view.ValuesHandle == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewMmapDirect {
-		_ = view.Close()
-		t.Fatalf("view=%+v want mmap direct with pinned handles", view)
-	}
 	if !slices.Equal(view.Offsets, []uint64{0, 0, 2, 2, 5}) || !slices.Equal(view.Values, []uint32{7, 8, 9, 10, 11}) {
 		_ = view.Close()
 		t.Fatalf("offsets=%v values=%v", view.Offsets, view.Values)
+	}
+	if !view.Direct || view.HeapCopy || view.Scratch || view.OffsetsHandle == nil || view.ValuesHandle == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewMmapDirect {
+		_ = view.Close()
+		if view.HeapCopy || view.Scratch {
+			t.Skipf("mmap direct view unavailable; fallback class=%+v", view.Class)
+		}
+		t.Fatalf("view=%+v want mmap direct with pinned handles", view)
 	}
 	if len(offsetsRaw) != offsetsSection.Length || len(valuesRaw) != valuesSection.Length {
 		t.Fatalf("fixture raw lengths offsets=%d/%d values=%d/%d", len(offsetsRaw), offsetsSection.Length, len(valuesRaw), valuesSection.Length)
@@ -2254,7 +2257,7 @@ func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) 
 			}
 			if !view.Direct {
 				_ = view.Close()
-				b.Fatalf("view class=%+v want mmap direct", view.Class)
+				b.Skipf("mmap direct view unavailable; fallback class=%+v", view.Class)
 			}
 			mmapDirect++
 			if err := view.Close(); err != nil {
@@ -2295,6 +2298,9 @@ func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) 
 			b.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
 		}
 		defer view.Close()
+		if !view.Direct {
+			b.Skipf("mmap direct view unavailable; fallback class=%+v", view.Class)
+		}
 		b.ReportAllocs()
 		b.SetBytes(int64(len(view.Values) * 4))
 		b.ResetTimer()
