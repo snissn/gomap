@@ -46,6 +46,9 @@ func typedColumnAdapterCapability(column typedColumnAdapterColumn, op columnsema
 	if err != nil {
 		return columnsemantics.Unsupported(op, columnsemantics.ReasonUnknownLogicalType, err.Error()), err
 	}
+	if op == columnsemantics.OpAdjacencyDirectPayload && typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported(column) {
+		return columnsemantics.Supported(op), nil
+	}
 	return columnsemantics.CapabilityFor(desc, op), nil
 }
 

@@ -24,7 +24,7 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values, dictionaries, and dictionary codes are not string direct-view payloads. |
-| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` primitive direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; column_graph/search consumption is deferred to #1917+. |
+| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` primitive direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support, and #1917 wires that reader through the adapter. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; column_graph/search consumption remains separate follow-up work. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
@@ -72,7 +72,8 @@ valid.
 | --- | --- | --- |
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
-| `typed_column_part` | `adjacency_list` consumers | `raw_uint32_offsets_list` is the selected #1901 v1 primitive and has safe writer/fallback-reader plus certified primitive direct-view support; legacy dense fixed-degree `raw_uint32_dense` remains fallback/compatibility. |
+| `typed_column_part` | adapter `adjacency_list` offsets-list consumer | `raw_uint32_offsets_list` is active for variable adjacency reads with safe writer/fallback-reader plus certified primitive direct-view support. |
+| `typed_column_part` | column_graph adjacency consumer or legacy dense adjacency | Graph/search consumption and legacy fixed-degree `raw_uint32_dense` remain fallback/deferred compatibility paths. |
 | physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
@@ -171,8 +172,9 @@ payloads, variable-width varint/delta/double-delta layouts, physical row assets,
 and legacy dense adjacency direct views are fallback-only or deferred unless a
 future issue adds a new explicit encoding and conformance row. For adjacency,
 that explicit row is `raw_uint32_offsets_list`; #1915 enables the safe
-writer/fallback reader and #1916 enables the primitive direct-view reader, while
-column_graph/search runtime consumption remains deferred to #1917+.
+writer/fallback reader, #1916 enables the primitive direct-view reader, and
+#1917 wires that reader through adapter scans; column_graph/search runtime
+consumption remains separate follow-up work.
 
 ## Old/non-certified behavior
 
@@ -214,7 +216,7 @@ hardware, rows, dimensions, `ns/op`, ops/sec, `B/op`, `allocs/op`,
 direct/fallback counters, padding bytes, storage bytes, mapped bytes, decoded
 bytes, and hot-loop allocs.
 
-Later #1917+ PRs that claim adjacency search speedups must also define
+Later graph/search PRs that claim adjacency search speedups must also define
 permanent primitive microbenchmarks for fallback decode, direct-view
 prepare/open, and per-row offsets-list iteration, then graph benchmarks for
 serial no-doc, serial full-doc, serial exclude-embedding, parallel graph-only,

@@ -130,7 +130,7 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 			},
 		},
 		{
-			name:     "adjacency_list",
+			name:     "adjacency_list_dense_compatibility",
 			field:    semanticAdjacencyField("neighbors"),
 			logical:  columnsemantics.LogicalAdjacencyList,
 			physical: typedcolumn.ColumnTypeAdjacencyList,
@@ -144,6 +144,19 @@ func TestTypedColumnAdapterSemanticConformanceMatrix(t *testing.T) {
 				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
 				{op: columnsemantics.OpMin, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
 				{op: columnsemantics.OpMax, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
+			},
+		},
+		{
+			name:     "adjacency_list_offsets_list_adapter",
+			field:    semanticAdjacencyOffsetsListField("neighbors_offsets"),
+			logical:  columnsemantics.LogicalAdjacencyList,
+			physical: typedcolumn.ColumnTypeAdjacencyList,
+			encoding: typedcolumn.EncodingRawUint32OffsetsList,
+			checks: []capabilityCheck{
+				{op: columnsemantics.OpCountRows, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpAdjacencyDirectPayload, status: columnsemantics.StatusSupported, reason: columnsemantics.ReasonSupported},
+				{op: columnsemantics.OpOrderedRange, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
+				{op: columnsemantics.OpSum, status: columnsemantics.StatusUnsupported, reason: columnsemantics.ReasonAdjacencyScalarOperationUnsupported},
 			},
 		},
 	}

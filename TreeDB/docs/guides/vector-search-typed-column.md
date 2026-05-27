@@ -17,7 +17,7 @@ changes.
 | Document title/body/source text | Retained document / residual payload | Usually needed only after top-k; keep flexible. |
 | Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
 | Vector graph/ANN data | `derived_accelerator` | It accelerates search but is not the authoritative owner of the embedding field. |
-| Fixed-degree adjacency list | fallback/deferred for direct views in the active stack | Dense little-endian `uint32` payload bytes are supported as a format fixture, but certified adjacency mmap direct views are deferred to #1901; nullable/missing adjacency remains fail-closed. |
+| Adjacency list | adapter direct/fallback path for explicit offsets-list; dense compatibility remains fallback | Dense fixed-degree `uint32` payload bytes remain compatibility/fallback. `adjacency_layout: "uint32_offsets_list"` selects variable adjacency with certified adapter direct reads; graph/search consumption remains separate follow-up work. |
 
 Best practice: keep vector payloads out of retained JSON for search-heavy
 workloads when the typed-column vector section is the intended search data plane.

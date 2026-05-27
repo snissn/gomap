@@ -101,7 +101,7 @@ func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 		{ValueType: ColumnStoreValueDouble, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Reason: "default compatibility carrier stores raw int64 float64 bit patterns; fixed_width_encoding little_endian selects native raw_float64"},
 		{ValueType: ColumnStoreValueString, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Reason: "stored as dictionary codes with dictionary section metadata"},
 		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Reason: "stored as fixed-dim dense little-endian float32 sections"},
-		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections by default; explicit adjacency_layout uint32_offsets_list selects the #1915 safe offsets-list writer/fallback reader"},
+		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections by default; explicit adjacency_layout uint32_offsets_list selects the variable offsets-list writer/fallback/direct reader"},
 	}
 }
 
@@ -115,6 +115,14 @@ func typedColumnAdapterMappingForValueType(valueType ColumnStoreValueType) (type
 		}
 	}
 	return typedColumnAdapterTypeMapping{ValueType: valueType, Status: typedColumnAdapterFailClosed, Reason: "unknown declared value type"}, fmt.Errorf("%w: %s", errTypedColumnAdapterUnsupportedType, valueType)
+}
+
+func typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported(column typedColumnAdapterColumn) bool {
+	return column.Field.ValueType == ColumnStoreValueAdjacencyList &&
+		!column.Field.Nullable &&
+		column.Definition.Encoding == typedcolumn.EncodingRawUint32OffsetsList &&
+		column.Definition.Compression == typedcolumn.CompressionNone &&
+		column.Definition.FixedWidthElements == 0
 }
 
 func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColumn, error) {
@@ -201,6 +209,12 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	case ColumnStoreValueAdjacencyList:
 		switch field.AdjacencyLayout {
 		case ColumnAdjacencyListLayoutUint32OffsetsList:
+			if field.AdjacencyDegree != 0 {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: adjacency_list adjacency_degree=%d must be zero for adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyDegree, field.AdjacencyLayout)
+			}
+			if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+				return typedColumnAdapterColumn{}, fmt.Errorf("%w: adjacency_list fixed_width_encoding is unsupported for adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
+			}
 			def.Encoding = typedcolumn.EncodingRawUint32OffsetsList
 			def.FixedWidthElements = 0
 		case ColumnAdjacencyListLayoutFixedDense:

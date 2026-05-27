@@ -542,8 +542,9 @@ count, exact offsets/value byte lengths, Go `int` range before slicing,
 little-endian identity, and separate section metadata/checksums for offsets
 (8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
 fallback reader into owned Go slices; #1916 adds certified primitive direct-view
-readers for paired offsets/value handles. Adapter-to-column_graph wiring and
-graph search consumption remain deferred to issue #1917 and later.
+readers for paired offsets/value handles, and #1917 wires that variable adjacency
+reader through typed-column adapters. Adapter-to-column_graph wiring and graph
+search consumption remain separate follow-up work.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -618,8 +619,8 @@ staged and fail-closed. Authoritative dense `adjacency_list` typed-column fields
 must be non-nullable, must declare positive `adjacency_degree`, and must fail
 closed when any source row length, schema descriptor, or asset payload length
 disagrees with that fixed degree. The offsets-list selector is also non-nullable,
-must not declare `adjacency_degree`, and uses the #1915 concrete encoding for
-safe publication/reopen/fallback reconstruction.
+must not declare `adjacency_degree`, and uses the #1915/#1916 concrete encoding
+for safe publication/reopen/fallback reconstruction and adapter direct reads.
 
 ## 8. Commit-Log Segment Format
 

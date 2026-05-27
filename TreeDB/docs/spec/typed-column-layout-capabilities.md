@@ -34,7 +34,7 @@ not just encodings. A key includes:
 | `double` | `float64` + `raw_float64` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Legacy fixed-width little-endian dense fallback/compatibility payload bytes. Direct-view certification remains deferred; this is not the #1901 v1 target. Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
-| `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | #1915/#1916-selected v1 variable-list primitive selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication and certified primitive direct-view readers are enabled; column_graph adapter wiring and graph search consumption remain deferred to #1917+. |
+| `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | #1915/#1916-selected v1 variable-list primitive selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication and certified primitive direct-view readers are enabled through the adapter; column_graph/search consumption remains separate follow-up work. |
 
 Nullable/default wrappers expose null and default-mask dependencies separately
 from carrier-value capabilities. Value predicates and aggregates over nullable
@@ -149,7 +149,7 @@ example `layout_variable_width_no_direct_view`,
 `layout_adjacency_direct_view_deferred` for legacy dense adjacency,
 `layout_adjacency_offsets_list_direct_view_deferred` for old/fallback diagnostics,
 and `layout_adjacency_offsets_list_runtime_deferred` for graph/search runtime
-consumption before #1917+.
+consumption before a dedicated graph/search consumer wires the adapter primitive.
 
 ## Future extension rules
 
@@ -171,7 +171,7 @@ New layouts should declare unsupported operations explicitly. Examples:
   adjacency traversal/metrics continue through decoded/fallback dense payloads;
   the #1901 v1 target is the distinct `raw_uint32_offsets_list` variable-list
   layout with `uint64` offsets and `uint32` values, whose safe writer/fallback
-  reader and certified primitive direct-view reader are available while
-  column_graph/search runtime consumption remains deferred to #1917+;
+  reader and certified primitive direct-view reader are available through the
+  adapter while column_graph/search runtime consumption remains separate follow-up work;
   vector/adjacency layouts reject scalar aggregate/range shortcuts unless a
   future issue implements and tests them through the shared substrate.
