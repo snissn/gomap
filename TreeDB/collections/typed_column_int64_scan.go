@@ -88,6 +88,14 @@ type TypedColumnInt64PredicateScanDiagnostics struct {
 	FastDecodeStreamingPlans       int
 	FastDecodeMaterializePlans     int
 	FastDecodeUnsupportedPlans     int
+	FastDecodeMmapDirectViews      int
+	FastDecodeHeapCopyTypedViews   int
+	FastDecodeScratchDecodes       int
+	FastDecodeStreamingFallbacks   int
+	FastDecodeCertificationFailure int
+	FastDecodeAbsoluteUnaligned    int
+	FastDecodeActualUnaligned      int
+	FastDecodeStaleHandles         int
 	DirectViewSuccesses            int
 	DirectViewFailures             int
 	KernelBlocks                   int
@@ -971,6 +979,14 @@ func addTypedColumnInt64PredicateAggregateDiagnostics(dst *TypedColumnInt64Predi
 	dst.FastDecodeStreamingPlans += src.FastDecodeStreamingPlans
 	dst.FastDecodeMaterializePlans += src.FastDecodeMaterializePlans
 	dst.FastDecodeUnsupportedPlans += src.FastDecodeUnsupportedPlans
+	dst.FastDecodeMmapDirectViews += src.FastDecodeMmapDirectViews
+	dst.FastDecodeHeapCopyTypedViews += src.FastDecodeHeapCopyTypedViews
+	dst.FastDecodeScratchDecodes += src.FastDecodeScratchDecodes
+	dst.FastDecodeStreamingFallbacks += src.FastDecodeStreamingFallbacks
+	dst.FastDecodeCertificationFailure += src.FastDecodeCertificationFailure
+	dst.FastDecodeAbsoluteUnaligned += src.FastDecodeAbsoluteUnaligned
+	dst.FastDecodeActualUnaligned += src.FastDecodeActualUnaligned
+	dst.FastDecodeStaleHandles += src.FastDecodeStaleHandles
 	dst.DirectViewSuccesses += src.DirectViewSuccesses
 	dst.DirectViewFailures += src.DirectViewFailures
 	dst.KernelBlocks += src.KernelBlocks

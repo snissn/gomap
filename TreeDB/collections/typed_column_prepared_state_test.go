@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
@@ -126,6 +128,54 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 	}
 	if vectorScalar.Capability.Status != columnsemantics.StatusUnsupported || vectorScalar.Capability.Reason != columnsemantics.ReasonVectorScalarOperationUnsupported {
 		t.Fatalf("vector scalar capability=%+v want #1843 unsupported scalar operation", vectorScalar.Capability)
+	}
+}
+
+func TestTypedColumnPreparedFastDecodeSourceCounters1896(t *testing.T) {
+	var diag TypedColumnInt64PredicateScanDiagnostics
+	recordTypedColumnInt64FastDecodePlan(&diag, typeddecode.Plan{Path: typeddecode.PathStreaming, Reason: typeddecode.ReasonNotWriterCertified})
+	if diag.FastDecodeStreamingPlans != 1 || diag.FastDecodeCertificationFailure != 1 || diag.FastDecodeFallbackReason != string(typeddecode.ReasonNotWriterCertified) {
+		t.Fatalf("streaming plan counters=%+v want certification streaming plan", diag)
+	}
+	recordTypedColumnInt64ScratchDecode(&diag, typeddecode.ReasonNotWriterCertified)
+	if diag.FastDecodeScratchDecodes != 1 || diag.FastDecodeStreamingFallbacks != 1 || diag.FastDecodeFallbackReason != string(typeddecode.ReasonNotWriterCertified) {
+		t.Fatalf("scratch counters=%+v want certification streaming fallback", diag)
+	}
+	recordTypedColumnInt64DirectViewStatus(&diag, typeddecode.StreamingStatus(typeddecode.ReasonAbsoluteOffsetUnaligned, "absolute"))
+	if diag.DirectViewFailures != 1 || diag.FastDecodeAbsoluteUnaligned != 1 || diag.FastDecodeStreamingFallbacks != 1 {
+		t.Fatalf("absolute counters=%+v want direct-view failure without scratch fallback", diag)
+	}
+	recordTypedColumnInt64ScratchDecode(&diag, typeddecode.ReasonAbsoluteOffsetUnaligned)
+	if diag.FastDecodeScratchDecodes != 2 || diag.FastDecodeStreamingFallbacks != 2 {
+		t.Fatalf("absolute scratch counters=%+v want streaming fallback", diag)
+	}
+	recordTypedColumnInt64DirectViewStatus(&diag, typeddecode.StreamingStatus(typeddecode.ReasonActualPointerUnaligned, "actual"))
+	if diag.DirectViewFailures != 2 || diag.FastDecodeActualUnaligned != 1 {
+		t.Fatalf("actual counters=%+v want actual pointer counter", diag)
+	}
+	recordTypedColumnInt64DirectViewStatus(&diag, typeddecode.UnsupportedStatus(typeddecode.ReasonStaleHandle, "stale"))
+	if diag.DirectViewFailures != 3 || diag.FastDecodeStaleHandles != 1 || diag.FastDecodeStreamingFallbacks != 2 {
+		t.Fatalf("stale counters=%+v want stale counter without fallback", diag)
+	}
+
+	mgr := mappedresource.NewManager()
+	h, err := mgr.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "counter", Generation: 1, PartID: 1, FileID: 1, Length: 8}, mappedresource.Scope{Kind: mappedresource.ScopePreparedQuery, ID: "counter", Namespace: "test"}, mappedresource.SourceMapped, make([]byte, 8), mappedresource.AcquireOptions{Reason: "counter"})
+	if err != nil {
+		t.Fatalf("AcquireBytes: %v", err)
+	}
+	defer func() { _ = h.Release() }()
+	recordTypedColumnInt64DirectViewStatusWithHandle(&diag, typeddecode.DirectStatus(), h)
+	if diag.DirectViewSuccesses != 1 || diag.FastDecodeMmapDirectViews != 1 || diag.FastDecodeHeapCopyTypedViews != 0 {
+		t.Fatalf("direct counters=%+v want one mmap direct view", diag)
+	}
+	heap, err := mgr.AcquireBytes(mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: "counter", Generation: 1, PartID: 2, FileID: 1, Length: 8}, mappedresource.Scope{Kind: mappedresource.ScopePreparedQuery, ID: "counter", Namespace: "test"}, mappedresource.SourceHeapCopy, make([]byte, 8), mappedresource.AcquireOptions{Reason: "counter heap"})
+	if err != nil {
+		t.Fatalf("AcquireBytes heap: %v", err)
+	}
+	defer func() { _ = heap.Release() }()
+	recordTypedColumnInt64DirectViewStatusWithHandle(&diag, typeddecode.DirectStatus(), heap)
+	if diag.DirectViewSuccesses != 2 || diag.FastDecodeMmapDirectViews != 1 || diag.FastDecodeHeapCopyTypedViews != 1 {
+		t.Fatalf("heap counters=%+v want separate heap-copy typed view", diag)
 	}
 }
 

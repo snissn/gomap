@@ -698,11 +698,15 @@ func TestTypedColumnInt64RawLayoutRoundTripReopenQuery(t *testing.T) {
 		t.Fatalf("prepared raw diagnostics=%+v want fast raw reducer without decoded heap copy", prepared.Diagnostics)
 	}
 	if typedColumnInt64DirectViewSupportedForTest() {
-		if prepared.Diagnostics.DirectViewSuccesses == 0 || prepared.Diagnostics.HeapCopyBytes != 0 {
-			t.Fatalf("prepared raw diagnostics=%+v want mmap direct-view reducer", prepared.Diagnostics)
+		if prepared.Diagnostics.DirectViewSuccesses == 0 || prepared.Diagnostics.FastDecodeMmapDirectViews == 0 || prepared.Diagnostics.FastDecodeHeapCopyTypedViews != 0 || prepared.Diagnostics.FastDecodeStreamingFallbacks != 0 || prepared.Diagnostics.HeapCopyBytes != 0 {
+			t.Fatalf("prepared raw diagnostics=%+v want mmap direct-view reducer with source counters", prepared.Diagnostics)
 		}
-	} else if prepared.Diagnostics.DirectViewFailures == 0 || prepared.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
-		t.Fatalf("prepared raw diagnostics=%+v want platform heap fallback without materialization", prepared.Diagnostics)
+	} else if prepared.Diagnostics.FastDecodeHeapCopyTypedViews > 0 {
+		if prepared.Diagnostics.DirectViewSuccesses == 0 || prepared.Diagnostics.FastDecodeScratchDecodes != 0 || prepared.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+			t.Fatalf("prepared raw diagnostics=%+v want platform heap typed-view fallback without scratch decode", prepared.Diagnostics)
+		}
+	} else if prepared.Diagnostics.DirectViewFailures == 0 || prepared.Diagnostics.FastDecodeStreamingFallbacks == 0 || prepared.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+		t.Fatalf("prepared raw diagnostics=%+v want platform streaming fallback without materialization", prepared.Diagnostics)
 	}
 	if session.prepareDiagnostics.DirectViewCertified == 0 || session.prepareDiagnostics.CertificationFailures != 0 {
 		t.Fatalf("prepare diagnostics=%+v want certified direct-view layout with no failures", session.prepareDiagnostics)
@@ -756,11 +760,15 @@ func TestTypedColumnInt64PreparedCertificationDiagnosticsAndClose(t *testing.T) 
 		t.Fatalf("hot diagnostics first=%+v second=%+v want no per-run metadata or heap decode", first.Diagnostics, second.Diagnostics)
 	}
 	if typedColumnInt64DirectViewSupportedForTest() {
-		if first.Diagnostics.DirectViewSuccesses == 0 || second.Diagnostics.DirectViewSuccesses == 0 || first.Diagnostics.HeapCopyBytes != 0 || second.Diagnostics.HeapCopyBytes != 0 {
-			t.Fatalf("hot diagnostics first=%+v second=%+v want mmap direct-view runs", first.Diagnostics, second.Diagnostics)
+		if first.Diagnostics.DirectViewSuccesses == 0 || second.Diagnostics.DirectViewSuccesses == 0 || first.Diagnostics.FastDecodeMmapDirectViews == 0 || second.Diagnostics.FastDecodeMmapDirectViews == 0 || first.Diagnostics.FastDecodeStreamingFallbacks != 0 || second.Diagnostics.FastDecodeStreamingFallbacks != 0 || first.Diagnostics.HeapCopyBytes != 0 || second.Diagnostics.HeapCopyBytes != 0 {
+			t.Fatalf("hot diagnostics first=%+v second=%+v want mmap direct-view runs with source counters", first.Diagnostics, second.Diagnostics)
 		}
-	} else if first.Diagnostics.DirectViewFailures == 0 || second.Diagnostics.DirectViewFailures == 0 || first.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) || second.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
-		t.Fatalf("hot diagnostics first=%+v second=%+v want platform heap fallback without materialization", first.Diagnostics, second.Diagnostics)
+	} else if first.Diagnostics.FastDecodeHeapCopyTypedViews > 0 || second.Diagnostics.FastDecodeHeapCopyTypedViews > 0 {
+		if first.Diagnostics.DirectViewSuccesses == 0 || second.Diagnostics.DirectViewSuccesses == 0 || first.Diagnostics.FastDecodeScratchDecodes != 0 || second.Diagnostics.FastDecodeScratchDecodes != 0 || first.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) || second.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+			t.Fatalf("hot diagnostics first=%+v second=%+v want platform heap typed-view fallback without scratch decode", first.Diagnostics, second.Diagnostics)
+		}
+	} else if first.Diagnostics.DirectViewFailures == 0 || second.Diagnostics.DirectViewFailures == 0 || first.Diagnostics.FastDecodeStreamingFallbacks == 0 || second.Diagnostics.FastDecodeStreamingFallbacks == 0 || first.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) || second.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonHandleSourceUnsupported) {
+		t.Fatalf("hot diagnostics first=%+v second=%+v want platform streaming fallback without materialization", first.Diagnostics, second.Diagnostics)
 	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -768,6 +776,114 @@ func TestTypedColumnInt64PreparedCertificationDiagnosticsAndClose(t *testing.T) 
 	if diag := session.Diagnostics(); !diag.Closed || diag.ActiveResourceHandles != 0 || diag.ActiveMappedBytes != 0 || diag.ActiveHeapCopyBytes != 0 {
 		t.Fatalf("session diagnostics after close=%+v want resources released", diag)
 	}
+}
+
+func TestTypedColumnInt64PreparedHeapCopyTypedViewCounters(t *testing.T) {
+	d, col := setupTypedColumnInt64RawScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	if err := session.readCache.close(); err != nil {
+		t.Fatalf("close prepared read cache before forced heap run: %v", err)
+	}
+	session.readCache.forceReadAtFallback = true
+	result, err := session.Run()
+	if err != nil {
+		t.Fatalf("Run forced heap-copy typed view: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 1, 2)
+	if result.Diagnostics.FastDecodeHeapCopyTypedViews == 0 || result.Diagnostics.FastDecodeMmapDirectViews != 0 || result.Diagnostics.FastDecodeScratchDecodes != 0 || result.Diagnostics.FastDecodeStreamingFallbacks != 0 || result.Diagnostics.HeapCopyBytes == 0 {
+		t.Fatalf("diagnostics=%+v want heap-copy typed view without mmap or scratch decode fallback", result.Diagnostics)
+	}
+}
+
+func TestTypedColumnInt64PreparedAbsoluteOffsetUnalignedFallsBack(t *testing.T) {
+	d, col := setupTypedColumnInt64RawScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1, 2, 3})
+	insertTypedColumnInt64ScanRows(t, col, []int64{4, 5, 6})
+
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
+	if err != nil {
+		if closeView != nil {
+			closeView()
+		}
+		t.Fatalf("prepareColumnPhysicalScanSnapshotViewWithSidecars: %v", err)
+	}
+	if len(view.TypedColumnPartRefs) < 2 {
+		if closeView != nil {
+			closeView()
+		}
+		t.Fatalf("typed refs=%+v want multi-asset typed-column parts", view.TypedColumnPartRefs)
+	}
+	unalignedRef := appendUnalignedTypedColumnAssetCopyForTest(t, d.ColumnAssetRootDir(), view.TypedColumnPartRefs[0].Ref)
+	for i := range view.TypedColumnPartRefs {
+		if view.TypedColumnPartRefs[i].Ref.Generation == unalignedRef.Generation {
+			view.TypedColumnPartRefs[i].Ref = unalignedRef
+		}
+	}
+
+	req := TypedColumnInt64PredicateAggregateRequest{Column: "time_us", Kind: TypedColumnInt64PredicateEqual, Value: 2, ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
+	session, _, err := col.prepareTypedColumnInt64PredicateAggregateSessionFromView(view, closeView, req)
+	if err != nil {
+		if closeView != nil {
+			closeView()
+		}
+		t.Fatalf("prepareTypedColumnInt64PredicateAggregateSessionFromView: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	result, err := session.Run()
+	if err != nil {
+		t.Fatalf("Run with unaligned absolute offset: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 1, 2)
+	if result.Diagnostics.FastDecodeAbsoluteUnaligned == 0 || result.Diagnostics.DirectViewFailures == 0 || result.Diagnostics.FastDecodeScratchDecodes == 0 || result.Diagnostics.FastDecodeStreamingFallbacks == 0 || result.Diagnostics.FastDecodeFallbackReason != string(typeddecode.ReasonAbsoluteOffsetUnaligned) {
+		t.Fatalf("diagnostics=%+v want absolute-offset unaligned direct-view fallback counters", result.Diagnostics)
+	}
+}
+
+func appendUnalignedTypedColumnAssetCopyForTest(t *testing.T, rootDir string, ref ColumnAssetRef) ColumnAssetRef {
+	t.Helper()
+	raw, err := readColumnPhysicalAssetFromManager(rootDir, ref)
+	if err != nil {
+		t.Fatalf("readColumnPhysicalAssetFromManager: %v", err)
+	}
+	path, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open segment append: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	offset, err := file.Seek(0, 2)
+	if err != nil {
+		t.Fatalf("seek segment end: %v", err)
+	}
+	if offset%8 == 0 {
+		if _, err := file.Write([]byte{0}); err != nil {
+			t.Fatalf("write unalignment padding: %v", err)
+		}
+		offset++
+	}
+	if offset%8 == 0 {
+		t.Fatalf("failed to choose unaligned offset=%d", offset)
+	}
+	if _, err := file.Write(raw); err != nil {
+		t.Fatalf("write duplicate typed-column asset: %v", err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatalf("sync duplicate typed-column asset: %v", err)
+	}
+	dup := ref
+	dup.Offset = offset
+	dup.Length = int64(len(raw))
+	return dup
 }
 
 func TestTypedColumnInt64PreparedStatsRoundTripReopen(t *testing.T) {
@@ -3156,6 +3272,14 @@ func reportTypedColumnInt64AggregateBenchMetrics(b *testing.B, totalRows int, di
 	b.ReportMetric(float64(diag.FastDecodeStreamingPlans), "fast_decode_streaming_plans/op")
 	b.ReportMetric(float64(diag.FastDecodeMaterializePlans), "fast_decode_materialize_plans/op")
 	b.ReportMetric(float64(diag.FastDecodeUnsupportedPlans), "fast_decode_unsupported_plans/op")
+	b.ReportMetric(float64(diag.FastDecodeMmapDirectViews), "mmap_direct_view/op")
+	b.ReportMetric(float64(diag.FastDecodeHeapCopyTypedViews), "heap_copy_typed_view/op")
+	b.ReportMetric(float64(diag.FastDecodeScratchDecodes), "scratch_decode/op")
+	b.ReportMetric(float64(diag.FastDecodeStreamingFallbacks), "streaming_fallback/op")
+	b.ReportMetric(float64(diag.FastDecodeCertificationFailure), "certification_failure/op")
+	b.ReportMetric(float64(diag.FastDecodeAbsoluteUnaligned), "absolute_offset_unaligned/op")
+	b.ReportMetric(float64(diag.FastDecodeActualUnaligned), "actual_pointer_unaligned/op")
+	b.ReportMetric(float64(diag.FastDecodeStaleHandles), "stale_handle/op")
 	b.ReportMetric(float64(diag.DirectViewSuccesses), "direct_view_successes/op")
 	b.ReportMetric(float64(diag.DirectViewFailures), "direct_view_failures/op")
 	b.ReportMetric(float64(diag.KernelBlocks), "kernel_blocks/op")

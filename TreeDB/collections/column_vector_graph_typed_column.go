@@ -28,6 +28,7 @@ type columnVectorGraphTypedColumnVectorSource struct {
 	heapCopyBytes       uint64
 	activeHandles       int64
 	deniedResources     uint64
+	closed              bool
 }
 
 type columnVectorGraphTypedColumnVectorLocation struct {
@@ -582,7 +583,7 @@ func (r *columnVectorGraphPhysicalRowReader) populateTypedColumnVectorSearchStat
 }
 
 func (s *columnVectorGraphTypedColumnVectorSource) vectorForOrdinal(ordinal int) ([]float32, bool, bool) {
-	if s == nil || ordinal < 0 || ordinal >= len(s.locations) || s.dims <= 0 {
+	if s == nil || s.closed || ordinal < 0 || ordinal >= len(s.locations) || s.dims <= 0 {
 		return nil, false, false
 	}
 	loc := s.locations[ordinal]
@@ -615,18 +616,28 @@ func (s *columnVectorGraphTypedColumnVectorSource) captureResourceStats() {
 }
 
 func (s *columnVectorGraphTypedColumnVectorSource) Close() error {
-	if s == nil {
+	if s == nil || s.closed {
 		return nil
 	}
+	s.closed = true
 	var closeErr error
 	for _, part := range s.parts {
-		if part == nil || part.handle == nil {
+		if part == nil {
 			continue
 		}
-		if err := part.handle.Release(); err != nil && closeErr == nil {
-			closeErr = err
+		if part.handle != nil {
+			if err := part.handle.Release(); err != nil && closeErr == nil {
+				closeErr = err
+			}
+			part.handle = nil
 		}
-		part.handle = nil
+		part.values = nil
+		part.direct = false
+		part.rows = 0
+	}
+	for i := range s.locations {
+		s.locations[i].part = nil
+		s.locations[i].rowIndex = 0
 	}
 	return closeErr
 }

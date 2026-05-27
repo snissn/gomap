@@ -156,6 +156,137 @@ func TestInt64DeltaPlanUsesStreamingNotDirectView(t *testing.T) {
 	}
 }
 
+func TestScalarFloatDirectViewPlansPreserveRawBitsAndValidateHandles(t *testing.T) {
+	cases := []struct {
+		name      string
+		bits      []uint64
+		cert      typedcolumn.ColumnPartLayoutContractColumn
+		plan      func(typedcolumn.ColumnPartLayoutContractColumn) Plan
+		put       func([]byte, uint64)
+		viewBits  func(*mappedresource.Manager, *mappedresource.Handle, DirectViewColumnRequest, int) ([]uint64, Status)
+		elemBytes int
+	}{
+		{
+			name:      "float32",
+			bits:      []uint64{0x00000000, 0x80000000, 0x7f800000, 0xff800000, 0x7f7fffff, 0xff7fffff, 0x7fc00001, 0x7fa12345},
+			cert:      testFloat32ScalarDirectCert(8),
+			plan:      Float32ScalarPlan,
+			put:       func(dst []byte, bits uint64) { binary.LittleEndian.PutUint32(dst, uint32(bits)) },
+			elemBytes: 4,
+			viewBits: func(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, want int) ([]uint64, Status) {
+				view, status := Float32ScalarView(mgr, h, req, ResourceViewOptions{ExpectedElements: want, RequireMapped: true})
+				out := make([]uint64, len(view))
+				for i, value := range view {
+					out[i] = uint64(math.Float32bits(value))
+				}
+				return out, status
+			},
+		},
+		{
+			name:      "float64",
+			bits:      []uint64{0x0000000000000000, 0x8000000000000000, 0x7ff0000000000000, 0xfff0000000000000, 0x7fefffffffffffff, 0xffefffffffffffff, 0x7ff8000000000001, 0x7ff123456789abcd},
+			cert:      testFloat64ScalarDirectCert(8),
+			plan:      Float64ScalarPlan,
+			put:       func(dst []byte, bits uint64) { binary.LittleEndian.PutUint64(dst, bits) },
+			elemBytes: 8,
+			viewBits: func(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, want int) ([]uint64, Status) {
+				view, status := Float64ScalarView(mgr, h, req, ResourceViewOptions{ExpectedElements: want, RequireMapped: true})
+				out := make([]uint64, len(view))
+				for i, value := range view {
+					out[i] = math.Float64bits(value)
+				}
+				return out, status
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := tc.plan(tc.cert)
+			if !plan.DirectCandidate() {
+				t.Fatalf("plan=%+v want direct candidate", plan)
+			}
+			req := DirectViewColumnRequest{Plan: plan, Certification: tc.cert, Rows: len(tc.bits), PayloadBytes: len(tc.bits) * tc.elemBytes, AssetOffset: 0, HasAssetOffset: true}
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				t.Fatalf("column status=%+v want direct", status)
+			}
+			raw := alignedBytes(tc.elemBytes, len(tc.bits)*tc.elemBytes)
+			for i, bits := range tc.bits {
+				tc.put(raw[i*tc.elemBytes:], bits)
+			}
+			mgr := mappedresource.NewManager()
+			h, err := mgr.AcquireBytes(testKeyWithPart(uint64(20+tc.elemBytes), int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: tc.name + " scalar direct view"})
+			if err != nil {
+				t.Fatalf("AcquireBytes: %v", err)
+			}
+			got, status := tc.viewBits(mgr, h, req, len(tc.bits))
+			if !status.Direct() {
+				t.Fatalf("view status=%+v want direct", status)
+			}
+			for i, bits := range tc.bits {
+				if got[i] != bits {
+					t.Fatalf("bits[%d]=0x%x want 0x%x", i, got[i], bits)
+				}
+			}
+			misalignedRaw := alignedBytes(tc.elemBytes, len(raw)+1)[1:]
+			mh, err := mgr.AcquireBytes(testKeyWithPart(uint64(40+tc.elemBytes), int64(len(misalignedRaw))), testScope(), mappedresource.SourceMapped, misalignedRaw, mappedresource.AcquireOptions{Reason: tc.name + " scalar misaligned"})
+			if err != nil {
+				t.Fatalf("AcquireBytes misaligned: %v", err)
+			}
+			if _, status := tc.viewBits(mgr, mh, req, len(tc.bits)); status.Reason != ReasonActualPointerUnaligned {
+				t.Fatalf("misaligned status=%+v want %s", status, ReasonActualPointerUnaligned)
+			}
+			_ = mh.Release()
+			if err := h.Release(); err != nil {
+				t.Fatalf("Release: %v", err)
+			}
+			if _, status := tc.viewBits(mgr, h, req, len(tc.bits)); status.Reason != ReasonStaleHandle {
+				t.Fatalf("stale status=%+v want %s", status, ReasonStaleHandle)
+			}
+		})
+	}
+}
+
+func TestScalarFloatDirectViewValidationRejectsFallbackLayouts(t *testing.T) {
+	cert := testFloat32ScalarDirectCert(2)
+	plan := Float32ScalarPlan(cert)
+	valid := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 8, AssetOffset: 0, HasAssetOffset: true}
+	if status := ValidateDirectViewColumn(valid); !status.Direct() {
+		t.Fatalf("valid status=%+v want direct", status)
+	}
+	wrongEndian := cloneDirectViewCert(cert)
+	wrongEndian.Endian = typedcolumn.ColumnPartLayoutEndianCodecDefined
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: Float32ScalarPlan(wrongEndian), Certification: wrongEndian, Rows: 2, PayloadBytes: 8, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonWrongEndian {
+		t.Fatalf("wrong endian status=%+v want %s", status, ReasonWrongEndian)
+	}
+	wrongRows := valid
+	wrongRows.Rows = 3
+	if status := ValidateDirectViewColumn(wrongRows); status.Reason != ReasonRowCountMismatch {
+		t.Fatalf("wrong rows status=%+v want %s", status, ReasonRowCountMismatch)
+	}
+	wrongDims := cloneDirectViewCert(cert)
+	wrongDims.FixedWidthElements = 1
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: Float32ScalarPlan(wrongDims), Certification: wrongDims, Rows: 2, PayloadBytes: 8, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonDimensionMismatch {
+		t.Fatalf("scalar dims status=%+v want %s", status, ReasonDimensionMismatch)
+	}
+	wrongLength := cloneDirectViewCert(cert)
+	wrongLength.Section.Length = 7
+	wrongLength.Blocks[0].PayloadLength = 7
+	wrongLength.Blocks[0].RawBytes = 7
+	wrongLength.Blocks[0].StoredBytes = 7
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: plan, Certification: wrongLength, Rows: 2, PayloadBytes: 7, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonLengthMultipleMismatch {
+		t.Fatalf("wrong length status=%+v want %s", status, ReasonLengthMultipleMismatch)
+	}
+	notCertified := cloneDirectViewCert(cert)
+	notCertified.DirectViewCertified = false
+	if status := ValidateDirectViewColumn(DirectViewColumnRequest{Plan: Float32ScalarPlan(notCertified), Certification: notCertified, Rows: 2, PayloadBytes: 8, AssetOffset: 0, HasAssetOffset: true}); status.Reason != ReasonNotWriterCertified {
+		t.Fatalf("missing cert status=%+v want %s", status, ReasonNotWriterCertified)
+	}
+	rawInt64Carrier := typedcolumn.ColumnPartLayoutContractColumn{Name: "score", LogicalType: "float32", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, Rows: 2, Section: typedcolumn.ColumnPartLayoutContractSection{Length: 16}, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true, Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{RowCount: 2, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: 16, StoredBytes: 16, PayloadLength: 16}}}
+	if rawPlan := Float32ScalarPlan(rawInt64Carrier); rawPlan.DirectCandidate() || rawPlan.Reason == ReasonSupported {
+		t.Fatalf("raw-int64 float carrier plan=%+v want non-native fallback/unsupported", rawPlan)
+	}
+}
+
 func TestDenseDirectViewBlockValidatesDimensionsAndLength(t *testing.T) {
 	cert := testFloat32VectorDirectCert(2, 4)
 	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 4, ElementsPerRow: 4, Alignment: 4, Rows: 2}
@@ -253,6 +384,24 @@ func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 func cloneDirectViewCert(cert typedcolumn.ColumnPartLayoutContractColumn) typedcolumn.ColumnPartLayoutContractColumn {
 	cert.Blocks = append([]typedcolumn.ColumnPartLayoutContractBlock(nil), cert.Blocks...)
 	return cert
+}
+
+func testFloat32ScalarDirectCert(rows int) typedcolumn.ColumnPartLayoutContractColumn {
+	bytes := rows * 4
+	return typedcolumn.ColumnPartLayoutContractColumn{
+		Name: "score32", LogicalType: "float32", Type: typedcolumn.ColumnTypeFloat32, Encoding: typedcolumn.EncodingRawFloat32, Compression: typedcolumn.CompressionNone,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: true,
+		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{FirstRow: 0, RowCount: rows, Encoding: typedcolumn.EncodingRawFloat32, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadOffset: 0, PayloadLength: bytes}},
+	}
+}
+
+func testFloat64ScalarDirectCert(rows int) typedcolumn.ColumnPartLayoutContractColumn {
+	bytes := rows * 8
+	return typedcolumn.ColumnPartLayoutContractColumn{
+		Name: "score64", LogicalType: "double", Type: typedcolumn.ColumnTypeFloat64, Encoding: typedcolumn.EncodingRawFloat64, Compression: typedcolumn.CompressionNone,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true,
+		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{FirstRow: 0, RowCount: rows, Encoding: typedcolumn.EncodingRawFloat64, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadOffset: 0, PayloadLength: bytes}},
+	}
 }
 
 func testFloat32VectorDirectCert(rows, dims int) typedcolumn.ColumnPartLayoutContractColumn {

@@ -220,10 +220,43 @@ func Int64ReducerPlan(layout columnlayout.Capabilities, cert typedcolumn.ColumnP
 }
 
 func validateDirectViewCertification(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn, elementSize int, elementsPerRow int) Status {
+	if status := validateDirectViewCertificationFields(cert, elementSize, elementsPerRow); !status.Direct() {
+		return status
+	}
 	if cap := layout.Supports(columnlayout.OpDirectView); !cap.Supported() {
 		return statusFromLayoutCapability(cap)
 	}
-	return validateDirectViewCertificationFields(cert, elementSize, elementsPerRow)
+	return DirectStatus()
+}
+
+// Float32ScalarPlan selects a direct-view candidate only for writer-certified
+// native raw little-endian float32 scalar sections. Raw-int64 compatibility
+// carriers for logical float32 remain non-native fallback layouts.
+func Float32ScalarPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:     columnsemantics.LogicalFloat32,
+		Physical:    typedcolumn.ColumnTypeFloat32,
+		Encoding:    cert.Encoding,
+		Compression: cert.Compression,
+		Nullable:    cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0,
+	})
+	return scalarDirectViewPlan(layout, cert, columnsemantics.LogicalFloat32, typedcolumn.ColumnTypeFloat32, typedcolumn.EncodingRawFloat32, 4)
+}
+
+// Float64ScalarPlan selects a direct-view candidate only for writer-certified
+// native raw little-endian float64/double scalar sections. Raw-int64
+// compatibility carriers for logical double remain non-native fallback layouts.
+func Float64ScalarPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:     columnsemantics.LogicalDouble,
+		Physical:    typedcolumn.ColumnTypeFloat64,
+		Encoding:    cert.Encoding,
+		Compression: cert.Compression,
+		Nullable:    cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0,
+	})
+	return scalarDirectViewPlan(layout, cert, columnsemantics.LogicalDouble, typedcolumn.ColumnTypeFloat64, typedcolumn.EncodingRawFloat64, 8)
 }
 
 // DenseFloat32VectorPlan selects a direct-view candidate only for writer-
@@ -257,6 +290,21 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 		FixedWidthElements: degree,
 	})
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
+}
+
+func scalarDirectViewPlan(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int) Plan {
+	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: elementSize, ElementsPerRow: 1, Alignment: elementSize, Rows: cert.Rows}
+	status := validateDirectViewCertification(layout, cert, elementSize, 1)
+	if !status.Direct() {
+		return Plan{Path: status.Path, Reason: status.Reason, Message: status.Message, ElementSize: elementSize, ElementsPerRow: 1, Alignment: elementSize, Rows: cert.Rows}
+	}
+	if cert.LogicalType != string(logical) {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical_type=%q want %q", cert.LogicalType, logical), ElementSize: elementSize, ElementsPerRow: 1, Alignment: elementSize, Rows: cert.Rows}
+	}
+	if cert.Type != physical || cert.Encoding != encoding {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("type/encoding=(%s,%s) want (%s,%s)", cert.Type, cert.Encoding, physical, encoding), ElementSize: elementSize, ElementsPerRow: 1, Alignment: elementSize, Rows: cert.Rows}
+	}
+	return plan
 }
 
 func denseDirectViewPlan(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int, elementsPerRow int) Plan {
@@ -293,11 +341,25 @@ func validateDirectViewCertificationFields(cert typedcolumn.ColumnPartLayoutCont
 	if cert.ElementSize != elementSize {
 		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("element_size=%d want %d", cert.ElementSize, elementSize))
 	}
-	if cert.FixedWidthElements != 0 && cert.FixedWidthElements != elementsPerRow {
-		return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("elements_per_row=%d want %d", cert.FixedWidthElements, elementsPerRow))
+	if status := validateFixedWidthElements(cert, elementsPerRow); !status.Direct() {
+		return status
 	}
 	if cert.Alignment <= 0 || cert.Alignment < elementSize || cert.LengthMultiple <= 0 || cert.LengthMultiple%elementSize != 0 {
 		return StreamingStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("alignment=%d length_multiple=%d element_size=%d", cert.Alignment, cert.LengthMultiple, elementSize))
+	}
+	return DirectStatus()
+}
+
+func validateFixedWidthElements(cert typedcolumn.ColumnPartLayoutContractColumn, elementsPerRow int) Status {
+	switch cert.Type {
+	case typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList:
+		if elementsPerRow <= 0 || cert.FixedWidthElements != elementsPerRow {
+			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("elements_per_row=%d want %d", cert.FixedWidthElements, elementsPerRow))
+		}
+	default:
+		if cert.FixedWidthElements != 0 {
+			return StreamingStatus(ReasonDimensionMismatch, fmt.Sprintf("fixed_width_elements=%d want scalar", cert.FixedWidthElements))
+		}
 	}
 	return DirectStatus()
 }
@@ -568,8 +630,8 @@ func Uint32View(mgr *mappedresource.Manager, h *mappedresource.Handle, opts Reso
 
 // Float32ByteView validates and exposes immutable bytes as []float32 without a
 // mappedresource handle. Callers are responsible for tying the byte slice to an
-// explicit lifetime; handle-backed optimized paths should prefer Float32View or
-// DenseFloat32VectorView.
+// explicit lifetime; handle-backed optimized paths should prefer Float32View,
+// Float32ScalarView, or DenseFloat32VectorView.
 func Float32ByteView(raw []byte, opts ResourceViewOptions) ([]float32, Status) {
 	view, err := mappedresource.Float32View(raw)
 	return validateViewLen(view, opts.ExpectedElements, err)
@@ -584,12 +646,36 @@ func Uint32ByteView(raw []byte, opts ResourceViewOptions) ([]uint32, Status) {
 	return validateViewLen(view, opts.ExpectedElements, err)
 }
 
+func Float32ScalarView(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, opts ResourceViewOptions) ([]float32, Status) {
+	status := ValidateDirectViewColumn(req)
+	if !status.Direct() {
+		return nil, status
+	}
+	opts, status = normalizeFixedWidthViewOptions(req, opts)
+	if !status.Direct() {
+		return nil, status
+	}
+	return Float32View(mgr, h, opts)
+}
+
+func Float64ScalarView(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, opts ResourceViewOptions) ([]float64, Status) {
+	status := ValidateDirectViewColumn(req)
+	if !status.Direct() {
+		return nil, status
+	}
+	opts, status = normalizeFixedWidthViewOptions(req, opts)
+	if !status.Direct() {
+		return nil, status
+	}
+	return Float64View(mgr, h, opts)
+}
+
 func DenseFloat32VectorView(mgr *mappedresource.Manager, h *mappedresource.Handle, req DirectViewColumnRequest, opts ResourceViewOptions) ([]float32, Status) {
 	status := ValidateDirectViewColumn(req)
 	if !status.Direct() {
 		return nil, status
 	}
-	opts, status = normalizeDenseViewOptions(req, opts)
+	opts, status = normalizeFixedWidthViewOptions(req, opts)
 	if !status.Direct() {
 		return nil, status
 	}
@@ -601,14 +687,14 @@ func AdjacencyListView(mgr *mappedresource.Manager, h *mappedresource.Handle, re
 	if !status.Direct() {
 		return nil, status
 	}
-	opts, status = normalizeDenseViewOptions(req, opts)
+	opts, status = normalizeFixedWidthViewOptions(req, opts)
 	if !status.Direct() {
 		return nil, status
 	}
 	return Uint32View(mgr, h, opts)
 }
 
-func normalizeDenseViewOptions(req DirectViewColumnRequest, opts ResourceViewOptions) (ResourceViewOptions, Status) {
+func normalizeFixedWidthViewOptions(req DirectViewColumnRequest, opts ResourceViewOptions) (ResourceViewOptions, Status) {
 	elementsPerRow := req.Plan.ElementsPerRow
 	if elementsPerRow <= 0 {
 		elementsPerRow = 1
