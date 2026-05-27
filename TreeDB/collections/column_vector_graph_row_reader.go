@@ -423,7 +423,7 @@ func (r *columnVectorGraphPhysicalRowReader) nativeGraphRowFromBlock(block *colu
 	scratch.Float32Values = scratch.Float32Values[:0]
 	scratch.Uint32Values = scratch.Uint32Values[:0]
 
-	vector, _, typedVectorOK := r.typedVectorForOrdinal(ordinal)
+	vector, _, _, typedVectorOK := r.typedVectorForOrdinal(ordinal)
 	if typedVectorOK {
 		if err := r.skipNativeGraphVector(&cur, block.version, ordinal); err != nil {
 			return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
@@ -608,7 +608,7 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(ro
 	if invNorm.Null || adjacency.Null {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
 	}
-	vectorValues, _, typedVectorOK := r.typedVectorForOrdinal(row.Ordinal)
+	vectorValues, _, _, typedVectorOK := r.typedVectorForOrdinal(row.Ordinal)
 	if !typedVectorOK {
 		if vector.Type != ColumnStoreValueFloat32Vector {
 			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph vector type: vector=%q", r.def.Name, row.Ordinal, vector.Type)

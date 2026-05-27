@@ -14,6 +14,28 @@ import (
 
 const columnVectorGraphTypedColumnVectorScopeID = "column-vector-graph-typed-column-vector"
 
+type columnVectorGraphTypedColumnVectorOutcome uint8
+
+const (
+	columnVectorGraphTypedColumnVectorOutcomeUnknown columnVectorGraphTypedColumnVectorOutcome = iota
+	columnVectorGraphTypedColumnVectorOutcomeMmapDirect
+	columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView
+	columnVectorGraphTypedColumnVectorOutcomeScratchDecode
+)
+
+func (o columnVectorGraphTypedColumnVectorOutcome) String() string {
+	switch o {
+	case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+		return "mmap_direct"
+	case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
+		return "heap_copy_typed_view"
+	case columnVectorGraphTypedColumnVectorOutcomeScratchDecode:
+		return "scratch_decode"
+	default:
+		return "unknown"
+	}
+}
+
 type columnVectorGraphTypedColumnVectorSource struct {
 	field  TypedStorageField
 	column typedColumnAdapterColumn
@@ -37,12 +59,13 @@ type columnVectorGraphTypedColumnVectorLocation struct {
 }
 
 type columnVectorGraphTypedColumnVectorPart struct {
-	generation uint64
-	partID     uint64
-	rows       int
-	values     []float32
-	direct     bool
-	handle     *mappedresource.Handle
+	generation     uint64
+	partID         uint64
+	rows           int
+	values         []float32
+	outcome        columnVectorGraphTypedColumnVectorOutcome
+	fallbackReason typeddecode.Reason
+	handle         *mappedresource.Handle
 }
 
 type columnVectorGraphTypedColumnPhysicalLocation struct {
@@ -344,21 +367,22 @@ func (c *Collection) loadColumnVectorGraphTypedColumnVectorPart(collection strin
 		return nil, 0, err
 	}
 	sectionChecksum := page.Checksum(sectionBytes)
-	values, handle, direct, scratchDecode, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, manager)
+	values, handle, outcome, fallbackReason, err := c.acquireColumnVectorGraphTypedColumnDenseVectorValues(collection, typedRef.Ref, image.Version, section, certColumn, sectionChecksum, typedRef.Rows, adapterColumn.Definition.FixedWidthElements, manager)
 	if err != nil {
 		return nil, 0, err
 	}
 	decodedBytes := uint64(image.ManifestBytes)
-	if scratchDecode {
+	if outcome == columnVectorGraphTypedColumnVectorOutcomeScratchDecode {
 		decodedBytes += uint64(len(values)) * 4
 	}
 	return &columnVectorGraphTypedColumnVectorPart{
-		generation: typedRef.Ref.Generation,
-		partID:     typedRef.Ref.PartID,
-		rows:       typedRef.Rows,
-		values:     values,
-		direct:     direct,
-		handle:     handle,
+		generation:     typedRef.Ref.Generation,
+		partID:         typedRef.Ref.PartID,
+		rows:           typedRef.Rows,
+		values:         values,
+		outcome:        outcome,
+		fallbackReason: fallbackReason,
+		handle:         handle,
 	}, decodedBytes, nil
 }
 
@@ -464,17 +488,17 @@ func columnVectorGraphTypedColumnDenseByteLen(rows, dims int) (int, error) {
 	return elements * 4, nil
 }
 
-func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, bool, bool, error) {
+func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collection string, ref ColumnAssetRef, imageVersion uint16, section typedcolumn.ColumnPartImageSection, certColumn typedcolumn.ColumnPartLayoutContractColumn, sectionChecksum uint32, rows, dims int, manager *mappedresource.Manager) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
 	if manager == nil {
-		return nil, nil, false, false, errors.New("nil mappedresource manager")
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", errors.New("nil mappedresource manager")
 	}
 	path, err := columnAssetSegmentPath(c.db.ColumnAssetRootDir(), ref)
 	if err != nil {
-		return nil, nil, false, false, err
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}
 	sectionOffset, err := columnVectorGraphTypedColumnSectionOffset(ref, section)
 	if err != nil {
-		return nil, nil, false, false, err
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}
 	key := mappedresource.Key{
 		Class:      mappedresource.ClassTypedColumnAsset,
@@ -497,35 +521,53 @@ func (c *Collection) acquireColumnVectorGraphTypedColumnDenseVectorValues(collec
 	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: columnVectorGraphTypedColumnVectorScopeID, Collection: collection, Namespace: ref.Namespace, Generation: ref.Generation, Reason: "column_graph typed-column vector source"}
 	handle, err := manager.AcquireFileRange(key, scope, path, mappedresource.AcquireOptions{Reason: "column_graph typed-column dense vector section", ValidationMode: mappedresource.ValidationVerify, PreferMapped: true, AllowHeapCopy: true})
 	if err != nil {
-		return nil, nil, false, false, err
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}
 	if err := validateColumnVectorGraphTypedColumnHandleChecksum(handle, sectionChecksum); err != nil {
 		_ = handle.Release()
-		return nil, nil, false, false, err
-	}
-	expectedElements, err := typedColumnAdapterDenseElements(rows, dims)
-	if err != nil {
-		_ = handle.Release()
-		return nil, nil, false, false, err
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
 	}
 	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
 	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: rows, PayloadBytes: section.Length, AssetOffset: int64(ref.Offset), HasAssetOffset: true}
+	return columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, directReq, rows, dims)
+}
+
+func columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, directReq typeddecode.DirectViewColumnRequest, rows, dims int) ([]float32, *mappedresource.Handle, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, error) {
+	expectedElements, err := typedColumnAdapterDenseElements(rows, dims)
+	if err != nil {
+		_ = handle.Release()
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", err
+	}
 	values, viewStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: true})
 	if viewStatus.Direct() {
-		return values, handle, true, false, nil
+		return values, handle, columnVectorGraphTypedColumnVectorOutcomeMmapDirect, "", nil
 	}
 	firstErr := fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String())
-	if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
+	fallbackReason := viewStatus.Reason
+	if viewStatus.Reason == typeddecode.ReasonHandleSourceUnsupported {
+		heapValues, heapStatus := typeddecode.DenseFloat32VectorView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: expectedElements, RequireMapped: false})
+		if heapStatus.Direct() {
+			return heapValues, handle, columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView, "", nil
+		}
+		fallbackReason = heapStatus.Reason
+		if !typedColumnDenseDecodeFallbackAllowed(heapStatus) {
+			_ = handle.Release()
+			return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, errors.Join(firstErr, fmt.Errorf("float32 dense vector heap typed-view validation: %s", heapStatus.String()))
+		}
+	} else if !typedColumnDenseDecodeFallbackAllowed(viewStatus) {
 		_ = handle.Release()
-		return nil, nil, false, false, errors.Join(firstErr, fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String()))
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, firstErr
 	}
 	bytes := handle.Bytes()
 	decoded, decodeErr := typedcolumn.DecodeRawFloat32VectorPayload(nil, bytes, rows, dims)
-	_ = handle.Release()
+	releaseErr := handle.Release()
 	if decodeErr != nil {
-		return nil, nil, false, false, errors.Join(firstErr, fmt.Errorf("float32 dense vector direct-view validation: %s", viewStatus.String()), decodeErr)
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, errors.Join(firstErr, decodeErr, releaseErr)
 	}
-	return decoded, nil, false, true, nil
+	if releaseErr != nil {
+		return nil, nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, fallbackReason, errors.Join(firstErr, releaseErr)
+	}
+	return decoded, nil, columnVectorGraphTypedColumnVectorOutcomeScratchDecode, fallbackReason, nil
 }
 
 func validateColumnVectorGraphTypedColumnHandleChecksum(handle *mappedresource.Handle, want uint32) error {
@@ -552,9 +594,9 @@ func columnVectorGraphTypedColumnSectionOffset(ref ColumnAssetRef, section typed
 	return ref.Offset + int64(section.Offset), nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) typedVectorForOrdinal(ordinal int) ([]float32, bool, bool) {
+func (r *columnVectorGraphPhysicalRowReader) typedVectorForOrdinal(ordinal int) ([]float32, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, bool) {
 	if r == nil || r.typedVectorSource == nil {
-		return nil, false, false
+		return nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", false
 	}
 	return r.typedVectorSource.vectorForOrdinal(ordinal)
 }
@@ -569,6 +611,7 @@ func (r *columnVectorGraphPhysicalRowReader) populateTypedColumnVectorSearchStat
 	}
 	if r.hasTypedColumnVectorFallback() {
 		stats.TypedColumnFallbacks = 1
+		stats.VectorCertificationFailures = 1
 		return
 	}
 	source := r.typedVectorSource
@@ -582,20 +625,20 @@ func (r *columnVectorGraphPhysicalRowReader) populateTypedColumnVectorSearchStat
 	stats.TypedColumnDeniedResources = source.deniedResources
 }
 
-func (s *columnVectorGraphTypedColumnVectorSource) vectorForOrdinal(ordinal int) ([]float32, bool, bool) {
+func (s *columnVectorGraphTypedColumnVectorSource) vectorForOrdinal(ordinal int) ([]float32, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, bool) {
 	if s == nil || s.closed || ordinal < 0 || ordinal >= len(s.locations) || s.dims <= 0 {
-		return nil, false, false
+		return nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", false
 	}
 	loc := s.locations[ordinal]
 	if loc.part == nil || loc.rowIndex < 0 || loc.rowIndex >= loc.part.rows {
-		return nil, false, false
+		return nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", false
 	}
 	start := loc.rowIndex * s.dims
 	end := start + s.dims
 	if start < 0 || end < start || end > len(loc.part.values) {
-		return nil, false, false
+		return nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, "", false
 	}
-	return loc.part.values[start:end], loc.part.direct, true
+	return loc.part.values[start:end], loc.part.outcome, loc.part.fallbackReason, true
 }
 
 func (s *columnVectorGraphTypedColumnVectorSource) captureResourceStats() {
@@ -632,7 +675,8 @@ func (s *columnVectorGraphTypedColumnVectorSource) Close() error {
 			part.handle = nil
 		}
 		part.values = nil
-		part.direct = false
+		part.outcome = columnVectorGraphTypedColumnVectorOutcomeUnknown
+		part.fallbackReason = ""
 		part.rows = 0
 	}
 	for i := range s.locations {

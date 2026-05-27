@@ -3,14 +3,17 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -69,19 +72,22 @@ func TestColumnVectorGraphTypedColumnVectorReaderParity1782(t *testing.T) {
 		t.Fatalf("SearchCosine: %v", err)
 	}
 	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
-	if stats.VectorDirectViews+stats.VectorScratchDecodes != stats.CandidateFetches {
-		t.Fatalf("stats=%+v want vector direct+scratch accounting to match candidate fetches", stats)
+	if stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes != stats.CandidateFetches {
+		t.Fatalf("stats=%+v want vector mmap+heap-copy+scratch accounting to match candidate fetches", stats)
+	}
+	if stats.AdjacencyMmapDirectViews != 0 || stats.AdjacencyHeapCopyTypedViews != 0 {
+		t.Fatalf("stats=%+v want adjacency direct-view counters to remain deferred/zero", stats)
 	}
 	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
-		if stats.VectorDirectViews == 0 {
+		if stats.VectorMmapDirectViews == 0 || stats.VectorDirectViews != stats.VectorMmapDirectViews || stats.VectorHeapCopyTypedViews != 0 {
 			t.Fatalf("stats=%+v want typed-column vector mmap direct views on valid dense section", stats)
 		}
-		if stats.TypedColumnMappedBytes == 0 || stats.TypedColumnActiveHandles == 0 || stats.TypedColumnFallbacks != 0 {
+		if stats.TypedColumnMappedBytes == 0 || stats.TypedColumnActiveHandles == 0 || stats.TypedColumnFallbacks != 0 || stats.VectorCertificationFailures != 0 {
 			t.Fatalf("stats=%+v want live mappedresource-backed typed-column source without fallback", stats)
 		}
 	} else {
-		if stats.VectorDirectViews != 0 || stats.VectorScratchDecodes == 0 || stats.TypedColumnDecodedBytes == 0 || stats.TypedColumnFallbacks != 0 {
-			t.Fatalf("stats=%+v want platform scratch fallback from typed-column source", stats)
+		if stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 || stats.TypedColumnFallbacks != 0 {
+			t.Fatalf("stats=%+v want non-mmap typed-column source fallback without row-asset fallback", stats)
 		}
 	}
 }
@@ -110,9 +116,9 @@ func TestColumnVectorGraphTypedColumnVectorCloseReleasesHandles1782(t *testing.T
 			_ = reader.Close()
 			t.Fatalf("stats before close=%+v want active typed-column mmap handles/bytes", stats)
 		}
-	} else if stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 || source.decodedDerivedBytes == 0 {
+	} else if stats.ActiveHandles == 0 && source.decodedDerivedBytes == 0 {
 		_ = reader.Close()
-		t.Fatalf("stats before close=%+v decoded=%d want released platform scratch fallback", stats, source.decodedDerivedBytes)
+		t.Fatalf("stats before close=%+v decoded=%d want active heap-copy typed view or scratch fallback evidence", stats, source.decodedDerivedBytes)
 	}
 	if err := reader.Close(); err != nil {
 		t.Fatalf("reader.Close: %v", err)
@@ -120,8 +126,8 @@ func TestColumnVectorGraphTypedColumnVectorCloseReleasesHandles1782(t *testing.T
 	if stats := source.manager.Stats(); stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHeapCopyBytes != 0 {
 		t.Fatalf("stats after close=%+v want released typed-column handles", stats)
 	}
-	if vector, direct, ok := source.vectorForOrdinal(0); ok || direct || vector != nil {
-		t.Fatalf("vectorForOrdinal after close vector=%v direct=%t ok=%t want no newly exposed stale slice", vector, direct, ok)
+	if vector, outcome, reason, ok := source.vectorForOrdinal(0); ok || outcome != columnVectorGraphTypedColumnVectorOutcomeUnknown || reason != "" || vector != nil {
+		t.Fatalf("vectorForOrdinal after close vector=%v outcome=%s reason=%s ok=%t want no newly exposed stale slice", vector, outcome, reason, ok)
 	}
 }
 
@@ -144,14 +150,11 @@ func TestColumnVectorGraphTypedColumnVectorPinKeyUsesTypedColumnAssetRef1782(t *
 		t.Fatalf("missing typed vector source")
 	}
 	pins := reader.typedVectorSource.manager.PinSummary()
-	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
-		if len(pins) != 0 {
-			t.Fatalf("pins=%d want none when platform cannot provide mmap direct views", len(pins))
-		}
-		return
-	}
-	if len(pins) == 0 {
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() && len(pins) == 0 {
 		t.Fatal("typed vector source has no mappedresource pins")
+	}
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() && len(pins) == 0 {
+		return
 	}
 	for _, pin := range pins {
 		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
@@ -206,11 +209,11 @@ func TestSearchVectorIndexTypedColumnVectorReopenGeneration1782(t *testing.T) {
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
 	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
-		if got.Stats.VectorDirectViews == 0 || got.Stats.TypedColumnMappedBytes == 0 || got.Stats.TypedColumnFallbacks != 0 {
+		if got.Stats.VectorMmapDirectViews == 0 || got.Stats.VectorDirectViews != got.Stats.VectorMmapDirectViews || got.Stats.TypedColumnMappedBytes == 0 || got.Stats.TypedColumnFallbacks != 0 {
 			t.Fatalf("stats=%+v want durable typed-column vector mmap direct reads after reopen", got.Stats)
 		}
-	} else if got.Stats.VectorDirectViews != 0 || got.Stats.VectorScratchDecodes == 0 || got.Stats.TypedColumnDecodedBytes == 0 || got.Stats.TypedColumnFallbacks != 0 {
-		t.Fatalf("stats=%+v want durable typed-column vector scratch fallback after reopen", got.Stats)
+	} else if got.Stats.VectorMmapDirectViews != 0 || got.Stats.VectorHeapCopyTypedViews+got.Stats.VectorScratchDecodes == 0 || got.Stats.TypedColumnFallbacks != 0 {
+		t.Fatalf("stats=%+v want durable typed-column vector non-mmap fallback after reopen", got.Stats)
 	}
 }
 
@@ -243,8 +246,8 @@ func TestColumnVectorGraphTypedColumnVectorCorruptPartFallsBack1782(t *testing.T
 		t.Fatalf("SearchCosine fallback: %v", err)
 	}
 	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
-	if stats.TypedColumnFallbacks != 1 || stats.VectorDirectViews != 0 || stats.VectorScratchDecodes == 0 {
-		t.Fatalf("stats=%+v want typed-column fallback to graph row vector scratch decodes", stats)
+	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 || stats.VectorCertificationFailures == 0 {
+		t.Fatalf("stats=%+v want typed-column certification fallback to graph row vector scratch decodes", stats)
 	}
 }
 
@@ -281,7 +284,7 @@ func TestColumnVectorGraphTypedColumnVectorNonColumnPartOwnerUsesGraphVectors178
 		t.Fatalf("SearchCosine non-column-part owner: %v", err)
 	}
 	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
-	if stats.TypedColumnFallbacks != 0 || stats.VectorDirectViews != 0 || stats.VectorScratchDecodes == 0 {
+	if stats.TypedColumnFallbacks != 0 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 || stats.VectorCertificationFailures != 0 {
 		t.Fatalf("stats=%+v want ordinary graph row vector scratch decodes", stats)
 	}
 }
@@ -496,7 +499,7 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFal
 	if !ok {
 		t.Fatalf("missing layout certification for %q", adapterColumn.Definition.Name)
 	}
-	values, handle, direct, scratchDecode, err := (&Collection{db: d}).acquireColumnVectorGraphTypedColumnDenseVectorValues("docs", ref, image.Version, section, certColumn, page.Checksum(sectionBytes), imageRows, 3, manager)
+	values, handle, outcome, fallbackReason, err := (&Collection{db: d}).acquireColumnVectorGraphTypedColumnDenseVectorValues("docs", ref, image.Version, section, certColumn, page.Checksum(sectionBytes), imageRows, 3, manager)
 	if err != nil {
 		t.Fatalf("acquire dense vector values: %v", err)
 	}
@@ -509,8 +512,8 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFal
 	if handle != nil {
 		handleSource = handle.Source()
 	}
-	if direct || !scratchDecode || handle != nil || handleSource != mappedresource.Source("<nil>") {
-		t.Fatalf("direct=%v scratchDecode=%v handle=%v source=%s want scratch fallback, not mmap direct view", direct, scratchDecode, handle != nil, handleSource)
+	if outcome != columnVectorGraphTypedColumnVectorOutcomeScratchDecode || fallbackReason != typeddecode.ReasonAbsoluteOffsetUnaligned || handle != nil || handleSource != mappedresource.Source("<nil>") {
+		t.Fatalf("outcome=%s reason=%s handle=%v source=%s want absolute-offset scratch fallback, not mmap direct view", outcome, fallbackReason, handle != nil, handleSource)
 	}
 	if !float32SlicesEqual1782(values[:3], []float32{1, 0, 0}) || !float32SlicesEqual1782(values[3:], []float32{0, 1, 0}) {
 		t.Fatalf("values=%v want row-major typed vectors", values)
@@ -522,6 +525,272 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFal
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() && stats.TotalHeapCopyBytes != uint64(section.Length) {
 		t.Fatalf("stats=%+v want one platform heap-copy fallback decode", stats)
 	}
+}
+
+func TestColumnVectorGraphTypedColumnVectorHeapCopyTypedViewCounters1898(t *testing.T) {
+	fixture := newColumnVectorGraphTypedColumnVectorViewFixture1898(t, 3, [][]float32{{1, 0, 0}, {0, 1, 0}})
+	manager := mappedresource.NewManager()
+	handle := columnVectorGraphTypedColumnVectorAcquireBytesHandle1898(t, manager, fixture, mappedresource.SourceHeapCopy, append([]byte(nil), fixture.sectionBytes...))
+	values, retained, outcome, fallbackReason, err := columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, fixture.directReq, fixture.rows, fixture.dims)
+	if err != nil {
+		t.Fatalf("columnVectorGraphTypedColumnDenseVectorValuesFromHandle heap copy: %v", err)
+	}
+	defer func() {
+		if retained != nil {
+			_ = retained.Release()
+		}
+	}()
+	if retained != handle || outcome != columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView || fallbackReason != "" {
+		t.Fatalf("retained=%v handle=%v outcome=%s reason=%s want heap-copy typed view", retained != nil, handle != nil, outcome, fallbackReason)
+	}
+	if !float32SlicesEqual1782(values[:3], []float32{1, 0, 0}) || !float32SlicesEqual1782(values[3:], []float32{0, 1, 0}) {
+		t.Fatalf("values=%v want row-major typed vectors", values)
+	}
+	stats := manager.Stats()
+	if stats.ActiveHeapCopyBytes == 0 || stats.ActiveMappedBytes != 0 || stats.ActiveHandles == 0 {
+		t.Fatalf("stats=%+v want active heap-copy typed view handle, not mmap", stats)
+	}
+	var searchStats columnVectorGraphNativeSearchStats
+	recordColumnVectorGraphVectorSourceStats(&searchStats, outcome, fallbackReason)
+	if searchStats.VectorHeapCopyTypedViews != 1 || searchStats.VectorMmapDirectViews != 0 || searchStats.VectorDirectViews != 0 || searchStats.VectorScratchDecodes != 0 {
+		t.Fatalf("searchStats=%+v want heap-copy typed view separated from mmap direct wins", searchStats)
+	}
+}
+
+func TestColumnVectorGraphTypedColumnVectorActualPointerUnalignedUsesScratchFallback1898(t *testing.T) {
+	fixture := newColumnVectorGraphTypedColumnVectorViewFixture1898(t, 3, [][]float32{{1, 0, 0}, {0, 1, 0}})
+	manager := mappedresource.NewManager()
+	misaligned := append([]byte{0}, fixture.sectionBytes...)
+	handle := columnVectorGraphTypedColumnVectorAcquireBytesHandle1898(t, manager, fixture, mappedresource.SourceMapped, misaligned[1:])
+	values, retained, outcome, fallbackReason, err := columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, fixture.directReq, fixture.rows, fixture.dims)
+	if err != nil {
+		t.Fatalf("columnVectorGraphTypedColumnDenseVectorValuesFromHandle unaligned: %v", err)
+	}
+	if retained != nil || outcome != columnVectorGraphTypedColumnVectorOutcomeScratchDecode || fallbackReason != typeddecode.ReasonActualPointerUnaligned {
+		t.Fatalf("retained=%v outcome=%s reason=%s want actual-pointer scratch fallback", retained != nil, outcome, fallbackReason)
+	}
+	if !float32SlicesEqual1782(values[:3], []float32{1, 0, 0}) || !float32SlicesEqual1782(values[3:], []float32{0, 1, 0}) {
+		t.Fatalf("values=%v want row-major typed vectors", values)
+	}
+	stats := manager.Stats()
+	if stats.ActiveHandles != 0 || stats.ActiveMappedBytes != 0 || stats.DirectViewSuccesses != 0 || stats.DirectViewFailures == 0 {
+		t.Fatalf("stats=%+v want released scratch fallback with direct-view failure evidence", stats)
+	}
+	var searchStats columnVectorGraphNativeSearchStats
+	recordColumnVectorGraphVectorSourceStats(&searchStats, outcome, fallbackReason)
+	if searchStats.VectorScratchDecodes != 1 || searchStats.VectorActualPointerUnaligned != 1 || searchStats.VectorMmapDirectViews != 0 || searchStats.VectorHeapCopyTypedViews != 0 {
+		t.Fatalf("searchStats=%+v want actual-pointer unaligned scratch counter", searchStats)
+	}
+}
+
+func TestColumnVectorGraphTypedColumnVectorMisalignedSectionUsesScratchFallback1898(t *testing.T) {
+	fixture := newColumnVectorGraphTypedColumnVectorViewFixture1898(t, 3, [][]float32{{1, 0, 0}, {0, 1, 0}})
+	manager := mappedresource.NewManager()
+	handle := columnVectorGraphTypedColumnVectorAcquireBytesHandle1898(t, manager, fixture, mappedresource.SourceMapped, append([]byte(nil), fixture.sectionBytes...))
+	req := fixture.directReq
+	req.Certification.Section.Offset++
+	values, retained, outcome, fallbackReason, err := columnVectorGraphTypedColumnDenseVectorValuesFromHandle(manager, handle, req, fixture.rows, fixture.dims)
+	if err != nil {
+		t.Fatalf("columnVectorGraphTypedColumnDenseVectorValuesFromHandle misaligned section: %v", err)
+	}
+	if retained != nil || outcome != columnVectorGraphTypedColumnVectorOutcomeScratchDecode || fallbackReason != typeddecode.ReasonAbsoluteOffsetUnaligned {
+		t.Fatalf("retained=%v outcome=%s reason=%s want misaligned-section scratch fallback", retained != nil, outcome, fallbackReason)
+	}
+	if !float32SlicesEqual1782(values[:3], []float32{1, 0, 0}) || !float32SlicesEqual1782(values[3:], []float32{0, 1, 0}) {
+		t.Fatalf("values=%v want row-major typed vectors", values)
+	}
+	var searchStats columnVectorGraphNativeSearchStats
+	recordColumnVectorGraphVectorSourceStats(&searchStats, outcome, fallbackReason)
+	if searchStats.VectorScratchDecodes != 1 || searchStats.VectorAbsoluteOffsetUnaligned != 1 || searchStats.VectorMmapDirectViews != 0 || searchStats.VectorHeapCopyTypedViews != 0 {
+		t.Fatalf("searchStats=%+v want absolute-offset unaligned scratch counter", searchStats)
+	}
+}
+
+func TestColumnVectorGraphTypedColumnVectorParallelReadersIndependentHandles1898(t *testing.T) {
+	const (
+		rows = 96
+		dims = 16
+		m    = 8
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, dims, m, input)
+	defer func() { _ = d.Close() }()
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+	query := append([]float32(nil), input[17].vector...)
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 2 {
+		workers = 2
+	}
+	if workers > columnVectorGraphNativeSearchParallelBenchMaxWorkersV3 {
+		workers = columnVectorGraphNativeSearchParallelBenchMaxWorkersV3
+	}
+	readers := make([]*columnVectorGraphPhysicalRowReader, workers)
+	for i := range readers {
+		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+		if err != nil {
+			t.Fatalf("open reader %d: %v", i, err)
+		}
+		defer func(reader *columnVectorGraphPhysicalRowReader) { _ = reader.Close() }(reader)
+		if reader.typedVectorSource == nil || reader.typedVectorSource.manager == nil {
+			t.Fatalf("reader %d missing typed-column vector source", i)
+		}
+		if i > 0 && reader.typedVectorSource.manager == readers[0].typedVectorSource.manager {
+			t.Fatalf("reader %d shares typed-column vector manager with reader 0", i)
+		}
+		resourceStats := reader.typedVectorSource.manager.Stats()
+		if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+			if resourceStats.ActiveMappedBytes == 0 || resourceStats.ActiveHandles == 0 {
+				t.Fatalf("reader %d resource stats=%+v want independent mmap handles", i, resourceStats)
+			}
+		} else if resourceStats.ActiveHandles == 0 && reader.typedVectorSource.decodedDerivedBytes == 0 {
+			t.Fatalf("reader %d resource stats=%+v decoded=%d want independent heap-copy or scratch source", i, resourceStats, reader.typedVectorSource.decodedDerivedBytes)
+		}
+		readers[i] = reader
+	}
+	want, _, err := readers[0].SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &columnVectorGraphNativeSearchScratch{})
+	if err != nil {
+		t.Fatalf("baseline SearchCosine: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan string, len(readers))
+	for worker := range readers {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var scratch columnVectorGraphNativeSearchScratch
+			for i := 0; i < 25; i++ {
+				got, stats, err := readers[worker].SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &scratch)
+				if err != nil {
+					errs <- fmt.Sprintf("worker %d SearchCosine: %v", worker, err)
+					return
+				}
+				if mismatch := columnGraphNativeSearchResultsMismatchV3(got, want); mismatch != "" {
+					errs <- fmt.Sprintf("worker %d iteration %d: %s", worker, i, mismatch)
+					return
+				}
+				if stats.TypedColumnFallbacks != 0 || stats.AdjacencyMmapDirectViews != 0 || stats.AdjacencyHeapCopyTypedViews != 0 {
+					errs <- fmt.Sprintf("worker %d stats=%+v want typed vector source without adjacency direct-view claim", worker, stats)
+					return
+				}
+				if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+					if stats.VectorMmapDirectViews == 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes != 0 {
+						errs <- fmt.Sprintf("worker %d stats=%+v want mmap direct typed vectors", worker, stats)
+						return
+					}
+				} else if stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 {
+					errs <- fmt.Sprintf("worker %d stats=%+v want non-mmap typed vector fallback", worker, stats)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if t.Failed() || len(readers) < 2 {
+		return
+	}
+	if err := readers[0].Close(); err != nil {
+		t.Fatalf("close reader 0: %v", err)
+	}
+	readers[0] = nil
+	var scratch columnVectorGraphNativeSearchScratch
+	got, _, err := readers[1].SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &scratch)
+	if err != nil {
+		t.Fatalf("reader 1 SearchCosine after reader 0 close: %v", err)
+	}
+	if mismatch := columnGraphNativeSearchResultsMismatchV3(got, want); mismatch != "" {
+		t.Fatalf("reader 1 after reader 0 close: %s", mismatch)
+	}
+}
+
+type columnVectorGraphTypedColumnVectorViewFixture1898 struct {
+	rows         int
+	dims         int
+	image        typedcolumn.ColumnPartImage
+	section      typedcolumn.ColumnPartImageSection
+	certColumn   typedcolumn.ColumnPartLayoutContractColumn
+	sectionBytes []byte
+	directReq    typeddecode.DirectViewColumnRequest
+}
+
+func newColumnVectorGraphTypedColumnVectorViewFixture1898(tb testing.TB, dims int, vectors [][]float32) columnVectorGraphTypedColumnVectorViewFixture1898 {
+	tb.Helper()
+	cfg, err := normalizeColumnStoreConfig("docs", columnGraphTypedColumnVectorStoreConfig1782(dims))
+	if err != nil {
+		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows := typedColumnVectorDeclaredRows1782(tb, *cfg, vectors)
+	imageBytes, imageRows, err := buildTypedColumnPartImageForDeclaredRows(*cfg, 1, typedColumnPartAssetPartID, rows)
+	if err != nil {
+		tb.Fatalf("buildTypedColumnPartImageForDeclaredRows: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(imageBytes)
+	if err != nil {
+		tb.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	_, adapterColumn, ok, err := columnVectorGraphTypedColumnVectorField(*cfg, "embedding", dims)
+	if err != nil || !ok {
+		tb.Fatalf("columnVectorGraphTypedColumnVectorField ok=%v err=%v", ok, err)
+	}
+	section, err := columnVectorGraphTypedColumnVectorSection(image, adapterColumn.Definition.Name)
+	if err != nil {
+		tb.Fatalf("columnVectorGraphTypedColumnVectorSection: %v", err)
+	}
+	sectionBytes, err := image.SectionBytes(section)
+	if err != nil {
+		tb.Fatalf("SectionBytes: %v", err)
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		tb.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
+	if !ok {
+		tb.Fatalf("missing layout certification for %q", adapterColumn.Definition.Name)
+	}
+	plan := typeddecode.DenseFloat32VectorPlan(certColumn, dims)
+	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: imageRows, PayloadBytes: section.Length, AssetOffset: 0, HasAssetOffset: true}
+	if status := typeddecode.ValidateDirectViewColumn(directReq); !status.Direct() {
+		tb.Fatalf("ValidateDirectViewColumn: %s", status.String())
+	}
+	return columnVectorGraphTypedColumnVectorViewFixture1898{rows: imageRows, dims: dims, image: image, section: section, certColumn: certColumn, sectionBytes: sectionBytes, directReq: directReq}
+}
+
+func columnVectorGraphTypedColumnVectorAcquireBytesHandle1898(tb testing.TB, manager *mappedresource.Manager, fixture columnVectorGraphTypedColumnVectorViewFixture1898, source mappedresource.Source, data []byte) *mappedresource.Handle {
+	tb.Helper()
+	key := mappedresource.Key{
+		Class:      mappedresource.ClassTypedColumnAsset,
+		Namespace:  "test",
+		Kind:       string(ColumnAssetKindTCS1TypedColumnPart),
+		Generation: 1,
+		PartID:     typedColumnPartAssetPartID,
+		FileID:     1,
+		Offset:     0,
+		Length:     int64(len(data)),
+		Checksum:   uint64(page.Checksum(data)),
+		Version:    fixture.image.Version,
+		Encoding:   fixture.section.Encoding.String(),
+		Section: mappedresource.Section{
+			Kind:     string(fixture.section.Kind),
+			Category: string(fixture.section.Category),
+			Column:   fixture.section.Column,
+		},
+	}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: columnVectorGraphTypedColumnVectorScopeID, Collection: "docs", Namespace: "test", Generation: 1, Reason: "column_graph typed-column vector test"}
+	handle, err := manager.AcquireBytes(key, scope, source, data, mappedresource.AcquireOptions{Reason: "column_graph typed-column vector test", ValidationMode: mappedresource.ValidationVerify})
+	if err != nil {
+		tb.Fatalf("AcquireBytes: %v", err)
+	}
+	return handle
 }
 
 func TestSearchVectorIndexColumnGraphL2RemainsFailClosed1782(t *testing.T) {
@@ -603,8 +872,8 @@ func assertTypedColumnVectorFallbackSearch1782(tb testing.TB, col *Collection, d
 		tb.Fatalf("SearchCosine fallback: %v", err)
 	}
 	assertColumnGraphNativeSearchResultsV3(tb, got, exactColumnGraphTopKForTest(tb, rows, query, 2))
-	if stats.TypedColumnFallbacks != 1 || stats.VectorDirectViews != 0 || stats.VectorScratchDecodes == 0 {
-		tb.Fatalf("stats=%+v want typed-column fallback to graph row vector scratch decodes", stats)
+	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 || stats.VectorCertificationFailures == 0 {
+		tb.Fatalf("stats=%+v want typed-column certification fallback to graph row vector scratch decodes", stats)
 	}
 }
 
