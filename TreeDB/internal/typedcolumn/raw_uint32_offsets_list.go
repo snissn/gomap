@@ -61,17 +61,14 @@ func EncodeRawUint32OffsetsListPayload(dst []byte, rows int, offsets []uint64, v
 // sections into owned Go slices. The returned slices never alias offsetsRaw or
 // valuesRaw, but they may reuse caller-provided destination slices.
 func DecodeRawUint32OffsetsListFallback(offsetsDst []uint64, valuesDst []uint32, offsetsRaw []byte, valuesRaw []byte, rows int) (RawUint32OffsetsList, error) {
-	if err := validateRawUint32OffsetsListBytes(offsetsRaw, valuesRaw, rows); err != nil {
+	valuesCount, err := validateRawUint32OffsetsListBytes(offsetsRaw, valuesRaw, rows)
+	if err != nil {
 		return RawUint32OffsetsList{}, err
 	}
 	offsetCount := rows + 1
 	offsets := resizeFixedWidthValues(offsetsDst, offsetCount)
 	for i := range offsets {
 		offsets[i] = readLittleEndianUint64(offsetsRaw[i*8:])
-	}
-	valuesCount, err := validateRawUint32OffsetsListOffsets(offsets, valuesRaw)
-	if err != nil {
-		return RawUint32OffsetsList{}, err
 	}
 	values := resizeFixedWidthValues(valuesDst, valuesCount)
 	for i := range values {
@@ -186,7 +183,8 @@ func ValidateRawUint32OffsetsListSections(offsetsSection ColumnPartImageSection,
 	if offsetsSection.Length != len(offsetsRaw) || valuesSection.Length != len(valuesRaw) {
 		return fmt.Errorf("typedcolumn: offsets-list section lengths offsets=%d/%d values=%d/%d", offsetsSection.Length, len(offsetsRaw), valuesSection.Length, len(valuesRaw))
 	}
-	return validateRawUint32OffsetsListBytes(offsetsRaw, valuesRaw, rows)
+	_, err := validateRawUint32OffsetsListBytes(offsetsRaw, valuesRaw, rows)
+	return err
 }
 
 // NewRawUint32OffsetsListImageSections returns image-directory metadata for the
@@ -222,39 +220,39 @@ func NewRawUint32OffsetsListImageSections(column string, rows int, offsetsBytes 
 	return offsets, values, nil
 }
 
-func validateRawUint32OffsetsListBytes(offsetsRaw []byte, valuesRaw []byte, rows int) error {
+func validateRawUint32OffsetsListBytes(offsetsRaw []byte, valuesRaw []byte, rows int) (int, error) {
 	if rows < 0 {
-		return fmt.Errorf("typedcolumn: negative offsets-list rows=%d", rows)
+		return 0, fmt.Errorf("typedcolumn: negative offsets-list rows=%d", rows)
 	}
 	if err := validateRawUint32OffsetsListSectionLengths(len(offsetsRaw), len(valuesRaw), rows); err != nil {
-		return err
+		return 0, err
 	}
 	if len(offsetsRaw) == 0 {
-		return fmt.Errorf("typedcolumn: offsets-list missing offsets")
+		return 0, fmt.Errorf("typedcolumn: offsets-list missing offsets")
 	}
 	first := readLittleEndianUint64(offsetsRaw)
 	if first != 0 {
-		return fmt.Errorf("typedcolumn: offsets-list offsets[0]=%d want 0", first)
+		return 0, fmt.Errorf("typedcolumn: offsets-list offsets[0]=%d want 0", first)
 	}
 	prev := first
 	for i := 1; i <= rows; i++ {
 		current := readLittleEndianUint64(offsetsRaw[i*8:])
 		if current > maxHostIntUint64() {
-			return fmt.Errorf("typedcolumn: offsets-list offsets[%d]=%d exceeds host int", i, current)
+			return 0, fmt.Errorf("typedcolumn: offsets-list offsets[%d]=%d exceeds host int", i, current)
 		}
 		if current < prev {
-			return fmt.Errorf("typedcolumn: offsets-list offsets[%d]=%d before previous=%d", i, current, prev)
+			return 0, fmt.Errorf("typedcolumn: offsets-list offsets[%d]=%d before previous=%d", i, current, prev)
 		}
 		prev = current
 	}
 	if prev > maxHostIntUint64() {
-		return fmt.Errorf("typedcolumn: offsets-list final offset=%d exceeds host int", prev)
+		return 0, fmt.Errorf("typedcolumn: offsets-list final offset=%d exceeds host int", prev)
 	}
 	valueCount := len(valuesRaw) / 4
 	if int(prev) != valueCount {
-		return fmt.Errorf("typedcolumn: offsets-list final offset=%d values=%d", prev, valueCount)
+		return 0, fmt.Errorf("typedcolumn: offsets-list final offset=%d values=%d", prev, valueCount)
 	}
-	return nil
+	return valueCount, nil
 }
 
 func validateRawUint32OffsetsListSectionLengths(offsetsBytes int, valuesBytes int, rows int) error {
@@ -283,33 +281,6 @@ func validateRawUint32OffsetsListSectionLengths(offsetsBytes int, valuesBytes in
 
 func maxHostIntUint64() uint64 {
 	return uint64(^uint(0) >> 1)
-}
-
-func validateRawUint32OffsetsListOffsets(offsets []uint64, valuesRaw []byte) (int, error) {
-	if len(offsets) == 0 {
-		return 0, fmt.Errorf("typedcolumn: offsets-list missing offsets")
-	}
-	if offsets[0] != 0 {
-		return 0, fmt.Errorf("typedcolumn: offsets-list offsets[0]=%d want 0", offsets[0])
-	}
-	prev := offsets[0]
-	for i := 1; i < len(offsets); i++ {
-		if offsets[i] > maxHostIntUint64() {
-			return 0, fmt.Errorf("typedcolumn: offsets-list offsets[%d]=%d exceeds host int", i, offsets[i])
-		}
-		if offsets[i] < prev {
-			return 0, fmt.Errorf("typedcolumn: offsets-list offsets[%d]=%d before previous=%d", i, offsets[i], prev)
-		}
-		prev = offsets[i]
-	}
-	if prev > maxHostIntUint64() {
-		return 0, fmt.Errorf("typedcolumn: offsets-list final offset=%d exceeds host int", prev)
-	}
-	valuesCount := len(valuesRaw) / 4
-	if int(prev) != valuesCount {
-		return 0, fmt.Errorf("typedcolumn: offsets-list final offset=%d values=%d", prev, valuesCount)
-	}
-	return valuesCount, nil
 }
 
 // BuildUint32OffsetsList builds an uncompressed raw_uint32_offsets_list granule.
