@@ -90,7 +90,14 @@ func TestTypedColumnSemanticAdapterDangerousCapabilitiesFailClosed(t *testing.T)
 		}
 	}
 	if cap, _ := typedColumnAdapterCapability(adjacencyColumn, columnsemantics.OpAdjacencyDirectPayload); cap.Status != columnsemantics.StatusFallback || cap.Reason != columnsemantics.ReasonAdjacencyCapabilityDeferred {
-		t.Fatalf("adjacency direct payload capability=%+v want deferred fallback", cap)
+		t.Fatalf("dense adjacency direct payload capability=%+v want deferred fallback", cap)
+	}
+	offsetsAdjacencyColumn, err := typedColumnAdapterMapField(semanticAdjacencyOffsetsListField("neighbors_offsets"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap, _ := typedColumnAdapterCapability(offsetsAdjacencyColumn, columnsemantics.OpAdjacencyDirectPayload); cap.Status != columnsemantics.StatusSupported || cap.Reason != columnsemantics.ReasonSupported {
+		t.Fatalf("offsets-list adjacency direct payload capability=%+v want supported", cap)
 	}
 	if cap, _ := typedColumnAdapterCapability(adjacencyColumn, columnsemantics.OpOrderedRange); cap.Status != columnsemantics.StatusUnsupported || cap.Reason != columnsemantics.ReasonAdjacencyScalarOperationUnsupported {
 		t.Fatalf("adjacency range capability=%+v", cap)
@@ -304,5 +311,11 @@ func semanticVectorField(name string) TypedStorageField {
 func semanticAdjacencyField(name string) TypedStorageField {
 	field := semanticField(name, ColumnStoreValueAdjacencyList)
 	field.AdjacencyDegree = 2
+	return field
+}
+
+func semanticAdjacencyOffsetsListField(name string) TypedStorageField {
+	field := semanticField(name, ColumnStoreValueAdjacencyList)
+	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
 	return field
 }

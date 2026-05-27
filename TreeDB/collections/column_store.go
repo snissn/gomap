@@ -193,7 +193,7 @@ type ColumnStoreColumn struct {
 	AdjacencyDegree int `json:"adjacency_degree,omitempty"`
 	// AdjacencyLayout selects the explicit adjacency_list physical layout. Empty
 	// means fixed dense compatibility; uint32_offsets_list is the #1914/#1901 v1
-	// variable-list primitive and remains writer/direct-reader deferred here.
+	// variable-list primitive for adapter writer/fallback/direct reads.
 	AdjacencyLayout    ColumnAdjacencyListLayout `json:"adjacency_layout,omitempty"`
 	FixedWidthEncoding ColumnFixedWidthEncoding  `json:"fixed_width_encoding,omitempty"`
 }

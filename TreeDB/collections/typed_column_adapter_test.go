@@ -383,6 +383,48 @@ func TestTypedColumnAdapterRoundTripAdjacencyOffsetsList1915(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterMixedDenseAndOffsetsListAdjacency1917(t *testing.T) {
+	dense := typedColumnAdapterField("neighbors_dense", ColumnStoreValueAdjacencyList)
+	dense.AdjacencyDegree = 2
+	offsets := typedColumnAdapterField("neighbors_variable", ColumnStoreValueAdjacencyList)
+	offsets.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	rows := []typedColumnAdapterRow{
+		{PrimaryID: 1, Values: map[string]columnDeclaredValue{
+			"neighbors_dense":    {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{1, 2}},
+			"neighbors_variable": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: nil},
+		}},
+		{PrimaryID: 2, Values: map[string]columnDeclaredValue{
+			"neighbors_dense":    {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{3, 4}},
+			"neighbors_variable": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{7}},
+		}},
+		{PrimaryID: 3, Values: map[string]columnDeclaredValue{
+			"neighbors_dense":    {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{5, 6}},
+			"neighbors_variable": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{8, 9, 10}},
+		}},
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1917, RowsPerGranule: 2, Fields: []TypedStorageField{dense, offsets}}, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	gotRows, err := parsed.scanRows()
+	if err != nil {
+		t.Fatalf("scanRows: %v", err)
+	}
+	for i := range rows {
+		if !slices.Equal(gotRows[i].Values["neighbors_dense"].AdjacencyList, rows[i].Values["neighbors_dense"].AdjacencyList) || !slices.Equal(gotRows[i].Values["neighbors_variable"].AdjacencyList, rows[i].Values["neighbors_variable"].AdjacencyList) {
+			t.Fatalf("row[%d]=%+v want %+v", i, gotRows[i].Values, rows[i].Values)
+		}
+	}
+}
+
 func TestTypedColumnAdapterUint32OffsetsListDirectViewReader1916(t *testing.T) {
 	part, column, image, offsetsSection, valuesSection, offsetsRaw, valuesRaw := typedColumnAdapterOffsetsListDirectFixture(t)
 	_ = part
@@ -1439,6 +1481,22 @@ func TestTypedColumnAdapterAdjacencyOffsetsListSelectorSupported1915(t *testing.
 	}
 }
 
+func TestTypedColumnAdapterAdjacencyOffsetsListWrongSelectorsFailClosed1917(t *testing.T) {
+	withDegree := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	withDegree.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	withDegree.AdjacencyDegree = 2
+	if _, err := typedColumnAdapterMapField(withDegree); err == nil || !strings.Contains(err.Error(), "must be zero for adjacency_layout") {
+		t.Fatalf("offsets-list with degree err=%v want selector/degree failure", err)
+	}
+
+	withFixedWidth := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	withFixedWidth.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	withFixedWidth.FixedWidthEncoding = ColumnFixedWidthEncodingLittleEndian
+	if _, err := typedColumnAdapterMapField(withFixedWidth); err == nil || !strings.Contains(err.Error(), "fixed_width_encoding is unsupported") {
+		t.Fatalf("offsets-list with fixed_width_encoding err=%v want selector/encoding failure", err)
+	}
+}
+
 func TestTypedColumnAdapterExistingConfigStaysTypedRow(t *testing.T) {
 	layout, err := ResolveTypedStorageLayout(CollectionMeta{
 		Name: "typed_column_adapter_existing_config",
@@ -2352,6 +2410,144 @@ func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) 
 		b.ReportMetric(0, "mmap_direct/op")
 		b.ReportMetric(0, "heap_copy_typed_view/op")
 		b.ReportMetric(0, "scratch_decode/op")
+		typedColumnAdapterAdjacencyBenchSink = sink
+	})
+}
+
+func BenchmarkTypedColumnAdapterVariableAdjacencyScan1917(b *testing.B) {
+	const rowsN = 8192
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	rows := make([]typedColumnAdapterRow, rowsN)
+	totalValues := 0
+	for i := range rows {
+		degree := i % 9
+		neighbors := make([]uint32, degree)
+		for j := range neighbors {
+			neighbors[j] = uint32((i*17 + j) & 0xffff)
+		}
+		totalValues += len(neighbors)
+		rows[i] = typedColumnAdapterRow{PrimaryID: int64(i + 1), Values: map[string]columnDeclaredValue{
+			"neighbors": {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: neighbors},
+		}}
+	}
+	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{PartID: 1917, RowsPerGranule: rowsN, Fields: []TypedStorageField{field}}, rows)
+	if err != nil {
+		b.Fatalf("buildTypedColumnAdapterPart: %v", err)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		b.Fatalf("buildImage: %v", err)
+	}
+	column, ok := part.columnByName("neighbors")
+	if !ok {
+		b.Fatalf("missing adapter column")
+	}
+	offsetsSection, valuesSection, ok := typedColumnAdapterColumnOffsetsListSections(image, "neighbors")
+	if !ok {
+		b.Fatalf("missing offsets-list sections")
+	}
+	offsetsRaw, err := image.SectionBytes(offsetsSection)
+	if err != nil {
+		b.Fatalf("offsets SectionBytes: %v", err)
+	}
+	valuesRaw, err := image.SectionBytes(valuesSection)
+	if err != nil {
+		b.Fatalf("values SectionBytes: %v", err)
+	}
+	path := filepath.Join(b.TempDir(), "variable-adjacency.tcs1")
+	if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
+		b.Fatalf("write image: %v", err)
+	}
+	reportShape := func(b *testing.B) {
+		b.Helper()
+		b.ReportMetric(float64(rowsN), "rows/op")
+		b.ReportMetric(float64(totalValues), "values/op")
+		b.ReportMetric(float64(totalValues*4), "read_bytes/op")
+		b.ReportMetric(float64(image.TotalBytes()), "storage_B/op")
+		b.ReportMetric(float64(image.PaddingBytes()), "padding_B/op")
+		b.ReportMetric(float64(offsetsSection.Length), "offsets_storage_B/op")
+		b.ReportMetric(float64(valuesSection.Length), "values_storage_B/op")
+	}
+
+	b.Run("mmap_direct_scan_preopened", func(b *testing.B) {
+		mgr := mappedresource.NewManager()
+		reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-variable-adjacency-bench", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: false}
+		view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(reader, column, image.Rows)
+		if err != nil {
+			if strings.Contains(err.Error(), "mmap unsupported") {
+				b.Skipf("mmap direct view unsupported on this platform: %v", err)
+			}
+			b.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
+		}
+		defer view.Close()
+		if !view.Direct {
+			b.Skipf("mmap direct view unavailable; fallback class=%+v", view.Class)
+		}
+		b.ReportAllocs()
+		b.SetBytes(int64(totalValues * 4))
+		// Timer boundary: setup/write/open/certification are complete; timed work is row iteration over the prepared mmap direct view only.
+		b.ResetTimer()
+		var sink uint64
+		for i := 0; i < b.N; i++ {
+			sink += typedColumnAdapterSumUint32OffsetsListRows(view.Offsets, view.Values, view.Rows)
+		}
+		elapsed := b.Elapsed().Seconds()
+		reportShape(b)
+		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
+		b.ReportMetric(1, "adjacency_mmap_direct/op")
+		b.ReportMetric(0, "adjacency_heap_copy_typed_view/op")
+		b.ReportMetric(0, "adjacency_scratch_decode/op")
+		typedColumnAdapterAdjacencyBenchSink = sink
+	})
+
+	b.Run("heap_copy_typed_view_scan_preopened", func(b *testing.B) {
+		mgr := mappedresource.NewManager()
+		reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-variable-adjacency-bench-heap", PartID: image.PartID, PreferMapped: false, AllowHeapCopy: true}
+		view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(reader, column, image.Rows)
+		if err != nil {
+			b.Fatalf("AcquireUint32OffsetsListColumnView heap copy: %v", err)
+		}
+		defer view.Close()
+		if !view.HeapCopy || view.Direct || view.Scratch {
+			b.Fatalf("view=%+v want heap-copy typed view, not mmap direct or scratch", view)
+		}
+		b.ReportAllocs()
+		b.SetBytes(int64(totalValues * 4))
+		// Timer boundary: setup/write/open/certification/heap copy are complete; timed work is row iteration over the prepared heap-copy typed view only.
+		b.ResetTimer()
+		var sink uint64
+		for i := 0; i < b.N; i++ {
+			sink += typedColumnAdapterSumUint32OffsetsListRows(view.Offsets, view.Values, view.Rows)
+		}
+		elapsed := b.Elapsed().Seconds()
+		reportShape(b)
+		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
+		b.ReportMetric(0, "adjacency_mmap_direct/op")
+		b.ReportMetric(1, "adjacency_heap_copy_typed_view/op")
+		b.ReportMetric(0, "adjacency_scratch_decode/op")
+		typedColumnAdapterAdjacencyBenchSink = sink
+	})
+
+	b.Run("scratch_fallback_decode_and_scan", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(totalValues * 4))
+		// Timer boundary: setup/write/open are excluded; timed work is fallback decode plus row iteration.
+		b.ResetTimer()
+		var sink uint64
+		for i := 0; i < b.N; i++ {
+			decoded, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
+			if err != nil {
+				b.Fatalf("DecodeRawUint32OffsetsListFallback: %v", err)
+			}
+			sink += typedColumnAdapterSumUint32OffsetsListRows(decoded.Offsets, decoded.Values, decoded.Rows)
+		}
+		elapsed := b.Elapsed().Seconds()
+		reportShape(b)
+		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
+		b.ReportMetric(0, "adjacency_mmap_direct/op")
+		b.ReportMetric(0, "adjacency_heap_copy_typed_view/op")
+		b.ReportMetric(1, "adjacency_scratch_decode/op")
 		typedColumnAdapterAdjacencyBenchSink = sink
 	})
 }

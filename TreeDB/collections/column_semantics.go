@@ -46,6 +46,14 @@ func typedColumnAdapterCapability(column typedColumnAdapterColumn, op columnsema
 	if err != nil {
 		return columnsemantics.Unsupported(op, columnsemantics.ReasonUnknownLogicalType, err.Error()), err
 	}
+	if op == columnsemantics.OpAdjacencyDirectPayload &&
+		column.Field.ValueType == ColumnStoreValueAdjacencyList &&
+		!column.Field.Nullable &&
+		column.Definition.Encoding.String() == "raw_uint32_offsets_list" &&
+		column.Definition.Compression.String() == "none" &&
+		column.Definition.FixedWidthElements == 0 {
+		return columnsemantics.Supported(op), nil
+	}
 	return columnsemantics.CapabilityFor(desc, op), nil
 }
 

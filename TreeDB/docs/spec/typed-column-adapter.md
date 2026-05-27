@@ -54,8 +54,9 @@ positive `adjacency_degree` and each present row must contain exactly that many
 uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
 "uint32_offsets_list"`; it must not be inferred from a missing degree and is
 supported by the safe #1915 writer/fallback reader path plus the #1916 certified
-primitive direct-view reader. Column-graph/search consumption remains deferred to
-issue #1917 and later. Serialized typed-column images publish offsets-list columns as one global
+primitive direct-view reader wired through the adapter in #1917. Column-graph/search
+consumption remains deferred to later graph/search work and is not claimed by this
+adapter path. Serialized typed-column images publish offsets-list columns as one global
 `row_count + 1` little-endian `uint64` offsets section plus one global flattened
 `uint32` values section, even when the typed-column part has multiple codec
 blocks/granules.
@@ -72,14 +73,16 @@ records are sufficient.
 
 ## Durable Publication / Reconstruction Seam (#1755)
 
-For inserts and updates with scalar, fixed-dimension vector, or fixed-degree
-adjacency `typed_column_part` owners, TreeDB writes:
+For inserts and updates with scalar, fixed-dimension vector, fixed-degree dense
+adjacency, or explicit offsets-list variable adjacency `typed_column_part` owners,
+TreeDB writes:
 
 - a compatibility `tcs1_part_image`/`TCPA` typed-row asset containing row IDs,
   tombstones, and any `typed_row_asset` owned fields;
 - a `tcs1_typed_column_part` asset containing the authoritative scalar,
-  fixed-dimension `float32_vector`, and fixed-degree `adjacency_list`
-  `typed_column_part` values for the same generation.
+  fixed-dimension `float32_vector`, fixed-degree dense `adjacency_list`, and
+  explicit offsets-list variable `adjacency_list` `typed_column_part` values for
+  the same generation.
 
 Manifest part records classify these assets as `base`, `delta`, or `tombstone`.
 Insert/base spans use `base`; updates use `delta`; deletes publish only a
@@ -181,9 +184,9 @@ schema, or fail-closed validation.
 The only production `TreeDB/collections` file that imports
 `TreeDB/internal/typedcolumn` is the adapter seam. Publication/reopen logic calls
 through that seam. Query/vector search integration remains staged through later issues. The active
-#1886 stack consumes certified typed-column `float32_vector` payloads, while
-physical row-asset direct views are deferred to #1897 and adjacency direct-view
-certification is deferred to #1901. This path publishes fixed-dimension
-`float32_vector` and fixed-degree `adjacency_list` values today; #1914 only
-specifies the explicit offsets-list selector and does not make adjacency mmap
-direct views part of the current stack.
+adapter stack consumes certified typed-column `float32_vector` payloads and the
+explicit `raw_uint32_offsets_list` variable adjacency reader; physical row-asset
+direct views and legacy dense adjacency direct views remain fallback/deferred.
+This path publishes fixed-dimension `float32_vector`, fixed-degree dense
+`adjacency_list`, and explicit offsets-list variable `adjacency_list` values
+today without claiming graph/search speedups.
