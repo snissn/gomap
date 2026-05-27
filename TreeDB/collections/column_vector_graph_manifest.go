@@ -11,10 +11,12 @@ import (
 )
 
 const (
-	columnManifestVectorGraphRecordPrefix = "\x03column-manifest/v1/vector-graph/"
-	columnManifestVectorGraphMagic        = uint32(0x54434d47) // TCMG
-	columnVectorGraphLayer0SourceMagic    = uint32(0x54434741) // TCGA
-	columnVectorGraphLayer0SourceVersion  = uint16(1)
+	columnManifestVectorGraphRecordPrefix       = "\x03column-manifest/v1/vector-graph/"
+	columnManifestVectorGraphMagic              = uint32(0x54434d47) // TCMG
+	columnVectorGraphLayer0SourceMagic          = uint32(0x54434741) // TCGA
+	columnVectorGraphLayer0SourceVersion        = uint16(1)
+	columnVectorGraphAdjacencyLayerSourcesMagic = uint32(0x5443474c) // TCGL
+	columnVectorGraphAdjacencyLayerSourcesV1    = uint16(1)
 
 	columnVectorGraphVectorColumnName    = "vector"
 	columnVectorGraphInvNormColumnName   = "inv_norm"
@@ -40,6 +42,8 @@ type columnVectorGraphManifestSnapshot struct {
 	AssetRef               ColumnAssetRef
 	AssetBytes             int64
 	Layer0AdjacencySource  columnVectorGraphLayer0AdjacencySourceSnapshot
+	AdjacencyLayerCount    int
+	AdjacencyLayerSources  []columnVectorGraphLayer0AdjacencySourceSnapshot
 }
 
 // columnVectorGraphLayer0AdjacencySourceSnapshot binds the optional #1918
@@ -87,6 +91,7 @@ type columnVectorGraphPreparedPhysicalAsset struct {
 	Bytes                 int64
 	RowCount              int
 	Layer0AdjacencySource columnVectorGraphPreparedLayer0AdjacencySource
+	AdjacencyLayerSources []columnVectorGraphPreparedAdjacencySource
 }
 
 func columnVectorGraphManifestRecordKey(indexName string) []byte {
@@ -144,7 +149,9 @@ func encodeColumnVectorGraphManifestRecord(snapshot columnVectorGraphManifestSna
 	writeManifestUint64(&b, uint64(snapshot.AssetRef.Length))
 	writeManifestUint64(&b, uint64(snapshot.AssetRef.Checksum))
 	writeManifestUint64(&b, uint64(snapshot.AssetBytes))
-	if snapshot.Layer0AdjacencySource.Present {
+	if len(snapshot.AdjacencyLayerSources) > 0 {
+		encodeColumnVectorGraphAdjacencyLayerSources(&b, snapshot.AdjacencyLayerCount, snapshot.AdjacencyLayerSources)
+	} else if snapshot.Layer0AdjacencySource.Present {
 		encodeColumnVectorGraphLayer0AdjacencySource(&b, snapshot.Layer0AdjacencySource)
 	}
 	return b.Bytes(), nil
@@ -212,20 +219,36 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 	snapshot.AssetRef.Length = int64(length64)
 	snapshot.AssetRef.Checksum = uint32(checksum64)
 	snapshot.AssetBytes = int64(assetBytes64)
-	if cur.pos < len(raw) {
-		sourceCur := cur
-		if len(raw)-sourceCur.pos < 6 {
+	for cur.pos < len(raw) {
+		if len(raw)-cur.pos < 6 {
 			return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
 		}
-		if source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur); err == nil && sourceCur.pos == len(raw) {
-			if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
-				snapshot.Layer0AdjacencySource = source
+		if sourcesCur := cur; true {
+			layerCount, sources, err := decodeColumnVectorGraphAdjacencyLayerSources(&sourcesCur)
+			if err == nil {
+				if err := validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount, sources); err == nil {
+					snapshot.AdjacencyLayerCount = layerCount
+					snapshot.AdjacencyLayerSources = sources
+					if len(sources) > 0 {
+						snapshot.Layer0AdjacencySource = sources[0]
+					}
+				}
+				cur = sourcesCur
+				continue
 			}
-			cur = sourceCur
-		} else {
-			cur.pos = len(raw)
-			cur.err = nil
 		}
+		if sourceCur := cur; true {
+			source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
+			if err == nil {
+				if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
+					snapshot.Layer0AdjacencySource = source
+				}
+				cur = sourceCur
+				continue
+			}
+		}
+		cur.pos = len(raw)
+		cur.err = nil
 	}
 	if cur.pos != len(raw) {
 		return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
@@ -271,9 +294,47 @@ func encodeColumnVectorGraphLayer0AdjacencySource(b *bytes.Buffer, source column
 	writeManifestUint64(b, uint64(source.GraphAssetChecksum))
 }
 
+func encodeColumnVectorGraphAdjacencyLayerSources(b *bytes.Buffer, layerCount int, sources []columnVectorGraphLayer0AdjacencySourceSnapshot) {
+	writeManifestUint32(b, columnVectorGraphAdjacencyLayerSourcesMagic)
+	writeManifestUint16(b, columnVectorGraphAdjacencyLayerSourcesV1)
+	writeManifestUint64(b, uint64(layerCount))
+	writeManifestUint64(b, uint64(len(sources)))
+	for _, source := range sources {
+		encodeColumnVectorGraphLayer0AdjacencySource(b, source)
+	}
+}
+
+func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []columnVectorGraphLayer0AdjacencySourceSnapshot, error) {
+	if magic := cur.u32(); magic != columnVectorGraphAdjacencyLayerSourcesMagic {
+		return 0, nil, fmt.Errorf("collections: bad column vector graph adjacency layer sources magic=0x%08x", magic)
+	}
+	if version := cur.u16(); version != columnVectorGraphAdjacencyLayerSourcesV1 {
+		return 0, nil, fmt.Errorf("collections: unsupported column vector graph adjacency layer sources version=%d", version)
+	}
+	layerCount64 := cur.u64()
+	sourceCount64 := cur.u64()
+	if err := cur.err; err != nil {
+		return 0, nil, err
+	}
+	if layerCount64 > uint64(math.MaxInt) || sourceCount64 > uint64(math.MaxInt) {
+		return 0, nil, errors.New("collections: column vector graph adjacency layer sources count overflows int")
+	}
+	layerCount := int(layerCount64)
+	sourceCount := int(sourceCount64)
+	sources := make([]columnVectorGraphLayer0AdjacencySourceSnapshot, sourceCount)
+	for i := range sources {
+		source, err := decodeColumnVectorGraphLayer0AdjacencySource(cur)
+		if err != nil {
+			return 0, nil, err
+		}
+		sources[i] = source
+	}
+	return layerCount, sources, nil
+}
+
 func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVectorGraphLayer0AdjacencySourceSnapshot, error) {
 	if magic := cur.u32(); magic != columnVectorGraphLayer0SourceMagic {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, fmt.Errorf("collections: bad column vector graph layer-0 adjacency source magic=0x%08x", magic)
+		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, fmt.Errorf("collections: bad column vector graph adjacency source magic=0x%08x", magic)
 	}
 	if version := cur.u16(); version != columnVectorGraphLayer0SourceVersion {
 		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, fmt.Errorf("collections: unsupported column vector graph layer-0 adjacency source version=%d", version)
@@ -351,6 +412,15 @@ func validateColumnVectorGraphManifestSnapshot(snapshot columnVectorGraphManifes
 	if err := validateColumnVectorGraphManifestSnapshotCore(snapshot); err != nil {
 		return err
 	}
+	if len(snapshot.AdjacencyLayerSources) > 0 {
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(snapshot.AdjacencyLayerCount, snapshot.AdjacencyLayerSources); err != nil {
+			return err
+		}
+		if snapshot.Layer0AdjacencySource.Present && snapshot.Layer0AdjacencySource != snapshot.AdjacencyLayerSources[0] {
+			return errors.New("collections: column vector graph layer-0 adjacency source does not match all-layer source[0]")
+		}
+		return nil
+	}
 	if snapshot.Layer0AdjacencySource.Present {
 		if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(snapshot.Layer0AdjacencySource); err != nil {
 			return err
@@ -402,15 +472,43 @@ func validateColumnVectorGraphManifestSnapshotCore(snapshot columnVectorGraphMan
 	return nil
 }
 
+func validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount int, sources []columnVectorGraphLayer0AdjacencySourceSnapshot) error {
+	if layerCount <= 0 {
+		return fmt.Errorf("collections: column vector graph adjacency layer count=%d must be positive", layerCount)
+	}
+	if len(sources) != layerCount {
+		return fmt.Errorf("collections: column vector graph adjacency layer sources=%d want layer_count=%d", len(sources), layerCount)
+	}
+	for layer, source := range sources {
+		if !source.Present {
+			return fmt.Errorf("collections: column vector graph adjacency layer source[%d] is absent", layer)
+		}
+		if source.Layer != layer {
+			return fmt.Errorf("collections: column vector graph adjacency layer source[%d] has layer=%d", layer, source.Layer)
+		}
+		if err := validateColumnVectorGraphAdjacencySourceSnapshot(source); err != nil {
+			return fmt.Errorf("collections: column vector graph adjacency layer source[%d]: %w", layer, err)
+		}
+	}
+	return nil
+}
+
 func validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source columnVectorGraphLayer0AdjacencySourceSnapshot) error {
+	if source.Present && source.Layer != 0 {
+		return fmt.Errorf("collections: column vector graph layer-0 adjacency source layer=%d want 0", source.Layer)
+	}
+	return validateColumnVectorGraphAdjacencySourceSnapshot(source)
+}
+
+func validateColumnVectorGraphAdjacencySourceSnapshot(source columnVectorGraphLayer0AdjacencySourceSnapshot) error {
 	if !source.Present {
 		return nil
 	}
 	if source.Schema == "" || source.ColumnName == "" || source.ValueType == "" || source.Encoding == "" {
 		return errors.New("collections: column vector graph layer-0 adjacency source missing schema metadata")
 	}
-	if source.Layer != 0 {
-		return fmt.Errorf("collections: column vector graph layer-0 adjacency source layer=%d want 0", source.Layer)
+	if source.Layer < 0 {
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d must be non-negative", source.Layer)
 	}
 	if source.SourceSchemaHash == 0 || source.BaseManifestGeneration == 0 || source.BaseManifestChecksum == 0 || source.BaseSchemaHash == 0 || source.GraphSchemaHash == 0 {
 		return errors.New("collections: column vector graph layer-0 adjacency source missing identity")
@@ -527,9 +625,13 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 		return columnVectorGraphPreparedPhysicalAsset{}, err
 	}
 	sourcePartID := nextColumnVectorGraphPartIDAfter(partID, partID)
-	layer0Source, err := prepareColumnVectorGraphLayer0AdjacencySourceAsset(assetRootDir, collection, base, normalizedDef, generation, sourcePartID, rows)
+	adjacencySources, err := prepareColumnVectorGraphAdjacencySourcesAssets(assetRootDir, collection, base, normalizedDef, generation, sourcePartID, rows)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, err
+	}
+	var layer0Source columnVectorGraphPreparedLayer0AdjacencySource
+	if len(adjacencySources) > 0 {
+		layer0Source = adjacencySources[0]
 	}
 	return columnVectorGraphPreparedPhysicalAsset{
 		AssetRootDir:          assetRootDir,
@@ -538,6 +640,7 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 		Bytes:                 summary.PayloadBytes,
 		RowCount:              summary.RowCount,
 		Layer0AdjacencySource: layer0Source,
+		AdjacencyLayerSources: adjacencySources,
 	}, nil
 }
 
@@ -847,14 +950,23 @@ func columnVectorGraphManifestAssetRefsForScan(graph columnVectorGraphManifestSn
 		return nil, err
 	}
 	refs := []ColumnAssetRef{graph.AssetRef}
-	if graph.Layer0AdjacencySource.Present && columnVectorGraphLayer0AdjacencySourceRefEligibleForScan(graph, activeGeneration, expectedNamespace) {
+	if len(graph.AdjacencyLayerSources) > 0 {
+		for _, source := range graph.AdjacencyLayerSources {
+			if columnVectorGraphAdjacencySourceRefEligibleForScan(graph, source, activeGeneration, expectedNamespace) {
+				refs = append(refs, source.Ref)
+			}
+		}
+	} else if columnVectorGraphLayer0AdjacencySourceRefEligibleForScan(graph, activeGeneration, expectedNamespace) {
 		refs = append(refs, graph.Layer0AdjacencySource.Ref)
 	}
 	return refs, nil
 }
 
 func columnVectorGraphLayer0AdjacencySourceRefEligibleForScan(graph columnVectorGraphManifestSnapshot, activeGeneration uint64, expectedNamespace string) bool {
-	source := graph.Layer0AdjacencySource
+	return columnVectorGraphAdjacencySourceRefEligibleForScan(graph, graph.Layer0AdjacencySource, activeGeneration, expectedNamespace)
+}
+
+func columnVectorGraphAdjacencySourceRefEligibleForScan(graph columnVectorGraphManifestSnapshot, source columnVectorGraphLayer0AdjacencySourceSnapshot, activeGeneration uint64, expectedNamespace string) bool {
 	if !source.Present || source.Ref.Generation > activeGeneration || source.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart || source.Ref.Namespace != expectedNamespace || source.Ref.Generation != graph.BaseManifestGeneration {
 		return false
 	}

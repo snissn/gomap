@@ -24,7 +24,7 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values and dictionary string tables are not string direct-view payloads. Derived dictionary-code sidecar row-code payloads are a separate `uint32` sidecar direct-view format. |
-| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` primitive direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support, #1917 wires that reader through the adapter, and #1918 publishes a validated/reopenable layer-0 `column_graph` adjacency source. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; search traversal still uses row-asset adjacency until a later graph consumer switch. |
+| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` primitive direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support, #1917 wires that reader through the adapter, and graph rebuilds publish validated/reopenable `column_graph` adjacency sources per layer. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; all-layer search consumption is graph-owned follow-up work. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
@@ -89,7 +89,7 @@ valid.
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
 | `typed_column_part` | adapter `adjacency_list` offsets-list consumer | `raw_uint32_offsets_list` is active for variable adjacency reads with safe writer/fallback-reader plus certified primitive direct-view support. |
-| `typed_column_part` | column_graph layer-0 adjacency source or legacy dense adjacency | A durable #1918 `raw_uint32_offsets_list` source is published and validated/reopened, while graph search still consumes row-asset adjacency. Legacy fixed-degree `raw_uint32_dense` remains fallback/deferred compatibility. |
+| `typed_column_part` | column_graph adjacency sources or legacy dense adjacency | Durable `raw_uint32_offsets_list` sources are published and validated/reopened per graph layer; row-asset adjacency remains canonical/fallback compatibility and all-layer search consumption is staged separately. Legacy fixed-degree `raw_uint32_dense` remains fallback/deferred compatibility. |
 | physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
@@ -189,8 +189,9 @@ and legacy dense adjacency direct views are fallback-only or deferred unless a
 future issue adds a new explicit encoding and conformance row. For adjacency,
 that explicit row is `raw_uint32_offsets_list`; #1915 enables the safe
 writer/fallback reader, #1916 enables the primitive direct-view reader, and
-#1917 wires that reader through adapter scans; column_graph/search runtime
-consumption remains separate follow-up work.
+#1917 wires that reader through adapter scans. Column-graph rebuild publication
+uses the same primitive for per-layer derived sources; search consumption remains
+graph-owned staged work beyond the writer/publication seam.
 
 ## Old/non-certified behavior
 

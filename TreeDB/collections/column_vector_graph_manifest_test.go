@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
 	}
-	if decoded != record {
+	if !reflect.DeepEqual(decoded, record) {
 		t.Fatalf("decoded=%+v want %+v", decoded, record)
 	}
 	if key := columnVectorGraphManifestRecordKey(def.Name); !bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) {
@@ -143,7 +144,7 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 	if err != nil {
 		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
 	}
-	if decoded != snapshot {
+	if !reflect.DeepEqual(decoded, snapshot) {
 		t.Fatalf("decoded=%+v want %+v", decoded, snapshot)
 	}
 	for _, cut := range []int{1, 8} {
@@ -154,7 +155,7 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 		}
 		want := snapshot
 		want.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceSnapshot{}
-		if decoded != want {
+		if !reflect.DeepEqual(decoded, want) {
 			t.Fatalf("decode source truncated by %d decoded=%+v want optional source ignored", cut, decoded)
 		}
 	}

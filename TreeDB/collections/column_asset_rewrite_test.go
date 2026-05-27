@@ -171,12 +171,20 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testi
 	if err != nil {
 		t.Fatalf("columnVectorGraphLayer0AdjacencySourceColumnStoreConfig: %v", err)
 	}
+	sourceCfgLayer1, _, err := columnVectorGraphAdjacencySourceColumnStoreConfig("events", state.cfg, def, 1)
+	if err != nil {
+		t.Fatalf("columnVectorGraphAdjacencySourceColumnStoreConfig layer 1: %v", err)
+	}
 	oldSourceRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: oldGraphRef.Namespace, Generation: oldGraphRef.Generation, PartID: oldGraphRef.PartID + 1, FileID: oldGraphRef.FileID + 101, Offset: oldGraphRef.Offset + oldGraphRef.Length + 5, Length: 512, Checksum: 0x19181918}
+	oldLayer1SourceRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: oldGraphRef.Namespace, Generation: oldGraphRef.Generation, PartID: oldGraphRef.PartID + 2, FileID: oldGraphRef.FileID + 102, Offset: oldSourceRef.Offset + oldSourceRef.Length + 7, Length: 640, Checksum: 0x19201920}
 	oldGraph, err := decodeColumnVectorGraphManifestRecord(oldGraphRecord.value)
 	if err != nil {
 		t.Fatalf("decode old graph record: %v", err)
 	}
 	oldGraph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceSnapshot{Present: true, Schema: columnVectorGraphLayer0AdjacencySourceSchema, ColumnName: columnVectorGraphLayer0AdjacencySourceColumnName, ValueType: string(ColumnStoreValueAdjacencyList), Encoding: "raw_uint32_offsets_list", Layer: 0, SourceSchemaHash: sourceCfg.SchemaHash, RowCount: oldGraph.RowCount, ValuesCount: 2, OffsetsBytes: int64(oldGraph.RowCount+1) * 8, ValuesBytes: 8, PaddingBytes: 0, Ref: oldSourceRef, AssetBytes: oldSourceRef.Length, BaseManifestGeneration: oldGraph.BaseManifestGeneration, BaseManifestChecksum: oldGraph.BaseManifestChecksum, BaseSchemaHash: oldGraph.BaseSchemaHash, GraphSchemaHash: oldGraph.GraphSchemaHash, GraphAssetGeneration: oldGraph.AssetRef.Generation, GraphAssetPartID: oldGraph.AssetRef.PartID, GraphAssetFileID: oldGraph.AssetRef.FileID, GraphAssetOffset: oldGraph.AssetRef.Offset, GraphAssetLength: oldGraph.AssetRef.Length, GraphAssetChecksum: oldGraph.AssetRef.Checksum}
+	layer1Source := columnVectorGraphLayer0AdjacencySourceSnapshot{Present: true, Schema: columnVectorGraphAdjacencySourceSchema(1), ColumnName: columnVectorGraphAdjacencySourceColumnName(1), ValueType: string(ColumnStoreValueAdjacencyList), Encoding: "raw_uint32_offsets_list", Layer: 1, SourceSchemaHash: sourceCfgLayer1.SchemaHash, RowCount: oldGraph.RowCount, ValuesCount: 1, OffsetsBytes: int64(oldGraph.RowCount+1) * 8, ValuesBytes: 4, PaddingBytes: 0, Ref: oldLayer1SourceRef, AssetBytes: oldLayer1SourceRef.Length, BaseManifestGeneration: oldGraph.BaseManifestGeneration, BaseManifestChecksum: oldGraph.BaseManifestChecksum, BaseSchemaHash: oldGraph.BaseSchemaHash, GraphSchemaHash: oldGraph.GraphSchemaHash, GraphAssetGeneration: oldGraph.AssetRef.Generation, GraphAssetPartID: oldGraph.AssetRef.PartID, GraphAssetFileID: oldGraph.AssetRef.FileID, GraphAssetOffset: oldGraph.AssetRef.Offset, GraphAssetLength: oldGraph.AssetRef.Length, GraphAssetChecksum: oldGraph.AssetRef.Checksum}
+	oldGraph.AdjacencyLayerCount = 2
+	oldGraph.AdjacencyLayerSources = []columnVectorGraphLayer0AdjacencySourceSnapshot{oldGraph.Layer0AdjacencySource, layer1Source}
 	oldGraphRecord.value, err = encodeColumnVectorGraphManifestRecord(oldGraph)
 	if err != nil {
 		t.Fatalf("encode old graph record with source: %v", err)
@@ -193,20 +201,24 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testi
 	newSourceRef := oldSourceRef
 	newSourceRef.FileID += 23
 	newSourceRef.Offset += oldSourceRef.Length + 17
+	newLayer1SourceRef := oldLayer1SourceRef
+	newLayer1SourceRef.FileID += 29
+	newLayer1SourceRef.Offset += oldLayer1SourceRef.Length + 19
 	patched, count, err := patchColumnAssetRewriteManifestRecords(
 		records,
 		map[ColumnAssetRef]ColumnAssetRef{
-			oldPart.AssetRef: newPartRef,
-			oldGraphRef:      newGraphRef,
-			oldSourceRef:     newSourceRef,
+			oldPart.AssetRef:   newPartRef,
+			oldGraphRef:        newGraphRef,
+			oldSourceRef:       newSourceRef,
+			oldLayer1SourceRef: newLayer1SourceRef,
 		},
 		state.cfg.AssetManager.Namespace,
 	)
 	if err != nil {
 		t.Fatalf("patchColumnAssetRewriteManifestRecords: %v", err)
 	}
-	if count != 3 {
-		t.Fatalf("patch count=%d want 3", count)
+	if count != 4 {
+		t.Fatalf("patch count=%d want 4", count)
 	}
 	graphRecord, ok := findColumnVectorGraphManifestRecord(patched, testColumnGraphVectorIndexDefinitionV2A().Name)
 	if !ok {
@@ -225,22 +237,29 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testi
 	if graph.Layer0AdjacencySource.GraphAssetFileID != newGraphRef.FileID || graph.Layer0AdjacencySource.GraphAssetOffset != newGraphRef.Offset || graph.Layer0AdjacencySource.GraphAssetLength != newGraphRef.Length || graph.Layer0AdjacencySource.GraphAssetChecksum != newGraphRef.Checksum {
 		t.Fatalf("patched graph source identity=%+v does not track graph ref=%+v", graph.Layer0AdjacencySource, newGraphRef)
 	}
+	if len(graph.AdjacencyLayerSources) != 2 || graph.AdjacencyLayerSources[1].Ref != newLayer1SourceRef {
+		t.Fatalf("patched graph all-layer sources=%+v want layer-1 ref %+v", graph.AdjacencyLayerSources, newLayer1SourceRef)
+	}
+	if graph.AdjacencyLayerSources[1].GraphAssetFileID != newGraphRef.FileID || graph.AdjacencyLayerSources[1].GraphAssetOffset != newGraphRef.Offset || graph.AdjacencyLayerSources[1].GraphAssetLength != newGraphRef.Length || graph.AdjacencyLayerSources[1].GraphAssetChecksum != newGraphRef.Checksum {
+		t.Fatalf("patched graph layer-1 source identity=%+v does not track graph ref=%+v", graph.AdjacencyLayerSources[1], newGraphRef)
+	}
 
 	inPlaceRecords := cloneColumnManifestRecords(records)
 	inPlacePatched, inPlaceCount, err := patchColumnAssetRewriteManifestRecordsInPlace(
 		inPlaceRecords,
 		map[ColumnAssetRef]ColumnAssetRef{
-			oldPart.AssetRef: newPartRef,
-			oldGraphRef:      newGraphRef,
-			oldSourceRef:     newSourceRef,
+			oldPart.AssetRef:   newPartRef,
+			oldGraphRef:        newGraphRef,
+			oldSourceRef:       newSourceRef,
+			oldLayer1SourceRef: newLayer1SourceRef,
 		},
 		state.cfg.AssetManager.Namespace,
 	)
 	if err != nil {
 		t.Fatalf("patchColumnAssetRewriteManifestRecordsInPlace: %v", err)
 	}
-	if inPlaceCount != 3 {
-		t.Fatalf("in-place patch count=%d want 3", inPlaceCount)
+	if inPlaceCount != 4 {
+		t.Fatalf("in-place patch count=%d want 4", inPlaceCount)
 	}
 	if len(inPlacePatched) != 0 && &inPlacePatched[0] != &inPlaceRecords[0] {
 		t.Fatal("in-place vector graph patch returned a copied record slice")
@@ -261,6 +280,12 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testi
 	}
 	if graph.Layer0AdjacencySource.GraphAssetFileID != newGraphRef.FileID || graph.Layer0AdjacencySource.GraphAssetOffset != newGraphRef.Offset || graph.Layer0AdjacencySource.GraphAssetLength != newGraphRef.Length || graph.Layer0AdjacencySource.GraphAssetChecksum != newGraphRef.Checksum {
 		t.Fatalf("in-place patched graph source identity=%+v does not track graph ref=%+v", graph.Layer0AdjacencySource, newGraphRef)
+	}
+	if len(graph.AdjacencyLayerSources) != 2 || graph.AdjacencyLayerSources[1].Ref != newLayer1SourceRef {
+		t.Fatalf("in-place patched graph all-layer sources=%+v want layer-1 ref %+v", graph.AdjacencyLayerSources, newLayer1SourceRef)
+	}
+	if graph.AdjacencyLayerSources[1].GraphAssetFileID != newGraphRef.FileID || graph.AdjacencyLayerSources[1].GraphAssetOffset != newGraphRef.Offset || graph.AdjacencyLayerSources[1].GraphAssetLength != newGraphRef.Length || graph.AdjacencyLayerSources[1].GraphAssetChecksum != newGraphRef.Checksum {
+		t.Fatalf("in-place patched graph layer-1 source identity=%+v does not track graph ref=%+v", graph.AdjacencyLayerSources[1], newGraphRef)
 	}
 }
 

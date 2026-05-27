@@ -741,7 +741,13 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		AssetRef:               prepared.Ref,
 		AssetBytes:             prepared.Bytes,
 	}
-	graph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceFromPrepared(graph, prepared.Layer0AdjacencySource)
+	graph.AdjacencyLayerCount = len(prepared.AdjacencyLayerSources)
+	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, prepared.AdjacencyLayerSources)
+	if len(graph.AdjacencyLayerSources) > 0 {
+		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
+	} else {
+		graph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceFromPrepared(graph, prepared.Layer0AdjacencySource)
+	}
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -885,7 +891,13 @@ func nextColumnVectorGraphPartID(records []columnManifestRecord, namespace strin
 		if graph.AssetRef.Namespace == namespace {
 			next = nextColumnVectorGraphPartIDAfter(next, graph.AssetRef.PartID)
 		}
-		if graph.Layer0AdjacencySource.Present && graph.Layer0AdjacencySource.Ref.Namespace == namespace {
+		if len(graph.AdjacencyLayerSources) > 0 {
+			for _, source := range graph.AdjacencyLayerSources {
+				if source.Present && source.Ref.Namespace == namespace {
+					next = nextColumnVectorGraphPartIDAfter(next, source.Ref.PartID)
+				}
+			}
+		} else if graph.Layer0AdjacencySource.Present && graph.Layer0AdjacencySource.Ref.Namespace == namespace {
 			next = nextColumnVectorGraphPartIDAfter(next, graph.Layer0AdjacencySource.Ref.PartID)
 		}
 	}
