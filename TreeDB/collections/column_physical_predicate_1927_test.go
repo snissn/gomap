@@ -169,6 +169,7 @@ func TestColumnDictionaryPreparedPredicateFastPathsPreserveDiagnostics1927(t *te
 			if diag.RowsScanned != len(events) || diag.RowsMatched != wantMatched || diag.ReduceRows != wantMatched {
 				t.Fatalf("diagnostics rows scanned/matched/reduced=%d/%d/%d want %d/%d/%d full=%+v", diag.RowsScanned, diag.RowsMatched, diag.ReduceRows, len(events), wantMatched, wantMatched, diag)
 			}
+			// Each prepared predicate uses one dictionary-code sidecar per scheduled granule.
 			if diag.PredicateDictionaryCodeHits != diag.ScheduledGranules*len(tc.req.Predicates) {
 				t.Fatalf("predicate code hits=%d want scheduled(%d)*predicates(%d) diagnostics=%+v", diag.PredicateDictionaryCodeHits, diag.ScheduledGranules, len(tc.req.Predicates), diag)
 			}

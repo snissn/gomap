@@ -157,10 +157,10 @@ func (r *columnDictionaryHourCountRunner) run(view columnPhysicalScanSnapshotVie
 	} else {
 		for assetIdx, asset := range r.assets {
 			predicates := &r.predicateAssets[assetIdx]
+			rows += len(asset.groupCodes)
 			if predicates.rejectsAll {
 				continue
 			}
-			rows += len(asset.groupCodes)
 			fast, ok := predicates.fastPath(len(asset.groupCodes))
 			if !ok {
 				for rowIdx, groupCode := range asset.groupCodes {
