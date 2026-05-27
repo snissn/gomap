@@ -733,10 +733,11 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 		if !canContributeRange {
 			return
 		}
+		start, end := columnAssetReachabilityRangeBoundsForRef(ref)
 		set := rangesByFile[ref.FileID]
 		set.appendRange(columnAssetReachabilityRange{
-			start:  ref.Offset,
-			end:    ref.Offset + ref.Length,
+			start:  start,
+			end:    end,
 			status: status,
 		})
 		rangesByFile[ref.FileID] = set
@@ -1209,6 +1210,27 @@ func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace 
 		ref.Offset >= 0 &&
 		ref.Length > 0 &&
 		ref.Offset <= math.MaxInt64-ref.Length
+}
+
+func columnAssetReachabilityRangeBoundsForRef(ref ColumnAssetRef) (int64, int64) {
+	start := ref.Offset
+	end := ref.Offset + ref.Length
+	if columnAssetReachabilityRefHasDeterministicPrefixPadding(ref) {
+		paddingWindow := int64(typedColumnPartDirectViewAssetAlignment - 1)
+		if start > paddingWindow {
+			start -= paddingWindow
+		} else {
+			start = 0
+		}
+	}
+	return start, end
+}
+
+func columnAssetReachabilityRefHasDeterministicPrefixPadding(ref ColumnAssetRef) bool {
+	return ref.Kind == ColumnAssetKindTCS1TypedColumnPart &&
+		ref.FileID >= columnAssetDirectViewSegmentFileIDBase &&
+		typedColumnPartDirectViewAssetAlignment > 1 &&
+		ref.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0
 }
 
 func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) ([]columnAssetReachabilityInterval, int) {
