@@ -408,7 +408,7 @@ func validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source columnVectorG
 	if source.AssetBytes <= 0 {
 		return errors.New("collections: column vector graph layer-0 adjacency source asset bytes must be positive")
 	}
-	if source.GraphAssetGeneration == 0 || source.GraphAssetPartID == 0 || source.GraphAssetFileID == 0 || source.GraphAssetChecksum == 0 {
+	if source.GraphAssetGeneration == 0 || source.GraphAssetPartID == 0 || source.GraphAssetFileID == 0 {
 		return errors.New("collections: column vector graph layer-0 adjacency source missing graph asset identity")
 	}
 	if source.GraphAssetOffset < 0 || source.GraphAssetLength <= 0 {

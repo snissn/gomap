@@ -83,8 +83,10 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 	if err != nil {
 		t.Fatalf("columnVectorGraphLayer0AdjacencySourceColumnStoreConfig: %v", err)
 	}
-	graphRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 4, FileID: 1, Offset: 128, Length: 2048, Checksum: 0x11112222}
-	sourceRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 5, FileID: 1009, Offset: 0, Length: 1024, Checksum: 0x33334444}
+	// CRC32/checksum identity values can legitimately be zero; the
+	// generation/part/file/offset/length tuple still carries asset identity.
+	graphRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 4, FileID: 1, Offset: 128, Length: 2048, Checksum: 0}
+	sourceRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: graphCfg.AssetManager.Namespace, Generation: 9, PartID: 5, FileID: 1009, Offset: 0, Length: 1024, Checksum: 0}
 	snapshot := columnVectorGraphManifestSnapshot{
 		IndexName:              def.Name,
 		Field:                  def.Field,
