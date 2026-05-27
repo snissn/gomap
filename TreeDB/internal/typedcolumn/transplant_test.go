@@ -396,6 +396,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1918 is the scoped production vector graph writer/validator that publishes
 		// a raw_uint32_offsets_list layer-0 adjacency source through typed-column assets.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_adjacency_source.go")): {},
+		// #1919 is the scoped production vector graph reader that consumes the
+		// certified layer-0 raw_uint32_offsets_list adjacency source.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_adjacency_direct_source.go")): {},
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
