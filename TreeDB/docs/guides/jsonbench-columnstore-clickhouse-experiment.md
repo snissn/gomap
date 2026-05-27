@@ -117,15 +117,15 @@ the single-entry wrapper was merged; the result values are preserved here.
 | system/layout | query | best | effective query rows/s | scanned rows | storage | load | TreeDB vs ClickHouse |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | TreeDB `column-store-prepared` | q1 | 0.0122s | 822.9M | 10.0M | 1.11 GiB | 54.754s | 2.1x faster |
-| ClickHouse JSON | q1 | 0.0260s | 384.6M | 10.0M | 986.82 MiB | 52.632s | baseline |
+| ClickHouse JSON | q1 | 0.0260s | 384.6M | 9,999,994 | 986.82 MiB | 52.632s | baseline |
 | TreeDB `column-store-prepared` | q2 | 0.0518s | 192.9M | 10.0M | 3.21 GiB | 105.283s | 3.8x faster |
-| ClickHouse JSON | q2 | 0.1970s | 50.8M | 10.0M | 986.82 MiB | 52.632s | baseline |
+| ClickHouse JSON | q2 | 0.1970s | 50.8M | 9,999,994 | 986.82 MiB | 52.632s | baseline |
 | TreeDB `column-store-prepared` | q3 | 0.1201s | 83.3M | 10.0M | 2.63 GiB | 103.099s | 1.1x slower |
-| ClickHouse JSON | q3 | 0.1060s | 94.3M | 10.0M | 986.82 MiB | 52.632s | baseline |
+| ClickHouse JSON | q3 | 0.1060s | 94.3M | 9,999,994 | 986.82 MiB | 52.632s | baseline |
 | TreeDB `column-store-prepared-metadata` | q4 | 0.0100s | 996.4M logical | 0 | 3.10 GiB | 124.950s | 8.9x faster |
-| ClickHouse JSON | q4 | 0.0890s | 112.4M | 10.0M | 986.82 MiB | 52.632s | baseline |
+| ClickHouse JSON | q4 | 0.0890s | 112.4M | 9,999,994 | 986.82 MiB | 52.632s | baseline |
 | TreeDB `column-store-prepared-metadata` | q5 | 0.0098s | 1,017.9M logical | 0 | 3.10 GiB | 125.455s | 6.8x faster |
-| ClickHouse JSON | q5 | 0.0670s | 149.3M | 10.0M | 986.82 MiB | 52.632s | baseline |
+| ClickHouse JSON | q5 | 0.0670s | 149.3M | 9,999,994 | 986.82 MiB | 52.632s | baseline |
 
 TreeDB attempts:
 
