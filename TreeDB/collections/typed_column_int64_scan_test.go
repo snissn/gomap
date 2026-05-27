@@ -1004,8 +1004,8 @@ func TestTypedColumnInt64PreparedDeltaUsesStreamingCursor(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	assertTypedColumnInt64Aggregate(t, result, 4, 34)
-	if result.Diagnostics.FastDecodeStreamingPlans == 0 || result.Diagnostics.FastDecodeDirectViewPlans != 0 || result.Diagnostics.DirectViewSuccesses != 0 || result.Diagnostics.DecodedHeapCopyBytes != 0 {
-		t.Fatalf("diagnostics=%+v want delta-varint streaming cursor without direct view or []int64 materialization", result.Diagnostics)
+	if result.Diagnostics.FastDecodeStreamingPlans == 0 || result.Diagnostics.FastDecodeDirectViewPlans != 0 || result.Diagnostics.DirectViewSuccesses != 0 || result.Diagnostics.FastDecodeStreamingFallbacks != 0 || result.Diagnostics.DecodedHeapCopyBytes != 0 {
+		t.Fatalf("diagnostics=%+v want planned delta-varint streaming cursor without direct view/fallback or []int64 materialization", result.Diagnostics)
 	}
 }
 

@@ -493,8 +493,8 @@ func recordTypedColumnInt64ScratchDecode(diag *TypedColumnInt64PredicateScanDiag
 		return
 	}
 	diag.FastDecodeScratchDecodes++
-	diag.FastDecodeStreamingFallbacks++
 	if reason != "" && reason != typeddecode.ReasonSupported {
+		diag.FastDecodeStreamingFallbacks++
 		diag.FastDecodeFallbackReason = string(reason)
 	}
 }
@@ -833,7 +833,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 		}
 		decodedAny = true
 		result.Diagnostics.BlocksDecoded++
-		if streamingFallbackReason == "" && columnPlan.Path == typeddecode.PathStreaming {
+		if streamingFallbackReason == "" && columnPlan.Path == typeddecode.PathStreaming && columnPlan.Reason != typeddecode.ReasonVariableWidth {
 			streamingFallbackReason = columnPlan.Reason
 		}
 		recordTypedColumnInt64ScratchDecode(&result.Diagnostics, streamingFallbackReason)
