@@ -235,7 +235,9 @@ func (i ColumnPartImage) columnOffsetsListSections(column string) (ColumnPartIma
 }
 
 // ColumnOffsetsListSections returns the unique offsets and values sections for
-// the named offsets-list column.
+// the named offsets-list column. The boolean is false when either section is
+// missing or duplicated, so callers fail closed instead of selecting a last
+// matching section from a malformed image.
 func (i ColumnPartImage) ColumnOffsetsListSections(column string) (ColumnPartImageSection, ColumnPartImageSection, bool) {
 	return i.columnOffsetsListSections(column)
 }
