@@ -1228,7 +1228,6 @@ func columnAssetReachabilityRangeBoundsForRef(ref ColumnAssetRef) (int64, int64)
 
 func columnAssetReachabilityRefHasDeterministicPrefixPadding(ref ColumnAssetRef) bool {
 	return ref.Kind == ColumnAssetKindTCS1TypedColumnPart &&
-		ref.FileID >= columnAssetDirectViewSegmentFileIDBase &&
 		typedColumnPartDirectViewAssetAlignment > 1 &&
 		ref.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0
 }
