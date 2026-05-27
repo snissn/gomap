@@ -543,8 +543,11 @@ little-endian identity, and separate section metadata/checksums for offsets
 (8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
 fallback reader into owned Go slices; #1916 adds certified primitive direct-view
 readers for paired offsets/value handles, and #1917 wires that variable adjacency
-reader through typed-column adapters. Adapter-to-column_graph wiring and graph
-search consumption remain separate follow-up work.
+reader through typed-column adapters. #1918 records a durable `column_graph`
+layer-0 adjacency source as a `raw_uint32_offsets_list` typed-column asset during
+physical graph rebuilds; search traversal still reads the row graph asset, and
+switching graph search to authoritative typed-column adjacency remains a separate
+follow-up.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -924,9 +927,11 @@ The collection and index names must be non-empty. The command payload names the
 logical rebuild request only; it does not carry vector graph bytes, physical root
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
-`column_graph` indexes, that path rebuilds vector, inverse-norm, and adjacency
-data into physical column assets and publishes the graph manifest through the
-normal collection column manifest/root lifecycle. Replay outcomes that are
+`column_graph` indexes, that path rebuilds vector, inverse-norm, and row-asset
+adjacency data into physical column assets, also publishes a durable layer-0
+`raw_uint32_offsets_list` typed-column adjacency source for validation/reopen
+coverage, and records both refs in the graph manifest through the normal
+collection column manifest/root lifecycle. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and

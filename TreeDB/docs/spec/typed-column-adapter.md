@@ -181,12 +181,14 @@ schema, or fail-closed validation.
 
 ## Boundary
 
-The only production `TreeDB/collections` file that imports
-`TreeDB/internal/typedcolumn` is the adapter seam. Publication/reopen logic calls
-through that seam. Query/vector search integration remains staged through later issues. The active
-adapter stack consumes certified typed-column `float32_vector` payloads and the
-explicit `raw_uint32_offsets_list` variable adjacency reader; physical row-asset
-direct views and legacy dense adjacency direct views remain fallback/deferred.
-This path publishes fixed-dimension `float32_vector`, fixed-degree dense
-`adjacency_list`, and explicit offsets-list variable `adjacency_list` values
-today without claiming graph/search speedups.
+Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay
+limited to the adapter seam and scoped vector-graph source/reader seams.
+Publication/reopen logic calls through those seams. Query/vector search
+integration remains staged through later issues. The active adapter stack
+consumes certified typed-column `float32_vector` payloads and the explicit
+`raw_uint32_offsets_list` variable adjacency reader; physical row-asset direct
+views and legacy dense adjacency direct views remain fallback/deferred. This path
+publishes fixed-dimension `float32_vector`, fixed-degree dense `adjacency_list`,
+and explicit offsets-list variable `adjacency_list` values; #1918 additionally
+publishes and validates a durable `column_graph` layer-0 offsets-list source
+without changing graph/search traversal semantics.

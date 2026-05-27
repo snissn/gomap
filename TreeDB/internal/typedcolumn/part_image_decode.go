@@ -519,6 +519,18 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			Blocks: make([]ColumnBlock, 0, blocks),
 		}
 		expectedFirstRow := 0
+		if blocks == 0 && desc.RowCount == 0 {
+			switch columnType {
+			case ColumnTypeInt64:
+				column.Definition.Encoding = EncodingRawInt64
+				column.Definition.Compression = CompressionNone
+			case ColumnTypeAdjacencyList:
+				if fixedWidthElements == 0 {
+					column.Definition.Encoding = EncodingRawUint32OffsetsList
+					column.Definition.Compression = CompressionNone
+				}
+			}
+		}
 		for j := 0; j < blocks; j++ {
 			blockDesc, granule, err := decodeColumnBlockDescriptorAndGranule(&dec)
 			if err != nil {
@@ -541,7 +553,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			columnDesc.Blocks = append(columnDesc.Blocks, blockDesc)
 			column.Blocks = append(column.Blocks, ColumnBlock{Descriptor: blockDesc, Granule: granule})
 		}
-		if err := validateDecodedColumnFixedWidthElements(name, columnType, fixedWidthElements, columnDesc.Blocks); err != nil {
+		if err := validateDecodedColumnFixedWidthElements(name, columnType, fixedWidthElements, columnDesc.Blocks, desc.RowCount); err != nil {
 			return ColumnPartDescriptor{}, nil, err
 		}
 		if expectedFirstRow != desc.RowCount {
@@ -559,7 +571,7 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 	return desc, columns, nil
 }
 
-func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType, fixedWidthElements int, blocks []ColumnBlockDescriptor) error {
+func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType, fixedWidthElements int, blocks []ColumnBlockDescriptor, rows int) error {
 	switch columnType {
 	case ColumnTypeFloat32Vector:
 		if fixedWidthElements <= 0 {
@@ -571,6 +583,9 @@ func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType,
 		}
 		if fixedWidthElements == 0 {
 			if len(blocks) == 0 {
+				if rows == 0 {
+					return nil
+				}
 				return fmt.Errorf("typedcolumn: column %s type=%s requires blocks for %s", name, columnType, EncodingRawUint32OffsetsList)
 			}
 			for _, block := range blocks {
