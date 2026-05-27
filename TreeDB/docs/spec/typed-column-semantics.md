@@ -23,7 +23,7 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | `double` | default `int64` carrier; native `float64` when `fixed_width_encoding: "little_endian"` is selected | compatibility `raw_int64` carrying `math.Float64bits`; native `raw_float64` little-endian IEEE-754 bits | same raw-bit restriction as `float32`; native `raw_float64` is a bit-preserving direct scalar payload candidate without enabling numeric float fast paths yet. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
 | `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null plus vector direct-payload, similarity, dot-product, and vector-metric capabilities are explicit prepare-time entries for specialized vector kernels. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
-| `adjacency_list` | `adjacency_list` | `raw_uint32_dense` | count rows/non-null plus adjacency graph traversal and adjacency-metric capabilities are explicit prepare-time entries for specialized graph kernels. Direct payload views are fallback/deferred to #1901 (`adjacency_capability_deferred`). Scalar range/sum/min/max/stats/pruning shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
+| `adjacency_list` | `adjacency_list` | legacy `raw_uint32_dense`; #1914 target `raw_uint32_offsets_list` | count rows/non-null plus adjacency graph traversal and adjacency-metric semantics are graph-specific entries. Direct payload views are fallback/deferred to #1901 (`adjacency_capability_deferred`). The selected v1 primitive is an explicit `ColumnStoreValueAdjacencyList` variable-list selector (`adjacency_layout: "uint32_offsets_list"`) plus internal encoding with `uint64` offsets and `uint32` values, not a new value type and not fixed padded rows. Primitive shape validation is separate from graph ordinal/layer/search validation. Scalar range/sum/min/max/stats/pruning shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
 
 ## Scalar float fail-closed policy
 
@@ -176,6 +176,7 @@ and every current `typedcolumn.Encoding`:
 - `raw_float32`
 - `raw_float64`
 - `raw_uint32_dense`
+- `raw_uint32_offsets_list`
 
 ## Future scalar numeric-width admission rules
 

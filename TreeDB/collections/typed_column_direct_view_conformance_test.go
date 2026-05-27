@@ -21,9 +21,10 @@ import (
 )
 
 type typedColumnDirectViewMatrixKey struct {
-	valueType ColumnStoreValueType
-	owner     typedColumnDirectViewStorageOwner
-	consumer  typedColumnDirectViewConsumerPath
+	valueType       ColumnStoreValueType
+	owner           typedColumnDirectViewStorageOwner
+	consumer        typedColumnDirectViewConsumerPath
+	adjacencyLayout typedColumnDirectViewAdjacencyLayout
 }
 
 func TestTypedColumnDirectViewAllTypeInventoryCoversCurrentValueTypesExactlyOnce(t *testing.T) {
@@ -55,16 +56,23 @@ func TestTypedColumnDirectViewConformanceMatrixRowsAreExplicit(t *testing.T) {
 		case ColumnStoreValueAdjacencyList:
 			support = typedColumnDirectViewDeferredFallbackOnly
 		}
-		expected[typedColumnDirectViewMatrixKey{valueType: valueType, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}] = support
-		expected[typedColumnDirectViewMatrixKey{valueType: valueType, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetGeneric}] = typedColumnDirectViewDeferredFallbackOnly
+		layout := typedColumnDirectViewAdjacencyLayoutNone
+		rowAssetLayout := typedColumnDirectViewAdjacencyLayoutNone
+		if valueType == ColumnStoreValueAdjacencyList {
+			layout = typedColumnDirectViewAdjacencyLayoutRawUint32Dense
+			rowAssetLayout = typedColumnDirectViewAdjacencyLayoutPhysicalRowAsset
+		}
+		expected[typedColumnDirectViewMatrixKey{valueType: valueType, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, adjacencyLayout: layout}] = support
+		expected[typedColumnDirectViewMatrixKey{valueType: valueType, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetGeneric, adjacencyLayout: rowAssetLayout}] = typedColumnDirectViewDeferredFallbackOnly
 	}
 	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector}] = typedColumnDirectViewActiveLittleEndianCandidate
+	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedAdjacency, adjacencyLayout: typedColumnDirectViewAdjacencyLayoutRawUint32Offsets}] = typedColumnDirectViewDeferredFallbackOnly
 	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetVector}] = typedColumnDirectViewDeferredFallbackOnly
-	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetAdjacency}] = typedColumnDirectViewDeferredFallbackOnly
+	expected[typedColumnDirectViewMatrixKey{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetAdjacency, adjacencyLayout: typedColumnDirectViewAdjacencyLayoutPhysicalRowAsset}] = typedColumnDirectViewDeferredFallbackOnly
 
 	seen := make(map[typedColumnDirectViewMatrixKey]bool, len(expected))
 	for _, row := range typedColumnDirectViewConformanceMatrix() {
-		key := typedColumnDirectViewMatrixKey{valueType: row.ValueType, owner: row.StorageOwner, consumer: row.Consumer}
+		key := typedColumnDirectViewMatrixKey{valueType: row.ValueType, owner: row.StorageOwner, consumer: row.Consumer, adjacencyLayout: row.AdjacencyLayout}
 		want, ok := expected[key]
 		if !ok {
 			t.Fatalf("unexpected broad/nonsensical direct-view matrix row: %+v", row)
@@ -103,7 +111,7 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 		{name: "column graph typed vector source", valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
 		{name: "bool fallback", valueType: ColumnStoreValueBool, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewFallbackOnly},
 		{name: "string fallback", valueType: ColumnStoreValueString, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewFallbackOnly},
-		{name: "adjacency deferred", valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewDeferredFallbackOnly, endian: "little", size: 4, align: 4, followUp: 1901},
+		{name: "dense adjacency compatibility deferred", valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewDeferredFallbackOnly, endian: "little", size: 4, align: 4, followUp: 1901},
 		{name: "row asset vector deferred", valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetVector, support: typedColumnDirectViewDeferredFallbackOnly, followUp: 1897},
 		{name: "row asset adjacency deferred", valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetAdjacency, support: typedColumnDirectViewDeferredFallbackOnly, followUp: 1897},
 		{name: "row asset generic deferred", valueType: ColumnStoreValueInt64, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetGeneric, support: typedColumnDirectViewDeferredFallbackOnly, followUp: 1897},
@@ -118,6 +126,54 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 	}
 }
 
+func TestTypedColumnDirectViewAdjacencyOffsetsListSpecClassification(t *testing.T) {
+	offsets := typedColumnDirectViewClassificationForAdjacencyLayout(ColumnStoreValueAdjacencyList, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerColumnGraphTypedAdjacency, typedColumnDirectViewAdjacencyLayoutRawUint32Offsets)
+	if offsets.Support != typedColumnDirectViewDeferredFallbackOnly || offsets.AdjacencyLayout != typedColumnDirectViewAdjacencyLayoutRawUint32Offsets {
+		t.Fatalf("offsets-list classification=%+v want explicit deferred raw_uint32_offsets_list", offsets)
+	}
+	if offsets.RequiresElementsPerRow {
+		t.Fatalf("offsets-list classification=%+v must not use fixed padded row degree", offsets)
+	}
+	if offsets.OffsetsElementSize != 8 || offsets.OffsetsAlignment != 8 || offsets.ValuesElementSize != 4 || offsets.ValuesAlignment != 4 {
+		t.Fatalf("offsets-list alignment table=%+v want offsets uint64/8-byte and values uint32/4-byte", offsets)
+	}
+	if !strings.Contains(offsets.Reason, "uint64 offsets") || !strings.Contains(offsets.Reason, "uint32 values") {
+		t.Fatalf("offsets-list reason=%q must name uint64 offsets and uint32 values", offsets.Reason)
+	}
+
+	dense := typedColumnDirectViewClassificationForAdjacencyLayout(ColumnStoreValueAdjacencyList, typedColumnDirectViewStorageTypedColumnPart, typedColumnDirectViewConsumerTypedColumnPartGeneric, typedColumnDirectViewAdjacencyLayoutRawUint32Dense)
+	if dense.Support != typedColumnDirectViewDeferredFallbackOnly || !dense.RequiresElementsPerRow || dense.AdjacencyLayout != typedColumnDirectViewAdjacencyLayoutRawUint32Dense {
+		t.Fatalf("dense adjacency classification=%+v want fixed-degree dense fallback/compatibility", dense)
+	}
+	if strings.Contains(dense.Reason, "uint64 offsets") {
+		t.Fatalf("dense adjacency reason=%q must not be silently reclassified as offsets-list", dense.Reason)
+	}
+}
+
+func TestTypedColumnDirectViewAdjacencyOffsetsListUsesExplicitValueTypeExtension(t *testing.T) {
+	if ColumnAdjacencyListLayoutUint32OffsetsList == ColumnAdjacencyListLayoutFixedDense {
+		t.Fatal("offsets-list selector must be distinct from fixed dense default")
+	}
+	if _, err := normalizeColumnStoreValueType(ColumnStoreValueAdjacencyList); err != nil {
+		t.Fatalf("ColumnStoreValueAdjacencyList must remain the value type: %v", err)
+	}
+	if _, err := normalizeColumnStoreValueType(ColumnStoreValueType("uint32_offsets_list")); err == nil {
+		t.Fatal("uint32_offsets_list must not become a new ColumnStoreValueType")
+	}
+
+	field := TypedStorageField{Name: "neighbors", Path: "neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}
+	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{Collection: "events", Fields: []TypedStorageField{field}})
+	if err != nil {
+		t.Fatalf("NormalizeTypedStorageLayout offsets-list selector: %v", err)
+	}
+	if got := layout.Fields[0].AdjacencyLayout; got != ColumnAdjacencyListLayoutUint32OffsetsList {
+		t.Fatalf("adjacency_layout=%q want %q", got, ColumnAdjacencyListLayoutUint32OffsetsList)
+	}
+	if layout.Fields[0].AdjacencyDegree != 0 {
+		t.Fatalf("offsets-list selector used adjacency_degree=%d; missing degree must not mean dense row width", layout.Fields[0].AdjacencyDegree)
+	}
+}
+
 func TestTypedColumnDirectViewActiveRowsAreCertifiedSetOnly(t *testing.T) {
 	expectedActive := map[typedColumnDirectViewMatrixKey]bool{
 		{valueType: ColumnStoreValueInt64, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:         true,
@@ -128,7 +184,7 @@ func TestTypedColumnDirectViewActiveRowsAreCertifiedSetOnly(t *testing.T) {
 	}
 	seen := make(map[typedColumnDirectViewMatrixKey]bool, len(expectedActive))
 	for _, row := range typedColumnDirectViewConformanceMatrix() {
-		key := typedColumnDirectViewMatrixKey{valueType: row.ValueType, owner: row.StorageOwner, consumer: row.Consumer}
+		key := typedColumnDirectViewMatrixKey{valueType: row.ValueType, owner: row.StorageOwner, consumer: row.Consumer, adjacencyLayout: row.AdjacencyLayout}
 		if row.Support == typedColumnDirectViewActiveLittleEndianCandidate {
 			if !expectedActive[key] {
 				t.Fatalf("unexpected active direct-view row: %+v", row)
@@ -155,6 +211,9 @@ func TestTypedColumnDirectViewRowAssetAndAdjacencyGuardrails(t *testing.T) {
 		if adjacency {
 			if row.Support != typedColumnDirectViewDeferredFallbackOnly || !typedColumnDirectViewHasFollowUp(row, 1901) {
 				t.Fatalf("adjacency row=%+v want deferred fallback linked to #1901", row)
+			}
+			if row.StorageOwner == typedColumnDirectViewStorageTypedColumnPart && row.AdjacencyLayout == typedColumnDirectViewAdjacencyLayoutNone {
+				t.Fatalf("typed-column adjacency row=%+v missing explicit adjacency layout selector", row)
 			}
 		}
 	}
@@ -188,12 +247,19 @@ func TestTypedColumnDirectViewRowAssetAndAdjacencyGuardrails(t *testing.T) {
 
 func TestTypedColumnDirectViewSafetyChecksAndCounterVocabulary(t *testing.T) {
 	placements := map[typedColumnDirectViewCheckPlacement]bool{}
+	checkNames := map[string]bool{}
 	for _, check := range typedColumnDirectViewSafetyChecks() {
 		placements[check.Placement] = true
+		checkNames[check.Name] = true
 	}
 	for _, placement := range []typedColumnDirectViewCheckPlacement{typedColumnDirectViewReadTime, typedColumnDirectViewCertificationTime, typedColumnDirectViewFallbackPolicy, typedColumnDirectViewDeferredPolicy} {
 		if !placements[placement] {
 			t.Fatalf("missing direct-view safety-check placement %s", placement)
+		}
+	}
+	for _, name := range []string{"offsets-list offset count is exactly row_count+1", "offsets-list offsets start at zero and are monotonic", "offsets-list final offset exactly matches uint32 value count", "offsets-list offsets fit Go int slice ranges before indexing", "absolute asset+offsets-section storage offset alignment", "absolute asset+values-section storage offset alignment"} {
+		if !checkNames[name] {
+			t.Fatalf("missing offsets-list safety check %q", name)
 		}
 	}
 	gotCounters := make(map[typeddecode.Counter]bool)
@@ -202,7 +268,11 @@ func TestTypedColumnDirectViewSafetyChecksAndCounterVocabulary(t *testing.T) {
 	}
 	for _, counter := range []typeddecode.Counter{
 		typeddecode.CounterMmapDirectView,
+		typeddecode.CounterOffsetsMmapDirectView,
+		typeddecode.CounterValuesMmapDirectView,
 		typeddecode.CounterHeapCopyTypedView,
+		typeddecode.CounterOffsetsHeapCopyTypedView,
+		typeddecode.CounterValuesHeapCopyTypedView,
 		typeddecode.CounterScratchDecode,
 		typeddecode.CounterStreamingFallback,
 		typeddecode.CounterCertificationFailure,
@@ -212,6 +282,18 @@ func TestTypedColumnDirectViewSafetyChecksAndCounterVocabulary(t *testing.T) {
 	} {
 		if !gotCounters[counter] {
 			t.Fatalf("missing counter vocabulary token %s", counter)
+		}
+	}
+	if !gotCounters[typeddecode.CounterOffsetsListValidation] {
+		t.Fatalf("missing offsets-list validation counter vocabulary token")
+	}
+	gotReasons := make(map[typeddecode.Reason]bool)
+	for _, reason := range typeddecode.ReasonVocabulary() {
+		gotReasons[reason] = true
+	}
+	for _, reason := range []typeddecode.Reason{typeddecode.ReasonOffsetsCountMismatch, typeddecode.ReasonOffsetsStartMismatch, typeddecode.ReasonOffsetsNonMonotonic, typeddecode.ReasonOffsetsGoIntRange, typeddecode.ReasonValuesLengthMismatch} {
+		if !gotReasons[reason] {
+			t.Fatalf("missing offsets-list reason token %s", reason)
 		}
 	}
 }
@@ -258,6 +340,25 @@ func TestTypedColumnDirectViewLittleEndianByteFixtures(t *testing.T) {
 	wantVector := []byte{0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x80, 0x34, 0x12, 0xc0, 0x7f, 0x00, 0x00, 0x20, 0xc0}
 	if !slices.Equal(vectorRaw, wantVector) {
 		t.Fatalf("float32_vector little-endian bytes=%x want %x", vectorRaw, wantVector)
+	}
+
+	offsets := []uint64{0, 2, 2, 5}
+	offsetsRaw := make([]byte, len(offsets)*8)
+	for i, value := range offsets {
+		binary.LittleEndian.PutUint64(offsetsRaw[i*8:], value)
+	}
+	wantOffsets := []byte{0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0}
+	if !slices.Equal(offsetsRaw, wantOffsets) {
+		t.Fatalf("uint32 offsets-list offsets little-endian bytes=%x want %x", offsetsRaw, wantOffsets)
+	}
+	values := []uint32{1, 2, 9, 10, 11}
+	valuesRaw := make([]byte, len(values)*4)
+	for i, value := range values {
+		binary.LittleEndian.PutUint32(valuesRaw[i*4:], value)
+	}
+	wantValues := []byte{1, 0, 0, 0, 2, 0, 0, 0, 9, 0, 0, 0, 10, 0, 0, 0, 11, 0, 0, 0}
+	if !slices.Equal(valuesRaw, wantValues) {
+		t.Fatalf("uint32 offsets-list values little-endian bytes=%x want %x", valuesRaw, wantValues)
 	}
 }
 

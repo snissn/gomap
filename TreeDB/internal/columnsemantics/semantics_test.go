@@ -19,7 +19,7 @@ func TestSemanticMatrixCoversCurrentLogicalTypesColumnTypesAndEncodings(t *testi
 			t.Fatalf("typedcolumn column type %q not covered", columnType)
 		}
 	}
-	for _, encoding := range []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64} {
+	for _, encoding := range []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList} {
 		if !slices.Contains(Encodings(), encoding) || !IsKnownEncoding(encoding) {
 			t.Fatalf("typedcolumn encoding %s not covered", encoding)
 		}
@@ -292,6 +292,14 @@ func TestCapabilityVectorAndAdjacencySpecificOperationsAreExplicit(t *testing.T)
 	}
 	if cap := CapabilityFor(adjacency, OpVectorSimilarity); cap.Status != StatusUnsupported || cap.Reason != ReasonOperationUnsupported {
 		t.Fatalf("adjacency vector similarity capability=%+v want operation unsupported", cap)
+	}
+
+	offsetsAdjacency := Descriptor{Logical: LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList}
+	if cap := CapabilityFor(offsetsAdjacency, OpAdjacencyDirectPayload); cap.Status != StatusFallback || cap.Reason != ReasonAdjacencyCapabilityDeferred {
+		t.Fatalf("offsets-list adjacency direct capability=%+v want semantic direct deferred", cap)
+	}
+	if cap := CapabilityFor(offsetsAdjacency, OpAdjacencyTraversal); cap.Status != StatusSupported {
+		t.Fatalf("offsets-list adjacency traversal semantic capability=%+v want semantic support; layout/runtime gates remain separate", cap)
 	}
 }
 

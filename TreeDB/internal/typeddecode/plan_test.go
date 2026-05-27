@@ -369,15 +369,53 @@ func TestDenseFloat32VectorDirectViewValidationCoversDimsLengthEndianAlignmentAn
 	}
 }
 
+func TestUint32OffsetsListShapeValidation1914(t *testing.T) {
+	valid := Uint32OffsetsListShapeRequest{Rows: 3, Offsets: []uint64{0, 2, 2, 5}, Values: 5}
+	if status := ValidateUint32OffsetsListShape(valid); !status.Direct() {
+		t.Fatalf("valid offsets-list status=%+v want supported", status)
+	}
+	cases := []struct {
+		name string
+		req  Uint32OffsetsListShapeRequest
+		want Reason
+	}{
+		{name: "offset count", req: Uint32OffsetsListShapeRequest{Rows: 3, Offsets: []uint64{0, 1, 2}, Values: 2}, want: ReasonOffsetsCountMismatch},
+		{name: "start", req: Uint32OffsetsListShapeRequest{Rows: 1, Offsets: []uint64{1, 2}, Values: 2}, want: ReasonOffsetsStartMismatch},
+		{name: "monotonic", req: Uint32OffsetsListShapeRequest{Rows: 2, Offsets: []uint64{0, 3, 2}, Values: 2}, want: ReasonOffsetsNonMonotonic},
+		{name: "values length", req: Uint32OffsetsListShapeRequest{Rows: 2, Offsets: []uint64{0, 1, 3}, Values: 2}, want: ReasonValuesLengthMismatch},
+		{name: "go int values", req: Uint32OffsetsListShapeRequest{Rows: 1, Offsets: []uint64{0, uint64(int(^uint(0)>>1)) + 1}, Values: uint64(int(^uint(0)>>1)) + 1}, want: ReasonOffsetsGoIntRange},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if status := ValidateUint32OffsetsListShape(tc.req); status.Reason != tc.want {
+				t.Fatalf("status=%+v want %s", status, tc.want)
+			}
+		})
+	}
+}
+
 func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 	cert := testAdjacencyDirectCert(2, 2)
 	plan := AdjacencyListPlan(cert, 2)
 	if plan.DirectCandidate() || plan.Reason != ReasonDirectViewDeferred {
-		t.Fatalf("plan=%+v want deferred non-direct adjacency", plan)
+		t.Fatalf("plan=%+v want deferred non-direct dense adjacency", plan)
 	}
 	columnReq := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: 2, PayloadBytes: 16, AssetOffset: 0, HasAssetOffset: true}
 	if status := ValidateDirectViewColumn(columnReq); status.Path != PathUnsupported || status.Reason != ReasonDirectViewDeferred {
 		t.Fatalf("adjacency status=%+v want deferred unsupported", status)
+	}
+
+	offsetsCert := testAdjacencyOffsetsListSpecCert(2, 3)
+	offsetsPlan := AdjacencyOffsetsListPlan(offsetsCert)
+	if offsetsPlan.DirectCandidate() || offsetsPlan.Reason != ReasonDirectViewDeferred || offsetsPlan.ElementsPerRow != 0 {
+		t.Fatalf("offsets-list plan=%+v want explicit variable-list deferred non-direct", offsetsPlan)
+	}
+	if offsetsPlan.ElementSize != 4 || offsetsPlan.Alignment != 4 {
+		t.Fatalf("offsets-list plan=%+v want uint32 value identity", offsetsPlan)
+	}
+	denseCert := testAdjacencyDirectCert(2, 2)
+	if plan := AdjacencyOffsetsListPlan(denseCert); plan.Reason != ReasonValidationFailed {
+		t.Fatalf("dense cert offsets-list plan=%+v want identity validation failure", plan)
 	}
 }
 
@@ -560,6 +598,13 @@ func testAdjacencyDirectCert(rows, degree int) typedcolumn.ColumnPartLayoutContr
 		Name: "neighbors", LogicalType: "adjacency_list", Type: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone,
 		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, FixedWidthElements: degree, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: true,
 		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{FirstRow: 0, RowCount: rows, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadOffset: 0, PayloadLength: bytes}},
+	}
+}
+
+func testAdjacencyOffsetsListSpecCert(rows, values int) typedcolumn.ColumnPartLayoutContractColumn {
+	return typedcolumn.ColumnPartLayoutContractColumn{
+		Name: "neighbors", LogicalType: "adjacency_list", Type: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: (rows+1)*8 + values*4}, ElementSize: 4, Alignment: 4, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 4, DirectViewCertified: false,
 	}
 }
 

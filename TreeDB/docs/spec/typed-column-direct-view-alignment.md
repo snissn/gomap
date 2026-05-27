@@ -24,7 +24,7 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values, dictionaries, and dictionary codes are not string direct-view payloads. |
-| `ColumnStoreValueAdjacencyList` | deferred/fallback-only | direct-view certification is deferred to #1901. Existing dense little-endian `uint32` byte fixtures may remain payload-format tests only. |
+| `ColumnStoreValueAdjacencyList` | spec-only v1 target plus fallback compatibility | #1914 selects an explicit typed-column `raw_uint32_offsets_list` variable-list primitive (`uint64` offsets, `uint32` values) for #1901. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; writer, unsafe direct-view reader, and graph search consumption are deferred to #1915+. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
@@ -69,7 +69,7 @@ their image-local layout contract is otherwise valid.
 | --- | --- | --- |
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
-| `typed_column_part` | `adjacency_list` consumers | deferred/fallback-only; #1901 owns certified adjacency direct views. |
+| `typed_column_part` | `adjacency_list` consumers | `raw_uint32_offsets_list` is the selected #1901 v1 primitive but is spec-only/deferred here; legacy dense fixed-degree `raw_uint32_dense` remains fallback/compatibility. |
 | physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
@@ -115,12 +115,56 @@ later writer/reader PRs only when the same fail-closed behavior is preserved.
   writers, the segment/appender layer supplies deterministic zero prefix padding
   before active direct-view candidates so newly written assets satisfy this rule.
 
+### `raw_uint32_offsets_list` adjacency primitive (#1914)
+
+The #1901 v1 adjacency target is an extension of
+`ColumnStoreValueAdjacencyList` selected by the explicit metadata selector
+`adjacency_layout: "uint32_offsets_list"` plus the internal encoding
+`raw_uint32_offsets_list`, not a new public value type and not an accidental
+missing `adjacency_degree` dense row. Its physical shape is:
+
+```text
+offsets []uint64  // row_count + 1, little-endian
+values  []uint32  // flattened adjacency values, little-endian
+```
+
+The direct-view contract records and validates the offsets and values sections
+separately:
+
+| Section | Element type | Element size | Absolute alignment | Length rule |
+| --- | --- | ---: | ---: | --- |
+| offsets | `uint64` | 8 bytes | 8 bytes | exactly `row_count + 1` elements. |
+| values | `uint32` | 4 bytes | 4 bytes | exactly `offsets[row_count]` elements. |
+
+Validation is split by layer:
+
+- primitive certification/read validation checks `offsets` length exactly
+  `row_count + 1`, `offsets[0] == 0`, monotonic offsets, final offset exactly
+  equal to the `uint32` value count, exact byte lengths for both sections,
+  little-endian identity, Go `int` range before slicing, section checksums and
+  bounds, no null/default/compression wrappers, and mappedresource lifetime;
+- absolute alignment is checked separately for
+  `asset_ref.offset + offsets_section.offset` (8-byte `uint64` alignment) and
+  `asset_ref.offset + values_section.offset` (4-byte `uint32` alignment);
+- actual Go pointer alignment is still checked immediately before exposing each
+  unsafe typed view;
+- graph-level validation remains graph-owned: neighbor ordinal bounds, layer
+  semantics, deleted-row rejection, row identity, candidate ordering, and score
+  correctness are not primitive checks.
+
+Empty lists are represented by equal adjacent offsets. V1 direct views are only
+for non-null, non-default, uncompressed offsets-list payloads. Fixed dense
+`raw_uint32_dense` rows remain a distinct fallback/compatibility layout, and
+physical row-asset adjacency direct views remain deferred to #1897.
+
 ### Fallback-only/deferred encodings
 
 Bool bitpack/RLE, strings/dictionaries, nullable/default wrappers, compressed
 payloads, variable-width varint/delta/double-delta layouts, physical row assets,
 and adjacency direct views are fallback-only or deferred unless a future issue
-adds a new explicit encoding and conformance row.
+adds a new explicit encoding and conformance row. For adjacency, that explicit
+row is `raw_uint32_offsets_list`, but this issue deliberately does not enable a
+writer, unsafe direct-view reader, adapter integration, or graph search runtime.
 
 ## Old/non-certified behavior
 
@@ -137,13 +181,18 @@ Later writer/reader PRs must use these stable counter names and reason buckets:
 | Counter | Meaning |
 | --- | --- |
 | `mmap_direct_view` | zero-copy typed view from mapped storage after certification and read-time checks. |
+| `offsets_mmap_direct_view` | zero-copy typed `uint64` offsets view for `raw_uint32_offsets_list` after offsets-section certification and read-time checks. |
+| `values_mmap_direct_view` | zero-copy typed `uint32` values view for `raw_uint32_offsets_list` after values-section certification and read-time checks. |
 | `heap_copy_typed_view` | safe typed view over owned heap bytes; fallback, not zero-copy evidence. |
+| `offsets_heap_copy_typed_view` | safe typed offsets view over owned heap bytes; fallback, not zero-copy evidence. |
+| `values_heap_copy_typed_view` | safe typed values view over owned heap bytes; fallback, not zero-copy evidence. |
 | `scratch_decode` | decode into caller/session scratch. |
 | `streaming_fallback` | streaming codec or byte-loop fallback. |
 | `certification_failure` | manifest/layout/checksum/schema certification rejected direct view. |
 | `absolute_offset_unaligned` | `asset_ref.offset + payload offset` failed alignment. |
 | `actual_pointer_unaligned` | concrete Go byte-slice address failed alignment. |
 | `stale_handle` | nil/released/out-of-lifetime handle rejected view construction. |
+| `offsets_list_validation_failure` | `raw_uint32_offsets_list` shape validation failed (offset count, monotonicity, Go `int` range, value length, or offsets/values section identity). |
 | per-reason fallback counts | map keyed by stable reason strings such as `wrong_endian`, `length_multiple_mismatch`, `row_count_mismatch`, `dimension_mismatch`, `nullable_default_wrapper`, `compressed`, and `direct_view_deferred`. |
 
 ## Baseline benchmark harness for later PRs
@@ -152,6 +201,15 @@ This PR does not claim a speedup. Later implementation PRs should run focused
 baselines and final measurements with exact branch/commit, hardware, rows,
 dimensions, `ns/op`, ops/sec, `B/op`, `allocs/op`, direct/fallback counters,
 padding bytes, storage bytes, mapped bytes, decoded bytes, and hot-loop allocs.
+
+Later #1915+ PRs that claim adjacency speedups must also define permanent
+primitive microbenchmarks for fallback decode, direct-view prepare/open, and
+per-row offsets-list iteration, then graph benchmarks for serial no-doc,
+serial full-doc, serial exclude-embedding, parallel graph-only, and parallel
+prepared-searcher document modes. Report `adjacency_mmap_direct/search`,
+`adjacency_heap_copy_typed_view/search`, `adjacency_scratch_decode/search`,
+offsets-list certification failures, padding bytes for offsets and values
+sections, and CPU/allocation profile summaries against latest-main baselines.
 
 Suggested commands:
 

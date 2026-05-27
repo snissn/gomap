@@ -41,7 +41,7 @@ time.
 | `double` / `float64` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` double column selects native uncompressed `raw_float64` little-endian IEEE-754 payload bytes. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
-| `adjacency_list` | represented | Fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row; direct-view certification is deferred/fallback-only for this stack (#1901). |
+| `adjacency_list` | represented for dense compatibility; offsets-list spec-only | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the #1914/#1901 variable-list target (`uint64` offsets plus `uint32` values) on the same value type, but writer/reader runtime support is deferred to #1915+. |
 
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit
@@ -49,8 +49,11 @@ JSON null maps to null bitmap rows, omitted paths map to default/missing bitmap
 rows, and present values map to the encoded carrier payload (`0/1` bools,
 int64s, float bit patterns, or string dictionary codes). Vector and adjacency
 nullable/missing support remains staged/fail-closed; `adjacency_list`
-`typed_column_part` owners must declare positive `adjacency_degree` and each
-present row must contain exactly that many uint32 neighbors.
+`typed_column_part` owners using the dense compatibility layout must declare
+positive `adjacency_degree` and each present row must contain exactly that many
+uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
+"uint32_offsets_list"`; it must not be inferred from a missing degree and remains
+fail-closed in the adapter until #1915 adds writer/fallback reader support.
 
 Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows
@@ -113,12 +116,15 @@ payloads, sortable keys, and physical row assets are outside this native scalar
 payload rule.
 
 `float32_vector` typed-column data is stored as uncompressed raw little-endian
-`float32` payloads. `adjacency_list` typed-column data is stored as uncompressed
-raw little-endian `uint32` payloads with exactly `adjacency_degree` elements per
-row, but adjacency direct views are deferred to #1901. The `typedcolumn` image
-builder keeps sections relatively aligned; current direct-view eligibility also
-requires absolute storage alignment (`asset_ref.offset + section/block offset`)
-and actual Go pointer alignment at view construction time. Readers must validate
+`float32` payloads. Default/dense `adjacency_list` typed-column data is stored as
+uncompressed raw little-endian `uint32` payloads with exactly
+`adjacency_degree` elements per row. The #1914 offsets-list selector instead
+uses `uint64` offsets plus flattened `uint32` values and remains adapter
+fail-closed until #1915. Adjacency direct views are deferred to #1901. The
+`typedcolumn` image builder keeps sections relatively aligned; current
+direct-view eligibility also requires absolute storage alignment
+(`asset_ref.offset + section/block offset`) and actual Go pointer alignment at
+view construction time. Readers must validate
 lifetime, range, length, endian mode, absolute offset alignment, source, and
 actual pointer alignment through #1736 `mappedresource` handles before exposing
 mmap direct typed views; heap-copy typed views and scratch decodes are safe
@@ -168,5 +174,6 @@ through that seam. Query/vector search integration remains staged through later 
 #1886 stack consumes certified typed-column `float32_vector` payloads, while
 physical row-asset direct views are deferred to #1897 and adjacency direct-view
 certification is deferred to #1901. This path publishes fixed-dimension
-`float32_vector` and fixed-degree `adjacency_list` values but does not make
-adjacency mmap direct views part of the current stack.
+`float32_vector` and fixed-degree `adjacency_list` values today; #1914 only
+specifies the explicit offsets-list selector and does not make adjacency mmap
+direct views part of the current stack.

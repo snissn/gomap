@@ -42,6 +42,11 @@ const (
 	ReasonPayloadLengthMismatch   Reason = "payload_length_mismatch"
 	ReasonRowCountMismatch        Reason = "row_count_mismatch"
 	ReasonDimensionMismatch       Reason = "dimension_mismatch"
+	ReasonOffsetsCountMismatch    Reason = "offsets_count_mismatch"
+	ReasonOffsetsStartMismatch    Reason = "offsets_start_mismatch"
+	ReasonOffsetsNonMonotonic     Reason = "offsets_non_monotonic"
+	ReasonOffsetsGoIntRange       Reason = "offsets_go_int_range"
+	ReasonValuesLengthMismatch    Reason = "values_length_mismatch"
 	ReasonAbsoluteOffsetUnaligned Reason = "absolute_offset_unaligned"
 	ReasonActualPointerUnaligned  Reason = "actual_pointer_unaligned"
 	ReasonDirectViewDeferred      Reason = "direct_view_deferred"
@@ -111,14 +116,19 @@ func (p Plan) DirectCandidate() bool { return p.Path == PathDirectView && p.Reas
 type Counter string
 
 const (
-	CounterMmapDirectView          Counter = "mmap_direct_view"
-	CounterHeapCopyTypedView       Counter = "heap_copy_typed_view"
-	CounterScratchDecode           Counter = "scratch_decode"
-	CounterStreamingFallback       Counter = "streaming_fallback"
-	CounterCertificationFailure    Counter = "certification_failure"
-	CounterAbsoluteOffsetUnaligned Counter = "absolute_offset_unaligned"
-	CounterActualPointerUnaligned  Counter = "actual_pointer_unaligned"
-	CounterStaleHandle             Counter = "stale_handle"
+	CounterMmapDirectView           Counter = "mmap_direct_view"
+	CounterOffsetsMmapDirectView    Counter = "offsets_mmap_direct_view"
+	CounterValuesMmapDirectView     Counter = "values_mmap_direct_view"
+	CounterHeapCopyTypedView        Counter = "heap_copy_typed_view"
+	CounterOffsetsHeapCopyTypedView Counter = "offsets_heap_copy_typed_view"
+	CounterValuesHeapCopyTypedView  Counter = "values_heap_copy_typed_view"
+	CounterScratchDecode            Counter = "scratch_decode"
+	CounterStreamingFallback        Counter = "streaming_fallback"
+	CounterCertificationFailure     Counter = "certification_failure"
+	CounterAbsoluteOffsetUnaligned  Counter = "absolute_offset_unaligned"
+	CounterActualPointerUnaligned   Counter = "actual_pointer_unaligned"
+	CounterStaleHandle              Counter = "stale_handle"
+	CounterOffsetsListValidation    Counter = "offsets_list_validation_failure"
 )
 
 // CounterVocabulary returns the stable counter names that benchmark/reporting
@@ -126,13 +136,52 @@ const (
 func CounterVocabulary() []Counter {
 	return []Counter{
 		CounterMmapDirectView,
+		CounterOffsetsMmapDirectView,
+		CounterValuesMmapDirectView,
 		CounterHeapCopyTypedView,
+		CounterOffsetsHeapCopyTypedView,
+		CounterValuesHeapCopyTypedView,
 		CounterScratchDecode,
 		CounterStreamingFallback,
 		CounterCertificationFailure,
 		CounterAbsoluteOffsetUnaligned,
 		CounterActualPointerUnaligned,
 		CounterStaleHandle,
+		CounterOffsetsListValidation,
+	}
+}
+
+// ReasonVocabulary returns stable direct-view/fallback reason names that tests,
+// diagnostics, and benchmark summaries may key on.
+func ReasonVocabulary() []Reason {
+	return []Reason{
+		ReasonSupported,
+		ReasonUnsupportedOperation,
+		ReasonLayoutCapability,
+		ReasonNotWriterCertified,
+		ReasonCompressed,
+		ReasonVariableWidth,
+		ReasonNullableWrapper,
+		ReasonWrongEndian,
+		ReasonLengthMultipleMismatch,
+		ReasonPayloadLengthMismatch,
+		ReasonRowCountMismatch,
+		ReasonDimensionMismatch,
+		ReasonOffsetsCountMismatch,
+		ReasonOffsetsStartMismatch,
+		ReasonOffsetsNonMonotonic,
+		ReasonOffsetsGoIntRange,
+		ReasonValuesLengthMismatch,
+		ReasonAbsoluteOffsetUnaligned,
+		ReasonActualPointerUnaligned,
+		ReasonDirectViewDeferred,
+		ReasonUnaligned,
+		ReasonNilHandle,
+		ReasonStaleHandle,
+		ReasonHandleSourceUnsupported,
+		ReasonDictionarySemanticsMissing,
+		ReasonMaterializationRequired,
+		ReasonValidationFailed,
 	}
 }
 
@@ -276,9 +325,10 @@ func DenseFloat32VectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, dim
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalFloat32Vector, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.EncodingRawFloat32Vector, 4, dims)
 }
 
-// AdjacencyListPlan intentionally defers adjacency direct views for the active
-// #1893/#1886 stack. It preserves the same fail-closed validation vocabulary so
-// #1901 can enable writer-certified raw little-endian adjacency sections later.
+// AdjacencyListPlan intentionally keeps the legacy dense fixed-degree adjacency
+// layout as deferred/fallback-only. The #1901 v1 direct-view target is the
+// explicit raw_uint32_offsets_list variable-list primitive, not accidental
+// missing-degree behavior on this dense plan.
 func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree int) Plan {
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            columnsemantics.LogicalAdjacencyList,
@@ -290,6 +340,69 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 		FixedWidthElements: degree,
 	})
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
+}
+
+// AdjacencyOffsetsListPlan records the #1914 v1 adjacency primitive identity:
+// little-endian uint64 offsets plus little-endian uint32 values. It is spec-only
+// in this issue and therefore never returns a direct-view candidate.
+func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
+	}
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:     columnsemantics.LogicalAdjacencyList,
+		Physical:    typedcolumn.ColumnTypeAdjacencyList,
+		Encoding:    typedcolumn.EncodingRawUint32OffsetsList,
+		Compression: cert.Compression,
+		Nullable:    cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0,
+	})
+	cap := layout.Supports(columnlayout.OpAdjacencyDirectView)
+	return Plan{Path: PathUnsupported, Reason: statusFromLayoutCapability(cap).Reason, Message: cap.Error(), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
+}
+
+// Uint32OffsetsListShapeRequest validates the #1914 primitive shape without
+// constructing an unsafe direct view. Values is the number of uint32 values, not
+// the values byte length.
+type Uint32OffsetsListShapeRequest struct {
+	Rows    int
+	Offsets []uint64
+	Values  uint64
+}
+
+func ValidateUint32OffsetsListShape(req Uint32OffsetsListShapeRequest) Status {
+	if req.Rows < 0 {
+		return UnsupportedStatus(ReasonRowCountMismatch, fmt.Sprintf("rows=%d", req.Rows))
+	}
+	maxInt := int(^uint(0) >> 1)
+	if req.Rows == maxInt {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, "row_count+1 overflows int")
+	}
+	wantOffsets := req.Rows + 1
+	if len(req.Offsets) != wantOffsets {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets=%d want row_count+1=%d", len(req.Offsets), wantOffsets))
+	}
+	maxIndex := uint64(maxInt)
+	if req.Offsets[0] != 0 {
+		return UnsupportedStatus(ReasonOffsetsStartMismatch, fmt.Sprintf("offsets[0]=%d want 0", req.Offsets[0]))
+	}
+	if req.Values > maxIndex {
+		return UnsupportedStatus(ReasonOffsetsGoIntRange, fmt.Sprintf("values=%d exceeds max int=%d", req.Values, maxInt))
+	}
+	prev := uint64(0)
+	for i, offset := range req.Offsets {
+		if offset > maxIndex {
+			return UnsupportedStatus(ReasonOffsetsGoIntRange, fmt.Sprintf("offsets[%d]=%d exceeds max int=%d", i, offset, maxInt))
+		}
+		if i > 0 && offset < prev {
+			return UnsupportedStatus(ReasonOffsetsNonMonotonic, fmt.Sprintf("offsets[%d]=%d previous=%d", i, offset, prev))
+		}
+		prev = offset
+	}
+	if final := req.Offsets[req.Rows]; final != req.Values {
+		return UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("final_offset=%d values=%d", final, req.Values))
+	}
+	return DirectStatus()
 }
 
 func scalarDirectViewPlan(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, physical typedcolumn.ColumnType, encoding typedcolumn.Encoding, elementSize int) Plan {
@@ -373,7 +486,7 @@ func statusFromLayoutCapability(cap columnlayout.Capability) Status {
 		reason = ReasonVariableWidth
 	case columnlayout.ReasonNullDefaultWrapperRequired:
 		reason = ReasonNullableWrapper
-	case columnlayout.ReasonAdjacencyDirectViewDeferred:
+	case columnlayout.ReasonAdjacencyDirectViewDeferred, columnlayout.ReasonAdjacencyOffsetsListDirectViewDeferred, columnlayout.ReasonAdjacencyOffsetsListRuntimeDeferred:
 		reason = ReasonDirectViewDeferred
 	case columnlayout.ReasonOperationUnsupported:
 		reason = ReasonUnsupportedOperation

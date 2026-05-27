@@ -521,7 +521,22 @@ native scalar float direct-view payload. Issue `#1756` adds fixed-dimension
 sections whose element count per row is `vector_dims`. Issue `#1783` adds
 fixed-degree `adjacency_list` fields as uncompressed row-major little-endian
 dense `uint32` sections whose element count per row is `adjacency_degree`;
-adjacency direct-view certification remains deferred to #1901.
+that dense layout remains fallback/compatibility. Issue #1914 selects the #1901
+v1 column-store adjacency primitive as an explicit `ColumnStoreValueAdjacencyList`
+layout extension selected by `adjacency_layout: "uint32_offsets_list"` and the
+internal encoding `raw_uint32_offsets_list`:
+
+```text
+offsets []uint64  // row_count + 1, little-endian
+values  []uint32  // flattened adjacency values, little-endian
+```
+
+The offsets-list primitive validates exact offsets count, `offsets[0] == 0`,
+monotonic offsets, final offset equal to the value count, exact offsets/value
+byte lengths, Go `int` range before slicing, little-endian identity, and separate
+absolute alignment for offsets (8-byte) and values (4-byte) sections. It is
+spec/conformance-only in #1914: no writer, unsafe direct-view reader, adapter
+runtime, or graph search behavior is enabled until #1915+.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -589,10 +604,12 @@ schema, null/missing, and fail-closed validation must not be weakened to meet th
 allocation budget.
 
 Production `float32_vector` and `adjacency_list` nullable/missing support remains
-staged and fail-closed. Authoritative `adjacency_list` typed-column fields must
-be non-nullable, must declare positive `adjacency_degree`, and must fail closed
-when any source row length, schema descriptor, or asset payload length disagrees
-with that fixed degree.
+staged and fail-closed. Authoritative dense `adjacency_list` typed-column fields
+must be non-nullable, must declare positive `adjacency_degree`, and must fail
+closed when any source row length, schema descriptor, or asset payload length
+disagrees with that fixed degree. The offsets-list selector is also non-nullable,
+must not declare `adjacency_degree`, and remains writer/reader fail-closed until
+issue #1915 adds the concrete encoding.
 
 ## 8. Commit-Log Segment Format
 

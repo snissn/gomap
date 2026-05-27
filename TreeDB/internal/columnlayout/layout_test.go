@@ -237,6 +237,19 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	if cap := adjacency.Supports(OpInt64RangePredicate); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
 		t.Fatalf("adjacency scalar cap=%+v want %s", cap, ReasonAdjacencyScalarUnsupported)
 	}
+	offsetsAdjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone})
+	if offsetsAdjacency.Layout.Kind != LayoutVariableWidth || !offsetsAdjacency.Layout.VariableWidth || offsetsAdjacency.Layout.FixedWidth || offsetsAdjacency.Layout.ElementsPerRow != 0 {
+		t.Fatalf("offsets-list adjacency caps=%+v want variable-length non-dense layout", offsetsAdjacency)
+	}
+	if offsetsAdjacency.DirectView.Eligible || offsetsAdjacency.DirectView.Reason != ReasonAdjacencyOffsetsListDirectViewDeferred {
+		t.Fatalf("offsets-list adjacency direct=%+v want spec-only deferred direct view", offsetsAdjacency.DirectView)
+	}
+	if cap := offsetsAdjacency.Supports(OpAdjacencyDirectView); cap.Supported() || cap.Reason != ReasonAdjacencyOffsetsListDirectViewDeferred {
+		t.Fatalf("offsets-list direct cap=%+v want %s", cap, ReasonAdjacencyOffsetsListDirectViewDeferred)
+	}
+	if cap := offsetsAdjacency.Supports(OpAdjacencyTraversal); cap.Supported() || cap.Reason != ReasonAdjacencyOffsetsListRuntimeDeferred {
+		t.Fatalf("offsets-list traversal cap=%+v want runtime deferred", cap)
+	}
 	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
 		if cap := adjacency.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {
 			t.Fatalf("adjacency semantic scalar %s cap=%+v want %s", op, cap, ReasonAdjacencyScalarUnsupported)

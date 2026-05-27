@@ -12,11 +12,21 @@ const (
 type typedColumnDirectViewConsumerPath string
 
 const (
-	typedColumnDirectViewConsumerTypedColumnPartGeneric typedColumnDirectViewConsumerPath = "typed_column_part_generic"
-	typedColumnDirectViewConsumerColumnGraphTypedVector typedColumnDirectViewConsumerPath = "column_graph_typed_column_vector_source"
-	typedColumnDirectViewConsumerRowAssetVector         typedColumnDirectViewConsumerPath = "row_asset_vector_consumer"
-	typedColumnDirectViewConsumerRowAssetAdjacency      typedColumnDirectViewConsumerPath = "row_asset_adjacency_consumer"
-	typedColumnDirectViewConsumerRowAssetGeneric        typedColumnDirectViewConsumerPath = "row_asset_generic_consumer"
+	typedColumnDirectViewConsumerTypedColumnPartGeneric    typedColumnDirectViewConsumerPath = "typed_column_part_generic"
+	typedColumnDirectViewConsumerColumnGraphTypedVector    typedColumnDirectViewConsumerPath = "column_graph_typed_column_vector_source"
+	typedColumnDirectViewConsumerColumnGraphTypedAdjacency typedColumnDirectViewConsumerPath = "column_graph_typed_column_adjacency_source"
+	typedColumnDirectViewConsumerRowAssetVector            typedColumnDirectViewConsumerPath = "row_asset_vector_consumer"
+	typedColumnDirectViewConsumerRowAssetAdjacency         typedColumnDirectViewConsumerPath = "row_asset_adjacency_consumer"
+	typedColumnDirectViewConsumerRowAssetGeneric           typedColumnDirectViewConsumerPath = "row_asset_generic_consumer"
+)
+
+type typedColumnDirectViewAdjacencyLayout string
+
+const (
+	typedColumnDirectViewAdjacencyLayoutNone             typedColumnDirectViewAdjacencyLayout = ""
+	typedColumnDirectViewAdjacencyLayoutRawUint32Dense   typedColumnDirectViewAdjacencyLayout = "raw_uint32_dense"
+	typedColumnDirectViewAdjacencyLayoutRawUint32Offsets typedColumnDirectViewAdjacencyLayout = "raw_uint32_offsets_list"
+	typedColumnDirectViewAdjacencyLayoutPhysicalRowAsset typedColumnDirectViewAdjacencyLayout = "physical_row_asset_legacy"
 )
 
 type typedColumnDirectViewSupport string
@@ -51,6 +61,11 @@ type typedColumnDirectViewClassification struct {
 	ElementSize            int
 	Alignment              int
 	RequiresElementsPerRow bool
+	AdjacencyLayout        typedColumnDirectViewAdjacencyLayout
+	OffsetsElementSize     int
+	OffsetsAlignment       int
+	ValuesElementSize      int
+	ValuesAlignment        int
 	NativeScalarPayload    bool
 	Reason                 string
 	FollowUpIssue          int
@@ -66,35 +81,62 @@ func typedColumnDirectViewSafetyChecks() []typedColumnDirectViewSafetyCheck {
 		{Name: "logical type and physical encoding", Placement: typedColumnDirectViewCertificationTime},
 		{Name: "compression/null/default exclusion", Placement: typedColumnDirectViewCertificationTime},
 		{Name: "row count and fixed dims/degree", Placement: typedColumnDirectViewCertificationTime},
+		{Name: "offsets-list offset count is exactly row_count+1", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterOffsetsListValidation},
+		{Name: "offsets-list offsets start at zero and are monotonic", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterOffsetsListValidation},
+		{Name: "offsets-list final offset exactly matches uint32 value count", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterOffsetsListValidation},
+		{Name: "offsets-list offsets fit Go int slice ranges before indexing", Placement: typedColumnDirectViewReadTime, Counter: typeddecode.CounterOffsetsListValidation},
 		{Name: "manifest identity, checksum, and section bounds", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterCertificationFailure},
-		{Name: "absolute asset+payload storage offset alignment", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterAbsoluteOffsetUnaligned},
+		{Name: "absolute asset+offsets-section storage offset alignment", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterAbsoluteOffsetUnaligned},
+		{Name: "absolute asset+values-section storage offset alignment", Placement: typedColumnDirectViewCertificationTime, Counter: typeddecode.CounterAbsoluteOffsetUnaligned},
 		{Name: "bool/string/dictionary/nullable/default/compressed/variable-width/delta fallback", Placement: typedColumnDirectViewFallbackPolicy, Counter: typeddecode.CounterStreamingFallback},
 		{Name: "physical row asset and adjacency direct-view deferral", Placement: typedColumnDirectViewDeferredPolicy, Counter: typeddecode.CounterScratchDecode},
 	}
 }
 
 func typedColumnDirectViewClassificationFor(valueType ColumnStoreValueType, owner typedColumnDirectViewStorageOwner, consumer typedColumnDirectViewConsumerPath) typedColumnDirectViewClassification {
-	base := typedColumnDirectViewClassification{ValueType: valueType, StorageOwner: owner, Consumer: consumer, Support: typedColumnDirectViewFallbackOnly, Reason: "fallback_only"}
+	return typedColumnDirectViewClassificationForAdjacencyLayout(valueType, owner, consumer, typedColumnDirectViewAdjacencyLayoutNone)
+}
+
+func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStoreValueType, owner typedColumnDirectViewStorageOwner, consumer typedColumnDirectViewConsumerPath, adjacencyLayout typedColumnDirectViewAdjacencyLayout) typedColumnDirectViewClassification {
+	base := typedColumnDirectViewClassification{ValueType: valueType, StorageOwner: owner, Consumer: consumer, Support: typedColumnDirectViewFallbackOnly, Reason: "fallback_only", AdjacencyLayout: adjacencyLayout}
 	if owner == typedColumnDirectViewStoragePhysicalRowAsset || consumer == typedColumnDirectViewConsumerRowAssetVector || consumer == typedColumnDirectViewConsumerRowAssetAdjacency || consumer == typedColumnDirectViewConsumerRowAssetGeneric {
 		base.Support = typedColumnDirectViewDeferredFallbackOnly
 		base.Reason = "physical row assets are deferred to #1897"
 		base.FollowUpIssue = 1897
 		base.FollowUpIssues = []int{1897}
 		if valueType == ColumnStoreValueAdjacencyList || consumer == typedColumnDirectViewConsumerRowAssetAdjacency {
-			base.Reason = "physical row assets are deferred to #1897; adjacency_list direct-view certification is deferred to #1901"
+			base.AdjacencyLayout = typedColumnDirectViewAdjacencyLayoutPhysicalRowAsset
+			base.Reason = "physical row assets are deferred to #1897; row-asset adjacency remains legacy/fallback while #1901 targets typed-column raw_uint32_offsets_list"
 			base.FollowUpIssues = []int{1897, 1901}
 		}
 		return base
 	}
 	if valueType == ColumnStoreValueAdjacencyList {
+		if adjacencyLayout == typedColumnDirectViewAdjacencyLayoutNone {
+			adjacencyLayout = typedColumnDirectViewAdjacencyLayoutRawUint32Dense
+			base.AdjacencyLayout = adjacencyLayout
+		}
 		base.Support = typedColumnDirectViewDeferredFallbackOnly
 		base.PayloadEndian = "little"
 		base.ElementSize = 4
 		base.Alignment = 4
-		base.RequiresElementsPerRow = true
-		base.Reason = "adjacency_list direct-view certification is deferred to #1901"
 		base.FollowUpIssue = 1901
 		base.FollowUpIssues = []int{1901}
+		switch adjacencyLayout {
+		case typedColumnDirectViewAdjacencyLayoutRawUint32Offsets:
+			base.RequiresElementsPerRow = false
+			base.OffsetsElementSize = 8
+			base.OffsetsAlignment = 8
+			base.ValuesElementSize = 4
+			base.ValuesAlignment = 4
+			base.Reason = "#1914 selected typed-column ColumnStoreValueAdjacencyList raw_uint32_offsets_list: uint64 offsets plus uint32 values; writer/direct-view/search runtime remains deferred to #1915+"
+			base.FollowUpIssues = []int{1901, 1915, 1916, 1917, 1919}
+		case typedColumnDirectViewAdjacencyLayoutRawUint32Dense:
+			base.RequiresElementsPerRow = true
+			base.Reason = "legacy dense fixed-degree raw_uint32_dense adjacency remains fallback/compatibility; #1901 v1 target is raw_uint32_offsets_list"
+		default:
+			base.Reason = "unknown adjacency layout selector requires explicit direct-view classification"
+		}
 		return base
 	}
 	switch valueType {
@@ -163,11 +205,14 @@ func typedColumnDirectViewConformanceMatrix() []typedColumnDirectViewClassificat
 	}
 
 	inventory := typedColumnDirectViewAllTypeInventory()
-	rows := make([]rowSpec, 0, len(inventory)*2+3)
+	rows := make([]rowSpec, 0, len(inventory)*2+4)
 	for _, valueType := range inventory {
 		rows = append(rows, rowSpec{valueType: valueType, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric})
 	}
-	rows = append(rows, rowSpec{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector})
+	rows = append(rows,
+		rowSpec{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector},
+		rowSpec{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedAdjacency},
+	)
 	for _, valueType := range inventory {
 		rows = append(rows, rowSpec{valueType: valueType, owner: typedColumnDirectViewStoragePhysicalRowAsset, consumer: typedColumnDirectViewConsumerRowAssetGeneric})
 	}
@@ -178,7 +223,14 @@ func typedColumnDirectViewConformanceMatrix() []typedColumnDirectViewClassificat
 
 	out := make([]typedColumnDirectViewClassification, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, typedColumnDirectViewClassificationFor(row.valueType, row.owner, row.consumer))
+		layout := typedColumnDirectViewAdjacencyLayoutNone
+		if row.valueType == ColumnStoreValueAdjacencyList && row.owner == typedColumnDirectViewStorageTypedColumnPart {
+			layout = typedColumnDirectViewAdjacencyLayoutRawUint32Dense
+			if row.consumer == typedColumnDirectViewConsumerColumnGraphTypedAdjacency {
+				layout = typedColumnDirectViewAdjacencyLayoutRawUint32Offsets
+			}
+		}
+		out = append(out, typedColumnDirectViewClassificationForAdjacencyLayout(row.valueType, row.owner, row.consumer, layout))
 	}
 	return out
 }

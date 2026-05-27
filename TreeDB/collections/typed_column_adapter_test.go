@@ -1067,6 +1067,15 @@ func TestTypedColumnAdapterVectorAdjacencyRepresented(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterAdjacencyOffsetsListSelectorFailsClosedUntil1915(t *testing.T) {
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	field.AdjacencyDegree = 0
+	if _, err := typedColumnAdapterMapField(field); !errors.Is(err, errTypedColumnAdapterUnsupportedType) || !strings.Contains(err.Error(), "#1915") {
+		t.Fatalf("typedColumnAdapterMapField offsets-list err=%v want #1915 unsupported", err)
+	}
+}
+
 func TestTypedColumnAdapterExistingConfigStaysTypedRow(t *testing.T) {
 	layout, err := ResolveTypedStorageLayout(CollectionMeta{
 		Name: "typed_column_adapter_existing_config",

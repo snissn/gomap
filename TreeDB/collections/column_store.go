@@ -69,6 +69,16 @@ const (
 	ColumnFixedWidthEncodingLittleEndian ColumnFixedWidthEncoding = "little_endian"
 )
 
+type ColumnAdjacencyListLayout string
+
+const (
+	// Empty preserves the existing fixed-degree dense adjacency layout selected
+	// by adjacency_degree. The #1901 v1 variable-list primitive must be selected
+	// explicitly and must not be inferred from a missing degree.
+	ColumnAdjacencyListLayoutFixedDense        ColumnAdjacencyListLayout = ""
+	ColumnAdjacencyListLayoutUint32OffsetsList ColumnAdjacencyListLayout = "uint32_offsets_list"
+)
+
 type ColumnSortDirection string
 
 const (
@@ -178,10 +188,14 @@ type ColumnStoreColumn struct {
 	Nullable   bool                   `json:"nullable,omitempty"`
 	Dictionary bool                   `json:"dictionary,omitempty"`
 	VectorDims int                    `json:"vector_dims,omitempty"`
-	// AdjacencyDegree is the fixed number of uint32 neighbors per row for
-	// adjacency_list typed_column_part storage.
-	AdjacencyDegree    int                      `json:"adjacency_degree,omitempty"`
-	FixedWidthEncoding ColumnFixedWidthEncoding `json:"fixed_width_encoding,omitempty"`
+	// AdjacencyDegree is the fixed number of uint32 neighbors per row for the
+	// legacy/fallback dense adjacency_list typed_column_part layout.
+	AdjacencyDegree int `json:"adjacency_degree,omitempty"`
+	// AdjacencyLayout selects the explicit adjacency_list physical layout. Empty
+	// means fixed dense compatibility; uint32_offsets_list is the #1914/#1901 v1
+	// variable-list primitive and remains writer/direct-reader deferred here.
+	AdjacencyLayout    ColumnAdjacencyListLayout `json:"adjacency_layout,omitempty"`
+	FixedWidthEncoding ColumnFixedWidthEncoding  `json:"fixed_width_encoding,omitempty"`
 }
 
 type ColumnSortKey struct {
@@ -444,6 +458,13 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: %w", col.Name, err)
 		}
+		adjacencyLayout, err := normalizeColumnAdjacencyListLayout(col.AdjacencyLayout)
+		if err != nil {
+			return fmt.Errorf("collections: invalid column %q adjacency_layout: %w", col.Name, err)
+		}
+		if adjacencyLayout != ColumnAdjacencyListLayoutFixedDense && valueType != ColumnStoreValueAdjacencyList {
+			return fmt.Errorf("collections: invalid column %q adjacency_layout: only adjacency_list columns may set adjacency_layout", col.Name)
+		}
 		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(valueType) {
 			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
 		}
@@ -466,16 +487,32 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			if col.AdjacencyDegree < 0 {
 				return fmt.Errorf("collections: invalid column %q adjacency_degree: must be non-negative", col.Name)
 			}
-			if owner != TypedStorageOwnerColumnPart {
-				if col.AdjacencyDegree != 0 {
-					return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list typed_column_part columns may set adjacency_degree", col.Name)
+			switch adjacencyLayout {
+			case ColumnAdjacencyListLayoutFixedDense:
+				if owner != TypedStorageOwnerColumnPart {
+					if col.AdjacencyDegree != 0 {
+						return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list typed_column_part columns may set adjacency_degree", col.Name)
+					}
+				} else {
+					if col.Nullable {
+						return fmt.Errorf("collections: invalid column %q nullable adjacency_list typed_column_part is unsupported", col.Name)
+					}
+					if col.AdjacencyDegree <= 0 {
+						return fmt.Errorf("collections: invalid column %q adjacency_degree: must be positive for adjacency_list typed_column_part", col.Name)
+					}
 				}
-			} else {
+			case ColumnAdjacencyListLayoutUint32OffsetsList:
+				if owner != TypedStorageOwnerColumnPart {
+					return fmt.Errorf("collections: invalid column %q adjacency_layout: uint32_offsets_list requires owner %q", col.Name, TypedStorageOwnerColumnPart)
+				}
 				if col.Nullable {
 					return fmt.Errorf("collections: invalid column %q nullable adjacency_list typed_column_part is unsupported", col.Name)
 				}
-				if col.AdjacencyDegree <= 0 {
-					return fmt.Errorf("collections: invalid column %q adjacency_degree: must be positive for adjacency_list typed_column_part", col.Name)
+				if col.AdjacencyDegree != 0 {
+					return fmt.Errorf("collections: invalid column %q adjacency_degree: must be zero for adjacency_layout %q", col.Name, adjacencyLayout)
+				}
+				if fixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+					return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for adjacency_layout %q", col.Name, adjacencyLayout)
 				}
 			}
 		} else if col.AdjacencyDegree != 0 {
@@ -627,6 +664,15 @@ func normalizeColumnFixedWidthEncoding(encoding ColumnFixedWidthEncoding) (Colum
 		return encoding, nil
 	default:
 		return "", fmt.Errorf("unsupported fixed_width_encoding %q", encoding)
+	}
+}
+
+func normalizeColumnAdjacencyListLayout(layout ColumnAdjacencyListLayout) (ColumnAdjacencyListLayout, error) {
+	switch layout {
+	case ColumnAdjacencyListLayoutFixedDense, ColumnAdjacencyListLayoutUint32OffsetsList:
+		return layout, nil
+	default:
+		return "", fmt.Errorf("unsupported adjacency_layout %q", layout)
 	}
 }
 
@@ -1033,6 +1079,9 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, string(columnStoreColumnOwnerOrRowAsset(col)))
 		writeHashUint64(&d, uint64(col.VectorDims))
 		writeHashUint64(&d, uint64(col.AdjacencyDegree))
+		if col.AdjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
+			writeHashString(&d, string(col.AdjacencyLayout))
+		}
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)
 		if col.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {

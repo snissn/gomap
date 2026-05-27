@@ -1831,7 +1831,7 @@ func columnAssetDirectViewAlignmentTestPayloads(t *testing.T) (ColumnStoreConfig
 
 func columnAssetTypedColumnPartDirectViewTestConfig(t *testing.T, collection string, field TypedStorageField) ColumnStoreConfig {
 	t.Helper()
-	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{{Name: field.Name, Path: field.Path, Owner: field.Owner, ValueType: field.ValueType, Nullable: field.Nullable, FixedWidthEncoding: field.FixedWidthEncoding, VectorDims: field.VectorDims, AdjacencyDegree: field.AdjacencyDegree}}}
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{{Name: field.Name, Path: field.Path, Owner: field.Owner, ValueType: field.ValueType, Nullable: field.Nullable, FixedWidthEncoding: field.FixedWidthEncoding, VectorDims: field.VectorDims, AdjacencyDegree: field.AdjacencyDegree, AdjacencyLayout: field.AdjacencyLayout}}}
 	normalized, err := normalizeColumnStoreConfig(collection, cfg)
 	if err != nil {
 		t.Fatalf("normalizeColumnStoreConfig: %v", err)

@@ -183,7 +183,7 @@ func ColumnTypes() []typedcolumn.ColumnType {
 }
 
 func Encodings() []typedcolumn.Encoding {
-	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64}
+	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList}
 }
 
 func IsKnownLogicalType(t LogicalType) bool {
@@ -292,7 +292,7 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeAdjacencyList:
-		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense || encoding == typedcolumn.EncodingRawUint32OffsetsList
 	}
 	return ReasonEncodingPhysicalMismatch, false
 }
@@ -455,7 +455,7 @@ func vectorCapability(desc Descriptor, op Operation) Capability {
 
 func adjacencyCapability(desc Descriptor, op Operation) Capability {
 	if desc.Physical != typedcolumn.ColumnTypeAdjacencyList {
-		return Unsupported(op, ReasonLogicalPhysicalMismatch, "adjacency_list semantics require dense uint32 adjacency physical type")
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "adjacency_list semantics require uint32 adjacency physical type")
 	}
 	switch op {
 	case OpAllRows:
