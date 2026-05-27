@@ -611,7 +611,6 @@ func (r *columnVectorGraphPhysicalRowReader) populateTypedColumnVectorSearchStat
 	}
 	if r.hasTypedColumnVectorFallback() {
 		stats.TypedColumnFallbacks = 1
-		stats.VectorCertificationFailures = 1
 		return
 	}
 	source := r.typedVectorSource

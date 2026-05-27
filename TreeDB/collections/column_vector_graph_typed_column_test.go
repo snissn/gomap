@@ -246,8 +246,8 @@ func TestColumnVectorGraphTypedColumnVectorCorruptPartFallsBack1782(t *testing.T
 		t.Fatalf("SearchCosine fallback: %v", err)
 	}
 	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 2))
-	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 || stats.VectorCertificationFailures == 0 {
-		t.Fatalf("stats=%+v want typed-column certification fallback to graph row vector scratch decodes", stats)
+	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 {
+		t.Fatalf("stats=%+v want typed-column source fallback to graph row vector scratch decodes", stats)
 	}
 }
 
@@ -872,8 +872,8 @@ func assertTypedColumnVectorFallbackSearch1782(tb testing.TB, col *Collection, d
 		tb.Fatalf("SearchCosine fallback: %v", err)
 	}
 	assertColumnGraphNativeSearchResultsV3(tb, got, exactColumnGraphTopKForTest(tb, rows, query, 2))
-	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 || stats.VectorCertificationFailures == 0 {
-		tb.Fatalf("stats=%+v want typed-column certification fallback to graph row vector scratch decodes", stats)
+	if stats.TypedColumnFallbacks != 1 || stats.VectorMmapDirectViews != 0 || stats.VectorHeapCopyTypedViews != 0 || stats.VectorScratchDecodes == 0 {
+		tb.Fatalf("stats=%+v want typed-column source fallback to graph row vector scratch decodes", stats)
 	}
 }
 
