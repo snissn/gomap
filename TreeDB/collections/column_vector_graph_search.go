@@ -665,14 +665,6 @@ func recordColumnVectorGraphVectorFallbackReasonStats(stats *columnVectorGraphNa
 }
 
 func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, direct bool) {
-	outcome := columnVectorGraphLayer0AdjacencySourceOutcomeUnknown
-	if direct {
-		outcome = columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect
-	}
-	recordColumnVectorGraphAdjacencySourceOutcomeStats(stats, adjacencyLen, outcome)
-}
-
-func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
 	if stats == nil {
 		return
 	}
@@ -680,6 +672,18 @@ func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraph
 	if adjacencyLen == 0 {
 		return
 	}
+	if direct {
+		stats.AdjacencyDirectViews++
+		return
+	}
+	stats.AdjacencyScratchDecodes++
+}
+
+func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
+	if stats == nil {
+		return
+	}
+	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
 	switch outcome {
 	case columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect:
 		stats.AdjacencyDirectViews++
@@ -687,7 +691,9 @@ func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraph
 	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
 		stats.AdjacencyHeapCopyTypedViews++
 	default:
-		stats.AdjacencyScratchDecodes++
+		if adjacencyLen > 0 {
+			stats.AdjacencyScratchDecodes++
+		}
 	}
 }
 
@@ -718,8 +724,8 @@ func (r *columnVectorGraphPhysicalRowReader) populateLayer0AdjacencySourceSearch
 	if r == nil || stats == nil || r.layer0AdjacencySource != nil {
 		return
 	}
+	stats.AdjacencySourceUnavailable = 1
 	if r.layer0AdjacencySourceUnavailable {
-		stats.AdjacencySourceUnavailable = 1
 		stats.AdjacencySourceFallbacks = 1
 		return
 	}

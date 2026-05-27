@@ -39,8 +39,12 @@ func TestColumnVectorGraphAdjacencySourceStatsSkipEmptyNoopV3(t *testing.T) {
 		t.Fatalf("scratch adjacency stats=%+v want bytes=8 scratch=1", stats)
 	}
 	recordColumnVectorGraphAdjacencySourceStats(&stats, 3, true)
-	if stats.AdjacencyBytesRead != 20 || stats.AdjacencyDirectViews != 1 || stats.AdjacencyMmapDirectViews != 1 || stats.AdjacencyHeapCopyTypedViews != 0 || stats.AdjacencyScratchDecodes != 1 {
-		t.Fatalf("direct adjacency stats=%+v want cumulative bytes=20 mmap_direct=1 scratch=1", stats)
+	if stats.AdjacencyBytesRead != 20 || stats.AdjacencyDirectViews != 1 || stats.AdjacencyMmapDirectViews != 0 || stats.AdjacencyHeapCopyTypedViews != 0 || stats.AdjacencyScratchDecodes != 1 {
+		t.Fatalf("row-asset direct adjacency stats=%+v want cumulative bytes=20 direct=1 scratch=1 without layer-0 mmap attribution", stats)
+	}
+	recordColumnVectorGraphAdjacencySourceOutcomeStats(&stats, 0, columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect)
+	if stats.AdjacencyBytesRead != 20 || stats.AdjacencyDirectViews != 2 || stats.AdjacencyMmapDirectViews != 1 || stats.AdjacencyHeapCopyTypedViews != 0 || stats.AdjacencyScratchDecodes != 1 {
+		t.Fatalf("empty layer-0 direct adjacency stats=%+v want mmap outcome counted without bytes", stats)
 	}
 }
 

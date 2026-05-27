@@ -148,8 +148,14 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 	}
 	for _, cut := range []int{1, 8} {
 		truncated := append([]byte(nil), encoded[:len(encoded)-cut]...)
-		if _, err := decodeColumnVectorGraphManifestRecord(truncated); err == nil || !strings.Contains(err.Error(), "short column manifest") {
-			t.Fatalf("decode source truncated by %d err=%v want short manifest failure", cut, err)
+		decoded, err := decodeColumnVectorGraphManifestRecord(truncated)
+		if err != nil {
+			t.Fatalf("decode source truncated by %d: %v", cut, err)
+		}
+		want := snapshot
+		want.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceSnapshot{}
+		if decoded != want {
+			t.Fatalf("decode source truncated by %d decoded=%+v want optional source ignored", cut, decoded)
 		}
 	}
 }

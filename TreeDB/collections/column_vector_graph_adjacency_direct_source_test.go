@@ -186,7 +186,7 @@ func TestColumnVectorGraphLayer0AdjacencySourceChecksumFallback1919(t *testing.T
 	if err != nil {
 		t.Fatalf("SearchCosine after corrupt source: %v", err)
 	}
-	if len(got) == 0 || stats.AdjacencySourceFallbacks != 1 || stats.AdjacencyCertificationFailures == 0 || stats.AdjacencyMmapDirectViews != 0 {
+	if len(got) == 0 || stats.AdjacencySourceUnavailable != 1 || stats.AdjacencySourceFallbacks != 1 || stats.AdjacencyCertificationFailures == 0 || stats.AdjacencyMmapDirectViews != 0 {
 		t.Fatalf("results=%d stats=%+v want row-asset fallback with source certification failure", len(got), stats)
 	}
 }
@@ -352,6 +352,9 @@ func columnAssetReachabilityPlanHasSource1919(plan ColumnAssetReachabilityPlan, 
 }
 
 func columnVectorGraphLayer0AdjacencyMmapExpectedOnPlatform1919() bool {
+	if !mappedresource.NativeLittleEndian() {
+		return false
+	}
 	switch runtime.GOOS {
 	case "darwin", "linux", "freebsd", "netbsd", "openbsd":
 		return true

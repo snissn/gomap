@@ -227,7 +227,7 @@ func columnVectorGraphLayer0AdjacencyDirectSourceFromHandles(manager *mappedreso
 		return &columnVectorGraphLayer0AdjacencyDirectSource{rows: rows, offsets: offsets, values: values, outcome: columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect, manager: manager, offsetsHandle: offsetsHandle, valuesHandle: valuesHandle}, "", nil
 	}
 	firstStatus := status
-	if status.Reason == typeddecode.ReasonHandleSourceUnsupported {
+	if status.Reason == typeddecode.ReasonHandleSourceUnsupported || status.Reason == typeddecode.ReasonActualPointerUnaligned {
 		offsets, values, status = typeddecode.Uint32OffsetsListView(manager, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: false})
 		if status.Direct() {
 			if len(values) != valuesCount {
