@@ -219,6 +219,13 @@ func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildColumnPart: %v", err)
 	}
+	neighbors := part.Columns["neighbors"]
+	if got := len(part.Descriptor.Granules); got != 2 {
+		t.Fatalf("granules=%d want 2", got)
+	}
+	if got := len(neighbors.Blocks); got != 2 {
+		t.Fatalf("offsets-list blocks=%d want 2", got)
+	}
 	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"neighbors": "adjacency_list"}})
 	if err != nil {
 		t.Fatalf("BuildColumnPartImage: %v", err)
@@ -236,6 +243,12 @@ func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	if offsetsSection.Offset >= valuesSection.Offset {
 		t.Fatalf("section order offsets=%d values=%d", offsetsSection.Offset, valuesSection.Offset)
 	}
+	if !bytes.Equal(image.sectionBytes(offsetsSection), mustOffsetsListOffsets(t, []uint64{0, 0, 2, 2, 5})) {
+		t.Fatalf("global offsets section bytes=%v", image.sectionBytes(offsetsSection))
+	}
+	if !bytes.Equal(image.sectionBytes(valuesSection), mustOffsetsListValues(t, []uint32{7, 8, 9, 10, 11})) {
+		t.Fatalf("values section bytes=%v", image.sectionBytes(valuesSection))
+	}
 	if err := ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, image.sectionBytes(offsetsSection), image.sectionBytes(valuesSection), 4); err != nil {
 		t.Fatalf("ValidateRawUint32OffsetsListSections: %v", err)
 	}
@@ -249,6 +262,11 @@ func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	}
 	if certColumn.OffsetsBytes != offsetsSection.Length || certColumn.ValuesBytes != valuesSection.Length || certColumn.DirectViewCertified {
 		t.Fatalf("certified offsets-list column=%+v", certColumn)
+	}
+	for i, block := range certColumn.Blocks {
+		if block.PayloadOffset != 0 || block.PayloadLength != 0 {
+			t.Fatalf("certified offsets-list block %d payload offset/length=(%d,%d) want (0,0)", i, block.PayloadOffset, block.PayloadLength)
+		}
 	}
 	parsed, err := ParseColumnPartImage(image.Bytes)
 	if err != nil {

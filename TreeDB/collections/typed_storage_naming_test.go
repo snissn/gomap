@@ -366,6 +366,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_column_float_fallback_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 14, occurrences: 14},
 	{path: "TreeDB/collections/typed_column_float_fallback_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 48, occurrences: 50},
 	{path: "TreeDB/collections/typed_column_int64_scan.go", classification: typedStorageLegacyCompatibility, matchingLines: 22, occurrences: 31},
+	{path: "TreeDB/collections/typed_column_offsets_list_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/typed_column_int64_scan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 32, occurrences: 40},
 	{path: "TreeDB/collections/typed_column_prepared_int64.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_column_prepared_state.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},

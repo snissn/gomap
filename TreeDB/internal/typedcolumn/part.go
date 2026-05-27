@@ -1048,13 +1048,6 @@ func (b *ColumnPartBuilder) buildColumn(batch Batch, def ColumnDefinition) (Colu
 	if blockRows == 0 {
 		blockRows = b.opts.PartPolicy.RowsPerGranule
 	}
-	if def.Encoding == EncodingRawUint32OffsetsList {
-		// The v1 offsets-list primitive stores one column-wide offsets section with
-		// exactly row_count+1 uint64 entries plus one values section. Keep the
-		// descriptor to a single block until a later format explicitly adds
-		// per-block offsets-list sections.
-		blockRows = len(b.order)
-	}
 	column := ColumnPartColumn{Definition: def}
 	descriptor := ColumnPartColumnDescriptor{Name: def.Name, Type: def.Type, FixedWidthElements: def.FixedWidthElements}
 	for start := 0; start < len(b.order); start += blockRows {

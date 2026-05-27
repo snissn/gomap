@@ -797,28 +797,48 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 }
 
 func (b *columnPartImageBuilder) addUint32OffsetsListColumnSections(columnDescriptor ColumnPartColumnDescriptor, column ColumnPartColumn) error {
-	totalOffsetsBytes := 0
-	totalValuesBytes := 0
+	globalOffsets := resizeFixedWidthValues([]uint64(nil), b.part.Descriptor.RowCount+1)
+	globalValues := make([]uint32, 0)
+	expectedFirstRow := 0
+	var reader GranuleReader
 	for i, block := range column.Blocks {
 		if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
 			return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
 		}
-		offsetsBytes, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return fmt.Errorf("typedcolumn: column %s block %d first_row=%d want %d", columnDescriptor.Name, i, block.Descriptor.FirstRow, expectedFirstRow)
+		}
+		decoded, err := reader.DecodeUint32OffsetsListInto(nil, nil, block.Granule)
 		if err != nil {
 			return fmt.Errorf("typedcolumn: column %s block %d offsets-list payload: %w", columnDescriptor.Name, i, err)
 		}
-		totalOffsetsBytes += offsetsBytes
-		totalValuesBytes += valuesBytes
-	}
-	offsetsData := make([]byte, 0, totalOffsetsBytes)
-	valuesData := make([]byte, 0, totalValuesBytes)
-	for _, block := range column.Blocks {
-		offsetsBytes, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
-		if err != nil {
-			return err
+		if decoded.Rows != block.Descriptor.RowCount || len(decoded.Offsets) != block.Descriptor.RowCount+1 {
+			return fmt.Errorf("typedcolumn: column %s block %d offsets-list rows=%d offsets=%d want rows=%d", columnDescriptor.Name, i, decoded.Rows, len(decoded.Offsets), block.Descriptor.RowCount)
 		}
-		offsetsData = append(offsetsData, block.Granule.Payload[:offsetsBytes]...)
-		valuesData = append(valuesData, block.Granule.Payload[offsetsBytes:offsetsBytes+valuesBytes]...)
+		base := uint64(len(globalValues))
+		if base > maxHostIntUint64() || uint64(len(decoded.Values)) > maxHostIntUint64()-base {
+			return fmt.Errorf("typedcolumn: column %s offsets-list values exceed host int", columnDescriptor.Name)
+		}
+		first := block.Descriptor.FirstRow
+		for row := 0; row <= decoded.Rows; row++ {
+			globalOffsets[first+row] = base + decoded.Offsets[row]
+		}
+		globalValues = append(globalValues, decoded.Values...)
+		expectedFirstRow += block.Descriptor.RowCount
+	}
+	if expectedFirstRow != b.part.Descriptor.RowCount {
+		return fmt.Errorf("typedcolumn: column %s offsets-list covers %d rows, want %d", columnDescriptor.Name, expectedFirstRow, b.part.Descriptor.RowCount)
+	}
+	if err := ValidateRawUint32OffsetsListShape(b.part.Descriptor.RowCount, globalOffsets, uint64(len(globalValues))); err != nil {
+		return fmt.Errorf("typedcolumn: column %s offsets-list global shape: %w", columnDescriptor.Name, err)
+	}
+	offsetsData, err := EncodeRawUint32OffsetsListOffsets(nil, globalOffsets)
+	if err != nil {
+		return err
+	}
+	valuesData, err := EncodeRawUint32OffsetsListValues(nil, globalValues)
+	if err != nil {
+		return err
 	}
 	offsetsSection, valuesSection, err := NewRawUint32OffsetsListImageSections(columnDescriptor.Name, b.part.Descriptor.RowCount, len(offsetsData), len(valuesData))
 	if err != nil {

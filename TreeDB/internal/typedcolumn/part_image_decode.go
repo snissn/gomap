@@ -1450,27 +1450,47 @@ func attachUint32OffsetsListColumnPayloadsFromImage(image ColumnPartImage, name 
 	if err := ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, image.Rows); err != nil {
 		return err
 	}
-	offsetsCursor := 0
-	valuesCursor := 0
+	global, err := DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
+	if err != nil {
+		return err
+	}
+	expectedFirstRow := 0
 	for i := range column.Blocks {
 		block := &column.Blocks[i]
-		offsetsBytes, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return fmt.Errorf("typedcolumn: image column %s block %d first_row=%d want %d", name, i, block.Descriptor.FirstRow, expectedFirstRow)
+		}
+		if block.Descriptor.RowCount <= 0 || block.Descriptor.FirstRow > global.Rows-block.Descriptor.RowCount {
+			return fmt.Errorf("typedcolumn: image column %s block %d row span [%d,%d) outside rows=%d", name, i, block.Descriptor.FirstRow, block.Descriptor.FirstRow+block.Descriptor.RowCount, global.Rows)
+		}
+		first := block.Descriptor.FirstRow
+		begin := global.Offsets[first]
+		end := global.Offsets[first+block.Descriptor.RowCount]
+		if begin > end || end > maxHostIntUint64() {
+			return fmt.Errorf("typedcolumn: image column %s block %d offsets range [%d,%d) invalid", name, i, begin, end)
+		}
+		beginInt := int(begin)
+		endInt := int(end)
+		if beginInt > len(global.Values) || endInt > len(global.Values) {
+			return fmt.Errorf("typedcolumn: image column %s block %d values range [%d,%d) outside values=%d", name, i, begin, end, len(global.Values))
+		}
+		localOffsets := resizeFixedWidthValues([]uint64(nil), block.Descriptor.RowCount+1)
+		for row := 0; row <= block.Descriptor.RowCount; row++ {
+			localOffsets[row] = global.Offsets[first+row] - begin
+		}
+		payload, err := EncodeRawUint32OffsetsListPayload(nil, block.Descriptor.RowCount, localOffsets, global.Values[beginInt:endInt])
 		if err != nil {
 			return fmt.Errorf("typedcolumn: image column %s block %d offsets-list payload: %w", name, i, err)
 		}
-		if offsetsCursor > len(offsetsRaw)-offsetsBytes || valuesCursor > len(valuesRaw)-valuesBytes {
-			return fmt.Errorf("typedcolumn: image column %s block %d outside offsets/values sections", name, i)
+		if len(payload) != block.Descriptor.StoredBytes {
+			return fmt.Errorf("typedcolumn: image column %s block %d payload bytes=%d descriptor stored bytes=%d", name, i, len(payload), block.Descriptor.StoredBytes)
 		}
-		payload := make([]byte, block.Descriptor.StoredBytes)
-		copy(payload[:offsetsBytes], offsetsRaw[offsetsCursor:offsetsCursor+offsetsBytes])
-		copy(payload[offsetsBytes:], valuesRaw[valuesCursor:valuesCursor+valuesBytes])
 		block.Granule.Payload = payload
 		block.Granule.PayloadRef = PayloadRef{Kind: PayloadRefInline, Length: len(payload)}
-		offsetsCursor += offsetsBytes
-		valuesCursor += valuesBytes
+		expectedFirstRow += block.Descriptor.RowCount
 	}
-	if offsetsCursor != len(offsetsRaw) || valuesCursor != len(valuesRaw) {
-		return fmt.Errorf("typedcolumn: image column %s consumed offsets=%d/%d values=%d/%d", name, offsetsCursor, len(offsetsRaw), valuesCursor, len(valuesRaw))
+	if expectedFirstRow != global.Rows {
+		return fmt.Errorf("typedcolumn: image column %s covers %d rows, want %d", name, expectedFirstRow, global.Rows)
 	}
 	columns[name] = column
 	return nil

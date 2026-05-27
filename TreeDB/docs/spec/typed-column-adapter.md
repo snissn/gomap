@@ -54,6 +54,10 @@ positive `adjacency_degree` and each present row must contain exactly that many
 uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
 "uint32_offsets_list"`; it must not be inferred from a missing degree and is
 supported only by the safe #1915 writer/fallback reader path (not direct views).
+Serialized typed-column images publish offsets-list columns as one global
+`row_count + 1` little-endian `uint64` offsets section plus one global flattened
+`uint32` values section, even when the typed-column part has multiple codec
+blocks/granules.
 
 Adapter input rows are keyed by `TypedStorageField.Path`, not by display `Name`.
 When `Name != Path`, the physical column name may use `Name`, but decoded rows

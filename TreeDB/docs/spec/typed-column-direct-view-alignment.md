@@ -128,8 +128,12 @@ offsets []uint64  // row_count + 1, little-endian
 values  []uint32  // flattened adjacency values, little-endian
 ```
 
-The direct-view contract records and validates the offsets and values sections
-separately:
+The image format records one canonical column-wide offsets section and one
+column-wide values section per offsets-list column. Multi-block typed-column
+parts keep block-local payloads internally, but serialized images publish global
+offsets (exactly `row_count + 1`) plus global flattened values so each section
+has a single checksum/range identity. The direct-view contract records and
+validates the offsets and values sections separately:
 
 | Section | Element type | Element size | Absolute alignment | Length rule |
 | --- | --- | ---: | ---: | --- |

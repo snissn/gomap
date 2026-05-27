@@ -80,10 +80,14 @@ addition to the descriptor and column-data sections. The contract is versioned
 and writer-built before publication. It records the image/descriptor identity,
 descriptor checksum, per-column logical type, physical typedcolumn type,
 encoding, compression, section offsets and lengths, section checksums, block row
-spans, payload offsets/lengths, fixed-width
-element counts, element size/alignment/endian, null/default mask presence and
-counts, dictionary section identity/order/collation fields, and capability flags
-for direct-view, streaming reducer, stats, and pruning shortcuts.
+spans, payload offsets/lengths for contiguous fixed-width/scalar sections,
+fixed-width element counts, element size/alignment/endian, null/default mask
+presence and counts, dictionary section identity/order/collation fields, and
+capability flags for direct-view, streaming reducer, stats, and pruning
+shortcuts. `raw_uint32_offsets_list` uses separate global offsets/values section
+identity instead of per-block contiguous payload offsets; its v1 block
+payload-offset fields are empty and block descriptors retain row spans plus raw
+byte counts for fallback reconstruction.
 
 The writer validates the contract before returning the image. Fixed-width direct
 view candidates must be uncompressed, little-endian, aligned by absolute storage

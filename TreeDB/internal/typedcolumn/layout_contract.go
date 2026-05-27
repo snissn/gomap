@@ -448,8 +448,13 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		contract.PruningCertified = false
 	}
 	payloadOffset := sections.data.section.Offset
-	if column.Definition.Encoding == EncodingRawUint32OffsetsList {
-		payloadOffset = sections.offsets.section.Offset
+	offsetsList := column.Definition.Encoding == EncodingRawUint32OffsetsList
+	if offsetsList {
+		// Offsets-list images store two discontiguous global sections, so the generic
+		// per-block combined payload offset/length fields are intentionally empty.
+		// Section-level offsets/checksums plus block row spans carry the durable
+		// identity until a future contract version adds per-block split ranges.
+		payloadOffset = 0
 	}
 	for i, block := range column.Blocks {
 		if i >= len(columnDesc.Blocks) {
@@ -463,6 +468,10 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		}
 		contract.NullCount += block.Granule.NullCount
 		contract.DefaultCount += block.Granule.DefaultCount
+		payloadLength := block.Descriptor.StoredBytes
+		if offsetsList {
+			payloadLength = 0
+		}
 		contract.Blocks = append(contract.Blocks, ColumnPartLayoutContractBlock{
 			FirstRow:      block.Descriptor.FirstRow,
 			RowCount:      block.Descriptor.RowCount,
@@ -473,11 +482,13 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 			RawBytes:      block.Descriptor.RawBytes,
 			StoredBytes:   block.Descriptor.StoredBytes,
 			PayloadOffset: payloadOffset,
-			PayloadLength: block.Descriptor.StoredBytes,
+			PayloadLength: payloadLength,
 			NullCount:     block.Granule.NullCount,
 			DefaultCount:  block.Granule.DefaultCount,
 		})
-		payloadOffset += block.Descriptor.StoredBytes
+		if !offsetsList {
+			payloadOffset += block.Descriptor.StoredBytes
+		}
 	}
 	return contract, nil
 }
@@ -667,7 +678,14 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 	if len(contract.Blocks) != len(column.Blocks) || len(contract.Blocks) != len(columnDesc.Blocks) {
 		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list blocks=%d descriptor=%d", columnDesc.Name, len(contract.Blocks), len(column.Blocks))
 	}
-	offsetsBytes := 0
+	expectedOffsetCount, err := checkedAddInt(desc.RowCount, 1, "layout contract offsets-list global offset count")
+	if err != nil {
+		return err
+	}
+	expectedOffsetsBytes, err := checkedMulInt(expectedOffsetCount, 8, "layout contract offsets-list global offsets bytes")
+	if err != nil {
+		return err
+	}
 	valuesBytes := 0
 	nullCount := 0
 	defaultCount := 0
@@ -680,11 +698,13 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 		if certified.Encoding != want.Encoding || certified.Compression != want.Compression || certified.RawBytes != want.RawBytes || certified.StoredBytes != want.StoredBytes {
 			return fmt.Errorf("typedcolumn: layout contract column %s block %d encoding/compression/raw/stored=(%s,%s,%d,%d) want (%s,%s,%d,%d)", columnDesc.Name, i, certified.Encoding, certified.Compression, certified.RawBytes, certified.StoredBytes, want.Encoding, want.Compression, want.RawBytes, want.StoredBytes)
 		}
-		blockOffsetsBytes, blockValuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if certified.PayloadOffset != 0 || certified.PayloadLength != 0 {
+			return fmt.Errorf("typedcolumn: layout contract column %s block %d offsets-list payload offset/length=(%d,%d) want (0,0)", columnDesc.Name, i, certified.PayloadOffset, certified.PayloadLength)
+		}
+		_, blockValuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
 		if err != nil {
 			return err
 		}
-		offsetsBytes += blockOffsetsBytes
 		valuesBytes += blockValuesBytes
 		nullCount += block.Granule.NullCount
 		defaultCount += block.Granule.DefaultCount
@@ -692,8 +712,8 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 			return fmt.Errorf("typedcolumn: layout contract column %s block %d null/default=(%d,%d) want (%d,%d)", columnDesc.Name, i, certified.NullCount, certified.DefaultCount, block.Granule.NullCount, block.Granule.DefaultCount)
 		}
 	}
-	if offsetsBytes != offsetsSection.Length || valuesBytes != valuesSection.Length {
-		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list consumed offsets=%d/%d values=%d/%d", columnDesc.Name, offsetsBytes, offsetsSection.Length, valuesBytes, valuesSection.Length)
+	if expectedOffsetsBytes != offsetsSection.Length || valuesBytes != valuesSection.Length {
+		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list consumed offsets=%d/%d values=%d/%d", columnDesc.Name, expectedOffsetsBytes, offsetsSection.Length, valuesBytes, valuesSection.Length)
 	}
 	if contract.NullCount != nullCount || contract.DefaultCount != defaultCount || contract.NullMaskPresent || contract.DefaultMaskPresent || nullCount != 0 || defaultCount != 0 {
 		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list null/default counts=(%d,%d) flags=(%v,%v)", columnDesc.Name, contract.NullCount, contract.DefaultCount, contract.NullMaskPresent, contract.DefaultMaskPresent)
