@@ -24,7 +24,7 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values, dictionaries, and dictionary codes are not string direct-view payloads. |
-| `ColumnStoreValueAdjacencyList` | spec-only v1 target plus fallback compatibility | #1914 selects an explicit typed-column `raw_uint32_offsets_list` variable-list primitive (`uint64` offsets, `uint32` values) for #1901. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; writer, unsafe direct-view reader, and graph search consumption are deferred to #1915+. |
+| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1915 implements the explicit typed-column `raw_uint32_offsets_list` variable-list primitive (`uint64` offsets, `uint32` values) for safe writer/fallback-reader use. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; unsafe direct-view readers and graph search consumption are deferred to #1916+. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
@@ -69,7 +69,7 @@ their image-local layout contract is otherwise valid.
 | --- | --- | --- |
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
-| `typed_column_part` | `adjacency_list` consumers | `raw_uint32_offsets_list` is the selected #1901 v1 primitive but is spec-only/deferred here; legacy dense fixed-degree `raw_uint32_dense` remains fallback/compatibility. |
+| `typed_column_part` | `adjacency_list` consumers | `raw_uint32_offsets_list` is the selected #1901 v1 primitive and has safe writer/fallback-reader support; legacy dense fixed-degree `raw_uint32_dense` remains fallback/compatibility. |
 | physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
@@ -128,8 +128,12 @@ offsets []uint64  // row_count + 1, little-endian
 values  []uint32  // flattened adjacency values, little-endian
 ```
 
-The direct-view contract records and validates the offsets and values sections
-separately:
+The image format records one canonical column-wide offsets section and one
+column-wide values section per offsets-list column. Multi-block typed-column
+parts keep block-local payloads internally, but serialized images publish global
+offsets (exactly `row_count + 1`) plus global flattened values so each section
+has a single checksum/range identity. The direct-view contract records and
+validates the offsets and values sections separately:
 
 | Section | Element type | Element size | Absolute alignment | Length rule |
 | --- | --- | ---: | ---: | --- |
@@ -163,8 +167,8 @@ Bool bitpack/RLE, strings/dictionaries, nullable/default wrappers, compressed
 payloads, variable-width varint/delta/double-delta layouts, physical row assets,
 and adjacency direct views are fallback-only or deferred unless a future issue
 adds a new explicit encoding and conformance row. For adjacency, that explicit
-row is `raw_uint32_offsets_list`, but this issue deliberately does not enable a
-writer, unsafe direct-view reader, adapter integration, or graph search runtime.
+row is `raw_uint32_offsets_list`; #1915 enables the safe writer/fallback reader,
+while unsafe direct-view readers and graph search runtime remain deferred.
 
 ## Old/non-certified behavior
 

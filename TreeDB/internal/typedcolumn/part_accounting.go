@@ -17,32 +17,34 @@ const (
 )
 
 type ColumnPartByteAccounting struct {
-	Rows                    int                                    `json:"rows"`
-	Columns                 int                                    `json:"columns"`
-	Granules                int                                    `json:"granules"`
-	CodecBlocks             int                                    `json:"codec_blocks"`
-	PhysicalFiles           int                                    `json:"physical_files"`
-	SerializedImageBytes    int                                    `json:"serialized_image_bytes,omitempty"`
-	SerializedManifestBytes int                                    `json:"serialized_manifest_bytes,omitempty"`
-	SerializedPaddingBytes  int                                    `json:"serialized_padding_bytes,omitempty"`
-	LogicalValueBytes       int                                    `json:"logical_value_bytes"`
-	EncodedRawBytes         int                                    `json:"encoded_raw_bytes"`
-	DeclaredColumnBytes     int                                    `json:"declared_column_bytes"`
-	DictionaryBytes         int                                    `json:"dictionary_bytes"`
-	MarkBytes               int                                    `json:"mark_bytes"`
-	SortKeyMetadataBytes    int                                    `json:"sort_key_metadata_bytes"`
-	AggregateMetadataBytes  int                                    `json:"aggregate_metadata_bytes"`
-	ColumnStatsBytes        int                                    `json:"column_stats_bytes"`
-	PruningMetadataBytes    int                                    `json:"pruning_metadata_bytes"`
-	DescriptorBytes         int                                    `json:"descriptor_bytes"`
-	LayoutContractBytes     int                                    `json:"layout_contract_bytes"`
-	LocatorBytes            int                                    `json:"locator_bytes"`
-	TotalStoredBytes        int                                    `json:"total_stored_bytes"`
-	BytesPerRow             float64                                `json:"bytes_per_row"`
-	RetainedJSONPayload     string                                 `json:"retained_json_payload"`
-	ColumnsDetail           []ColumnPartColumnByteAccounting       `json:"columns_detail"`
-	CompressionDetail       []ColumnPartCompressionByteAccounting  `json:"compression_detail"`
-	SerializedSections      []ColumnPartImageSectionByteAccounting `json:"serialized_sections,omitempty"`
+	Rows                       int                                    `json:"rows"`
+	Columns                    int                                    `json:"columns"`
+	Granules                   int                                    `json:"granules"`
+	CodecBlocks                int                                    `json:"codec_blocks"`
+	PhysicalFiles              int                                    `json:"physical_files"`
+	SerializedImageBytes       int                                    `json:"serialized_image_bytes,omitempty"`
+	SerializedManifestBytes    int                                    `json:"serialized_manifest_bytes,omitempty"`
+	SerializedPaddingBytes     int                                    `json:"serialized_padding_bytes,omitempty"`
+	LogicalValueBytes          int                                    `json:"logical_value_bytes"`
+	EncodedRawBytes            int                                    `json:"encoded_raw_bytes"`
+	DeclaredColumnBytes        int                                    `json:"declared_column_bytes"`
+	DeclaredColumnOffsetsBytes int                                    `json:"declared_column_offsets_bytes,omitempty"`
+	DeclaredColumnValuesBytes  int                                    `json:"declared_column_values_bytes,omitempty"`
+	DictionaryBytes            int                                    `json:"dictionary_bytes"`
+	MarkBytes                  int                                    `json:"mark_bytes"`
+	SortKeyMetadataBytes       int                                    `json:"sort_key_metadata_bytes"`
+	AggregateMetadataBytes     int                                    `json:"aggregate_metadata_bytes"`
+	ColumnStatsBytes           int                                    `json:"column_stats_bytes"`
+	PruningMetadataBytes       int                                    `json:"pruning_metadata_bytes"`
+	DescriptorBytes            int                                    `json:"descriptor_bytes"`
+	LayoutContractBytes        int                                    `json:"layout_contract_bytes"`
+	LocatorBytes               int                                    `json:"locator_bytes"`
+	TotalStoredBytes           int                                    `json:"total_stored_bytes"`
+	BytesPerRow                float64                                `json:"bytes_per_row"`
+	RetainedJSONPayload        string                                 `json:"retained_json_payload"`
+	ColumnsDetail              []ColumnPartColumnByteAccounting       `json:"columns_detail"`
+	CompressionDetail          []ColumnPartCompressionByteAccounting  `json:"compression_detail"`
+	SerializedSections         []ColumnPartImageSectionByteAccounting `json:"serialized_sections,omitempty"`
 }
 
 type ColumnPartColumnByteAccounting struct {
@@ -108,6 +110,12 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 			report := block.Granule.CodecReport
 			out.CodecBlocks++
 			valueBytes := logicalColumnValueBytes(column.Definition, block.Descriptor.RowCount)
+			if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+				_, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.RawBytes)
+				if err == nil {
+					valueBytes = valuesBytes
+				}
+			}
 			detail.Rows += block.Descriptor.RowCount
 			detail.Blocks++
 			detail.LogicalValueBytes += valueBytes
@@ -217,7 +225,9 @@ func (p *ColumnPart) ByteAccountingFromImage(image ColumnPartImage) ColumnPartBy
 	out.SerializedImageBytes = image.TotalBytes()
 	out.SerializedManifestBytes = image.ManifestBytes
 	out.SerializedPaddingBytes = image.PaddingBytes()
-	out.DeclaredColumnBytes = image.CategoryBytes(ColumnPartImageCategoryDeclaredColumns)
+	out.DeclaredColumnOffsetsBytes = image.CategoryBytes(ColumnPartImageCategoryDeclaredColumnOffsets)
+	out.DeclaredColumnValuesBytes = image.CategoryBytes(ColumnPartImageCategoryDeclaredColumnValues)
+	out.DeclaredColumnBytes = image.CategoryBytes(ColumnPartImageCategoryDeclaredColumns) + out.DeclaredColumnOffsetsBytes + out.DeclaredColumnValuesBytes
 	out.DictionaryBytes = image.CategoryBytes(ColumnPartImageCategoryDictionaries)
 	out.MarkBytes = image.CategoryBytes(ColumnPartImageCategoryMarks)
 	out.SortKeyMetadataBytes = image.CategoryBytes(ColumnPartImageCategorySortKeyMetadata)

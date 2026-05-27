@@ -129,7 +129,7 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 			base.OffsetsAlignment = 8
 			base.ValuesElementSize = 4
 			base.ValuesAlignment = 4
-			base.Reason = "#1914 selected typed-column ColumnStoreValueAdjacencyList raw_uint32_offsets_list: uint64 offsets plus uint32 values; writer/direct-view/search runtime remains deferred to #1915+"
+			base.Reason = "#1915 typed-column ColumnStoreValueAdjacencyList raw_uint32_offsets_list uses uint64 offsets plus uint32 values; unsafe direct-view/search runtime remains deferred to #1916+"
 			base.FollowUpIssues = []int{1901, 1915, 1916, 1917, 1919}
 		case typedColumnDirectViewAdjacencyLayoutRawUint32Dense:
 			base.RequiresElementsPerRow = true

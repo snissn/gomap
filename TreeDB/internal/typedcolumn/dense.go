@@ -69,6 +69,38 @@ func (b *ColumnPartBuilder) gatherUint32Dense(source []uint32, elementsPerRow in
 	return b.u32dense, nil
 }
 
+func (b *ColumnPartBuilder) gatherUint32OffsetsList(source RawUint32OffsetsList, start int, end int) (RawUint32OffsetsList, error) {
+	if err := ValidateRawUint32OffsetsListShape(source.Rows, source.Offsets, uint64(len(source.Values))); err != nil {
+		return RawUint32OffsetsList{}, err
+	}
+	rows := end - start
+	b.u32offset = resizeFixedWidthValues(b.u32offset[:0], rows+1)
+	b.u32offset[0] = 0
+	b.u32dense = b.u32dense[:0]
+	for row := start; row < end; row++ {
+		sourceRow := b.order[row]
+		if sourceRow < 0 || sourceRow >= source.Rows {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: uint32 offsets-list source row %d outside rows=%d", sourceRow, source.Rows)
+		}
+		begin := source.Offsets[sourceRow]
+		finish := source.Offsets[sourceRow+1]
+		if begin > maxHostIntUint64() || finish > maxHostIntUint64() {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: uint32 offsets-list row %d offset outside host int", sourceRow)
+		}
+		if finish < begin {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: uint32 offsets-list row %d non-monotonic offsets", sourceRow)
+		}
+		beginInt := int(begin)
+		finishInt := int(finish)
+		if beginInt > len(source.Values) || finishInt > len(source.Values) {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: uint32 offsets-list row %d values range [%d,%d) outside values=%d", sourceRow, begin, finish, len(source.Values))
+		}
+		b.u32dense = append(b.u32dense, source.Values[beginInt:finishInt]...)
+		b.u32offset[row-start+1] = uint64(len(b.u32dense))
+	}
+	return RawUint32OffsetsList{Rows: rows, Offsets: b.u32offset, Values: b.u32dense}, nil
+}
+
 func (b *GranuleBuilder) BuildFloat32Vector(values []float32, rows int, elementsPerRow int) (EncodedGranule, error) {
 	if b.cfg.Encoding != 0 && b.cfg.Encoding != EncodingRawFloat32Vector {
 		return EncodedGranule{}, fmt.Errorf("typedcolumn: float32_vector encoding=%s want %s", b.cfg.Encoding, EncodingRawFloat32Vector)
@@ -284,6 +316,17 @@ func (p *ColumnPart) DenseUint32Column(name string, dst []uint32) (DenseUint32Co
 	return DenseUint32Column{Rows: p.Descriptor.RowCount, ElementsPerRow: column.Definition.FixedWidthElements, Values: out}, nil
 }
 
+func (p *ColumnPart) Uint32OffsetsListColumn(name string, offsetsDst []uint64, valuesDst []uint32) (RawUint32OffsetsList, error) {
+	column, ok := p.Columns[name]
+	if !ok {
+		return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeAdjacencyList || column.Definition.Encoding != EncodingRawUint32OffsetsList {
+		return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: column %s type/encoding=(%s,%s) is not raw_uint32_offsets_list adjacency_list", name, column.Definition.Type, column.Definition.Encoding)
+	}
+	return uint32OffsetsListColumnInto(offsetsDst, valuesDst, p.Descriptor.RowCount, column)
+}
+
 func denseFloat32ColumnInto(dst []float32, rows int, column ColumnPartColumn) ([]float32, error) {
 	elements, err := checkedMulInt(rows, column.Definition.FixedWidthElements, "float32_vector column elements")
 	if err != nil {
@@ -354,6 +397,50 @@ func denseUint32ColumnInto(dst []uint32, rows int, column ColumnPartColumn) ([]u
 		copy(out[start:start+len(values)], values)
 	}
 	return out, nil
+}
+
+func uint32OffsetsListColumnInto(offsetsDst []uint64, valuesDst []uint32, rows int, column ColumnPartColumn) (RawUint32OffsetsList, error) {
+	outOffsets := offsetsDst[:0]
+	if cap(outOffsets) < rows+1 {
+		outOffsets = make([]uint64, rows+1)
+	} else {
+		outOffsets = outOffsets[:rows+1]
+	}
+	for i := range outOffsets {
+		outOffsets[i] = 0
+	}
+	outValues := valuesDst[:0]
+	var reader GranuleReader
+	var offsetsScratch []uint64
+	var valuesScratch []uint32
+	for _, block := range column.Blocks {
+		decoded, err := reader.DecodeUint32OffsetsListInto(offsetsScratch[:0], valuesScratch[:0], block.Granule)
+		if err != nil {
+			return RawUint32OffsetsList{}, err
+		}
+		if decoded.Rows != block.Descriptor.RowCount || len(decoded.Offsets) != block.Descriptor.RowCount+1 {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: offsets-list block rows=%d decoded rows=%d offsets=%d", block.Descriptor.RowCount, decoded.Rows, len(decoded.Offsets))
+		}
+		first := block.Descriptor.FirstRow
+		if first < 0 || first > rows-decoded.Rows {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: offsets-list block first_row=%d rows=%d outside column rows=%d", first, decoded.Rows, rows)
+		}
+		base := uint64(len(outValues))
+		if base > maxHostIntUint64() {
+			return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: offsets-list values exceed host int")
+		}
+		outValues = append(outValues, decoded.Values...)
+		offsetsScratch = decoded.Offsets
+		valuesScratch = decoded.Values
+		for i := 0; i < decoded.Rows; i++ {
+			outOffsets[first+i] = base + decoded.Offsets[i]
+		}
+		outOffsets[first+decoded.Rows] = uint64(len(outValues))
+	}
+	if err := ValidateRawUint32OffsetsListShape(rows, outOffsets, uint64(len(outValues))); err != nil {
+		return RawUint32OffsetsList{}, err
+	}
+	return RawUint32OffsetsList{Rows: rows, Offsets: outOffsets, Values: outValues}, nil
 }
 
 func ensureFloat32Len(dst []float32, n int) []float32 {

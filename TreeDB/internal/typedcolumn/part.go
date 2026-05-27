@@ -90,15 +90,16 @@ type ColumnDefinition struct {
 }
 
 type Batch struct {
-	Rows           int
-	Columns        map[string][]int64
-	Nulls          map[string][]bool
-	Defaults       map[string][]bool
-	DefaultValues  map[string]int64
-	Float32Columns map[string][]float32
-	Float64Columns map[string][]float64
-	Float32Vectors map[string][]float32
-	Uint32Vectors  map[string][]uint32
+	Rows               int
+	Columns            map[string][]int64
+	Nulls              map[string][]bool
+	Defaults           map[string][]bool
+	DefaultValues      map[string]int64
+	Float32Columns     map[string][]float32
+	Float64Columns     map[string][]float64
+	Float32Vectors     map[string][]float32
+	Uint32Vectors      map[string][]uint32
+	Uint32OffsetsLists map[string]RawUint32OffsetsList
 }
 
 type ColumnPart struct {
@@ -173,17 +174,18 @@ type RowLocator struct {
 }
 
 type ColumnPartBuilder struct {
-	opts     Options
-	order    []int
-	values64 []int64
-	codes32  []uint32
-	bools    []bool
-	nulls    []bool
-	defaults []bool
-	float32s []float32
-	float64s []float64
-	u32dense []uint32
-	builder  *GranuleBuilder
+	opts      Options
+	order     []int
+	values64  []int64
+	codes32   []uint32
+	bools     []bool
+	nulls     []bool
+	defaults  []bool
+	float32s  []float32
+	float64s  []float64
+	u32dense  []uint32
+	u32offset []uint64
+	builder   *GranuleBuilder
 }
 
 func NewColumnPartBuilder(opts Options) (*ColumnPartBuilder, error) {
@@ -747,17 +749,26 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires uncompressed dense sections", def.Name)
 		}
 	case ColumnTypeAdjacencyList:
-		if def.FixedWidthElements <= 0 {
-			return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires positive fixed-width elements", def.Name)
-		}
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawUint32Dense
 		}
-		if def.Encoding != EncodingRawUint32Dense {
+		switch def.Encoding {
+		case EncodingRawUint32Dense:
+			if def.FixedWidthElements <= 0 {
+				return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires positive fixed-width elements", def.Name)
+			}
+			if def.Compression != CompressionNone {
+				return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires uncompressed dense sections", def.Name)
+			}
+		case EncodingRawUint32OffsetsList:
+			if def.FixedWidthElements != 0 {
+				return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s raw_uint32_offsets_list requires fixed-width elements=0", def.Name)
+			}
+			if def.Compression != CompressionNone {
+				return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires uncompressed offsets-list sections", def.Name)
+			}
+		default:
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported adjacency_list encoding %s for %s", def.Encoding, def.Name)
-		}
-		if def.Compression != CompressionNone {
-			return ColumnDefinition{}, fmt.Errorf("typedcolumn: adjacency_list column %s requires uncompressed dense sections", def.Name)
 		}
 	default:
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported column type %s for %s", def.Type, def.Name)
@@ -822,13 +833,27 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, columnRows, rows)
 			}
 		case ColumnTypeAdjacencyList:
-			values, ok := batch.Uint32Vectors[def.Name]
-			if !ok {
-				return 0, fmt.Errorf("typedcolumn: missing adjacency_list column %s", def.Name)
-			}
-			columnRows, err := denseRowsForValues(len(values), def.FixedWidthElements, def.Name)
-			if err != nil {
-				return 0, err
+			var columnRows int
+			switch def.Encoding {
+			case EncodingRawUint32OffsetsList:
+				list, ok := batch.Uint32OffsetsLists[def.Name]
+				if !ok {
+					return 0, fmt.Errorf("typedcolumn: missing adjacency_list offsets-list column %s", def.Name)
+				}
+				if err := ValidateRawUint32OffsetsListShape(list.Rows, list.Offsets, uint64(len(list.Values))); err != nil {
+					return 0, fmt.Errorf("typedcolumn: column %s: %w", def.Name, err)
+				}
+				columnRows = list.Rows
+			default:
+				values, ok := batch.Uint32Vectors[def.Name]
+				if !ok {
+					return 0, fmt.Errorf("typedcolumn: missing adjacency_list column %s", def.Name)
+				}
+				var err error
+				columnRows, err = denseRowsForValues(len(values), def.FixedWidthElements, def.Name)
+				if err != nil {
+					return 0, err
+				}
 			}
 			if rows == 0 {
 				rows = columnRows
@@ -915,6 +940,11 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 	for name := range batch.Uint32Vectors {
 		if _, ok := declared[name]; !ok {
 			return 0, fmt.Errorf("typedcolumn: undeclared adjacency_list column %s", name)
+		}
+	}
+	for name := range batch.Uint32OffsetsLists {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared adjacency_list offsets-list column %s", name)
 		}
 	}
 	if rows <= 0 {
@@ -1071,6 +1101,13 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 		}
 		return b.builder.BuildFloat32Vector(values, end-start, def.FixedWidthElements)
 	case ColumnTypeAdjacencyList:
+		if def.Encoding == EncodingRawUint32OffsetsList {
+			list, err := b.gatherUint32OffsetsList(batch.Uint32OffsetsLists[def.Name], start, end)
+			if err != nil {
+				return EncodedGranule{}, err
+			}
+			return b.builder.BuildUint32OffsetsList(list.Rows, list.Offsets, list.Values)
+		}
 		sourceValues := batch.Uint32Vectors[def.Name]
 		values, err := b.gatherUint32Dense(sourceValues, def.FixedWidthElements, start, end)
 		if err != nil {

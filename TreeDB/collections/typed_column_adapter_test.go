@@ -366,6 +366,23 @@ func TestTypedColumnAdapterRoundTripAdjacencyList(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterRoundTripAdjacencyOffsetsList1915(t *testing.T) {
+	want := [][]uint32{{}, {7, 8}, {}, {9, 10, 11}}
+	values := make([]columnDeclaredValue, len(want))
+	for i, v := range want {
+		values[i] = columnDeclaredValue{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: v}
+	}
+	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
+	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
+	field.AdjacencyDegree = 0
+	got := typedColumnAdapterRoundTrip(t, field, values)
+	for i := range want {
+		if !slices.Equal(got[i].AdjacencyList, want[i]) {
+			t.Fatalf("offsets-list adjacency[%d]=%v want %v all=%+v", i, got[i].AdjacencyList, want[i], got)
+		}
+	}
+}
+
 func TestTypedColumnAdapterAdjacencyRequiresDegreeAndLength(t *testing.T) {
 	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
 	if _, err := typedColumnAdapterMapField(field); err == nil || !strings.Contains(err.Error(), "adjacency_degree") {
@@ -1067,12 +1084,16 @@ func TestTypedColumnAdapterVectorAdjacencyRepresented(t *testing.T) {
 	}
 }
 
-func TestTypedColumnAdapterAdjacencyOffsetsListSelectorFailsClosedUntil1915(t *testing.T) {
+func TestTypedColumnAdapterAdjacencyOffsetsListSelectorSupported1915(t *testing.T) {
 	field := typedColumnAdapterField("neighbors", ColumnStoreValueAdjacencyList)
 	field.AdjacencyLayout = ColumnAdjacencyListLayoutUint32OffsetsList
 	field.AdjacencyDegree = 0
-	if _, err := typedColumnAdapterMapField(field); !errors.Is(err, errTypedColumnAdapterUnsupportedType) || !strings.Contains(err.Error(), "#1915") {
-		t.Fatalf("typedColumnAdapterMapField offsets-list err=%v want #1915 unsupported", err)
+	column, err := typedColumnAdapterMapField(field)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterMapField offsets-list: %v", err)
+	}
+	if column.Definition.Encoding != typedcolumn.EncodingRawUint32OffsetsList || column.Definition.FixedWidthElements != 0 {
+		t.Fatalf("offsets-list column definition=%+v", column.Definition)
 	}
 }
 

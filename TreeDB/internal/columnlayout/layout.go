@@ -366,7 +366,7 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.Layout.ElementsPerRow = 0
 		caps.Layout.ElementWidthBytes = 4
 		caps.Layout.Endian = EndianLittle
-		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyOffsetsListDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "offsets-list writer/reader/search integration deferred to #1915+", ValidationBoundary: "prepare"}
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyOffsetsListDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "offsets-list unsafe direct-view/search integration deferred to #1916+", ValidationBoundary: "prepare"}
 	default:
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonUnsupportedEncoding, ValidationBoundary: "prepare"}
 	}
@@ -469,7 +469,7 @@ func (c Capabilities) Supports(op Operation) Capability {
 				if op == OpAdjacencyDirectView {
 					return Unsupported(op, ReasonAdjacencyOffsetsListDirectViewDeferred, "raw_uint32_offsets_list direct views are specified but deferred to #1916")
 				}
-				return Unsupported(op, ReasonAdjacencyOffsetsListRuntimeDeferred, "raw_uint32_offsets_list writer/fallback reader/search integration is deferred to #1915+")
+				return Unsupported(op, ReasonAdjacencyOffsetsListRuntimeDeferred, "raw_uint32_offsets_list graph/search runtime integration is deferred to #1917+")
 			}
 		}
 	}

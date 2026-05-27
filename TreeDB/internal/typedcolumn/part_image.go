@@ -29,24 +29,28 @@ const (
 	ColumnPartImageSectionDictionaries      ColumnPartImageSectionKind = "dictionaries"
 	ColumnPartImageSectionLayoutContract    ColumnPartImageSectionKind = "layout_contract"
 	ColumnPartImageSectionColumnData        ColumnPartImageSectionKind = "column_data"
+	ColumnPartImageSectionColumnOffsets     ColumnPartImageSectionKind = "column_offsets"
+	ColumnPartImageSectionColumnValues      ColumnPartImageSectionKind = "column_values"
 	ColumnPartImageSectionPadding           ColumnPartImageSectionKind = "padding"
 )
 
 type ColumnPartImageSectionCategory string
 
 const (
-	ColumnPartImageCategoryManifest          ColumnPartImageSectionCategory = "manifest"
-	ColumnPartImageCategoryDescriptor        ColumnPartImageSectionCategory = "descriptor"
-	ColumnPartImageCategorySortKeyMetadata   ColumnPartImageSectionCategory = "sort_key_metadata"
-	ColumnPartImageCategoryMarks             ColumnPartImageSectionCategory = "marks"
-	ColumnPartImageCategoryLocators          ColumnPartImageSectionCategory = "locators"
-	ColumnPartImageCategoryAggregateMetadata ColumnPartImageSectionCategory = "aggregate_metadata"
-	ColumnPartImageCategoryColumnStats       ColumnPartImageSectionCategory = "column_stats"
-	ColumnPartImageCategoryPruningMetadata   ColumnPartImageSectionCategory = "pruning_metadata"
-	ColumnPartImageCategoryDictionaries      ColumnPartImageSectionCategory = "dictionaries"
-	ColumnPartImageCategoryLayoutContract    ColumnPartImageSectionCategory = "layout_contract"
-	ColumnPartImageCategoryDeclaredColumns   ColumnPartImageSectionCategory = "declared_columns"
-	ColumnPartImageCategoryPadding           ColumnPartImageSectionCategory = "padding"
+	ColumnPartImageCategoryManifest              ColumnPartImageSectionCategory = "manifest"
+	ColumnPartImageCategoryDescriptor            ColumnPartImageSectionCategory = "descriptor"
+	ColumnPartImageCategorySortKeyMetadata       ColumnPartImageSectionCategory = "sort_key_metadata"
+	ColumnPartImageCategoryMarks                 ColumnPartImageSectionCategory = "marks"
+	ColumnPartImageCategoryLocators              ColumnPartImageSectionCategory = "locators"
+	ColumnPartImageCategoryAggregateMetadata     ColumnPartImageSectionCategory = "aggregate_metadata"
+	ColumnPartImageCategoryColumnStats           ColumnPartImageSectionCategory = "column_stats"
+	ColumnPartImageCategoryPruningMetadata       ColumnPartImageSectionCategory = "pruning_metadata"
+	ColumnPartImageCategoryDictionaries          ColumnPartImageSectionCategory = "dictionaries"
+	ColumnPartImageCategoryLayoutContract        ColumnPartImageSectionCategory = "layout_contract"
+	ColumnPartImageCategoryDeclaredColumns       ColumnPartImageSectionCategory = "declared_columns"
+	ColumnPartImageCategoryDeclaredColumnOffsets ColumnPartImageSectionCategory = "declared_column_offsets"
+	ColumnPartImageCategoryDeclaredColumnValues  ColumnPartImageSectionCategory = "declared_column_values"
+	ColumnPartImageCategoryPadding               ColumnPartImageSectionCategory = "padding"
 )
 
 type ColumnPartImageOptions struct {
@@ -201,6 +205,23 @@ func (i ColumnPartImage) columnDataSection(column string) (ColumnPartImageSectio
 		}
 	}
 	return ColumnPartImageSection{}, false
+}
+
+func (i ColumnPartImage) columnOffsetsListSections(column string) (ColumnPartImageSection, ColumnPartImageSection, bool) {
+	var offsets ColumnPartImageSection
+	var values ColumnPartImageSection
+	for _, section := range i.Sections {
+		if section.Column != column {
+			continue
+		}
+		switch section.Kind {
+		case ColumnPartImageSectionColumnOffsets:
+			offsets = section
+		case ColumnPartImageSectionColumnValues:
+			values = section
+		}
+	}
+	return offsets, values, offsets.Kind == ColumnPartImageSectionColumnOffsets && values.Kind == ColumnPartImageSectionColumnValues
 }
 
 func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart) error {
@@ -451,9 +472,16 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			return fmt.Errorf("typedcolumn: descriptor column %s fixed-width elements=%d", column.Name, column.FixedWidthElements)
 		}
 		switch column.Type {
-		case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
+		case ColumnTypeFloat32Vector:
 			if column.FixedWidthElements <= 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements", column.Name, column.Type)
+			}
+		case ColumnTypeAdjacencyList:
+			if column.FixedWidthElements < 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has negative fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
+			}
+			if column.FixedWidthElements == 0 && !columnDescriptorAllBlocksEncoding(column, EncodingRawUint32OffsetsList) {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements unless encoding=%s", column.Name, column.Type, EncodingRawUint32OffsetsList)
 			}
 		default:
 			if column.FixedWidthElements != 0 {
@@ -492,6 +520,18 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 		Blocks:   countColumnBlocks(desc),
 	}, enc.bytes())
 	return nil
+}
+
+func columnDescriptorAllBlocksEncoding(column ColumnPartColumnDescriptor, encoding Encoding) bool {
+	if len(column.Blocks) == 0 {
+		return false
+	}
+	for _, block := range column.Blocks {
+		if block.Encoding != encoding {
+			return false
+		}
+	}
+	return true
 }
 
 func imageColumnCardinalityForDescriptor(column ColumnPartColumnDescriptor, partColumn ColumnPartColumn) (uint32, error) {
@@ -725,6 +765,12 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 		if !ok {
 			return fmt.Errorf("typedcolumn: missing column %s", columnDescriptor.Name)
 		}
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+			if err := b.addUint32OffsetsListColumnSections(columnDescriptor, column); err != nil {
+				return err
+			}
+			continue
+		}
 		totalPayloadBytes := 0
 		for i, block := range column.Blocks {
 			if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
@@ -747,6 +793,67 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 			Compression: column.Definition.Compression,
 		}, data)
 	}
+	return nil
+}
+
+func (b *columnPartImageBuilder) addUint32OffsetsListColumnSections(columnDescriptor ColumnPartColumnDescriptor, column ColumnPartColumn) error {
+	globalOffsets := resizeFixedWidthValues([]uint64(nil), b.part.Descriptor.RowCount+1)
+	globalValues := make([]uint32, 0)
+	expectedFirstRow := 0
+	var reader GranuleReader
+	var offsetsScratch []uint64
+	var valuesScratch []uint32
+	for i, block := range column.Blocks {
+		if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
+			return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
+		}
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return fmt.Errorf("typedcolumn: column %s block %d first_row=%d want %d", columnDescriptor.Name, i, block.Descriptor.FirstRow, expectedFirstRow)
+		}
+		decoded, err := reader.DecodeUint32OffsetsListInto(offsetsScratch[:0], valuesScratch[:0], block.Granule)
+		if err != nil {
+			return fmt.Errorf("typedcolumn: column %s block %d offsets-list payload: %w", columnDescriptor.Name, i, err)
+		}
+		if decoded.Rows != block.Descriptor.RowCount || len(decoded.Offsets) != block.Descriptor.RowCount+1 {
+			return fmt.Errorf("typedcolumn: column %s block %d offsets-list rows=%d offsets=%d want rows=%d", columnDescriptor.Name, i, decoded.Rows, len(decoded.Offsets), block.Descriptor.RowCount)
+		}
+		base := uint64(len(globalValues))
+		if base > maxHostIntUint64() || uint64(len(decoded.Values)) > maxHostIntUint64()-base {
+			return fmt.Errorf("typedcolumn: column %s offsets-list values exceed host int", columnDescriptor.Name)
+		}
+		first := block.Descriptor.FirstRow
+		for row := 0; row <= decoded.Rows; row++ {
+			globalOffsets[first+row] = base + decoded.Offsets[row]
+		}
+		globalValues = append(globalValues, decoded.Values...)
+		offsetsScratch = decoded.Offsets
+		valuesScratch = decoded.Values
+		expectedFirstRow += block.Descriptor.RowCount
+	}
+	if expectedFirstRow != b.part.Descriptor.RowCount {
+		return fmt.Errorf("typedcolumn: column %s offsets-list covers %d rows, want %d", columnDescriptor.Name, expectedFirstRow, b.part.Descriptor.RowCount)
+	}
+	if err := ValidateRawUint32OffsetsListShape(b.part.Descriptor.RowCount, globalOffsets, uint64(len(globalValues))); err != nil {
+		return fmt.Errorf("typedcolumn: column %s offsets-list global shape: %w", columnDescriptor.Name, err)
+	}
+	offsetsData, err := EncodeRawUint32OffsetsListOffsets(nil, globalOffsets)
+	if err != nil {
+		return err
+	}
+	valuesData, err := EncodeRawUint32OffsetsListValues(nil, globalValues)
+	if err != nil {
+		return err
+	}
+	offsetsSection, valuesSection, err := NewRawUint32OffsetsListImageSections(columnDescriptor.Name, b.part.Descriptor.RowCount, len(offsetsData), len(valuesData))
+	if err != nil {
+		return err
+	}
+	offsetsSection.Granules = len(b.part.Descriptor.Granules)
+	offsetsSection.Blocks = len(column.Blocks)
+	valuesSection.Granules = len(b.part.Descriptor.Granules)
+	valuesSection.Blocks = len(column.Blocks)
+	b.appendSection(offsetsSection, offsetsData)
+	b.appendSection(valuesSection, valuesData)
 	return nil
 }
 
@@ -1028,6 +1135,8 @@ var columnPartImageSectionCodes = []columnPartImageSectionCode{
 	{kind: ColumnPartImageSectionLayoutContract, kindCode: 9, category: ColumnPartImageCategoryLayoutContract, categoryCode: 9},
 	{kind: ColumnPartImageSectionColumnStats, kindCode: 10, category: ColumnPartImageCategoryColumnStats, categoryCode: 10},
 	{kind: ColumnPartImageSectionPruningMetadata, kindCode: 11, category: ColumnPartImageCategoryPruningMetadata, categoryCode: 11},
+	{kind: ColumnPartImageSectionColumnOffsets, kindCode: 12, category: ColumnPartImageCategoryDeclaredColumnOffsets, categoryCode: 12},
+	{kind: ColumnPartImageSectionColumnValues, kindCode: 13, category: ColumnPartImageCategoryDeclaredColumnValues, categoryCode: 13},
 }
 
 func columnPartImageSectionKindCode(kind ColumnPartImageSectionKind) (uint16, error) {

@@ -531,12 +531,19 @@ offsets []uint64  // row_count + 1, little-endian
 values  []uint32  // flattened adjacency values, little-endian
 ```
 
-The offsets-list primitive validates exact offsets count, `offsets[0] == 0`,
-monotonic offsets, final offset equal to the value count, exact offsets/value
-byte lengths, Go `int` range before slicing, little-endian identity, and separate
-absolute alignment for offsets (8-byte) and values (4-byte) sections. It is
-spec/conformance-only in #1914: no writer, unsafe direct-view reader, adapter
-runtime, or graph search behavior is enabled until #1915+.
+The serialized image stores one canonical column-wide offsets section and one
+column-wide values section per offsets-list column. For multi-block parts, block
+payloads may use block-local offsets internally, but the image writer publishes a
+single global `row_count + 1` offsets array by dropping duplicate block starts and
+adding cumulative value bases; readers reconstruct block-local fallback payloads
+from those global sections. The offsets-list primitive validates exact offsets
+count, `offsets[0] == 0`, monotonic offsets, final offset equal to the value
+count, exact offsets/value byte lengths, Go `int` range before slicing,
+little-endian identity, and separate section metadata/checksums for offsets
+(8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
+fallback reader into owned Go slices; unsafe direct-view readers,
+adapter-to-column_graph wiring, and graph search consumption remain deferred to
+issue #1916 and later.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -545,8 +552,10 @@ and fixed-dimension `raw_float32_vector` typed-column payload sections as
 `DirectViewCertified`; the adapter-internal `__treedb_primary_id` row-locator
 column is not a declared-value direct-view certification target. The contract
 records section/block offsets, lengths, checksums, element size, endian, length
-multiple, row count, fixed elements per row, and null/default exclusion. Image
-padding bytes are deterministic zero bytes
+multiple, row count, fixed elements per row, and null/default exclusion. For
+`raw_uint32_offsets_list`, the contract records global offsets/value section
+identity and leaves generic per-block combined payload offsets empty because the
+two sections are discontiguous. Image padding bytes are deterministic zero bytes
 and are included in serialized-image byte accounting. When a typed-column-part
 asset contains an active direct-view-certified candidate, the column asset segment
 writer/appender also emits deterministic zero prefix padding as needed so the
@@ -608,8 +617,8 @@ staged and fail-closed. Authoritative dense `adjacency_list` typed-column fields
 must be non-nullable, must declare positive `adjacency_degree`, and must fail
 closed when any source row length, schema descriptor, or asset payload length
 disagrees with that fixed degree. The offsets-list selector is also non-nullable,
-must not declare `adjacency_degree`, and remains writer/reader fail-closed until
-issue #1915 adds the concrete encoding.
+must not declare `adjacency_degree`, and uses the #1915 concrete encoding for
+safe publication/reopen/fallback reconstruction.
 
 ## 8. Commit-Log Segment Format
 
