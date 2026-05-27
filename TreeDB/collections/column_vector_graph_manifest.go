@@ -406,6 +406,9 @@ func validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source columnVectorG
 	if source.RowCount < 0 || source.ValuesCount < 0 {
 		return errors.New("collections: column vector graph layer-0 adjacency source row/value count must be non-negative")
 	}
+	if source.RowCount == math.MaxInt || int64(source.RowCount) > math.MaxInt64/8-1 {
+		return fmt.Errorf("collections: column vector graph layer-0 adjacency source row_count=%d offsets byte count overflows int64", source.RowCount)
+	}
 	if source.OffsetsBytes <= 0 || source.ValuesBytes < 0 || source.PaddingBytes < 0 {
 		return errors.New("collections: column vector graph layer-0 adjacency source invalid byte accounting")
 	}

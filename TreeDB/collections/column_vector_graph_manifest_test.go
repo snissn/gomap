@@ -146,6 +146,12 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 	if decoded != snapshot {
 		t.Fatalf("decoded=%+v want %+v", decoded, snapshot)
 	}
+	for _, cut := range []int{1, 8} {
+		truncated := append([]byte(nil), encoded[:len(encoded)-cut]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(truncated); err == nil || !strings.Contains(err.Error(), "short column manifest") {
+			t.Fatalf("decode source truncated by %d err=%v want short manifest failure", cut, err)
+		}
+	}
 }
 
 func TestColumnVectorGraphPhysicalConfigUsesLittleEndianVectorOnlyM1C(t *testing.T) {
