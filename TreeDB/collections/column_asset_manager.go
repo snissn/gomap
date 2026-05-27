@@ -35,6 +35,7 @@ const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 const columnAssetVerifiedChecksumCacheSlots = 4096
 const typedColumnPartDirectViewAssetAlignment = 8
 const dictionaryCodesDirectViewAssetAlignment = columnDictionaryCodesPayloadAlignment
+const int64ValuesDirectViewAssetAlignment = columnInt64ValuesPayloadAlignment
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
@@ -662,6 +663,8 @@ func columnAssetSegmentPayloadAlignment(kind ColumnAssetKind, cfg ColumnStoreCon
 	switch kind {
 	case ColumnAssetKindTCS1DictionaryCodes:
 		return dictionaryCodesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1Int64Values:
+		return int64ValuesDirectViewAssetAlignment
 	case ColumnAssetKindTCS1TypedColumnPart:
 		if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
 			return typedColumnPartDirectViewAssetAlignment
