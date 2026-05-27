@@ -541,21 +541,22 @@ count, `offsets[0] == 0`, monotonic offsets, final offset equal to the value
 count, exact offsets/value byte lengths, Go `int` range before slicing,
 little-endian identity, and separate section metadata/checksums for offsets
 (8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
-fallback reader into owned Go slices; unsafe direct-view readers,
-adapter-to-column_graph wiring, and graph search consumption remain deferred to
-issue #1916 and later.
+fallback reader into owned Go slices; #1916 adds certified primitive direct-view
+readers for paired offsets/value handles. Adapter-to-column_graph wiring and
+graph search consumption remain deferred to issue #1917 and later.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
-and fixed-dimension `raw_float32_vector` typed-column payload sections as
-`DirectViewCertified`; the adapter-internal `__treedb_primary_id` row-locator
-column is not a declared-value direct-view certification target. The contract
-records section/block offsets, lengths, checksums, element size, endian, length
-multiple, row count, fixed elements per row, and null/default exclusion. For
-`raw_uint32_offsets_list`, the contract records global offsets/value section
-identity and leaves generic per-block combined payload offsets empty because the
-two sections are discontiguous. Image padding bytes are deterministic zero bytes
+fixed-dimension `raw_float32_vector`, and explicit `raw_uint32_offsets_list`
+typed-column payload sections as `DirectViewCertified`; the adapter-internal
+`__treedb_primary_id` row-locator column is not a declared-value direct-view
+certification target. The contract records section/block offsets, lengths,
+checksums, element size, endian, length multiple, row count, fixed elements per
+row, and null/default exclusion. For `raw_uint32_offsets_list`, the contract
+records global offsets/value section identity and leaves generic per-block
+combined payload offsets empty because the two sections are discontiguous. Image
+padding bytes are deterministic zero bytes
 and are included in serialized-image byte accounting. When a typed-column-part
 asset contains an active direct-view-certified candidate, the column asset segment
 writer/appender also emits deterministic zero prefix padding as needed so the
