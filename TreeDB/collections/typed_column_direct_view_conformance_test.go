@@ -257,7 +257,7 @@ func TestTypedColumnDirectViewSafetyChecksAndCounterVocabulary(t *testing.T) {
 			t.Fatalf("missing direct-view safety-check placement %s", placement)
 		}
 	}
-	for _, name := range []string{"offsets-list offset count is exactly row_count+1", "offsets-list offsets start at zero and are monotonic", "offsets-list final offset exactly matches uint32 value count", "offsets-list offsets fit Go int slice ranges before indexing", "absolute asset+offsets-section storage offset alignment", "absolute asset+values-section storage offset alignment"} {
+	for _, name := range []string{"mappedresource source support", "offsets-list offset count is exactly row_count+1", "offsets-list offsets start at zero and are monotonic", "offsets-list final offset exactly matches uint32 value count", "offsets-list offsets fit Go int slice ranges before indexing", "absolute asset+offsets-section storage offset alignment", "absolute asset+values-section storage offset alignment"} {
 		if !checkNames[name] {
 			t.Fatalf("missing offsets-list safety check %q", name)
 		}
