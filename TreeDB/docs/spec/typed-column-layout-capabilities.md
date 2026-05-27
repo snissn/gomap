@@ -34,7 +34,7 @@ not just encodings. A key includes:
 | `double` | `float64` + `raw_float64` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Legacy fixed-width little-endian dense fallback/compatibility payload bytes. Direct-view certification remains deferred; this is not the #1901 v1 target. Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
-| `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | #1914-selected v1 variable-list primitive selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. It is spec-only/deferred in this issue: no writer, unsafe direct-view reader, adapter runtime, or graph search consumption is enabled until #1915+. |
+| `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | #1915-selected v1 variable-list primitive selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication is enabled; unsafe direct-view reader, column_graph adapter wiring, and graph search consumption remain deferred to #1916+. |
 
 Nullable/default wrappers expose null and default-mask dependencies separately
 from carrier-value capabilities. Value predicates and aggregates over nullable
@@ -164,7 +164,8 @@ New layouts should declare unsupported operations explicitly. Examples:
   and vector metrics; adjacency direct payloads are deferred to #1901 while
   adjacency traversal/metrics continue through decoded/fallback dense payloads;
   the #1901 v1 target is the distinct `raw_uint32_offsets_list` variable-list
-  layout with `uint64` offsets and `uint32` values, which remains runtime
-  deferred until #1915+; vector/adjacency layouts reject scalar aggregate/range
+  layout with `uint64` offsets and `uint32` values, whose safe writer/fallback
+  reader is available while direct-view/search runtime remains deferred;
+  vector/adjacency layouts reject scalar aggregate/range
   shortcuts unless a future issue implements and tests them through the shared
   substrate.

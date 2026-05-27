@@ -145,6 +145,18 @@ func TestRawUint32OffsetsListCorruptionValidation(t *testing.T) {
 	}
 }
 
+func TestRawUint32OffsetsListGranuleEncodingMismatchFailsClosed(t *testing.T) {
+	raw, err := EncodeRawUint32OffsetsListPayload(nil, 1, []uint64{0, 1}, []uint32{42})
+	if err != nil {
+		t.Fatalf("EncodeRawUint32OffsetsListPayload: %v", err)
+	}
+	g := EncodedGranule{Rows: 1, Encoding: EncodingRawUint32Dense, Compression: CompressionNone, RawBytes: len(raw), StoredBytes: len(raw), PayloadRef: PayloadRef{Kind: PayloadRefInline, Length: len(raw)}, Payload: raw}
+	var reader GranuleReader
+	if _, err := reader.DecodeUint32OffsetsListInto(nil, nil, g); err == nil || !strings.Contains(err.Error(), "encoding") {
+		t.Fatalf("DecodeUint32OffsetsListInto err=%v want encoding mismatch", err)
+	}
+}
+
 func TestRawUint32OffsetsListSectionMetadataValidation(t *testing.T) {
 	t.Parallel()
 	offsetsRaw := mustOffsetsListOffsets(t, []uint64{0, 2})
@@ -185,6 +197,81 @@ func TestRawUint32OffsetsListSectionMetadataValidation(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 	})
+}
+
+func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
+	opts := Options{
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Encoding: EncodingRawUint32OffsetsList, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+	}
+	batch := Batch{
+		Rows:    4,
+		Columns: map[string][]int64{"id": []int64{0, 1, 2, 3}},
+		Uint32OffsetsLists: map[string]RawUint32OffsetsList{
+			"neighbors": {Rows: 4, Offsets: []uint64{0, 0, 2, 2, 5}, Values: []uint32{7, 8, 9, 10, 11}},
+		},
+	}
+	part, err := BuildColumnPart(1915, opts, batch)
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"neighbors": "adjacency_list"}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	offsetsSection, valuesSection, ok := image.columnOffsetsListSections("neighbors")
+	if !ok {
+		t.Fatalf("missing offsets-list sections: %+v", image.Sections)
+	}
+	if offsetsSection.Kind != ColumnPartImageSectionColumnOffsets || offsetsSection.Name != "offsets" || offsetsSection.Length != 5*8 {
+		t.Fatalf("offsets section=%+v", offsetsSection)
+	}
+	if valuesSection.Kind != ColumnPartImageSectionColumnValues || valuesSection.Name != "values" || valuesSection.Length != 5*4 {
+		t.Fatalf("values section=%+v", valuesSection)
+	}
+	if offsetsSection.Offset >= valuesSection.Offset {
+		t.Fatalf("section order offsets=%d values=%d", offsetsSection.Offset, valuesSection.Offset)
+	}
+	if err := ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, image.sectionBytes(offsetsSection), image.sectionBytes(valuesSection), 4); err != nil {
+		t.Fatalf("ValidateRawUint32OffsetsListSections: %v", err)
+	}
+	cert, err := CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	certColumn, ok := cert.Column("neighbors")
+	if !ok {
+		t.Fatalf("missing certified neighbors column")
+	}
+	if certColumn.OffsetsBytes != offsetsSection.Length || certColumn.ValuesBytes != valuesSection.Length || certColumn.DirectViewCertified {
+		t.Fatalf("certified offsets-list column=%+v", certColumn)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	decodedPart, err := ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	decoded, err := decodedPart.Uint32OffsetsListColumn("neighbors", nil, nil)
+	if err != nil {
+		t.Fatalf("Uint32OffsetsListColumn: %v", err)
+	}
+	if !equalUint64s(decoded.Offsets, []uint64{0, 0, 2, 2, 5}) || !equalUint32s(decoded.Values, []uint32{7, 8, 9, 10, 11}) {
+		t.Fatalf("decoded=%+v", decoded)
+	}
+	accounting := part.ByteAccountingFromImage(image)
+	if accounting.DeclaredColumnOffsetsBytes != offsetsSection.Length || accounting.DeclaredColumnValuesBytes != valuesSection.Length {
+		t.Fatalf("accounting offsets=%d values=%d sections=%+v", accounting.DeclaredColumnOffsetsBytes, accounting.DeclaredColumnValuesBytes, accounting.SerializedSections)
+	}
+	if accounting.SerializedPaddingBytes != image.PaddingBytes() {
+		t.Fatalf("accounting padding=%d image padding=%d", accounting.SerializedPaddingBytes, image.PaddingBytes())
+	}
 }
 
 func TestRawUint32OffsetsListImageStorageAccounting(t *testing.T) {

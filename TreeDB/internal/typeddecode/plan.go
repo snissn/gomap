@@ -342,9 +342,9 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
 }
 
-// AdjacencyOffsetsListPlan records the #1914 v1 adjacency primitive identity:
-// little-endian uint64 offsets plus little-endian uint32 values. It is spec-only
-// in this issue and therefore never returns a direct-view candidate.
+// AdjacencyOffsetsListPlan records the #1901 v1 adjacency primitive identity:
+// little-endian uint64 offsets plus little-endian uint32 values. #1915 adds the
+// safe writer/fallback reader; unsafe direct-view candidates remain deferred.
 func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
 	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
 		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}

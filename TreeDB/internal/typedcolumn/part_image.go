@@ -207,6 +207,23 @@ func (i ColumnPartImage) columnDataSection(column string) (ColumnPartImageSectio
 	return ColumnPartImageSection{}, false
 }
 
+func (i ColumnPartImage) columnOffsetsListSections(column string) (ColumnPartImageSection, ColumnPartImageSection, bool) {
+	var offsets ColumnPartImageSection
+	var values ColumnPartImageSection
+	for _, section := range i.Sections {
+		if section.Column != column {
+			continue
+		}
+		switch section.Kind {
+		case ColumnPartImageSectionColumnOffsets:
+			offsets = section
+		case ColumnPartImageSectionColumnValues:
+			values = section
+		}
+	}
+	return offsets, values, offsets.Kind == ColumnPartImageSectionColumnOffsets && values.Kind == ColumnPartImageSectionColumnValues
+}
+
 func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart) error {
 	descriptorSection, err := image.singleSection(ColumnPartImageSectionDescriptor)
 	if err != nil {
@@ -455,9 +472,16 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			return fmt.Errorf("typedcolumn: descriptor column %s fixed-width elements=%d", column.Name, column.FixedWidthElements)
 		}
 		switch column.Type {
-		case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
+		case ColumnTypeFloat32Vector:
 			if column.FixedWidthElements <= 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements", column.Name, column.Type)
+			}
+		case ColumnTypeAdjacencyList:
+			if column.FixedWidthElements < 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has negative fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
+			}
+			if column.FixedWidthElements == 0 && !columnDescriptorAllBlocksEncoding(column, EncodingRawUint32OffsetsList) {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements unless encoding=%s", column.Name, column.Type, EncodingRawUint32OffsetsList)
 			}
 		default:
 			if column.FixedWidthElements != 0 {
@@ -496,6 +520,18 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 		Blocks:   countColumnBlocks(desc),
 	}, enc.bytes())
 	return nil
+}
+
+func columnDescriptorAllBlocksEncoding(column ColumnPartColumnDescriptor, encoding Encoding) bool {
+	if len(column.Blocks) == 0 {
+		return false
+	}
+	for _, block := range column.Blocks {
+		if block.Encoding != encoding {
+			return false
+		}
+	}
+	return true
 }
 
 func imageColumnCardinalityForDescriptor(column ColumnPartColumnDescriptor, partColumn ColumnPartColumn) (uint32, error) {
@@ -729,6 +765,12 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 		if !ok {
 			return fmt.Errorf("typedcolumn: missing column %s", columnDescriptor.Name)
 		}
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+			if err := b.addUint32OffsetsListColumnSections(columnDescriptor, column); err != nil {
+				return err
+			}
+			continue
+		}
 		totalPayloadBytes := 0
 		for i, block := range column.Blocks {
 			if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
@@ -751,6 +793,43 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 			Compression: column.Definition.Compression,
 		}, data)
 	}
+	return nil
+}
+
+func (b *columnPartImageBuilder) addUint32OffsetsListColumnSections(columnDescriptor ColumnPartColumnDescriptor, column ColumnPartColumn) error {
+	totalOffsetsBytes := 0
+	totalValuesBytes := 0
+	for i, block := range column.Blocks {
+		if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
+			return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
+		}
+		offsetsBytes, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if err != nil {
+			return fmt.Errorf("typedcolumn: column %s block %d offsets-list payload: %w", columnDescriptor.Name, i, err)
+		}
+		totalOffsetsBytes += offsetsBytes
+		totalValuesBytes += valuesBytes
+	}
+	offsetsData := make([]byte, 0, totalOffsetsBytes)
+	valuesData := make([]byte, 0, totalValuesBytes)
+	for _, block := range column.Blocks {
+		offsetsBytes, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if err != nil {
+			return err
+		}
+		offsetsData = append(offsetsData, block.Granule.Payload[:offsetsBytes]...)
+		valuesData = append(valuesData, block.Granule.Payload[offsetsBytes:offsetsBytes+valuesBytes]...)
+	}
+	offsetsSection, valuesSection, err := NewRawUint32OffsetsListImageSections(columnDescriptor.Name, b.part.Descriptor.RowCount, len(offsetsData), len(valuesData))
+	if err != nil {
+		return err
+	}
+	offsetsSection.Granules = len(b.part.Descriptor.Granules)
+	offsetsSection.Blocks = len(column.Blocks)
+	valuesSection.Granules = len(b.part.Descriptor.Granules)
+	valuesSection.Blocks = len(column.Blocks)
+	b.appendSection(offsetsSection, offsetsData)
+	b.appendSection(valuesSection, valuesData)
 	return nil
 }
 

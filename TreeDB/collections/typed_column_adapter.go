@@ -100,7 +100,7 @@ func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 		{ValueType: ColumnStoreValueDouble, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Reason: "default compatibility carrier stores raw int64 float64 bit patterns; fixed_width_encoding little_endian selects native raw_float64"},
 		{ValueType: ColumnStoreValueString, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingLowCardinalityUint32, Reason: "stored as dictionary codes with dictionary section metadata"},
 		{ValueType: ColumnStoreValueFloat32Vector, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector, Reason: "stored as fixed-dim dense little-endian float32 sections"},
-		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections by default; explicit adjacency_layout uint32_offsets_list is the #1914 variable-list target but writer support is deferred"},
+		{ValueType: ColumnStoreValueAdjacencyList, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Reason: "stored as fixed-degree dense little-endian uint32 sections by default; explicit adjacency_layout uint32_offsets_list selects the #1915 safe offsets-list writer/fallback reader"},
 	}
 }
 
@@ -200,7 +200,8 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 	case ColumnStoreValueAdjacencyList:
 		switch field.AdjacencyLayout {
 		case ColumnAdjacencyListLayoutUint32OffsetsList:
-			return typedColumnAdapterColumn{}, fmt.Errorf("%w: adjacency_list field %q adjacency_layout %q writer support deferred to #1915", errTypedColumnAdapterUnsupportedType, field.Path, field.AdjacencyLayout)
+			def.Encoding = typedcolumn.EncodingRawUint32OffsetsList
+			def.FixedWidthElements = 0
 		case ColumnAdjacencyListLayoutFixedDense:
 			if field.AdjacencyDegree <= 0 {
 				return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q adjacency_list requires positive adjacency_degree", field.Path)
@@ -305,14 +306,21 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			}
 			batch.Float32Vectors[column.Definition.Name] = make([]float32, elements)
 		case typedcolumn.ColumnTypeAdjacencyList:
-			if batch.Uint32Vectors == nil {
-				batch.Uint32Vectors = make(map[string][]uint32)
+			if column.Definition.Encoding == typedcolumn.EncodingRawUint32OffsetsList {
+				if batch.Uint32OffsetsLists == nil {
+					batch.Uint32OffsetsLists = make(map[string]typedcolumn.RawUint32OffsetsList)
+				}
+				batch.Uint32OffsetsLists[column.Definition.Name] = typedcolumn.RawUint32OffsetsList{Rows: len(rows), Offsets: make([]uint64, len(rows)+1)}
+			} else {
+				if batch.Uint32Vectors == nil {
+					batch.Uint32Vectors = make(map[string][]uint32)
+				}
+				elements, err := typedColumnAdapterDenseElements(len(rows), column.Definition.FixedWidthElements)
+				if err != nil {
+					return nil, err
+				}
+				batch.Uint32Vectors[column.Definition.Name] = make([]uint32, elements)
 			}
-			elements, err := typedColumnAdapterDenseElements(len(rows), column.Definition.FixedWidthElements)
-			if err != nil {
-				return nil, err
-			}
-			batch.Uint32Vectors[column.Definition.Name] = make([]uint32, elements)
 		default:
 			batch.Columns[column.Definition.Name] = make([]int64, len(rows))
 			if column.Field.Nullable {
@@ -352,7 +360,14 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 			case typedcolumn.ColumnTypeAdjacencyList:
-				if err := encodeTypedColumnAdapterAdjacencyListValue(batch.Uint32Vectors[column.Definition.Name], rowIdx, column, value); err != nil {
+				if column.Definition.Encoding == typedcolumn.EncodingRawUint32OffsetsList {
+					list := batch.Uint32OffsetsLists[column.Definition.Name]
+					updated, err := encodeTypedColumnAdapterAdjacencyOffsetsListValue(list, rowIdx, column, value)
+					if err != nil {
+						return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+					}
+					batch.Uint32OffsetsLists[column.Definition.Name] = updated
+				} else if err := encodeTypedColumnAdapterAdjacencyListValue(batch.Uint32Vectors[column.Definition.Name], rowIdx, column, value); err != nil {
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 			default:
@@ -657,6 +672,19 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 		return out, nil
 	}
 	if column.Field.ValueType == ColumnStoreValueAdjacencyList {
+		if column.Definition.Encoding == typedcolumn.EncodingRawUint32OffsetsList {
+			list, err := p.Part.Uint32OffsetsListColumn(column.Definition.Name, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]columnDeclaredValue, list.Rows)
+			for i := 0; i < list.Rows; i++ {
+				start := int(list.Offsets[i])
+				end := int(list.Offsets[i+1])
+				out[i] = columnDeclaredValue{Type: column.Field.ValueType, Present: true, AdjacencyList: append([]uint32{}, list.Values[start:end]...)}
+			}
+			return out, nil
+		}
 		matrix, err := p.Part.DenseUint32Column(column.Definition.Name, nil)
 		if err != nil {
 			return nil, err
@@ -950,6 +978,24 @@ func encodeTypedColumnAdapterAdjacencyListValue(dst []uint32, rowIdx int, column
 	}
 	copy(dst[start:start+degree], value.AdjacencyList)
 	return nil
+}
+
+func encodeTypedColumnAdapterAdjacencyOffsetsListValue(list typedcolumn.RawUint32OffsetsList, rowIdx int, column typedColumnAdapterColumn, value columnDeclaredValue) (typedcolumn.RawUint32OffsetsList, error) {
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return typedcolumn.RawUint32OffsetsList{}, err
+	}
+	if column.Definition.Encoding != typedcolumn.EncodingRawUint32OffsetsList || column.Definition.FixedWidthElements != 0 {
+		return typedcolumn.RawUint32OffsetsList{}, fmt.Errorf("adjacency_list offsets-list column encoding=%s fixed_width_elements=%d", column.Definition.Encoding, column.Definition.FixedWidthElements)
+	}
+	if rowIdx < 0 || rowIdx >= list.Rows || len(list.Offsets) != list.Rows+1 {
+		return typedcolumn.RawUint32OffsetsList{}, fmt.Errorf("adjacency_list offsets-list row %d outside rows=%d offsets=%d", rowIdx, list.Rows, len(list.Offsets))
+	}
+	if uint64(len(list.Values)) > uint64(int(^uint(0)>>1))-uint64(len(value.AdjacencyList)) {
+		return typedcolumn.RawUint32OffsetsList{}, fmt.Errorf("adjacency_list offsets-list values overflow")
+	}
+	list.Values = append(list.Values, value.AdjacencyList...)
+	list.Offsets[rowIdx+1] = uint64(len(list.Values))
+	return list, nil
 }
 
 func typedColumnAdapterDenseElements(rows int, elementsPerRow int) (int, error) {

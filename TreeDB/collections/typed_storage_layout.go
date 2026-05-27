@@ -535,7 +535,9 @@ func (l TypedStorageLayout) ensureTypedColumnPartSupported() error {
 			}
 			switch field.AdjacencyLayout {
 			case ColumnAdjacencyListLayoutUint32OffsetsList:
-				return fmt.Errorf("%w: adjacency_list field %q adjacency_layout %q writer/fallback reader deferred to #1915", ErrTypedStorageColumnPartUnsupported, field.Path, field.AdjacencyLayout)
+				if field.AdjacencyDegree != 0 {
+					return fmt.Errorf("%w: adjacency_list field %q offsets-list requires adjacency_degree=0", ErrTypedStorageColumnPartUnsupported, field.Path)
+				}
 			default:
 				if field.AdjacencyDegree <= 0 {
 					return fmt.Errorf("%w: adjacency_list field %q requires adjacency_degree", ErrTypedStorageColumnPartUnsupported, field.Path)

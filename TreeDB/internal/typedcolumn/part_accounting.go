@@ -110,6 +110,12 @@ func (p *ColumnPart) ByteAccounting() ColumnPartByteAccounting {
 			report := block.Granule.CodecReport
 			out.CodecBlocks++
 			valueBytes := logicalColumnValueBytes(column.Definition, block.Descriptor.RowCount)
+			if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+				_, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.RawBytes)
+				if err == nil {
+					valueBytes = valuesBytes
+				}
+			}
 			detail.Rows += block.Descriptor.RowCount
 			detail.Blocks++
 			detail.LogicalValueBytes += valueBytes

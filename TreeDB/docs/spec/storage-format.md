@@ -534,9 +534,10 @@ values  []uint32  // flattened adjacency values, little-endian
 The offsets-list primitive validates exact offsets count, `offsets[0] == 0`,
 monotonic offsets, final offset equal to the value count, exact offsets/value
 byte lengths, Go `int` range before slicing, little-endian identity, and separate
-absolute alignment for offsets (8-byte) and values (4-byte) sections. It is
-spec/conformance-only in #1914: no writer, unsafe direct-view reader, adapter
-runtime, or graph search behavior is enabled until #1915+.
+section metadata/checksums for offsets (8-byte elements) and values (4-byte
+elements). #1915 adds the safe writer and fallback reader into owned Go slices;
+unsafe direct-view readers, adapter-to-column_graph wiring, and graph search
+consumption remain deferred to #1916+.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -608,8 +609,8 @@ staged and fail-closed. Authoritative dense `adjacency_list` typed-column fields
 must be non-nullable, must declare positive `adjacency_degree`, and must fail
 closed when any source row length, schema descriptor, or asset payload length
 disagrees with that fixed degree. The offsets-list selector is also non-nullable,
-must not declare `adjacency_degree`, and remains writer/reader fail-closed until
-issue #1915 adds the concrete encoding.
+must not declare `adjacency_degree`, and uses the #1915 concrete encoding for
+safe publication/reopen/fallback reconstruction.
 
 ## 8. Commit-Log Segment Format
 

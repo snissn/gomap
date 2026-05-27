@@ -29,10 +29,10 @@ const (
 	EncodingRawUint32Dense
 	EncodingRawFloat32
 	EncodingRawFloat64
-	// EncodingRawUint32OffsetsList is the spec-only v1 variable-length
-	// adjacency/list primitive: little-endian uint64 offsets plus little-endian
-	// uint32 values. Writers and unsafe direct-view readers are intentionally
-	// deferred to #1915/#1916.
+	// EncodingRawUint32OffsetsList is the v1 variable-length adjacency/list
+	// primitive: little-endian uint64 offsets plus little-endian uint32 values.
+	// The safe writer and fallback reader are implemented; unsafe direct-view
+	// readers are intentionally deferred to #1916.
 	EncodingRawUint32OffsetsList
 )
 
@@ -188,15 +188,17 @@ func (b *GranuleBuilder) BuildInt64(values []int64) (EncodedGranule, error) {
 }
 
 type GranuleReader struct {
-	raw      []byte
-	values   []int64
-	stored64 []int64
-	bools    []bool
-	nulls    []bool
-	defaults []bool
-	codes    []uint32
-	float32s []float32
-	float64s []float64
+	raw       []byte
+	values    []int64
+	stored64  []int64
+	bools     []bool
+	nulls     []bool
+	defaults  []bool
+	codes     []uint32
+	float32s  []float32
+	float64s  []float64
+	offsets64 []uint64
+	u32values []uint32
 }
 
 func (r *GranuleReader) DecodeInt64(g EncodedGranule) ([]int64, error) {

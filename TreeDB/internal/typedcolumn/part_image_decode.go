@@ -487,9 +487,13 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			return ColumnPartDescriptor{}, nil, err
 		}
 		switch columnType {
-		case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
+		case ColumnTypeFloat32Vector:
 			if fixedWidthElements <= 0 {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements", name, columnType)
+			}
+		case ColumnTypeAdjacencyList:
+			if fixedWidthElements < 0 {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s has negative fixed-width elements %d", name, columnType, fixedWidthElements)
 			}
 		default:
 			if fixedWidthElements != 0 {
@@ -537,6 +541,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			columnDesc.Blocks = append(columnDesc.Blocks, blockDesc)
 			column.Blocks = append(column.Blocks, ColumnBlock{Descriptor: blockDesc, Granule: granule})
 		}
+		if err := validateDecodedColumnFixedWidthElements(name, columnType, fixedWidthElements, columnDesc.Blocks); err != nil {
+			return ColumnPartDescriptor{}, nil, err
+		}
 		if expectedFirstRow != desc.RowCount {
 			return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: descriptor column %s covers %d rows, want %d", name, expectedFirstRow, desc.RowCount)
 		}
@@ -550,6 +557,34 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 		return ColumnPartDescriptor{}, nil, err
 	}
 	return desc, columns, nil
+}
+
+func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType, fixedWidthElements int, blocks []ColumnBlockDescriptor) error {
+	switch columnType {
+	case ColumnTypeFloat32Vector:
+		if fixedWidthElements <= 0 {
+			return fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements", name, columnType)
+		}
+	case ColumnTypeAdjacencyList:
+		if fixedWidthElements < 0 {
+			return fmt.Errorf("typedcolumn: column %s type=%s has negative fixed-width elements %d", name, columnType, fixedWidthElements)
+		}
+		if fixedWidthElements == 0 {
+			if len(blocks) == 0 {
+				return fmt.Errorf("typedcolumn: column %s type=%s requires blocks for %s", name, columnType, EncodingRawUint32OffsetsList)
+			}
+			for _, block := range blocks {
+				if block.Encoding != EncodingRawUint32OffsetsList {
+					return fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements unless encoding=%s", name, columnType, EncodingRawUint32OffsetsList)
+				}
+			}
+		}
+	default:
+		if fixedWidthElements != 0 {
+			return fmt.Errorf("typedcolumn: column %s type=%s has fixed-width elements %d", name, columnType, fixedWidthElements)
+		}
+	}
+	return nil
 }
 
 func validateDecodedGranuleDescriptors(desc ColumnPartDescriptor) error {
@@ -604,6 +639,9 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if block.FirstGranule != firstGranule || block.LastGranule != lastGranule {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d granule range [%d,%d] want [%d,%d] for rows [%d,%d)", column, blockIndex, block.FirstGranule, block.LastGranule, firstGranule, lastGranule, block.FirstRow, block.FirstRow+block.RowCount)
 	}
+	if columnType == ColumnTypeAdjacencyList && block.Encoding == EncodingRawUint32OffsetsList {
+		return validateDecodedOffsetsListColumnBlockDescriptor(column, blockIndex, fixedWidthElements, block)
+	}
 	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, fixedWidthElements, block.Encoding, block.RowCount)
 	if err != nil {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d: %w", column, blockIndex, err)
@@ -651,6 +689,22 @@ func validateDecodedColumnBlockGranuleMetadata(column string, blockIndex int, gr
 	}
 	if granule.HasMinMax && granule.Min > granule.Max {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d granule min=%d exceeds max=%d", column, blockIndex, granule.Min, granule.Max)
+	}
+	return nil
+}
+
+func validateDecodedOffsetsListColumnBlockDescriptor(column string, blockIndex int, fixedWidthElements int, block ColumnBlockDescriptor) error {
+	if fixedWidthElements != 0 {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d raw_uint32_offsets_list fixed_width_elements=%d want 0", column, blockIndex, fixedWidthElements)
+	}
+	if block.Compression != CompressionNone {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d offsets-list compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
+	}
+	if _, _, err := RawUint32OffsetsListBlockPayloadBytes(block.RowCount, block.RawBytes); err != nil {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d offsets-list raw bytes: %w", column, blockIndex, err)
+	}
+	if block.StoredBytes != block.RawBytes {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d offsets-list stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
 	return nil
 }
@@ -1355,6 +1409,12 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 		return err
 	}
 	for name, column := range columns {
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+			if err := attachUint32OffsetsListColumnPayloadsFromImage(image, name, column, columns); err != nil {
+				return err
+			}
+			continue
+		}
 		section, ok := image.columnDataSection(name)
 		if !ok {
 			return fmt.Errorf("typedcolumn: image missing column data section %s", name)
@@ -1380,31 +1440,92 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 	return nil
 }
 
-func validateColumnDataSectionsForColumns(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
-	required := make(map[string]struct{}, len(columns))
-	for name := range columns {
-		required[name] = struct{}{}
+func attachUint32OffsetsListColumnPayloadsFromImage(image ColumnPartImage, name string, column ColumnPartColumn, columns map[string]ColumnPartColumn) error {
+	offsetsSection, valuesSection, ok := image.columnOffsetsListSections(name)
+	if !ok {
+		return fmt.Errorf("typedcolumn: image missing offsets-list sections %s", name)
 	}
-	seen := make(map[string]ColumnPartImageSection, len(columns))
+	offsetsRaw := image.sectionBytes(offsetsSection)
+	valuesRaw := image.sectionBytes(valuesSection)
+	if err := ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, image.Rows); err != nil {
+		return err
+	}
+	offsetsCursor := 0
+	valuesCursor := 0
+	for i := range column.Blocks {
+		block := &column.Blocks[i]
+		offsetsBytes, valuesBytes, err := RawUint32OffsetsListBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if err != nil {
+			return fmt.Errorf("typedcolumn: image column %s block %d offsets-list payload: %w", name, i, err)
+		}
+		if offsetsCursor > len(offsetsRaw)-offsetsBytes || valuesCursor > len(valuesRaw)-valuesBytes {
+			return fmt.Errorf("typedcolumn: image column %s block %d outside offsets/values sections", name, i)
+		}
+		payload := make([]byte, block.Descriptor.StoredBytes)
+		copy(payload[:offsetsBytes], offsetsRaw[offsetsCursor:offsetsCursor+offsetsBytes])
+		copy(payload[offsetsBytes:], valuesRaw[valuesCursor:valuesCursor+valuesBytes])
+		block.Granule.Payload = payload
+		block.Granule.PayloadRef = PayloadRef{Kind: PayloadRefInline, Length: len(payload)}
+		offsetsCursor += offsetsBytes
+		valuesCursor += valuesBytes
+	}
+	if offsetsCursor != len(offsetsRaw) || valuesCursor != len(valuesRaw) {
+		return fmt.Errorf("typedcolumn: image column %s consumed offsets=%d/%d values=%d/%d", name, offsetsCursor, len(offsetsRaw), valuesCursor, len(valuesRaw))
+	}
+	columns[name] = column
+	return nil
+}
+
+func validateColumnDataSectionsForColumns(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
+	required := make(map[string]ColumnPartColumn, len(columns))
+	for name, column := range columns {
+		required[name] = column
+	}
+	seenData := make(map[string]ColumnPartImageSection, len(columns))
+	seenOffsets := make(map[string]ColumnPartImageSection, len(columns))
+	seenValues := make(map[string]ColumnPartImageSection, len(columns))
 	for _, section := range image.Sections {
-		if section.Kind != ColumnPartImageSectionColumnData {
+		switch section.Kind {
+		case ColumnPartImageSectionColumnData, ColumnPartImageSectionColumnOffsets, ColumnPartImageSectionColumnValues:
+		default:
 			continue
 		}
 		if section.Column == "" {
-			return fmt.Errorf("typedcolumn: image column data section at offset=%d has empty column", section.Offset)
+			return fmt.Errorf("typedcolumn: image %s section at offset=%d has empty column", section.Kind, section.Offset)
 		}
 		if _, ok := required[section.Column]; !ok {
-			return fmt.Errorf("typedcolumn: image has column data section for unknown column %s at offset=%d", section.Column, section.Offset)
+			return fmt.Errorf("typedcolumn: image has %s section for unknown column %s at offset=%d", section.Kind, section.Column, section.Offset)
+		}
+		var seen map[string]ColumnPartImageSection
+		switch section.Kind {
+		case ColumnPartImageSectionColumnData:
+			seen = seenData
+		case ColumnPartImageSectionColumnOffsets:
+			seen = seenOffsets
+		case ColumnPartImageSectionColumnValues:
+			seen = seenValues
 		}
 		previous, exists := seen[section.Column]
 		if exists {
-			return fmt.Errorf("typedcolumn: duplicate column data section %s at offset=%d previous_offset=%d", section.Column, section.Offset, previous.Offset)
+			return fmt.Errorf("typedcolumn: duplicate %s section %s at offset=%d previous_offset=%d", section.Kind, section.Column, section.Offset, previous.Offset)
 		}
 		seen[section.Column] = section
 	}
-	for name := range required {
-		if _, ok := seen[name]; !ok {
+	for name, column := range required {
+		_, hasData := seenData[name]
+		_, hasOffsets := seenOffsets[name]
+		_, hasValues := seenValues[name]
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+			if hasData || !hasOffsets || !hasValues {
+				return fmt.Errorf("typedcolumn: image column %s offsets-list sections data=%v offsets=%v values=%v", name, hasData, hasOffsets, hasValues)
+			}
+			continue
+		}
+		if !hasData && !hasOffsets && !hasValues {
 			return fmt.Errorf("typedcolumn: image missing column data section %s", name)
+		}
+		if !hasData || hasOffsets || hasValues {
+			return fmt.Errorf("typedcolumn: image column %s dense/scalar sections data=%v offsets=%v values=%v", name, hasData, hasOffsets, hasValues)
 		}
 	}
 	return nil

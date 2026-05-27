@@ -176,7 +176,7 @@ func TestTypedStorageLayoutTypedColumnAdjacencySupportedWithDegree(t *testing.T)
 	}
 }
 
-func TestTypedStorageLayoutAdjacencyOffsetsListSelectorSpecOnly(t *testing.T) {
+func TestTypedStorageLayoutAdjacencyOffsetsListSelectorSupported1915(t *testing.T) {
 	layout, err := NormalizeTypedStorageLayout(TypedStorageLayout{
 		Collection: "events",
 		Fields: []TypedStorageField{{
@@ -194,11 +194,11 @@ func TestTypedStorageLayoutAdjacencyOffsetsListSelectorSpecOnly(t *testing.T) {
 	if field.AdjacencyLayout != ColumnAdjacencyListLayoutUint32OffsetsList || field.AdjacencyDegree != 0 {
 		t.Fatalf("normalized offsets-list field=%+v", field)
 	}
-	if err := layout.EnsureReadSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) || !strings.Contains(err.Error(), "#1915") {
-		t.Fatalf("EnsureReadSupported err=%v want #1915 fail-closed", err)
+	if err := layout.EnsureReadSupported(); err != nil {
+		t.Fatalf("EnsureReadSupported: %v", err)
 	}
-	if err := layout.EnsurePublicationSupported(); !errors.Is(err, ErrTypedStorageColumnPartUnsupported) || !strings.Contains(err.Error(), "#1915") {
-		t.Fatalf("EnsurePublicationSupported err=%v want #1915 fail-closed", err)
+	if err := layout.EnsurePublicationSupported(); err != nil {
+		t.Fatalf("EnsurePublicationSupported: %v", err)
 	}
 }
 

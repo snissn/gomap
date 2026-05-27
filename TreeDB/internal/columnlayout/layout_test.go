@@ -242,7 +242,7 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 		t.Fatalf("offsets-list adjacency caps=%+v want variable-length non-dense layout", offsetsAdjacency)
 	}
 	if offsetsAdjacency.DirectView.Eligible || offsetsAdjacency.DirectView.Reason != ReasonAdjacencyOffsetsListDirectViewDeferred {
-		t.Fatalf("offsets-list adjacency direct=%+v want spec-only deferred direct view", offsetsAdjacency.DirectView)
+		t.Fatalf("offsets-list adjacency direct=%+v want deferred direct view", offsetsAdjacency.DirectView)
 	}
 	if cap := offsetsAdjacency.Supports(OpAdjacencyDirectView); cap.Supported() || cap.Reason != ReasonAdjacencyOffsetsListDirectViewDeferred {
 		t.Fatalf("offsets-list direct cap=%+v want %s", cap, ReasonAdjacencyOffsetsListDirectViewDeferred)
