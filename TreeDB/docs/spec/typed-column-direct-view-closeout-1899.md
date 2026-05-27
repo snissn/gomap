@@ -168,18 +168,19 @@ GOWORK=off go test ./TreeDB/collections \
   -benchmem -benchtime=500ms -count=5
 ```
 
-Timer boundaries: scalar direct-view construction measures certification/handle
-view construction over already-acquired mapped bytes; each scalar subbenchmark
-revalidates direct-view certification inside the timed loop; vector dense scan measures
+Timer boundaries: scalar direct-view construction measures certification, fixed-width
+option normalization, and handle-backed typed slice view construction over
+already-acquired mapped bytes; each scalar subbenchmark explicitly revalidates
+direct-view certification inside the timed loop. Vector dense scan measures
 view-backed dense payload iteration; column-graph benchmarks time search and, for
 the document variants, final document fetch/reconstruction separately through
 reported `doc_*` counters.
 
 | Scenario | Benchmark | ns/op | ops/sec | B/op | allocs/op | Direct-source counters |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| int64 mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/int64_mmap` | 176 | 5,688,282 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=65536` |
-| float32 mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/float32_mmap` | 205 | 4,873,294 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=32768` |
-| double mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/float64_mmap` | 188 | 5,316,321 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=65536` |
+| int64 mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/int64_mmap` | 275 | 3,633,721 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=65536` |
+| float32 mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/float32_mmap` | 195 | 5,133,470 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=32768` |
+| double mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/float64_mmap` | 276 | 3,624,502 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=65536` |
 | vector mmap direct scan | `BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan/mapped` | 12,568 | 79,567 | 0 | 0 | `direct_views/op=1`, `mapped_B=65536`, `heap_copy_B=0`, `scratch_decodes/op=0` |
 | vector heap-copy typed-view scan | `BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan/heap` | 12,311 | 81,228 | 0 | 0 | `direct_views/op=1`, `mapped_B=0`, `heap_copy_B=65536`, `scratch_decodes/op=0`; safe fallback, not mmap evidence |
 | vector section decode scan | `BenchmarkTypedColumnVectorDenseSectionScan` | 29,845 | 33,506 | 131,169 | 6 | scratch/section decode comparison path |

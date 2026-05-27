@@ -411,7 +411,11 @@ func BenchmarkFixedWidthScalarDirectView1899(b *testing.B) {
 			if status := ValidateDirectViewColumn(req); !status.Direct() {
 				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
 			}
-			view, status := Int64View(mgr, h, opts)
+			viewOpts, status := normalizeFixedWidthViewOptions(req, opts)
+			if !status.Direct() {
+				b.Fatalf("normalizeFixedWidthViewOptions: %s", status.String())
+			}
+			view, status := Int64View(mgr, h, viewOpts)
 			if !status.Direct() {
 				b.Fatalf("Int64View: %s", status.String())
 			}
@@ -449,9 +453,16 @@ func BenchmarkFixedWidthScalarDirectView1899(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			view, status := Float32ScalarView(mgr, h, req, opts)
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+			}
+			viewOpts, status := normalizeFixedWidthViewOptions(req, opts)
 			if !status.Direct() {
-				b.Fatalf("Float32ScalarView: %s", status.String())
+				b.Fatalf("normalizeFixedWidthViewOptions: %s", status.String())
+			}
+			view, status := Float32View(mgr, h, viewOpts)
+			if !status.Direct() {
+				b.Fatalf("Float32View: %s", status.String())
 			}
 			sink += view[i&7]
 			direct++
@@ -487,9 +498,16 @@ func BenchmarkFixedWidthScalarDirectView1899(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			view, status := Float64ScalarView(mgr, h, req, opts)
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+			}
+			viewOpts, status := normalizeFixedWidthViewOptions(req, opts)
 			if !status.Direct() {
-				b.Fatalf("Float64ScalarView: %s", status.String())
+				b.Fatalf("normalizeFixedWidthViewOptions: %s", status.String())
+			}
+			view, status := Float64View(mgr, h, viewOpts)
+			if !status.Direct() {
+				b.Fatalf("Float64View: %s", status.String())
 			}
 			sink += view[i&7]
 			direct++
