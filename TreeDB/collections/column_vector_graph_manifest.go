@@ -223,28 +223,44 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 		if len(raw)-cur.pos < 6 {
 			return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
 		}
-		if sourcesCur := cur; true {
-			layerCount, sources, err := decodeColumnVectorGraphAdjacencyLayerSources(&sourcesCur)
-			if err == nil {
-				if err := validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount, sources); err == nil {
-					snapshot.AdjacencyLayerCount = layerCount
-					snapshot.AdjacencyLayerSources = sources
-					if len(sources) > 0 {
-						snapshot.Layer0AdjacencySource = sources[0]
-					}
-				}
-				cur = sourcesCur
-				continue
-			}
+		magicCur := cur
+		magic := magicCur.u32()
+		if err := magicCur.err; err != nil {
+			return columnVectorGraphManifestSnapshot{}, err
 		}
-		if sourceCur := cur; true {
-			source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
-			if err == nil {
-				if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
-					snapshot.Layer0AdjacencySource = source
+		switch magic {
+		case columnVectorGraphAdjacencyLayerSourcesMagic:
+			if len(snapshot.AdjacencyLayerSources) > 0 {
+				return columnVectorGraphManifestSnapshot{}, errors.New("collections: duplicate column vector graph adjacency layer sources block")
+			}
+			sourcesCur := cur
+			layerCount, sources, err := decodeColumnVectorGraphAdjacencyLayerSources(&sourcesCur)
+			if err != nil {
+				return columnVectorGraphManifestSnapshot{}, err
+			}
+			if err := validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount, sources); err != nil {
+				return columnVectorGraphManifestSnapshot{}, err
+			}
+			snapshot.AdjacencyLayerCount = layerCount
+			snapshot.AdjacencyLayerSources = sources
+			if len(sources) > 0 {
+				snapshot.Layer0AdjacencySource = sources[0]
+			}
+			cur = sourcesCur
+			continue
+		case columnVectorGraphLayer0SourceMagic:
+			if len(snapshot.AdjacencyLayerSources) > 0 {
+				return columnVectorGraphManifestSnapshot{}, errors.New("collections: column vector graph manifest has both all-layer and legacy layer-0 adjacency source blocks")
+			}
+			if sourceCur := cur; true {
+				source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
+				if err == nil {
+					if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
+						snapshot.Layer0AdjacencySource = source
+					}
+					cur = sourceCur
+					continue
 				}
-				cur = sourceCur
-				continue
 			}
 		}
 		cur.pos = len(raw)
@@ -316,8 +332,19 @@ func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []c
 	if err := cur.err; err != nil {
 		return 0, nil, err
 	}
-	if layerCount64 > uint64(math.MaxInt) || sourceCount64 > uint64(math.MaxInt) {
+	if layerCount64 == 0 {
+		return 0, nil, errors.New("collections: column vector graph adjacency layer sources layer_count must be positive")
+	}
+	if sourceCount64 != layerCount64 {
+		return 0, nil, fmt.Errorf("collections: column vector graph adjacency layer sources source_count=%d want layer_count=%d", sourceCount64, layerCount64)
+	}
+	if layerCount64 > uint64(math.MaxInt) {
 		return 0, nil, errors.New("collections: column vector graph adjacency layer sources count overflows int")
+	}
+	remaining := uint64(len(cur.raw) - cur.pos)
+	const minEncodedAdjacencySourceBytes = uint64(6 + 4*8 + 7*8 + 2*8 + 7*8 + 4*8 + 6*8)
+	if sourceCount64 > remaining/minEncodedAdjacencySourceBytes {
+		return 0, nil, fmt.Errorf("collections: column vector graph adjacency layer sources source_count=%d exceeds remaining record bytes=%d", sourceCount64, remaining)
 	}
 	layerCount := int(layerCount64)
 	sourceCount := int(sourceCount64)

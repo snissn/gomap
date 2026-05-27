@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -339,6 +340,54 @@ func TestColumnGraphAllLayerAdjacencySourcesRejectSingleLayerDefect1920(t *testi
 			t.Fatalf("validate all-layer sources after corrupt layer err=%v, want layer-1 failure", err)
 		}
 	})
+}
+
+func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T) {
+	d, _, _, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+	defer func() { _ = d.Close() }()
+	encoded, err := encodeColumnVectorGraphManifestRecord(graph)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	magic := make([]byte, 4)
+	binary.BigEndian.PutUint32(magic, columnVectorGraphAdjacencyLayerSourcesMagic)
+	pos := bytes.Index(encoded, magic)
+	if pos < 0 {
+		t.Fatal("encoded graph manifest missing adjacency layer sources block")
+	}
+	if len(encoded)-pos < 4+2+8+8 {
+		t.Fatalf("encoded graph manifest too short for layer source header at %d", pos)
+	}
+	sourceCountOffset := pos + 4 + 2 + 8
+	for _, tc := range []struct {
+		name        string
+		rewrite     func([]byte)
+		wantMessage string
+	}{
+		{
+			name: "source_count_mismatch",
+			rewrite: func(raw []byte) {
+				binary.BigEndian.PutUint64(raw[sourceCountOffset:], uint64(graph.AdjacencyLayerCount+1))
+			},
+			wantMessage: "source_count",
+		},
+		{
+			name: "implausible_source_count",
+			rewrite: func(raw []byte) {
+				binary.BigEndian.PutUint64(raw[pos+4+2:], uint64(1<<20))
+				binary.BigEndian.PutUint64(raw[sourceCountOffset:], uint64(1<<20))
+			},
+			wantMessage: "remaining record bytes",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := append([]byte(nil), encoded...)
+			tc.rewrite(corrupt)
+			if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("decode malformed all-layer block err=%v, want %q", err, tc.wantMessage)
+			}
+		})
+	}
 }
 
 func TestColumnGraphReachabilityProtectsAllLayerAdjacencySourceRefs1920(t *testing.T) {
