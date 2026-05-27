@@ -3974,6 +3974,7 @@ func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *te
 	if len(view.AssetRefs) == 0 {
 		t.Fatal("fixture produced no physical asset refs")
 	}
+	manifestRows := view.AssetRefs[0].Rows
 	view.AssetRefs[0].Rows++
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
 	if err != nil {
@@ -3989,6 +3990,64 @@ func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *te
 	}
 	if _, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &readCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
 		t.Fatalf("group-count-distinct err=%v want manifest row mismatch", err)
+	}
+
+	view.AssetRefs[0].Rows = manifestRows
+	part := view.AssetRefs[0]
+	partKey := [2]uint64{part.Ref.Generation, part.Ref.PartID}
+	distinctSnapshot, ok := columnDictionaryCodeSnapshotsByPart(view, "did")[partKey]
+	if !ok {
+		t.Fatalf("missing distinct dictionary snapshot for part=%v", partKey)
+	}
+	distinctRaw, err := readCache.read(distinctSnapshot.AssetRef, nil)
+	if err != nil {
+		t.Fatalf("read distinct dictionary sidecar: %v", err)
+	}
+	distinctAsset, err := decodeColumnDictionaryCodesAsset(distinctRaw, distinctSnapshot.AssetRef, view.Config, view.CollectionName, "did", false)
+	if err != nil {
+		t.Fatalf("decode distinct dictionary sidecar: %v", err)
+	}
+	if len(distinctAsset.Dictionary) == 0 {
+		t.Fatal("distinct dictionary sidecar has empty dictionary")
+	}
+	distinctAsset.Codes = append(distinctAsset.Codes, 0)
+	encodedDistinct, err := encodeColumnDictionaryCodesAsset(distinctAsset)
+	if err != nil {
+		t.Fatalf("encode mismatched distinct dictionary sidecar: %v", err)
+	}
+	mismatchedDistinctRef, err := writeColumnDictionaryCodesAssetToManager(view.ColumnAssetRootDir, view.Config, encodedDistinct, distinctAsset.Generation, distinctAsset.PartID)
+	if err != nil {
+		t.Fatalf("write mismatched distinct dictionary sidecar: %v", err)
+	}
+	updatedDistinct := false
+	for i := range view.DictionaryCodes {
+		snapshot := &view.DictionaryCodes[i]
+		if snapshot.ColumnName == "did" && snapshot.AssetRef.Generation == part.Ref.Generation && snapshot.AssetRef.PartID == part.Ref.PartID {
+			snapshot.AssetRef = mismatchedDistinctRef
+			updatedDistinct = true
+			break
+		}
+	}
+	if !updatedDistinct {
+		t.Fatalf("failed to replace distinct dictionary snapshot for part=%v", partKey)
+	}
+	viewReadCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, ColumnAssetReadIntegritySkipChecksums)
+	if err != nil {
+		t.Fatalf("new view column asset read cache: %v", err)
+	}
+	viewReadCache.returnViews = true
+	defer func() {
+		if err := viewReadCache.close(); err != nil {
+			t.Fatalf("view read cache close: %v", err)
+		}
+	}()
+	if _, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &viewReadCache); err == nil {
+		if !ok {
+			t.Skip("column asset mmap views are unavailable on this platform")
+		}
+		t.Fatalf("group-count-distinct one-shot ok=%v err=%v want distinct manifest row mismatch", ok, err)
+	} else if !strings.Contains(err.Error(), "distinct dictionary codes asset row count") {
+		t.Fatalf("group-count-distinct one-shot ok=%v err=%v want distinct manifest row mismatch", ok, err)
 	}
 }
 

@@ -34,6 +34,7 @@ const columnAssetSegmentWriteLockStripes = 64
 const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 const columnAssetVerifiedChecksumCacheSlots = 4096
 const typedColumnPartDirectViewAssetAlignment = 8
+const dictionaryCodesDirectViewAssetAlignment = columnDictionaryCodesPayloadAlignment
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
@@ -658,10 +659,15 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []b
 }
 
 func columnAssetSegmentPayloadAlignment(kind ColumnAssetKind, cfg ColumnStoreConfig) int64 {
-	if kind != ColumnAssetKindTCS1TypedColumnPart || !columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
-		return 0
+	switch kind {
+	case ColumnAssetKindTCS1DictionaryCodes:
+		return dictionaryCodesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1TypedColumnPart:
+		if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
+			return typedColumnPartDirectViewAssetAlignment
+		}
 	}
-	return typedColumnPartDirectViewAssetAlignment
+	return 0
 }
 
 func columnAssetSegmentPrefixPadding(offset int64, alignment int64) int {

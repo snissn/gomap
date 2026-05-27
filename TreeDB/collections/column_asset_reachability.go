@@ -1231,7 +1231,7 @@ type columnAssetReachabilityPaddingInterval struct {
 }
 
 func deterministicColumnAssetReachabilityPaddingIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) []columnAssetReachabilityPaddingInterval {
-	if len(ranges) < 2 || typedColumnPartDirectViewAssetAlignment <= 1 || segment.path == "" {
+	if len(ranges) < 2 || segment.path == "" {
 		return nil
 	}
 	clipped := make([]columnAssetReachabilityRange, 0, len(ranges))
@@ -1265,14 +1265,26 @@ func deterministicColumnAssetReachabilityPaddingIntervals(segment columnAssetRea
 }
 
 func columnAssetReachabilityRangeFollowsDeterministicZeroPadding(segment columnAssetReachabilitySegment, previousEnd int64, r columnAssetReachabilityRange) bool {
-	if r.kind != ColumnAssetKindTCS1TypedColumnPart || r.start <= previousEnd || r.start%int64(typedColumnPartDirectViewAssetAlignment) != 0 {
+	alignment := columnAssetReachabilityRangeDeterministicPaddingAlignment(r.kind)
+	if alignment <= 1 || r.start <= previousEnd || r.start%alignment != 0 {
 		return false
 	}
-	padding := int64(columnAssetSegmentPrefixPadding(previousEnd, typedColumnPartDirectViewAssetAlignment))
+	padding := int64(columnAssetSegmentPrefixPadding(previousEnd, alignment))
 	if padding == 0 || r.start-previousEnd != padding {
 		return false
 	}
 	return columnAssetReachabilitySegmentRangeIsZero(segment.path, previousEnd, padding)
+}
+
+func columnAssetReachabilityRangeDeterministicPaddingAlignment(kind ColumnAssetKind) int64 {
+	switch kind {
+	case ColumnAssetKindTCS1DictionaryCodes:
+		return dictionaryCodesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1TypedColumnPart:
+		return typedColumnPartDirectViewAssetAlignment
+	default:
+		return 0
+	}
 }
 
 func columnAssetReachabilitySegmentRangeIsZero(path string, offset, length int64) bool {
