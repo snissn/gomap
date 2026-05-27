@@ -1280,6 +1280,8 @@ func columnAssetReachabilityRangeDeterministicPaddingAlignment(kind ColumnAssetK
 	switch kind {
 	case ColumnAssetKindTCS1DictionaryCodes:
 		return dictionaryCodesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1Int64Values:
+		return int64ValuesDirectViewAssetAlignment
 	case ColumnAssetKindTCS1TypedColumnPart:
 		return typedColumnPartDirectViewAssetAlignment
 	default:

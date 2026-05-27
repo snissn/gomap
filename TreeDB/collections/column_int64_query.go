@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"errors"
 	"fmt"
 	"time"
 )
@@ -108,17 +107,13 @@ func runColumnInt64ValueHourCountOneShot(view columnPhysicalScanSnapshotView, re
 		if payload.rowCount != snapshot.Rows {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: int64 values asset generation=%d part_id=%d column=%q rows=%d want manifest rows=%d", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, payload.rowCount, snapshot.Rows)
 		}
-		cur := manifestCursor{raw: raw, pos: payload.offset}
-		for i := 0; i < payload.rowCount; i++ {
-			value := int64(cur.u64())
+		values, _, err := viewColumnInt64ValuesPayload(raw, payload)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
+		for _, value := range values {
 			counts[columnPhysicalQueryUTCHour(value)]++
 			rows++
-		}
-		if cur.err != nil {
-			return ColumnPhysicalQueryResult{}, true, cur.err
-		}
-		if cur.pos != len(raw) {
-			return ColumnPhysicalQueryResult{}, true, errors.New("collections: trailing bytes in int64 values asset")
 		}
 		assetBytes += snapshot.AssetRef.Length
 		blocks++
@@ -174,12 +169,21 @@ func visitColumnInt64ValueHourCountAssets(view columnPhysicalScanSnapshotView, r
 			return 0, 0, true, fmt.Errorf("collections: int64 values read generation=%d part_id=%d column=%q: %w", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, err)
 		}
 		scratch = raw
-		decoded, err := decodeColumnInt64ValuesAsset(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, false)
+		rawIsView := readCache.lastView
+		decoded, payload, err := decodeColumnInt64ValuesAssetPayload(raw, snapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, false)
 		if err != nil {
 			return 0, 0, true, err
 		}
-		if len(decoded.Values) != snapshot.Rows {
-			return 0, 0, true, fmt.Errorf("collections: int64 values asset generation=%d part_id=%d column=%q rows=%d want manifest rows=%d", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, len(decoded.Values), snapshot.Rows)
+		if payload.rowCount != snapshot.Rows {
+			return 0, 0, true, fmt.Errorf("collections: int64 values asset generation=%d part_id=%d column=%q rows=%d want manifest rows=%d", snapshot.AssetRef.Generation, snapshot.AssetRef.PartID, req.ValueColumn, payload.rowCount, snapshot.Rows)
+		}
+		if rawIsView {
+			decoded.Values, _, err = viewColumnInt64ValuesPayload(raw, payload)
+		} else {
+			decoded.Values, err = copyColumnInt64ValuesPayload(raw, payload)
+		}
+		if err != nil {
+			return 0, 0, true, err
 		}
 		if err := visit(snapshot, decoded); err != nil {
 			return 0, 0, true, err

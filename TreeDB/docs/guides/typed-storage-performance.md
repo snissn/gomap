@@ -124,8 +124,10 @@ extracted from an int64 timestamp column. The supported insert-only sidecar path
 scans dictionary-code and int64 assets directly, reports zero document/row
 materializations, and emits groups keyed by `Key` plus `Hour`. Dictionary-code
 sidecars use a version-2 row-code payload: manifest-style metadata/dictionary
-headers followed by zero padding and an aligned little-endian `uint32` stream, so
-row-touching dictionary reducers can use the shared payload-view helper instead
+headers followed by zero padding and an aligned little-endian `uint32` stream.
+The matching int64 value sidecars use a version-2 manifest-style header followed
+by zero padding and an aligned little-endian `int64` stream. Row-touching
+dictionary and int64 reducers use sidecar-specific payload-view helpers instead
 of per-row manifest big-endian decoding.
 
 The low-level comparison harness exposes this as
