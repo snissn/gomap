@@ -125,36 +125,77 @@ adjacency mmap direct views.
 
 ## Benchmark and evidence section
 
-The final PR body should carry the latest local numbers from the implementation
-and benchmark chunk. This spec records the evidence structure so results can be
-pasted without changing the contract.
+Closeout evidence was captured on `darwin/arm64`, Apple M3, `go1.25.5`, with
+`GOMAXPROCS=8`. Benchmark numbers below are representative local medians from
+five runs with `-benchtime=500ms`; the PR body records the exact final commit and
+artifact paths.
 
-Suggested correctness check for the narrowed stack:
+Correctness commands:
 
 ```sh
+GOWORK=off go test ./TreeDB/internal/typeddecode ./TreeDB/internal/columnlayout ./TreeDB/internal/typedcolumn \
+  -run 'Test(Int64DirectView|DirectView|ScalarFloat|DenseFloat32Vector|AdjacencyDirectView|ColumnPartLayoutContract|RawFixedWidth|FloatAndNonInt64|CapabilityValidation)' \
+  -count=1
+
 GOWORK=off go test ./TreeDB/collections \
-  -run 'TestTypedStorageLegacyNameAllowlistIsComplete|TestTypedColumnDirectView' \
+  -run 'TestTypedColumnDirectView|TestColumnAssetTypedColumnPartDirectView|TestColumnAssetReachabilityDirectView|TestColumnVectorGraphTypedColumn|TestSearchVectorIndexTypedColumnVector|TestColumnVectorGraphBlockViewAdjacency|TestColumnVectorGraphAdjacency' \
   -count=1
 ```
 
-Suggested benchmark harnesses for final evidence:
+Both commands passed during #1899 closeout. The first command covers native
+scalar `float32`/`double` direct-view planning, raw-bit preservation, stale
+handles, actual-pointer alignment, wrong endian/length/row/dim mismatches, and
+adjacency direct-view deferral. The second command covers all-type inventory,
+writer certification/storage accounting, absolute-offset alignment, multi-asset
+segment/appender padding, reopen/persistence, corruption/fallback, column-graph
+typed-column vector counters, and row-asset/adjacency guardrails.
+
+Benchmark commands:
 
 ```sh
-GOWORK=off go test ./TreeDB/collections \
-  -run '^$' \
-  -bench 'BenchmarkTypedColumn(Int64PredicateAggregatePrepared|Vector|.*Direct|.*Fallback)|Benchmark(ColumnVectorGraphNativeSearchCosineV3|OpenVectorIndexSearcherColumnGraphNativeReaderV4)' \
+GOWORK=off go test ./TreeDB/internal/typeddecode \
+  -run '^$' -bench 'BenchmarkFixedWidthScalarDirectView1899' \
   -benchmem -benchtime=500ms -count=5
 
 GOWORK=off go test ./TreeDB/internal/typedcolumn \
   -run '^$' \
-  -bench 'BenchmarkTypedColumnVectorDense(DirectView|Section)Scan|BenchmarkTypedColumnDenseFloat32Dot' \
+  -bench 'BenchmarkScalarFloatRawDecode1737|BenchmarkTypedColumnVectorDense(DirectViewScan|MmapHeapDirectViewScan|SectionScan)|BenchmarkTypedColumnDenseFloat32Dot1790' \
+  -benchmem -benchtime=500ms -count=5
+
+GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench 'BenchmarkTypedColumn(Int64PredicateAggregate|Int64PredicateScan|FloatFallback)|BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3|BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReader(V4|WithDocumentsV4|WithDocumentsExcludeEmbedding1875)' \
   -benchmem -benchtime=500ms -count=5
 ```
 
-Evidence table shape:
+Timer boundaries: scalar direct-view construction measures certification/handle
+view construction over already-acquired mapped bytes; vector dense scan measures
+view-backed dense payload iteration; column-graph benchmarks time search and, for
+the document variants, final document fetch/reconstruction separately through
+reported `doc_*` counters.
 
-| Command | Commit/branch | Scenario | Rows/dims | mmap direct views | heap-copy typed views | scratch/stream fallback | ns/op or ops/sec | B/op | allocs/op | Padding/storage notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| correctness check above | final PR head | direct-view conformance and regression tests | as encoded by tests | pass/fail counter assertions | pass/fail counter assertions | pass/fail fallback assertions | n/a | n/a | n/a | include any contract/padding failures |
-| collections benchmark above | final PR head | prepared scalar/vector and column-graph typed-column source | measured input | latest local number in PR body | latest local number in PR body | latest local number in PR body | latest local number in PR body | latest local number in PR body | latest local number in PR body | payload/layout/in-image/prefix bytes |
-| internal typedcolumn benchmark above | final PR head | dense direct-view and section scans | measured input | latest local number in PR body | latest local number in PR body | latest local number in PR body | latest local number in PR body | latest local number in PR body | latest local number in PR body | payload/layout/in-image/prefix bytes |
+| Scenario | Benchmark | ns/op | ops/sec | B/op | allocs/op | Direct-source counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| int64 mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/int64_mmap` | 34.5 | 28,951,940 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=65536` |
+| float32 mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/float32_mmap` | 179 | 5,583,473 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=32768` |
+| double mmap view construction | `BenchmarkFixedWidthScalarDirectView1899/float64_mmap` | 179 | 5,574,136 | 0 | 0 | `mmap_direct_view/op=1`, heap/scratch/certification failures `0`, `mapped_B=65536` |
+| vector mmap direct scan | `BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan/mapped` | 12,568 | 79,567 | 0 | 0 | `direct_views/op=1`, `mapped_B=65536`, `heap_copy_B=0`, `scratch_decodes/op=0` |
+| vector heap-copy typed-view scan | `BenchmarkTypedColumnVectorDenseMmapHeapDirectViewScan/heap` | 12,311 | 81,228 | 0 | 0 | `direct_views/op=1`, `mapped_B=0`, `heap_copy_B=65536`, `scratch_decodes/op=0`; safe fallback, not mmap evidence |
+| vector section decode scan | `BenchmarkTypedColumnVectorDenseSectionScan` | 29,845 | 33,506 | 131,169 | 6 | scratch/section decode comparison path |
+| column_graph typed vector search | `BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3` | 13,669 | 73,158 | 0 | 0 | `vector_mmap_direct/search=164`, vector heap/scratch/certification failures `0`, `typed_column_vector_fallbacks/search=0`, adjacency mmap/heap `0`, `adjacency_scratch_decodes/search=104` |
+| open searcher no-doc | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4` | 13,020 | 76,805 | 784 | 2 | `vector_mmap_direct/search=164`, vector heap/scratch/certification failures `0`, adjacency mmap/heap `0`, `adjacency_scratch_decode/search=104` |
+| open searcher full-doc | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocumentsV4` | 102,448 | 9,761 | 95,045 | 345 | same vector/adjacency counters as no-doc; includes final document fetch/reconstruction |
+| open searcher projected-doc | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocumentsExcludeEmbedding1875` | 35,936 | 27,827 | 25,120 | 308 | same vector/adjacency counters as no-doc; excludes embedding from final document fetch |
+
+Storage/padding evidence from `TestTypedColumnDirectViewWriterStorageAccounting1895`
+and the segment/appender alignment tests:
+
+| Fixture | Type | Rows | Dims | Image bytes | Layout-contract bytes | In-image padding | Row-record padding | Segment prefix padding | Total padding | Direct certified | Fallback/deferred |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `bool_bitpack_rle` | `bool` | 3 | 0 | 2372 | 691 | 20 | 0 | 0 | 20 | false | fallback=true, deferred=false |
+| `int64_raw_fixed_width` | `int64` | 3 | 0 | 3472 | 693 | 32 | 0 | 7 | 39 | true | fallback=false, deferred=false |
+| `float32_native_raw_fixed_width` | `float32` | 3 | 0 | 2404 | 697 | 26 | 0 | 7 | 33 | true | fallback=false, deferred=false |
+| `double_native_raw_fixed_width` | `double` | 3 | 0 | 2408 | 696 | 20 | 0 | 7 | 27 | true | fallback=false, deferred=false |
+| `string_dictionary_codes` | `string` | 3 | 0 | 2567 | 693 | 15 | 0 | 0 | 15 | false | fallback=true, deferred=false |
+| `float32_vector_fixed_dim` | `float32_vector` | 3 | 3 | 2452 | 706 | 28 | 0 | 7 | 35 | true | fallback=false, deferred=false |
+| `adjacency_deferred` | `adjacency_list` | 3 | 2 | 2440 | 706 | 28 | 0 | 0 | 28 | false | fallback=true, deferred=true |
