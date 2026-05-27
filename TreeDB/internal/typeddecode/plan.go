@@ -124,6 +124,7 @@ const (
 	CounterValuesHeapCopyTypedView  Counter = "values_heap_copy_typed_view"
 	CounterScratchDecode            Counter = "scratch_decode"
 	CounterStreamingFallback        Counter = "streaming_fallback"
+	CounterSourceUnsupported        Counter = "source_unsupported"
 	CounterCertificationFailure     Counter = "certification_failure"
 	CounterAbsoluteOffsetUnaligned  Counter = "absolute_offset_unaligned"
 	CounterActualPointerUnaligned   Counter = "actual_pointer_unaligned"
@@ -143,6 +144,7 @@ func CounterVocabulary() []Counter {
 		CounterValuesHeapCopyTypedView,
 		CounterScratchDecode,
 		CounterStreamingFallback,
+		CounterSourceUnsupported,
 		CounterCertificationFailure,
 		CounterAbsoluteOffsetUnaligned,
 		CounterActualPointerUnaligned,
@@ -301,7 +303,11 @@ func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities
 		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("fixed_width_elements=%d want variable-width offsets list", cert.FixedWidthElements))
 	}
 	if cap := layout.Supports(columnlayout.OpAdjacencyDirectView); !cap.Supported() {
-		return statusFromLayoutCapability(cap)
+		status := statusFromLayoutCapability(cap)
+		if status.Streaming() {
+			return MaterializeStatus(status.Reason, status.Message)
+		}
+		return status
 	}
 	return DirectStatus()
 }

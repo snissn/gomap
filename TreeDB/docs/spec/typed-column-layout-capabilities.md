@@ -128,7 +128,7 @@ Current validation is at prepare plus payload-read boundaries:
 
 Prepared diagnostics must distinguish `mmap_direct_view`,
 `heap_copy_typed_view`, `scratch_decode`, `streaming_fallback`,
-`certification_failure`, `absolute_offset_unaligned`, `actual_pointer_unaligned`,
+`source_unsupported`, `certification_failure`, `absolute_offset_unaligned`, `actual_pointer_unaligned`,
 `stale_handle`, and per-reason fallback counts. Prepared int64 diagnostics also
 include `DirectViewCertified`, `StreamingCertified`, `StatsCertified`,
 `PruningCertified`, `CertificationFailures`, and `CertificationFailureReason`,

@@ -196,6 +196,7 @@ Later writer/reader PRs must use these stable counter names and reason buckets:
 | `values_heap_copy_typed_view` | safe typed values view over owned heap bytes; fallback, not zero-copy evidence. |
 | `scratch_decode` | decode into caller/session scratch. |
 | `streaming_fallback` | streaming codec or byte-loop fallback. |
+| `source_unsupported` | mappedresource handle source did not match the direct-view requirement. |
 | `certification_failure` | manifest/layout/checksum/schema certification rejected direct view. |
 | `absolute_offset_unaligned` | `asset_ref.offset + payload offset` failed alignment. |
 | `actual_pointer_unaligned` | concrete Go byte-slice address failed alignment. |

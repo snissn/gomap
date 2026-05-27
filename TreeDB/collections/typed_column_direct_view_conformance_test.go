@@ -275,6 +275,7 @@ func TestTypedColumnDirectViewSafetyChecksAndCounterVocabulary(t *testing.T) {
 		typeddecode.CounterValuesHeapCopyTypedView,
 		typeddecode.CounterScratchDecode,
 		typeddecode.CounterStreamingFallback,
+		typeddecode.CounterSourceUnsupported,
 		typeddecode.CounterCertificationFailure,
 		typeddecode.CounterAbsoluteOffsetUnaligned,
 		typeddecode.CounterActualPointerUnaligned,

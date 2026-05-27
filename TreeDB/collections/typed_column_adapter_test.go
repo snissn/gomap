@@ -481,7 +481,7 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewClassifications1916(t *tes
 		if err != nil || !view.Scratch || view.Direct || view.HeapCopy || view.Class.Class != typedColumnAdapterUint32OffsetsListViewSourceUnsupported {
 			t.Fatalf("view=%+v err=%v want source-unsupported scratch fallback", view, err)
 		}
-		if view.Class.Counter != typeddecode.CounterStreamingFallback || !slices.Contains(view.Class.Counters, typeddecode.CounterScratchDecode) {
+		if view.Class.Counter != typeddecode.CounterSourceUnsupported || !slices.Contains(view.Class.Counters, typeddecode.CounterScratchDecode) {
 			t.Fatalf("class=%+v want source counter plus scratch counter", view.Class)
 		}
 		if !slices.Equal(view.Offsets, []uint64{0, 0, 2, 2, 5}) || !slices.Equal(view.Values, []uint32{7, 8, 9, 10, 11}) {
@@ -547,6 +547,17 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewClassifications1916(t *tes
 			assertTypedColumnAdapterNoActive(t, mgr)
 		})
 	}
+
+	t.Run("nil handle classifies with lifetime failures", func(t *testing.T) {
+		mgr := mappedresource.NewManager()
+		valuesHandle := typedColumnAdapterAcquireBytesSource(t, mgr, alignedValues, mappedresource.SourceMapped, "values")
+		view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr, base, image.Rows, offsetsSection.Length, valuesSection.Length, nil, valuesHandle)
+		if err == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewStaleHandle || view.Class.Counter != typeddecode.CounterStaleHandle {
+			t.Fatalf("view=%+v err=%v want nil handle lifetime classification", view, err)
+		}
+		_ = valuesHandle.Release()
+		assertTypedColumnAdapterNoActive(t, mgr)
+	})
 
 	for _, tc := range []struct {
 		name           string
@@ -2316,23 +2327,21 @@ func BenchmarkTypedColumnAdapterUint32OffsetsListDirectReader1916(b *testing.B) 
 		typedColumnAdapterAdjacencyBenchSink = sink
 	})
 
-	b.Run("scratch_fallback_decode_iterate_rows", func(b *testing.B) {
+	b.Run("scratch_fallback_iterate_rows", func(b *testing.B) {
+		decoded, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
+		if err != nil {
+			b.Fatalf("DecodeRawUint32OffsetsListFallback: %v", err)
+		}
 		b.ReportAllocs()
-		b.SetBytes(int64(len(valuesRaw)))
+		b.SetBytes(int64(len(decoded.Values) * 4))
 		b.ResetTimer()
 		var sink uint64
-		var scratchDecode uint64
 		for i := 0; i < b.N; i++ {
-			decoded, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
-			if err != nil {
-				b.Fatalf("DecodeRawUint32OffsetsListFallback: %v", err)
-			}
-			scratchDecode++
 			sink += typedColumnAdapterSumUint32OffsetsListRows(decoded.Offsets, decoded.Values, decoded.Rows)
 		}
 		b.ReportMetric(0, "mmap_direct/op")
 		b.ReportMetric(0, "heap_copy_typed_view/op")
-		b.ReportMetric(float64(scratchDecode)/float64(b.N), "scratch_decode/op")
+		b.ReportMetric(0, "scratch_decode/op")
 		typedColumnAdapterAdjacencyBenchSink = sink
 	})
 }

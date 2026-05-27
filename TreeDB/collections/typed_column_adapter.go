@@ -1609,8 +1609,8 @@ func typedColumnAdapterClassifyUint32OffsetsListStatus(status typeddecode.Status
 	switch status.Reason {
 	case typeddecode.ReasonHandleSourceUnsupported:
 		class.Class = typedColumnAdapterUint32OffsetsListViewSourceUnsupported
-		class.Counter = typeddecode.CounterStreamingFallback
-	case typeddecode.ReasonStaleHandle:
+		class.Counter = typeddecode.CounterSourceUnsupported
+	case typeddecode.ReasonNilHandle, typeddecode.ReasonStaleHandle:
 		class.Class = typedColumnAdapterUint32OffsetsListViewStaleHandle
 		class.Counter = typeddecode.CounterStaleHandle
 	case typeddecode.ReasonActualPointerUnaligned:
