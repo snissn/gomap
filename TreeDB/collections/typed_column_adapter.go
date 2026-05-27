@@ -117,6 +117,14 @@ func typedColumnAdapterMappingForValueType(valueType ColumnStoreValueType) (type
 	return typedColumnAdapterTypeMapping{ValueType: valueType, Status: typedColumnAdapterFailClosed, Reason: "unknown declared value type"}, fmt.Errorf("%w: %s", errTypedColumnAdapterUnsupportedType, valueType)
 }
 
+func typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported(column typedColumnAdapterColumn) bool {
+	return column.Field.ValueType == ColumnStoreValueAdjacencyList &&
+		!column.Field.Nullable &&
+		column.Definition.Encoding == typedcolumn.EncodingRawUint32OffsetsList &&
+		column.Definition.Compression == typedcolumn.CompressionNone &&
+		column.Definition.FixedWidthElements == 0
+}
+
 func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColumn, error) {
 	if field.Owner != TypedStorageOwnerColumnPart {
 		return typedColumnAdapterColumn{}, fmt.Errorf("collections: typed-column adapter field %q owner=%q want %q", field.Path, field.Owner, TypedStorageOwnerColumnPart)

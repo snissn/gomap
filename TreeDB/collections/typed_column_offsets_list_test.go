@@ -111,7 +111,11 @@ func TestTypedColumnAdjacencyOffsetsListUpdateDeleteVisibility1917(t *testing.T)
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	assertTypedColumnOffsetsListNeighbors(t, col, []byte("r0"), []any{})
 	assertTypedColumnOffsetsListNeighbors(t, col, []byte("r1"), []any{float64(7), float64(8), float64(9)})
+	if got, err := col.Get([]byte("r2")); err != nil || got != nil {
+		t.Fatalf("post-checkpoint deleted r2 Get=%s err=%v want missing", got, err)
+	}
 }
 
 func newTypedColumnAdjacencyOffsetsListTestCollection(t *testing.T) (*backenddb.DB, *Collection) {
