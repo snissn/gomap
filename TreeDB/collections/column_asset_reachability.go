@@ -1284,7 +1284,7 @@ func columnAssetReachabilitySegmentRangeIsZero(path string, offset, length int64
 		return false
 	}
 	defer func() { _ = file.Close() }()
-	buf := make([]byte, length)
+	buf := make([]byte, int(length))
 	if _, err := file.ReadAt(buf, offset); err != nil {
 		return false
 	}
