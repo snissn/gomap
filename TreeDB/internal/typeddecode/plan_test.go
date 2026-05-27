@@ -381,6 +381,147 @@ func TestAdjacencyDirectViewValidationIsDeferredForCurrentStack(t *testing.T) {
 	}
 }
 
+var fixedWidthScalarDirectViewSink1899 float64
+
+func BenchmarkFixedWidthScalarDirectView1899(b *testing.B) {
+	const rows = 8192
+	b.Run("int64_mmap", func(b *testing.B) {
+		raw := alignedBytes(8, rows*8)
+		for i := 0; i < rows; i++ {
+			binary.LittleEndian.PutUint64(raw[i*8:], uint64(i))
+		}
+		cert := testInt64DirectCert(rows)
+		plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 8, ElementsPerRow: 1, Alignment: 8, Rows: rows}
+		req := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: rows, PayloadBytes: len(raw), AssetOffset: 0, HasAssetOffset: true}
+		if status := ValidateDirectViewColumn(req); !status.Direct() {
+			b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+		}
+		mgr := mappedresource.NewManager()
+		h, err := mgr.AcquireBytes(testKeyWithPart(189901, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "#1899 int64 direct-view benchmark"})
+		if err != nil {
+			b.Fatalf("AcquireBytes: %v", err)
+		}
+		b.Cleanup(func() { _ = h.Release() })
+		opts := ResourceViewOptions{ExpectedElements: rows, RequireMapped: true}
+		var direct uint64
+		var sink int64
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+			}
+			viewOpts, status := normalizeFixedWidthViewOptions(req, opts)
+			if !status.Direct() {
+				b.Fatalf("normalizeFixedWidthViewOptions: %s", status.String())
+			}
+			view, status := Int64View(mgr, h, viewOpts)
+			if !status.Direct() {
+				b.Fatalf("Int64View: %s", status.String())
+			}
+			sink += view[i&7]
+			direct++
+		}
+		b.StopTimer()
+		fixedWidthScalarDirectViewSink1899 += float64(sink)
+		b.ReportMetric(float64(direct)/float64(b.N), "mmap_direct_view/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(0, "scratch_decode/op")
+		b.ReportMetric(0, "certification_failure/op")
+		b.ReportMetric(float64(len(raw)), "mapped_B")
+	})
+	b.Run("float32_mmap", func(b *testing.B) {
+		raw := alignedBytes(4, rows*4)
+		for i := 0; i < rows; i++ {
+			binary.LittleEndian.PutUint32(raw[i*4:], uint32(i)|0x3f800000)
+		}
+		cert := testFloat32ScalarDirectCert(rows)
+		plan := Float32ScalarPlan(cert)
+		req := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: rows, PayloadBytes: len(raw), AssetOffset: 0, HasAssetOffset: true}
+		if status := ValidateDirectViewColumn(req); !status.Direct() {
+			b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+		}
+		mgr := mappedresource.NewManager()
+		h, err := mgr.AcquireBytes(testKeyWithPart(189904, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "#1899 scalar float32 direct-view benchmark"})
+		if err != nil {
+			b.Fatalf("AcquireBytes: %v", err)
+		}
+		b.Cleanup(func() { _ = h.Release() })
+		opts := ResourceViewOptions{ExpectedElements: rows, RequireMapped: true}
+		var direct uint64
+		var sink float32
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+			}
+			viewOpts, status := normalizeFixedWidthViewOptions(req, opts)
+			if !status.Direct() {
+				b.Fatalf("normalizeFixedWidthViewOptions: %s", status.String())
+			}
+			view, status := Float32View(mgr, h, viewOpts)
+			if !status.Direct() {
+				b.Fatalf("Float32View: %s", status.String())
+			}
+			sink += view[i&7]
+			direct++
+		}
+		b.StopTimer()
+		fixedWidthScalarDirectViewSink1899 += float64(sink)
+		b.ReportMetric(float64(direct)/float64(b.N), "mmap_direct_view/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(0, "scratch_decode/op")
+		b.ReportMetric(0, "certification_failure/op")
+		b.ReportMetric(float64(len(raw)), "mapped_B")
+	})
+	b.Run("float64_mmap", func(b *testing.B) {
+		raw := alignedBytes(8, rows*8)
+		for i := 0; i < rows; i++ {
+			binary.LittleEndian.PutUint64(raw[i*8:], uint64(i)|0x3ff0000000000000)
+		}
+		cert := testFloat64ScalarDirectCert(rows)
+		plan := Float64ScalarPlan(cert)
+		req := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: rows, PayloadBytes: len(raw), AssetOffset: 0, HasAssetOffset: true}
+		if status := ValidateDirectViewColumn(req); !status.Direct() {
+			b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+		}
+		mgr := mappedresource.NewManager()
+		h, err := mgr.AcquireBytes(testKeyWithPart(189908, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "#1899 scalar float64 direct-view benchmark"})
+		if err != nil {
+			b.Fatalf("AcquireBytes: %v", err)
+		}
+		b.Cleanup(func() { _ = h.Release() })
+		opts := ResourceViewOptions{ExpectedElements: rows, RequireMapped: true}
+		var direct uint64
+		var sink float64
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+			}
+			viewOpts, status := normalizeFixedWidthViewOptions(req, opts)
+			if !status.Direct() {
+				b.Fatalf("normalizeFixedWidthViewOptions: %s", status.String())
+			}
+			view, status := Float64View(mgr, h, viewOpts)
+			if !status.Direct() {
+				b.Fatalf("Float64View: %s", status.String())
+			}
+			sink += view[i&7]
+			direct++
+		}
+		b.StopTimer()
+		fixedWidthScalarDirectViewSink1899 += sink
+		b.ReportMetric(float64(direct)/float64(b.N), "mmap_direct_view/op")
+		b.ReportMetric(0, "heap_copy_typed_view/op")
+		b.ReportMetric(0, "scratch_decode/op")
+		b.ReportMetric(0, "certification_failure/op")
+		b.ReportMetric(float64(len(raw)), "mapped_B")
+	})
+}
+
 func cloneDirectViewCert(cert typedcolumn.ColumnPartLayoutContractColumn) typedcolumn.ColumnPartLayoutContractColumn {
 	cert.Blocks = append([]typedcolumn.ColumnPartLayoutContractBlock(nil), cert.Blocks...)
 	return cert
@@ -426,7 +567,7 @@ func testInt64DirectCert(rows int) typedcolumn.ColumnPartLayoutContractColumn {
 	bytes := rows * 8
 	return typedcolumn.ColumnPartLayoutContractColumn{
 		Name: "v", LogicalType: "int64", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone,
-		Rows: rows, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true,
 		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{RowCount: rows, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadLength: bytes}},
 	}
 }

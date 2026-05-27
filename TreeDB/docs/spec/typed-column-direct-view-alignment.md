@@ -2,13 +2,15 @@
 
 Status: pre-alpha safety contract, writer-certification target, and conformance
 baseline for the #1886 stack. This document defines when TreeDB column-store
-bytes may be exposed as typed Go slices without copying. Issue #1895 lands the
+bytes may be exposed as typed Go slices without copying. Issue #1895 landed the
 writer side for typed-column-part fixed-width payloads: aligned image sections,
 deterministic segment-prefix padding, and writer-certified layout contracts for
-the active fixed-width candidates. Reader fast-path consumption remains owned by
-later #1886 issues. The #1737 payload phase added native little-endian scalar
-float payload encodings and shared fixed-width helpers without enabling
-production unsafe reader direct views.
+the active fixed-width candidates. The #1737 payload phase added native
+little-endian scalar float payload encodings and shared fixed-width helpers.
+Issues #1896 and #1898 added reader consumption for generic typed-column paths
+and the column-graph typed-column vector source. The final issue #1899 evidence
+matrix and deferral closeout is recorded in
+`typed-column-direct-view-closeout-1899.md`.
 
 ## Scope and non-goals
 
@@ -68,7 +70,7 @@ their image-local layout contract is otherwise valid.
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
 | `typed_column_part` | `adjacency_list` consumers | deferred/fallback-only; #1901 owns certified adjacency direct views. |
-| physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding. |
+| physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
 

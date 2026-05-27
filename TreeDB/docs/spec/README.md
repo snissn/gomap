@@ -200,6 +200,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1893 aligned fixed-width direct-view safety contract, all-type/storage
     owner classification, absolute-offset alignment rule, fallback/deferred
     policy, counter vocabulary, and benchmark harness expectations for #1886.
+- `TreeDB/docs/spec/typed-column-direct-view-closeout-1899.md`
+  - issue #1899 final #1886 closeout matrix and evidence structure for
+    typed-column fixed-width scalar/vector direct-view coverage, with physical
+    row assets deferred to #1897 and adjacency direct views deferred to #1901.
 
 ## Canonical Ownership
 
@@ -230,9 +234,10 @@ in `typed-column-transplant.md`, the #1754/#1755 adapter/publication seam is
 recorded in `typed-column-adapter.md`, the #1758 closeout evidence/handoff is
 recorded in `typed-storage-closeout-1758.md`, and current typed-row plus
 typed-column maintenance behavior is recorded in
-`typed-asset-maintenance-1788.md`, and typed-column schema/version evolution
-policy is owned by `typed-column-schema-evolution.md`. User-command WAL
-lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`,
+`typed-asset-maintenance-1788.md`, typed-column schema/version evolution
+policy is owned by `typed-column-schema-evolution.md`, and #1886 direct-view
+closeout evidence is owned by `typed-column-direct-view-closeout-1899.md`.
+User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`,
 `WAL-rejected`, `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
 `collection-wal-durability-plan.md` for historical design context only.
