@@ -392,8 +392,9 @@ func BenchmarkFixedWidthScalarDirectView1899(b *testing.B) {
 		}
 		cert := testInt64DirectCert(rows)
 		plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 8, ElementsPerRow: 1, Alignment: 8, Rows: rows}
-		if status := ValidateDirectViewBlock(DirectViewBlockRequest{Plan: plan, Certification: cert, Block: cert.Blocks[0], Rows: rows, PayloadBytes: len(raw), AssetOffset: 0, HasAssetOffset: true}); !status.Direct() {
-			b.Fatalf("ValidateDirectViewBlock: %s", status.String())
+		req := DirectViewColumnRequest{Plan: plan, Certification: cert, Rows: rows, PayloadBytes: len(raw), AssetOffset: 0, HasAssetOffset: true}
+		if status := ValidateDirectViewColumn(req); !status.Direct() {
+			b.Fatalf("ValidateDirectViewColumn: %s", status.String())
 		}
 		mgr := mappedresource.NewManager()
 		h, err := mgr.AcquireBytes(testKeyWithPart(189901, int64(len(raw))), testScope(), mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "#1899 int64 direct-view benchmark"})
@@ -407,6 +408,9 @@ func BenchmarkFixedWidthScalarDirectView1899(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
+			if status := ValidateDirectViewColumn(req); !status.Direct() {
+				b.Fatalf("ValidateDirectViewColumn: %s", status.String())
+			}
 			view, status := Int64View(mgr, h, opts)
 			if !status.Direct() {
 				b.Fatalf("Int64View: %s", status.String())
@@ -545,7 +549,7 @@ func testInt64DirectCert(rows int) typedcolumn.ColumnPartLayoutContractColumn {
 	bytes := rows * 8
 	return typedcolumn.ColumnPartLayoutContractColumn{
 		Name: "v", LogicalType: "int64", Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone,
-		Rows: rows, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true,
+		Rows: rows, Section: typedcolumn.ColumnPartLayoutContractSection{Length: bytes}, ElementSize: 8, Alignment: 8, Endian: typedcolumn.ColumnPartLayoutEndianLittle, LengthMultiple: 8, DirectViewCertified: true,
 		Blocks: []typedcolumn.ColumnPartLayoutContractBlock{{RowCount: rows, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, RawBytes: bytes, StoredBytes: bytes, PayloadLength: bytes}},
 	}
 }
