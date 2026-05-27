@@ -24,7 +24,7 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values, dictionaries, and dictionary codes are not string direct-view payloads. |
-| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1915 implements the explicit typed-column `raw_uint32_offsets_list` variable-list primitive (`uint64` offsets, `uint32` values) for safe writer/fallback-reader use. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; unsafe direct-view readers and graph search consumption are deferred to #1916+. |
+| `ColumnStoreValueAdjacencyList` | v1 offsets-list primitive plus fallback compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` primitive direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility; column_graph/search consumption is deferred to #1917+. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
@@ -56,12 +56,15 @@ remain aligned.
 
 `DirectViewCertified` remains false for bool bitpack/RLE, strings/dictionaries,
 nullable/default wrappers, compressed payloads, variable-width delta layouts,
-physical row assets, and adjacency direct views. The adapter's internal
-`__treedb_primary_id` row-locator column is also not a #1895 certified value
-column; only declared `ColumnStoreValue*` typed-column-part fields may be active
-writer certification targets. Synthetic or legacy refs that start at a
-misaligned segment offset must fail closed or use fallback planning even when
-their image-local layout contract is otherwise valid.
+physical row assets, and legacy dense adjacency rows. It is true for the
+explicit non-null, non-default, uncompressed `raw_uint32_offsets_list` adjacency
+primitive only when both global sections satisfy the offsets/value contract below.
+The adapter's internal `__treedb_primary_id` row-locator column is also not an
+issue #1895 certified value column; only declared `ColumnStoreValue*`
+typed-column-part fields may be active writer certification targets. Synthetic
+or legacy refs that start at a misaligned segment offset must fail closed or use
+fallback planning even when their image-local layout contract is otherwise
+valid.
 
 ## Storage owner and consumer matrix
 
@@ -69,7 +72,7 @@ their image-local layout contract is otherwise valid.
 | --- | --- | --- |
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
-| `typed_column_part` | `adjacency_list` consumers | `raw_uint32_offsets_list` is the selected #1901 v1 primitive and has safe writer/fallback-reader support; legacy dense fixed-degree `raw_uint32_dense` remains fallback/compatibility. |
+| `typed_column_part` | `adjacency_list` consumers | `raw_uint32_offsets_list` is the selected #1901 v1 primitive and has safe writer/fallback-reader plus certified primitive direct-view support; legacy dense fixed-degree `raw_uint32_dense` remains fallback/compatibility. |
 | physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
@@ -165,10 +168,11 @@ physical row-asset adjacency direct views remain deferred to #1897.
 
 Bool bitpack/RLE, strings/dictionaries, nullable/default wrappers, compressed
 payloads, variable-width varint/delta/double-delta layouts, physical row assets,
-and adjacency direct views are fallback-only or deferred unless a future issue
-adds a new explicit encoding and conformance row. For adjacency, that explicit
-row is `raw_uint32_offsets_list`; #1915 enables the safe writer/fallback reader,
-while unsafe direct-view readers and graph search runtime remain deferred.
+and legacy dense adjacency direct views are fallback-only or deferred unless a
+future issue adds a new explicit encoding and conformance row. For adjacency,
+that explicit row is `raw_uint32_offsets_list`; #1915 enables the safe
+writer/fallback reader and #1916 enables the primitive direct-view reader, while
+column_graph/search runtime consumption remains deferred to #1917+.
 
 ## Old/non-certified behavior
 
@@ -192,6 +196,7 @@ Later writer/reader PRs must use these stable counter names and reason buckets:
 | `values_heap_copy_typed_view` | safe typed values view over owned heap bytes; fallback, not zero-copy evidence. |
 | `scratch_decode` | decode into caller/session scratch. |
 | `streaming_fallback` | streaming codec or byte-loop fallback. |
+| `source_unsupported` | mappedresource handle source did not match the direct-view requirement. |
 | `certification_failure` | manifest/layout/checksum/schema certification rejected direct view. |
 | `absolute_offset_unaligned` | `asset_ref.offset + payload offset` failed alignment. |
 | `actual_pointer_unaligned` | concrete Go byte-slice address failed alignment. |
@@ -201,19 +206,23 @@ Later writer/reader PRs must use these stable counter names and reason buckets:
 
 ## Baseline benchmark harness for later PRs
 
-This PR does not claim a speedup. Later implementation PRs should run focused
-baselines and final measurements with exact branch/commit, hardware, rows,
-dimensions, `ns/op`, ops/sec, `B/op`, `allocs/op`, direct/fallback counters,
-padding bytes, storage bytes, mapped bytes, decoded bytes, and hot-loop allocs.
+Issue #1916 claims primitive reader behavior only: certified direct-view prepare/open
+classification and allocation-free per-row offsets-list iteration after prepare.
+It does not claim a column_graph/search speedup. Later graph-consuming PRs
+should run focused baselines and final measurements with exact branch/commit,
+hardware, rows, dimensions, `ns/op`, ops/sec, `B/op`, `allocs/op`,
+direct/fallback counters, padding bytes, storage bytes, mapped bytes, decoded
+bytes, and hot-loop allocs.
 
-Later #1915+ PRs that claim adjacency speedups must also define permanent
-primitive microbenchmarks for fallback decode, direct-view prepare/open, and
-per-row offsets-list iteration, then graph benchmarks for serial no-doc,
-serial full-doc, serial exclude-embedding, parallel graph-only, and parallel
-prepared-searcher document modes. Report `adjacency_mmap_direct/search`,
-`adjacency_heap_copy_typed_view/search`, `adjacency_scratch_decode/search`,
-offsets-list certification failures, padding bytes for offsets and values
-sections, and CPU/allocation profile summaries against latest-main baselines.
+Later #1917+ PRs that claim adjacency search speedups must also define
+permanent primitive microbenchmarks for fallback decode, direct-view
+prepare/open, and per-row offsets-list iteration, then graph benchmarks for
+serial no-doc, serial full-doc, serial exclude-embedding, parallel graph-only,
+and parallel prepared-searcher document modes. Report
+`adjacency_mmap_direct/search`, `adjacency_heap_copy_typed_view/search`,
+`adjacency_scratch_decode/search`, offsets-list certification failures, padding
+bytes for offsets and values sections, and CPU/allocation profile summaries
+against latest-main baselines.
 
 Suggested commands:
 

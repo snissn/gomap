@@ -241,14 +241,23 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	if offsetsAdjacency.Layout.Kind != LayoutVariableWidth || !offsetsAdjacency.Layout.VariableWidth || offsetsAdjacency.Layout.FixedWidth || offsetsAdjacency.Layout.ElementsPerRow != 0 {
 		t.Fatalf("offsets-list adjacency caps=%+v want variable-length non-dense layout", offsetsAdjacency)
 	}
-	if offsetsAdjacency.DirectView.Eligible || offsetsAdjacency.DirectView.Reason != ReasonAdjacencyOffsetsListDirectViewDeferred {
-		t.Fatalf("offsets-list adjacency direct=%+v want deferred direct view", offsetsAdjacency.DirectView)
+	if !offsetsAdjacency.DirectView.Eligible || offsetsAdjacency.DirectView.Reason != ReasonSupported {
+		t.Fatalf("offsets-list adjacency direct=%+v want certified direct-view eligible", offsetsAdjacency.DirectView)
 	}
-	if cap := offsetsAdjacency.Supports(OpAdjacencyDirectView); cap.Supported() || cap.Reason != ReasonAdjacencyOffsetsListDirectViewDeferred {
-		t.Fatalf("offsets-list direct cap=%+v want %s", cap, ReasonAdjacencyOffsetsListDirectViewDeferred)
+	if cap := offsetsAdjacency.Supports(OpAdjacencyDirectView); !cap.Supported() {
+		t.Fatalf("offsets-list direct cap=%+v want supported", cap)
 	}
 	if cap := offsetsAdjacency.Supports(OpAdjacencyTraversal); cap.Supported() || cap.Reason != ReasonAdjacencyOffsetsListRuntimeDeferred {
 		t.Fatalf("offsets-list traversal cap=%+v want runtime deferred", cap)
+	}
+	offsetsAdjacencyWithFixedWidth := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone, FixedWidthElements: 2})
+	if offsetsAdjacencyWithFixedWidth.DirectView.Eligible || offsetsAdjacencyWithFixedWidth.DirectView.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("offsets-list fixed-width direct=%+v want %s", offsetsAdjacencyWithFixedWidth.DirectView, ReasonEncodingPhysicalMismatch)
+	}
+	for _, op := range []Operation{OpAdjacencyDirectView, OpAdjacencyTraversal, OpAdjacencyMetricReducer} {
+		if cap := offsetsAdjacencyWithFixedWidth.Supports(op); cap.Supported() || cap.Reason != ReasonEncodingPhysicalMismatch {
+			t.Fatalf("offsets-list fixed-width %s cap=%+v want %s", op, cap, ReasonEncodingPhysicalMismatch)
+		}
 	}
 	for _, op := range []columnsemantics.Operation{columnsemantics.OpOrderedRange, columnsemantics.OpSum, columnsemantics.OpMin, columnsemantics.OpMax, columnsemantics.OpDirectScalarValueCarrier} {
 		if cap := adjacency.SupportsSemanticOperation(op); cap.Supported() || cap.Reason != ReasonAdjacencyScalarUnsupported {

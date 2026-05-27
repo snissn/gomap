@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"slices"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -1237,6 +1238,59 @@ type typedColumnAdapterDenseUint32ResourceView struct {
 	Direct         bool
 }
 
+type typedColumnAdapterUint32OffsetsListViewClass string
+
+const (
+	typedColumnAdapterUint32OffsetsListViewMmapDirect              typedColumnAdapterUint32OffsetsListViewClass = "mmap_direct"
+	typedColumnAdapterUint32OffsetsListViewHeapCopyTyped           typedColumnAdapterUint32OffsetsListViewClass = "heap_copy_typed_view"
+	typedColumnAdapterUint32OffsetsListViewScratchDecode           typedColumnAdapterUint32OffsetsListViewClass = "scratch_decode"
+	typedColumnAdapterUint32OffsetsListViewSourceUnsupported       typedColumnAdapterUint32OffsetsListViewClass = "source_unsupported"
+	typedColumnAdapterUint32OffsetsListViewStaleHandle             typedColumnAdapterUint32OffsetsListViewClass = "stale_handle"
+	typedColumnAdapterUint32OffsetsListViewActualPointerUnaligned  typedColumnAdapterUint32OffsetsListViewClass = "actual_pointer_unaligned"
+	typedColumnAdapterUint32OffsetsListViewAbsoluteOffsetUnaligned typedColumnAdapterUint32OffsetsListViewClass = "absolute_offset_unaligned"
+	typedColumnAdapterUint32OffsetsListViewCertificationFailure    typedColumnAdapterUint32OffsetsListViewClass = "certification_failure"
+	typedColumnAdapterUint32OffsetsListViewValidationFailure       typedColumnAdapterUint32OffsetsListViewClass = "validation_failure"
+)
+
+type typedColumnAdapterUint32OffsetsListClassification struct {
+	Class    typedColumnAdapterUint32OffsetsListViewClass
+	Counter  typeddecode.Counter
+	Counters []typeddecode.Counter
+	Status   typeddecode.Status
+}
+
+type typedColumnAdapterUint32OffsetsListResourceView struct {
+	Rows          int
+	Offsets       []uint64
+	Values        []uint32
+	OffsetsHandle *mappedresource.Handle
+	ValuesHandle  *mappedresource.Handle
+	Direct        bool
+	HeapCopy      bool
+	Scratch       bool
+	Class         typedColumnAdapterUint32OffsetsListClassification
+}
+
+func (v *typedColumnAdapterUint32OffsetsListResourceView) Close() error {
+	if v == nil {
+		return nil
+	}
+	offsets := v.OffsetsHandle
+	values := v.ValuesHandle
+	v.OffsetsHandle = nil
+	v.ValuesHandle = nil
+	v.Offsets = nil
+	v.Values = nil
+	return errors.Join(releaseMappedResourceHandle(offsets), releaseMappedResourceHandle(values))
+}
+
+func releaseMappedResourceHandle(h *mappedresource.Handle) error {
+	if h == nil {
+		return nil
+	}
+	return h.Release()
+}
+
 func typedColumnAdapterAcquireFloat32ScalarColumnView(reader typedColumnAdapterResourceReader, column typedColumnAdapterColumn, rows int) (typedColumnAdapterFloat32ScalarResourceView, error) {
 	if column.Field.ValueType != ColumnStoreValueFloat32 || column.Definition.Type != typedcolumn.ColumnTypeFloat32 || column.Definition.Encoding != typedcolumn.EncodingRawFloat32 {
 		return typedColumnAdapterFloat32ScalarResourceView{}, fmt.Errorf("collections: typed-column adapter column %q is not native raw float32", column.Definition.Name)
@@ -1411,6 +1465,183 @@ func typedColumnAdapterAcquireDenseUint32ColumnView(reader typedColumnAdapterRes
 		return typedColumnAdapterDenseUint32ResourceView{}, errors.Join(viewErr, releaseErr)
 	}
 	return typedColumnAdapterDenseUint32ResourceView{Rows: rows, ElementsPerRow: degree, Values: decoded, Direct: false}, nil
+}
+
+func typedColumnAdapterAcquireUint32OffsetsListColumnView(reader typedColumnAdapterResourceReader, column typedColumnAdapterColumn, rows int) (typedColumnAdapterUint32OffsetsListResourceView, error) {
+	if column.Field.ValueType != ColumnStoreValueAdjacencyList || column.Definition.Type != typedcolumn.ColumnTypeAdjacencyList || column.Definition.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return typedColumnAdapterUint32OffsetsListResourceView{}, fmt.Errorf("collections: typed-column adapter column %q is not raw_uint32_offsets_list adjacency_list", column.Definition.Name)
+	}
+	if rows == 0 {
+		rows = reader.Image.Rows
+	}
+	offsetsSection, valuesSection, found := typedColumnAdapterColumnOffsetsListSections(reader.Image, column.Definition.Name)
+	if !found {
+		return typedColumnAdapterUint32OffsetsListResourceView{}, fmt.Errorf("collections: typed-column adapter image missing offsets-list sections %q", column.Definition.Name)
+	}
+	if offsetsSection.Encoding != typedcolumn.EncodingRawUint32OffsetsList || valuesSection.Encoding != typedcolumn.EncodingRawUint32OffsetsList || offsetsSection.Compression != typedcolumn.CompressionNone || valuesSection.Compression != typedcolumn.CompressionNone {
+		return typedColumnAdapterUint32OffsetsListResourceView{}, fmt.Errorf("collections: typed-column adapter column %q offsets-list section encoding/compression mismatch", column.Definition.Name)
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(reader.Image)
+	if err != nil {
+		return typedColumnAdapterUint32OffsetsListResourceView{}, fmt.Errorf("collections: typed-column adapter column %q layout certification: %w", column.Definition.Name, err)
+	}
+	certColumn, ok := certification.Column(column.Definition.Name)
+	if !ok {
+		return typedColumnAdapterUint32OffsetsListResourceView{}, fmt.Errorf("collections: typed-column adapter image missing layout certification for column %q", column.Definition.Name)
+	}
+	offsetsHandle, err := reader.AcquireSection(offsetsSection)
+	if err != nil {
+		return typedColumnAdapterUint32OffsetsListResourceView{}, err
+	}
+	valuesHandle, err := reader.AcquireSection(valuesSection)
+	if err != nil {
+		releaseErr := offsetsHandle.Release()
+		return typedColumnAdapterUint32OffsetsListResourceView{}, errors.Join(err, releaseErr)
+	}
+	view, err := typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(reader.Manager, certColumn, rows, offsetsSection.Length, valuesSection.Length, offsetsHandle, valuesHandle)
+	if err != nil {
+		releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
+		return typedColumnAdapterUint32OffsetsListResourceView{}, errors.Join(err, releaseErr)
+	}
+	if view.OffsetsHandle == nil && view.ValuesHandle == nil {
+		releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
+		if releaseErr != nil {
+			return typedColumnAdapterUint32OffsetsListResourceView{}, releaseErr
+		}
+	}
+	return view, nil
+}
+
+func typedColumnAdapterOpenUint32OffsetsListColumnViewFromHandles(mgr *mappedresource.Manager, certColumn typedcolumn.ColumnPartLayoutContractColumn, rows int, offsetsBytes int, valuesBytes int, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (typedColumnAdapterUint32OffsetsListResourceView, error) {
+	if offsetsHandle == nil || valuesHandle == nil {
+		status := typeddecode.StreamingStatus(typeddecode.ReasonNilHandle, "nil offsets-list handle")
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
+	if offsetsHandle.Released() || valuesHandle.Released() {
+		status := typeddecode.UnsupportedStatus(typeddecode.ReasonStaleHandle, "released offsets-list handle")
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
+	plan := typeddecode.AdjacencyOffsetsListPlan(certColumn)
+	directReq := typeddecode.Uint32OffsetsListDirectViewRequest{Plan: plan, Certification: certColumn, Rows: rows, OffsetsBytes: offsetsBytes, ValuesBytes: valuesBytes, AssetOffset: 0, HasAssetOffset: true}
+	status := typeddecode.ValidateUint32OffsetsListDirectViewSections(directReq)
+	if !status.Direct() {
+		if typedColumnUint32OffsetsListScratchFallbackAllowed(status) {
+			return typedColumnAdapterDecodeUint32OffsetsListScratch(certColumn.Name, rows, offsetsHandle, valuesHandle, typedColumnAdapterClassifyUint32OffsetsListStatus(status))
+		}
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
+	if offsetsHandle.Source() == mappedresource.SourceMapped && valuesHandle.Source() == mappedresource.SourceMapped {
+		offsets, values, viewStatus := typeddecode.Uint32OffsetsListView(mgr, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: true})
+		if viewStatus.Direct() {
+			class := typedColumnAdapterUint32OffsetsListClassification{Class: typedColumnAdapterUint32OffsetsListViewMmapDirect, Counter: typeddecode.CounterMmapDirectView, Counters: []typeddecode.Counter{typeddecode.CounterOffsetsMmapDirectView, typeddecode.CounterValuesMmapDirectView}, Status: viewStatus}
+			return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Offsets: offsets, Values: values, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, Direct: true, Class: class}, nil
+		}
+		if typedColumnUint32OffsetsListScratchFallbackAllowed(viewStatus) {
+			return typedColumnAdapterDecodeUint32OffsetsListScratch(certColumn.Name, rows, offsetsHandle, valuesHandle, typedColumnAdapterClassifyUint32OffsetsListStatus(viewStatus))
+		}
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(viewStatus)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
+	if offsetsHandle.Source() == mappedresource.SourceHeapCopy && valuesHandle.Source() == mappedresource.SourceHeapCopy {
+		offsets, values, viewStatus := typeddecode.Uint32OffsetsListView(nil, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: false})
+		if viewStatus.Direct() {
+			class := typedColumnAdapterUint32OffsetsListClassification{Class: typedColumnAdapterUint32OffsetsListViewHeapCopyTyped, Counter: typeddecode.CounterHeapCopyTypedView, Counters: []typeddecode.Counter{typeddecode.CounterOffsetsHeapCopyTypedView, typeddecode.CounterValuesHeapCopyTypedView}, Status: viewStatus}
+			return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Offsets: offsets, Values: values, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, HeapCopy: true, Class: class}, nil
+		}
+		if typedColumnUint32OffsetsListScratchFallbackAllowed(viewStatus) {
+			return typedColumnAdapterDecodeUint32OffsetsListScratch(certColumn.Name, rows, offsetsHandle, valuesHandle, typedColumnAdapterClassifyUint32OffsetsListStatus(viewStatus))
+		}
+		class := typedColumnAdapterClassifyUint32OffsetsListStatus(viewStatus)
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+	}
+	status = typeddecode.StreamingStatus(typeddecode.ReasonHandleSourceUnsupported, fmt.Sprintf("offsets_source=%s values_source=%s", offsetsHandle.Source(), valuesHandle.Source()))
+	class := typedColumnAdapterClassifyUint32OffsetsListStatus(status)
+	if typedColumnAdapterUint32OffsetsListMixedMmapHeapCopySources(offsetsHandle.Source(), valuesHandle.Source()) {
+		return typedColumnAdapterDecodeUint32OffsetsListScratch(certColumn.Name, rows, offsetsHandle, valuesHandle, class)
+	}
+	return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(certColumn.Name, class)
+}
+
+func typedColumnAdapterUint32OffsetsListMixedMmapHeapCopySources(offsetsSource, valuesSource mappedresource.Source) bool {
+	return (offsetsSource == mappedresource.SourceMapped && valuesSource == mappedresource.SourceHeapCopy) ||
+		(offsetsSource == mappedresource.SourceHeapCopy && valuesSource == mappedresource.SourceMapped)
+}
+
+func typedColumnAdapterDecodeUint32OffsetsListScratch(column string, rows int, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, class typedColumnAdapterUint32OffsetsListClassification) (typedColumnAdapterUint32OffsetsListResourceView, error) {
+	decoded, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsHandle.Bytes(), valuesHandle.Bytes(), rows)
+	if err != nil {
+		class = typedColumnAdapterClassifyUint32OffsetsListStatus(typeddecode.UnsupportedStatus(typeddecode.ReasonValidationFailed, err.Error()))
+		return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Class: class}, typedColumnAdapterUint32OffsetsListError(typedColumnAdapterUint32OffsetsListScratchColumn(column, offsetsHandle), class)
+	}
+	if class.Class == "" {
+		class.Class = typedColumnAdapterUint32OffsetsListViewScratchDecode
+	}
+	if class.Counter == "" {
+		class.Counter = typeddecode.CounterScratchDecode
+	} else if class.Counter != typeddecode.CounterScratchDecode && !slices.Contains(class.Counters, typeddecode.CounterScratchDecode) {
+		class.Counters = append(class.Counters, typeddecode.CounterScratchDecode)
+	}
+	return typedColumnAdapterUint32OffsetsListResourceView{Rows: rows, Offsets: decoded.Offsets, Values: decoded.Values, Scratch: true, Class: class}, nil
+}
+
+func typedColumnAdapterUint32OffsetsListScratchColumn(column string, offsetsHandle *mappedresource.Handle) string {
+	if column != "" {
+		return column
+	}
+	if offsetsHandle != nil {
+		return offsetsHandle.Key().Section.Column
+	}
+	return ""
+}
+
+func typedColumnAdapterUint32OffsetsListError(column string, class typedColumnAdapterUint32OffsetsListClassification) error {
+	if column == "" {
+		column = "<unknown>"
+	}
+	return fmt.Errorf("collections: typed-column adapter column %q offsets-list direct-view classification=%s reason=%s: %s", column, class.Class, class.Status.Reason, class.Status.String())
+}
+
+func typedColumnAdapterClassifyUint32OffsetsListStatus(status typeddecode.Status) typedColumnAdapterUint32OffsetsListClassification {
+	class := typedColumnAdapterUint32OffsetsListClassification{Status: status}
+	switch status.Reason {
+	case typeddecode.ReasonHandleSourceUnsupported:
+		class.Class = typedColumnAdapterUint32OffsetsListViewSourceUnsupported
+		class.Counter = typeddecode.CounterSourceUnsupported
+	case typeddecode.ReasonNilHandle, typeddecode.ReasonStaleHandle:
+		class.Class = typedColumnAdapterUint32OffsetsListViewStaleHandle
+		class.Counter = typeddecode.CounterStaleHandle
+	case typeddecode.ReasonActualPointerUnaligned:
+		class.Class = typedColumnAdapterUint32OffsetsListViewActualPointerUnaligned
+		class.Counter = typeddecode.CounterActualPointerUnaligned
+	case typeddecode.ReasonAbsoluteOffsetUnaligned:
+		class.Class = typedColumnAdapterUint32OffsetsListViewAbsoluteOffsetUnaligned
+		class.Counter = typeddecode.CounterAbsoluteOffsetUnaligned
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper:
+		class.Class = typedColumnAdapterUint32OffsetsListViewCertificationFailure
+		class.Counter = typeddecode.CounterCertificationFailure
+	case typeddecode.ReasonOffsetsCountMismatch, typeddecode.ReasonOffsetsStartMismatch, typeddecode.ReasonOffsetsNonMonotonic, typeddecode.ReasonOffsetsGoIntRange, typeddecode.ReasonValuesLengthMismatch:
+		class.Class = typedColumnAdapterUint32OffsetsListViewValidationFailure
+		class.Counter = typeddecode.CounterOffsetsListValidation
+	case typeddecode.ReasonDirectViewDeferred:
+		class.Class = typedColumnAdapterUint32OffsetsListViewScratchDecode
+		class.Counter = typeddecode.CounterScratchDecode
+	default:
+		class.Class = typedColumnAdapterUint32OffsetsListViewValidationFailure
+		class.Counter = typeddecode.CounterOffsetsListValidation
+	}
+	return class
+}
+
+func typedColumnUint32OffsetsListScratchFallbackAllowed(status typeddecode.Status) bool {
+	switch status.Reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonActualPointerUnaligned, typeddecode.ReasonWrongEndian, typeddecode.ReasonNotWriterCertified, typeddecode.ReasonDirectViewDeferred:
+		return true
+	default:
+		return false
+	}
 }
 
 func typedColumnDenseDecodeFallbackAllowed(status typeddecode.Status) bool {
@@ -1866,6 +2097,10 @@ func typedColumnAdapterColumnDataSection(image typedcolumn.ColumnPartImage, colu
 		}
 	}
 	return typedcolumn.ColumnPartImageSection{}, false
+}
+
+func typedColumnAdapterColumnOffsetsListSections(image typedcolumn.ColumnPartImage, column string) (typedcolumn.ColumnPartImageSection, typedcolumn.ColumnPartImageSection, bool) {
+	return image.ColumnOffsetsListSections(column)
 }
 
 func typedColumnAdapterPrepareInt64PredicatePart(fields []TypedStorageField, raw []byte, refPartID uint64, typedRows int, physicalRows int, schemaHash uint64, column string, operation string, decode typedColumnAdapterPartImageDecoder) (*typedColumnAdapterPart, typedColumnAdapterColumn, int, error) {

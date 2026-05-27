@@ -2120,8 +2120,23 @@ func validateImageSectionLayout(sections []ColumnPartImageSection, manifestBytes
 
 func validateImageSectionMultiplicity(sections []ColumnPartImageSection) error {
 	counts := make(map[ColumnPartImageSectionKind]int, len(sections))
+	columnCounts := make(map[struct {
+		kind   ColumnPartImageSectionKind
+		column string
+	}]int)
 	for _, section := range sections {
 		counts[section.Kind]++
+		switch section.Kind {
+		case ColumnPartImageSectionColumnOffsets, ColumnPartImageSectionColumnValues:
+			key := struct {
+				kind   ColumnPartImageSectionKind
+				column string
+			}{kind: section.Kind, column: section.Column}
+			columnCounts[key]++
+			if columnCounts[key] > 1 {
+				return fmt.Errorf("typedcolumn: image has %d %s sections for column %q, want at most 1", columnCounts[key], section.Kind, section.Column)
+			}
+		}
 	}
 	for _, kind := range []ColumnPartImageSectionKind{
 		ColumnPartImageSectionDescriptor,

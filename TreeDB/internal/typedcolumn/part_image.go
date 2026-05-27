@@ -210,18 +210,36 @@ func (i ColumnPartImage) columnDataSection(column string) (ColumnPartImageSectio
 func (i ColumnPartImage) columnOffsetsListSections(column string) (ColumnPartImageSection, ColumnPartImageSection, bool) {
 	var offsets ColumnPartImageSection
 	var values ColumnPartImageSection
+	foundOffsets := false
+	foundValues := false
 	for _, section := range i.Sections {
 		if section.Column != column {
 			continue
 		}
 		switch section.Kind {
 		case ColumnPartImageSectionColumnOffsets:
+			if foundOffsets {
+				return ColumnPartImageSection{}, ColumnPartImageSection{}, false
+			}
 			offsets = section
+			foundOffsets = true
 		case ColumnPartImageSectionColumnValues:
+			if foundValues {
+				return ColumnPartImageSection{}, ColumnPartImageSection{}, false
+			}
 			values = section
+			foundValues = true
 		}
 	}
-	return offsets, values, offsets.Kind == ColumnPartImageSectionColumnOffsets && values.Kind == ColumnPartImageSectionColumnValues
+	return offsets, values, foundOffsets && foundValues
+}
+
+// ColumnOffsetsListSections returns the unique offsets and values sections for
+// the named offsets-list column. The boolean is false when either section is
+// missing or duplicated, so callers fail closed instead of selecting a last
+// matching section from a malformed image.
+func (i ColumnPartImage) ColumnOffsetsListSections(column string) (ColumnPartImageSection, ColumnPartImageSection, bool) {
+	return i.columnOffsetsListSections(column)
 }
 
 func validateImageDescriptorMatchesPart(image ColumnPartImage, part *ColumnPart) error {

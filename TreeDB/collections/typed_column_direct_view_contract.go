@@ -78,6 +78,7 @@ func typedColumnDirectViewSafetyChecks() []typedColumnDirectViewSafetyCheck {
 		{Name: "exact byte length and element count", Placement: typedColumnDirectViewReadTime},
 		{Name: "host endian compatibility", Placement: typedColumnDirectViewReadTime},
 		{Name: "handle lifetime and released-state", Placement: typedColumnDirectViewReadTime, Counter: typeddecode.CounterStaleHandle},
+		{Name: "mappedresource source support", Placement: typedColumnDirectViewReadTime, Counter: typeddecode.CounterSourceUnsupported},
 		{Name: "logical type and physical encoding", Placement: typedColumnDirectViewCertificationTime},
 		{Name: "compression/null/default exclusion", Placement: typedColumnDirectViewCertificationTime},
 		{Name: "row count and fixed dims/degree", Placement: typedColumnDirectViewCertificationTime},
