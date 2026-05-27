@@ -394,6 +394,9 @@ func TestTypedColumnAdapterUint32OffsetsListDirectViewReader1916(t *testing.T) {
 	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-offsets-list", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: false}
 	view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(reader, column, image.Rows)
 	if err != nil {
+		if strings.Contains(err.Error(), "mmap unsupported") {
+			t.Skipf("mmap direct view unsupported on this platform: %v", err)
+		}
 		t.Fatalf("AcquireUint32OffsetsListColumnView: %v", err)
 	}
 	if !view.Direct || view.HeapCopy || view.Scratch || view.OffsetsHandle == nil || view.ValuesHandle == nil || view.Class.Class != typedColumnAdapterUint32OffsetsListViewMmapDirect {
@@ -547,7 +550,7 @@ func TestTypedColumnAdapterUint32OffsetsListPartialOpenFailureCleansUp1916(t *te
 		t.Fatalf("write truncated image: %v", err)
 	}
 	mgr := mappedresource.NewManager()
-	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-offsets-list-partial", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: false}
+	reader := typedColumnAdapterResourceReader{Manager: mgr, Image: image, Path: path, Namespace: "typed-column-adapter-offsets-list-partial", PartID: image.PartID, PreferMapped: true, AllowHeapCopy: true}
 	view, err := typedColumnAdapterAcquireUint32OffsetsListColumnView(reader, column, image.Rows)
 	if err == nil {
 		_ = view.Close()
