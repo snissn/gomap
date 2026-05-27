@@ -4042,10 +4042,10 @@ func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *te
 		}
 	}()
 	if _, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &viewReadCache); err == nil {
-		if ok {
-			t.Fatalf("group-count-distinct one-shot ok=%v err=%v want distinct manifest row mismatch", ok, err)
+		if !ok {
+			t.Skip("column asset mmap views are unavailable on this platform")
 		}
-		t.Log("group-count-distinct one-shot returned clean fallback before view-backed row mismatch validation")
+		t.Fatalf("group-count-distinct one-shot ok=%v err=%v want distinct manifest row mismatch", ok, err)
 	} else if !strings.Contains(err.Error(), "distinct dictionary codes asset row count") {
 		t.Fatalf("group-count-distinct one-shot ok=%v err=%v want distinct manifest row mismatch", ok, err)
 	}
