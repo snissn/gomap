@@ -414,10 +414,12 @@ func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireBytes offsets: %v", err)
 	}
+	defer offsetsHandle.Release()
 	valuesHandle, err := mgr.AcquireBytes(testKeyWithPart(191602, int64(len(valuesRaw))), testScope(), mappedresource.SourceMapped, valuesRaw, mappedresource.AcquireOptions{Reason: "offsets-list values"})
 	if err != nil {
 		t.Fatalf("AcquireBytes values: %v", err)
 	}
+	defer valuesHandle.Release()
 	offsets, values, status := Uint32OffsetsListView(mgr, offsetsHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true})
 	if !status.Direct() {
 		t.Fatalf("view status=%+v want direct", status)
@@ -433,6 +435,7 @@ func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireBytes heap: %v", err)
 	}
+	defer heapHandle.Release()
 	if _, _, status := Uint32OffsetsListView(mgr, heapHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true}); status.Reason != ReasonHandleSourceUnsupported {
 		t.Fatalf("heap status=%+v want %s", status, ReasonHandleSourceUnsupported)
 	}
@@ -445,6 +448,7 @@ func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireBytes misaligned offsets: %v", err)
 	}
+	defer misalignedHandle.Release()
 	if _, _, status := Uint32OffsetsListView(mgr, misalignedHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true}); status.Reason != ReasonActualPointerUnaligned {
 		t.Fatalf("misaligned status=%+v want %s", status, ReasonActualPointerUnaligned)
 	}
