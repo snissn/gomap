@@ -2459,11 +2459,12 @@ func BenchmarkTypedColumnAdapterVariableAdjacencyScan1917(b *testing.B) {
 	if err := os.WriteFile(path, image.Bytes, 0o600); err != nil {
 		b.Fatalf("write image: %v", err)
 	}
+	readBytes := offsetsSection.Length + valuesSection.Length
 	reportShape := func(b *testing.B) {
 		b.Helper()
 		b.ReportMetric(float64(rowsN), "rows/op")
 		b.ReportMetric(float64(totalValues), "values/op")
-		b.ReportMetric(float64(totalValues*4), "read_bytes/op")
+		b.ReportMetric(float64(readBytes), "read_bytes/op")
 		b.ReportMetric(float64(image.TotalBytes()), "storage_B/op")
 		b.ReportMetric(float64(image.PaddingBytes()), "padding_B/op")
 		b.ReportMetric(float64(offsetsSection.Length), "offsets_storage_B/op")
@@ -2485,13 +2486,14 @@ func BenchmarkTypedColumnAdapterVariableAdjacencyScan1917(b *testing.B) {
 			b.Skipf("mmap direct view unavailable; fallback class=%+v", view.Class)
 		}
 		b.ReportAllocs()
-		b.SetBytes(int64(totalValues * 4))
+		b.SetBytes(int64(readBytes))
 		// Timer boundary: setup/write/open/certification are complete; timed work is row iteration over the prepared mmap direct view only.
 		b.ResetTimer()
 		var sink uint64
 		for i := 0; i < b.N; i++ {
 			sink += typedColumnAdapterSumUint32OffsetsListRows(view.Offsets, view.Values, view.Rows)
 		}
+		b.StopTimer()
 		elapsed := b.Elapsed().Seconds()
 		reportShape(b)
 		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
@@ -2513,13 +2515,14 @@ func BenchmarkTypedColumnAdapterVariableAdjacencyScan1917(b *testing.B) {
 			b.Fatalf("view=%+v want heap-copy typed view, not mmap direct or scratch", view)
 		}
 		b.ReportAllocs()
-		b.SetBytes(int64(totalValues * 4))
+		b.SetBytes(int64(readBytes))
 		// Timer boundary: setup/write/open/certification/heap copy are complete; timed work is row iteration over the prepared heap-copy typed view only.
 		b.ResetTimer()
 		var sink uint64
 		for i := 0; i < b.N; i++ {
 			sink += typedColumnAdapterSumUint32OffsetsListRows(view.Offsets, view.Values, view.Rows)
 		}
+		b.StopTimer()
 		elapsed := b.Elapsed().Seconds()
 		reportShape(b)
 		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
@@ -2531,7 +2534,7 @@ func BenchmarkTypedColumnAdapterVariableAdjacencyScan1917(b *testing.B) {
 
 	b.Run("scratch_fallback_decode_and_scan", func(b *testing.B) {
 		b.ReportAllocs()
-		b.SetBytes(int64(totalValues * 4))
+		b.SetBytes(int64(readBytes))
 		// Timer boundary: setup/write/open are excluded; timed work is fallback decode plus row iteration.
 		b.ResetTimer()
 		var sink uint64
@@ -2542,6 +2545,7 @@ func BenchmarkTypedColumnAdapterVariableAdjacencyScan1917(b *testing.B) {
 			}
 			sink += typedColumnAdapterSumUint32OffsetsListRows(decoded.Offsets, decoded.Values, decoded.Rows)
 		}
+		b.StopTimer()
 		elapsed := b.Elapsed().Seconds()
 		reportShape(b)
 		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
