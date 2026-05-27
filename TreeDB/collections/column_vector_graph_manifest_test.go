@@ -67,6 +67,11 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("decode corrupt err=%v want trailing-bytes failure", err)
 	}
+	shortSourceHeader := append([]byte(nil), encoded...)
+	shortSourceHeader = append(shortSourceHeader, 0, 0, 0, 0, 0)
+	if _, err := decodeColumnVectorGraphManifestRecord(shortSourceHeader); err == nil || !strings.Contains(err.Error(), "trailing") {
+		t.Fatalf("decode short source header err=%v want trailing-bytes failure", err)
+	}
 }
 
 func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.T) {

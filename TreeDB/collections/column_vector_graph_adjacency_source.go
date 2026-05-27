@@ -76,22 +76,22 @@ func prepareColumnVectorGraphLayer0AdjacencySourceAsset(assetRootDir, collection
 	if err != nil {
 		return columnVectorGraphPreparedLayer0AdjacencySource{}, err
 	}
-	list, err := columnVectorGraphLayer0AdjacencyOffsetsListFromRows(rows)
-	if err != nil {
-		return columnVectorGraphPreparedLayer0AdjacencySource{}, err
-	}
 	fields := columnStoreTypedColumnPartFields(sourceCfg)
 	adapterRows := make([]typedColumnAdapterRow, len(rows))
+	valuesCount := 0
 	for rowIdx := range rows {
-		begin := int(list.Offsets[rowIdx])
-		end := int(list.Offsets[rowIdx+1])
-		if begin < 0 || end < begin || end > len(list.Values) {
-			return columnVectorGraphPreparedLayer0AdjacencySource{}, fmt.Errorf("collections: column_graph layer-0 adjacency source row %d values range [%d,%d) outside %d", rowIdx, begin, end, len(list.Values))
+		layer0, err := columnVectorGraphAdjacencyLayer(rows[rowIdx].Adjacency, 0)
+		if err != nil {
+			return columnVectorGraphPreparedLayer0AdjacencySource{}, fmt.Errorf("collections: column_graph layer-0 adjacency row %d: %w", rowIdx, err)
 		}
+		if len(layer0) > math.MaxInt-valuesCount {
+			return columnVectorGraphPreparedLayer0AdjacencySource{}, errors.New("collections: column_graph layer-0 adjacency values overflow int")
+		}
+		valuesCount += len(layer0)
 		adapterRows[rowIdx] = typedColumnAdapterRow{
 			PrimaryID: int64(rowIdx),
 			Values: map[string]columnDeclaredValue{
-				fields[0].Path: {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: append([]uint32(nil), list.Values[begin:end]...)},
+				fields[0].Path: {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: append([]uint32(nil), layer0...)},
 			},
 		}
 	}
@@ -135,7 +135,7 @@ func prepareColumnVectorGraphLayer0AdjacencySourceAsset(assetRootDir, collection
 		Ref:          ref,
 		Bytes:        ref.Length,
 		Rows:         image.Rows,
-		Values:       len(list.Values),
+		Values:       valuesCount,
 		OffsetsBytes: int64(accounting.DeclaredColumnOffsetsBytes),
 		ValuesBytes:  int64(accounting.DeclaredColumnValuesBytes),
 		PaddingBytes: int64(accounting.SerializedPaddingBytes),
@@ -160,26 +160,6 @@ func writeColumnVectorGraphLayer0AdjacencySourceAssetToManager(rootDir string, c
 		return ColumnAssetRef{}, errors.Join(appendErr, closeErr)
 	}
 	return ref, closeErr
-}
-
-func columnVectorGraphLayer0AdjacencyOffsetsListFromRows(rows []columnVectorGraphAssetRow) (typedcolumn.RawUint32OffsetsList, error) {
-	offsets := make([]uint64, len(rows)+1)
-	values := make([]uint32, 0)
-	for i := range rows {
-		layer0, err := columnVectorGraphAdjacencyLayer(rows[i].Adjacency, 0)
-		if err != nil {
-			return typedcolumn.RawUint32OffsetsList{}, fmt.Errorf("collections: column_graph layer-0 adjacency row %d: %w", i, err)
-		}
-		if len(layer0) > math.MaxInt-len(values) {
-			return typedcolumn.RawUint32OffsetsList{}, errors.New("collections: column_graph layer-0 adjacency values overflow int")
-		}
-		values = append(values, layer0...)
-		offsets[i+1] = uint64(len(values))
-	}
-	if err := typedcolumn.ValidateRawUint32OffsetsListShape(len(rows), offsets, uint64(len(values))); err != nil {
-		return typedcolumn.RawUint32OffsetsList{}, err
-	}
-	return typedcolumn.RawUint32OffsetsList{Rows: len(rows), Offsets: offsets, Values: values}, nil
 }
 
 func validateColumnVectorGraphLayer0AdjacencySourceAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot) error {
@@ -320,6 +300,9 @@ func validateColumnVectorGraphLayer0AdjacencySourceMatchesGraph(graph columnVect
 	}
 	if source.RowCount == math.MaxInt {
 		return errors.New("collections: column_graph layer-0 adjacency source row_count+1 overflows int")
+	}
+	if int64(source.RowCount) > math.MaxInt64/8-1 {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source row_count=%d offsets byte count overflows int64", source.RowCount)
 	}
 	wantOffsetsBytes := int64(source.RowCount+1) * 8
 	if source.OffsetsBytes != wantOffsetsBytes {

@@ -1478,38 +1478,6 @@ func graphManifestFromRecords1918(tb testing.TB, records []columnManifestRecord,
 	return graph
 }
 
-func publishMutatedColumnGraphRecord1918(tb testing.TB, d *backenddb.DB, col *Collection, records []columnManifestRecord, cfg *ColumnStoreConfig, def VectorIndexDefinition, mutate func(*columnVectorGraphManifestSnapshot)) {
-	tb.Helper()
-	manifest, err := decodeColumnManifestSnapshotForScan(records)
-	if err != nil {
-		tb.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
-	}
-	for i := range records {
-		if !bytes.Equal(records[i].key, columnVectorGraphManifestRecordKey(def.Name)) {
-			continue
-		}
-		graph, err := decodeColumnVectorGraphManifestRecord(records[i].value)
-		if err != nil {
-			tb.Fatalf("decode graph record: %v", err)
-		}
-		mutate(&graph)
-		records[i].value, err = encodeColumnVectorGraphManifestRecord(graph)
-		if err != nil {
-			tb.Fatalf("encode graph record: %v", err)
-		}
-	}
-	sortColumnManifestRecords(records)
-	identity := *cfg.ActiveManifest
-	identity.Checksum = checksumColumnManifestRecords(ColumnPublishManifestEncodeInput{
-		Collection:        manifest.Collection,
-		ColumnStore:       *cfg,
-		Operation:         manifest.Operation,
-		AppliedCommandLSN: manifest.AppliedCommandLSN,
-	}, manifest.Generation, records)
-	meta := col.Meta()
-	publishColumnGraphCatalogForTestV2A(tb, d, meta, identity, records)
-}
-
 func loadColumnGraphRebuildManifestRecordsV2A(tb testing.TB, d *backenddb.DB, collection string) []columnManifestRecord {
 	tb.Helper()
 	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(tb, d, collection)

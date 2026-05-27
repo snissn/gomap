@@ -213,7 +213,7 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 	snapshot.AssetRef.Checksum = uint32(checksum64)
 	snapshot.AssetBytes = int64(assetBytes64)
 	if cur.pos < len(raw) {
-		if len(raw)-cur.pos < 4 {
+		if len(raw)-cur.pos < 6 {
 			return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
 		}
 		source, err := decodeColumnVectorGraphLayer0AdjacencySource(&cur)
@@ -274,16 +274,17 @@ func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVe
 		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, fmt.Errorf("collections: unsupported column vector graph layer-0 adjacency source version=%d", version)
 	}
 	source := columnVectorGraphLayer0AdjacencySourceSnapshot{
-		Present:          true,
-		Schema:           cur.string(),
-		ColumnName:       cur.string(),
-		ValueType:        cur.string(),
-		Encoding:         cur.string(),
-		Layer:            int(cur.u64()),
-		SourceSchemaHash: cur.u64(),
-		RowCount:         int(cur.u64()),
-		ValuesCount:      int(cur.u64()),
+		Present:    true,
+		Schema:     cur.string(),
+		ColumnName: cur.string(),
+		ValueType:  cur.string(),
+		Encoding:   cur.string(),
 	}
+	layer64 := cur.u64()
+	sourceSchemaHash := cur.u64()
+	rowCount64 := cur.u64()
+	valuesCount64 := cur.u64()
+	source.SourceSchemaHash = sourceSchemaHash
 	offsetsBytes64 := cur.u64()
 	valuesBytes64 := cur.u64()
 	paddingBytes64 := cur.u64()
@@ -311,7 +312,7 @@ func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVe
 	if err := cur.err; err != nil {
 		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, err
 	}
-	if source.Layer < 0 || source.RowCount < 0 || source.ValuesCount < 0 {
+	if layer64 > uint64(math.MaxInt) || rowCount64 > uint64(math.MaxInt) || valuesCount64 > uint64(math.MaxInt) {
 		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, errors.New("collections: column vector graph layer-0 adjacency source integer overflow")
 	}
 	if fileID64 > uint64(math.MaxUint32) || graphAssetFileID64 > uint64(math.MaxUint32) {
@@ -323,6 +324,9 @@ func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVe
 	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || assetBytes64 > uint64(math.MaxInt64) || offsetsBytes64 > uint64(math.MaxInt64) || valuesBytes64 > uint64(math.MaxInt64) || paddingBytes64 > uint64(math.MaxInt64) || graphAssetOffset64 > uint64(math.MaxInt64) || graphAssetLength64 > uint64(math.MaxInt64) {
 		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, errors.New("collections: column vector graph layer-0 adjacency source offsets or byte counts overflow int64")
 	}
+	source.Layer = int(layer64)
+	source.RowCount = int(rowCount64)
+	source.ValuesCount = int(valuesCount64)
 	source.OffsetsBytes = int64(offsetsBytes64)
 	source.ValuesBytes = int64(valuesBytes64)
 	source.PaddingBytes = int64(paddingBytes64)
