@@ -73,6 +73,11 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	if _, err := decodeColumnVectorGraphManifestRecord(shortSourceHeader); err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("decode short source header err=%v want trailing-bytes failure", err)
 	}
+	unknownTrailer := append([]byte(nil), encoded...)
+	unknownTrailer = append(unknownTrailer, 0, 0, 0, 1, 0, 0)
+	if _, err := decodeColumnVectorGraphManifestRecord(unknownTrailer); err == nil || !strings.Contains(err.Error(), "unrecognized trailing bytes") {
+		t.Fatalf("decode unknown trailer err=%v want unrecognized trailing bytes failure", err)
+	}
 }
 
 func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.T) {

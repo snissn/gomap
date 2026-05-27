@@ -252,19 +252,21 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 			if len(snapshot.AdjacencyLayerSources) > 0 {
 				return columnVectorGraphManifestSnapshot{}, errors.New("collections: column vector graph manifest has both all-layer and legacy layer-0 adjacency source blocks")
 			}
-			if sourceCur := cur; true {
-				source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
-				if err == nil {
-					if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
-						snapshot.Layer0AdjacencySource = source
-					}
-					cur = sourceCur
-					continue
-				}
+			sourceCur := cur
+			source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
+			if err != nil {
+				cur.pos = len(raw)
+				cur.err = nil
+				continue
 			}
+			if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
+				snapshot.Layer0AdjacencySource = source
+			}
+			cur = sourceCur
+			continue
+		default:
+			return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: unrecognized trailing bytes in column vector graph manifest record magic=0x%08x", magic)
 		}
-		cur.pos = len(raw)
-		cur.err = nil
 	}
 	if cur.pos != len(raw) {
 		return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
@@ -532,40 +534,40 @@ func validateColumnVectorGraphAdjacencySourceSnapshot(source columnVectorGraphLa
 		return nil
 	}
 	if source.Schema == "" || source.ColumnName == "" || source.ValueType == "" || source.Encoding == "" {
-		return errors.New("collections: column vector graph layer-0 adjacency source missing schema metadata")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d missing schema metadata", source.Layer)
 	}
 	if source.Layer < 0 {
 		return fmt.Errorf("collections: column vector graph adjacency source layer=%d must be non-negative", source.Layer)
 	}
 	if source.SourceSchemaHash == 0 || source.BaseManifestGeneration == 0 || source.BaseManifestChecksum == 0 || source.BaseSchemaHash == 0 || source.GraphSchemaHash == 0 {
-		return errors.New("collections: column vector graph layer-0 adjacency source missing identity")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d missing identity", source.Layer)
 	}
 	if source.RowCount < 0 || source.ValuesCount < 0 {
-		return errors.New("collections: column vector graph layer-0 adjacency source row/value count must be non-negative")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d row/value count must be non-negative", source.Layer)
 	}
 	if source.RowCount == math.MaxInt || int64(source.RowCount) > math.MaxInt64/8-1 {
-		return fmt.Errorf("collections: column vector graph layer-0 adjacency source row_count=%d offsets byte count overflows int64", source.RowCount)
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d row_count=%d offsets byte count overflows int64", source.Layer, source.RowCount)
 	}
 	if source.OffsetsBytes <= 0 || source.ValuesBytes < 0 || source.PaddingBytes < 0 {
-		return errors.New("collections: column vector graph layer-0 adjacency source invalid byte accounting")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d invalid byte accounting", source.Layer)
 	}
 	if source.AssetBytes <= 0 {
-		return errors.New("collections: column vector graph layer-0 adjacency source asset bytes must be positive")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d asset bytes must be positive", source.Layer)
 	}
 	if source.GraphAssetGeneration == 0 || source.GraphAssetPartID == 0 || source.GraphAssetFileID == 0 {
-		return errors.New("collections: column vector graph layer-0 adjacency source missing graph asset identity")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d missing graph asset identity", source.Layer)
 	}
 	if source.GraphAssetOffset < 0 || source.GraphAssetLength <= 0 {
-		return errors.New("collections: column vector graph layer-0 adjacency source invalid graph asset byte identity")
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d invalid graph asset byte identity", source.Layer)
 	}
 	if err := validateColumnAssetRefForPlan(source.Ref); err != nil {
 		return err
 	}
 	if source.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
-		return fmt.Errorf("collections: column vector graph layer-0 adjacency source ref kind=%q want %q", source.Ref.Kind, ColumnAssetKindTCS1TypedColumnPart)
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d ref kind=%q want %q", source.Layer, source.Ref.Kind, ColumnAssetKindTCS1TypedColumnPart)
 	}
 	if source.AssetBytes != source.Ref.Length {
-		return fmt.Errorf("collections: column vector graph layer-0 adjacency source asset bytes=%d does not match ref length=%d", source.AssetBytes, source.Ref.Length)
+		return fmt.Errorf("collections: column vector graph adjacency source layer=%d asset bytes=%d does not match ref length=%d", source.Layer, source.AssetBytes, source.Ref.Length)
 	}
 	return nil
 }
