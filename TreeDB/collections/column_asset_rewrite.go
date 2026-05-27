@@ -400,7 +400,11 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 			return columnAssetRewriteCopyResult{}, fmt.Errorf("collections: column asset rewrite read generation=%d part_id=%d: %w", oldRef.Generation, oldRef.PartID, err)
 		}
 		rawScratch = raw
-		newRef, err := appender.appendKind(raw, oldRef.Kind, oldRef.Generation, oldRef.PartID)
+		alignment := columnAssetSegmentPayloadAlignment(oldRef.Kind, cfg)
+		if oldRef.Kind == ColumnAssetKindTCS1TypedColumnPart && oldRef.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0 {
+			alignment = typedColumnPartDirectViewAssetAlignment
+		}
+		newRef, err := appender.appendKindWithAlignment(raw, oldRef.Kind, oldRef.Generation, oldRef.PartID, alignment)
 		if err != nil {
 			return columnAssetRewriteCopyResult{}, err
 		}
@@ -478,6 +482,9 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
 			graph, err := decodeColumnVectorGraphManifestRecord(record.value)
 			if err != nil {
+				return nil, 0, err
+			}
+			if _, err := columnVectorGraphManifestAssetRefsForScan(graph, graph.BaseManifestGeneration, expectedNamespace); err != nil {
 				return nil, 0, err
 			}
 			changed := false

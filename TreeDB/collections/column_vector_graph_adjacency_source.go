@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -163,11 +164,88 @@ func writeColumnVectorGraphLayer0AdjacencySourceAssetToManager(rootDir string, c
 }
 
 func validateColumnVectorGraphLayer0AdjacencySourceAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot) error {
-	if !graph.Layer0AdjacencySource.Present {
+	source := graph.Layer0AdjacencySource
+	if !source.Present {
 		return nil
 	}
-	_, _, err := decodeColumnVectorGraphLayer0AdjacencySourceAsset(rootDir, collection, cfg, def, graph)
-	return err
+	sourceCfg, adapterColumn, err := columnVectorGraphLayer0AdjacencySourceColumnStoreConfig(collection, cfg, def)
+	if err != nil {
+		return err
+	}
+	if err := validateColumnVectorGraphLayer0AdjacencySourceMatchesGraph(graph, sourceCfg); err != nil {
+		return err
+	}
+	if err := validateColumnVectorGraphAssetRefAvailable(rootDir, source.Ref); err != nil {
+		return err
+	}
+	raw, err := readColumnPhysicalAssetFromManager(rootDir, source.Ref)
+	if err != nil {
+		return err
+	}
+	if int64(len(raw)) != source.AssetBytes || int64(len(raw)) != source.Ref.Length {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source bytes=%d manifest=%d ref=%d", len(raw), source.AssetBytes, source.Ref.Length)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return err
+	}
+	if image.PartID != source.Ref.PartID || image.Rows != source.RowCount {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source image part/rows=(%d,%d) want (%d,%d)", image.PartID, image.Rows, source.Ref.PartID, source.RowCount)
+	}
+	fields := columnStoreTypedColumnPartFields(sourceCfg)
+	if _, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(sourceCfg.SchemaHash)}, image); err != nil {
+		return err
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source layout certification: %w", err)
+	}
+	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
+	if !ok {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source missing layout certification for column %q", adapterColumn.Definition.Name)
+	}
+	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections(adapterColumn.Definition.Name)
+	if !ok {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source missing offsets-list sections for column %q", adapterColumn.Definition.Name)
+	}
+	if int64(offsetsSection.Length) != source.OffsetsBytes || int64(valuesSection.Length) != source.ValuesBytes {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source section bytes offsets=%d/%d values=%d/%d", offsetsSection.Length, source.OffsetsBytes, valuesSection.Length, source.ValuesBytes)
+	}
+	plan := typeddecode.AdjacencyOffsetsListPlan(certColumn)
+	status := typeddecode.ValidateUint32OffsetsListDirectViewSections(typeddecode.Uint32OffsetsListDirectViewRequest{
+		Plan:           plan,
+		Certification:  certColumn,
+		Rows:           source.RowCount,
+		OffsetsBytes:   offsetsSection.Length,
+		ValuesBytes:    valuesSection.Length,
+		AssetOffset:    source.Ref.Offset,
+		HasAssetOffset: true,
+	})
+	if !status.Direct() {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source direct-view section validation failed: %s", status.String())
+	}
+	offsetsRaw, err := image.SectionBytes(offsetsSection)
+	if err != nil {
+		return err
+	}
+	return validateColumnVectorGraphLayer0AdjacencySourceOffsets(offsetsRaw, source.RowCount, source.ValuesCount)
+}
+
+func validateColumnVectorGraphLayer0AdjacencySourceOffsets(offsetsRaw []byte, rows, values int) error {
+	if rows < 0 || values < 0 {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source rows/values=(%d,%d) must be non-negative", rows, values)
+	}
+	if len(offsetsRaw)%8 != 0 {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source offsets bytes=%d want multiple of 8", len(offsetsRaw))
+	}
+	offsets := make([]uint64, len(offsetsRaw)/8)
+	for i := range offsets {
+		offsets[i] = binary.LittleEndian.Uint64(offsetsRaw[i*8:])
+	}
+	if err := typedcolumn.ValidateRawUint32OffsetsListShape(rows, offsets, uint64(values)); err != nil {
+		return fmt.Errorf("collections: column_graph layer-0 adjacency source offsets validation: %w", err)
+	}
+	return nil
 }
 
 func decodeColumnVectorGraphLayer0AdjacencySourceAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot) (typedcolumn.RawUint32OffsetsList, typedcolumn.ColumnPartImage, error) {
