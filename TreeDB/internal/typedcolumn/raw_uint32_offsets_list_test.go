@@ -245,10 +245,23 @@ func TestRawUint32OffsetsListZeroRowsColumnPartImage1918(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "offsets-list offsets=0 want row_count+1=1") {
 		t.Fatalf("BuildColumnPart missing zero-row offsets sentinel err=%v want offsets-list shape failure", err)
 	}
+	badScalarOpts := opts
+	badScalarOpts.Columns = append([]ColumnDefinition(nil), opts.Columns...)
+	badScalarOpts.Columns[0].Encoding = EncodingDeltaVarint
+	_, err = BuildColumnPart(1920, badScalarOpts, Batch{
+		Rows:    0,
+		Columns: map[string][]int64{"id": {}},
+		Uint32OffsetsLists: map[string]RawUint32OffsetsList{
+			"neighbors": {Rows: 0, Offsets: []uint64{0}, Values: nil},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid part rows 0") {
+		t.Fatalf("BuildColumnPart zero-row delta scalar err=%v want invalid part rows", err)
+	}
 	badVectorOpts := opts
 	badVectorOpts.Columns = append([]ColumnDefinition(nil), opts.Columns...)
 	badVectorOpts.Columns = append(badVectorOpts.Columns, ColumnDefinition{Name: "vec", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, CompressionSet: true})
-	_, err = BuildColumnPart(1920, badVectorOpts, Batch{Rows: 0, Columns: map[string][]int64{"id": {}}})
+	_, err = BuildColumnPart(1921, badVectorOpts, Batch{Rows: 0, Columns: map[string][]int64{"id": {}}})
 	if err == nil || !strings.Contains(err.Error(), "requires positive fixed-width elements") {
 		t.Fatalf("BuildColumnPart zero-dim vector err=%v want fixed-width failure", err)
 	}

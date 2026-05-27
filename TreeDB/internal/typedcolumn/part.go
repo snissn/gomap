@@ -969,22 +969,12 @@ func batchAllowsZeroRowsForOffsetsList(batch Batch, defs []ColumnDefinition) boo
 				return false
 			}
 			hasOffsetsList = true
-		case ColumnTypeFloat32:
-			if len(batch.Float32Columns[def.Name]) != 0 {
-				return false
-			}
-		case ColumnTypeFloat64:
-			if len(batch.Float64Columns[def.Name]) != 0 {
-				return false
-			}
-		case ColumnTypeFloat32Vector:
-			if len(batch.Float32Vectors[def.Name]) != 0 {
+		case ColumnTypeInt64:
+			if def.Encoding != EncodingRawInt64 || len(batch.Columns[def.Name]) != 0 {
 				return false
 			}
 		default:
-			if len(batch.Columns[def.Name]) != 0 {
-				return false
-			}
+			return false
 		}
 	}
 	return hasOffsetsList
