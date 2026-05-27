@@ -609,7 +609,7 @@ must be non-nullable, must declare positive `adjacency_degree`, and must fail
 closed when any source row length, schema descriptor, or asset payload length
 disagrees with that fixed degree. The offsets-list selector is also non-nullable,
 must not declare `adjacency_degree`, and remains writer/reader fail-closed until
-#1915 adds the concrete encoding.
+issue #1915 adds the concrete encoding.
 
 ## 8. Commit-Log Segment Format
 

@@ -679,16 +679,11 @@ func TestColumnStoreAdjacencyOffsetsListLayoutNormalizesSpecOnly(t *testing.T) {
 		t.Fatalf("normalized adjacency offsets-list column=%+v", col)
 	}
 
-	dense := testColumnStoreConfig(nil)
-	dense.Columns = []ColumnStoreColumn{{Name: "neighbors", Path: "neighbors", ValueType: ColumnStoreValueAdjacencyList, Owner: TypedStorageOwnerColumnPart, AdjacencyDegree: 16}}
-	dense.SortKey = nil
-	dense.AggregateMetadata = nil
-	denseMeta, err := normalizeCollectionMeta(CollectionMeta{Name: "events_dense", Options: CollectionOptions{ColumnStore: dense}})
-	if err != nil {
-		t.Fatalf("normalizeCollectionMeta dense: %v", err)
-	}
-	if meta.Options.ColumnStore.SchemaHash == denseMeta.Options.ColumnStore.SchemaHash {
-		t.Fatalf("schema hash did not include adjacency_layout selector: offsets=%x dense=%x", meta.Options.ColumnStore.SchemaHash, denseMeta.Options.ColumnStore.SchemaHash)
+	layoutToggled := *meta.Options.ColumnStore
+	layoutToggled.Columns = append([]ColumnStoreColumn(nil), meta.Options.ColumnStore.Columns...)
+	layoutToggled.Columns[0].AdjacencyLayout = ColumnAdjacencyListLayoutFixedDense
+	if toggledHash := hashColumnStoreSchema(&layoutToggled); meta.Options.ColumnStore.SchemaHash == toggledHash {
+		t.Fatalf("schema hash did not include adjacency_layout selector: offsets=%x toggled=%x", meta.Options.ColumnStore.SchemaHash, toggledHash)
 	}
 }
 
