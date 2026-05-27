@@ -850,6 +850,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
 		searchStats.AdjacencyMmapDirectViews += stats.AdjacencyMmapDirectViews
 		searchStats.AdjacencyHeapCopyTypedViews += stats.AdjacencyHeapCopyTypedViews
+		searchStats.AdjacencySourceUnavailable += stats.AdjacencySourceUnavailable
+		searchStats.AdjacencySourceFallbacks += stats.AdjacencySourceFallbacks
+		searchStats.AdjacencyCertificationFailures += stats.AdjacencyCertificationFailures
+		searchStats.AdjacencyAbsoluteOffsetUnaligned += stats.AdjacencyAbsoluteOffsetUnaligned
+		searchStats.AdjacencyActualPointerUnaligned += stats.AdjacencyActualPointerUnaligned
+		searchStats.AdjacencyStaleHandles += stats.AdjacencyStaleHandles
 		searchStats.VectorDirectViews += stats.VectorDirectViews
 		searchStats.VectorMmapDirectViews += stats.VectorMmapDirectViews
 		searchStats.VectorHeapCopyTypedViews += stats.VectorHeapCopyTypedViews
@@ -961,6 +967,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalAdjacencyDirectViews atomic.Uint64
 	var totalAdjacencyMmapDirectViews atomic.Uint64
 	var totalAdjacencyHeapCopyTypedViews atomic.Uint64
+	var totalAdjacencySourceUnavailable atomic.Uint64
+	var totalAdjacencySourceFallbacks atomic.Uint64
+	var totalAdjacencyCertificationFailures atomic.Uint64
+	var totalAdjacencyAbsoluteOffsetUnaligned atomic.Uint64
+	var totalAdjacencyActualPointerUnaligned atomic.Uint64
+	var totalAdjacencyStaleHandles atomic.Uint64
 	var totalVectorDirectViews atomic.Uint64
 	var totalVectorMmapDirectViews atomic.Uint64
 	var totalVectorHeapCopyTypedViews atomic.Uint64
@@ -1024,6 +1036,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.AdjacencyDirectViews += stats.AdjacencyDirectViews
 			localStats.AdjacencyMmapDirectViews += stats.AdjacencyMmapDirectViews
 			localStats.AdjacencyHeapCopyTypedViews += stats.AdjacencyHeapCopyTypedViews
+			localStats.AdjacencySourceUnavailable += stats.AdjacencySourceUnavailable
+			localStats.AdjacencySourceFallbacks += stats.AdjacencySourceFallbacks
+			localStats.AdjacencyCertificationFailures += stats.AdjacencyCertificationFailures
+			localStats.AdjacencyAbsoluteOffsetUnaligned += stats.AdjacencyAbsoluteOffsetUnaligned
+			localStats.AdjacencyActualPointerUnaligned += stats.AdjacencyActualPointerUnaligned
+			localStats.AdjacencyStaleHandles += stats.AdjacencyStaleHandles
 			localStats.VectorDirectViews += stats.VectorDirectViews
 			localStats.VectorMmapDirectViews += stats.VectorMmapDirectViews
 			localStats.VectorHeapCopyTypedViews += stats.VectorHeapCopyTypedViews
@@ -1060,6 +1078,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalAdjacencyDirectViews.Add(localStats.AdjacencyDirectViews)
 		totalAdjacencyMmapDirectViews.Add(localStats.AdjacencyMmapDirectViews)
 		totalAdjacencyHeapCopyTypedViews.Add(localStats.AdjacencyHeapCopyTypedViews)
+		totalAdjacencySourceUnavailable.Add(localStats.AdjacencySourceUnavailable)
+		totalAdjacencySourceFallbacks.Add(localStats.AdjacencySourceFallbacks)
+		totalAdjacencyCertificationFailures.Add(localStats.AdjacencyCertificationFailures)
+		totalAdjacencyAbsoluteOffsetUnaligned.Add(localStats.AdjacencyAbsoluteOffsetUnaligned)
+		totalAdjacencyActualPointerUnaligned.Add(localStats.AdjacencyActualPointerUnaligned)
+		totalAdjacencyStaleHandles.Add(localStats.AdjacencyStaleHandles)
 		totalVectorDirectViews.Add(localStats.VectorDirectViews)
 		totalVectorMmapDirectViews.Add(localStats.VectorMmapDirectViews)
 		totalVectorHeapCopyTypedViews.Add(localStats.VectorHeapCopyTypedViews)
@@ -1087,40 +1111,46 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		stats = addColumnPhysicalRowReaderStatsV3(stats, worker.reader.Stats())
 	}
 	reportColumnGraphNativeSearchBenchMetricsV3(b, b.N, baseStats, stats, columnVectorGraphNativeSearchStats{
-		CandidateRows:                 totalCandidateRows.Load(),
-		Candidates:                    totalCandidates.Load(),
-		Edges:                         totalEdges.Load(),
-		VisitedNodes:                  totalVisitedNodes.Load(),
-		VisitedEdges:                  totalVisitedEdges.Load(),
-		VectorBytesRead:               totalVectorBytesRead.Load(),
-		AdjacencyBytesRead:            totalAdjacencyBytesRead.Load(),
-		CandidateFetches:              totalCandidateFetches.Load(),
-		ExpansionFetches:              totalExpansionFetches.Load(),
-		ResultFetches:                 totalResultFetches.Load(),
-		ScoreBatches:                  totalScoreBatches.Load(),
-		OrdinalsGrouped:               totalOrdinalsGrouped.Load(),
-		BlockViewHits:                 totalBlockViewHits.Load(),
-		BlockViewMisses:               totalBlockViewMisses.Load(),
-		BlockViewBuilds:               totalBlockViewBuilds.Load(),
-		AdjacencyExpansions:           totalAdjacencyExpansions.Load(),
-		AdjacencyScratchDecodes:       totalAdjacencyScratchDecodes.Load(),
-		AdjacencyDirectViews:          totalAdjacencyDirectViews.Load(),
-		AdjacencyMmapDirectViews:      totalAdjacencyMmapDirectViews.Load(),
-		AdjacencyHeapCopyTypedViews:   totalAdjacencyHeapCopyTypedViews.Load(),
-		VectorDirectViews:             totalVectorDirectViews.Load(),
-		VectorMmapDirectViews:         totalVectorMmapDirectViews.Load(),
-		VectorHeapCopyTypedViews:      totalVectorHeapCopyTypedViews.Load(),
-		VectorScratchDecodes:          totalVectorScratchDecodes.Load(),
-		VectorCertificationFailures:   totalVectorCertificationFailures.Load(),
-		VectorAbsoluteOffsetUnaligned: totalVectorAbsoluteOffsetUnaligned.Load(),
-		VectorActualPointerUnaligned:  totalVectorActualPointerUnaligned.Load(),
-		VectorStaleHandles:            totalVectorStaleHandles.Load(),
-		TypedColumnMappedBytes:        totalTypedColumnMappedBytes.Load(),
-		TypedColumnHeapCopyBytes:      totalTypedColumnHeapCopyBytes.Load(),
-		TypedColumnDecodedBytes:       totalTypedColumnDecodedBytes.Load(),
-		TypedColumnActiveHandles:      totalTypedColumnActiveHandles.Load(),
-		TypedColumnDeniedResources:    totalTypedColumnDeniedResources.Load(),
-		TypedColumnFallbacks:          totalTypedColumnFallbacks.Load(),
+		CandidateRows:                    totalCandidateRows.Load(),
+		Candidates:                       totalCandidates.Load(),
+		Edges:                            totalEdges.Load(),
+		VisitedNodes:                     totalVisitedNodes.Load(),
+		VisitedEdges:                     totalVisitedEdges.Load(),
+		VectorBytesRead:                  totalVectorBytesRead.Load(),
+		AdjacencyBytesRead:               totalAdjacencyBytesRead.Load(),
+		CandidateFetches:                 totalCandidateFetches.Load(),
+		ExpansionFetches:                 totalExpansionFetches.Load(),
+		ResultFetches:                    totalResultFetches.Load(),
+		ScoreBatches:                     totalScoreBatches.Load(),
+		OrdinalsGrouped:                  totalOrdinalsGrouped.Load(),
+		BlockViewHits:                    totalBlockViewHits.Load(),
+		BlockViewMisses:                  totalBlockViewMisses.Load(),
+		BlockViewBuilds:                  totalBlockViewBuilds.Load(),
+		AdjacencyExpansions:              totalAdjacencyExpansions.Load(),
+		AdjacencyScratchDecodes:          totalAdjacencyScratchDecodes.Load(),
+		AdjacencyDirectViews:             totalAdjacencyDirectViews.Load(),
+		AdjacencyMmapDirectViews:         totalAdjacencyMmapDirectViews.Load(),
+		AdjacencyHeapCopyTypedViews:      totalAdjacencyHeapCopyTypedViews.Load(),
+		AdjacencySourceUnavailable:       totalAdjacencySourceUnavailable.Load(),
+		AdjacencySourceFallbacks:         totalAdjacencySourceFallbacks.Load(),
+		AdjacencyCertificationFailures:   totalAdjacencyCertificationFailures.Load(),
+		AdjacencyAbsoluteOffsetUnaligned: totalAdjacencyAbsoluteOffsetUnaligned.Load(),
+		AdjacencyActualPointerUnaligned:  totalAdjacencyActualPointerUnaligned.Load(),
+		AdjacencyStaleHandles:            totalAdjacencyStaleHandles.Load(),
+		VectorDirectViews:                totalVectorDirectViews.Load(),
+		VectorMmapDirectViews:            totalVectorMmapDirectViews.Load(),
+		VectorHeapCopyTypedViews:         totalVectorHeapCopyTypedViews.Load(),
+		VectorScratchDecodes:             totalVectorScratchDecodes.Load(),
+		VectorCertificationFailures:      totalVectorCertificationFailures.Load(),
+		VectorAbsoluteOffsetUnaligned:    totalVectorAbsoluteOffsetUnaligned.Load(),
+		VectorActualPointerUnaligned:     totalVectorActualPointerUnaligned.Load(),
+		VectorStaleHandles:               totalVectorStaleHandles.Load(),
+		TypedColumnMappedBytes:           totalTypedColumnMappedBytes.Load(),
+		TypedColumnHeapCopyBytes:         totalTypedColumnHeapCopyBytes.Load(),
+		TypedColumnDecodedBytes:          totalTypedColumnDecodedBytes.Load(),
+		TypedColumnActiveHandles:         totalTypedColumnActiveHandles.Load(),
+		TypedColumnDeniedResources:       totalTypedColumnDeniedResources.Load(),
+		TypedColumnFallbacks:             totalTypedColumnFallbacks.Load(),
 	})
 }
 
@@ -1312,6 +1342,12 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.AdjacencyDirectViews)/float64(n), "adjacency_direct_views/search")
 	b.ReportMetric(float64(searchStats.AdjacencyMmapDirectViews)/float64(n), "adjacency_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.AdjacencyHeapCopyTypedViews)/float64(n), "adjacency_heap_copy_typed_view/search")
+	b.ReportMetric(float64(searchStats.AdjacencySourceUnavailable)/float64(n), "adjacency_source_unavailable/search")
+	b.ReportMetric(float64(searchStats.AdjacencySourceFallbacks)/float64(n), "adjacency_source_fallbacks/search")
+	b.ReportMetric(float64(searchStats.AdjacencyCertificationFailures)/float64(n), "adjacency_certification_failures/search")
+	b.ReportMetric(float64(searchStats.AdjacencyAbsoluteOffsetUnaligned)/float64(n), "adjacency_absolute_offset_unaligned/search")
+	b.ReportMetric(float64(searchStats.AdjacencyActualPointerUnaligned)/float64(n), "adjacency_actual_pointer_unaligned/search")
+	b.ReportMetric(float64(searchStats.AdjacencyStaleHandles)/float64(n), "adjacency_stale_handles/search")
 	b.ReportMetric(float64(searchStats.VectorDirectViews)/float64(n), "vector_direct_views/search")
 	b.ReportMetric(float64(searchStats.VectorMmapDirectViews)/float64(n), "vector_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.VectorHeapCopyTypedViews)/float64(n), "vector_heap_copy_typed_view/search")

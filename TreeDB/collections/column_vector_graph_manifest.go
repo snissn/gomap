@@ -682,12 +682,10 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
-	if err := validateColumnVectorGraphLayer0AdjacencySourceAsset(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph); err != nil {
-		status.State = VectorIndexStateColumnGraphUnavailable
-		status.Reason = VectorIndexReasonColumnGraphCorrupt
-		status.RebuildNeeded = true
-		return columnGraphVectorIndexStatusError(status, err)
-	}
+	// The layer-0 adjacency source is an optional #1919 accelerator. Keep
+	// loaded-status gating tied to the canonical row-asset graph; search opens
+	// and validates the source independently and falls back to row assets when it
+	// is absent, corrupt, stale, or non-certified.
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	status.Stats = VectorIndexStats{
@@ -747,15 +745,9 @@ func columnVectorGraphManifestMatchStatus(collection string, graph columnVectorG
 	if graph.BaseManifestChecksum != baseChecksum {
 		return columnVectorGraphManifestMatchMismatch
 	}
-	if graph.Layer0AdjacencySource.Present {
-		sourceCfg, _, err := columnVectorGraphLayer0AdjacencySourceColumnStoreConfig(collection, cfg, def)
-		if err != nil {
-			return columnVectorGraphManifestMatchMismatch
-		}
-		if err := validateColumnVectorGraphLayer0AdjacencySourceMatchesGraph(graph, sourceCfg); err != nil {
-			return columnVectorGraphManifestMatchMismatch
-		}
-	}
+	// Layer-0 adjacency-source metadata is intentionally not part of the loaded
+	// graph match. A bad optional source disables only the direct adjacency fast
+	// path; the row-asset graph remains the canonical searchable index.
 	return columnVectorGraphManifestMatchLoaded
 }
 

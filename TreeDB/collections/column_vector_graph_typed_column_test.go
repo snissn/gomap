@@ -75,8 +75,8 @@ func TestColumnVectorGraphTypedColumnVectorReaderParity1782(t *testing.T) {
 	if stats.VectorMmapDirectViews+stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes != stats.CandidateFetches {
 		t.Fatalf("stats=%+v want vector mmap+heap-copy+scratch accounting to match candidate fetches", stats)
 	}
-	if stats.AdjacencyMmapDirectViews != 0 || stats.AdjacencyHeapCopyTypedViews != 0 {
-		t.Fatalf("stats=%+v want adjacency direct-view counters to remain deferred/zero", stats)
+	if stats.AdjacencyMmapDirectViews+stats.AdjacencyHeapCopyTypedViews == 0 || stats.AdjacencySourceFallbacks != 0 {
+		t.Fatalf("stats=%+v want active layer-0 adjacency source without source fallback", stats)
 	}
 	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		if stats.VectorMmapDirectViews == 0 || stats.VectorDirectViews != stats.VectorMmapDirectViews || stats.VectorHeapCopyTypedViews != 0 {
@@ -674,8 +674,8 @@ func TestColumnVectorGraphTypedColumnVectorParallelReadersIndependentHandles1898
 					errs <- fmt.Sprintf("worker %d iteration %d: %s", worker, i, mismatch)
 					return
 				}
-				if stats.TypedColumnFallbacks != 0 || stats.AdjacencyMmapDirectViews != 0 || stats.AdjacencyHeapCopyTypedViews != 0 {
-					errs <- fmt.Sprintf("worker %d stats=%+v want typed vector source without adjacency direct-view claim", worker, stats)
+				if stats.TypedColumnFallbacks != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyMmapDirectViews+stats.AdjacencyHeapCopyTypedViews == 0 {
+					errs <- fmt.Sprintf("worker %d stats=%+v want typed vector source plus active layer-0 adjacency source", worker, stats)
 					return
 				}
 				if columnGraphTypedColumnMmapDirectViewSupportedForTest() {

@@ -6,6 +6,7 @@ import (
 	"math"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 type columnVectorGraphPhysicalRowReaderOptions struct {
@@ -40,12 +41,15 @@ var (
 // The reader is not concurrency-safe. Parallel native search uses one reader
 // and one scratch per worker over immutable physical graph assets.
 type columnVectorGraphPhysicalRowReader struct {
-	def                       VectorIndexDefinition
-	graph                     columnVectorGraphManifestSnapshot
-	catalog                   *collectionCatalog
-	reader                    *columnPhysicalRowReader
-	typedVectorSource         *columnVectorGraphTypedColumnVectorSource
-	typedVectorFallbackReason string
+	def                                 VectorIndexDefinition
+	graph                               columnVectorGraphManifestSnapshot
+	catalog                             *collectionCatalog
+	reader                              *columnPhysicalRowReader
+	typedVectorSource                   *columnVectorGraphTypedColumnVectorSource
+	typedVectorFallbackReason           string
+	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
+	layer0AdjacencySourceUnavailable    bool
+	layer0AdjacencySourceFallbackReason typeddecode.Reason
 }
 
 // columnVectorGraphPhysicalRow aliases caller-owned scratch and cached asset
@@ -107,6 +111,16 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 	}
 	if catalog != nil && catalog.meta.Options.ColumnStore != nil {
 		baseCfg := catalog.meta.Options.ColumnStore
+		if source, fallbackReason, sourceErr := c.openColumnVectorGraphLayer0AdjacencyDirectSourceForReader(catalog.meta.Name, *baseCfg, def, graph); sourceErr == nil && source != nil {
+			graphReader.layer0AdjacencySource = source
+		} else if graph.Layer0AdjacencySource.Present {
+			if fallbackReason == "" {
+				fallbackReason = typeddecode.ReasonValidationFailed
+			}
+			graphReader.layer0AdjacencySourceFallbackReason = fallbackReason
+		} else {
+			graphReader.layer0AdjacencySourceUnavailable = true
+		}
 		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
 			graphReader.typedVectorFallbackReason = ownerErr.Error()
 		} else if typedVectorOwner {
@@ -215,9 +229,6 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
-	if err := validateColumnVectorGraphLayer0AdjacencySourceAsset(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph); err != nil {
-		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
-	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(catalog.meta.Name, *cfg, def)
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
@@ -263,6 +274,12 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 			closeErr = err
 		}
 		r.typedVectorSource = nil
+	}
+	if r.layer0AdjacencySource != nil {
+		if err := r.layer0AdjacencySource.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.layer0AdjacencySource = nil
 	}
 	if r.reader != nil {
 		if err := r.reader.Close(); closeErr == nil && err != nil {
