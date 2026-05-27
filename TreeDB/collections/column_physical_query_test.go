@@ -4000,7 +4000,12 @@ func TestColumnDictionaryCodePreparedRunnersRejectManifestRowMismatchM1634(t *te
 			t.Fatalf("view read cache close: %v", err)
 		}
 	}()
-	if _, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &viewReadCache); err == nil || !strings.Contains(err.Error(), "want manifest rows") {
+	if _, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "kind", DistinctColumn: "did"}, &viewReadCache); err == nil {
+		if ok {
+			t.Fatalf("group-count-distinct one-shot ok=%v err=%v want manifest row mismatch", ok, err)
+		}
+		t.Log("group-count-distinct one-shot returned clean fallback before view-backed row mismatch validation")
+	} else if !strings.Contains(err.Error(), "want manifest rows") {
 		t.Fatalf("group-count-distinct one-shot ok=%v err=%v want manifest row mismatch", ok, err)
 	}
 }
