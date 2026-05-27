@@ -516,7 +516,7 @@ local dictionary codes. Segment writers also prefix-pad dictionary-code assets s
 consumers. Readers fail closed on non-zero payload padding, payload-length or
 row-count mismatch, absolute misalignment, codes outside dictionary cardinality,
 checksum mismatch when requested, or unsupported versions. Version 1
-big-endian/manifold row-code payloads are intentionally rejected by current
+big-endian/manifest row-code payloads are intentionally rejected by current
 pre-alpha readers; rebuild old DB directories instead of migrating in place.
 
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part

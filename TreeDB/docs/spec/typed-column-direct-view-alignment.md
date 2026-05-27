@@ -38,8 +38,10 @@ zero padding to 4-byte alignment. The sidecar writer pads both the asset payload
 (relative payload offset) and the segment prefix (absolute `asset_ref.offset +
 payload_offset`) so normal mmap reads can construct a `[]uint32` view on native
 little-endian hosts; readers still perform concrete pointer-alignment, length,
-row-count, cardinality, schema/ref/checksum, and lifetime checks before using the
-view, with a copy/fallback helper available for unsupported sources.
+row-count, cardinality, and schema/ref/checksum checks before using the view.
+Call sites are responsible for bounding the direct-view slice lifetime to the
+raw mmap/cache bytes it aliases, with a copy/fallback helper available when a
+caller needs owned data or the source is unsupported.
 
 ## Writer certification and padding (#1895)
 

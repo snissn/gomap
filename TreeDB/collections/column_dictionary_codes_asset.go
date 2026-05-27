@@ -407,6 +407,12 @@ func columnDictionaryCodesPayloadBytes(raw []byte, payload columnDictionaryCodes
 	return raw[payload.offset:end], nil
 }
 
+// viewColumnDictionaryCodesPayload returns dictionary row codes from the v2
+// little-endian payload. When directView is true, the returned []uint32 aliases
+// raw and must not be retained beyond raw's mmap/cache lifetime; callers that
+// need owned data must use copyColumnDictionaryCodesPayload or copy the slice.
+// Header, schema/ref, checksum, row-count, padding, length, absolute alignment,
+// and cardinality validation happen before this helper is used.
 func viewColumnDictionaryCodesPayload(raw []byte, payload columnDictionaryCodesAssetPayload) ([]uint32, bool, error) {
 	payloadBytes, err := columnDictionaryCodesPayloadBytes(raw, payload)
 	if err != nil {
@@ -420,6 +426,8 @@ func viewColumnDictionaryCodesPayload(raw []byte, payload columnDictionaryCodesA
 	return codes, false, nil
 }
 
+// copyColumnDictionaryCodesPayload always returns owned row codes decoded from
+// the v2 little-endian payload, regardless of host byte order or alignment.
 func copyColumnDictionaryCodesPayload(raw []byte, payload columnDictionaryCodesAssetPayload) ([]uint32, error) {
 	payloadBytes, err := columnDictionaryCodesPayloadBytes(raw, payload)
 	if err != nil {
@@ -430,6 +438,12 @@ func copyColumnDictionaryCodesPayload(raw []byte, payload columnDictionaryCodesA
 	return codes, nil
 }
 
+// columnDictionaryCodesLittleEndianDirectView is the width-specific direct-view
+// primitive for dictionary-code sidecars. It only checks native little-endian
+// support, exact byte/count agreement, and pointer alignment; callers must do
+// asset-level validation first and must respect the returned slice's raw-data
+// lifetime. #1935 int64 sidecars should mirror this contract with int64-specific
+// helpers rather than reusing this uint32 primitive.
 func columnDictionaryCodesLittleEndianDirectView(raw []byte, count int) ([]uint32, bool) {
 	if count < 0 || len(raw)%columnDictionaryCodesPayloadElemBytes != 0 || len(raw)/columnDictionaryCodesPayloadElemBytes != count {
 		return nil, false
