@@ -199,6 +199,61 @@ func TestRawUint32OffsetsListSectionMetadataValidation(t *testing.T) {
 	})
 }
 
+func TestRawUint32OffsetsListZeroRowsColumnPartImage1918(t *testing.T) {
+	opts := Options{
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: "neighbors", Type: ColumnTypeAdjacencyList, Encoding: EncodingRawUint32OffsetsList, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+	}
+	part, err := BuildColumnPart(1918, opts, Batch{
+		Rows:    0,
+		Columns: map[string][]int64{"id": {}},
+		Uint32OffsetsLists: map[string]RawUint32OffsetsList{
+			"neighbors": {Rows: 0, Offsets: []uint64{0}, Values: nil},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart zero-row offsets-list: %v", err)
+	}
+	if part.Descriptor.RowCount != 0 || len(part.Descriptor.Granules) != 0 || len(part.Columns["neighbors"].Blocks) != 0 {
+		t.Fatalf("zero-row part descriptor=%+v neighbors=%+v", part.Descriptor, part.Columns["neighbors"])
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"neighbors": "adjacency_list"}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage zero-row offsets-list: %v", err)
+	}
+	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections("neighbors")
+	if !ok || offsetsSection.Length != 8 || valuesSection.Length != 0 {
+		t.Fatalf("zero-row offsets-list sections offsets=%+v values=%+v ok=%v", offsetsSection, valuesSection, ok)
+	}
+	decoded, err := ColumnPartFromImage(image)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage zero-row offsets-list: %v", err)
+	}
+	if decoded.Descriptor.RowCount != 0 || decoded.Columns["neighbors"].Definition.Encoding != EncodingRawUint32OffsetsList {
+		t.Fatalf("decoded zero-row part descriptor=%+v neighbors=%+v", decoded.Descriptor, decoded.Columns["neighbors"].Definition)
+	}
+	_, err = BuildColumnPart(1919, opts, Batch{
+		Rows:    0,
+		Columns: map[string][]int64{"id": {}},
+		Uint32OffsetsLists: map[string]RawUint32OffsetsList{
+			"neighbors": {Rows: 0, Offsets: nil, Values: nil},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "offsets-list offsets=0 want row_count+1=1") {
+		t.Fatalf("BuildColumnPart missing zero-row offsets sentinel err=%v want offsets-list shape failure", err)
+	}
+	badVectorOpts := opts
+	badVectorOpts.Columns = append([]ColumnDefinition(nil), opts.Columns...)
+	badVectorOpts.Columns = append(badVectorOpts.Columns, ColumnDefinition{Name: "vec", Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, Compression: CompressionNone, CompressionSet: true})
+	_, err = BuildColumnPart(1920, badVectorOpts, Batch{Rows: 0, Columns: map[string][]int64{"id": {}}})
+	if err == nil || !strings.Contains(err.Error(), "requires positive fixed-width elements") {
+		t.Fatalf("BuildColumnPart zero-dim vector err=%v want fixed-width failure", err)
+	}
+}
+
 func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	opts := Options{
 		Columns: []ColumnDefinition{
