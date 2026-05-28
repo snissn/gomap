@@ -3436,9 +3436,11 @@ func buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t testing.T
 		dictionary[i] = fmt.Sprintf("kind_%03d", i)
 		codes[i] = uint32(i)
 	}
+	firstKind := dictionary[0]
+	lastKind := dictionary[len(dictionary)-1]
 	parts := []columnDictionaryCodeGroupCountOneShotPartSpecM1942{
 		{partID: 1, dictionary: dictionary, codes: codes},
-		{partID: 2, dictionary: []string{"kind_064", "kind_000", "kind_extra"}, codes: []uint32{0, 1, 2, 0}},
+		{partID: 2, dictionary: []string{lastKind, firstKind, "kind_extra"}, codes: []uint32{0, 1, 2, 0}},
 	}
 	view, bytes := buildColumnDictionaryCodeGroupCountOneShotPartsViewM1942(t, parts)
 	return view, len(codes) + 4, len(dictionary) + 1, bytes
