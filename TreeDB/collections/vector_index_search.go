@@ -89,6 +89,24 @@ type VectorIndexSearchStats struct {
 	ExpansionFetches uint64 `json:"expansion_fetches,omitempty"`
 	// ResultFetches is the per-search count of vector row fetches for final results.
 	ResultFetches uint64 `json:"result_fetches,omitempty"`
+	// DotBatchCalls counts within-query vector dot batch calls.
+	DotBatchCalls uint64 `json:"dot_batch_calls,omitempty"`
+	// DotBatchCandidates counts candidate vectors scored through dot batch calls.
+	DotBatchCandidates uint64 `json:"dot_batch_candidates,omitempty"`
+	// DotBatchAverageCandidates is DotBatchCandidates/DotBatchCalls rounded down.
+	DotBatchAverageCandidates uint64 `json:"dot_batch_avg_candidates,omitempty"`
+	// DotBatchTileSizeTotal sums the tile sizes passed to dot batch calls.
+	DotBatchTileSizeTotal uint64 `json:"dot_batch_tile_size_total,omitempty"`
+	// DotBatchTileSizeMax is the largest within-query dot batch tile size.
+	DotBatchTileSizeMax uint64 `json:"dot_batch_tile_size_max,omitempty"`
+	// DotBatchOptimizedCalls counts dot batch calls handled by an optimized kernel.
+	DotBatchOptimizedCalls uint64 `json:"dot_batch_optimized_calls,omitempty"`
+	// DotBatchScalarKernelFallbacks counts dot batch calls handled by the scalar batch fallback kernel.
+	DotBatchScalarKernelFallbacks uint64 `json:"dot_batch_scalar_kernel_fallbacks,omitempty"`
+	// DotScalarFallbackCalls counts batch-seam calls that fell back to scalar scoreOrdinal.
+	DotScalarFallbackCalls uint64 `json:"dot_scalar_fallback_calls,omitempty"`
+	// DotScalarFallbackCandidates counts candidates scored by scalar scoreOrdinal after a batch-seam fallback.
+	DotScalarFallbackCandidates uint64 `json:"dot_scalar_fallback_candidates,omitempty"`
 	// DocumentsFetched is the post-top-k document materialization count.
 	DocumentsFetched uint64 `json:"documents_fetched,omitempty"`
 	// DocumentsMissing is the post-top-k materialization miss count.
@@ -786,6 +804,13 @@ func deltaInt64(before, after int64) int64 {
 	return after - before
 }
 
+func columnVectorGraphDotBatchAverageCandidates(candidates, calls uint64) uint64 {
+	if calls == 0 {
+		return 0
+	}
+	return candidates / calls
+}
+
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
 	return VectorIndexSearchStats{
 		CandidateRows:                    searchStats.CandidateRows,
@@ -798,6 +823,15 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		CandidateFetches:                 searchStats.CandidateFetches,
 		ExpansionFetches:                 searchStats.ExpansionFetches,
 		ResultFetches:                    searchStats.ResultFetches,
+		DotBatchCalls:                    searchStats.DotBatchCalls,
+		DotBatchCandidates:               searchStats.DotBatchCandidates,
+		DotBatchAverageCandidates:        columnVectorGraphDotBatchAverageCandidates(searchStats.DotBatchCandidates, searchStats.DotBatchCalls),
+		DotBatchTileSizeTotal:            searchStats.DotBatchTileSizeTotal,
+		DotBatchTileSizeMax:              searchStats.DotBatchTileSizeMax,
+		DotBatchOptimizedCalls:           searchStats.DotBatchOptimizedCalls,
+		DotBatchScalarKernelFallbacks:    searchStats.DotBatchScalarKernelFallbacks,
+		DotScalarFallbackCalls:           searchStats.DotScalarFallbackCalls,
+		DotScalarFallbackCandidates:      searchStats.DotScalarFallbackCandidates,
 		RowFetches:                       readerStats.RowFetches,
 		BatchFetches:                     readerStats.BatchFetches,
 		RowsFetched:                      readerStats.RowsFetched,

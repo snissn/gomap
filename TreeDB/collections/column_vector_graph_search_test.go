@@ -775,6 +775,376 @@ func TestColumnVectorGraphNativeSearchParallelReadersV3(t *testing.T) {
 	}
 }
 
+func setColumnVectorGraphBatchedScoringEnabledForTest(tb testing.TB, enabled bool) {
+	tb.Helper()
+	previous := setColumnVectorGraphBatchedScoringEnabled(enabled)
+	tb.Cleanup(func() { setColumnVectorGraphBatchedScoringEnabled(previous) })
+}
+
+func TestColumnVectorGraphScoreOrdinalBatchSeamParity1963(t *testing.T) {
+	const (
+		rows = 64
+		dims = 128
+		m    = 8
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	query := append([]float32(nil), input[7].vector...)
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("query inv norm: %v", err)
+	}
+	ordinals := make([]int, columnVectorGraphBatchScoringTileSize)
+	for i := range ordinals {
+		ordinals[i] = (i * 7) % rows
+	}
+	var scalarScratch columnVectorGraphNativeSearchScratch
+	if err := scalarScratch.prepare(reader.RowCount(), dims, m, len(ordinals), len(ordinals)); err != nil {
+		t.Fatalf("scalar scratch prepare: %v", err)
+	}
+	scalarPlan, err := scalarScratch.prepareSearchPlan(reader)
+	if err != nil {
+		t.Fatalf("scalar prepareSearchPlan: %v", err)
+	}
+	var scalarStats columnVectorGraphNativeSearchStats
+	want := make([]float64, len(ordinals))
+	for i, ordinal := range ordinals {
+		score, err := reader.scoreOrdinal(scalarPlan, nil, query, queryInvNorm, ordinal, &scalarScratch, &scalarStats)
+		if err != nil {
+			t.Fatalf("scoreOrdinal(%d): %v", ordinal, err)
+		}
+		want[i] = score
+	}
+	var batchScratch columnVectorGraphNativeSearchScratch
+	if err := batchScratch.prepare(reader.RowCount(), dims, len(ordinals), len(ordinals), len(ordinals)); err != nil {
+		t.Fatalf("batch scratch prepare: %v", err)
+	}
+	batchPlan, err := batchScratch.prepareSearchPlan(reader)
+	if err != nil {
+		t.Fatalf("batch prepareSearchPlan: %v", err)
+	}
+	var batchStats columnVectorGraphNativeSearchStats
+	got, err := reader.scoreOrdinalBatch(batchPlan, nil, query, queryInvNorm, ordinals, &batchScratch, &batchStats)
+	if err != nil {
+		t.Fatalf("scoreOrdinalBatch: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("batch scores len=%d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-6 {
+			t.Fatalf("score[%d]=%.9f want %.9f", i, got[i], want[i])
+		}
+	}
+	if columnVectorGraphUseOptimizedDotBatch(dims, len(ordinals)) {
+		if batchStats.DotBatchCalls != 1 || batchStats.DotBatchCandidates != uint64(len(ordinals)) || batchStats.DotBatchTileSizeMax != uint64(len(ordinals)) {
+			t.Fatalf("batch stats=%+v want one optimized batch for %d ordinals", batchStats, len(ordinals))
+		}
+	} else if batchStats.DotScalarFallbackCalls != 1 || batchStats.DotScalarFallbackCandidates != uint64(len(ordinals)) {
+		t.Fatalf("batch stats=%+v want one scalar-kernel fallback batch for %d ordinals", batchStats, len(ordinals))
+	}
+	if batchStats.VectorScratchDecodes != 0 {
+		t.Fatalf("batch stats=%+v want typed-column direct path without vector scratch decodes", batchStats)
+	}
+}
+
+func TestColumnVectorGraphScoreOrdinalBatchTinyFallback1963(t *testing.T) {
+	const (
+		rows = 8
+		dims = 16
+		m    = 4
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	query := append([]float32(nil), input[3].vector...)
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("query inv norm: %v", err)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	if err := scratch.prepare(reader.RowCount(), dims, m, 1, 1); err != nil {
+		t.Fatalf("scratch prepare: %v", err)
+	}
+	plan, err := scratch.prepareSearchPlan(reader)
+	if err != nil {
+		t.Fatalf("prepareSearchPlan: %v", err)
+	}
+	var stats columnVectorGraphNativeSearchStats
+	scores, err := reader.scoreOrdinalBatch(plan, nil, query, queryInvNorm, []int{2}, &scratch, &stats)
+	if err != nil {
+		t.Fatalf("scoreOrdinalBatch tiny: %v", err)
+	}
+	if len(scores) != 1 {
+		t.Fatalf("scores len=%d want 1", len(scores))
+	}
+	if stats.DotBatchCalls != 0 || stats.DotScalarFallbackCalls != 1 || stats.DotScalarFallbackCandidates != 1 || stats.ScoreBatches != 1 {
+		t.Fatalf("tiny fallback stats=%+v want scalar fallback without dot batch", stats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchCosineBatchedScoringParity1963(t *testing.T) {
+	const (
+		rows     = 192
+		dims     = 64
+		m        = 12
+		topK     = 10
+		efSearch = 96
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader scalar: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	query := append([]float32(nil), input[37].vector...)
+	opts := columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}
+	setColumnVectorGraphBatchedScoringEnabledForTest(t, false)
+	var scalarScratch columnVectorGraphNativeSearchScratch
+	scalarResults, scalarStats, err := reader.SearchCosine(query, opts, &scalarScratch)
+	if err != nil {
+		t.Fatalf("scalar SearchCosine: %v", err)
+	}
+	setColumnVectorGraphBatchedScoringEnabled(true)
+	var batchScratch columnVectorGraphNativeSearchScratch
+	batchResults, batchStats, err := reader.SearchCosine(query, opts, &batchScratch)
+	if err != nil {
+		t.Fatalf("batched SearchCosine: %v", err)
+	}
+	assertColumnGraphNativeSearchResultsV3(t, batchResults, scalarResults)
+	if batchStats.Candidates != scalarStats.Candidates || batchStats.CandidateFetches != scalarStats.CandidateFetches || batchStats.VisitedEdges != scalarStats.VisitedEdges || batchStats.Edges != scalarStats.Edges {
+		t.Fatalf("scalar stats=%+v batch stats=%+v want matching graph/candidate counts", scalarStats, batchStats)
+	}
+	if batchStats.DotBatchCandidates+batchStats.DotScalarFallbackCandidates == 0 {
+		t.Fatalf("batch stats=%+v want batch seam dot or scalar-fallback counters", batchStats)
+	}
+	if scalarStats.DotBatchCalls != 0 || scalarStats.DotBatchCandidates != 0 {
+		t.Fatalf("scalar stats=%+v want no dot batch counters", scalarStats)
+	}
+	if batchStats.AdjacencyScratchDecodes != 0 || batchStats.VectorScratchDecodes != 0 || scalarStats.AdjacencyScratchDecodes != 0 || scalarStats.VectorScratchDecodes != 0 {
+		t.Fatalf("scalar stats=%+v batch stats=%+v want healthy typed-column direct path scratch decodes at zero", scalarStats, batchStats)
+	}
+}
+
+func TestColumnVectorGraphNativeSearchBatchedScoringParallelScratch1963(t *testing.T) {
+	setColumnVectorGraphBatchedScoringEnabledForTest(t, true)
+	const (
+		rows     = 96
+		dims     = 32
+		m        = 8
+		topK     = 8
+		efSearch = 48
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	query := append([]float32(nil), input[11].vector...)
+	baselineReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("open baseline reader: %v", err)
+	}
+	defer func() { _ = baselineReader.Close() }()
+	want, _, err := baselineReader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &columnVectorGraphNativeSearchScratch{})
+	if err != nil {
+		t.Fatalf("baseline SearchCosine: %v", err)
+	}
+	workers := 4
+	readers := make([]*columnVectorGraphPhysicalRowReader, workers)
+	for i := range readers {
+		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+		if err != nil {
+			t.Fatalf("open reader %d: %v", i, err)
+		}
+		defer func() { _ = reader.Close() }()
+		readers[i] = reader
+	}
+	var wg sync.WaitGroup
+	errs := make(chan string, workers)
+	for worker := range readers {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var scratch columnVectorGraphNativeSearchScratch
+			for i := 0; i < 20; i++ {
+				got, stats, err := readers[worker].SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: topK, EfSearch: efSearch}, &scratch)
+				if err != nil {
+					errs <- fmt.Sprintf("worker %d SearchCosine: %v", worker, err)
+					return
+				}
+				if mismatch := columnGraphNativeSearchResultsMismatchV3(got, want); mismatch != "" {
+					errs <- fmt.Sprintf("worker %d iteration %d: %s", worker, i, mismatch)
+					return
+				}
+				if stats.DotBatchCandidates+stats.DotScalarFallbackCandidates == 0 {
+					errs <- fmt.Sprintf("worker %d iteration %d stats=%+v want batch seam counters", worker, i, stats)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func withColumnVectorGraphBatchedScoringForBenchmark(b *testing.B, enabled bool) {
+	b.Helper()
+	previous := setColumnVectorGraphBatchedScoringEnabled(enabled)
+	b.Cleanup(func() { setColumnVectorGraphBatchedScoringEnabled(previous) })
+}
+
+func BenchmarkColumnVectorGraphScoreOrdinalTile1963(b *testing.B) {
+	const (
+		rows = 1024
+		dims = 128
+		m    = 32
+	)
+	input := columnGraphRebuildSyntheticRowsV2A(rows, dims)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(b, dims, m, input)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		b.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		b.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	query := append([]float32(nil), input[37].vector...)
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		b.Fatalf("query inv norm: %v", err)
+	}
+	tiles := []int{1, 2, 4, 8, 16, 32, 13}
+	layouts := []struct {
+		name    string
+		ordinal func(i int) int
+	}{
+		{name: "contiguous", ordinal: func(i int) int { return 128 + i }},
+		{name: "scattered", ordinal: func(i int) int { return (17 + i*37) % rows }},
+	}
+	for _, layout := range layouts {
+		layout := layout
+		for _, tile := range tiles {
+			tile := tile
+			ordinals := make([]int, tile)
+			for i := range ordinals {
+				ordinals[i] = layout.ordinal(i)
+			}
+			name := fmt.Sprintf("%s/tile_%d", layout.name, tile)
+			b.Run(name+"/scalar", func(b *testing.B) {
+				var scratch columnVectorGraphNativeSearchScratch
+				if err := scratch.prepare(reader.RowCount(), dims, max(m, tile), tile, tile); err != nil {
+					b.Fatalf("scratch prepare: %v", err)
+				}
+				plan, err := scratch.prepareSearchPlan(reader)
+				if err != nil {
+					b.Fatalf("prepareSearchPlan: %v", err)
+				}
+				var stats columnVectorGraphNativeSearchStats
+				for _, ordinal := range ordinals {
+					if _, err := reader.scoreOrdinal(plan, nil, query, queryInvNorm, ordinal, &scratch, &stats); err != nil {
+						b.Fatalf("warm scoreOrdinal: %v", err)
+					}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				var sum float64
+				for i := 0; i < b.N; i++ {
+					for _, ordinal := range ordinals {
+						score, err := reader.scoreOrdinal(plan, nil, query, queryInvNorm, ordinal, &scratch, &stats)
+						if err != nil {
+							b.Fatalf("scoreOrdinal: %v", err)
+						}
+						sum += score
+					}
+				}
+				columnPhysicalScanBenchSum += int64(sum)
+			})
+			b.Run(name+"/batch", func(b *testing.B) {
+				var scratch columnVectorGraphNativeSearchScratch
+				if err := scratch.prepare(reader.RowCount(), dims, max(m, tile), tile, tile); err != nil {
+					b.Fatalf("scratch prepare: %v", err)
+				}
+				plan, err := scratch.prepareSearchPlan(reader)
+				if err != nil {
+					b.Fatalf("prepareSearchPlan: %v", err)
+				}
+				var stats columnVectorGraphNativeSearchStats
+				if _, err := reader.scoreOrdinalBatch(plan, nil, query, queryInvNorm, ordinals, &scratch, &stats); err != nil {
+					b.Fatalf("warm scoreOrdinalBatch: %v", err)
+				}
+				b.ReportMetric(float64(tile), "tile")
+				b.ReportAllocs()
+				b.ResetTimer()
+				var sum float64
+				for i := 0; i < b.N; i++ {
+					scores, err := reader.scoreOrdinalBatch(plan, nil, query, queryInvNorm, ordinals, &scratch, &stats)
+					if err != nil {
+						b.Fatalf("scoreOrdinalBatch: %v", err)
+					}
+					for _, score := range scores {
+						sum += score
+					}
+				}
+				b.StopTimer()
+				columnPhysicalScanBenchSum += int64(sum)
+				if stats.DotBatchCalls > 0 {
+					b.ReportMetric(float64(stats.DotBatchCandidates)/float64(stats.DotBatchCalls), "dot_batch_avg_candidates")
+				}
+				b.ReportMetric(float64(stats.DotBatchCalls)/float64(b.N+1), "dot_batch_calls/op")
+				b.ReportMetric(float64(stats.DotScalarFallbackCalls)/float64(b.N+1), "dot_scalar_fallback_calls/op")
+			})
+		}
+	}
+}
+
+func BenchmarkColumnVectorGraphNativeSearchCosineBatchedScoring1963(b *testing.B) {
+	for _, tc := range []struct {
+		name    string
+		batched bool
+	}{
+		{name: "scalar", batched: false},
+		{name: "batched", batched: true},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			withColumnVectorGraphBatchedScoringForBenchmark(b, tc.batched)
+			shape := columnVectorGraphNativeSearchSmallBenchShapeV3()
+			shape.typedColumnVector = true
+			benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+		})
+	}
+}
+
 func BenchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B) {
 	benchmarkColumnVectorGraphNativeSearchCosineV3(b, columnVectorGraphNativeSearchSmallBenchShapeV3())
 }
@@ -853,6 +1223,16 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.ResultFetches += stats.ResultFetches
 		searchStats.ScoreBatches += stats.ScoreBatches
 		searchStats.OrdinalsGrouped += stats.OrdinalsGrouped
+		searchStats.DotBatchCalls += stats.DotBatchCalls
+		searchStats.DotBatchCandidates += stats.DotBatchCandidates
+		searchStats.DotBatchTileSizeTotal += stats.DotBatchTileSizeTotal
+		if stats.DotBatchTileSizeMax > searchStats.DotBatchTileSizeMax {
+			searchStats.DotBatchTileSizeMax = stats.DotBatchTileSizeMax
+		}
+		searchStats.DotBatchOptimizedCalls += stats.DotBatchOptimizedCalls
+		searchStats.DotBatchScalarKernelFallbacks += stats.DotBatchScalarKernelFallbacks
+		searchStats.DotScalarFallbackCalls += stats.DotScalarFallbackCalls
+		searchStats.DotScalarFallbackCandidates += stats.DotScalarFallbackCandidates
 		searchStats.BlockViewHits += stats.BlockViewHits
 		searchStats.BlockViewMisses += stats.BlockViewMisses
 		searchStats.BlockViewBuilds += stats.BlockViewBuilds
@@ -1412,6 +1792,17 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.CandidateFetches)/float64(n), "candidate_fetches/search")
 	b.ReportMetric(float64(searchStats.ScoreBatches)/float64(n), "score_batches/search")
 	b.ReportMetric(float64(searchStats.OrdinalsGrouped)/float64(n), "ordinals_grouped/search")
+	b.ReportMetric(float64(searchStats.DotBatchCalls)/float64(n), "dot_batch_calls/search")
+	b.ReportMetric(float64(searchStats.DotBatchCandidates)/float64(n), "dot_batch_candidates/search")
+	if searchStats.DotBatchCalls > 0 {
+		b.ReportMetric(float64(searchStats.DotBatchCandidates)/float64(searchStats.DotBatchCalls), "dot_batch_avg_candidates")
+	}
+	b.ReportMetric(float64(searchStats.DotBatchTileSizeTotal)/float64(n), "dot_batch_tile_candidates/search")
+	b.ReportMetric(float64(searchStats.DotBatchTileSizeMax), "dot_batch_tile_max")
+	b.ReportMetric(float64(searchStats.DotBatchOptimizedCalls)/float64(n), "dot_batch_optimized_calls/search")
+	b.ReportMetric(float64(searchStats.DotBatchScalarKernelFallbacks)/float64(n), "dot_batch_scalar_kernel_fallbacks/search")
+	b.ReportMetric(float64(searchStats.DotScalarFallbackCalls)/float64(n), "dot_scalar_fallback_calls/search")
+	b.ReportMetric(float64(searchStats.DotScalarFallbackCandidates)/float64(n), "dot_scalar_fallback_candidates/search")
 	b.ReportMetric(float64(searchStats.BlockViewHits)/float64(n), "block_view_hits/search")
 	b.ReportMetric(float64(searchStats.BlockViewMisses)/float64(n), "block_view_misses/search")
 	b.ReportMetric(float64(searchStats.BlockViewBuilds)/float64(n), "block_view_builds/search")

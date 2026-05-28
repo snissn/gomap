@@ -74,15 +74,46 @@ func TestDotFloat32SpecialValues1790(t *testing.T) {
 	}
 }
 
+func TestDotFloat32BatchParityWithScalar1963(t *testing.T) {
+	for _, dims := range []int{0, 1, 2, 3, 4, 7, 8, 13, 16, 31, 32, 63, 64, 127, 128, 129} {
+		for _, rowsN := range []int{0, 1, 2, 4, 8, 13, 16, 32} {
+			t.Run(fmt.Sprintf("dims_%d/rows_%d", dims, rowsN), func(t *testing.T) {
+				vec := dotTestVector1790(dims, 3)
+				rows := make([][]float32, rowsN)
+				for i := range rows {
+					rows[i] = dotTestVector1790(dims, i+5)
+				}
+				got := make([]float32, rowsN)
+				DotFloat32Batch(got, rows, vec)
+				for i := range rows {
+					want := DotFloat32Scalar(rows[i], vec)
+					if math.Abs(float64(got[i]-want)) > 1e-4 {
+						t.Fatalf("DotFloat32Batch[%d]=%v want scalar=%v implementation=%s", i, got[i], want, DotFloat32BatchImplementation())
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestDotFloat32ZeroAllocs1790(t *testing.T) {
 	left := dotTestVector1790(257, 3)
 	right := dotTestVector1790(257, 5)
+	rows := [][]float32{left, dotTestVector1790(257, 7), dotTestVector1790(257, 9), right}
+	batchResults := make([]float32, len(rows))
 	var sink float32
 	allocsOptimized := testing.AllocsPerRun(1000, func() {
 		sink += DotFloat32(left, right)
 	})
 	if allocsOptimized != 0 {
 		t.Fatalf("DotFloat32 allocs/run=%v want 0", allocsOptimized)
+	}
+	allocsBatch := testing.AllocsPerRun(1000, func() {
+		DotFloat32Batch(batchResults, rows, right)
+		sink += batchResults[0]
+	})
+	if allocsBatch != 0 {
+		t.Fatalf("DotFloat32Batch allocs/run=%v want 0 implementation=%s", allocsBatch, DotFloat32BatchImplementation())
 	}
 	allocsScalar := testing.AllocsPerRun(1000, func() {
 		sink += DotFloat32Scalar(left, right)

@@ -159,6 +159,8 @@ github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721 h1:2XY
 github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a h1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a/go.mod h1:PDwKLbWpRDAN2IPbK9PxIgSx0YdwQaSOLWObRawQJ58=
+github.com/snissn/simd v0.0.0-20260523073437-a4847ce2ce89 h1:JC6ua13UmE+uaf7MKurSdM4SjKKwF7+Mvsly3JCB1Po=
+github.com/snissn/simd v0.0.0-20260523073437-a4847ce2ce89/go.mod h1:8xsPUbOTnNI4WUdPlXVlWXt85Y8RCm3xqGAo8PLxYyA=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=
@@ -187,8 +189,6 @@ github.com/tidwall/rtred v0.1.2 h1:exmoQtOLvDoO8ud++6LwVsAMTu0KPzLTUrMln8u1yu8=
 github.com/tidwall/rtred v0.1.2/go.mod h1:hd69WNXQ5RP9vHd7dqekAz+RIdtfBogmglkZSRxCHFQ=
 github.com/tidwall/tinyqueue v0.1.1 h1:SpNEvEggbpyN5DIReaJ2/1ndroY8iyEGxPYxoSaymYE=
 github.com/tidwall/tinyqueue v0.1.1/go.mod h1:O/QNHwrnjqr6IHItYrzoHAKYhBkLI67Q096fQP5zMYw=
-github.com/tphakala/simd v1.0.22 h1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=
-github.com/tphakala/simd v1.0.22/go.mod h1:8xsPUbOTnNI4WUdPlXVlWXt85Y8RCm3xqGAo8PLxYyA=
 github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957 h1:IloOsa7abfb6f3i6TQvSh3ayA3LmN0GQNPk+aVwUIrQ=
 github.com/unum-cloud/usearch/golang v0.0.0-20260502205332-29e527731957/go.mod h1:UbKHPUIhYNwtzXpfbC5fgg/oPffBPRvk92TWK6swg6U=
 github.com/xdg-go/pbkdf2 v1.0.0 h1:Su7DPu48wXMwC3bs7MCNG+z4FhcyEuz5dlvchbq0B0c=

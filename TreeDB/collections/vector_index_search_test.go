@@ -1684,6 +1684,22 @@ func BenchmarkVectorSearchReusableBufferSerialTypedColumn1961(b *testing.B) {
 	BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4(b)
 }
 
+func BenchmarkVectorSearchReusableBufferSerialTypedColumnBatchedScoring1963(b *testing.B) {
+	for _, tc := range []struct {
+		name    string
+		batched bool
+	}{
+		{name: "scalar", batched: false},
+		{name: "batched", batched: true},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			withColumnVectorGraphBatchedScoringForBenchmark(b, tc.batched)
+			BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4(b)
+		})
+	}
+}
+
 func BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4(b *testing.B) {
 	const (
 		rows     = 1024
@@ -2039,6 +2055,15 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.CandidateFetches), "candidate_fetches/search")
 	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")
 	b.ReportMetric(float64(stats.ResultFetches), "result_fetches/search")
+	b.ReportMetric(float64(stats.DotBatchCalls), "dot_batch_calls/search")
+	b.ReportMetric(float64(stats.DotBatchCandidates), "dot_batch_candidates/search")
+	b.ReportMetric(float64(stats.DotBatchAverageCandidates), "dot_batch_avg_candidates")
+	b.ReportMetric(float64(stats.DotBatchTileSizeTotal), "dot_batch_tile_candidates/search")
+	b.ReportMetric(float64(stats.DotBatchTileSizeMax), "dot_batch_tile_max")
+	b.ReportMetric(float64(stats.DotBatchOptimizedCalls), "dot_batch_optimized_calls/search")
+	b.ReportMetric(float64(stats.DotBatchScalarKernelFallbacks), "dot_batch_scalar_kernel_fallbacks/search")
+	b.ReportMetric(float64(stats.DotScalarFallbackCalls), "dot_scalar_fallback_calls/search")
+	b.ReportMetric(float64(stats.DotScalarFallbackCandidates), "dot_scalar_fallback_candidates/search")
 	b.ReportMetric(float64(stats.VectorDirectViews), "vector_direct_views/search")
 	b.ReportMetric(float64(stats.VectorMmapDirectViews), "vector_mmap_direct/search")
 	b.ReportMetric(float64(stats.VectorHeapCopyTypedViews), "vector_heap_copy_typed_view/search")
