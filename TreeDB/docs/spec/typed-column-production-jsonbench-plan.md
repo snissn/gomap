@@ -1088,13 +1088,17 @@ GOWORK=off go test ./TreeDB/collections \
   -memprofile "$OUT/allocs.pprof"
 
 JSONBENCH_TREEDB_DIR=${JSONBENCH_TREEDB_DIR:-../JSONBench/treedb}
-cd "$JSONBENCH_TREEDB_DIR"
-DATA_DIR=./testdata/bluesky SUBSET_ROWS=6 TRIES=1 ./run_matrix.sh
+(
+  cd "$JSONBENCH_TREEDB_DIR"
+  DATA_DIR=./testdata/bluesky SUBSET_ROWS=6 TRIES=1 ./run_matrix.sh
+)
 
 # External JSONBench 100k working run.
 JSONBENCH_TREEDB_DIR=${JSONBENCH_TREEDB_DIR:-../JSONBench/treedb}
-cd "$JSONBENCH_TREEDB_DIR"
-DATA_DIR="$HOME/data/bluesky" SUBSET_ROWS=100000 TRIES=3 ./run_matrix.sh
+(
+  cd "$JSONBENCH_TREEDB_DIR"
+  DATA_DIR="$HOME/data/bluesky" SUBSET_ROWS=100000 TRIES=3 ./run_matrix.sh
+)
 ```
 
 Required metrics:
