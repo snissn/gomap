@@ -445,6 +445,7 @@ func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVecto
 		recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
 		return layer, nil
 	} else if fallbackReason != "" {
+		recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
 		recordColumnVectorGraphAdjacencyFallbackReasonStats(stats, fallbackReason)
 		if stats != nil {
 			stats.AdjacencySourceFallbacks++

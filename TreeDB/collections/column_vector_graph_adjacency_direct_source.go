@@ -306,7 +306,7 @@ func (g *columnVectorGraphAdjacencyDirectSources) MaxLayerForOrdinal(ordinal int
 	for layer := len(g.sources) - 1; layer >= 0; layer-- {
 		neighbors, outcome, reason, ok := g.Neighbors(layer, ordinal)
 		if !ok {
-			return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, reason, false
+			return 0, nil, counters, reason, false
 		}
 		counters.addOutcome(len(neighbors), outcome)
 		if len(neighbors) > 0 {

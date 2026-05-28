@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 func TestColumnVectorGraphLayer0AdjacencySourceSearchParity1919(t *testing.T) {
@@ -452,6 +453,21 @@ func TestColumnVectorGraphAllLayerAdjacencyDirectSourcesEmptyUpperLayers1921(t *
 	}
 	if len(got) == 0 || stats.AdjacencyScratchDecodes != 0 {
 		t.Fatalf("results=%d stats=%+v want zero adjacency scratch with empty direct layers", len(got), stats)
+	}
+	if source0 := reader.adjacencyLayerSources.sources[0]; source0 != nil {
+		if err := source0.offsetsHandle.Release(); err != nil {
+			t.Fatalf("release layer 0 offsets handle: %v", err)
+		}
+		if err := source0.valuesHandle.Release(); err != nil {
+			t.Fatalf("release layer 0 values handle: %v", err)
+		}
+	}
+	_, _, partialCounters, reason, ok := reader.adjacencyLayerSources.MaxLayerForOrdinal(1)
+	if ok || reason != typeddecode.ReasonStaleHandle {
+		t.Fatalf("partial max-layer ok=%v reason=%s want stale-handle fallback", ok, reason)
+	}
+	if got, want := partialCounters.AdjacencyMmapDirectViews+partialCounters.AdjacencyHeapCopyTypedViews, uint64(len(reader.adjacencyLayerSources.sources)-1); got != want {
+		t.Fatalf("partial max-layer counters=%+v want upper-layer direct lookups preserved=%d", partialCounters, want)
 	}
 }
 
