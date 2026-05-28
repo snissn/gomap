@@ -181,12 +181,51 @@ Expected interpretation:
   after lifetime, range, checksum/integrity policy, endian/format, length, and
   alignment validation.
 
-## Column graph benchmark matrix
+## Vector search benchmark tiers
 
-For a broader benchmark matrix, use the canonical command from the spec guide:
+Use the tier aliases below when you need a quick serial/parallel matrix with
+clear timing boundaries. All six aliases use the same synthetic shape:
+`rows=1024`, `dims=128`, `M=16`, `topK=10`, and `efSearch=128`. Setup,
+fixture load, graph rebuild, searcher open, and warmup are outside the timed
+loop; each timed operation is one no-document search.
 
 ```sh
-GOWORK=off go test ./TreeDB/collections \
+GOMAXPROCS=8 go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkVectorSearch(CoreGraphSerialTypedColumn1961|CoreGraphParallelTypedColumn1961|PublicSearchSerialTypedColumn1961|PublicSearchParallelTypedColumn1961|ReusableBufferSerialTypedColumn1961|ReusableBufferParallelTypedColumn1961)$' \
+  -benchmem \
+  -benchtime=2s \
+  -count=5
+```
+
+Report both `ns/op` and `ops/sec`; compute `ops/sec` as `1e9 / ns/op` from the
+Go benchmark output. For parallel benchmarks, this is the aggregate operation
+rate implied by Go's parallel `ns/op` measurement. Always include `B/op`,
+`allocs/op`, and the direct/fallback counters
+(`adjacency_mmap_direct/search`, `adjacency_scratch_decodes/search`,
+`vector_mmap_direct/search`, and `vector_scratch_decodes/search`).
+
+| Tier alias | Canonical benchmark | Boundary |
+| --- | --- | --- |
+| `BenchmarkVectorSearchCoreGraphSerialTypedColumn1961` | `BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3` | Core reader `SearchCosine`; graph traversal/scoring/top-k only, no public response materialization. |
+| `BenchmarkVectorSearchCoreGraphParallelTypedColumn1961` | `BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnV3` | Same core boundary with one reader/scratch per worker. |
+| `BenchmarkVectorSearchPublicSearchSerialTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4` | Existing public `VectorIndexSearcher.Search`; response-owned result and ID buffers; no documents. |
+| `BenchmarkVectorSearchPublicSearchParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4` | Existing public `Search` with one opened searcher per worker; no documents. |
+| `BenchmarkVectorSearchReusableBufferSerialTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4` | Public no-document `SearchWithBuffer`; caller-owned reusable result/ID storage. |
+| `BenchmarkVectorSearchReusableBufferParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferParallelV4` | Reusable-buffer path with one independent searcher and buffer per worker. |
+
+Use the reusable-buffer tier only for no-document callers that can honor the
+buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` rejects
+`IncludeDocuments`; callers that fetch documents should continue using
+`Search`/`SearchVectorIndex` and report the document-fetch counters separately.
+A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
+slices are valid only until the same buffer is reused or reset.
+
+The broader legacy/canonical matrix remains useful when you also need one-shot
+open/setup or document materialization:
+
+```sh
+go test ./TreeDB/collections \
   -run '^$' \
   -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
   -benchmem \
@@ -202,11 +241,20 @@ Read the benchmark names before comparing numbers:
 | `ColumnVectorGraphNativeSearchCosine...` | Lower-level graph traversal/scoring/top-k over the physical reader. |
 | `OpenVectorIndexSearcher...V4` | Reusable searcher steady-state query; setup/open outside timed loop. |
 | `SearchVectorIndex...V4` | Public one-shot search; setup/open inside each operation. |
-| `...WithDocuments...` | One-shot search plus post-top-k document materialization. |
+| `...ReusableBuffer...` | Opened public no-document search with caller-owned reusable response buffers. |
+| `...WithDocuments...` | Search plus post-top-k document materialization. |
 
-Report `ns/op`, searches/sec, `B/op`, `allocs/op`, candidates/search,
-edges/search, row fetches, cache hits/misses, decoded blocks, granules touched,
-physical bytes, max resident bytes, and documents fetched.
+Profile public response allocation and the reusable-buffer ceiling separately:
+
+```sh
+OUT=$(mktemp -d /tmp/treedb_vector_search_response_XXXXXX)
+GOMAXPROCS=8 go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4$|^BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4$' \
+  -benchmem -count=1 -benchtime=5s \
+  -cpuprofile "$OUT/cpu.pprof" -memprofile "$OUT/mem.pprof"
+go tool pprof -top -nodecount=40 "$OUT/cpu.pprof" > "$OUT/cpu_top.txt"
+go tool pprof -top -alloc_space -nodecount=40 "$OUT/mem.pprof" > "$OUT/alloc_space_top.txt"
+```
 
 ## Search/fetch timing boundary
 

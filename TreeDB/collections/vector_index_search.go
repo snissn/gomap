@@ -53,7 +53,9 @@ type VectorIndexSearcherSearchOptions struct {
 
 // VectorIndexSearchResult is one public vector-index search hit.
 type VectorIndexSearchResult struct {
-	// ID is the collection document ID. The returned slice is response-owned.
+	// ID is the collection document ID. Search and SearchVectorIndex return
+	// response-owned bytes. SearchWithBuffer returns bytes owned by the caller's
+	// VectorIndexSearchBuffer and valid only until that buffer is reused or reset.
 	ID []byte `json:"id"`
 	// Ordinal is the vector row ordinal in the persisted column_graph index.
 	Ordinal int `json:"ordinal"`
@@ -250,8 +252,36 @@ type VectorIndexSearchResponse struct {
 	Status VectorIndexStatus `json:"status"`
 	// Stats contains search and reader telemetry.
 	Stats VectorIndexSearchStats `json:"stats,omitempty"`
-	// Results contains top-k hits in descending score order.
+	// Results contains top-k hits in descending score order. Search and
+	// SearchVectorIndex return response-owned slices; SearchWithBuffer returns a
+	// slice owned by the caller's VectorIndexSearchBuffer.
 	Results []VectorIndexSearchResult `json:"results,omitempty"`
+}
+
+// VectorIndexSearchBuffer is caller-owned reusable response storage for
+// VectorIndexSearcher.SearchWithBuffer. It is intended for steady-state
+// no-document searches that need to avoid per-call response allocation.
+//
+// A VectorIndexSearchBuffer is not safe for concurrent use. Do not reuse or
+// reset the same buffer while any caller still needs a response previously
+// returned from it. The response Results slice and each result ID returned by
+// SearchWithBuffer alias this buffer and remain valid only until the same
+// buffer is reused or Reset is called. Parallel callers should use independent
+// searcher/buffer pairs per worker.
+type VectorIndexSearchBuffer struct {
+	results []VectorIndexSearchResult
+	idBytes []byte
+}
+
+// Reset clears the buffer's current response view while retaining reusable
+// capacity. Any response previously returned by SearchWithBuffer with this
+// buffer must be considered invalid after Reset returns.
+func (b *VectorIndexSearchBuffer) Reset() {
+	if b == nil {
+		return
+	}
+	b.results = b.results[:0]
+	b.idBytes = b.idBytes[:0]
 }
 
 // VectorIndexSearcher is a reusable, snapshot-bound vector index search handle.
@@ -552,6 +582,98 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		}
 	}
 	return response, nil
+}
+
+// SearchWithBuffer runs one no-document vector-index query against the
+// searcher's bound snapshot using caller-owned reusable response storage.
+// Returned result slices and result IDs alias buffer and are valid only until
+// buffer is reused or Reset is called. The same buffer must not be reused
+// concurrently; parallel callers should use independent searcher/buffer pairs
+// per worker. IncludeDocuments is not supported by this reusable no-document
+// path.
+//
+// On any error after a non-nil buffer is supplied, the buffer's reusable
+// result/id views are reset to length zero and the returned response has no
+// Results. Search metadata and any telemetry collected before the error may
+// still be present in the returned response.
+func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
+	if buffer == nil {
+		return VectorIndexSearchResponse{}, errors.New("collections: nil vector index search buffer")
+	}
+	buffer.Reset()
+	var response VectorIndexSearchResponse
+	if s == nil || s.reader == nil || s.collection == nil {
+		return response, errors.New("collections: nil vector index searcher")
+	}
+	response.IndexName = s.indexName
+	response.Strategy = s.strategy
+	response.Path = s.path
+	response.Status = s.status
+	if s.closed {
+		return response, errors.New("collections: vector index searcher is closed")
+	}
+	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
+		return response, err
+	}
+	if opts.IncludeDocuments {
+		return response, errors.New("collections: vector index SearchWithBuffer does not support IncludeDocuments")
+	}
+	if documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
+		return response, errors.New("collections: vector index document projection requires IncludeDocuments")
+	}
+	readerStatsBefore := s.readerLast
+	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
+		TopK:     opts.TopK,
+		EfSearch: opts.EfSearch,
+	}, &s.scratch)
+	readerStatsAfter := s.reader.Stats()
+	s.readerLast = readerStatsAfter
+	readerStats := columnPhysicalRowReaderStatsDelta(readerStatsBefore, readerStatsAfter)
+	response.Stats = vectorIndexSearchStatsFromInternal(searchStats, readerStats)
+	if err != nil {
+		return response, err
+	}
+	if len(results) == 0 {
+		return response, nil
+	}
+	idByteCount, err := vectorIndexSearchResultIDBytes(results)
+	if err != nil {
+		return response, err
+	}
+	buffer.results = resizeVectorIndexSearchResultBuffer(buffer.results, len(results))
+	buffer.idBytes = resizeVectorIndexSearchByteBuffer(buffer.idBytes, idByteCount)
+	idOffset := 0
+	for i, result := range results {
+		if len(result.ID) > len(buffer.idBytes)-idOffset {
+			buffer.Reset()
+			return response, errors.New("collections: vector index search result id byte accounting mismatch")
+		}
+		nextIDOffset := idOffset + len(result.ID)
+		id := buffer.idBytes[idOffset:nextIDOffset:nextIDOffset]
+		idOffset = nextIDOffset
+		copy(id, result.ID)
+		buffer.results[i] = VectorIndexSearchResult{
+			ID:      id,
+			Ordinal: result.Ordinal,
+			Score:   result.Score,
+		}
+	}
+	response.Results = buffer.results
+	return response, nil
+}
+
+func resizeVectorIndexSearchResultBuffer(dst []VectorIndexSearchResult, target int) []VectorIndexSearchResult {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]VectorIndexSearchResult, target)
+	}
+	return dst[:target]
+}
+
+func resizeVectorIndexSearchByteBuffer(dst []byte, target int) []byte {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]byte, target)
+	}
+	return dst[:target]
 }
 
 func validateVectorIndexSearchRequest(topK, efSearch int) error {

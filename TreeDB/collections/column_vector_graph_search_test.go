@@ -804,6 +804,10 @@ func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3(b *testing.B) {
 	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
 }
 
+func BenchmarkVectorSearchCoreGraphSerialTypedColumn1961(b *testing.B) {
+	BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3(b)
+}
+
 func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnProduction8192V3(b *testing.B) {
 	shape := columnVectorGraphNativeSearchProduction8192BenchShapeV3()
 	shape.typedColumnVector = true
@@ -896,6 +900,10 @@ func BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnV3(b *testin
 	shape := columnVectorGraphNativeSearchSmallBenchShapeV3()
 	shape.typedColumnVector = true
 	benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b, shape)
+}
+
+func BenchmarkVectorSearchCoreGraphParallelTypedColumn1961(b *testing.B) {
+	BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnV3(b)
 }
 
 func BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnProduction8192V3(b *testing.B) {
