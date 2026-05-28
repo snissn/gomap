@@ -574,9 +574,23 @@ fallback reader into owned Go slices; #1916 adds certified primitive direct-view
 readers for paired offsets/value handles, and #1917 wires that variable adjacency
 reader through typed-column adapters. #1918 records a durable `column_graph`
 layer-0 adjacency source as a `raw_uint32_offsets_list` typed-column asset during
-physical graph rebuilds; search traversal still reads the row graph asset, and
-switching graph search to authoritative typed-column adjacency remains a separate
-follow-up.
+physical graph rebuilds, and #1920 extends graph manifests to record one such
+source per graph adjacency layer. Layer-0 search can consume the optional source,
+but row-asset adjacency remains canonical/fallback compatibility and upper-layer
+all-source search consumption remains a separate follow-up.
+
+The `column_graph` manifest keeps the row graph asset ref as the canonical graph
+asset. New all-layer source metadata is an optional manifest trailer with magic
+`TCGL` and version `1`: it records `layer_count`, `source_count`, and then one
+`TCGA` v1 source record per layer in ascending layer order. Each source record
+binds the source schema/column name, value type/encoding, layer number, source
+schema hash, row count, value count, offsets/value/padding byte accounting,
+source `tcs1_typed_column_part` ref, base-manifest identity, graph schema hash,
+and graph-asset identity. `source_count` must equal `layer_count`; layer `i`
+must have `Layer=i`; layer 0 is also exposed through the legacy optional
+layer-0 field for older #1919 readers. Empty rows and layers are represented by
+equal adjacent offsets in the per-layer offsets array. Old graph manifests
+without the trailer remain row-asset fallback readable.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -957,10 +971,11 @@ logical rebuild request only; it does not carry vector graph bytes, physical roo
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
 `column_graph` indexes, that path rebuilds vector, inverse-norm, and row-asset
-adjacency data into physical column assets, also publishes a durable layer-0
-`raw_uint32_offsets_list` typed-column adjacency source for validation/reopen
-coverage, and records both refs in the graph manifest through the normal
-collection column manifest/root lifecycle. Replay outcomes that are
+adjacency data into physical column assets, also publishes durable per-layer
+`raw_uint32_offsets_list` typed-column adjacency sources for validation/reopen
+coverage, and records the row graph ref plus layer count/per-layer source refs
+in the graph manifest through the normal collection column manifest/root
+lifecycle. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and

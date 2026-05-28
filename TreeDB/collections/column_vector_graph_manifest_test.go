@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
 	}
-	if decoded != record {
+	if !reflect.DeepEqual(decoded, record) {
 		t.Fatalf("decoded=%+v want %+v", decoded, record)
 	}
 	if key := columnVectorGraphManifestRecordKey(def.Name); !bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) {
@@ -71,6 +72,11 @@ func TestColumnVectorGraphManifestRecordRoundTripV2A(t *testing.T) {
 	shortSourceHeader = append(shortSourceHeader, 0, 0, 0, 0, 0)
 	if _, err := decodeColumnVectorGraphManifestRecord(shortSourceHeader); err == nil || !strings.Contains(err.Error(), "trailing") {
 		t.Fatalf("decode short source header err=%v want trailing-bytes failure", err)
+	}
+	unknownTrailer := append([]byte(nil), encoded...)
+	unknownTrailer = append(unknownTrailer, 0, 0, 0, 1, 0, 0)
+	if _, err := decodeColumnVectorGraphManifestRecord(unknownTrailer); err == nil || !strings.Contains(err.Error(), "unrecognized trailing bytes") {
+		t.Fatalf("decode unknown trailer err=%v want unrecognized trailing bytes failure", err)
 	}
 }
 
@@ -143,7 +149,7 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 	if err != nil {
 		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
 	}
-	if decoded != snapshot {
+	if !reflect.DeepEqual(decoded, snapshot) {
 		t.Fatalf("decoded=%+v want %+v", decoded, snapshot)
 	}
 	for _, cut := range []int{1, 8} {
@@ -154,7 +160,7 @@ func TestColumnVectorGraphManifestLayer0AdjacencySourceRoundTrip1918(t *testing.
 		}
 		want := snapshot
 		want.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceSnapshot{}
-		if decoded != want {
+		if !reflect.DeepEqual(decoded, want) {
 			t.Fatalf("decode source truncated by %d decoded=%+v want optional source ignored", cut, decoded)
 		}
 	}

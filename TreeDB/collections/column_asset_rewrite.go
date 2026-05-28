@@ -497,18 +497,33 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 				}
 				graph.AssetRef = newRef
 				graph.AssetBytes = newRef.Length
-				if graph.Layer0AdjacencySource.Present {
-					graph.Layer0AdjacencySource.GraphAssetGeneration = newRef.Generation
-					graph.Layer0AdjacencySource.GraphAssetPartID = newRef.PartID
-					graph.Layer0AdjacencySource.GraphAssetFileID = newRef.FileID
-					graph.Layer0AdjacencySource.GraphAssetOffset = newRef.Offset
-					graph.Layer0AdjacencySource.GraphAssetLength = newRef.Length
-					graph.Layer0AdjacencySource.GraphAssetChecksum = newRef.Checksum
+				patchColumnVectorGraphAdjacencySourceGraphIdentity(&graph.Layer0AdjacencySource, newRef)
+				for idx := range graph.AdjacencyLayerSources {
+					patchColumnVectorGraphAdjacencySourceGraphIdentity(&graph.AdjacencyLayerSources[idx], newRef)
 				}
 				changed = true
 				count++
 			}
-			if graph.Layer0AdjacencySource.Present {
+			if len(graph.AdjacencyLayerSources) > 0 {
+				for idx := range graph.AdjacencyLayerSources {
+					sourceRef := graph.AdjacencyLayerSources[idx].Ref
+					if newRef, ok := byOldRef[sourceRef]; ok {
+						if !columnAssetRewriteSameLogicalRef(sourceRef, newRef) {
+							return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph adjacency layer %d source ref %+v to %+v", graph.AdjacencyLayerSources[idx].Layer, sourceRef, newRef)
+						}
+						if err := validateColumnAssetRefForPlan(newRef); err != nil {
+							return nil, 0, err
+						}
+						graph.AdjacencyLayerSources[idx].Ref = newRef
+						graph.AdjacencyLayerSources[idx].AssetBytes = newRef.Length
+						changed = true
+						count++
+					}
+				}
+				if len(graph.AdjacencyLayerSources) > 0 {
+					graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
+				}
+			} else if graph.Layer0AdjacencySource.Present {
 				sourceRef := graph.Layer0AdjacencySource.Ref
 				if newRef, ok := byOldRef[sourceRef]; ok {
 					if !columnAssetRewriteSameLogicalRef(sourceRef, newRef) {
@@ -589,6 +604,18 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 		count++
 	}
 	return patched, count, nil
+}
+
+func patchColumnVectorGraphAdjacencySourceGraphIdentity(source *columnVectorGraphLayer0AdjacencySourceSnapshot, graphRef ColumnAssetRef) {
+	if source == nil || !source.Present {
+		return
+	}
+	source.GraphAssetGeneration = graphRef.Generation
+	source.GraphAssetPartID = graphRef.PartID
+	source.GraphAssetFileID = graphRef.FileID
+	source.GraphAssetOffset = graphRef.Offset
+	source.GraphAssetLength = graphRef.Length
+	source.GraphAssetChecksum = graphRef.Checksum
 }
 
 type columnAssetRewriteManifestPartPatchOffsets struct {

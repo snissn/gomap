@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -131,8 +132,13 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 	if list.Rows != 0 || len(list.Offsets) != 1 || list.Offsets[0] != 0 || len(list.Values) != 0 {
 		t.Fatalf("empty layer-0 source=%+v want rows=0 offsets=[0] values=[]", list)
 	}
+	if graph.AdjacencyLayerCount != 1 || len(graph.AdjacencyLayerSources) != 1 {
+		t.Fatalf("empty graph adjacency layer count=%d sources=%d want explicit layer 0 only", graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
+	}
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
-	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.Layer0AdjacencySource.Ref)
+	for _, source := range graph.AdjacencyLayerSources {
+		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, source.Ref)
+	}
 }
 
 func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
@@ -162,14 +168,11 @@ func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
 	list := loadColumnGraphLayer0AdjacencySourceList1918(t, d, "docs", cfg, def, graph)
 	want := layer0AdjacencySourceFromScannedRows1918(t, scanned)
 	assertRawUint32OffsetsListEqual1918(t, list, want)
-	if graph.Layer0AdjacencySource.OffsetsBytes != int64(len(want.Offsets))*8 || graph.Layer0AdjacencySource.ValuesBytes != int64(len(want.Values))*4 {
-		t.Fatalf("source bytes offsets=%d values=%d want offsets=%d values=%d", graph.Layer0AdjacencySource.OffsetsBytes, graph.Layer0AdjacencySource.ValuesBytes, len(want.Offsets)*8, len(want.Values)*4)
-	}
-	if graph.Layer0AdjacencySource.PaddingBytes < 0 || graph.Layer0AdjacencySource.AssetBytes <= graph.Layer0AdjacencySource.OffsetsBytes+graph.Layer0AdjacencySource.ValuesBytes {
-		t.Fatalf("source storage accounting=%+v", graph.Layer0AdjacencySource)
-	}
+	assertColumnGraphAllLayerSourcesMatchScanned1920(t, d, "docs", cfg, def, graph, scanned)
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
-	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.Layer0AdjacencySource.Ref)
+	for _, source := range graph.AdjacencyLayerSources {
+		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, source.Ref)
+	}
 
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
@@ -193,6 +196,35 @@ func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
 	_ = reopenedRecords
 	reopenedList := loadColumnGraphLayer0AdjacencySourceList1918(t, reopened, "docs", reopenedCfg, def, reopenedGraph)
 	assertRawUint32OffsetsListEqual1918(t, reopenedList, layer0AdjacencySourceFromScannedRows1918(t, reopenedRows))
+	assertColumnGraphAllLayerSourcesMatchScanned1920(t, reopened, "docs", reopenedCfg, def, reopenedGraph, reopenedRows)
+}
+
+func TestColumnGraphRebuildPublishesMultiLayerAdjacencySources1920(t *testing.T) {
+	rows := columnGraphRebuildSyntheticRowsV2A(96, 3)
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	if graph.AdjacencyLayerCount <= 1 || len(graph.AdjacencyLayerSources) != graph.AdjacencyLayerCount {
+		_ = d.Close()
+		t.Fatalf("adjacency layer count=%d sources=%d want multiple layers", graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
+	}
+	_, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	assertColumnGraphAllLayerSourcesMatchScanned1920(t, d, "docs", cfg, def, graph, scanned)
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedGraph, reopenedRows := loadAndScanColumnGraphRebuildRowsV2A(t, reopened, "docs", def)
+	_, reopenedCfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, reopened, "docs")
+	assertColumnGraphAllLayerSourcesMatchScanned1920(t, reopened, "docs", reopenedCfg, def, reopenedGraph, reopenedRows)
 }
 
 func TestColumnGraphRebuildPublishesEmptyNeighborLayer0Source1918(t *testing.T) {
@@ -214,6 +246,249 @@ func TestColumnGraphRebuildPublishesEmptyNeighborLayer0Source1918(t *testing.T) 
 	list := loadColumnGraphLayer0AdjacencySourceList1918(t, d, "docs", cfg, def, graph)
 	if list.Rows != 1 || len(list.Offsets) != 2 || list.Offsets[0] != 0 || list.Offsets[1] != 0 || len(list.Values) != 0 {
 		t.Fatalf("single-row layer-0 source=%+v want one empty row", list)
+	}
+	if graph.AdjacencyLayerCount != 1 || len(graph.AdjacencyLayerSources) != 1 || graph.AdjacencyLayerSources[0].Layer != 0 {
+		t.Fatalf("single-row all-layer sources count=%d sources=%+v want layer 0 only", graph.AdjacencyLayerCount, graph.AdjacencyLayerSources)
+	}
+}
+
+func TestColumnGraphRebuildPublishesAllLayerAdjacencySources1920(t *testing.T) {
+	d, cfg, def, graph, rows := prepareManualColumnGraphAllLayerSources1920(t)
+	defer func() { _ = d.Close() }()
+	if graph.AdjacencyLayerCount != 3 || len(graph.AdjacencyLayerSources) != 3 {
+		t.Fatalf("adjacency layer count=%d sources=%d want 3 layers", graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
+	}
+	if graph.Layer0AdjacencySource != graph.AdjacencyLayerSources[0] {
+		t.Fatalf("layer-0 alias=%+v want source[0]=%+v", graph.Layer0AdjacencySource, graph.AdjacencyLayerSources[0])
+	}
+	if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, graph); err != nil {
+		t.Fatalf("validate all-layer sources: %v", err)
+	}
+	var sourceBytes int64
+	for layer, source := range graph.AdjacencyLayerSources {
+		if source.Layer != layer || source.ColumnName != columnVectorGraphAdjacencySourceColumnName(layer) {
+			t.Fatalf("source[%d]=%+v has wrong identity", layer, source)
+		}
+		list := loadColumnGraphAdjacencyLayerSourceList1920(t, d, "docs", cfg, def, graph, layer)
+		want := adjacencyLayerSourceFromAssetRows1920(t, rows, layer)
+		assertRawUint32OffsetsListEqual1918(t, list, want)
+		if source.OffsetsBytes != int64(len(want.Offsets))*8 || source.ValuesBytes != int64(len(want.Values))*4 {
+			t.Fatalf("layer %d byte accounting offsets=%d values=%d want offsets=%d values=%d", layer, source.OffsetsBytes, source.ValuesBytes, len(want.Offsets)*8, len(want.Values)*4)
+		}
+		if source.PaddingBytes < 0 || source.AssetBytes <= source.OffsetsBytes+source.ValuesBytes {
+			t.Fatalf("layer %d storage accounting=%+v", layer, source)
+		}
+		sourceBytes += source.AssetBytes
+	}
+	if got, want := columnVectorGraphStorageBytes(graph), graph.AssetBytes+sourceBytes; got != want {
+		t.Fatalf("storage bytes=%d want %d", got, want)
+	}
+}
+
+func TestColumnGraphAllLayerAdjacencySourcesRejectSingleLayerDefect1920(t *testing.T) {
+	t.Run("missing_single_layer", func(t *testing.T) {
+		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+		defer func() { _ = d.Close() }()
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, graph); err != nil {
+			t.Fatalf("validate all-layer sources before removal: %v", err)
+		}
+		broken := graph
+		broken.AdjacencyLayerSources = append([]columnVectorGraphLayer0AdjacencySourceSnapshot(nil), graph.AdjacencyLayerSources...)
+		broken.AdjacencyLayerSources[1].Ref.FileID += 1000
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, broken); err == nil || !strings.Contains(err.Error(), "layer 1") {
+			t.Fatalf("validate all-layer sources after missing layer err=%v, want layer-1 failure", err)
+		}
+	})
+
+	t.Run("empty_advertised_layers", func(t *testing.T) {
+		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+		defer func() { _ = d.Close() }()
+		broken := graph
+		broken.AdjacencyLayerCount = graph.AdjacencyLayerCount
+		broken.AdjacencyLayerSources = nil
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, broken); err == nil || !strings.Contains(err.Error(), "sources count") {
+			t.Fatalf("validate all-layer sources with empty advertised layers err=%v, want count failure", err)
+		}
+	})
+
+	t.Run("layer0_alias_mismatch", func(t *testing.T) {
+		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+		defer func() { _ = d.Close() }()
+		broken := graph
+		broken.Layer0AdjacencySource = graph.AdjacencyLayerSources[1]
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, broken); err == nil || !strings.Contains(err.Error(), "alias") {
+			t.Fatalf("validate all-layer sources with layer-0 alias mismatch err=%v, want alias failure", err)
+		}
+	})
+
+	t.Run("corrupt_single_layer", func(t *testing.T) {
+		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+		defer func() { _ = d.Close() }()
+		source := graph.AdjacencyLayerSources[1]
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), source.Ref)
+		if err != nil {
+			t.Fatalf("read layer-1 source: %v", err)
+		}
+		image, err := typedcolumn.ParseColumnPartImage(raw)
+		if err != nil {
+			t.Fatalf("ParseColumnPartImage: %v", err)
+		}
+		offsetsSection, _, ok := image.ColumnOffsetsListSections(columnVectorGraphAdjacencySourceColumnName(1))
+		if !ok || offsetsSection.Length < 16 {
+			t.Fatalf("offsets section=%+v ok=%v", offsetsSection, ok)
+		}
+		path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), source.Ref)
+		if err != nil {
+			t.Fatalf("columnAssetSegmentPath: %v", err)
+		}
+		file, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatalf("OpenFile source: %v", err)
+		}
+		corrupt := []byte{0xff}
+		if _, err := file.WriteAt(corrupt, source.Ref.Offset+int64(offsetsSection.Offset+8)); err != nil {
+			_ = file.Close()
+			t.Fatalf("WriteAt corrupt source: %v", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatalf("Close corrupt source: %v", err)
+		}
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, graph); err == nil || !strings.Contains(err.Error(), "layer 1") {
+			t.Fatalf("validate all-layer sources after corrupt layer err=%v, want layer-1 failure", err)
+		}
+	})
+}
+
+func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T) {
+	d, _, _, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+	defer func() { _ = d.Close() }()
+	encoded, err := encodeColumnVectorGraphManifestRecord(graph)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	magic := make([]byte, 4)
+	binary.BigEndian.PutUint32(magic, columnVectorGraphAdjacencyLayerSourcesMagic)
+	pos := bytes.Index(encoded, magic)
+	if pos < 0 {
+		t.Fatal("encoded graph manifest missing adjacency layer sources block")
+	}
+	if len(encoded)-pos < 4+2+8+8 {
+		t.Fatalf("encoded graph manifest too short for layer source header at %d", pos)
+	}
+	sourceCountOffset := pos + 4 + 2 + 8
+	for _, tc := range []struct {
+		name        string
+		rewrite     func([]byte)
+		wantMessage string
+	}{
+		{
+			name: "source_count_mismatch",
+			rewrite: func(raw []byte) {
+				binary.BigEndian.PutUint64(raw[sourceCountOffset:], uint64(graph.AdjacencyLayerCount+1))
+			},
+			wantMessage: "source_count",
+		},
+		{
+			name: "implausible_source_count",
+			rewrite: func(raw []byte) {
+				binary.BigEndian.PutUint64(raw[pos+4+2:], uint64(1<<20))
+				binary.BigEndian.PutUint64(raw[sourceCountOffset:], uint64(1<<20))
+			},
+			wantMessage: "remaining record bytes",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := append([]byte(nil), encoded...)
+			tc.rewrite(corrupt)
+			if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("decode malformed all-layer block err=%v, want %q", err, tc.wantMessage)
+			}
+		})
+	}
+	t.Run("legacy_block_before_all_layer_block", func(t *testing.T) {
+		var legacy bytes.Buffer
+		encodeColumnVectorGraphLayer0AdjacencySource(&legacy, graph.AdjacencyLayerSources[0])
+		corrupt := make([]byte, 0, len(encoded)+legacy.Len())
+		corrupt = append(corrupt, encoded[:pos]...)
+		corrupt = append(corrupt, legacy.Bytes()...)
+		corrupt = append(corrupt, encoded[pos:]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "both legacy layer-0 and all-layer") {
+			t.Fatalf("decode manifest with legacy+all-layer blocks err=%v, want duplicate-block failure", err)
+		}
+	})
+	t.Run("malformed_legacy_block_before_all_layer_block", func(t *testing.T) {
+		badLegacy := make([]byte, 6)
+		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
+		binary.BigEndian.PutUint16(badLegacy[4:], columnVectorGraphLayer0SourceVersion+1)
+		corrupt := make([]byte, 0, len(encoded)+len(badLegacy))
+		corrupt = append(corrupt, encoded[:pos]...)
+		corrupt = append(corrupt, badLegacy...)
+		corrupt = append(corrupt, encoded[pos:]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "malformed legacy layer-0") {
+			t.Fatalf("decode manifest with malformed legacy before all-layer err=%v, want fail-closed malformed legacy failure", err)
+		}
+	})
+	t.Run("padded_malformed_legacy_block_before_all_layer_block", func(t *testing.T) {
+		badLegacy := make([]byte, 7)
+		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
+		binary.BigEndian.PutUint16(badLegacy[4:], columnVectorGraphLayer0SourceVersion+1)
+		badLegacy[6] = 0xa5
+		corrupt := make([]byte, 0, len(encoded)+len(badLegacy))
+		corrupt = append(corrupt, encoded[:pos]...)
+		corrupt = append(corrupt, badLegacy...)
+		corrupt = append(corrupt, encoded[pos:]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "malformed legacy layer-0") {
+			t.Fatalf("decode manifest with padded malformed legacy before all-layer err=%v, want fail-closed malformed legacy failure", err)
+		}
+	})
+	t.Run("malformed_legacy_only_magic_payload_ignored", func(t *testing.T) {
+		badLegacy := make([]byte, 14)
+		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
+		binary.BigEndian.PutUint16(badLegacy[4:], columnVectorGraphLayer0SourceVersion+1)
+		binary.BigEndian.PutUint32(badLegacy[10:], columnVectorGraphAdjacencyLayerSourcesMagic)
+		corrupt := append(append([]byte(nil), encoded[:pos]...), badLegacy...)
+		decoded, err := decodeColumnVectorGraphManifestRecord(corrupt)
+		if err != nil {
+			t.Fatalf("decode malformed legacy-only trailer with embedded TCGL magic: %v", err)
+		}
+		if decoded.Layer0AdjacencySource.Present || len(decoded.AdjacencyLayerSources) != 0 || decoded.AdjacencyLayerCount != 0 {
+			t.Fatalf("decoded malformed legacy-only trailer sources=%+v count=%d layer0=%+v, want ignored optional legacy metadata", decoded.AdjacencyLayerSources, decoded.AdjacencyLayerCount, decoded.Layer0AdjacencySource)
+		}
+	})
+	t.Run("encode_rejects_empty_advertised_layers", func(t *testing.T) {
+		broken := graph
+		broken.AdjacencyLayerSources = nil
+		if _, err := encodeColumnVectorGraphManifestRecord(broken); err == nil || !strings.Contains(err.Error(), "layer sources=0") {
+			t.Fatalf("encode graph with advertised layers but no sources err=%v, want count failure", err)
+		}
+	})
+	t.Run("encode_rejects_missing_layer0_alias", func(t *testing.T) {
+		broken := graph
+		broken.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceSnapshot{}
+		if _, err := encodeColumnVectorGraphManifestRecord(broken); err == nil || !strings.Contains(err.Error(), "missing layer-0") {
+			t.Fatalf("encode graph with missing layer-0 alias err=%v, want alias failure", err)
+		}
+	})
+}
+
+func TestColumnGraphReachabilityProtectsAllLayerAdjacencySourceRefs1920(t *testing.T) {
+	d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+	defer func() { _ = d.Close() }()
+	identity := ColumnManifestIdentity{Generation: graph.BaseManifestGeneration, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	records, identity := testColumnGraphManifestRecordsFromSnapshot1920(t, *cfg, graph, identity)
+	cfgForMeta := cfg.copy()
+	publishColumnGraphCatalogForTestV2A(t, d, CollectionMeta{
+		Name:          "docs",
+		Options:       CollectionOptions{DocumentFormat: DocumentFormatJSON, ColumnStore: &cfgForMeta},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}, identity, records)
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
+	for _, source := range graph.AdjacencyLayerSources {
+		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, source.Ref)
 	}
 }
 
@@ -1137,7 +1412,25 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(b, d, "docs", def)
 	b.ReportMetric(float64(graph.AssetBytes), "graph_asset_B/op")
 	b.ReportMetric(float64(columnVectorGraphStorageBytes(graph)), "graph_total_storage_B/op")
-	if graph.Layer0AdjacencySource.Present {
+	if len(graph.AdjacencyLayerSources) > 0 {
+		b.ReportMetric(float64(graph.AdjacencyLayerCount), "adjacency_layer_count")
+		var sourceBytes, offsetsBytes, valuesBytes, paddingBytes int64
+		for layer, source := range graph.AdjacencyLayerSources {
+			sourceBytes += source.AssetBytes
+			offsetsBytes += source.OffsetsBytes
+			valuesBytes += source.ValuesBytes
+			paddingBytes += source.PaddingBytes
+			b.ReportMetric(float64(source.AssetBytes), fmt.Sprintf("layer%d_source_B/op", layer))
+			b.ReportMetric(float64(source.OffsetsBytes), fmt.Sprintf("layer%d_offsets_B/op", layer))
+			b.ReportMetric(float64(source.ValuesBytes), fmt.Sprintf("layer%d_values_B/op", layer))
+			b.ReportMetric(float64(source.PaddingBytes), fmt.Sprintf("layer%d_padding_B/op", layer))
+		}
+		b.ReportMetric(float64(sourceBytes), "adjacency_sources_B/op")
+		b.ReportMetric(float64(offsetsBytes), "adjacency_offsets_B/op")
+		b.ReportMetric(float64(valuesBytes), "adjacency_values_B/op")
+		b.ReportMetric(float64(paddingBytes), "adjacency_padding_B/op")
+	} else if graph.Layer0AdjacencySource.Present {
+		b.ReportMetric(1, "adjacency_layer_count")
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.AssetBytes), "layer0_source_B/op")
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.OffsetsBytes), "layer0_offsets_B/op")
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.ValuesBytes), "layer0_values_B/op")
@@ -1439,19 +1732,80 @@ func loadColumnGraphLayer0AdjacencySourceList1918(tb testing.TB, d *backenddb.DB
 	return list
 }
 
+func loadColumnGraphAdjacencyLayerSourceList1920(tb testing.TB, d *backenddb.DB, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, layer int) typedcolumn.RawUint32OffsetsList {
+	tb.Helper()
+	list, _, err := decodeColumnVectorGraphAdjacencyLayerSourceAsset(d.ColumnAssetRootDir(), collection, *cfg, def, graph, layer)
+	if err != nil {
+		tb.Fatalf("decodeColumnVectorGraphAdjacencyLayerSourceAsset layer %d: %v", layer, err)
+	}
+	return list
+}
+
 func layer0AdjacencySourceFromScannedRows1918(tb testing.TB, rows []columnGraphRebuildScannedRowV2A) typedcolumn.RawUint32OffsetsList {
+	tb.Helper()
+	return adjacencyLayerSourceFromScannedRows1920(tb, rows, 0)
+}
+
+func adjacencyLayerSourceFromScannedRows1920(tb testing.TB, rows []columnGraphRebuildScannedRowV2A, layer int) typedcolumn.RawUint32OffsetsList {
 	tb.Helper()
 	offsets := make([]uint64, len(rows)+1)
 	values := make([]uint32, 0)
 	for i, row := range rows {
-		layer0, err := columnVectorGraphAdjacencyLayer(row.adjacency, 0)
+		layerAdjacency, err := columnVectorGraphAdjacencyLayer(row.adjacency, layer)
 		if err != nil {
-			tb.Fatalf("columnVectorGraphAdjacencyLayer row %d: %v", i, err)
+			tb.Fatalf("columnVectorGraphAdjacencyLayer row %d layer %d: %v", i, layer, err)
 		}
-		values = append(values, layer0...)
+		values = append(values, layerAdjacency...)
 		offsets[i+1] = uint64(len(values))
 	}
 	return typedcolumn.RawUint32OffsetsList{Rows: len(rows), Offsets: offsets, Values: values}
+}
+
+func adjacencyLayerSourceFromAssetRows1920(tb testing.TB, rows []columnVectorGraphAssetRow, layer int) typedcolumn.RawUint32OffsetsList {
+	tb.Helper()
+	offsets := make([]uint64, len(rows)+1)
+	values := make([]uint32, 0)
+	for i, row := range rows {
+		layerAdjacency, err := columnVectorGraphAdjacencyLayer(row.Adjacency, layer)
+		if err != nil {
+			tb.Fatalf("columnVectorGraphAdjacencyLayer row %d layer %d: %v", i, layer, err)
+		}
+		values = append(values, layerAdjacency...)
+		offsets[i+1] = uint64(len(values))
+	}
+	return typedcolumn.RawUint32OffsetsList{Rows: len(rows), Offsets: offsets, Values: values}
+}
+
+func assertColumnGraphAllLayerSourcesMatchScanned1920(tb testing.TB, d *backenddb.DB, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, rows []columnGraphRebuildScannedRowV2A) {
+	tb.Helper()
+	if graph.AdjacencyLayerCount != len(graph.AdjacencyLayerSources) || graph.AdjacencyLayerCount == 0 {
+		tb.Fatalf("graph adjacency layer count=%d sources=%d, want non-empty matching all-layer metadata", graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
+	}
+	if graph.Layer0AdjacencySource != graph.AdjacencyLayerSources[0] {
+		tb.Fatalf("layer-0 source alias=%+v want all-layer source[0]=%+v", graph.Layer0AdjacencySource, graph.AdjacencyLayerSources[0])
+	}
+	if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), collection, *cfg, def, graph); err != nil {
+		tb.Fatalf("validateColumnVectorGraphAdjacencyLayerSourcesAssets: %v", err)
+	}
+	var accounted int64
+	for layer, source := range graph.AdjacencyLayerSources {
+		if !source.Present || source.Layer != layer {
+			tb.Fatalf("source[%d]=%+v want present matching layer", layer, source)
+		}
+		list := loadColumnGraphAdjacencyLayerSourceList1920(tb, d, collection, cfg, def, graph, layer)
+		want := adjacencyLayerSourceFromScannedRows1920(tb, rows, layer)
+		assertRawUint32OffsetsListEqual1918(tb, list, want)
+		if source.OffsetsBytes != int64(len(want.Offsets))*8 || source.ValuesBytes != int64(len(want.Values))*4 {
+			tb.Fatalf("layer %d source bytes offsets=%d values=%d want offsets=%d values=%d", layer, source.OffsetsBytes, source.ValuesBytes, len(want.Offsets)*8, len(want.Values)*4)
+		}
+		if source.PaddingBytes < 0 || source.AssetBytes <= source.OffsetsBytes+source.ValuesBytes {
+			tb.Fatalf("layer %d source storage accounting=%+v", layer, source)
+		}
+		accounted += source.AssetBytes
+	}
+	if got, want := columnVectorGraphStorageBytes(graph), graph.AssetBytes+accounted; got != want {
+		tb.Fatalf("graph storage bytes=%d want graph asset %d + layer sources %d = %d", got, graph.AssetBytes, accounted, want)
+	}
 }
 
 func assertRawUint32OffsetsListEqual1918(tb testing.TB, got, want typedcolumn.RawUint32OffsetsList) {
@@ -1472,6 +1826,130 @@ func graphManifestFromRecords1918(tb testing.TB, records []columnManifestRecord,
 		tb.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
 	}
 	return graph
+}
+
+func prepareManualColumnGraphAllLayerSources1920(tb testing.TB) (*backenddb.DB, *ColumnStoreConfig, VectorIndexDefinition, columnVectorGraphManifestSnapshot, []columnVectorGraphAssetRow) {
+	tb.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open: %v", err)
+	}
+	baseCfg, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(3))
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(3, 2)
+	rows := []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 2, 2, 1, 2, 1, 2, 1, 3}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, Adjacency: []uint32{0, 2}},
+		{ID: []byte("doc-c"), Vector: []float32{0, 0, 1}, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 2, 2, 0, 1, 0, 1, 3}},
+		{ID: []byte("doc-d"), Vector: []float32{0.5, 0.5, 0}, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 0, 1, 0}},
+	}
+	for i := range rows {
+		invNorm, err := columnVectorGraphInvNorm(rows[i].Vector)
+		if err != nil {
+			_ = d.Close()
+			tb.Fatalf("columnVectorGraphInvNorm row %d: %v", i, err)
+		}
+		rows[i].InvNorm = invNorm
+	}
+	const generation = uint64(7)
+	input := ColumnPublishManifestEncodeInput{
+		Collection:        "docs",
+		ColumnStore:       *baseCfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			RowCount:           0,
+			ColumnPayloadBytes: 0,
+		},
+	}
+	header, err := encodeColumnManifestHeaderRecord(input, generation)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("encodeColumnManifestHeaderRecord: %v", err)
+	}
+	baseRecords := []columnManifestRecord{{key: []byte(columnManifestHeaderRecordKey), value: header}}
+	sortColumnManifestRecords(baseRecords)
+	baseChecksum := checksumColumnManifestRecords(input, generation, baseRecords)
+	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, generation, 1, 1, rows)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
+	}
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", *baseCfg, def)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	graph := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: generation,
+		BaseManifestChecksum:   baseChecksum,
+		BaseSchemaHash:         baseCfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               prepared.RowCount,
+		AssetRef:               prepared.Ref,
+		AssetBytes:             prepared.Bytes,
+		AdjacencyLayerCount:    len(prepared.AdjacencyLayerSources),
+	}
+	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, prepared.AdjacencyLayerSources)
+	if len(graph.AdjacencyLayerSources) > 0 {
+		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
+	}
+	return d, baseCfg, def, graph, rows
+}
+
+func testColumnGraphManifestRecordsFromSnapshot1920(tb testing.TB, baseCfg ColumnStoreConfig, graph columnVectorGraphManifestSnapshot, identity ColumnManifestIdentity) ([]columnManifestRecord, ColumnManifestIdentity) {
+	tb.Helper()
+	input := ColumnPublishManifestEncodeInput{
+		Collection:        "docs",
+		ColumnStore:       baseCfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			RowCount:           0,
+			ColumnPayloadBytes: 0,
+		},
+	}
+	header, err := encodeColumnManifestHeaderRecord(input, identity.Generation)
+	if err != nil {
+		tb.Fatalf("encodeColumnManifestHeaderRecord: %v", err)
+	}
+	baseRecords := []columnManifestRecord{{key: []byte(columnManifestHeaderRecordKey), value: header}}
+	sortColumnManifestRecords(baseRecords)
+	baseChecksum := checksumColumnManifestRecords(input, identity.Generation, baseRecords)
+	graph.BaseManifestGeneration = identity.Generation
+	graph.BaseManifestChecksum = baseChecksum
+	for idx := range graph.AdjacencyLayerSources {
+		graph.AdjacencyLayerSources[idx].BaseManifestGeneration = graph.BaseManifestGeneration
+		graph.AdjacencyLayerSources[idx].BaseManifestChecksum = graph.BaseManifestChecksum
+	}
+	if len(graph.AdjacencyLayerSources) > 0 {
+		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
+	} else if graph.Layer0AdjacencySource.Present {
+		graph.Layer0AdjacencySource.BaseManifestGeneration = graph.BaseManifestGeneration
+		graph.Layer0AdjacencySource.BaseManifestChecksum = graph.BaseManifestChecksum
+	}
+	encoded, err := encodeColumnVectorGraphManifestRecord(graph)
+	if err != nil {
+		tb.Fatalf("encodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	records := []columnManifestRecord{
+		{key: []byte(columnManifestHeaderRecordKey), value: header},
+		{key: columnVectorGraphManifestRecordKey(graph.IndexName), value: encoded},
+	}
+	sortColumnManifestRecords(records)
+	identity.Checksum = checksumColumnManifestRecords(input, identity.Generation, records)
+	return records, identity
 }
 
 func loadColumnGraphRebuildManifestRecordsV2A(tb testing.TB, d *backenddb.DB, collection string) []columnManifestRecord {
