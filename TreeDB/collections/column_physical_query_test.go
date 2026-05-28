@@ -3056,8 +3056,8 @@ func TestColumnDictionaryCodeGroupCountOneShotLocalDictionaryReorderParityM1942(
 }
 
 func TestColumnDictionaryCodeGroupCountOneShotLocalDictionaryScratchOverStackCapM1942(t *testing.T) {
-	view, wantRows, wantBytes := buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t)
-	assertColumnDictionaryCodeGroupCountOneShotParityM1942(t, view, wantRows, 66, wantBytes)
+	view, wantRows, wantGroups, wantBytes := buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t)
+	assertColumnDictionaryCodeGroupCountOneShotParityM1942(t, view, wantRows, wantGroups, wantBytes)
 }
 
 func assertColumnDictionaryCodeGroupCountOneShotParityM1942(t *testing.T, view columnPhysicalScanSnapshotView, wantRows, wantGroups int, wantBytes int64) {
@@ -3428,7 +3428,7 @@ func buildColumnDictionaryCodeGroupCountOneShotMultiPartViewM1942(t testing.TB) 
 	return view, map[string]int{"alpha": 3, "beta": 2, "gamma": 4, "delta": 2}, bytes
 }
 
-func buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t testing.TB) (columnPhysicalScanSnapshotView, int, int64) {
+func buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t testing.TB) (columnPhysicalScanSnapshotView, int, int, int64) {
 	t.Helper()
 	dictionary := make([]string, columnDictionaryCodeGroupCountOneShotLocalStackCap+1)
 	codes := make([]uint32, len(dictionary))
@@ -3441,7 +3441,7 @@ func buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t testing.T
 		{partID: 2, dictionary: []string{"kind_064", "kind_000", "kind_extra"}, codes: []uint32{0, 1, 2, 0}},
 	}
 	view, bytes := buildColumnDictionaryCodeGroupCountOneShotPartsViewM1942(t, parts)
-	return view, len(codes) + 4, bytes
+	return view, len(codes) + 4, len(dictionary) + 1, bytes
 }
 
 type columnDictionaryCodeGroupCountOneShotPartSpecM1942 struct {
