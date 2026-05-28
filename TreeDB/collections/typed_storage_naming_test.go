@@ -406,6 +406,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/docs/spec/typed-column-adapter.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/docs/spec/typed-column-direct-view-alignment.md", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 10},
 	{path: "TreeDB/docs/spec/typed-column-direct-view-closeout-1899.md", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
+	{path: "TreeDB/docs/spec/typed-column-production-jsonbench-plan.md", classification: typedStorageLegacyCompatibility, matchingLines: 24, occurrences: 25},
 	{path: "TreeDB/docs/spec/typed-column-semantics.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/docs/spec/typed-column-transplant.md", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/docs/spec/typed-storage-closeout-1758.md", classification: typedStorageLegacyCompatibility, matchingLines: 11, occurrences: 18},
