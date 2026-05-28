@@ -1,7 +1,7 @@
 # Production Typed-Column JSONBench Plan
 
-Status: planning note for promoting the `experiments/colgranule` design into the
-production TreeDB collection column store.
+Status: planning note for promoting the `experiments/colgranule` design into
+production TreeDB collection typed-column storage.
 
 TreeDB is pre-alpha. This plan may change on-disk formats and public collection
 query APIs. If an implementation changes persisted typed-column formats, update
@@ -10,7 +10,7 @@ scaffolding unless the specific change requires it.
 
 ## Goal
 
-Build the production collection column store around the same feature set proven
+Build the production collection typed-column path around the same feature set proven
 in `experiments/colgranule`, then make JSONBench q1 through q5 exercise those
 features through production APIs.
 
@@ -21,8 +21,9 @@ materialization costs.
 
 JSONBench parity must use real query predicates over stored columns. In
 particular, q2 must store full `kind`, `operation`, `collection` (reported as
-`event`), and `did` values, then execute `kind = commit` and `operation = create` predicates
-at query time. Do not regain ClickHouse-like numbers by write-time masking,
+`event`), and `did` values, then execute `kind = commit` and
+`operation = create` predicates at query time. Do not regain ClickHouse-like
+numbers by write-time masking,
 sentinel substitution, or benchmark-specific q2 pre-filtering.
 
 ## Terms
@@ -31,7 +32,7 @@ Use these terms consistently in code, docs, benchmark names, and diagnostics.
 
 ### Storage Containers
 
-#### Collection Column Store
+#### Collection Typed Storage
 
 The production collection feature configured by `ColumnStoreConfig` in
 `TreeDB/collections/column_store.go`.
@@ -739,7 +740,7 @@ It is not the production owner by itself.
 | Aggregate metadata and pruning metadata | `TreeDB/internal/typedcolumn/aggregate_metadata.go`, `pruning.go`, `stats.go` |
 | Data-plane part-set visibility | `TreeDB/internal/typedcolumn/part_set.go` |
 
-### Production collection column store
+### Production collection typed storage
 
 `TreeDB/collections` is the production integration target.
 
@@ -762,15 +763,14 @@ There are two different JSONBench-related locations.
 | Location | Role |
 | --- | --- |
 | `experiments/colgranule/jsonbench_treedb_columnstore_bench_test.go` | In-repo synthetic benchmark that compares the reference experiment kernels with the current production collection physical query path. |
-| external `snissn/JSONBench/treedb` checkout | Canonical benchmark/reporting home for cross-database JSONBench runs. Common local checkouts include `/Users/michaelseiler/dev/snissn/JSONBench/treedb` and Orca workspaces, but the repository state is the authority. Current external work has transitional TreeDB column-store rows; this plan targets the final production typed-column cells and must keep direct, prepared, and metadata rows unambiguous. |
+| `$JSONBENCH_TREEDB_DIR` or `<jsonbench-checkout>/treedb` | Local checkout of the external JSONBench TreeDB harness. This is the canonical benchmark/reporting home for cross-database JSONBench runs; repository state is authoritative, not any one local path. Current external work has transitional TreeDB column-store rows; this plan targets the final production typed-column cells and must keep direct, prepared, and metadata rows unambiguous. |
 
-The external harness entry points below are relative to the `snissn/JSONBench`
-repository root:
+The external harness entry points are under `$JSONBENCH_TREEDB_DIR`:
 
-- `treedb/run_matrix.sh`
-- `treedb/cmd/jsonbench_treedb/run.go`
-- `treedb/cmd/jsonbench_treedb/queries.go`
-- `treedb/README.md`
+- `run_matrix.sh`
+- `cmd/jsonbench_treedb/run.go`
+- `cmd/jsonbench_treedb/queries.go`
+- `README.md`
 
 Current transitional external labels include `column-store`,
 `column-store-prepared`, and `column-store-prepared-metadata` once the prepared
@@ -808,7 +808,7 @@ Deliverables:
 
 - Add or update docs so the terms in this note are used consistently.
 - Preserve current benchmark baselines for direct and prepared production queries.
-- Add parity tests that compare production column-store q1-q5 results against a
+- Add parity tests that compare production typed-column q1-q5 results against a
   simple row-scan implementation on the same input.
 - Keep the experiment benchmarks runnable until each feature is represented by
   production tests and benchmarks.
@@ -1006,7 +1006,7 @@ Acceptance criteria:
 
 Deliverables:
 
-- In the external JSONBench TreeDB harness, add explicit TreeDB column-store
+- In the external JSONBench TreeDB harness, add explicit TreeDB typed-column
   cells instead of overloading or relabeling row-scan/template cells.
 - In gomap, keep a smaller in-repo synthetic benchmark that exercises the same
   production query modes without depending on external JSONBench data.
@@ -1126,18 +1126,23 @@ OUT=/tmp/treedb_column_jsonbench_profile_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$OUT"
 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench 'BenchmarkJSONBenchProductionColumnStore/q2/direct' \
+  -bench 'BenchmarkJSONBenchProductionTypedColumn/q2/direct' \
   -benchmem \
   -cpuprofile "$OUT/cpu.pprof" \
   -memprofile "$OUT/allocs.pprof"
 
-# External JSONBench smoke once column-store cells exist there.
-cd /Users/michaelseiler/dev/snissn/JSONBench/treedb
-DATA_DIR=./testdata/bluesky SUBSET_ROWS=6 TRIES=1 ./run_matrix.sh
+JSONBENCH_TREEDB_DIR=${JSONBENCH_TREEDB_DIR:-../JSONBench/treedb}
+(
+  cd "$JSONBENCH_TREEDB_DIR"
+  DATA_DIR=./testdata/bluesky SUBSET_ROWS=6 TRIES=1 ./run_matrix.sh
+)
 
 # External JSONBench 100k working run.
-cd /Users/michaelseiler/dev/snissn/JSONBench/treedb
-DATA_DIR="$HOME/data/bluesky" SUBSET_ROWS=100000 TRIES=3 ./run_matrix.sh
+JSONBENCH_TREEDB_DIR=${JSONBENCH_TREEDB_DIR:-../JSONBench/treedb}
+(
+  cd "$JSONBENCH_TREEDB_DIR"
+  DATA_DIR="$HOME/data/bluesky" SUBSET_ROWS=100000 TRIES=3 ./run_matrix.sh
+)
 ```
 
 Required metrics:
@@ -1164,7 +1169,7 @@ Required metrics:
   validates the metadata it relies on.
 - Do not describe a storage source as a "sidecar" in new docs or diagnostics
   without naming the exact asset or section.
-- Do not report prepared-only JSONBench results as the column-store result.
+- Do not report prepared-only JSONBench results as the typed-column result.
   Direct and prepared rows must stay separate.
 - Do not use q2 write-time masking, empty sentinels, or benchmark-specific
   pre-filtered `event`/`did` payloads to simulate `kind=commit` and
