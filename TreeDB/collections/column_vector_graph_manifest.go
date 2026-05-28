@@ -46,10 +46,8 @@ type columnVectorGraphManifestSnapshot struct {
 	AdjacencyLayerSources  []columnVectorGraphAdjacencySourceSnapshot
 }
 
-// columnVectorGraphAdjacencySourceSnapshot binds an optional typed-column
-// adjacency offsets-list source to the graph manifest identity. Old graph
-// records have Present=false and continue to use row-asset adjacency as the
-// compatibility/fallback source.
+// columnVectorGraphAdjacencySourceSnapshot binds a graph-layer adjacency
+// offsets-list source to the graph manifest identity.
 type columnVectorGraphAdjacencySourceSnapshot struct {
 	Present                bool
 	Schema                 string
@@ -77,6 +75,10 @@ type columnVectorGraphAdjacencySourceSnapshot struct {
 	GraphAssetChecksum     uint32
 }
 
+// columnVectorGraphLayer0AdjacencySourceSnapshot binds the optional #1918
+// layer-0 adjacency offsets-list source to the graph manifest identity. Old
+// graph records have Present=false and continue to use row-asset adjacency as
+// the compatibility/fallback source.
 type columnVectorGraphLayer0AdjacencySourceSnapshot = columnVectorGraphAdjacencySourceSnapshot
 
 type columnVectorGraphAssetRow struct {
@@ -337,7 +339,7 @@ func encodeColumnVectorGraphLayer0AdjacencySource(b *bytes.Buffer, source column
 	writeManifestUint64(b, uint64(source.GraphAssetChecksum))
 }
 
-func encodeColumnVectorGraphAdjacencyLayerSources(b *bytes.Buffer, layerCount int, sources []columnVectorGraphLayer0AdjacencySourceSnapshot) {
+func encodeColumnVectorGraphAdjacencyLayerSources(b *bytes.Buffer, layerCount int, sources []columnVectorGraphAdjacencySourceSnapshot) {
 	writeManifestUint32(b, columnVectorGraphAdjacencyLayerSourcesMagic)
 	writeManifestUint16(b, columnVectorGraphAdjacencyLayerSourcesV1)
 	writeManifestUint64(b, uint64(layerCount))
@@ -384,6 +386,10 @@ func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []c
 		sources[i] = source
 	}
 	return layerCount, sources, nil
+}
+
+func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVectorGraphLayer0AdjacencySourceSnapshot, error) {
+	return decodeColumnVectorGraphAdjacencySource(cur)
 }
 
 func decodeColumnVectorGraphAdjacencySource(cur *manifestCursor) (columnVectorGraphAdjacencySourceSnapshot, error) {
@@ -529,7 +535,7 @@ func validateColumnVectorGraphManifestSnapshotCore(snapshot columnVectorGraphMan
 	return nil
 }
 
-func validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount int, sources []columnVectorGraphLayer0AdjacencySourceSnapshot) error {
+func validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount int, sources []columnVectorGraphAdjacencySourceSnapshot) error {
 	if layerCount <= 0 {
 		return fmt.Errorf("collections: column vector graph adjacency layer count=%d must be positive", layerCount)
 	}
@@ -557,7 +563,7 @@ func validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source columnVectorG
 	return validateColumnVectorGraphAdjacencySourceSnapshot(source)
 }
 
-func validateColumnVectorGraphAdjacencySourceSnapshot(source columnVectorGraphLayer0AdjacencySourceSnapshot) error {
+func validateColumnVectorGraphAdjacencySourceSnapshot(source columnVectorGraphAdjacencySourceSnapshot) error {
 	if !source.Present {
 		return nil
 	}

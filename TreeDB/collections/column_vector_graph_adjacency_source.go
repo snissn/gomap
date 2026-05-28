@@ -389,7 +389,7 @@ func writeColumnVectorGraphLayer0AdjacencySourceAssetToManager(rootDir string, c
 		return ColumnAssetRef{}, errors.New("collections: column_graph layer-0 adjacency source payload is empty")
 	}
 	if generation == 0 || partID == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column_graph layer-0 adjacency source append requires generation and part_id")
+		return ColumnAssetRef{}, errors.New("collections: column_graph layer-0 adjacency source append requires non-zero generation and part_id")
 	}
 	appender, err := newNextColumnPhysicalAssetSegmentAppender(rootDir, cfg)
 	if err != nil {
