@@ -204,6 +204,12 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1899 final #1886 closeout matrix and evidence structure for
     typed-column fixed-width scalar/vector direct-view coverage, with physical
     row assets deferred to #1897 and adjacency direct views deferred to #1901.
+- `TreeDB/docs/spec/typed-column-production-jsonbench-plan.md`
+  - planning note for promoting `experiments/colgranule` sort order, granule
+    metadata, codecs/compression, q1-q5 kernels, aggregate metadata, multipart
+    visibility, lifecycle accounting, and JSONBench reporting into production
+    `TreeDB/collections`, with direct query performance as the first-class
+    target.
 
 ## Canonical Ownership
 
