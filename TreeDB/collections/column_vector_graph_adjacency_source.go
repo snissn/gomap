@@ -492,22 +492,22 @@ func validateColumnVectorGraphAdjacencySourceAsset(rootDir, collection string, c
 	if err != nil {
 		return err
 	}
-	return validateColumnVectorGraphLayer0AdjacencySourceOffsets(offsetsRaw, source.RowCount, source.ValuesCount)
+	return validateColumnVectorGraphAdjacencySourceOffsets(source.Layer, offsetsRaw, source.RowCount, source.ValuesCount)
 }
 
-func validateColumnVectorGraphLayer0AdjacencySourceOffsets(offsetsRaw []byte, rows, values int) error {
+func validateColumnVectorGraphAdjacencySourceOffsets(layer int, offsetsRaw []byte, rows, values int) error {
 	if rows < 0 || values < 0 {
-		return fmt.Errorf("collections: column_graph layer-0 adjacency source rows/values=(%d,%d) must be non-negative", rows, values)
+		return fmt.Errorf("collections: column_graph adjacency layer %d source rows/values=(%d,%d) must be non-negative", layer, rows, values)
 	}
 	if len(offsetsRaw)%8 != 0 {
-		return fmt.Errorf("collections: column_graph layer-0 adjacency source offsets bytes=%d want multiple of 8", len(offsetsRaw))
+		return fmt.Errorf("collections: column_graph adjacency layer %d source offsets bytes=%d want multiple of 8", layer, len(offsetsRaw))
 	}
 	offsets := make([]uint64, len(offsetsRaw)/8)
 	for i := range offsets {
 		offsets[i] = binary.LittleEndian.Uint64(offsetsRaw[i*8:])
 	}
 	if err := typedcolumn.ValidateRawUint32OffsetsListShape(rows, offsets, uint64(values)); err != nil {
-		return fmt.Errorf("collections: column_graph layer-0 adjacency source offsets validation: %w", err)
+		return fmt.Errorf("collections: column_graph adjacency layer %d source offsets validation: %w", layer, err)
 	}
 	return nil
 }

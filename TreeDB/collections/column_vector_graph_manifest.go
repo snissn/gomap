@@ -43,14 +43,14 @@ type columnVectorGraphManifestSnapshot struct {
 	AssetBytes             int64
 	Layer0AdjacencySource  columnVectorGraphLayer0AdjacencySourceSnapshot
 	AdjacencyLayerCount    int
-	AdjacencyLayerSources  []columnVectorGraphLayer0AdjacencySourceSnapshot
+	AdjacencyLayerSources  []columnVectorGraphAdjacencySourceSnapshot
 }
 
-// columnVectorGraphLayer0AdjacencySourceSnapshot binds the optional #1918
-// layer-0 adjacency offsets-list source to the graph manifest identity. Old
-// graph records have Present=false and continue to use row-asset adjacency as
-// the compatibility/fallback source.
-type columnVectorGraphLayer0AdjacencySourceSnapshot struct {
+// columnVectorGraphAdjacencySourceSnapshot binds an optional typed-column
+// adjacency offsets-list source to the graph manifest identity. Old graph
+// records have Present=false and continue to use row-asset adjacency as the
+// compatibility/fallback source.
+type columnVectorGraphAdjacencySourceSnapshot struct {
 	Present                bool
 	Schema                 string
 	ColumnName             string
@@ -76,6 +76,8 @@ type columnVectorGraphLayer0AdjacencySourceSnapshot struct {
 	GraphAssetLength       int64
 	GraphAssetChecksum     uint32
 }
+
+type columnVectorGraphLayer0AdjacencySourceSnapshot = columnVectorGraphAdjacencySourceSnapshot
 
 type columnVectorGraphAssetRow struct {
 	ID        []byte
@@ -257,7 +259,7 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 				return columnVectorGraphManifestSnapshot{}, errors.New("collections: column vector graph manifest has both all-layer and legacy layer-0 adjacency source blocks")
 			}
 			sourceCur := cur
-			source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
+			source, err := decodeColumnVectorGraphAdjacencySource(&sourceCur)
 			if err != nil {
 				if columnVectorGraphManifestRecordContainsMagic(raw[cur.pos+6:], columnVectorGraphAdjacencyLayerSourcesMagic) {
 					return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: malformed legacy layer-0 adjacency source before all-layer adjacency sources block: %w", err)
@@ -339,7 +341,7 @@ func encodeColumnVectorGraphAdjacencyLayerSources(b *bytes.Buffer, layerCount in
 	}
 }
 
-func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []columnVectorGraphLayer0AdjacencySourceSnapshot, error) {
+func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []columnVectorGraphAdjacencySourceSnapshot, error) {
 	if magic := cur.u32(); magic != columnVectorGraphAdjacencyLayerSourcesMagic {
 		return 0, nil, fmt.Errorf("collections: bad column vector graph adjacency layer sources magic=0x%08x", magic)
 	}
@@ -367,9 +369,9 @@ func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []c
 	}
 	layerCount := int(layerCount64)
 	sourceCount := int(sourceCount64)
-	sources := make([]columnVectorGraphLayer0AdjacencySourceSnapshot, sourceCount)
+	sources := make([]columnVectorGraphAdjacencySourceSnapshot, sourceCount)
 	for i := range sources {
-		source, err := decodeColumnVectorGraphLayer0AdjacencySource(cur)
+		source, err := decodeColumnVectorGraphAdjacencySource(cur)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -378,14 +380,14 @@ func decodeColumnVectorGraphAdjacencyLayerSources(cur *manifestCursor) (int, []c
 	return layerCount, sources, nil
 }
 
-func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVectorGraphLayer0AdjacencySourceSnapshot, error) {
+func decodeColumnVectorGraphAdjacencySource(cur *manifestCursor) (columnVectorGraphAdjacencySourceSnapshot, error) {
 	if magic := cur.u32(); magic != columnVectorGraphLayer0SourceMagic {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, fmt.Errorf("collections: bad column vector graph adjacency source magic=0x%08x", magic)
+		return columnVectorGraphAdjacencySourceSnapshot{}, fmt.Errorf("collections: bad column vector graph adjacency source magic=0x%08x", magic)
 	}
 	if version := cur.u16(); version != columnVectorGraphLayer0SourceVersion {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, fmt.Errorf("collections: unsupported column vector graph layer-0 adjacency source version=%d", version)
+		return columnVectorGraphAdjacencySourceSnapshot{}, fmt.Errorf("collections: unsupported column vector graph adjacency source version=%d", version)
 	}
-	source := columnVectorGraphLayer0AdjacencySourceSnapshot{
+	source := columnVectorGraphAdjacencySourceSnapshot{
 		Present:    true,
 		Schema:     cur.string(),
 		ColumnName: cur.string(),
@@ -422,19 +424,19 @@ func decodeColumnVectorGraphLayer0AdjacencySource(cur *manifestCursor) (columnVe
 	graphAssetLength64 := cur.u64()
 	graphAssetChecksum64 := cur.u64()
 	if err := cur.err; err != nil {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, err
+		return columnVectorGraphAdjacencySourceSnapshot{}, err
 	}
 	if layer64 > uint64(math.MaxInt) || rowCount64 > uint64(math.MaxInt) || valuesCount64 > uint64(math.MaxInt) {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, errors.New("collections: column vector graph layer-0 adjacency source integer overflow")
+		return columnVectorGraphAdjacencySourceSnapshot{}, errors.New("collections: column vector graph adjacency source integer overflow")
 	}
 	if fileID64 > uint64(math.MaxUint32) || graphAssetFileID64 > uint64(math.MaxUint32) {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, errors.New("collections: column vector graph layer-0 adjacency source file_id overflows uint32")
+		return columnVectorGraphAdjacencySourceSnapshot{}, errors.New("collections: column vector graph adjacency source file_id overflows uint32")
 	}
 	if checksum64 > uint64(math.MaxUint32) || graphAssetChecksum64 > uint64(math.MaxUint32) {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, errors.New("collections: column vector graph layer-0 adjacency source checksum overflows uint32")
+		return columnVectorGraphAdjacencySourceSnapshot{}, errors.New("collections: column vector graph adjacency source checksum overflows uint32")
 	}
 	if offset64 > uint64(math.MaxInt64) || length64 > uint64(math.MaxInt64) || assetBytes64 > uint64(math.MaxInt64) || offsetsBytes64 > uint64(math.MaxInt64) || valuesBytes64 > uint64(math.MaxInt64) || paddingBytes64 > uint64(math.MaxInt64) || graphAssetOffset64 > uint64(math.MaxInt64) || graphAssetLength64 > uint64(math.MaxInt64) {
-		return columnVectorGraphLayer0AdjacencySourceSnapshot{}, errors.New("collections: column vector graph layer-0 adjacency source offsets or byte counts overflow int64")
+		return columnVectorGraphAdjacencySourceSnapshot{}, errors.New("collections: column vector graph adjacency source offsets or byte counts overflow int64")
 	}
 	source.Layer = int(layer64)
 	source.RowCount = int(rowCount64)
