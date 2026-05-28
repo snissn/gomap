@@ -49,6 +49,48 @@ type VectorIndexSearcherSearchOptions struct {
 	// DocumentFetchOptions controls optional projected final-fetch materialization.
 	// It is used only when IncludeDocuments is true; the zero value returns full documents.
 	DocumentFetchOptions DocumentFetchOptions
+	// Buffer optionally supplies caller-owned reusable storage for response
+	// result assembly and document-fetch staging. When Buffer is nil, Search
+	// allocates response-owned result and ID slices as before. When Buffer is
+	// non-nil, returned Results and result ID slices alias Buffer and remain
+	// valid until the next Search that reuses the same Buffer; one Buffer must
+	// not be shared by concurrent Search calls.
+	Buffer *VectorIndexSearchBuffer
+}
+
+// VectorIndexSearchBuffer is caller-owned reusable storage for
+// VectorIndexSearcher.Search response assembly. Its zero value is ready for use.
+// Pass one buffer per searcher/worker on steady-state hot paths to avoid
+// allocating result slices and result ID byte arenas on every Search.
+//
+// The fields are exported so callers may pre-size them, but Search owns their
+// contents while the response is live. Responses produced with a buffer alias
+// these slices until the buffer is reused or Reset is called.
+type VectorIndexSearchBuffer struct {
+	// Results stores the reusable public result slice returned in VectorIndexSearchResponse.Results.
+	Results []VectorIndexSearchResult
+	// IDBytes is the reusable byte arena backing each result ID.
+	IDBytes []byte
+	// DocumentIDs stages result IDs for optional post-top-k document materialization.
+	DocumentIDs [][]byte
+	// DocumentRowRefs stages row-ref materialization requests for document fetches.
+	DocumentRowRefs []DocumentRowRef
+}
+
+// Reset releases the buffer's current response view while retaining capacity for
+// reuse. It also clears result slots so buffered document payloads from an older
+// response are not kept live by the buffer.
+func (b *VectorIndexSearchBuffer) Reset() {
+	if b == nil {
+		return
+	}
+	clear(b.Results)
+	b.Results = b.Results[:0]
+	b.IDBytes = b.IDBytes[:0]
+	clear(b.DocumentIDs)
+	b.DocumentIDs = b.DocumentIDs[:0]
+	clear(b.DocumentRowRefs)
+	b.DocumentRowRefs = b.DocumentRowRefs[:0]
 }
 
 // VectorIndexSearchResult is one public vector-index search hit.
@@ -443,7 +485,9 @@ func failClosedColumnGraphReaderOpenStatus(def VectorIndexDefinition, status Vec
 }
 
 // Search runs one vector-index query against the searcher's bound snapshot.
-// Returned result IDs and documents are copied into response-owned buffers.
+// Returned result IDs and documents are copied into response-owned buffers unless
+// opts.Buffer is non-nil; with a buffer, Results and result IDs alias caller-owned
+// reusable storage until that buffer is reused or reset.
 func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (VectorIndexSearchResponse, error) {
 	var response VectorIndexSearchResponse
 	if s == nil || s.reader == nil || s.collection == nil {
@@ -475,37 +519,20 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		return response, err
 	}
 	if len(results) == 0 {
+		if opts.Buffer != nil {
+			opts.Buffer.Reset()
+		}
 		return response, nil
 	}
-	response.Results = make([]VectorIndexSearchResult, len(results))
-	idByteCount, err := vectorIndexSearchResultIDBytes(results)
+	response.Results, err = vectorIndexSearchResultsInto(results, opts.Buffer)
 	if err != nil {
 		return response, err
-	}
-	idBytes := make([]byte, idByteCount)
-	idOffset := 0
-	for i, result := range results {
-		if len(result.ID) > len(idBytes)-idOffset {
-			return response, errors.New("collections: vector index search result id byte accounting mismatch")
-		}
-		nextIDOffset := idOffset + len(result.ID)
-		id := idBytes[idOffset:nextIDOffset:nextIDOffset]
-		idOffset = nextIDOffset
-		copy(id, result.ID)
-		response.Results[i] = VectorIndexSearchResult{
-			ID:      id,
-			Ordinal: result.Ordinal,
-			Score:   result.Score,
-		}
 	}
 	if opts.IncludeDocuments {
 		if s.documentView == nil {
 			s.documentView = newCollectionReadViewAtSnapshot(s.collection, s.snapshot, s.catalog, false, mappedresource.ScopePreparedSearch)
 		}
-		ids := make([][]byte, len(results))
-		for i := range results {
-			ids[i] = results[i].ID
-		}
+		ids := vectorIndexSearchDocumentIDsInto(response.Results, opts.Buffer)
 		documentFetchOptions := opts.DocumentFetchOptions
 		var documents DocumentFetchResponse
 		var err error
@@ -520,7 +547,7 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 			if len(rowRefs.Results) != len(response.Results) {
 				return response, errors.New("collections: vector index document row-ref result count mismatch")
 			}
-			refs := make([]DocumentRowRef, len(rowRefs.Results))
+			refs := vectorIndexSearchDocumentRowRefsInto(len(rowRefs.Results), opts.Buffer)
 			for i := range rowRefs.Results {
 				if !rowRefs.Results[i].Found {
 					return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
@@ -552,6 +579,111 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		}
 	}
 	return response, nil
+}
+
+func vectorIndexSearchResultsInto(results []columnVectorGraphNativeSearchResult, buffer *VectorIndexSearchBuffer) ([]VectorIndexSearchResult, error) {
+	if len(results) == 0 {
+		if buffer != nil {
+			buffer.Reset()
+		}
+		return nil, nil
+	}
+	idByteCount, err := vectorIndexSearchResultIDBytes(results)
+	if err != nil {
+		return nil, err
+	}
+	var out []VectorIndexSearchResult
+	var idBytes []byte
+	if buffer == nil {
+		out = make([]VectorIndexSearchResult, len(results))
+		idBytes = make([]byte, idByteCount)
+	} else {
+		if len(buffer.Results) > len(results) {
+			clear(buffer.Results[len(results):])
+		}
+		if len(buffer.DocumentIDs) > 0 {
+			clear(buffer.DocumentIDs)
+			buffer.DocumentIDs = buffer.DocumentIDs[:0]
+		}
+		if len(buffer.DocumentRowRefs) > 0 {
+			clear(buffer.DocumentRowRefs)
+			buffer.DocumentRowRefs = buffer.DocumentRowRefs[:0]
+		}
+		if cap(buffer.Results) < len(results) {
+			buffer.Results = make([]VectorIndexSearchResult, len(results))
+		} else {
+			buffer.Results = buffer.Results[:len(results)]
+		}
+		if cap(buffer.IDBytes) < idByteCount {
+			buffer.IDBytes = make([]byte, idByteCount)
+		} else {
+			buffer.IDBytes = buffer.IDBytes[:idByteCount]
+		}
+		out = buffer.Results
+		idBytes = buffer.IDBytes
+	}
+	idOffset := 0
+	for i, result := range results {
+		if len(result.ID) > len(idBytes)-idOffset {
+			return nil, errors.New("collections: vector index search result id byte accounting mismatch")
+		}
+		nextIDOffset := idOffset + len(result.ID)
+		id := idBytes[idOffset:nextIDOffset:nextIDOffset]
+		idOffset = nextIDOffset
+		copy(id, result.ID)
+		out[i] = VectorIndexSearchResult{
+			ID:      id,
+			Ordinal: result.Ordinal,
+			Score:   result.Score,
+		}
+	}
+	return out, nil
+}
+
+func vectorIndexSearchDocumentIDsInto(results []VectorIndexSearchResult, buffer *VectorIndexSearchBuffer) [][]byte {
+	if len(results) == 0 {
+		if buffer != nil {
+			clear(buffer.DocumentIDs)
+			buffer.DocumentIDs = buffer.DocumentIDs[:0]
+		}
+		return nil
+	}
+	var ids [][]byte
+	if buffer == nil {
+		ids = make([][]byte, len(results))
+	} else {
+		clear(buffer.DocumentIDs)
+		if cap(buffer.DocumentIDs) < len(results) {
+			buffer.DocumentIDs = make([][]byte, len(results))
+		} else {
+			buffer.DocumentIDs = buffer.DocumentIDs[:len(results)]
+		}
+		ids = buffer.DocumentIDs
+	}
+	for i := range results {
+		ids[i] = results[i].ID
+	}
+	return ids
+}
+
+func vectorIndexSearchDocumentRowRefsInto(count int, buffer *VectorIndexSearchBuffer) []DocumentRowRef {
+	if count <= 0 {
+		if buffer != nil {
+			clear(buffer.DocumentRowRefs)
+			buffer.DocumentRowRefs = buffer.DocumentRowRefs[:0]
+		}
+		return nil
+	}
+	if buffer == nil {
+		return make([]DocumentRowRef, count)
+	}
+	clear(buffer.DocumentRowRefs)
+	if cap(buffer.DocumentRowRefs) < count {
+		buffer.DocumentRowRefs = make([]DocumentRowRef, count)
+	} else {
+		buffer.DocumentRowRefs = buffer.DocumentRowRefs[:count]
+	}
+	return buffer.DocumentRowRefs
 }
 
 func validateVectorIndexSearchRequest(topK, efSearch int) error {

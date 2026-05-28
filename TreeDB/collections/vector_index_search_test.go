@@ -98,6 +98,79 @@ func TestSearchVectorIndexColumnGraphResultIDsAreCapacityIsolatedV4(t *testing.T
 	}
 }
 
+func TestOpenVectorIndexSearcherSearchBufferReusesCallerStorageV4(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0.9, 0.1, 0}},
+		{id: "doc-c", vector: []float32{0, 1, 0}},
+		{id: "doc-d", vector: []float32{0, 0, 1}},
+	}
+	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{
+		IndexName:        def.Name,
+		MaxDecodedBlocks: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenVectorIndexSearcher: %v", err)
+	}
+	defer func() { _ = searcher.Close() }()
+
+	var buffer VectorIndexSearchBuffer
+	opts := VectorIndexSearcherSearchOptions{
+		Query:    []float32{1, 0, 0},
+		TopK:     2,
+		EfSearch: len(rows),
+		Buffer:   &buffer,
+	}
+	first, err := searcher.Search(opts)
+	if err != nil {
+		t.Fatalf("Search first: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, first, def.Name, 2)
+	if len(buffer.Results) != len(first.Results) || len(buffer.IDBytes) == 0 {
+		t.Fatalf("buffer results=%d id_bytes=%d want populated caller storage", len(buffer.Results), len(buffer.IDBytes))
+	}
+	if &first.Results[0] != &buffer.Results[0] {
+		t.Fatalf("response results do not alias caller buffer")
+	}
+	if &first.Results[0].ID[0] != &buffer.IDBytes[0] {
+		t.Fatalf("response result IDs do not alias caller ID arena")
+	}
+	resultPtr := &buffer.Results[0]
+	idPtr := &buffer.IDBytes[0]
+	secondID := append([]byte(nil), first.Results[1].ID...)
+	_ = append(first.Results[0].ID, '!')
+	if !bytes.Equal(first.Results[1].ID, secondID) {
+		t.Fatalf("second result ID changed after appending to first buffered result ID: got %q want %q", first.Results[1].ID, secondID)
+	}
+
+	opts.Query = []float32{0, 0, 1}
+	second, err := searcher.Search(opts)
+	if err != nil {
+		t.Fatalf("Search second: %v", err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, second, def.Name, 2)
+	if &second.Results[0] != resultPtr || &buffer.Results[0] != resultPtr {
+		t.Fatalf("result storage was not reused across buffered searches")
+	}
+	if &second.Results[0].ID[0] != idPtr || &buffer.IDBytes[0] != idPtr {
+		t.Fatalf("ID arena was not reused across buffered searches")
+	}
+
+	opts.TopK = 0
+	empty, err := searcher.Search(opts)
+	if err != nil {
+		t.Fatalf("Search empty: %v", err)
+	}
+	if len(empty.Results) != 0 || len(buffer.Results) != 0 || len(buffer.IDBytes) != 0 {
+		t.Fatalf("empty buffered search results=%d buffer_results=%d id_bytes=%d, want all empty", len(empty.Results), len(buffer.Results), len(buffer.IDBytes))
+	}
+}
+
 func TestSearchVectorIndexByteAccountingRejectsOverflowV4(t *testing.T) {
 	total, err := addVectorIndexSearchByteTotal(3, 4, 10, "document")
 	if err != nil || total != 7 {
@@ -1435,12 +1508,14 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4(b *tes
 	}
 	defer func() { _ = searcher.Close() }()
 	query := append([]float32(nil), input[37].vector...)
+	var searchBuffer VectorIndexSearchBuffer
 	opts := VectorIndexSearcherSearchOptions{
 		Query:                query,
 		TopK:                 topK,
 		EfSearch:             efSearch,
 		IncludeDocuments:     includeDocuments,
 		DocumentFetchOptions: fetchOptions,
+		Buffer:               &searchBuffer,
 	}
 	if _, err := searcher.Search(opts); err != nil {
 		b.Fatalf("warm Search: %v", err)
@@ -1524,12 +1599,18 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV
 			b.Fatalf("OpenVectorIndexSearcher worker %d: %v", i, err)
 		}
 		defer func() { _ = searcher.Close() }()
-		if _, err := searcher.Search(opts); err != nil {
+		benchWorkers[i].searcher = searcher
+		var warmBuffer VectorIndexSearchBuffer
+		workerOpts := opts
+		workerOpts.Buffer = &warmBuffer
+		if _, err := searcher.Search(workerOpts); err != nil {
 			b.Fatalf("warm Search worker %d: %v", i, err)
 		}
-		benchWorkers[i] = preparedWorker{searcher: searcher}
 	}
-	measuredStats, err := benchWorkers[0].searcher.Search(opts)
+	var measureBuffer VectorIndexSearchBuffer
+	measureOpts := opts
+	measureOpts.Buffer = &measureBuffer
+	measuredStats, err := benchWorkers[0].searcher.Search(measureOpts)
 	if err != nil {
 		b.Fatalf("measure Search stats: %v", err)
 	}
@@ -1559,12 +1640,17 @@ func benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV
 			return
 		}
 		searcher := benchWorkers[workerIndex].searcher
+		// Keep the response buffer goroutine-local in the hot loop: sharing
+		// mutable slice headers between parallel workers can create false sharing.
+		var workerBuffer VectorIndexSearchBuffer
+		workerOpts := opts
+		workerOpts.Buffer = &workerBuffer
 		var localSink int64
 		for pb.Next() {
 			if failed.Load() {
 				continue
 			}
-			got, err := searcher.Search(opts)
+			got, err := searcher.Search(workerOpts)
 			if err != nil {
 				recordParallelErr("Search: %v", err)
 				continue
