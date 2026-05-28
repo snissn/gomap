@@ -259,6 +259,9 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 			sourceCur := cur
 			source, err := decodeColumnVectorGraphLayer0AdjacencySource(&sourceCur)
 			if err != nil {
+				if columnVectorGraphManifestRecordContainsMagic(raw[cur.pos+6:], columnVectorGraphAdjacencyLayerSourcesMagic) {
+					return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: malformed legacy layer-0 adjacency source before all-layer adjacency sources block: %w", err)
+				}
 				cur.pos = len(raw)
 				cur.err = nil
 				continue
@@ -283,6 +286,12 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 		return columnVectorGraphManifestSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func columnVectorGraphManifestRecordContainsMagic(raw []byte, magic uint32) bool {
+	var encoded bytes.Buffer
+	writeManifestUint32(&encoded, magic)
+	return bytes.Contains(raw, encoded.Bytes())
 }
 
 func encodeColumnVectorGraphLayer0AdjacencySource(b *bytes.Buffer, source columnVectorGraphLayer0AdjacencySourceSnapshot) {

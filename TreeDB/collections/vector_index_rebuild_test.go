@@ -416,6 +416,18 @@ func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T
 			t.Fatalf("decode manifest with legacy+all-layer blocks err=%v, want duplicate-block failure", err)
 		}
 	})
+	t.Run("malformed_legacy_block_before_all_layer_block", func(t *testing.T) {
+		badLegacy := make([]byte, 6)
+		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
+		binary.BigEndian.PutUint16(badLegacy[4:], columnVectorGraphLayer0SourceVersion+1)
+		corrupt := make([]byte, 0, len(encoded)+len(badLegacy))
+		corrupt = append(corrupt, encoded[:pos]...)
+		corrupt = append(corrupt, badLegacy...)
+		corrupt = append(corrupt, encoded[pos:]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "malformed legacy layer-0") {
+			t.Fatalf("decode manifest with malformed legacy before all-layer err=%v, want fail-closed malformed legacy failure", err)
+		}
+	})
 	t.Run("encode_rejects_empty_advertised_layers", func(t *testing.T) {
 		broken := graph
 		broken.AdjacencyLayerSources = nil
