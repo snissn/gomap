@@ -20,8 +20,8 @@ queries do not pay avoidable setup, mapping, allocation, or document
 materialization costs.
 
 JSONBench parity must use real query predicates over stored columns. In
-particular, q2 must store full `kind`, `operation`, `collection/event`, and
-`did` values, then execute `kind = commit` and `operation = create` predicates
+particular, q2 must store full `kind`, `operation`, `collection` (reported as
+`event`), and `did` values, then execute `kind = commit` and `operation = create` predicates
 at query time. Do not regain ClickHouse-like numbers by write-time masking,
 sentinel substitution, or benchmark-specific q2 pre-filtering.
 
@@ -764,7 +764,8 @@ There are two different JSONBench-related locations.
 | `experiments/colgranule/jsonbench_treedb_columnstore_bench_test.go` | In-repo synthetic benchmark that compares the reference experiment kernels with the current production collection physical query path. |
 | external `snissn/JSONBench/treedb` checkout | Canonical benchmark/reporting home for cross-database JSONBench runs. Common local checkouts include `/Users/michaelseiler/dev/snissn/JSONBench/treedb` and Orca workspaces, but the repository state is the authority. Current external work has transitional TreeDB column-store rows; this plan targets the final production typed-column cells and must keep direct, prepared, and metadata rows unambiguous. |
 
-The external harness entry points are:
+The external harness entry points below are relative to the `snissn/JSONBench`
+repository root:
 
 - `treedb/run_matrix.sh`
 - `treedb/cmd/jsonbench_treedb/run.go`
@@ -777,6 +778,14 @@ layout split lands. Those labels are acceptable as interim reference rows, but
 final production typed-column reports must still expose the same dimensions as
 `column-direct`, `column-prepared`, `column-direct-metadata`, and
 `column-prepared-metadata` or provide explicit aliases.
+
+Draft label mapping:
+
+| Transitional label | Production dimension |
+| --- | --- |
+| `column-store` | `column-direct` data scan |
+| `column-store-prepared` | `column-prepared` data scan |
+| `column-store-prepared-metadata` | `column-prepared-metadata` for q4/q5 metadata Top-K |
 
 ## Current Gap Summary
 
@@ -879,8 +888,9 @@ Deliverables:
 
 Acceptance criteria:
 
-- q2 direct production query can use sorted-prefix planning for the
-  `kind/operation` predicate and exact grouped distinct over `collection/did`.
+- q2 direct production query uses sorted-prefix planning for the
+  `kind/operation` predicate and exact grouped distinct over `collection/did`
+  when the physical sort key is available and validated.
 - q4b direct production query skips granules when marks prove they cannot match.
 - Mark-pruning and sorted-prefix result hashes match full-scan result hashes.
 - Tests cover empty ranges, boundary equality, multi-column prefixes, missing
@@ -1021,7 +1031,7 @@ The production matrix should make every dimension explicit.
 | Query | Required production behavior |
 | --- | --- |
 | q1 | Count rows grouped by event/collection. |
-| q2 | Store full `kind`, `operation`, `collection/event`, and `did`; at query time apply `kind=commit` and `operation=create`, then count rows and exact distinct users grouped by event/collection. |
+| q2 | Store full `kind`, `operation`, `collection` (reported as `event`), and `did`; at query time apply `kind=commit` and `operation=create`, then count rows and exact distinct users grouped by event/collection. |
 | q3 | For `kind=commit`, `operation=create`, and event in the JSONBench event list, count rows grouped by event and hour of day. |
 | q4a | For post creates, return the three users with earliest post time using `time_us` physical order and early stop. |
 | q4b | For post creates, return the three users with earliest post time using ClickHouse-style physical order plus sort-key mark pruning. |
