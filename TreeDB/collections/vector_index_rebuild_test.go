@@ -300,6 +300,27 @@ func TestColumnGraphAllLayerAdjacencySourcesRejectSingleLayerDefect1920(t *testi
 		}
 	})
 
+	t.Run("empty_advertised_layers", func(t *testing.T) {
+		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+		defer func() { _ = d.Close() }()
+		broken := graph
+		broken.AdjacencyLayerCount = graph.AdjacencyLayerCount
+		broken.AdjacencyLayerSources = nil
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, broken); err == nil || !strings.Contains(err.Error(), "sources count") {
+			t.Fatalf("validate all-layer sources with empty advertised layers err=%v, want count failure", err)
+		}
+	})
+
+	t.Run("layer0_alias_mismatch", func(t *testing.T) {
+		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
+		defer func() { _ = d.Close() }()
+		broken := graph
+		broken.Layer0AdjacencySource = graph.AdjacencyLayerSources[1]
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, broken); err == nil || !strings.Contains(err.Error(), "alias") {
+			t.Fatalf("validate all-layer sources with layer-0 alias mismatch err=%v, want alias failure", err)
+		}
+	})
+
 	t.Run("corrupt_single_layer", func(t *testing.T) {
 		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
 		defer func() { _ = d.Close() }()

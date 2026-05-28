@@ -408,11 +408,14 @@ func validateColumnVectorGraphLayer0AdjacencySourceAsset(rootDir, collection str
 }
 
 func validateColumnVectorGraphAdjacencyLayerSourcesAssets(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot) error {
+	if graph.AdjacencyLayerCount != len(graph.AdjacencyLayerSources) {
+		return fmt.Errorf("collections: column_graph adjacency layer sources count=%d want %d", len(graph.AdjacencyLayerSources), graph.AdjacencyLayerCount)
+	}
 	if len(graph.AdjacencyLayerSources) == 0 {
 		return nil
 	}
-	if graph.AdjacencyLayerCount != len(graph.AdjacencyLayerSources) {
-		return fmt.Errorf("collections: column_graph adjacency layer sources count=%d want %d", len(graph.AdjacencyLayerSources), graph.AdjacencyLayerCount)
+	if graph.Layer0AdjacencySource != graph.AdjacencyLayerSources[0] {
+		return errors.New("collections: column_graph layer-0 adjacency source alias does not match all-layer source[0]")
 	}
 	for layer, source := range graph.AdjacencyLayerSources {
 		if !source.Present || source.Layer != layer {
