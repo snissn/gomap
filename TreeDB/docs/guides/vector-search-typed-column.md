@@ -17,7 +17,7 @@ changes.
 | Document title/body/source text | Retained document / residual payload | Usually needed only after top-k; keep flexible. |
 | Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
 | Vector graph/ANN data | `derived_accelerator` | It accelerates search but is not the authoritative owner of the embedding field. |
-| Adjacency list | adapter direct/fallback path for explicit offsets-list; dense compatibility remains fallback | Dense fixed-degree `uint32` payload bytes remain compatibility/fallback. `adjacency_layout: "uint32_offsets_list"` selects variable adjacency with certified adapter direct reads; graph/search consumption remains separate follow-up work. |
+| Adjacency list | certified all-layer `column_graph` adjacency direct sources for explicit offsets-list assets; row-asset/dense paths remain fallback | `adjacency_layout: "uint32_offsets_list"` publishes certified variable-adjacency typed-column sources for every graph layer, and the native search reader consumes those direct sources. Row-asset adjacency is a legacy/corruption fallback; dense fixed-degree `uint32` compatibility remains a separate fallback path. |
 
 Best practice: keep vector payloads out of retained JSON for search-heavy
 workloads when the typed-column vector section is the intended search data plane.
@@ -181,12 +181,51 @@ Expected interpretation:
   after lifetime, range, checksum/integrity policy, endian/format, length, and
   alignment validation.
 
-## Column graph benchmark matrix
+## Vector search benchmark tiers
 
-For a broader benchmark matrix, use the canonical command from the spec guide:
+Use the tier aliases below when you need a quick serial/parallel matrix with
+clear timing boundaries. All six aliases use the same synthetic shape:
+`rows=1024`, `dims=128`, `M=16`, `topK=10`, and `efSearch=128`. Setup,
+fixture load, graph rebuild, searcher open, and warmup are outside the timed
+loop; each timed operation is one no-document search.
 
 ```sh
-GOWORK=off go test ./TreeDB/collections \
+GOMAXPROCS=8 go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkVectorSearch(CoreGraphSerialTypedColumn1961|CoreGraphParallelTypedColumn1961|PublicSearchSerialTypedColumn1961|PublicSearchParallelTypedColumn1961|ReusableBufferSerialTypedColumn1961|ReusableBufferParallelTypedColumn1961)$' \
+  -benchmem \
+  -benchtime=2s \
+  -count=5
+```
+
+Report both `ns/op` and `ops/sec`; compute `ops/sec` as `1e9 / ns/op` from the
+Go benchmark output. For parallel benchmarks, this is the aggregate operation
+rate implied by Go's parallel `ns/op` measurement. Always include `B/op`,
+`allocs/op`, and the direct/fallback counters
+(`adjacency_mmap_direct/search`, `adjacency_scratch_decodes/search`,
+`vector_mmap_direct/search`, and `vector_scratch_decodes/search`).
+
+| Tier alias | Canonical benchmark | Boundary |
+| --- | --- | --- |
+| `BenchmarkVectorSearchCoreGraphSerialTypedColumn1961` | `BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnV3` | Core reader `SearchCosine`; graph traversal/scoring/top-k only, no public response materialization. |
+| `BenchmarkVectorSearchCoreGraphParallelTypedColumn1961` | `BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnV3` | Same core boundary with one reader/scratch per worker. |
+| `BenchmarkVectorSearchPublicSearchSerialTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4` | Existing public `VectorIndexSearcher.Search`; response-owned result and ID buffers; no documents. |
+| `BenchmarkVectorSearchPublicSearchParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4` | Existing public `Search` with one opened searcher per worker; no documents. |
+| `BenchmarkVectorSearchReusableBufferSerialTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4` | Public no-document `SearchWithBuffer`; caller-owned reusable result/ID storage. |
+| `BenchmarkVectorSearchReusableBufferParallelTypedColumn1961` | `BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferParallelV4` | Reusable-buffer path with one independent searcher and buffer per worker. |
+
+Use the reusable-buffer tier only for no-document callers that can honor the
+buffer lifetime contract. `VectorIndexSearcher.SearchWithBuffer` rejects
+`IncludeDocuments`; callers that fetch documents should continue using
+`Search`/`SearchVectorIndex` and report the document-fetch counters separately.
+A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
+slices are valid only until the same buffer is reused or reset.
+
+The broader legacy/canonical matrix remains useful when you also need one-shot
+open/setup or document materialization:
+
+```sh
+go test ./TreeDB/collections \
   -run '^$' \
   -bench 'Benchmark(ColumnVectorGraphNativeSearchCosineV3|ColumnVectorGraphNativeSearchCosineParallelV3|OpenVectorIndexSearcherColumnGraphNativeReaderSetupV6|OpenVectorIndexSearcherColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderV4|SearchVectorIndexColumnGraphNativeReaderWithDocumentsV4)$' \
   -benchmem \
@@ -202,11 +241,20 @@ Read the benchmark names before comparing numbers:
 | `ColumnVectorGraphNativeSearchCosine...` | Lower-level graph traversal/scoring/top-k over the physical reader. |
 | `OpenVectorIndexSearcher...V4` | Reusable searcher steady-state query; setup/open outside timed loop. |
 | `SearchVectorIndex...V4` | Public one-shot search; setup/open inside each operation. |
-| `...WithDocuments...` | One-shot search plus post-top-k document materialization. |
+| `...ReusableBuffer...` | Opened public no-document search with caller-owned reusable response buffers. |
+| `...WithDocuments...` | Search plus post-top-k document materialization. |
 
-Report `ns/op`, searches/sec, `B/op`, `allocs/op`, candidates/search,
-edges/search, row fetches, cache hits/misses, decoded blocks, granules touched,
-physical bytes, max resident bytes, and documents fetched.
+Profile public response allocation and the reusable-buffer ceiling separately:
+
+```sh
+OUT=$(mktemp -d /tmp/treedb_vector_search_response_XXXXXX)
+GOMAXPROCS=8 go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4$|^BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderReusableBufferV4$' \
+  -benchmem -count=1 -benchtime=5s \
+  -cpuprofile "$OUT/cpu.pprof" -memprofile "$OUT/mem.pprof"
+go tool pprof -top -nodecount=40 "$OUT/cpu.pprof" > "$OUT/cpu_top.txt"
+go tool pprof -top -alloc_space -nodecount=40 "$OUT/mem.pprof" > "$OUT/alloc_space_top.txt"
+```
 
 ## Search/fetch timing boundary
 
@@ -228,7 +276,7 @@ counters.
 | Limitation | Status/link |
 | --- | --- |
 | Native vector graph reads from typed-column dense sections are landed for the current `column_graph` path, but broader vector product tuning remains pre-alpha. | [#1782](https://github.com/snissn/gomap/issues/1782), [column graph native vector search spec](../spec/column-graph-native-vector-search.md). |
-| Authoritative fixed-degree `adjacency_list` typed-column storage is landed for explicit `typed_column_part` owners with positive `adjacency_degree`, but certified adjacency mmap direct views are deferred/fallback-only for this stack. | [#1783](https://github.com/snissn/gomap/issues/1783), [#1901](https://github.com/snissn/gomap/issues/1901) |
+| Certified all-layer `column_graph` adjacency direct sources are published for explicit offsets-list typed-column assets and consumed by native search. Row-asset adjacency remains a legacy/corruption fallback, and dense fixed-degree compatibility remains a separate fallback path. | [#1783](https://github.com/snissn/gomap/issues/1783), [#1901](https://github.com/snissn/gomap/issues/1901), [#1921](https://github.com/snissn/gomap/issues/1921) |
 | SIMD/vectorized dense-section kernels are follow-up optimization work. | [#1790](https://github.com/snissn/gomap/issues/1790) |
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
@@ -257,4 +305,4 @@ counters.
 | `docs_fetched` is non-zero in a search-only comparison | You included final document materialization. | Drop `-include-docs` or move document fetch into a separate benchmark row. |
 | Search benchmark allocates heavily | You may be timing setup/open, public document materialization, or fallback decode. | Compare reusable-searcher vs one-shot names and inspect allocation profiles. |
 | Results differ across branches | On-disk formats/APIs are pre-alpha. | Rebuild DB directories and rerun with the same rows/dims/degree/top-k/seed. |
-| Adjacency typed-column ownership is needed | Fixed-degree dense row-major little-endian `uint32` bytes are supported for explicit non-nullable `typed_column_part` owners with positive `adjacency_degree`, but direct-view certification is deferred to #1901. | Configure `adjacency_degree` on the authoritative field; expect decode/fallback paths until #1901 lands. |
+| Adjacency direct-source counters show scratch decodes | The certified all-layer `column_graph` adjacency direct sources are missing, stale, or failed validation, so search fell back to row-asset adjacency or dense compatibility/corruption recovery. | Rebuild or republish the graph so every layer has a certified `uint32_offsets_list` adjacency source; on the direct path expect adjacency mmap/direct counters with `adjacency_scratch_decodes/search=0`. |

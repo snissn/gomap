@@ -161,6 +161,13 @@ The initial API lives in `TreeDB/collections`:
   snapshot dirtiness, candidate counts, selected strategy, exact fallback
   reason, rebuild duration, and recall-at-k.
 
+Native `column_graph` benchmark tiers are documented in
+`docs/guides/vector-search-typed-column.md#vector-search-benchmark-tiers`.
+Use that matrix to distinguish core graph search, existing public response-owned
+`Search`, reusable-buffer no-document `SearchWithBuffer`, parallel callers, and
+explicit document-fetch paths. Report `ops/sec` (`1e9 / ns/op`) with `ns/op`,
+`B/op`, `allocs/op`, and vector/adjacency direct-vs-scratch counters.
+
 Smoke benchmark:
 
 ```sh
