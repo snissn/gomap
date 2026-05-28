@@ -171,8 +171,11 @@ func TestColumnVectorGraphNativeSearchCountersReportPayloadBytesC3(t *testing.T)
 	if got, want := stats.VectorBytesRead, stats.CandidateFetches*uint64(def.Dimensions)*4; got != want {
 		t.Fatalf("vector bytes read=%d want candidate_fetches*dims*4=%d stats=%+v", got, want, stats)
 	}
-	if stats.AdjacencyBytesRead == 0 || stats.AdjacencyDirectViews+stats.AdjacencyScratchDecodes == 0 {
-		t.Fatalf("stats=%+v want adjacency byte and direct/scratch counters", stats)
+	if stats.AdjacencyBytesRead == 0 || stats.AdjacencyMmapDirectViews+stats.AdjacencyHeapCopyTypedViews+stats.AdjacencyScratchDecodes == 0 {
+		t.Fatalf("stats=%+v want adjacency bytes and a classified adjacency source outcome", stats)
+	}
+	if stats.AdjacencyScratchDecodes != 0 {
+		t.Fatalf("stats=%+v want certified adjacency sources to avoid scratch decodes", stats)
 	}
 }
 
