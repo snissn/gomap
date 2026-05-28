@@ -10,8 +10,9 @@ const (
 	// Keep deferred/retained one-shot dictionary scans to small/medium payloads.
 	// Pure q1 group-count streams codes synchronously and intentionally does not
 	// use this cap, so direct one-shot calls avoid a throwaway translated arena.
-	columnDictionaryCodeOneShotMaxBytes          = 3 << 20
-	columnDictionaryCodeDistinctOneShotMaxValues = 1 << 16
+	columnDictionaryCodeOneShotMaxBytes                = 3 << 20
+	columnDictionaryCodeDistinctOneShotMaxValues       = 1 << 16
+	columnDictionaryCodeGroupCountOneShotLocalStackCap = 64
 )
 
 type columnDictionaryCodeGroupCountRunner struct {
@@ -326,6 +327,7 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		result:     make([]ColumnPhysicalQueryGroup, 0, 16),
 	}
 	var scratch []byte
+	var localCountStack [columnDictionaryCodeGroupCountOneShotLocalStackCap]int
 	assetBytes := int64(0)
 	blocks := 0
 	rows := 0
@@ -368,13 +370,15 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
 		}
+		localCounts := reducer.prepareLocalCounts(len(localToGlobal), localCountStack[:])
 		for i, localCode := range codes {
-			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
+			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localCounts))
 			if !ok {
-				return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
+				return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localCounts))
 			}
-			reducer.counts[localToGlobal[localIdx]]++
+			localCounts[localIdx]++
 		}
+		reducer.mergeLocalCounts(localCounts, localToGlobal)
 		rows += rowCount
 		assetBytes += snapshot.AssetRef.Length
 		blocks++
@@ -1053,6 +1057,44 @@ func (r *columnDictionaryCodeGroupCountOneShotReducer) translateDictionaryValue(
 	}
 	localToGlobal[localCode] = globalCode
 	return true
+}
+
+func (r *columnDictionaryCodeGroupCountOneShotReducer) prepareLocalCounts(cardinality int, stack []int) []int {
+	if cardinality <= len(stack) {
+		localCounts := stack[:cardinality]
+		clear(localCounts)
+		return localCounts
+	}
+	// For uncommon larger local dictionaries, borrow scratch space from counts'
+	// spare capacity so direct q1 avoids a separate per-call heap object while
+	// reusing the local buckets across assets. The returned slice is outside
+	// len(r.counts), so groups() and global count merges only observe the real
+	// global-count prefix.
+	needed := len(r.counts) + cardinality
+	if needed > cap(r.counts) {
+		newCap := cap(r.counts) * 2
+		if newCap < needed {
+			newCap = needed
+		}
+		if newCap < 16 {
+			newCap = 16
+		}
+		counts := make([]int, len(r.counts), newCap)
+		copy(counts, r.counts)
+		r.counts = counts
+	}
+	localCounts := r.counts[len(r.counts):needed]
+	clear(localCounts)
+	return localCounts
+}
+
+func (r *columnDictionaryCodeGroupCountOneShotReducer) mergeLocalCounts(localCounts []int, localToGlobal []uint32) {
+	for localIdx, count := range localCounts {
+		if count == 0 {
+			continue
+		}
+		r.counts[localToGlobal[localIdx]] += count
+	}
 }
 
 func (r *columnDictionaryCodeGroupCountOneShotReducer) groups() []ColumnPhysicalQueryGroup {
