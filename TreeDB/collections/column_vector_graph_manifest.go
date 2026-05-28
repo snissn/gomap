@@ -219,6 +219,7 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 	snapshot.AssetRef.Length = int64(length64)
 	snapshot.AssetRef.Checksum = uint32(checksum64)
 	snapshot.AssetBytes = int64(assetBytes64)
+	seenLegacyLayer0AdjacencySourceBlock := false
 	for cur.pos < len(raw) {
 		if len(raw)-cur.pos < 6 {
 			return columnVectorGraphManifestSnapshot{}, errors.New("collections: trailing bytes in column vector graph manifest record")
@@ -230,6 +231,9 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 		}
 		switch magic {
 		case columnVectorGraphAdjacencyLayerSourcesMagic:
+			if seenLegacyLayer0AdjacencySourceBlock {
+				return columnVectorGraphManifestSnapshot{}, errors.New("collections: column vector graph manifest has both legacy layer-0 and all-layer adjacency source blocks")
+			}
 			if len(snapshot.AdjacencyLayerSources) > 0 {
 				return columnVectorGraphManifestSnapshot{}, errors.New("collections: duplicate column vector graph adjacency layer sources block")
 			}
@@ -259,6 +263,10 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 				cur.err = nil
 				continue
 			}
+			if seenLegacyLayer0AdjacencySourceBlock {
+				return columnVectorGraphManifestSnapshot{}, errors.New("collections: duplicate column vector graph legacy layer-0 adjacency source block")
+			}
+			seenLegacyLayer0AdjacencySourceBlock = true
 			if err := validateColumnVectorGraphLayer0AdjacencySourceSnapshot(source); err == nil {
 				snapshot.Layer0AdjacencySource = source
 			}

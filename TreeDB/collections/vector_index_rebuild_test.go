@@ -405,6 +405,17 @@ func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T
 			}
 		})
 	}
+	t.Run("legacy_block_before_all_layer_block", func(t *testing.T) {
+		var legacy bytes.Buffer
+		encodeColumnVectorGraphLayer0AdjacencySource(&legacy, graph.AdjacencyLayerSources[0])
+		corrupt := make([]byte, 0, len(encoded)+legacy.Len())
+		corrupt = append(corrupt, encoded[:pos]...)
+		corrupt = append(corrupt, legacy.Bytes()...)
+		corrupt = append(corrupt, encoded[pos:]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "both legacy layer-0 and all-layer") {
+			t.Fatalf("decode manifest with legacy+all-layer blocks err=%v, want duplicate-block failure", err)
+		}
+	})
 }
 
 func TestColumnGraphReachabilityProtectsAllLayerAdjacencySourceRefs1920(t *testing.T) {
