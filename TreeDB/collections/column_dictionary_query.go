@@ -10,8 +10,9 @@ const (
 	// Keep deferred/retained one-shot dictionary scans to small/medium payloads.
 	// Pure q1 group-count streams codes synchronously and intentionally does not
 	// use this cap, so direct one-shot calls avoid a throwaway translated arena.
-	columnDictionaryCodeOneShotMaxBytes          = 3 << 20
-	columnDictionaryCodeDistinctOneShotMaxValues = 1 << 16
+	columnDictionaryCodeOneShotMaxBytes                = 3 << 20
+	columnDictionaryCodeDistinctOneShotMaxValues       = 1 << 16
+	columnDictionaryCodeGroupCountOneShotLocalStackCap = 64
 )
 
 type columnDictionaryCodeGroupCountRunner struct {
@@ -326,6 +327,7 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		result:     make([]ColumnPhysicalQueryGroup, 0, 16),
 	}
 	var scratch []byte
+	var localCountStack [columnDictionaryCodeGroupCountOneShotLocalStackCap]int
 	assetBytes := int64(0)
 	blocks := 0
 	rows := 0
@@ -368,7 +370,7 @@ func runColumnDictionaryCodeGroupCountOneShot(view columnPhysicalScanSnapshotVie
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, true, err
 		}
-		localCounts := reducer.prepareLocalCounts(len(localToGlobal))
+		localCounts := reducer.prepareLocalCounts(len(localToGlobal), localCountStack[:])
 		for i, localCode := range codes {
 			localIdx, ok := columnDictionaryCodeIndex(localCode, len(localCounts))
 			if !ok {
@@ -1057,11 +1059,17 @@ func (r *columnDictionaryCodeGroupCountOneShotReducer) translateDictionaryValue(
 	return true
 }
 
-func (r *columnDictionaryCodeGroupCountOneShotReducer) prepareLocalCounts(cardinality int) []int {
-	// Borrow scratch space from counts' spare capacity so direct q1 keeps the
-	// existing one-shot allocation budget while reusing the local buckets across
-	// assets. The returned slice is outside len(r.counts), so groups() and global
-	// count merges only observe the real global-count prefix.
+func (r *columnDictionaryCodeGroupCountOneShotReducer) prepareLocalCounts(cardinality int, stack []int) []int {
+	if cardinality <= len(stack) {
+		localCounts := stack[:cardinality]
+		clear(localCounts)
+		return localCounts
+	}
+	// For uncommon larger local dictionaries, borrow scratch space from counts'
+	// spare capacity so direct q1 avoids a separate per-call heap object while
+	// reusing the local buckets across assets. The returned slice is outside
+	// len(r.counts), so groups() and global count merges only observe the real
+	// global-count prefix.
 	needed := len(r.counts) + cardinality
 	if needed > cap(r.counts) {
 		newCap := cap(r.counts) * 2
