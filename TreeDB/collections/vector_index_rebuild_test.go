@@ -428,6 +428,20 @@ func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T
 			t.Fatalf("decode manifest with malformed legacy before all-layer err=%v, want fail-closed malformed legacy failure", err)
 		}
 	})
+	t.Run("malformed_legacy_only_magic_payload_ignored", func(t *testing.T) {
+		badLegacy := make([]byte, 14)
+		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
+		binary.BigEndian.PutUint16(badLegacy[4:], columnVectorGraphLayer0SourceVersion+1)
+		binary.BigEndian.PutUint32(badLegacy[10:], columnVectorGraphAdjacencyLayerSourcesMagic)
+		corrupt := append(append([]byte(nil), encoded[:pos]...), badLegacy...)
+		decoded, err := decodeColumnVectorGraphManifestRecord(corrupt)
+		if err != nil {
+			t.Fatalf("decode malformed legacy-only trailer with embedded TCGL magic: %v", err)
+		}
+		if decoded.Layer0AdjacencySource.Present || len(decoded.AdjacencyLayerSources) != 0 || decoded.AdjacencyLayerCount != 0 {
+			t.Fatalf("decoded malformed legacy-only trailer sources=%+v count=%d layer0=%+v, want ignored optional legacy metadata", decoded.AdjacencyLayerSources, decoded.AdjacencyLayerCount, decoded.Layer0AdjacencySource)
+		}
+	})
 	t.Run("encode_rejects_empty_advertised_layers", func(t *testing.T) {
 		broken := graph
 		broken.AdjacencyLayerSources = nil
