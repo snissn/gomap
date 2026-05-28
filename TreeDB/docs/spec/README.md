@@ -206,10 +206,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     row assets deferred to #1897 and adjacency direct views deferred to #1901.
 - `TreeDB/docs/spec/typed-column-production-jsonbench-plan.md`
   - planning note for promoting `experiments/colgranule` sort order, granule
-    metadata, codecs/compression, q1-q5 kernels, aggregate metadata, multipart
-    visibility, lifecycle accounting, and JSONBench reporting into production
-    `TreeDB/collections`, with direct query performance as the first-class
-    target.
+    metadata, codecs/compression, q1-q5 kernels, q2 real-predicate grouped
+    distinct execution, aggregate metadata, multipart visibility, lifecycle
+    accounting, and JSONBench reporting into production `TreeDB/collections`,
+    with direct query performance as the first-class target.
 
 ## Canonical Ownership
 
