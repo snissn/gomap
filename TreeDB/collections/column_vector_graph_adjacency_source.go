@@ -31,6 +31,20 @@ type columnVectorGraphPreparedAdjacencySource struct {
 	SchemaHash   uint64
 }
 
+type columnVectorGraphPreparedAdjacencySourcePayload struct {
+	Layer        int
+	Config       ColumnStoreConfig
+	PartID       uint64
+	Payload      []byte
+	Bytes        int64
+	Rows         int
+	Values       int
+	OffsetsBytes int64
+	ValuesBytes  int64
+	PaddingBytes int64
+	SchemaHash   uint64
+}
+
 type columnVectorGraphPreparedLayer0AdjacencySource = columnVectorGraphPreparedAdjacencySource
 
 func columnVectorGraphLayer0AdjacencySourceColumnStoreConfig(collection string, base ColumnStoreConfig, def VectorIndexDefinition) (ColumnStoreConfig, typedColumnAdapterColumn, error) {
@@ -103,6 +117,52 @@ func prepareColumnVectorGraphLayer0AdjacencySourceAsset(assetRootDir, collection
 }
 
 func prepareColumnVectorGraphAdjacencySourcesAssets(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedAdjacencySource, error) {
+	payloads, err := prepareColumnVectorGraphAdjacencySourcePayloads(assetRootDir, collection, base, def, firstPartID, rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(payloads) == 0 {
+		return nil, nil
+	}
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(assetRootDir, payloads[0].Config)
+	if err != nil {
+		return nil, err
+	}
+	layers, appendErr := appendColumnVectorGraphAdjacencySourcePayloads(appender, generation, payloads)
+	closeErr := appender.close()
+	if appendErr != nil {
+		return nil, errors.Join(appendErr, closeErr)
+	}
+	return layers, closeErr
+}
+
+func prepareColumnVectorGraphAdjacencySourcePayloads(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedAdjacencySourcePayload, error) {
+	lists, err := buildColumnVectorGraphAdjacencyLayerLists(rows)
+	if err != nil {
+		return nil, err
+	}
+	payloads := make([]columnVectorGraphPreparedAdjacencySourcePayload, len(lists))
+	partID := firstPartID
+	for layer, list := range lists {
+		if partID == 0 {
+			return nil, errors.New("collections: column_graph adjacency source part_id overflow")
+		}
+		prepared, err := prepareColumnVectorGraphAdjacencySourcePayloadFromList(assetRootDir, collection, base, def, partID, layer, list)
+		if err != nil {
+			return nil, err
+		}
+		payloads[layer] = prepared
+		if layer != len(lists)-1 {
+			if partID == ^uint64(0) {
+				return nil, errors.New("collections: column_graph adjacency source part_id overflow")
+			}
+			partID = nextColumnVectorGraphPartIDAfter(partID, partID)
+		}
+	}
+	return payloads, nil
+}
+
+func buildColumnVectorGraphAdjacencyLayerLists(rows []columnVectorGraphAssetRow) ([]typedcolumn.RawUint32OffsetsList, error) {
 	maxLayer := 0
 	for rowIdx := range rows {
 		rowMaxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].Adjacency)
@@ -113,107 +173,215 @@ func prepareColumnVectorGraphAdjacencySourcesAssets(assetRootDir, collection str
 			maxLayer = rowMaxLayer
 		}
 	}
-	layers := make([]columnVectorGraphPreparedAdjacencySource, maxLayer+1)
-	partID := firstPartID
-	for layer := 0; layer <= maxLayer; layer++ {
-		if partID == 0 {
-			return nil, errors.New("collections: column_graph adjacency source part_id overflow")
+	layers := make([]typedcolumn.RawUint32OffsetsList, maxLayer+1)
+	for layer := range layers {
+		layers[layer].Rows = len(rows)
+		layers[layer].Offsets = make([]uint64, len(rows)+1)
+	}
+	for rowIdx := range rows {
+		adjacency := rows[rowIdx].Adjacency
+		if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+			if len(adjacency) > math.MaxInt-len(layers[0].Values) {
+				return nil, fmt.Errorf("collections: column_graph adjacency layer 0 values overflow int")
+			}
+			layers[0].Values = append(layers[0].Values, adjacency...)
+		} else {
+			rowMaxLayer := int(adjacency[1])
+			pos := 2
+			for layer := 0; layer <= rowMaxLayer; layer++ {
+				if pos >= len(adjacency) {
+					return nil, fmt.Errorf("collections: column_graph adjacency row %d layer=%d missing count", rowIdx, layer)
+				}
+				count := int(adjacency[pos])
+				pos++
+				if count > len(adjacency)-pos {
+					return nil, fmt.Errorf("collections: column_graph adjacency row %d layer=%d count=%d exceeds remaining=%d", rowIdx, layer, count, len(adjacency)-pos)
+				}
+				if count > math.MaxInt-len(layers[layer].Values) {
+					return nil, fmt.Errorf("collections: column_graph adjacency layer %d values overflow int", layer)
+				}
+				layers[layer].Values = append(layers[layer].Values, adjacency[pos:pos+count]...)
+				pos += count
+			}
+			if pos != len(adjacency) {
+				return nil, fmt.Errorf("collections: column_graph adjacency row %d trailing adjacency values=%d", rowIdx, len(adjacency)-pos)
+			}
 		}
-		prepared, err := prepareColumnVectorGraphAdjacencySourceAsset(assetRootDir, collection, base, def, generation, partID, layer, rows)
+		for layer := range layers {
+			layers[layer].Offsets[rowIdx+1] = uint64(len(layers[layer].Values))
+		}
+	}
+	return layers, nil
+}
+
+func appendColumnVectorGraphAdjacencySourcePayloads(appender *columnPhysicalAssetSegmentAppender, generation uint64, payloads []columnVectorGraphPreparedAdjacencySourcePayload) ([]columnVectorGraphPreparedAdjacencySource, error) {
+	layers := make([]columnVectorGraphPreparedAdjacencySource, len(payloads))
+	for i, payload := range payloads {
+		alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
+		ref, err := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, payload.PartID, alignment)
 		if err != nil {
 			return nil, err
 		}
-		layers[layer] = prepared
-		if layer != maxLayer {
-			if partID == ^uint64(0) {
-				return nil, errors.New("collections: column_graph adjacency source part_id overflow")
-			}
-			partID = nextColumnVectorGraphPartIDAfter(partID, partID)
+		if err := validateColumnVectorGraphPreparedAdjacencySourceRef(payload, ref, generation); err != nil {
+			appender.failed = true
+			return nil, err
+		}
+		layers[i] = columnVectorGraphPreparedAdjacencySource{
+			Present:      true,
+			Layer:        payload.Layer,
+			Config:       payload.Config,
+			Ref:          ref,
+			Bytes:        ref.Length,
+			Rows:         payload.Rows,
+			Values:       payload.Values,
+			OffsetsBytes: payload.OffsetsBytes,
+			ValuesBytes:  payload.ValuesBytes,
+			PaddingBytes: payload.PaddingBytes,
+			SchemaHash:   payload.SchemaHash,
 		}
 	}
 	return layers, nil
 }
 
 func prepareColumnVectorGraphAdjacencySourceAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, layer int, rows []columnVectorGraphAssetRow) (columnVectorGraphPreparedAdjacencySource, error) {
-	if assetRootDir == "" {
-		return columnVectorGraphPreparedAdjacencySource{}, errors.New("collections: column_graph adjacency source requires asset root dir")
+	payload, err := prepareColumnVectorGraphAdjacencySourcePayload(assetRootDir, collection, base, def, partID, layer, rows)
+	if err != nil {
+		return columnVectorGraphPreparedAdjacencySource{}, err
 	}
-	if generation == 0 || partID == 0 {
+	if generation == 0 {
 		return columnVectorGraphPreparedAdjacencySource{}, errors.New("collections: column_graph adjacency source requires generation and part_id")
 	}
-	if layer < 0 {
-		return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency source layer=%d must be non-negative", layer)
-	}
-	sourceCfg, _, err := columnVectorGraphAdjacencySourceColumnStoreConfig(collection, base, def, layer)
+	ref, err := writeColumnVectorGraphLayer0AdjacencySourceAssetToManager(assetRootDir, payload.Config, payload.Payload, generation, partID)
 	if err != nil {
 		return columnVectorGraphPreparedAdjacencySource{}, err
 	}
-	fields := columnStoreTypedColumnPartFields(sourceCfg)
-	adapterRows := make([]typedColumnAdapterRow, len(rows))
-	valuesCount := 0
-	for rowIdx := range rows {
-		layerAdjacency, err := columnVectorGraphAdjacencyLayer(rows[rowIdx].Adjacency, layer)
-		if err != nil {
-			return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency layer %d row %d: %w", layer, rowIdx, err)
-		}
-		if len(layerAdjacency) > math.MaxInt-valuesCount {
-			return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency layer %d values overflow int", layer)
-		}
-		valuesCount += len(layerAdjacency)
-		adapterRows[rowIdx] = typedColumnAdapterRow{
-			PrimaryID: int64(rowIdx),
-			Values: map[string]columnDeclaredValue{
-				fields[0].Path: {Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: append([]uint32(nil), layerAdjacency...)},
-			},
-		}
-	}
-	part, err := buildTypedColumnAdapterPart(typedColumnAdapterOptions{
-		Collection:    collection,
-		Namespace:     sourceCfg.AssetManager.Namespace,
-		SchemaVersion: uint32(sourceCfg.SchemaHash),
-		PartID:        partID,
-		Fields:        fields,
-	}, adapterRows)
-	if err != nil {
+	if err := validateColumnVectorGraphPreparedAdjacencySourceRef(payload, ref, generation); err != nil {
 		return columnVectorGraphPreparedAdjacencySource{}, err
-	}
-	image, err := part.buildImage()
-	if err != nil {
-		return columnVectorGraphPreparedAdjacencySource{}, err
-	}
-	if image.Rows != len(rows) || image.PartID != partID {
-		return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency layer %d source image rows/part=(%d,%d) want (%d,%d)", layer, image.Rows, image.PartID, len(rows), partID)
-	}
-	accounting := part.Part.ByteAccountingFromImage(image)
-	if accounting.DeclaredColumnOffsetsBytes <= 0 {
-		return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency layer %d source missing offsets bytes", layer)
-	}
-	if accounting.DeclaredColumnValuesBytes < 0 {
-		return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency layer %d source invalid values bytes", layer)
-	}
-	ref, err := writeColumnVectorGraphLayer0AdjacencySourceAssetToManager(assetRootDir, sourceCfg, image.Bytes, generation, partID)
-	if err != nil {
-		return columnVectorGraphPreparedAdjacencySource{}, err
-	}
-	if ref.Namespace != sourceCfg.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Generation != generation || ref.PartID != partID || ref.Length != int64(len(image.Bytes)) {
-		return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: invalid column_graph adjacency layer %d source asset ref %+v", layer, ref)
-	}
-	if ref.Offset%8 != 0 {
-		return columnVectorGraphPreparedAdjacencySource{}, fmt.Errorf("collections: column_graph adjacency layer %d source absolute asset offset=%d is not 8-byte aligned", layer, ref.Offset)
 	}
 	return columnVectorGraphPreparedAdjacencySource{
 		Present:      true,
-		Layer:        layer,
-		Config:       sourceCfg,
+		Layer:        payload.Layer,
+		Config:       payload.Config,
 		Ref:          ref,
 		Bytes:        ref.Length,
+		Rows:         payload.Rows,
+		Values:       payload.Values,
+		OffsetsBytes: payload.OffsetsBytes,
+		ValuesBytes:  payload.ValuesBytes,
+		PaddingBytes: payload.PaddingBytes,
+		SchemaHash:   payload.SchemaHash,
+	}, nil
+}
+
+func prepareColumnVectorGraphAdjacencySourcePayload(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, partID uint64, layer int, rows []columnVectorGraphAssetRow) (columnVectorGraphPreparedAdjacencySourcePayload, error) {
+	if layer < 0 {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency source layer=%d must be non-negative", layer)
+	}
+	lists, err := buildColumnVectorGraphAdjacencyLayerLists(rows)
+	if err != nil {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, err
+	}
+	var list typedcolumn.RawUint32OffsetsList
+	if layer < len(lists) {
+		list = lists[layer]
+	} else {
+		list = typedcolumn.RawUint32OffsetsList{Rows: len(rows), Offsets: make([]uint64, len(rows)+1)}
+	}
+	return prepareColumnVectorGraphAdjacencySourcePayloadFromList(assetRootDir, collection, base, def, partID, layer, list)
+}
+
+func prepareColumnVectorGraphAdjacencySourcePayloadFromList(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, partID uint64, layer int, list typedcolumn.RawUint32OffsetsList) (columnVectorGraphPreparedAdjacencySourcePayload, error) {
+	if assetRootDir == "" {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, errors.New("collections: column_graph adjacency source requires asset root dir")
+	}
+	if partID == 0 {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, errors.New("collections: column_graph adjacency source requires generation and part_id")
+	}
+	if layer < 0 {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency source layer=%d must be non-negative", layer)
+	}
+	sourceCfg, adapterColumn, err := columnVectorGraphAdjacencySourceColumnStoreConfig(collection, base, def, layer)
+	if err != nil {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, err
+	}
+	if err := typedcolumn.ValidateRawUint32OffsetsListShape(list.Rows, list.Offsets, uint64(len(list.Values))); err != nil {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source shape: %w", layer, err)
+	}
+	primaryIDs := make([]int64, list.Rows)
+	for rowIdx := range primaryIDs {
+		primaryIDs[rowIdx] = int64(rowIdx)
+	}
+	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
+		SchemaVersion: uint32(sourceCfg.SchemaHash),
+		SchemaMode:    typedcolumn.ColumnSchemaFixed,
+		Columns: []typedcolumn.ColumnDefinition{
+			{
+				Name:           typedColumnAdapterPrimaryIDColumn,
+				Type:           typedcolumn.ColumnTypeInt64,
+				Encoding:       typedcolumn.EncodingRawInt64,
+				Compression:    typedcolumn.CompressionNone,
+				CompressionSet: true,
+				StatsDisabled:  true,
+			},
+			adapterColumn.Definition,
+		},
+		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
+		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
+		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
+		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
+	}, typedcolumn.Batch{
+		Rows: list.Rows,
+		Columns: map[string][]int64{
+			typedColumnAdapterPrimaryIDColumn: primaryIDs,
+		},
+		Uint32OffsetsLists: map[string]typedcolumn.RawUint32OffsetsList{
+			adapterColumn.Definition.Name: list,
+		},
+	})
+	if err != nil {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, err
+	}
+	logicalTypes := make(map[string]string, 1)
+	if logical, ok := columnStoreSemanticLogicalType(ColumnStoreValueAdjacencyList); ok {
+		logicalTypes[adapterColumn.Definition.Name] = string(logical)
+	}
+	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
+	if err != nil {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, err
+	}
+	if image.Rows != list.Rows || image.PartID != partID {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source image rows/part=(%d,%d) want (%d,%d)", layer, image.Rows, image.PartID, list.Rows, partID)
+	}
+	accounting := part.ByteAccountingFromImage(image)
+	if accounting.DeclaredColumnOffsetsBytes <= 0 {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source missing offsets bytes", layer)
+	}
+	if accounting.DeclaredColumnValuesBytes < 0 {
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source invalid values bytes", layer)
+	}
+	return columnVectorGraphPreparedAdjacencySourcePayload{
+		Layer:        layer,
+		Config:       sourceCfg,
+		PartID:       partID,
+		Payload:      image.Bytes,
+		Bytes:        int64(len(image.Bytes)),
 		Rows:         image.Rows,
-		Values:       valuesCount,
+		Values:       len(list.Values),
 		OffsetsBytes: int64(accounting.DeclaredColumnOffsetsBytes),
 		ValuesBytes:  int64(accounting.DeclaredColumnValuesBytes),
 		PaddingBytes: int64(accounting.SerializedPaddingBytes),
 		SchemaHash:   sourceCfg.SchemaHash,
 	}, nil
+}
+
+func validateColumnVectorGraphPreparedAdjacencySourceRef(payload columnVectorGraphPreparedAdjacencySourcePayload, ref ColumnAssetRef, generation uint64) error {
+	if ref.Namespace != payload.Config.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Generation != generation || ref.PartID != payload.PartID || ref.Length != payload.Bytes {
+		return fmt.Errorf("collections: invalid column_graph adjacency layer %d source asset ref %+v", payload.Layer, ref)
+	}
+	if ref.Offset%8 != 0 {
+		return fmt.Errorf("collections: column_graph adjacency layer %d source absolute asset offset=%d is not 8-byte aligned", payload.Layer, ref.Offset)
+	}
+	return nil
 }
 
 func writeColumnVectorGraphLayer0AdjacencySourceAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {

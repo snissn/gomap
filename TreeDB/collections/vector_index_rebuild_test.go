@@ -292,14 +292,10 @@ func TestColumnGraphAllLayerAdjacencySourcesRejectSingleLayerDefect1920(t *testi
 		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, graph); err != nil {
 			t.Fatalf("validate all-layer sources before removal: %v", err)
 		}
-		path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), graph.AdjacencyLayerSources[1].Ref)
-		if err != nil {
-			t.Fatalf("columnAssetSegmentPath: %v", err)
-		}
-		if err := os.Remove(path); err != nil {
-			t.Fatalf("remove layer-1 source: %v", err)
-		}
-		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, graph); err == nil || !strings.Contains(err.Error(), "layer 1") {
+		broken := graph
+		broken.AdjacencyLayerSources = append([]columnVectorGraphLayer0AdjacencySourceSnapshot(nil), graph.AdjacencyLayerSources...)
+		broken.AdjacencyLayerSources[1].Ref.FileID += 1000
+		if err := validateColumnVectorGraphAdjacencyLayerSourcesAssets(d.ColumnAssetRootDir(), "docs", *cfg, def, broken); err == nil || !strings.Contains(err.Error(), "layer 1") {
 			t.Fatalf("validate all-layer sources after missing layer err=%v, want layer-1 failure", err)
 		}
 	})
