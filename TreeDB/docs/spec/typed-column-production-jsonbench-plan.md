@@ -19,6 +19,13 @@ The one-shot direct API must become fast and clear enough that ad-hoc physical
 queries do not pay avoidable setup, mapping, allocation, or document
 materialization costs.
 
+JSONBench parity must use real query predicates over stored columns. In
+particular, q2 must store full `kind`, `operation`, `collection` (reported as
+`event`), and `did` values, then execute `kind = commit` and
+`operation = create` predicates at query time. Do not regain ClickHouse-like
+numbers by write-time masking,
+sentinel substitution, or benchmark-specific q2 pre-filtering.
+
 ## Terms
 
 Use these terms consistently in code, docs, benchmark names, and diagnostics.
@@ -265,11 +272,17 @@ typed-column part.
 Example JSONBench sort keys:
 
 - `time_us`
-- `(kind_code, operation_code, collection_code, did_code, time_us)`
+- `(kind, operation, collection, did, time_us)`
 
 Rows:
 
-- the sort key orders rows inside one part
+- the sort key orders rows inside one part by logical column values, not by
+  arbitrary per-part dictionary code assignment
+- dictionary-code carriers may only be used for sort comparison when their code
+  ordering is proven to preserve the declared logical value ordering, or when
+  comparison consults the dictionary values explicitly
+- nullable, missing, and default values must have a documented ordering before
+  a column can participate in a persisted sort key
 - equal sort-key values must tie-break by logical primary id so the order is
   deterministic
 
@@ -750,7 +763,7 @@ There are two different JSONBench-related locations.
 | Location | Role |
 | --- | --- |
 | `experiments/colgranule/jsonbench_treedb_columnstore_bench_test.go` | In-repo synthetic benchmark that compares the reference experiment kernels with the current production collection physical query path. |
-| `$JSONBENCH_TREEDB_DIR` or `<jsonbench-checkout>/treedb` | Local checkout of the external JSONBench TreeDB harness. This is the canonical benchmark/reporting home for cross-database JSONBench runs. Current code is a public collections API row-scan/template baseline, not a production typed-column cell. |
+| `$JSONBENCH_TREEDB_DIR` or `<jsonbench-checkout>/treedb` | Local checkout of the external JSONBench TreeDB harness. This is the canonical benchmark/reporting home for cross-database JSONBench runs; repository state is authoritative, not any one local path. Current external work has transitional TreeDB column-store rows; this plan targets the final production typed-column cells and must keep direct, prepared, and metadata rows unambiguous. |
 
 The external harness entry points are under `$JSONBENCH_TREEDB_DIR`:
 
@@ -758,6 +771,21 @@ The external harness entry points are under `$JSONBENCH_TREEDB_DIR`:
 - `cmd/jsonbench_treedb/run.go`
 - `cmd/jsonbench_treedb/queries.go`
 - `README.md`
+
+Current transitional external labels include `column-store`,
+`column-store-prepared`, and `column-store-prepared-metadata` once the prepared
+layout split lands. Those labels are acceptable as interim reference rows, but
+final production typed-column reports must still expose the same dimensions as
+`column-direct`, `column-prepared`, `column-direct-metadata`, and
+`column-prepared-metadata` or provide explicit aliases.
+
+Draft label mapping:
+
+| Transitional label | Production dimension |
+| --- | --- |
+| `column-store` | `column-direct` data scan |
+| `column-store-prepared` | `column-prepared` data scan |
+| `column-store-prepared-metadata` | `column-prepared-metadata` for q4/q5 metadata Top-K |
 
 ## Current Gap Summary
 
@@ -767,7 +795,7 @@ The external harness entry points are under `$JSONBENCH_TREEDB_DIR`:
 | Granules and marks | Per-granule descriptors and sort-key prefix marks support pruning. | Present in the data plane. | Not used by production dictionary/int64 physical query paths. |
 | Sectioned column part image | One row-aligned image contains descriptors, marks, locators, dictionaries, metadata, and payloads. | Present, with extra stats/pruning/layout sections. | Published for `typed_column_part` owners, but JSONBench string/int64 production query paths still largely use compatibility per-column assets. |
 | Encodings and compression | Delta, double-delta, nullable, bool bitpack/RLE, compact string codes, adaptive codec block sizing, Snappy/LZ4 keep-if-smaller. | Mostly present or extended. | Production JSONBench-style physical queries do not consistently consume the typed-column codec/block model. |
-| q1-q5 kernels | Dense low-allocation kernels, fused q2, q4 time-order early stop, q4 prefix-pruned scan, q4/q5 metadata paths. | General primitives exist, but JSONBench kernels are not production APIs. | Prepared paths are strong in some cases, but direct paths still pay avoidable setup/mapping costs and lack q4 sort-order operators. |
+| q1-q5 kernels | Dense low-allocation kernels, fused q2, q2 sorted-prefix grouped distinct, q4 time-order early stop, q4 prefix-pruned scan, q4/q5 metadata paths. | General primitives exist, but JSONBench kernels are not production APIs. | Prepared paths are strong in some cases, but direct paths still pay avoidable setup/mapping costs, direct q2 rebuilds high-cardinality distinct state, and q4 sort-order operators are absent. |
 | Predicate-qualified aggregate metadata | Per-granule metadata can be built only for rows matching declared predicates. | Present in the data plane. | Production `ColumnAggregateMetadata` has no predicate declaration and aggregate metadata queries reject physical predicates. |
 | Multipart visibility and compaction | Base/delta/tombstones, latest-row visibility, part-set scans, compaction planning. | Data-plane subset exists. | Production has mutation manifests and visibility fallback, but optimized physical predicates, aggregate metadata, and prepared paths are mostly insert-only. |
 | Lifecycle control plane | Workspace inventory, prepared assets, reachability/reclaim/rewrite debt/quarantine planning. | Mostly deferred from internal typedcolumn. | Production has real asset manager/publish/GC/rewrite plumbing, but not a sorted typed-column part-set lifecycle model with full JSONBench diagnostics. |
@@ -821,8 +849,12 @@ Deliverables:
 
 - Pass `ColumnStoreConfig.SortKey` into the typed-column adapter instead of
   always using the synthetic primary-id order.
-- Sort each typed-column part by the configured sort key, then by logical
-  primary key, then by stable input order if needed.
+- Sort each typed-column part by the configured sort key's logical values, then
+  by logical primary key, then by stable input order if needed.
+- Define and test nullable/missing/default ordering for every supported sort-key
+  value type before allowing that type in persisted sort metadata.
+- Ensure dictionary-backed string sort keys compare by logical string value or by
+  a dictionary code space whose ordering is explicitly certified as equivalent.
 - Persist sort-key metadata in the column part image and manifest.
 - Start with ascending sort keys. Add descending support only after the mark
   semantics and tests cover it.
@@ -832,7 +864,8 @@ Acceptance criteria:
 - A collection declared with `SortKey: time_us` physically stores typed-column
   part rows in ascending `time_us` order.
 - A collection declared with the ClickHouse-style key
-  `(kind, operation, collection, did, time_us)` physically stores that order.
+  `(kind, operation, collection, did, time_us)` physically stores that order for
+  both q2 grouped-distinct and q4b prefix-scan layouts.
 - Reopen tests verify that sort metadata and row locators survive checkpoint and
   reopen.
 - Direct q4 time-order early-stop tests prove that the query stops after it can
@@ -846,13 +879,20 @@ Deliverables:
 - Add a production pruning plan for sort-key prefix ranges.
 - Add diagnostics for granules considered, granules skipped by marks, granules
   decoded, rows scanned, and bytes decoded.
+- Make q2 use the ClickHouse-style sort key to restrict to the
+  `kind=commit`, `operation=create` prefix and stream grouped distinct over
+  `(collection, did)` without rebuilding a global `did` string map per direct
+  run.
 - Make q4b use the ClickHouse-style sort key to prune on
   `kind=commit`, `operation=create`, and `collection=app.bsky.feed.post`.
 
 Acceptance criteria:
 
+- q2 direct production query uses sorted-prefix planning for the
+  `kind/operation` predicate and exact grouped distinct over `collection/did`
+  when the physical sort key is available and validated.
 - q4b direct production query skips granules when marks prove they cannot match.
-- Mark-pruning result hashes match full-scan result hashes.
+- Mark-pruning and sorted-prefix result hashes match full-scan result hashes.
 - Tests cover empty ranges, boundary equality, multi-column prefixes, missing
   marks, corrupt marks, and unsupported descending marks.
 
@@ -864,7 +904,10 @@ but direct performance is the priority for this phase.
 Deliverables:
 
 - q1: grouped count by event/collection over dictionary codes.
-- q2: one fused pass that returns both row count and distinct user count by event.
+- q2: one fused pass that applies real `kind=commit` and `operation=create`
+  predicates, returns both row count and exact distinct user count by event, and
+  uses the sorted-prefix/grouped-distinct plan when the physical sort key proves
+  it is available.
 - q3: filtered event/hour grouped count.
 - q4a: top-3 earliest posters using `time_us` physical order and early stop.
 - q4b: top-3 earliest posters using ClickHouse-style sort order and mark-pruned
@@ -875,7 +918,8 @@ Acceptance criteria:
 
 - Direct q1-q5 scan typed-column sections, not JSON documents.
 - q2 is one physical query shape, not two independent physical calls glued
-  together at the benchmark layer.
+  together at the benchmark layer, and not a write-time masked benchmark
+  shortcut.
 - Hot loops avoid per-row map lookups and avoid per-row string conversions.
 - Each query has parity tests, allocation benchmarks, and CPU/alloc profiles.
 
@@ -987,7 +1031,7 @@ The production matrix should make every dimension explicit.
 | Query | Required production behavior |
 | --- | --- |
 | q1 | Count rows grouped by event/collection. |
-| q2 | For `kind=commit` and `operation=create`, count rows and distinct users grouped by event/collection. |
+| q2 | Store full `kind`, `operation`, `collection` (reported as `event`), and `did`; at query time apply `kind=commit` and `operation=create`, then count rows and exact distinct users grouped by event/collection. |
 | q3 | For `kind=commit`, `operation=create`, and event in the JSONBench event list, count rows grouped by event and hour of day. |
 | q4a | For post creates, return the three users with earliest post time using `time_us` physical order and early stop. |
 | q4b | For post creates, return the three users with earliest post time using ClickHouse-style physical order plus sort-key mark pruning. |
@@ -999,7 +1043,7 @@ The production matrix should make every dimension explicit.
 | --- | --- | --- |
 | `typed-column-primary-id-control` | synthetic primary id | Control layout. It should be correct but should not claim sort-order optimizations. |
 | `typed-column-time` | `time_us` | q4a early-stop layout and a useful q1/q2/q3/q5 control. |
-| `typed-column-filter-user-time` | `kind`, `operation`, `collection`, `did`, `time_us` | q4b mark-pruned prefix-scan layout and ClickHouse-order comparison. |
+| `typed-column-filter-user-time` | `kind`, `operation`, `collection`, `did`, `time_us` | q2 sorted-prefix grouped-distinct layout, q4b mark-pruned prefix-scan layout, and ClickHouse-order comparison. |
 | `typed-column-unsorted-legacy-assets` | current compatibility row order | Legacy production comparison only. Do not use it as the target implementation. |
 
 ### Execution modes
@@ -1127,6 +1171,9 @@ Required metrics:
   without naming the exact asset or section.
 - Do not report prepared-only JSONBench results as the typed-column result.
   Direct and prepared rows must stay separate.
+- Do not use q2 write-time masking, empty sentinels, or benchmark-specific
+  pre-filtered `event`/`did` payloads to simulate `kind=commit` and
+  `operation=create`. Store full predicate columns and execute real predicates.
 - Do not treat aggregate metadata as valid when mutation parts, stale manifests,
   compaction, or schema changes make the metadata unsafe.
 - Do not optimize by skipping checksum, schema, lifetime, or section-boundary
@@ -1140,10 +1187,15 @@ Required metrics:
    rather than only under `experiments/colgranule`.
 3. Wire `ColumnStoreConfig.SortKey` into typed-column publication for ascending
    int64/string-code sort carriers.
-4. Add q4a direct early-stop over `typed-column-time`.
-5. Add q2 direct fused count plus distinct over typed-column dictionary codes.
-6. Add sort-key mark diagnostics and q4b prefix pruning.
-7. Add predicate-qualified aggregate metadata declaration and q4/q5 metadata
+4. Add q2 direct fused count plus distinct over typed-column dictionary codes,
+   with real `kind`/`operation` predicates and no write-time sentinel masking.
+5. Wire sorted-prefix q2 planning over
+   `(kind, operation, collection, did, time_us)` so direct q2 stops rebuilding a
+   global high-cardinality `did` map when the sort contract is available.
+6. Add q4a direct early-stop over `typed-column-time`.
+7. Add sort-key mark diagnostics and q4b prefix pruning.
+8. Add predicate-qualified aggregate metadata declaration and q4/q5 metadata
    direct queries.
-8. Add external JSONBench `column-direct`, `column-prepared`,
-   `column-direct-metadata`, and `column-prepared-metadata` cells.
+9. Add or alias external JSONBench `column-direct`, `column-prepared`,
+   `column-direct-metadata`, and `column-prepared-metadata` cells, preserving
+   compatibility with transitional `column-store*` labels where needed.
