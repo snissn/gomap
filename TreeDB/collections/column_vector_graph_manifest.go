@@ -263,7 +263,7 @@ func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifes
 			sourceCur := cur
 			source, err := decodeColumnVectorGraphAdjacencySource(&sourceCur)
 			if err != nil {
-				if columnVectorGraphManifestRecordMagicAt(raw, cur.pos+6) == columnVectorGraphAdjacencyLayerSourcesMagic {
+				if columnVectorGraphManifestRecordHasDecodableAdjacencyLayerSourcesAtOrAfter(raw, cur.pos+6) {
 					return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: malformed legacy layer-0 adjacency source before all-layer adjacency sources block: %w", err)
 				}
 				cur.pos = len(raw)
@@ -302,6 +302,23 @@ func columnVectorGraphManifestRecordMagicAt(raw []byte, pos int) uint32 {
 		return 0
 	}
 	return magic
+}
+
+func columnVectorGraphManifestRecordHasDecodableAdjacencyLayerSourcesAtOrAfter(raw []byte, start int) bool {
+	if start < 0 {
+		start = 0
+	}
+	for pos := start; pos <= len(raw)-6; pos++ {
+		if columnVectorGraphManifestRecordMagicAt(raw, pos) != columnVectorGraphAdjacencyLayerSourcesMagic {
+			continue
+		}
+		candidate := manifestCursor{raw: raw, pos: pos}
+		layerCount, sources, err := decodeColumnVectorGraphAdjacencyLayerSources(&candidate)
+		if err == nil && validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(layerCount, sources) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func encodeColumnVectorGraphLayer0AdjacencySource(b *bytes.Buffer, source columnVectorGraphLayer0AdjacencySourceSnapshot) {

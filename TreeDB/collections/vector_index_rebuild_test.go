@@ -428,6 +428,19 @@ func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T
 			t.Fatalf("decode manifest with malformed legacy before all-layer err=%v, want fail-closed malformed legacy failure", err)
 		}
 	})
+	t.Run("padded_malformed_legacy_block_before_all_layer_block", func(t *testing.T) {
+		badLegacy := make([]byte, 7)
+		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
+		binary.BigEndian.PutUint16(badLegacy[4:], columnVectorGraphLayer0SourceVersion+1)
+		badLegacy[6] = 0xa5
+		corrupt := make([]byte, 0, len(encoded)+len(badLegacy))
+		corrupt = append(corrupt, encoded[:pos]...)
+		corrupt = append(corrupt, badLegacy...)
+		corrupt = append(corrupt, encoded[pos:]...)
+		if _, err := decodeColumnVectorGraphManifestRecord(corrupt); err == nil || !strings.Contains(err.Error(), "malformed legacy layer-0") {
+			t.Fatalf("decode manifest with padded malformed legacy before all-layer err=%v, want fail-closed malformed legacy failure", err)
+		}
+	})
 	t.Run("malformed_legacy_only_magic_payload_ignored", func(t *testing.T) {
 		badLegacy := make([]byte, 14)
 		binary.BigEndian.PutUint32(badLegacy, columnVectorGraphLayer0SourceMagic)
