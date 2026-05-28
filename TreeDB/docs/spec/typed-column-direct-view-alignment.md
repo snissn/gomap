@@ -187,10 +187,11 @@ Bool bitpack/RLE, strings/dictionaries, nullable/default wrappers, compressed
 payloads, variable-width varint/delta/double-delta layouts, physical row assets,
 and legacy dense adjacency direct views are fallback-only or deferred unless a
 future issue adds a new explicit encoding and conformance row. For adjacency,
-that explicit row is `raw_uint32_offsets_list`; #1915 enables the safe
-writer/fallback reader, #1916 enables the primitive direct-view reader, and
-#1917 wires that reader through adapter scans. Column-graph rebuild publication uses the same primitive for per-layer derived
-sources; certified column-graph search consumes those sources for max-layer
+that explicit row is `raw_uint32_offsets_list`; issue `#1915` enables the safe
+writer/fallback reader, issue `#1916` enables the primitive direct-view reader,
+and issue `#1917` wires that reader through adapter scans. Column-graph rebuild
+publication uses the same primitive for per-layer derived sources; certified
+column-graph search consumes those sources for max-layer
 discovery, upper-layer greedy traversal, and layer-0 expansion while preserving
 row-asset adjacency as the legacy/corruption fallback.
 

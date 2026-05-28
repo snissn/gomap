@@ -40,6 +40,32 @@ type columnVectorGraphNativeSearchOptions struct {
 	HasCandidateRows bool
 }
 
+type columnVectorGraphAdjacencySourceCounterSnapshot struct {
+	AdjacencyBytesRead          uint64
+	AdjacencyDirectViews        uint64
+	AdjacencyMmapDirectViews    uint64
+	AdjacencyHeapCopyTypedViews uint64
+	AdjacencyScratchDecodes     uint64
+}
+
+func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
+	if c == nil {
+		return
+	}
+	c.AdjacencyBytesRead += uint64(adjacencyLen) * 4
+	switch outcome {
+	case columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect:
+		c.AdjacencyDirectViews++
+		c.AdjacencyMmapDirectViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
+		c.AdjacencyHeapCopyTypedViews++
+	default:
+		if adjacencyLen > 0 {
+			c.AdjacencyScratchDecodes++
+		}
+	}
+}
+
 type columnVectorGraphNativeSearchStats struct {
 	CandidateRows                    uint64
 	Candidates                       uint64
@@ -415,8 +441,8 @@ func columnVectorGraphNextCandidateSeed(start int, rowCount int, selection typed
 }
 
 func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
-	if layer, layerAdjacency, outcome, fallbackReason, ok := r.maxDirectAdjacencyLayerForOrdinal(ordinal); ok {
-		recordColumnVectorGraphAdjacencySourceOutcomeStats(stats, len(layerAdjacency), outcome)
+	if layer, _, counters, fallbackReason, ok := r.maxDirectAdjacencyLayerForOrdinal(ordinal); ok {
+		recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
 		return layer, nil
 	} else if fallbackReason != "" {
 		recordColumnVectorGraphAdjacencyFallbackReasonStats(stats, fallbackReason)
@@ -687,21 +713,20 @@ func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeS
 }
 
 func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
+	var counters columnVectorGraphAdjacencySourceCounterSnapshot
+	counters.addOutcome(adjacencyLen, outcome)
+	recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
+}
+
+func recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats *columnVectorGraphNativeSearchStats, counters columnVectorGraphAdjacencySourceCounterSnapshot) {
 	if stats == nil {
 		return
 	}
-	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
-	switch outcome {
-	case columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect:
-		stats.AdjacencyDirectViews++
-		stats.AdjacencyMmapDirectViews++
-	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
-		stats.AdjacencyHeapCopyTypedViews++
-	default:
-		if adjacencyLen > 0 {
-			stats.AdjacencyScratchDecodes++
-		}
-	}
+	stats.AdjacencyBytesRead += counters.AdjacencyBytesRead
+	stats.AdjacencyDirectViews += counters.AdjacencyDirectViews
+	stats.AdjacencyMmapDirectViews += counters.AdjacencyMmapDirectViews
+	stats.AdjacencyHeapCopyTypedViews += counters.AdjacencyHeapCopyTypedViews
+	stats.AdjacencyScratchDecodes += counters.AdjacencyScratchDecodes
 }
 
 func recordColumnVectorGraphAdjacencyFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
@@ -720,9 +745,9 @@ func recordColumnVectorGraphAdjacencyFallbackReasonStats(stats *columnVectorGrap
 	}
 }
 
-func (r *columnVectorGraphPhysicalRowReader) maxDirectAdjacencyLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphLayer0AdjacencySourceOutcome, typeddecode.Reason, bool) {
+func (r *columnVectorGraphPhysicalRowReader) maxDirectAdjacencyLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphAdjacencySourceCounterSnapshot, typeddecode.Reason, bool) {
 	if r == nil || r.adjacencyLayerSources == nil || !r.adjacencyLayerSources.allLayers {
-		return 0, nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
+		return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, "", false
 	}
 	return r.adjacencyLayerSources.MaxLayerForOrdinal(ordinal)
 }

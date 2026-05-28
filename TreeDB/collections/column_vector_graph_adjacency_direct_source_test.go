@@ -432,6 +432,13 @@ func TestColumnVectorGraphAllLayerAdjacencyDirectSourcesEmptyUpperLayers1921(t *
 	if layer1, _, reason, ok := reader.directAdjacencyLayerForOrdinal(1, 1); !ok || reason != "" || len(layer1) != 0 {
 		t.Fatalf("row 1 layer 1 adjacency=%v reason=%s ok=%v, want empty direct upper layer", layer1, reason, ok)
 	}
+	maxLayer, _, counters, reason, ok := reader.adjacencyLayerSources.MaxLayerForOrdinal(1)
+	if !ok || reason != "" || maxLayer != 0 {
+		t.Fatalf("row 1 max layer=%d reason=%s ok=%v, want layer 0 after scanning empty upper layers", maxLayer, reason, ok)
+	}
+	if got, want := counters.AdjacencyMmapDirectViews+counters.AdjacencyHeapCopyTypedViews, uint64(len(reader.adjacencyLayerSources.sources)); got != want {
+		t.Fatalf("max-layer counters=%+v want one classified direct lookup per layer (%d)", counters, want)
+	}
 	if layer0, _, reason, ok := reader.directAdjacencyLayerForOrdinal(3, 0); !ok || reason != "" || len(layer0) != 0 {
 		t.Fatalf("row 3 layer 0 adjacency=%v reason=%s ok=%v, want empty direct layer 0", layer0, reason, ok)
 	}
@@ -450,6 +457,9 @@ func TestColumnVectorGraphAllLayerAdjacencyDirectSourcesEmptyUpperLayers1921(t *
 
 func TestColumnVectorGraphAllLayerAdjacencySourceMissingLayerFallback1921(t *testing.T) {
 	d, col, def, _, rows := openManualColumnGraphAllLayerSourceSearchFixture1921(t, func(graph *columnVectorGraphManifestSnapshot) {
+		if len(graph.AdjacencyLayerSources) < 2 {
+			t.Fatalf("fixture adjacency layers=%d want at least 2", len(graph.AdjacencyLayerSources))
+		}
 		graph.AdjacencyLayerSources[1].Ref.FileID += 1000
 	})
 	defer func() { _ = d.Close() }()

@@ -298,22 +298,22 @@ func (g *columnVectorGraphAdjacencyDirectSources) Neighbors(layer, ordinal int) 
 	return g.sources[layer].Neighbors(ordinal)
 }
 
-func (g *columnVectorGraphAdjacencyDirectSources) MaxLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphLayer0AdjacencySourceOutcome, typeddecode.Reason, bool) {
+func (g *columnVectorGraphAdjacencyDirectSources) MaxLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphAdjacencySourceCounterSnapshot, typeddecode.Reason, bool) {
 	if g == nil || g.closed || len(g.sources) == 0 {
-		return 0, nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
+		return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, "", false
 	}
-	var lastOutcome columnVectorGraphLayer0AdjacencySourceOutcome
+	var counters columnVectorGraphAdjacencySourceCounterSnapshot
 	for layer := len(g.sources) - 1; layer >= 0; layer-- {
 		neighbors, outcome, reason, ok := g.Neighbors(layer, ordinal)
 		if !ok {
-			return 0, nil, outcome, reason, false
+			return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, reason, false
 		}
-		lastOutcome = outcome
+		counters.addOutcome(len(neighbors), outcome)
 		if len(neighbors) > 0 {
-			return layer, neighbors, outcome, "", true
+			return layer, neighbors, counters, "", true
 		}
 	}
-	return 0, nil, lastOutcome, "", true
+	return 0, nil, counters, "", true
 }
 
 func (g *columnVectorGraphAdjacencyDirectSources) Close() error {
