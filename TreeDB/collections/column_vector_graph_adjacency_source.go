@@ -295,7 +295,7 @@ func prepareColumnVectorGraphAdjacencySourcePayloadFromList(assetRootDir, collec
 		return columnVectorGraphPreparedAdjacencySourcePayload{}, errors.New("collections: column_graph adjacency source requires asset root dir")
 	}
 	if partID == 0 {
-		return columnVectorGraphPreparedAdjacencySourcePayload{}, errors.New("collections: column_graph adjacency source requires generation and part_id")
+		return columnVectorGraphPreparedAdjacencySourcePayload{}, errors.New("collections: column_graph adjacency source requires non-zero part_id")
 	}
 	if layer < 0 {
 		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency source layer=%d must be non-negative", layer)

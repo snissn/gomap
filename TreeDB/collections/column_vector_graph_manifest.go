@@ -449,11 +449,14 @@ func validateColumnVectorGraphManifestSnapshot(snapshot columnVectorGraphManifes
 	if err := validateColumnVectorGraphManifestSnapshotCore(snapshot); err != nil {
 		return err
 	}
-	if len(snapshot.AdjacencyLayerSources) > 0 {
+	if snapshot.AdjacencyLayerCount != 0 || len(snapshot.AdjacencyLayerSources) > 0 {
 		if err := validateColumnVectorGraphAdjacencyLayerSourcesSnapshot(snapshot.AdjacencyLayerCount, snapshot.AdjacencyLayerSources); err != nil {
 			return err
 		}
-		if snapshot.Layer0AdjacencySource.Present && snapshot.Layer0AdjacencySource != snapshot.AdjacencyLayerSources[0] {
+		if !snapshot.Layer0AdjacencySource.Present {
+			return errors.New("collections: column vector graph all-layer adjacency sources missing layer-0 adjacency source alias")
+		}
+		if snapshot.Layer0AdjacencySource != snapshot.AdjacencyLayerSources[0] {
 			return errors.New("collections: column vector graph layer-0 adjacency source does not match all-layer source[0]")
 		}
 		return nil

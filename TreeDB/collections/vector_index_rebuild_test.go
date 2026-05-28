@@ -416,6 +416,20 @@ func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T
 			t.Fatalf("decode manifest with legacy+all-layer blocks err=%v, want duplicate-block failure", err)
 		}
 	})
+	t.Run("encode_rejects_empty_advertised_layers", func(t *testing.T) {
+		broken := graph
+		broken.AdjacencyLayerSources = nil
+		if _, err := encodeColumnVectorGraphManifestRecord(broken); err == nil || !strings.Contains(err.Error(), "layer sources=0") {
+			t.Fatalf("encode graph with advertised layers but no sources err=%v, want count failure", err)
+		}
+	})
+	t.Run("encode_rejects_missing_layer0_alias", func(t *testing.T) {
+		broken := graph
+		broken.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceSnapshot{}
+		if _, err := encodeColumnVectorGraphManifestRecord(broken); err == nil || !strings.Contains(err.Error(), "missing layer-0") {
+			t.Fatalf("encode graph with missing layer-0 alias err=%v, want alias failure", err)
+		}
+	})
 }
 
 func TestColumnGraphReachabilityProtectsAllLayerAdjacencySourceRefs1920(t *testing.T) {
