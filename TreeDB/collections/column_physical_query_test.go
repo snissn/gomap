@@ -3055,6 +3055,60 @@ func TestColumnDictionaryCodeGroupCountOneShotLocalDictionaryReorderParityM1942(
 	}
 }
 
+func TestColumnDictionaryCodeGroupCountOneShotLocalDictionaryScratchOverStackCapM1942(t *testing.T) {
+	view, wantRows, wantBytes := buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t)
+	assertColumnDictionaryCodeGroupCountOneShotParityM1942(t, view, wantRows, 66, wantBytes)
+}
+
+func assertColumnDictionaryCodeGroupCountOneShotParityM1942(t *testing.T, view columnPhysicalScanSnapshotView, wantRows, wantGroups int, wantBytes int64) {
+	t.Helper()
+	req := ColumnPhysicalQueryRequest{
+		Kind:                     ColumnPhysicalQueryGroupCount,
+		GroupColumn:              "kind",
+		ColumnAssetReadIntegrity: ColumnAssetReadIntegrityVerify,
+	}
+	cache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity one-shot cache: %v", err)
+	}
+	defer func() {
+		if err := cache.close(); err != nil {
+			t.Fatalf("one-shot cache close: %v", err)
+		}
+	}()
+	oneShot, ok, err := runColumnDictionaryCodeGroupCountOneShot(view, req, &cache)
+	if err != nil {
+		t.Fatalf("one-shot q1 local dictionaries: %v", err)
+	}
+	if !ok {
+		t.Fatal("one-shot q1 local dictionaries fell back")
+	}
+	if diag := oneShot.Diagnostics; diag.RowsScanned != wantRows || diag.ReduceRows != wantRows || diag.DictionaryCodeHits != len(view.AssetRefs) || diag.ScheduledGranules != len(view.AssetRefs) || diag.DecodedBlocks != len(view.AssetRefs) || diag.DirectReduceBlocks != len(view.AssetRefs) || diag.PhysicalBytesScanned != wantBytes || diag.ResultGroups != wantGroups || len(oneShot.Groups) != wantGroups {
+		t.Fatalf("one-shot diagnostics=%+v groups=%d want rows/reduce=%d blocks=%d bytes=%d groups=%d", diag, len(oneShot.Groups), wantRows, len(view.AssetRefs), wantBytes, wantGroups)
+	}
+
+	preparedCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity prepared cache: %v", err)
+	}
+	defer func() {
+		if err := preparedCache.close(); err != nil {
+			t.Fatalf("prepared cache close: %v", err)
+		}
+	}()
+	prepared, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &preparedCache)
+	if err != nil {
+		t.Fatalf("prepare q1 local dictionaries: %v", err)
+	}
+	if prepared == nil {
+		t.Fatal("prepare q1 local dictionaries returned nil")
+	}
+	preparedResult := prepared.run(view, req)
+	if !equalColumnPhysicalQueryGroups(oneShot.Groups, preparedResult.Groups) {
+		t.Fatalf("one-shot groups=%+v want prepared %+v", oneShot.Groups, preparedResult.Groups)
+	}
+}
+
 func TestColumnDictionaryCodeGroupCountOneShotRejectsCorruptWideLocalCodeM1942(t *testing.T) {
 	view := buildColumnDictionaryCodeGroupCountOneShotView1890(t, 16, false)
 	snapshot := view.DictionaryCodes[0]
@@ -3366,18 +3420,41 @@ func buildColumnDictionaryCodeGroupCountOneShotView1890(t testing.TB, rows int, 
 
 func buildColumnDictionaryCodeGroupCountOneShotMultiPartViewM1942(t testing.TB) (columnPhysicalScanSnapshotView, map[string]int, int64) {
 	t.Helper()
-	view := buildColumnDictionaryCodeGroupCountOneShotView1890(t, 1, false)
-	cfg := view.Config
-	root := view.ColumnAssetRootDir
-	type partSpec struct {
-		partID     uint64
-		dictionary []string
-		codes      []uint32
-	}
-	parts := []partSpec{
+	parts := []columnDictionaryCodeGroupCountOneShotPartSpecM1942{
 		{partID: 1, dictionary: []string{"alpha", "beta", "gamma"}, codes: []uint32{0, 1, 2, 0, 2}},
 		{partID: 2, dictionary: []string{"gamma", "alpha", "beta", "delta"}, codes: []uint32{0, 1, 3, 3, 2, 0}},
 	}
+	view, bytes := buildColumnDictionaryCodeGroupCountOneShotPartsViewM1942(t, parts)
+	return view, map[string]int{"alpha": 3, "beta": 2, "gamma": 4, "delta": 2}, bytes
+}
+
+func buildColumnDictionaryCodeGroupCountOneShotOverStackCapViewM1942(t testing.TB) (columnPhysicalScanSnapshotView, int, int64) {
+	t.Helper()
+	dictionary := make([]string, columnDictionaryCodeGroupCountOneShotLocalStackCap+1)
+	codes := make([]uint32, len(dictionary))
+	for i := range dictionary {
+		dictionary[i] = fmt.Sprintf("kind_%03d", i)
+		codes[i] = uint32(i)
+	}
+	parts := []columnDictionaryCodeGroupCountOneShotPartSpecM1942{
+		{partID: 1, dictionary: dictionary, codes: codes},
+		{partID: 2, dictionary: []string{"kind_064", "kind_000", "kind_extra"}, codes: []uint32{0, 1, 2, 0}},
+	}
+	view, bytes := buildColumnDictionaryCodeGroupCountOneShotPartsViewM1942(t, parts)
+	return view, len(codes) + 4, bytes
+}
+
+type columnDictionaryCodeGroupCountOneShotPartSpecM1942 struct {
+	partID     uint64
+	dictionary []string
+	codes      []uint32
+}
+
+func buildColumnDictionaryCodeGroupCountOneShotPartsViewM1942(t testing.TB, parts []columnDictionaryCodeGroupCountOneShotPartSpecM1942) (columnPhysicalScanSnapshotView, int64) {
+	t.Helper()
+	view := buildColumnDictionaryCodeGroupCountOneShotView1890(t, 1, false)
+	cfg := view.Config
+	root := view.ColumnAssetRootDir
 	assetRefs := make([]columnManifestAssetRefForScan, 0, len(parts))
 	dictionaryRefs := make([]columnManifestDictionaryCodesSnapshot, 0, len(parts))
 	var bytes int64
@@ -3412,7 +3489,7 @@ func buildColumnDictionaryCodeGroupCountOneShotMultiPartViewM1942(t testing.TB) 
 	view.AssetRefs = assetRefs
 	view.DictionaryCodes = dictionaryRefs
 	view.Diagnostics = columnPhysicalScanDiagnostics{AssetRefs: len(assetRefs)}
-	return view, map[string]int{"alpha": 3, "beta": 2, "gamma": 4, "delta": 2}, bytes
+	return view, bytes
 }
 
 func assertColumnDictionaryCodeGroupCountLargeQ11890(t testing.TB, result ColumnPhysicalQueryResult, rows int, bytes int64) {
