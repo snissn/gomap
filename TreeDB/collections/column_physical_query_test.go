@@ -3062,10 +3062,12 @@ func TestColumnDictionaryCodeGroupCountOneShotRejectsCorruptWideLocalCodeM1942(t
 	if err != nil {
 		t.Fatalf("newColumnPhysicalAssetReadCacheWithIntegrity read cache: %v", err)
 	}
+	defer func() {
+		if err := cache.close(); err != nil {
+			t.Fatalf("read cache close: %v", err)
+		}
+	}()
 	raw, err := cache.read(snapshot.AssetRef, nil)
-	if closeErr := cache.close(); closeErr != nil {
-		t.Fatalf("read cache close: %v", closeErr)
-	}
 	if err != nil {
 		t.Fatalf("read dictionary sidecar: %v", err)
 	}
