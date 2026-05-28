@@ -47,6 +47,7 @@ type columnVectorGraphPhysicalRowReader struct {
 	reader                              *columnPhysicalRowReader
 	typedVectorSource                   *columnVectorGraphTypedColumnVectorSource
 	typedVectorFallbackReason           string
+	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
 	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
 	layer0AdjacencySourceUnavailable    bool
 	layer0AdjacencySourceFallbackReason typeddecode.Reason
@@ -111,9 +112,12 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 	}
 	if catalog != nil && catalog.meta.Options.ColumnStore != nil {
 		baseCfg := catalog.meta.Options.ColumnStore
-		if source, fallbackReason, sourceErr := c.openColumnVectorGraphLayer0AdjacencyDirectSourceForReader(catalog.meta.Name, *baseCfg, def, graph); sourceErr == nil && source != nil {
-			graphReader.layer0AdjacencySource = source
-		} else if graph.Layer0AdjacencySource.Present {
+		if sources, fallbackReason, sourceErr := c.openColumnVectorGraphAdjacencyDirectSourcesForReader(catalog.meta.Name, *baseCfg, def, graph); sourceErr == nil && sources != nil {
+			graphReader.adjacencyLayerSources = sources
+			if len(sources.sources) > 0 {
+				graphReader.layer0AdjacencySource = sources.sources[0]
+			}
+		} else if len(graph.AdjacencyLayerSources) > 0 || graph.Layer0AdjacencySource.Present {
 			if fallbackReason == "" {
 				fallbackReason = typeddecode.ReasonValidationFailed
 			}
@@ -275,7 +279,13 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 		}
 		r.typedVectorSource = nil
 	}
-	if r.layer0AdjacencySource != nil {
+	if r.adjacencyLayerSources != nil {
+		if err := r.adjacencyLayerSources.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.adjacencyLayerSources = nil
+		r.layer0AdjacencySource = nil
+	} else if r.layer0AdjacencySource != nil {
 		if err := r.layer0AdjacencySource.Close(); closeErr == nil && err != nil {
 			closeErr = err
 		}

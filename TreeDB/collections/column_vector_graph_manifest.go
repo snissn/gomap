@@ -877,10 +877,10 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
-	// The layer-0 adjacency source is an optional #1919 accelerator. Keep
-	// loaded-status gating tied to the canonical row-asset graph; search opens
-	// and validates the source independently and falls back to row assets when it
-	// is absent, corrupt, stale, or non-certified.
+	// Certified adjacency sources are optional accelerators. Keep loaded-status
+	// gating tied to the canonical row-asset graph; search opens and validates
+	// sources independently and falls back to row assets when they are absent,
+	// corrupt, stale, incomplete, or non-certified.
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	status.Stats = VectorIndexStats{

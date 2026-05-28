@@ -171,8 +171,11 @@ func TestColumnVectorGraphNativeSearchCountersReportPayloadBytesC3(t *testing.T)
 	if got, want := stats.VectorBytesRead, stats.CandidateFetches*uint64(def.Dimensions)*4; got != want {
 		t.Fatalf("vector bytes read=%d want candidate_fetches*dims*4=%d stats=%+v", got, want, stats)
 	}
-	if stats.AdjacencyBytesRead == 0 || stats.AdjacencyDirectViews+stats.AdjacencyScratchDecodes == 0 {
-		t.Fatalf("stats=%+v want adjacency byte and direct/scratch counters", stats)
+	if stats.AdjacencyBytesRead == 0 || stats.AdjacencyMmapDirectViews+stats.AdjacencyHeapCopyTypedViews+stats.AdjacencyScratchDecodes == 0 {
+		t.Fatalf("stats=%+v want adjacency bytes and a classified adjacency source outcome", stats)
+	}
+	if stats.AdjacencyScratchDecodes != 0 {
+		t.Fatalf("stats=%+v want certified adjacency sources to avoid scratch decodes", stats)
 	}
 }
 
@@ -1177,7 +1180,7 @@ func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnV
 	}
 	if shape.directPhysicalAsset && !shape.typedColumnVector {
 		rows := columnVectorGraphNativeSearchBenchAssetRowsV3(b, shape.rows, shape.dims, shape.m)
-		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeV2B(b, shape.dims, shape.m, rows)
+		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencySources1921(b, shape.dims, shape.m, rows)
 		query := append([]float32(nil), rows[shape.queryOrdinal].Vector...)
 		return func() { _ = d.Close() }, col, def, query
 	}
@@ -1198,6 +1201,69 @@ func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnV
 	assertColumnGraphRebuildLoadedStatusV2A(b, status, def.Name)
 	query := append([]float32(nil), input[shape.queryOrdinal].vector...)
 	return func() { _ = d.Close() }, col, def, query
+}
+
+func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencySources1921(tb testing.TB, dims, m int, rows []columnVectorGraphAssetRow) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+	tb.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	baseCfg, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(dims))
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	def := columnGraphRebuildVectorIndexDefinitionV2A(dims, m)
+	const generation = uint64(2)
+	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, generation, 1, 1, rows)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
+	}
+	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig("docs", *baseCfg, def)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
+	}
+	graph := columnVectorGraphManifestSnapshot{
+		IndexName:              def.Name,
+		Field:                  def.Field,
+		Metric:                 def.Metric,
+		Encoding:               def.Encoding,
+		Dimensions:             def.Dimensions,
+		M:                      def.M,
+		EfConstruction:         def.EfConstruction,
+		EfSearch:               def.EfSearch,
+		BaseManifestGeneration: generation,
+		BaseSchemaHash:         baseCfg.SchemaHash,
+		GraphSchemaHash:        graphCfg.SchemaHash,
+		RowCount:               prepared.RowCount,
+		AssetRef:               prepared.Ref,
+		AssetBytes:             prepared.Bytes,
+		AdjacencyLayerCount:    len(prepared.AdjacencyLayerSources),
+	}
+	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, prepared.AdjacencyLayerSources)
+	if len(graph.AdjacencyLayerSources) > 0 {
+		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
+	}
+	identity := ColumnManifestIdentity{Generation: generation, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
+	records, manifestIdentity := testColumnGraphManifestRecordsFromSnapshot1920(tb, *baseCfg, graph, identity)
+	meta := CollectionMeta{
+		Name: "docs",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    baseCfg,
+		},
+		VectorIndexes: []VectorIndexDefinition{def},
+	}
+	publishColumnGraphCatalogForTestV2A(tb, d, meta, manifestIdentity, records)
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	return d, col, def
 }
 
 func columnVectorGraphNativeSearchBenchAssetRowsV3(tb testing.TB, rows, dims, degree int) []columnVectorGraphAssetRow {

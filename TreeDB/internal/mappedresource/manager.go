@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Source identifies how a handle's bytes are backed.
@@ -130,16 +131,17 @@ type AcquireOptions struct {
 // Handle owns a live resource view. Bytes are valid until Release. Release is
 // idempotent and updates accounting only once.
 type Handle struct {
-	mu      sync.Mutex
-	mgr     *Manager
-	id      uint64
-	key     Key
-	scope   Scope
-	source  Source
-	bytes   []byte
-	release func() error
-	err     error
-	done    bool
+	mu         sync.Mutex
+	mgr        *Manager
+	id         uint64
+	key        Key
+	scope      Scope
+	source     Source
+	bytes      []byte
+	release    func() error
+	err        error
+	done       bool
+	doneAtomic atomic.Bool
 }
 
 // Key returns the resource key.
@@ -184,9 +186,7 @@ func (h *Handle) Released() bool {
 	if h == nil {
 		return true
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.done
+	return h.doneAtomic.Load()
 }
 
 // Release releases the handle and removes its maintenance pin.
@@ -200,6 +200,7 @@ func (h *Handle) Release() error {
 		return h.err
 	}
 	h.done = true
+	h.doneAtomic.Store(true)
 	mgr := h.mgr
 	id := h.id
 	source := h.source
