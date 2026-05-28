@@ -55,9 +55,10 @@ uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
 "uint32_offsets_list"`; it must not be inferred from a missing degree and is
 supported by the safe #1915 writer/fallback reader path plus the #1916 certified
 primitive direct-view reader wired through the adapter in #1917. Column-graph
-rebuilds publish derived offsets-list adjacency sources per graph layer; search
-consumption remains graph-owned, row-asset-backed for compatibility, and staged
-outside this adapter path. Serialized typed-column images publish offsets-list
+rebuilds publish derived offsets-list adjacency sources per graph layer;
+certified column-graph search consumes those sources for max-layer discovery,
+upper-layer greedy traversal, and layer-0 expansion while preserving row-asset
+adjacency as the compatibility fallback. Serialized typed-column images publish offsets-list
 columns as one global
 `row_count + 1` little-endian `uint64` offsets section plus one global flattened
 `uint32` values section, even when the typed-column part has multiple codec
@@ -186,12 +187,12 @@ schema, or fail-closed validation.
 Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay
 limited to the adapter seam and scoped vector-graph source/reader seams.
 Publication/reopen logic calls through those seams. Query/vector search
-integration remains graph-owned and staged by the vector-index issues. The active
-adapter stack consumes certified typed-column `float32_vector` payloads and the
-explicit `raw_uint32_offsets_list` variable adjacency reader; physical row-asset
-direct views and legacy dense adjacency direct views remain fallback/deferred.
-This path publishes fixed-dimension `float32_vector`, fixed-degree dense
-`adjacency_list`, and explicit offsets-list variable `adjacency_list` values;
-`column_graph` rebuilds additionally publish and validate durable per-layer
-offsets-list sources while preserving row-asset adjacency as the canonical
-compatibility source.
+integration remains graph-owned by the vector-index issues. The active adapter
+stack consumes certified typed-column `float32_vector` payloads and the explicit
+`raw_uint32_offsets_list` variable adjacency reader; physical row-asset direct
+views and legacy dense adjacency direct views remain fallback/deferred. This path
+publishes fixed-dimension `float32_vector`, fixed-degree dense `adjacency_list`,
+and explicit offsets-list variable `adjacency_list` values; `column_graph`
+rebuilds additionally publish, validate, and consume durable per-layer
+offsets-list sources for certified graph search while preserving row-asset
+adjacency as the canonical compatibility source.

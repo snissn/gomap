@@ -210,17 +210,17 @@ type VectorIndexSearchStats struct {
 	AdjacencyMmapDirectViews uint64 `json:"adjacency_mmap_direct,omitempty"`
 	// AdjacencyHeapCopyTypedViews is the per-search count of adjacency payloads served from typed heap-copy fallback views.
 	AdjacencyHeapCopyTypedViews uint64 `json:"adjacency_heap_copy_typed_view,omitempty"`
-	// AdjacencySourceUnavailable reports that this searcher had no usable layer-0 adjacency source and used row-asset fallback.
+	// AdjacencySourceUnavailable reports that this searcher had no usable certified adjacency source and used row-asset fallback.
 	AdjacencySourceUnavailable uint64 `json:"adjacency_source_unavailable,omitempty"`
-	// AdjacencySourceFallbacks reports searches or observations that fell back from the layer-0 adjacency source to row assets.
+	// AdjacencySourceFallbacks reports searches or observations that fell back from certified adjacency sources to row assets.
 	AdjacencySourceFallbacks uint64 `json:"adjacency_source_fallbacks,omitempty"`
-	// AdjacencyCertificationFailures counts layer-0 adjacency source certification, shape, or validation failures.
+	// AdjacencyCertificationFailures counts adjacency source certification, shape, or validation failures.
 	AdjacencyCertificationFailures uint64 `json:"adjacency_certification_failures,omitempty"`
-	// AdjacencyAbsoluteOffsetUnaligned counts layer-0 adjacency source fallbacks caused by absolute storage offset misalignment.
+	// AdjacencyAbsoluteOffsetUnaligned counts adjacency source fallbacks caused by absolute storage offset misalignment.
 	AdjacencyAbsoluteOffsetUnaligned uint64 `json:"adjacency_absolute_offset_unaligned,omitempty"`
-	// AdjacencyActualPointerUnaligned counts layer-0 adjacency source fallbacks caused by actual mapped pointer misalignment.
+	// AdjacencyActualPointerUnaligned counts adjacency source fallbacks caused by actual mapped pointer misalignment.
 	AdjacencyActualPointerUnaligned uint64 `json:"adjacency_actual_pointer_unaligned,omitempty"`
-	// AdjacencyStaleHandles counts layer-0 adjacency source fallbacks caused by released/stale mappedresource handles.
+	// AdjacencyStaleHandles counts adjacency source fallbacks caused by released/stale mappedresource handles.
 	AdjacencyStaleHandles uint64 `json:"adjacency_stale_handles,omitempty"`
 	// AdjacencyScratchDecodes is the per-search count of adjacency payloads served from scratch/fallback decodes.
 	AdjacencyScratchDecodes uint64 `json:"adjacency_scratch_decodes,omitempty"`
