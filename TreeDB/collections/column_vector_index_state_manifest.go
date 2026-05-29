@@ -156,7 +156,7 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 	snapshot.BaseManifestChecksum = cur.u64()
 	snapshot.BaseSchemaHash = cur.u64()
 	adjacencyLayerCount64 := uint64(0)
-	if version >= columnVectorIndexStateVersion {
+	if version != columnVectorIndexStateVersionV1 {
 		adjacencyLayerCount64 = cur.u64()
 	}
 	assetCount64 := cur.u64()
