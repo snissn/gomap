@@ -399,6 +399,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1919 is the scoped production vector graph reader that consumes the
 		// certified layer-0 raw_uint32_offsets_list adjacency source.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_adjacency_direct_source.go")): {},
+		// #1987 is the scoped production vector-index state writer/validator that
+		// publishes HNSW adjacency as generic uint32_list typed-column assets.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_index_state_adjacency.go")): {},
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
