@@ -7,7 +7,7 @@ var dotFloat32BatchImplementation = "per_row_" + DotFloat32Implementation()
 const dotFloat32BatchOptimizedAvailable = false
 
 // DotFloat32Indexed writes dot products for row-major base rows selected by
-// rowIDs using the portable scalar fallback. It writes min(len(dst), len(rowIDs))
+// rowIDs using the per-row DotFloat32 fallback. It writes min(len(dst), len(rowIDs))
 // scores for valid full-row shapes. Invalid shapes leave dst unchanged and
 // return Invalid=true.
 func DotFloat32Indexed(dst []float32, base []float32, query []float32, rowIDs []uint32, dims int) DotFloat32BatchStatus {
@@ -23,7 +23,7 @@ func DotFloat32Indexed(dst []float32, base []float32, query []float32, rowIDs []
 }
 
 // DotFloat32Strided writes dot products for row-major base rows at i*stride
-// using the portable scalar fallback. It writes min(len(dst), rowCount) scores
+// using the per-row DotFloat32 fallback. It writes min(len(dst), rowCount) scores
 // for valid full-row shapes. Invalid shapes leave dst unchanged and return
 // Invalid=true. stride and dims are in float32 elements; stride must be >= dims.
 func DotFloat32Strided(dst []float32, base []float32, query []float32, rowCount, dims, stride int) DotFloat32BatchStatus {
