@@ -89,7 +89,9 @@ func planColumnTypedColumnSortKeyPrefix(cfg ColumnStoreConfig, sortKey []ColumnS
 		}
 		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
 		if kind != ColumnPhysicalQueryPredicateEqual || len(predicate.Values) != 0 {
-			plan.FallbackReason = columnSortKeyMarkFallbackUnsupportedPredicate
+			if plan.PrefixLen == 0 {
+				plan.FallbackReason = columnSortKeyMarkFallbackUnsupportedPredicate
+			}
 			break
 		}
 		if plan.PrefixLen >= typedColumnPartSortKeyMaxColumns {

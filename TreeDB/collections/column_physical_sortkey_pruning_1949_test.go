@@ -34,6 +34,13 @@ func TestTypedColumnSortKeyPrefixPlannerFallbacks1949(t *testing.T) {
 		t.Fatalf("pruned rows=%v want %v", got, want)
 	}
 
+	partialReq := columnPhysicalQ4BPostCreateRequest1949()
+	partialReq.Predicates[1] = ColumnPhysicalQueryPredicate{Column: "operation", Kind: ColumnPhysicalQueryPredicateInList, Values: []string{"create"}}
+	partial := planColumnTypedColumnSortKeyPrefix(*cfg, sortKey, partialReq)
+	if !partial.Planned || partial.PrefixLen != 1 || !equalStrings1949(partial.prefixColumns(), []string{"kind"}) {
+		t.Fatalf("partial prefix plan=%+v want usable kind equality prefix", partial)
+	}
+
 	missingMarks := cloneTypedColumnAdapterPartForPlanner1949(part)
 	missingMarks.Part.Marks = nil
 	missing, err := plan.prunePartRows(missingMarks)
