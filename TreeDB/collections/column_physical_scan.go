@@ -1888,6 +1888,9 @@ func validateColumnManifestPartSortKeyForScan(kind ColumnAssetKind, sortKey []Co
 	if len(sortKey) != 0 && kind != ColumnAssetKindTCS1TypedColumnPart {
 		return fmt.Errorf("collections: column manifest sort key requires %q part records, got %q", ColumnAssetKindTCS1TypedColumnPart, kind)
 	}
+	if kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKey) > typedColumnPartSortKeyMaxColumns {
+		return fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", len(sortKey), typedColumnPartSortKeyMaxColumns)
+	}
 	seen := make(map[string]struct{}, len(sortKey))
 	for _, sortKeyColumn := range sortKey {
 		if sortKeyColumn.Column == "" {

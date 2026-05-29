@@ -282,6 +282,9 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 				return result, fmt.Errorf("collections: typed-column string predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
+		if visibility != nil && typedColumnPreparedPartHasLogicalSortKey(preparedPart) {
+			return result, typedColumnSortedMutationVisibilityUnsupported("typed-column string predicate scan")
+		}
 		partPruned, err := scanTypedColumnStringPreparedPartWithVisibility(preparedPart, adapterColumn.Definition.Name, codes, valueByCode, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility, readRange, &scanScratch)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column string predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)

@@ -301,6 +301,29 @@ func TestColumnManifestPartFieldsValidateSortKeyTrailer1948(t *testing.T) {
 	}
 }
 
+func TestColumnManifestPartFieldsRejectsTypedSortKeyEngineCap1948(t *testing.T) {
+	namespace := "events_column_assets"
+	sortKeys := make([]ColumnSortKey, typedColumnPartSortKeyMaxColumns+1)
+	for i := range sortKeys {
+		sortKeys[i] = ColumnSortKey{Column: fmt.Sprintf("c%02d", i)}
+	}
+	raw := encodeColumnManifestPartRecordWithRawSortKey1948(t, ColumnAssetKindTCS1TypedColumnPart, namespace, sortKeys)
+	if _, err := decodeColumnManifestPartSortKeyForScan(raw); err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("decodeColumnManifestPartSortKeyForScan err=%v want typed-column engine cap rejection", err)
+	}
+}
+
+func TestTypedColumnImageSortKeyMutationGuard1948(t *testing.T) {
+	primary := typedcolumn.ColumnPartDescriptor{SortKey: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn, Direction: typedcolumn.SortKeyAsc}}}
+	if typedColumnPartDescriptorHasLogicalSortKey(primary) {
+		t.Fatalf("primary-id descriptor reported logical sort key")
+	}
+	logical := typedcolumn.ColumnPartDescriptor{SortKey: []typedcolumn.SortKeyColumn{{Column: "time_us", Direction: typedcolumn.SortKeyAsc}}}
+	if !typedColumnPartDescriptorHasLogicalSortKey(logical) {
+		t.Fatalf("logical descriptor did not report sort key")
+	}
+}
+
 func encodeColumnManifestPartRecordWithRawSortKey1948(t testing.TB, kind ColumnAssetKind, namespace string, sortKey []ColumnSortKey) []byte {
 	t.Helper()
 	var b bytes.Buffer

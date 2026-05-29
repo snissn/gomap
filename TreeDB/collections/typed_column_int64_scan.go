@@ -576,6 +576,9 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 				return result, fmt.Errorf("collections: typed-column int64 predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
+		if visibility != nil && typedColumnAdapterPartHasLogicalSortKey(adapterPart) {
+			return result, typedColumnSortedMutationVisibilityUnsupported("typed-column int64 predicate scan")
+		}
 		partPruned, err := scanTypedColumnInt64PredicatePartWithVisibility(adapterPart.Part, adapterColumn.Definition.Name, req, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column int64 predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
@@ -959,6 +962,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregatePart(ty
 		if !ok {
 			return fmt.Errorf("collections: typed-column int64 predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
 		}
+	}
+	if visibility != nil && typedColumnAdapterPartHasLogicalSortKey(adapterPart) {
+		return typedColumnSortedMutationVisibilityUnsupported("typed-column int64 predicate aggregate")
 	}
 	partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(s.req), result, visibility, &s.aggregateScratch)
 	if err != nil {

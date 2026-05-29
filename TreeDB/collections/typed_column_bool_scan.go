@@ -576,6 +576,9 @@ func (s *TypedColumnBoolPredicateAggregateSession) scanFullAggregatePart(typedRe
 			return fmt.Errorf("collections: typed-column bool predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
 		}
 	}
+	if visibility != nil && typedColumnPartDescriptorHasLogicalSortKey(part.Descriptor) {
+		return typedColumnSortedMutationVisibilityUnsupported("typed-column bool predicate aggregate")
+	}
 	partPruned, err := scanTypedColumnBoolPredicateAggregatePartWithVisibilityAndScratch(part, s.aggregateColumn.Definition.Name, s.req, result, visibility, &s.aggregateScratch)
 	if err != nil {
 		return fmt.Errorf("collections: typed-column bool predicate aggregate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
@@ -670,6 +673,9 @@ func (s *TypedColumnBoolPredicateAggregateSession) scanPreparedAggregateStatePar
 		if !ok {
 			return fmt.Errorf("collections: typed-column bool predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
 		}
+	}
+	if visibility != nil && typedColumnPreparedPartHasLogicalSortKey(preparedPart) {
+		return typedColumnSortedMutationVisibilityUnsupported("typed-column bool predicate aggregate")
 	}
 	partPruned, err := s.scanPreparedAggregateColumnState(preparedColumn, typedRef.Ref, visibility, result, updateCacheDeltas)
 	if err != nil {

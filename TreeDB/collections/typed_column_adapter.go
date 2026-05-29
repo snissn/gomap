@@ -369,6 +369,28 @@ func columnSortKeysFromTypedColumnSortKeys(sortKeys []typedcolumn.SortKeyColumn)
 	return out
 }
 
+func typedColumnPartDescriptorHasLogicalSortKey(desc typedcolumn.ColumnPartDescriptor) bool {
+	return len(desc.SortKey) != 0 && !typedColumnSortKeyIsSyntheticPrimaryID(desc.SortKey)
+}
+
+func typedColumnAdapterPartHasLogicalSortKey(part *typedColumnAdapterPart) bool {
+	return part != nil && part.Part != nil && typedColumnPartDescriptorHasLogicalSortKey(part.Part.Descriptor)
+}
+
+func typedColumnPreparedPartHasLogicalSortKey(part *typedColumnPreparedPartState) bool {
+	return part != nil && typedColumnPartDescriptorHasLogicalSortKey(part.Descriptor)
+}
+
+func typedColumnSortKeyIsSyntheticPrimaryID(sortKey []typedcolumn.SortKeyColumn) bool {
+	if len(sortKey) != 1 {
+		return false
+	}
+	column := sortKey[0]
+	return column.Column == typedColumnAdapterPrimaryIDColumn &&
+		(column.Direction == "" || column.Direction == typedcolumn.SortKeyAsc) &&
+		column.Nulls == typedcolumn.SortKeyNullsDefault
+}
+
 func validateTypedColumnAdapterStringDictionaryLogicalOrder(column typedColumnAdapterColumn) error {
 	if len(column.Dictionary) == 0 {
 		if column.Field.Nullable {

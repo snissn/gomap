@@ -223,6 +223,9 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateStatePa
 			return fmt.Errorf("collections: typed-column int64 predicate aggregate missing latest-visible physical generation=%d", physical.Ref.Generation)
 		}
 	}
+	if visibility != nil && typedColumnPreparedPartHasLogicalSortKey(preparedPart) {
+		return typedColumnSortedMutationVisibilityUnsupported("typed-column int64 predicate aggregate")
+	}
 	partPruned, err := s.scanPreparedAggregateColumnState(preparedColumn, typedRef.Ref, visibility, result, updateCacheDeltas)
 	if err != nil {
 		return fmt.Errorf("collections: typed-column int64 predicate aggregate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
