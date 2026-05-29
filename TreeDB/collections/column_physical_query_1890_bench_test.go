@@ -287,14 +287,20 @@ func reportColumnPhysicalQueryQ1BenchmarkShape1890(b *testing.B, preview ColumnP
 func reportColumnPhysicalQueryObservabilityMetrics1890(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
 	b.Helper()
 	if diag.StorageSource != "" {
-		b.ReportMetric(1, "storage_source_"+diag.StorageSource)
+		b.ReportMetric(1, "storage_source_"+string(diag.StorageSource))
 	}
 	if diag.FallbackReason != "" {
-		b.ReportMetric(1, "fallback_"+diag.FallbackReason)
+		b.ReportMetric(1, "fallback_"+string(diag.FallbackReason))
 	}
-	b.ReportMetric(float64(diag.ManifestRoot), "manifest_root_id")
-	b.ReportMetric(float64(diag.ManifestGeneration), "manifest_generation")
-	b.ReportMetric(float64(diag.ActiveManifestChecksum), "active_manifest_checksum")
+	reportColumnPhysicalQueryUint64BenchmarkMetric1890(b, diag.ManifestRoot, "manifest_root_id")
+	reportColumnPhysicalQueryUint64BenchmarkMetric1890(b, diag.ManifestGeneration, "manifest_generation")
+	reportColumnPhysicalQueryUint64BenchmarkMetric1890(b, diag.ActiveManifestChecksum, "active_manifest_checksum")
+}
+
+func reportColumnPhysicalQueryUint64BenchmarkMetric1890(b *testing.B, value uint64, name string) {
+	b.Helper()
+	b.ReportMetric(float64(uint32(value>>32)), name+"_hi")
+	b.ReportMetric(float64(uint32(value)), name+"_lo")
 }
 
 func reportColumnPhysicalQueryQ1BenchmarkMetrics1890(b *testing.B, scannedRows, reducedRows, resultGroups, physicalBytes int64) {

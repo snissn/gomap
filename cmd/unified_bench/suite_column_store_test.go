@@ -1713,6 +1713,23 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q.ThroughputInterpretation == "" {
 					t.Fatalf("query %s missing throughput_interpretation", q.Name)
 				}
+				if q.StorageSource == "" || q.FallbackReason == "" {
+					t.Fatalf("query %s missing storage source/fallback diagnostics: %+v", q.Name, q)
+				}
+				if tc.forcedPath == columnStorePathAggregateMetadata {
+					if q.MetadataHits > 0 {
+						if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+							t.Fatalf("query %s metadata storage/fallback=%q/%q want aggregate metadata/none", q.Name, q.StorageSource, q.FallbackReason)
+						}
+					} else if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported) {
+						t.Fatalf("query %s aggregate reroute storage/fallback=%q/%q want compatibility sidecar/aggregate unsupported", q.Name, q.StorageSource, q.FallbackReason)
+					}
+				}
+				if tc.forcedPath == columnStorePathParallelColumnScan {
+					if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedRowAsset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+						t.Fatalf("query %s parallel storage/fallback=%q/%q want typed-row asset/none", q.Name, q.StorageSource, q.FallbackReason)
+					}
+				}
 				if tc.forcedPath == columnStorePathParallelColumnScan && q.WorkerCount != tc.wantWorker {
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)
 				}

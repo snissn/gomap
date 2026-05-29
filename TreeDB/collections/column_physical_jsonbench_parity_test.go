@@ -43,10 +43,14 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 		req             ColumnPhysicalQueryRequest
 		wantPredicates  int
 		wantMatchedRows int
+		wantReduceRows  int
 	}{
 		{
-			name: "q1",
-			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"},
+			name:            "q1",
+			req:             ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"},
+			wantPredicates:  0,
+			wantMatchedRows: 0,
+			wantReduceRows:  len(scanned),
 		},
 		{
 			name: "q2",
@@ -56,8 +60,9 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				DistinctColumn: "did",
 				Predicates:     commitCreate,
 			},
-			wantPredicates:  2,
+			wantPredicates:  len(commitCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", scanned),
+			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", scanned),
 		},
 		{
 			name: "q3",
@@ -67,8 +72,9 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				ValueColumn: "time_us",
 				Predicates:  feedCreate,
 			},
-			wantPredicates:  3,
+			wantPredicates:  len(feedCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", scanned),
+			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", scanned),
 		},
 		{
 			name: "q4a",
@@ -78,8 +84,9 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				ValueColumn: "time_us",
 				Predicates:  postCreate,
 			},
-			wantPredicates:  3,
+			wantPredicates:  len(postCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q4a", scanned),
+			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q4a", scanned),
 		},
 		{
 			name: "q4b",
@@ -89,8 +96,9 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				ValueColumn: "time_us",
 				Predicates:  postCreate,
 			},
-			wantPredicates:  3,
+			wantPredicates:  len(postCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q4b", scanned),
+			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q4b", scanned),
 		},
 		{
 			name: "q5",
@@ -100,8 +108,9 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				ValueColumn: "time_us",
 				Predicates:  postCreate,
 			},
-			wantPredicates:  3,
+			wantPredicates:  len(postCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned),
+			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned),
 		},
 	}
 
@@ -114,7 +123,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunColumnPhysicalQuery(%s): %v", tc.name, err)
 			}
-			assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, direct.Diagnostics, tc.wantPredicates, tc.wantMatchedRows)
+			assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, direct.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows)
 			directHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0(tc.name, direct.Groups))
 			if directHash != rowHash {
 				t.Fatalf("%s direct hash=%016x want row scan %016x row=%v direct=%v", tc.name, directHash, rowHash, rowLines, columnPhysicalJSONBenchPhysicalLinesP0(tc.name, direct.Groups))
@@ -130,7 +139,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				if err != nil {
 					t.Fatalf("prepared %s run %d: %v", tc.name, run, err)
 				}
-				assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, prepared.Diagnostics, tc.wantPredicates, tc.wantMatchedRows)
+				assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, prepared.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows)
 				preparedHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0(tc.name, prepared.Groups))
 				if preparedHash != rowHash {
 					t.Fatalf("%s prepared run %d hash=%016x want row scan %016x row=%v prepared=%v", tc.name, run, preparedHash, rowHash, rowLines, columnPhysicalJSONBenchPhysicalLinesP0(tc.name, prepared.Groups))
@@ -287,7 +296,7 @@ func assertColumnPhysicalJSONBenchRowScanPreservesFullPredicateColumnsP0(tb test
 	}
 }
 
-func assertColumnPhysicalJSONBenchDiagnosticsP0(tb testing.TB, query string, diag ColumnPhysicalQueryDiagnostics, wantPredicates, wantMatchedRows int) {
+func assertColumnPhysicalJSONBenchDiagnosticsP0(tb testing.TB, query string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantPredicates, wantMatchedRows, wantReduceRows int) {
 	tb.Helper()
 	if diag.ManifestRootName != "events/column/manifest" || diag.ManifestRoot == 0 {
 		tb.Fatalf("%s manifest root name/id missing: %+v", query, diag)
@@ -295,19 +304,17 @@ func assertColumnPhysicalJSONBenchDiagnosticsP0(tb testing.TB, query string, dia
 	if diag.ManifestGeneration == 0 || diag.ActiveManifestChecksum == 0 {
 		tb.Fatalf("%s active manifest generation/checksum missing: %+v", query, diag)
 	}
-	if diag.StorageSource != string(ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset) {
+	if diag.StorageSource != ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset {
 		tb.Fatalf("%s storage source=%q want %q diagnostics=%+v", query, diag.StorageSource, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, diag)
 	}
-	if diag.FallbackReason != string(ColumnPhysicalQueryFallbackNone) {
+	if diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
 		tb.Fatalf("%s fallback reason=%q want none diagnostics=%+v", query, diag.FallbackReason, diag)
 	}
 	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
 		tb.Fatalf("%s materialized row/document on physical path: %+v", query, diag)
 	}
-	if wantPredicates > 0 {
-		if diag.PredicateCount != wantPredicates || diag.RowsMatched != wantMatchedRows || diag.ReduceRows != wantMatchedRows {
-			tb.Fatalf("%s predicate diagnostics=%+v want predicates=%d matched/reduced=%d", query, diag, wantPredicates, wantMatchedRows)
-		}
+	if diag.RowsScanned != wantRowsScanned || diag.PredicateCount != wantPredicates || diag.RowsMatched != wantMatchedRows || diag.ReduceRows != wantReduceRows {
+		tb.Fatalf("%s row/predicate diagnostics=%+v want scanned=%d predicates=%d matched=%d reduced=%d", query, diag, wantRowsScanned, wantPredicates, wantMatchedRows, wantReduceRows)
 	}
 }
 

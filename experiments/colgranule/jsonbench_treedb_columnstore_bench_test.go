@@ -400,14 +400,20 @@ func reportTreeDBJSONBenchColumnStoreCompareMetrics(b *testing.B, reducedRows in
 	b.ReportMetric(float64(diag.TopKCandidates), "topk_candidates/op")
 	b.ReportMetric(float64(diag.ResultShapeNanos), "result_shape_ns/op")
 	if diag.StorageSource != "" {
-		b.ReportMetric(1, "storage_source_"+diag.StorageSource)
+		b.ReportMetric(1, "storage_source_"+string(diag.StorageSource))
 	}
 	if diag.FallbackReason != "" {
-		b.ReportMetric(1, "fallback_"+diag.FallbackReason)
+		b.ReportMetric(1, "fallback_"+string(diag.FallbackReason))
 	}
-	b.ReportMetric(float64(diag.ManifestRoot), "manifest_root_id")
-	b.ReportMetric(float64(diag.ManifestGeneration), "manifest_generation")
-	b.ReportMetric(float64(diag.ActiveManifestChecksum), "active_manifest_checksum")
+	reportTreeDBJSONBenchUint64Metric(b, diag.ManifestRoot, "manifest_root_id")
+	reportTreeDBJSONBenchUint64Metric(b, diag.ManifestGeneration, "manifest_generation")
+	reportTreeDBJSONBenchUint64Metric(b, diag.ActiveManifestChecksum, "active_manifest_checksum")
+}
+
+func reportTreeDBJSONBenchUint64Metric(b *testing.B, value uint64, name string) {
+	b.Helper()
+	b.ReportMetric(float64(uint32(value>>32)), name+"_hi")
+	b.ReportMetric(float64(uint32(value)), name+"_lo")
 }
 
 func jsonBenchCompareDirSize(root string) int64 {

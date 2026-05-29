@@ -62,6 +62,7 @@ type ColumnPhysicalQueryFallbackReason string
 const (
 	ColumnPhysicalQueryFallbackNone                         ColumnPhysicalQueryFallbackReason = "none"
 	ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported ColumnPhysicalQueryFallbackReason = "direct_asset_reduce_unsupported"
+	ColumnPhysicalQueryFallbackAggregateMetadataUnsupported ColumnPhysicalQueryFallbackReason = "aggregate_metadata_unsupported"
 	ColumnPhysicalQueryFallbackMutationVisibilityOverlay    ColumnPhysicalQueryFallbackReason = "mutation_visibility_overlay"
 	ColumnPhysicalQueryFallbackDocumentRootRowScan          ColumnPhysicalQueryFallbackReason = "document_root_row_scan"
 	ColumnPhysicalQueryFallbackMixed                        ColumnPhysicalQueryFallbackReason = "mixed"
@@ -152,8 +153,8 @@ type ColumnPhysicalQueryDiagnostics struct {
 	SegmentFileCacheHits        uint64
 	SegmentFileCacheMisses      uint64
 	ColumnAssetReadIntegrity    string
-	StorageSource               string
-	FallbackReason              string
+	StorageSource               ColumnPhysicalQueryStorageSource
+	FallbackReason              ColumnPhysicalQueryFallbackReason
 	ScanNanos                   int64
 	VisibilityNanos             int64
 	ReduceNanos                 int64
@@ -538,8 +539,8 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	var rawScratch []byte
 	start := time.Now()
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
-	diag.StorageSource = string(ColumnPhysicalQueryStorageSourceAggregateMetadata)
-	diag.FallbackReason = string(ColumnPhysicalQueryFallbackNone)
+	diag.StorageSource = ColumnPhysicalQueryStorageSourceAggregateMetadata
+	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = 2
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
@@ -1190,7 +1191,7 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		SegmentFileCacheHits:       diag.SegmentFileCacheHits,
 		SegmentFileCacheMisses:     diag.SegmentFileCacheMisses,
 		ColumnAssetReadIntegrity:   diag.ColumnAssetReadIntegrity,
-		FallbackReason:             string(ColumnPhysicalQueryFallbackNone),
+		FallbackReason:             ColumnPhysicalQueryFallbackNone,
 	}
 }
 
@@ -1199,12 +1200,12 @@ func annotateColumnPhysicalQueryResult(result *ColumnPhysicalQueryResult, source
 		return
 	}
 	if source != "" {
-		result.Diagnostics.StorageSource = string(source)
+		result.Diagnostics.StorageSource = source
 	}
 	if fallback == "" {
 		fallback = ColumnPhysicalQueryFallbackNone
 	}
-	result.Diagnostics.FallbackReason = string(fallback)
+	result.Diagnostics.FallbackReason = fallback
 }
 
 func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnostics) ColumnPhysicalQueryDiagnostics {
@@ -1290,31 +1291,30 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	return left
 }
 
-func mergeColumnPhysicalQueryStorageSource(left, right string) string {
+func mergeColumnPhysicalQueryStorageSource(left, right ColumnPhysicalQueryStorageSource) ColumnPhysicalQueryStorageSource {
 	if left == "" {
 		return right
 	}
 	if right == "" || right == left {
 		return left
 	}
-	return string(ColumnPhysicalQueryStorageSourceMixed)
+	return ColumnPhysicalQueryStorageSourceMixed
 }
 
-func mergeColumnPhysicalQueryFallbackReason(left, right string) string {
-	none := string(ColumnPhysicalQueryFallbackNone)
+func mergeColumnPhysicalQueryFallbackReason(left, right ColumnPhysicalQueryFallbackReason) ColumnPhysicalQueryFallbackReason {
 	if left == "" {
 		if right == "" {
-			return none
+			return ColumnPhysicalQueryFallbackNone
 		}
 		return right
 	}
-	if right == "" || right == left || right == none {
+	if right == "" || right == left || right == ColumnPhysicalQueryFallbackNone {
 		return left
 	}
-	if left == none {
+	if left == ColumnPhysicalQueryFallbackNone {
 		return right
 	}
-	return string(ColumnPhysicalQueryFallbackMixed)
+	return ColumnPhysicalQueryFallbackMixed
 }
 
 type columnPhysicalQueryExecutor struct {

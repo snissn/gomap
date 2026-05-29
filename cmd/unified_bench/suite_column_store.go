@@ -1174,9 +1174,15 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
 		storageSource := exec.StorageSource
+		if storageSource == "" {
+			storageSource = string(collections.ColumnPhysicalQueryStorageSourceFallback)
+		}
 		fallbackReason := exec.FallbackReason
 		if fallbackReason == "" {
 			fallbackReason = string(collections.ColumnPhysicalQueryFallbackNone)
+		}
+		if path == columnStorePathAggregateMetadata && planLabel == columnStorePathSerialColumnScan && fallbackReason == string(collections.ColumnPhysicalQueryFallbackNone) {
+			fallbackReason = string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported)
 		}
 		manifestRootName := exec.ManifestRootName
 		manifestRoot := exec.ManifestRoot
@@ -1426,8 +1432,8 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	return columnStoreQueryExecution{
 		ProductionHash:         productionHash,
 		ProductionHashKnown:    true,
-		StorageSource:          diag.StorageSource,
-		FallbackReason:         diag.FallbackReason,
+		StorageSource:          string(diag.StorageSource),
+		FallbackReason:         string(diag.FallbackReason),
 		ManifestRootName:       diag.ManifestRootName,
 		ManifestRoot:           diag.ManifestRoot,
 		ManifestGeneration:     diag.ManifestGeneration,
