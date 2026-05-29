@@ -564,6 +564,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 	for _, col := range cfg.Columns {
 		columnByName[col.Name] = col
 	}
+	if uint64(len(cfg.SortKey)) > columnManifestSortKeyMaxColumns {
+		return fmt.Errorf("collections: sort key columns=%d exceeds cap %d", len(cfg.SortKey), columnManifestSortKeyMaxColumns)
+	}
 	sortKeyColumns := make(map[string]struct{}, len(cfg.SortKey))
 	for _, sortKey := range cfg.SortKey {
 		col, ok := columnByName[sortKey.Column]

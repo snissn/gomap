@@ -22,12 +22,13 @@ const (
 	columnManifestDictionaryCodesRecordPrefix   = "\x04column-manifest/v1/dictionary/"
 	columnManifestInt64ValuesRecordPrefix       = "\x05column-manifest/v1/int64/"
 
-	columnManifestHeaderMagic     = uint32(0x54434d48) // TCMH
-	columnManifestPartMagic       = uint32(0x54434d50) // TCMP
-	columnManifestRecordVersionV1 = uint16(1)
-	columnManifestRecordVersionV2 = uint16(2)
-	columnManifestRecordVersionV3 = uint16(3)
-	columnManifestRecordVersion   = uint16(4)
+	columnManifestHeaderMagic       = uint32(0x54434d48) // TCMH
+	columnManifestPartMagic         = uint32(0x54434d50) // TCMP
+	columnManifestRecordVersionV1   = uint16(1)
+	columnManifestRecordVersionV2   = uint16(2)
+	columnManifestRecordVersionV3   = uint16(3)
+	columnManifestRecordVersion     = uint16(4)
+	columnManifestSortKeyMaxColumns = uint64(64)
 )
 
 var (
@@ -384,6 +385,9 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 	sortKey, err := columnSortKeysFromMatchString(asset.SortKey)
 	if err != nil {
 		return nil, err
+	}
+	if uint64(len(sortKey)) > columnManifestSortKeyMaxColumns {
+		return nil, fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", len(sortKey), columnManifestSortKeyMaxColumns)
 	}
 	writeColumnManifestSortKey(&b, sortKey)
 	return b.Bytes(), nil
@@ -1051,6 +1055,8 @@ func writeManifestString(b *bytes.Buffer, value string) {
 }
 
 func writeColumnManifestSortKey(b *bytes.Buffer, sortKeys []ColumnSortKey) {
+	// Callers validate the cap before encoding; keep this defensive marker local
+	// to the manifest format so readers and writers share one bound.
 	writeManifestUint64(b, uint64(len(sortKeys)))
 	for _, sortKey := range sortKeys {
 		writeManifestString(b, sortKey.Column)
@@ -1063,8 +1069,8 @@ func readColumnManifestSortKey(cur *manifestCursor) []ColumnSortKey {
 	if cur.err != nil {
 		return nil
 	}
-	if count > 64 {
-		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap 64", count)
+	if count > columnManifestSortKeyMaxColumns {
+		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", count, columnManifestSortKeyMaxColumns)
 		return nil
 	}
 	if count == 0 {
@@ -1084,8 +1090,8 @@ func skipColumnManifestSortKey(cur *manifestCursor) {
 	if cur.err != nil {
 		return
 	}
-	if count > 64 {
-		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap 64", count)
+	if count > columnManifestSortKeyMaxColumns {
+		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", count, columnManifestSortKeyMaxColumns)
 		return
 	}
 	for i := uint64(0); i < count; i++ {

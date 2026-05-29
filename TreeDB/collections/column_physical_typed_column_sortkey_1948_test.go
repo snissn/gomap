@@ -191,6 +191,24 @@ func TestColumnPreparedAssetSortKeyRejectsDuplicate1948(t *testing.T) {
 	}
 }
 
+func TestColumnPreparedAssetSortKeyRejectsOversized1948(t *testing.T) {
+	sortKeys := make([]ColumnSortKey, int(columnManifestSortKeyMaxColumns)+1)
+	for i := range sortKeys {
+		sortKeys[i] = ColumnSortKey{Column: fmt.Sprintf("c%02d", i)}
+	}
+	asset := ColumnPreparedAsset{
+		Ref:      ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "events_column_assets", Generation: 1, PartID: typedColumnPartAssetPartID, FileID: 1, Length: 1, Checksum: 1},
+		Rows:     1,
+		Bytes:    1,
+		Reason:   string(ColumnPublishOperationInsert),
+		PartRole: ColumnManifestPartRoleBase,
+		SortKey:  columnSortKeyMatchString(sortKeys),
+	}
+	if err := validateColumnPreparedAssetForPlan(asset); err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("validateColumnPreparedAssetForPlan oversized err=%v want exceeds cap", err)
+	}
+}
+
 func TestTypedColumnPartSortKeyQueryValidationFailsClosed1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
