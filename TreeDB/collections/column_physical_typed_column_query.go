@@ -1,8 +1,10 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"time"
 )
@@ -112,6 +114,9 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		runner.segmentFileCacheHits = readCache.hits
 		runner.segmentFileCacheMisses = readCache.misses
 		if err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, true, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			}
 			return nil, true, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		rawScratch = raw
@@ -334,7 +339,7 @@ func columnTypedColumnPhysicalQueryPredicateSpecs(cfg ColumnStoreConfig, req Col
 		default:
 			return nil, fmt.Errorf("%w: unsupported typed-column part physical predicate kind %q for column %q", ErrColumnQueryPlanUnsupported, predicate.Kind, predicate.Column)
 		}
-		specs = append(specs, columnPhysicalQueryPredicateSpec{column: predicate.Column, kind: kind, values: values})
+		specs = append(specs, columnPhysicalQueryPredicateSpec{column: predicate.Column, kind: kind, values: values, valueBytes: columnPhysicalQueryPredicateValueBytes(values)})
 	}
 	return specs, nil
 }
@@ -621,22 +626,32 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) groups(req ColumnPhysicalQue
 
 func typedColumnPhysicalQueryPredicatesMatch(values map[string][]columnDeclaredValue, specs []columnPhysicalQueryPredicateSpec, rowIdx int) (bool, error) {
 	for _, spec := range specs {
-		value, err := typedColumnPhysicalQueryStringAt(values, spec.column, rowIdx)
+		value, err := typedColumnPhysicalQueryStringValueAt(values, spec.column, rowIdx)
 		if err != nil {
 			return false, err
 		}
-		matched := false
-		for _, target := range spec.values {
-			if value == target {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		if !typedColumnPhysicalQueryPredicateValueMatches(value, spec) {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+func typedColumnPhysicalQueryPredicateValueMatches(value columnDeclaredValue, spec columnPhysicalQueryPredicateSpec) bool {
+	if value.StringBytes != nil {
+		for _, target := range spec.valueBytes {
+			if bytes.Equal(value.StringBytes, target) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, target := range spec.values {
+		if value.String == target {
+			return true
+		}
+	}
+	return false
 }
 
 func typedColumnPhysicalQueryStringInt64At(values map[string][]columnDeclaredValue, groupColumn, valueColumn string, rowIdx int) (string, int64, error) {
@@ -652,24 +667,32 @@ func typedColumnPhysicalQueryStringInt64At(values map[string][]columnDeclaredVal
 }
 
 func typedColumnPhysicalQueryStringAt(values map[string][]columnDeclaredValue, column string, rowIdx int) (string, error) {
-	columnValues, ok := values[column]
-	if !ok {
-		return "", fmt.Errorf("collections: typed-column part physical query missing string column %q", column)
-	}
-	if rowIdx < 0 || rowIdx >= len(columnValues) {
-		return "", fmt.Errorf("collections: typed-column part physical query row_index=%d outside column %q rows=%d", rowIdx, column, len(columnValues))
-	}
-	value := columnValues[rowIdx]
-	if value.Type != ColumnStoreValueString {
-		return "", fmt.Errorf("%w: typed-column part physical query expected string column %q, got %q", ErrColumnQueryPlanUnsupported, column, value.Type)
-	}
-	if !value.Present || value.Null {
-		return "", fmt.Errorf("%w: typed-column part physical query column %q has null/missing string value", ErrColumnQueryPlanUnsupported, column)
+	value, err := typedColumnPhysicalQueryStringValueAt(values, column, rowIdx)
+	if err != nil {
+		return "", err
 	}
 	if value.StringBytes != nil {
 		return string(value.StringBytes), nil
 	}
 	return value.String, nil
+}
+
+func typedColumnPhysicalQueryStringValueAt(values map[string][]columnDeclaredValue, column string, rowIdx int) (columnDeclaredValue, error) {
+	columnValues, ok := values[column]
+	if !ok {
+		return columnDeclaredValue{}, fmt.Errorf("collections: typed-column part physical query missing string column %q", column)
+	}
+	if rowIdx < 0 || rowIdx >= len(columnValues) {
+		return columnDeclaredValue{}, fmt.Errorf("collections: typed-column part physical query row_index=%d outside column %q rows=%d", rowIdx, column, len(columnValues))
+	}
+	value := columnValues[rowIdx]
+	if value.Type != ColumnStoreValueString {
+		return columnDeclaredValue{}, fmt.Errorf("%w: typed-column part physical query expected string column %q, got %q", ErrColumnQueryPlanUnsupported, column, value.Type)
+	}
+	if !value.Present || value.Null {
+		return columnDeclaredValue{}, fmt.Errorf("%w: typed-column part physical query column %q has null/missing string value", ErrColumnQueryPlanUnsupported, column)
+	}
+	return value, nil
 }
 
 func typedColumnPhysicalQueryInt64At(values map[string][]columnDeclaredValue, column string, rowIdx int) (int64, error) {

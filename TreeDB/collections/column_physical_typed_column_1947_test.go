@@ -239,8 +239,9 @@ func TestColumnPhysicalJSONBenchTypedColumnPartAssetFailureFailClosed1947(t *tes
 			if err == nil {
 				t.Fatalf("RunColumnPhysicalQuery after %s typed_column_part succeeded; want fail-closed error", tc.name)
 			}
-			if !strings.Contains(err.Error(), "typed-column part physical query") && !strings.Contains(err.Error(), "checksum") && !strings.Contains(err.Error(), "short") {
-				t.Fatalf("%s typed_column_part error=%v want typed-column/checksum/short-read context", tc.name, err)
+			errText := err.Error()
+			if !strings.Contains(errText, "typed-column") || (!strings.Contains(errText, "checksum") && !strings.Contains(errText, "short")) {
+				t.Fatalf("%s typed_column_part error=%v want typed-column context plus checksum/short-read context", tc.name, err)
 			}
 		})
 	}

@@ -1853,8 +1853,11 @@ func runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery typed-column group: %v", err)
 	}
-	if typedResult.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || typedResult.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone || typedResult.Diagnostics.TypedColumnPartSections == 0 {
+	if typedResult.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || typedResult.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone || typedResult.Diagnostics.TypedColumnPartSections == 0 || typedResult.Diagnostics.TypedColumnPartSectionBytes == 0 {
 		t.Fatalf("typed-column group diagnostics=%+v want typed_column_part_section without fallback", typedResult.Diagnostics)
+	}
+	if len(typedResult.Groups) != 1 || typedResult.Groups[0].Key != "like" || typedResult.Groups[0].Count != 1 {
+		t.Fatalf("typed-column group result=%+v want one like group with count 1", typedResult.Groups)
 	}
 	result, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"})
 	if err != nil {
