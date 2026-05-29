@@ -25,6 +25,10 @@ const (
 
 var columnManifestVectorGraphRecordPrefixBytes = []byte(columnManifestVectorGraphRecordPrefix)
 
+// Quarantine: graph-specific adjacency-source storage refs embedded in this
+// manifest (TCGA/TCGL) are transitional compatibility. #1986 owns moving
+// vector-index state refs out of these special graph records, and #1989 owns
+// removal or legacy isolation after uint32_list adjacency state is in use.
 type columnVectorGraphManifestSnapshot struct {
 	IndexName              string
 	Field                  string

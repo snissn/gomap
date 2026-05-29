@@ -10,6 +10,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
+// Quarantine: graph-specific adjacency-source storage is transitional
+// compatibility for the #1901 path, not the target architecture. Do not add new
+// storage features here; #1985 should salvage the raw_uint32_offsets_list
+// offsets/value mechanics under a generic uint32_list primitive, and #1986/#1988
+// should layer vector-index state/search above that primitive.
 const (
 	columnVectorGraphLayer0AdjacencySourceSchema     = "column_graph_layer0_adjacency/raw_uint32_offsets_list/v1"
 	columnVectorGraphAdjacencyLayerSourceSchema      = "column_graph_adjacency_layer/raw_uint32_offsets_list/v1"

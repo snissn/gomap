@@ -117,6 +117,9 @@ func typedColumnAdapterMappingForValueType(valueType ColumnStoreValueType) (type
 	return typedColumnAdapterTypeMapping{ValueType: valueType, Status: typedColumnAdapterFailClosed, Reason: "unknown declared value type"}, fmt.Errorf("%w: %s", errTypedColumnAdapterUnsupportedType, valueType)
 }
 
+// typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported gates the current
+// quarantined adjacency_list selector. Keep this narrow until #1985 introduces a
+// generic uint32_list adapter path.
 func typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported(column typedColumnAdapterColumn) bool {
 	return column.Field.ValueType == ColumnStoreValueAdjacencyList &&
 		!column.Field.Nullable &&

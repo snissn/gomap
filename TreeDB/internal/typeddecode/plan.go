@@ -360,9 +360,9 @@ func DenseFloat32VectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, dim
 }
 
 // AdjacencyListPlan intentionally keeps the legacy dense fixed-degree adjacency
-// layout as deferred/fallback-only. The #1901 v1 direct-view target is the
-// explicit raw_uint32_offsets_list variable-list primitive, not accidental
-// missing-degree behavior on this dense plan.
+// layout as deferred/fallback-only. The current #1901 offsets-list path is
+// quarantined compatibility; #1985 owns the generic uint32_list direct-view plan
+// that should salvage the raw_uint32_offsets_list mechanics.
 func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree int) Plan {
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            columnsemantics.LogicalAdjacencyList,
@@ -376,10 +376,11 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
 }
 
-// AdjacencyOffsetsListPlan selects a direct-view candidate only for writer-
-// certified raw_uint32_offsets_list adjacency sections: little-endian uint64
-// offsets plus little-endian uint32 values. Graph/search/runtime consumption is
-// deliberately left to fallback callers; this only certifies the primitive view.
+// AdjacencyOffsetsListPlan selects a direct-view candidate only for the current
+// writer-certified raw_uint32_offsets_list adjacency compatibility sections:
+// little-endian uint64 offsets plus little-endian uint32 values. Graph-specific
+// naming is quarantined by #1983; the validation/view mechanics should move to a
+// generic uint32_list plan in #1985.
 func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
 	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
 	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {

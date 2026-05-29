@@ -3,8 +3,10 @@ package typedcolumn
 import "fmt"
 
 // RawUint32OffsetsList is the owned fallback representation for the v1
-// variable-length uint32 list primitive. Offsets has Rows+1 entries and Values
-// stores all row values concatenated; row i spans Values[Offsets[i]:Offsets[i+1]].
+// variable-length uint32 list primitive. It is consumer-neutral storage
+// machinery: HNSW adjacency may consume it, but graph-specific semantics belong
+// above this layer. Offsets has Rows+1 entries and Values stores all row values
+// concatenated; row i spans Values[Offsets[i]:Offsets[i+1]].
 type RawUint32OffsetsList struct {
 	Rows    int
 	Offsets []uint64

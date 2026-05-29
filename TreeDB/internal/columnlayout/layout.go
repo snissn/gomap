@@ -355,7 +355,7 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 			caps.DirectView = denseFixedWidthElementsRequiredDirectView(desc, 4, EndianLittle, 4)
 			break
 		}
-		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "dense fixed-degree adjacency direct views remain fallback/compatibility; #1901 v1 target is raw_uint32_offsets_list", ValidationBoundary: "prepare"}
+		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonAdjacencyDirectViewDeferred, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, Lifetime: "dense fixed-degree adjacency direct views remain fallback/compatibility; #1983 quarantines graph-specific raw_uint32_offsets_list storage while #1985 defines uint32_list", ValidationBoundary: "prepare"}
 		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
 			caps.Reducers.AdjacencyMetrics = true
 			caps.Pruning.AdjacencyIndex = true

@@ -550,10 +550,11 @@ native scalar float direct-view payload. Issue `#1756` adds fixed-dimension
 sections whose element count per row is `vector_dims`. Issue `#1783` adds
 fixed-degree `adjacency_list` fields as uncompressed row-major little-endian
 dense `uint32` sections whose element count per row is `adjacency_degree`;
-that dense layout remains fallback/compatibility. Issue #1914 selects the #1901
-v1 column-store adjacency primitive as an explicit `ColumnStoreValueAdjacencyList`
+that dense layout remains fallback/compatibility. Issue #1914 selected the #1901
+variable-list compatibility path as an explicit `ColumnStoreValueAdjacencyList`
 layout extension selected by `adjacency_layout: "uint32_offsets_list"` and the
-internal encoding `raw_uint32_offsets_list`:
+internal encoding `raw_uint32_offsets_list`. Issue #1983 quarantines the
+consumer-specific storage integration; the reusable physical mechanics are:
 
 ```text
 offsets []uint64  // row_count + 1, little-endian
@@ -565,32 +566,34 @@ column-wide values section per offsets-list column. For multi-block parts, block
 payloads may use block-local offsets internally, but the image writer publishes a
 single global `row_count + 1` offsets array by dropping duplicate block starts and
 adding cumulative value bases; readers reconstruct block-local fallback payloads
-from those global sections. The offsets-list primitive validates exact offsets
+from those global sections. The offsets-list mechanics validate exact offsets
 count, `offsets[0] == 0`, monotonic offsets, final offset equal to the value
 count, exact offsets/value byte lengths, Go `int` range before slicing,
 little-endian identity, and separate section metadata/checksums for offsets
 (8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
-fallback reader into owned Go slices; #1916 adds certified primitive direct-view
-readers for paired offsets/value handles, and #1917 wires that variable adjacency
-reader through typed-column adapters. #1918 records a durable `column_graph`
-layer-0 adjacency source as a `raw_uint32_offsets_list` typed-column asset during
-physical graph rebuilds, and #1920 extends graph manifests to record one such
-source per graph adjacency layer. Layer-0 search can consume the optional source,
-but row-asset adjacency remains canonical/fallback compatibility and upper-layer
-all-source search consumption remains a separate follow-up.
+fallback reader into owned Go slices; #1916 adds certified direct-view readers
+for paired offsets/value handles, and #1917 wires that variable adjacency reader
+through typed-column adapters. #1918 records a durable `column_graph` layer-0
+adjacency source as a `raw_uint32_offsets_list` typed-column asset during
+physical graph rebuilds, and later graph-source work extends manifests to record
+per-layer sources. Those `column_graph` source records are transitional
+compatibility, not the target datastore primitive; #1984/#1985 own
+`uint32_list`, and #1986/#1988 own vector-index state/search consumption.
 
 The `column_graph` manifest keeps the row graph asset ref as the canonical graph
-asset. New all-layer source metadata is an optional manifest trailer with magic
-`TCGL` and version `1`: it records `layer_count`, `source_count`, and then one
-`TCGA` v1 source record per layer in ascending layer order. Each source record
-binds the source schema/column name, value type/encoding, layer number, source
-schema hash, row count, value count, offsets/value/padding byte accounting,
-source `tcs1_typed_column_part` ref, base-manifest identity, graph schema hash,
-and graph-asset identity. `source_count` must equal `layer_count`; layer `i`
-must have `Layer=i`; layer 0 is also exposed through the legacy optional
-layer-0 field for older #1919 readers. Empty rows and layers are represented by
-equal adjacent offsets in the per-layer offsets array. Old graph manifests
-without the trailer remain row-asset fallback readable.
+asset. The quarantined all-layer source metadata is an optional manifest trailer
+with magic `TCGL` and version `1`: it records `layer_count`, `source_count`, and
+then one `TCGA` v1 source record per layer in ascending layer order. Each source
+record binds the source schema/column name, value type/encoding, layer number,
+source schema hash, row count, value count, offsets/value/padding byte
+accounting, source `tcs1_typed_column_part` ref, base-manifest identity, graph
+schema hash, and graph-asset identity. `source_count` must equal `layer_count`;
+layer `i` must have `Layer=i`; layer 0 is also exposed through the legacy
+optional layer-0 field for older readers. Empty rows and layers are represented
+by equal adjacent offsets in the per-layer offsets array. Old graph manifests
+without the trailer remain row-asset fallback readable. Do not add new storage
+features to this `TCGA`/`TCGL` path; #1989 owns removal or compatibility
+isolation after typed-column `uint32_list` vector-index state is in use.
 
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
@@ -975,7 +978,10 @@ adjacency data into physical column assets, also publishes durable per-layer
 `raw_uint32_offsets_list` typed-column adjacency sources for validation/reopen
 coverage, and records the row graph ref plus layer count/per-layer source refs
 in the graph manifest through the normal collection column manifest/root
-lifecycle. Replay outcomes that are
+lifecycle. Those adjacency-source refs are current #1983-quarantined
+compatibility, not the target storage architecture; #1986/#1988/#1989 own
+replacement with vector-index state, search consumption, and legacy isolation or
+removal. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and
