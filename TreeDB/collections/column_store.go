@@ -245,9 +245,12 @@ type ColumnStoreCacheIdentity struct {
 	CatalogSystemRoot                      uint64
 	CatalogCommitSeq                       uint64
 	ManifestGeneration                     uint64
+	ManifestChecksum                       uint64
 	RecoveryAuthoritativeGeneration        uint64
+	RecoveryAuthoritativeChecksum          uint64
 	RecoveryAuthoritativeAppliedCommandLSN uint64
 	ManifestRoot                           uint64
+	ManifestRootName                       string
 }
 
 type ColumnCacheEntryKind string
@@ -306,21 +309,31 @@ func columnStoreCacheIdentity(catalog *collectionCatalog, systemRoot, commitSeq 
 		return ColumnStoreCacheIdentity{}, false
 	}
 	cfg := catalog.meta.Options.ColumnStore
+	manifestRootName := catalog.columnManifestRootName
+	if manifestRootName == "" && cfg.ManifestRoot != nil {
+		manifestRootName = cfg.ManifestRoot.Name
+	}
+	if manifestRootName == "" {
+		manifestRootName = collectionColumnManifestRootName(catalog.meta.Name)
+	}
 	id := ColumnStoreCacheIdentity{
 		Collection:        catalog.meta.Name,
 		SchemaHash:        cfg.SchemaHash,
 		CatalogSystemRoot: systemRoot,
 		CatalogCommitSeq:  commitSeq,
-		ManifestRoot:      catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
+		ManifestRoot:      catalog.rootID(manifestRootName),
+		ManifestRootName:  manifestRootName,
 	}
 	if id.SchemaHash == 0 {
 		id.SchemaHash = hashColumnStoreSchema(cfg)
 	}
 	if cfg.ActiveManifest != nil {
 		id.ManifestGeneration = cfg.ActiveManifest.Generation
+		id.ManifestChecksum = cfg.ActiveManifest.Checksum
 	}
 	if cfg.RecoveryAuthoritativeManifest != nil {
 		id.RecoveryAuthoritativeGeneration = cfg.RecoveryAuthoritativeManifest.Generation
+		id.RecoveryAuthoritativeChecksum = cfg.RecoveryAuthoritativeManifest.Checksum
 		id.RecoveryAuthoritativeAppliedCommandLSN = cfg.RecoveryAuthoritativeAppliedCommandLSN
 	}
 	return id, true

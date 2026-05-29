@@ -159,6 +159,12 @@ type columnStoreQueryMetric struct {
 	AliasOf                  string  `json:"alias_of,omitempty"`
 	ImplementationNote       string  `json:"implementation_note,omitempty"`
 	ThroughputInterpretation string  `json:"throughput_interpretation,omitempty"`
+	StorageSource            string  `json:"storage_source"`
+	FallbackReason           string  `json:"fallback_reason"`
+	ManifestRootName         string  `json:"manifest_root_name,omitempty"`
+	ManifestRoot             uint64  `json:"manifest_root,omitempty"`
+	ManifestGeneration       uint64  `json:"manifest_generation,omitempty"`
+	ActiveManifestChecksum   uint64  `json:"active_manifest_checksum,omitempty"`
 	DurationMS               float64 `json:"duration_ms"`
 	Rows                     int     `json:"rows"`
 	RowsProcessed            int     `json:"rows_processed"`
@@ -201,6 +207,12 @@ type columnStoreQueryExecution struct {
 	Lines                  []string
 	ProductionHash         uint64
 	ProductionHashKnown    bool
+	StorageSource          string
+	FallbackReason         string
+	ManifestRootName       string
+	ManifestRoot           uint64
+	ManifestGeneration     uint64
+	ActiveManifestChecksum uint64
 	RowsProcessed          int
 	RowsProcessedKnown     bool
 	BytesRead              int64
@@ -241,8 +253,11 @@ type columnStoreByteAccounting struct {
 
 type columnStoreManifestMetric struct {
 	ActiveGeneration                uint64 `json:"active_generation"`
+	ActiveChecksum                  uint64 `json:"active_checksum"`
 	RecoveryAuthoritativeGeneration uint64 `json:"recovery_authoritative_generation"`
+	RecoveryAuthoritativeChecksum   uint64 `json:"recovery_authoritative_checksum"`
 	AppliedCommandLSN               uint64 `json:"applied_command_lsn"`
+	ManifestRootName                string `json:"manifest_root_name"`
 	ManifestRoot                    uint64 `json:"manifest_root"`
 	SchemaHash                      uint64 `json:"schema_hash"`
 }
@@ -524,8 +539,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		},
 		Manifest: columnStoreManifestMetric{
 			ActiveGeneration:                manifestIdentity.ManifestGeneration,
+			ActiveChecksum:                  manifestIdentity.ManifestChecksum,
 			RecoveryAuthoritativeGeneration: manifestIdentity.RecoveryAuthoritativeGeneration,
+			RecoveryAuthoritativeChecksum:   manifestIdentity.RecoveryAuthoritativeChecksum,
 			AppliedCommandLSN:               manifestIdentity.RecoveryAuthoritativeAppliedCommandLSN,
+			ManifestRootName:                manifestIdentity.ManifestRootName,
 			ManifestRoot:                    manifestIdentity.ManifestRoot,
 			SchemaHash:                      manifestIdentity.SchemaHash,
 		},
@@ -1115,6 +1133,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	}
 	queries := make([]columnStoreQueryMetric, 0, len(queryNames))
 	parity := make(map[string]columnStoreParity, len(queryNames))
+	manifestIdentity, hasManifestIdentity := collection.ColumnStoreCacheIdentity()
 	var firstErr error
 	for _, name := range queryNames {
 		queryForceKind := columnStoreSuitePlanKindForQuery(path, name, forceKind)
@@ -1154,6 +1173,29 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		if !pass && firstErr == nil {
 			firstErr = fmt.Errorf("column_store: parity mismatch for %s: raw=%016x production=%016x", name, rawHash, hash)
 		}
+		storageSource := exec.StorageSource
+		fallbackReason := exec.FallbackReason
+		if fallbackReason == "" {
+			fallbackReason = string(collections.ColumnPhysicalQueryFallbackNone)
+		}
+		manifestRootName := exec.ManifestRootName
+		manifestRoot := exec.ManifestRoot
+		manifestGeneration := exec.ManifestGeneration
+		activeManifestChecksum := exec.ActiveManifestChecksum
+		if hasManifestIdentity {
+			if manifestRootName == "" {
+				manifestRootName = manifestIdentity.ManifestRootName
+			}
+			if manifestRoot == 0 {
+				manifestRoot = manifestIdentity.ManifestRoot
+			}
+			if manifestGeneration == 0 {
+				manifestGeneration = manifestIdentity.ManifestGeneration
+			}
+			if activeManifestChecksum == 0 {
+				activeManifestChecksum = manifestIdentity.ManifestChecksum
+			}
+		}
 		metric := columnStoreQueryMetric{
 			Name: name,
 			// PlanLabel records the executed planner kind after alias
@@ -1161,6 +1203,12 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			PlanLabel:              planLabel,
 			AliasOf:                columnStoreQueryAliasOf(name, planLabel),
 			ImplementationNote:     columnStoreQueryImplementationNote(name, path, planLabel),
+			StorageSource:          storageSource,
+			FallbackReason:         fallbackReason,
+			ManifestRootName:       manifestRootName,
+			ManifestRoot:           manifestRoot,
+			ManifestGeneration:     manifestGeneration,
+			ActiveManifestChecksum: activeManifestChecksum,
 			DurationMS:             durationMS(elapsed),
 			duration:               elapsed,
 			Rows:                   rows,
@@ -1272,6 +1320,8 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 		}
 		return columnStoreQueryExecution{
 			Lines:                  lines,
+			StorageSource:          string(collections.ColumnPhysicalQueryStorageSourceRowScan),
+			FallbackReason:         string(collections.ColumnPhysicalQueryFallbackNone),
 			RowsProcessed:          materialized,
 			RowsProcessedKnown:     true,
 			BytesRead:              bytesRead,
@@ -1300,6 +1350,8 @@ func executeColumnStoreSuiteQueryWithPlan(collection *collections.Collection, ro
 		}
 		return columnStoreQueryExecution{
 			Lines:                  lines,
+			StorageSource:          string(collections.ColumnPhysicalQueryStorageSourceRowScan),
+			FallbackReason:         string(collections.ColumnPhysicalQueryFallbackNone),
 			RowsProcessed:          materialized,
 			RowsProcessedKnown:     true,
 			BytesRead:              bytesRead,
@@ -1374,6 +1426,12 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	return columnStoreQueryExecution{
 		ProductionHash:         productionHash,
 		ProductionHashKnown:    true,
+		StorageSource:          diag.StorageSource,
+		FallbackReason:         diag.FallbackReason,
+		ManifestRootName:       diag.ManifestRootName,
+		ManifestRoot:           diag.ManifestRoot,
+		ManifestGeneration:     diag.ManifestGeneration,
+		ActiveManifestChecksum: diag.ActiveManifestChecksum,
 		RowsProcessed:          diag.ReduceRows,
 		RowsProcessedKnown:     true,
 		BytesRead:              diag.PhysicalBytesScanned,
@@ -2121,8 +2179,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
+	sb.WriteString("| query | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
@@ -2136,8 +2194,16 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if note != "" {
 			noteCell = markdownCodeTableText(note)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		manifestRootCell := "-"
+		if q.ManifestRootName != "" || q.ManifestRoot != 0 {
+			manifestRootCell = fmt.Sprintf("%s/%d", q.ManifestRootName, q.ManifestRoot)
+		}
+		activeManifestCell := "-"
+		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
+			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
@@ -2172,8 +2238,11 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 
 	sb.WriteString("## Manifest Recovery\n\n")
 	sb.WriteString(fmt.Sprintf("- active_generation: %d\n", report.Manifest.ActiveGeneration))
+	sb.WriteString(fmt.Sprintf("- active_checksum: %d\n", report.Manifest.ActiveChecksum))
 	sb.WriteString(fmt.Sprintf("- recovery_authoritative_generation: %d\n", report.Manifest.RecoveryAuthoritativeGeneration))
+	sb.WriteString(fmt.Sprintf("- recovery_authoritative_checksum: %d\n", report.Manifest.RecoveryAuthoritativeChecksum))
 	sb.WriteString(fmt.Sprintf("- applied_command_lsn: %d\n", report.Manifest.AppliedCommandLSN))
+	sb.WriteString(fmt.Sprintf("- manifest_root_name: `%s`\n", report.Manifest.ManifestRootName))
 	sb.WriteString(fmt.Sprintf("- manifest_root: %d\n", report.Manifest.ManifestRoot))
 	sb.WriteString(fmt.Sprintf("- schema_hash: %d\n\n", report.Manifest.SchemaHash))
 

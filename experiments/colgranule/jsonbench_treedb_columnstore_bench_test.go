@@ -153,6 +153,7 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 				last = result.Diagnostics
 				reducedRows += int64(result.Diagnostics.ReduceRows)
 			}
+			b.StopTimer()
 			reportTreeDBJSONBenchColumnStoreCompareMetrics(b, reducedRows, last, ds.Rows)
 		})
 		b.Run("treedb_column_store_prepared/"+q.name, func(b *testing.B) {
@@ -185,6 +186,7 @@ func benchmarkJSONBenchColumnStoreCompareTreeDB(b *testing.B, ds JSONBenchDatase
 				last = result.Diagnostics
 				reducedRows += int64(result.Diagnostics.ReduceRows)
 			}
+			b.StopTimer()
 			reportTreeDBJSONBenchColumnStoreCompareMetrics(b, reducedRows, last, ds.Rows)
 		})
 	}
@@ -397,6 +399,15 @@ func reportTreeDBJSONBenchColumnStoreCompareMetrics(b *testing.B, reducedRows in
 	b.ReportMetric(float64(diag.TopKLimit), "topk_limit/op")
 	b.ReportMetric(float64(diag.TopKCandidates), "topk_candidates/op")
 	b.ReportMetric(float64(diag.ResultShapeNanos), "result_shape_ns/op")
+	if diag.StorageSource != "" {
+		b.ReportMetric(1, "storage_source_"+diag.StorageSource)
+	}
+	if diag.FallbackReason != "" {
+		b.ReportMetric(1, "fallback_"+diag.FallbackReason)
+	}
+	b.ReportMetric(float64(diag.ManifestRoot), "manifest_root_id")
+	b.ReportMetric(float64(diag.ManifestGeneration), "manifest_generation")
+	b.ReportMetric(float64(diag.ActiveManifestChecksum), "active_manifest_checksum")
 }
 
 func jsonBenchCompareDirSize(root string) int64 {

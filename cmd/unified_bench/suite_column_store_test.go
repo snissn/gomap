@@ -389,6 +389,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
+		if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceRowScan) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			t.Fatalf("query %s storage source/fallback=%q/%q want row scan/none", q.Name, q.StorageSource, q.FallbackReason)
+		}
+		if q.ManifestRootName == "" || q.ManifestRoot == 0 || q.ManifestGeneration == 0 || q.ActiveManifestChecksum == 0 {
+			t.Fatalf("query %s missing manifest identity fields: %+v", q.Name, q)
+		}
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
@@ -477,7 +483,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.ManifestControlBytes == 0 || report.ByteAccounting.DBTotalBytes == 0 || report.ByteAccounting.DBTotalFiles == 0 {
 		t.Fatalf("expected measured manifest/control and DB byte accounting: %+v", report.ByteAccounting)
 	}
-	if report.Manifest.ActiveGeneration == 0 || report.Manifest.AppliedCommandLSN == 0 {
+	if report.Manifest.ActiveGeneration == 0 || report.Manifest.ActiveChecksum == 0 || report.Manifest.AppliedCommandLSN == 0 || report.Manifest.ManifestRootName == "" || report.Manifest.ManifestRoot == 0 {
 		t.Fatalf("expected active/recovery-authoritative manifest identity: %+v", report.Manifest)
 	}
 	if len(report.FailClosedForcedPaths) != 0 {
@@ -1601,6 +1607,12 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		}
 		if q.BytesRead <= 0 || q.RowsPerSecond <= 0 || q.NsPerRow <= 0 {
 			t.Fatalf("query %s missing physical throughput metrics: %+v", q.Name, q)
+		}
+		if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			t.Fatalf("query %s storage source/fallback=%q/%q want compatibility sidecar/none", q.Name, q.StorageSource, q.FallbackReason)
+		}
+		if q.ManifestRootName == "" || q.ManifestRoot == 0 || q.ManifestGeneration == 0 || q.ActiveManifestChecksum == 0 {
+			t.Fatalf("query %s missing per-row manifest identity: %+v", q.Name, q)
 		}
 		if q.Name == columnStoreQueryQ1 || q.Name == columnStoreQueryQ2 {
 			if q.DictionaryCodeHits == 0 {

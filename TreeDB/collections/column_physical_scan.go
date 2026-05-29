@@ -32,8 +32,11 @@ type columnPhysicalScanRequest struct {
 
 type columnPhysicalScanDiagnostics struct {
 	ManifestRoot               uint64
+	ManifestRootName           string
 	ManifestGeneration         uint64
+	ActiveManifestChecksum     uint64
 	RecoveryManifestGeneration uint64
+	RecoveryManifestChecksum   uint64
 	AppliedCommandLSN          uint64
 	ManifestRecords            int
 	AssetRefs                  int
@@ -286,7 +289,10 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars
 		return columnPhysicalScanSnapshotView{}, nil, err
 	}
 	collectionName := catalog.meta.Name
-	rootName := collectionColumnManifestRootName(collectionName)
+	rootName := catalog.columnManifestRootName
+	if rootName == "" {
+		rootName = collectionColumnManifestRootName(collectionName)
+	}
 	rootID := catalog.rootID(rootName)
 	cfgPtr := catalog.meta.Options.ColumnStore
 	columnStoreEnabled := cfgPtr != nil
@@ -369,8 +375,15 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 	if cfg.AssetManager == nil {
 		return columnPhysicalScanSnapshotView{}, errors.New("collections: physical column scan requires column asset manager metadata")
 	}
+	rootName := catalog.columnManifestRootName
+	if rootName == "" && cfg.ManifestRoot != nil {
+		rootName = cfg.ManifestRoot.Name
+	}
+	if rootName == "" {
+		rootName = collectionColumnManifestRootName(collectionName)
+	}
 	if rootID == 0 {
-		return columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: physical column scan missing manifest root %q", collectionColumnManifestRootName(collectionName))
+		return columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: physical column scan missing manifest root %q", rootName)
 	}
 	snapshotState := snap.State()
 	if snapshotState == nil {
@@ -379,8 +392,11 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 
 	diag := columnPhysicalScanDiagnostics{
 		ManifestRoot:               rootID,
+		ManifestRootName:           rootName,
 		ManifestGeneration:         cfg.ActiveManifest.Generation,
+		ActiveManifestChecksum:     cfg.ActiveManifest.Checksum,
 		RecoveryManifestGeneration: cfg.RecoveryAuthoritativeManifest.Generation,
+		RecoveryManifestChecksum:   cfg.RecoveryAuthoritativeManifest.Checksum,
 		AppliedCommandLSN:          cfg.RecoveryAuthoritativeAppliedCommandLSN,
 	}
 	rowAssetConfig := columnStoreRowAssetConfig(cfg)
