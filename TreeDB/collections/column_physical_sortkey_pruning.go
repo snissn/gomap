@@ -184,6 +184,8 @@ func (plan columnTypedColumnSortKeyPrefixPlan) prunePartRows(part *typedColumnAd
 		result.Skips = len(part.Part.Marks)
 		return result, nil
 	}
+	matchedGranules := make([]typedcolumn.GranuleDescriptor, 0, len(part.Part.Descriptor.Granules))
+	selectedRows := 0
 	for i, granule := range part.Part.Descriptor.Granules {
 		mark := part.Part.Marks[i]
 		if mark.Rows != granule.RowCount || granule.MarkOrdinal != i {
@@ -206,12 +208,21 @@ func (plan columnTypedColumnSortKeyPrefixPlan) prunePartRows(part *typedColumnAd
 		if constrained {
 			result.Matches++
 		}
-		result.Rows = appendRowsForGranule(result.Rows, granule)
+		matchedGranules = append(matchedGranules, granule)
+		selectedRows += granule.RowCount
 		result.DecodedGranules++
 	}
 	if result.Skips == 0 && result.DecodedGranules == len(part.Part.Descriptor.Granules) {
-		result.Rows = nil
 		result.AllRows = true
+		return result, nil
+	}
+	if selectedRows == 0 {
+		result.Rows = []int{}
+		return result, nil
+	}
+	result.Rows = make([]int, 0, selectedRows)
+	for _, granule := range matchedGranules {
+		result.Rows = appendRowsForGranule(result.Rows, granule)
 	}
 	return result, nil
 }
