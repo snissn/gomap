@@ -38,6 +38,30 @@ not just encodings. A key includes:
 | `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Legacy fixed-width little-endian dense fallback/compatibility payload bytes. Direct-view certification remains deferred; this is not the generic `uint32_list` target. Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
 | `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | Current #1915/#1916 variable-list compatibility path selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication and certified direct-view readers are enabled through the adapter. #1983 quarantines the graph-specific `column_graph` source integration; #1984/#1985 own the generic `uint32_list` capability split from graph traversal semantics. |
 
+## Target `uint32_list` layout contract (#1984)
+
+The first-class `uint32_list` logical layout is specified in
+`typed-column-uint32-list-semantics.md`. It is not admitted as a runtime value
+type until #1985 adds the generic primitive, but its v1 physical layout is fixed
+for downstream planning: `raw_uint32_offsets_list` with separate declared-column
+offsets and values sections.
+
+The offsets section is little-endian `uint64`, has exact byte length
+`(rows+1)*8`, starts with sentinel `offsets[0] == 0`, is monotonic
+non-decreasing, and all offsets must fit host `int`. The values section is
+little-endian flattened `uint32`, has byte length divisible by 4, and the final
+offset must equal `values_section_bytes/4` before values are exposed. Row `i` is
+`values[offsets[i]:offsets[i+1]]`; equal adjacent offsets represent an empty
+list.
+
+Length-only APIs may certify the offsets substream independently from values
+bytes. That certification is limited to row count, row lengths, monotonicity,
+host-int bounds, and the required flattened value count; full value reads and
+direct views still require values-section identity, checksum/read-integrity,
+endian, length, alignment, and lifetime validation. Graph traversal capability is
+not a layout capability of `uint32_list`; it belongs to vector-index/HNSW
+consumer state.
+
 Nullable/default wrappers expose null and default-mask dependencies separately
 from carrier-value capabilities. Value predicates and aggregates over nullable
 carriers require an explicit kernel that composes #1844 row selections with

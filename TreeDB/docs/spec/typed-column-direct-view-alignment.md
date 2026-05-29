@@ -147,7 +147,7 @@ for a future generic `uint32_list` primitive. Its physical shape is:
 
 ```text
 offsets []uint64  // row_count + 1, little-endian
-values  []uint32  // flattened adjacency values, little-endian
+values  []uint32  // flattened uint32 values, little-endian
 ```
 
 The image format records one canonical column-wide offsets section and one
@@ -179,8 +179,10 @@ Validation is split by layer:
   correctness are not primitive checks.
 
 See `typed-column-uint32-list-adjacency-quarantine.md` for the #1983 inventory of
-what to keep, generalize, remove, or quarantine before treating this encoding as
-a first-class `uint32_list` storage primitive.
+what to keep, generalize, remove, or quarantine. See
+`typed-column-uint32-list-semantics.md` for the #1984 logical `uint32_list`
+semantics, validation invariants, and length-only offsets behavior before
+#1985 treats this encoding as a runtime storage primitive.
 
 Empty lists are represented by equal adjacent offsets. V1 direct views are only
 for non-null, non-default, uncompressed offsets-list payloads. Fixed dense
@@ -197,8 +199,9 @@ future issue adds a new explicit encoding and conformance row. For the current q
 issue `#1916` enables the primitive direct-view reader, and issue `#1917` wires
 that reader through adapter scans. Column-graph rebuild/search may currently use
 derived per-layer sources, but new storage work must not extend that graph-specific
-source path as the target architecture; #1984/#1985 own the generic `uint32_list`
-primitive and #1986/#1988 own vector-index state/search consumption.
+source path as the target architecture; #1984 owns the generic `uint32_list`
+semantic contract, #1985 owns runtime primitive implementation, and #1986/#1988
+own vector-index state/search consumption.
 
 ## Old/non-certified behavior
 

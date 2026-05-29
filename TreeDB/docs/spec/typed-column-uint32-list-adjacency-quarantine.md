@@ -24,8 +24,11 @@ than the current graph-specific integration:
 | Consumer state | vector-index state references typed-column `uint32_list` assets | `column_graph` adjacency-source metadata is embedded in graph/column manifest records |
 
 `raw_uint32_offsets_list` is a physical encoding for generic `uint32_list`; it is
-not itself the HNSW adjacency type. HNSW adjacency should become a consumer that
-reads row `i` as `values[offsets[i]:offsets[i+1]]` from vector-index state.
+not itself the HNSW adjacency type. The first-class logical semantics,
+validation invariants, length-only offsets behavior, and compatibility naming
+strategy are defined in `typed-column-uint32-list-semantics.md`. HNSW adjacency
+should become a consumer that reads row `i` as
+`values[offsets[i]:offsets[i+1]]` from vector-index state.
 
 ## Inventory buckets
 
@@ -110,7 +113,7 @@ should be added through the generic primitive/vector-index-state route instead.
 
 | Issue | Owner scope | Exact files/APIs to revisit |
 | --- | --- | --- |
-| #1984 | Define first-class `uint32_list` semantics and public vocabulary. | `TreeDB/docs/spec/typed-column-semantics.md`, `typed-column-layout-capabilities.md`, `typed-column-adapter.md`, `typed-storage-naming.md`, `TreeDB/collections/column_store.go`, conformance tests. |
+| #1984 | Define first-class `uint32_list` semantics and public vocabulary. | `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`, `typed-column-semantics.md`, `typed-column-layout-capabilities.md`, `typed-column-adapter.md`, `typed-storage-naming.md`, docs/spec assertions. |
 | #1985 | Promote raw offsets-list machinery into a generic typed-column primitive. | `TreeDB/internal/typedcolumn/raw_uint32_offsets_list.go`, `TreeDB/internal/typeddecode/plan.go`, `TreeDB/internal/columnlayout`, `TreeDB/internal/columnsemantics`, `TreeDB/collections/typed_column_adapter.go`, `typed_column_offsets_list_test.go`, direct-view/conformance tests, primitive microbenchmarks. |
 | #1986 | Move vector-index state refs out of special column-graph manifest records. | `TreeDB/collections/column_vector_graph_manifest.go`, vector-index metadata/status tests, manifest encode/decode tests, docs for vector-index state identity. |
 | #1987 | Publish HNSW adjacency as typed-column `uint32_list` vector-index state. | `TreeDB/collections/vector_index_rebuild.go`, graph rebuild/publication tests, row-count/ordinal/layer validation, state refs from #1986. |

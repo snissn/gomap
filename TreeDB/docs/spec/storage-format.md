@@ -558,7 +558,7 @@ consumer-specific storage integration; the reusable physical mechanics are:
 
 ```text
 offsets []uint64  // row_count + 1, little-endian
-values  []uint32  // flattened adjacency values, little-endian
+values  []uint32  // flattened uint32 values, little-endian
 ```
 
 The serialized image stores one canonical column-wide offsets section and one
@@ -577,8 +577,10 @@ through typed-column adapters. #1918 records a durable `column_graph` layer-0
 adjacency source as a `raw_uint32_offsets_list` typed-column asset during
 physical graph rebuilds, and later graph-source work extends manifests to record
 per-layer sources. Those `column_graph` source records are transitional
-compatibility, not the target datastore primitive; #1984/#1985 own
-`uint32_list`, and #1986/#1988 own vector-index state/search consumption.
+compatibility, not the target datastore primitive; #1984 defines
+`uint32_list` semantics in `typed-column-uint32-list-semantics.md`, #1985 owns
+runtime primitive implementation, and #1986/#1988 own vector-index state/search
+consumption.
 
 The `column_graph` manifest keeps the row graph asset ref as the canonical graph
 asset. The quarantined all-layer source metadata is an optional manifest trailer

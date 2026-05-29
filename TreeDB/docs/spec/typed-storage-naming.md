@@ -50,6 +50,26 @@ drift from the runtime vocabulary strings.
 | `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueAdjacencyList` | `adjacency_list` | Legacy public declared-type compatibility name. |
 
+## `uint32_list` Compatibility Naming Strategy (#1984)
+
+The first-class generic integer-list logical type is `uint32_list`, with
+`uint32[]` as a conceptual spelling alias and `Array(UInt32)` as the ClickHouse
+reference model. Its v1 physical encoding is `raw_uint32_offsets_list`: explicit
+sentinel offsets (`rows+1`, `offsets[0] == 0`) plus flattened little-endian
+`uint32` values.
+
+The preferred public compatibility symbol is `ColumnStoreValueUint32List` with
+documented string `uint32_list`. This #1984 semantic-contract issue records that
+name but intentionally does not add it to the code vocabulary table above or the
+Go constants because the runtime writer/reader/direct-view implementation belongs
+to #1985. When #1985 adds the constant, it must update this table, the naming
+regression tests, adapter admission, and conformance evidence in the same PR.
+
+`ColumnStoreValueAdjacencyList` remains the legacy graph-adjacency compatibility
+name. It must not be reused as the generic `uint32_list` primitive, and
+`adjacency_list` must remain classified as consumer-specific/legacy rather than a
+first-class datastore list type.
+
 ## PR 1 Layout Resolver Contract
 
 Issue #1751 adds the pure-metadata resolver surface that turns collection
