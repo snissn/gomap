@@ -2492,6 +2492,7 @@ func typedColumnManifestPartRecordWithRawRole1787(t testing.TB, ref ColumnAssetR
 	writeManifestUint64(&b, ref.Generation)
 	writeManifestString(&b, string(operation))
 	writeManifestString(&b, string(role))
+	writeColumnManifestSortKey(&b, nil)
 	return columnManifestRecord{key: columnManifestPartRecordKey(keyGeneration, keyPartID), value: b.Bytes()}
 }
 

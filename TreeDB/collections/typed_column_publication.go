@@ -171,6 +171,42 @@ func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColum
 	return out, nil
 }
 
+func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStorageField) ([]ColumnSortKey, error) {
+	if len(cfg.SortKey) == 0 {
+		return nil, nil
+	}
+	fieldByName := make(map[string]TypedStorageField, len(fields)*2)
+	for _, field := range fields {
+		if field.Name != "" {
+			fieldByName[field.Name] = field
+		}
+		if field.Path != "" {
+			fieldByName[field.Path] = field
+		}
+	}
+	allOwnedByTypedPart := true
+	for _, sortKey := range cfg.SortKey {
+		field, ok := fieldByName[sortKey.Column]
+		if !ok {
+			allOwnedByTypedPart = false
+			continue
+		}
+		if sortKey.Direction != ColumnSortAscending {
+			return nil, fmt.Errorf("collections: typed-column part publication sort key column %q direction %q is unsupported; only ascending is supported", sortKey.Column, sortKey.Direction)
+		}
+		if field.Nullable {
+			return nil, fmt.Errorf("collections: typed-column part publication sort key column %q is nullable; null/default ordering is not defined", sortKey.Column)
+		}
+		if !columnStoreValueTypeSupportsTypedColumnPartSort(field.ValueType) {
+			return nil, fmt.Errorf("collections: typed-column part publication sort key column %q value_type %q is unsupported", sortKey.Column, field.ValueType)
+		}
+	}
+	if !allOwnedByTypedPart {
+		return nil, nil
+	}
+	return cloneColumnSortKeys(cfg.SortKey), nil
+}
+
 func typedColumnAdapterRowsFromDeclaredRows(allColumns []ColumnStoreColumn, fields []TypedStorageField, rows []columnDeclaredRow) ([]typedColumnAdapterRow, error) {
 	if len(fields) == 0 {
 		return nil, nil
@@ -208,6 +244,10 @@ func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation,
 	if len(fields) == 0 {
 		return nil, 0, nil
 	}
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
+	if err != nil {
+		return nil, 0, err
+	}
 	adapterRows, err := typedColumnAdapterRowsFromDeclaredRows(cfg.Columns, fields, rows)
 	if err != nil {
 		return nil, 0, err
@@ -218,6 +258,7 @@ func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation,
 		SchemaVersion: uint32(cfg.SchemaHash),
 		PartID:        partID,
 		Fields:        fields,
+		SortKey:       sortKey,
 	}, adapterRows)
 	if err != nil {
 		return nil, 0, err
@@ -363,7 +404,7 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCachePr
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
-		decoded, err = part.scanDecodedValuesSelected(selected)
+		decoded, err = part.scanDecodedValuesSelectedForReconstruction(selected)
 		var closeErr error
 		if closeReadCache {
 			closeErr = readCache.close()
@@ -498,6 +539,10 @@ func typedColumnPartSetsByGenerationFromManifestRecords(records []columnManifest
 		if err != nil {
 			return nil, nil, err
 		}
+		sortKey, err := decodeColumnManifestPartSortKeyForScan(record.value)
+		if err != nil {
+			return nil, nil, err
+		}
 		if role == ColumnManifestPartRoleTombstone {
 			return nil, nil, fmt.Errorf("collections: typed-column manifest ref generation=%d part_id=%d cannot be tombstone role", ref.Generation, ref.PartID)
 		}
@@ -511,7 +556,7 @@ func typedColumnPartSetsByGenerationFromManifestRecords(records []columnManifest
 			set.Generation = ref.Generation
 			set.Refs = make([]columnManifestAssetRefForScan, 0, 4)
 		}
-		set.Refs = append(set.Refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+		set.Refs = append(set.Refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows, SortKey: sortKey})
 		sets[ref.Generation] = set
 	}
 	return sets, physicalRowsByGeneration, nil

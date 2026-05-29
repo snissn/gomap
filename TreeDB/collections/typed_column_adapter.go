@@ -27,8 +27,8 @@ const (
 	typedColumnAdapterMetadataDictionaryCollationMark = "dictionary_collation"
 
 	typedColumnAdapterStringDictionaryIdentity  = "part_local_string_dictionary_v1"
-	typedColumnAdapterStringDictionaryOrder     = "none"
-	typedColumnAdapterStringDictionaryCollation = "none"
+	typedColumnAdapterStringDictionaryOrder     = "logical_bytewise_ascending"
+	typedColumnAdapterStringDictionaryCollation = "utf8_bytewise"
 )
 
 type typedColumnAdapterTypeStatus string
@@ -61,6 +61,7 @@ type typedColumnAdapterOptions struct {
 	PartID         uint64
 	RowsPerGranule int
 	Fields         []TypedStorageField
+	SortKey        []ColumnSortKey
 }
 
 type typedColumnAdapterRow struct {
@@ -76,8 +77,9 @@ type typedColumnAdapterPart struct {
 }
 
 type typedColumnPartDecodedValues struct {
-	PrimaryIDs []int64
-	Values     [][]columnDeclaredValue
+	PrimaryIDs     []int64
+	RowByPrimaryID []int
+	Values         [][]columnDeclaredValue
 }
 
 type typedColumnAdapterResourceReader struct {
@@ -98,6 +100,7 @@ type typedColumnAdapterImageSummary struct {
 	Rows         int
 	Sections     int
 	SectionBytes uint64
+	SortKey      []ColumnSortKey
 }
 
 func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
@@ -297,6 +300,104 @@ func typedColumnAdapterColumnsForFields(fields []TypedStorageField) ([]typedColu
 	return columns, nil
 }
 
+func typedColumnAdapterSortKey(opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn) ([]typedcolumn.SortKeyColumn, error) {
+	if len(opts.SortKey) == 0 {
+		return []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}, nil
+	}
+	byName := make(map[string]typedColumnAdapterColumn, len(columns)*2)
+	for _, column := range columns {
+		byName[column.Definition.Name] = column
+		if column.Field.Name != "" {
+			byName[column.Field.Name] = column
+		}
+		if column.Field.Path != "" {
+			byName[column.Field.Path] = column
+		}
+	}
+	out := make([]typedcolumn.SortKeyColumn, 0, len(opts.SortKey))
+	seen := make(map[string]struct{}, len(opts.SortKey))
+	for _, sortKey := range opts.SortKey {
+		column, ok := byName[sortKey.Column]
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column adapter sort key column %q is not owned by typed_column_part", sortKey.Column)
+		}
+		if _, exists := seen[column.Definition.Name]; exists {
+			return nil, fmt.Errorf("collections: typed-column adapter duplicate sort key column %q", sortKey.Column)
+		}
+		seen[column.Definition.Name] = struct{}{}
+		if sortKey.Direction != ColumnSortAscending {
+			return nil, fmt.Errorf("collections: typed-column adapter sort key column %q direction %q is unsupported; only ascending is supported", sortKey.Column, sortKey.Direction)
+		}
+		if column.Field.Nullable {
+			return nil, fmt.Errorf("collections: typed-column adapter sort key column %q is nullable; null/default ordering is not defined", sortKey.Column)
+		}
+		if !columnStoreValueTypeSupportsTypedColumnPartSort(column.Field.ValueType) {
+			return nil, fmt.Errorf("collections: typed-column adapter sort key column %q value_type %q is unsupported", sortKey.Column, column.Field.ValueType)
+		}
+		if column.Field.ValueType == ColumnStoreValueString {
+			if err := validateTypedColumnAdapterStringDictionaryLogicalOrder(column); err != nil {
+				return nil, fmt.Errorf("collections: typed-column adapter sort key column %q: %w", sortKey.Column, err)
+			}
+		}
+		out = append(out, typedcolumn.SortKeyColumn{Column: column.Definition.Name, Direction: typedcolumn.SortKeyAsc})
+	}
+	return out, nil
+}
+
+func columnSortKeysFromTypedColumnSortKeys(sortKeys []typedcolumn.SortKeyColumn) []ColumnSortKey {
+	if len(sortKeys) == 0 {
+		return nil
+	}
+	count := 0
+	for _, sortKey := range sortKeys {
+		if sortKey.Column != typedColumnAdapterPrimaryIDColumn {
+			count++
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	out := make([]ColumnSortKey, 0, count)
+	for _, sortKey := range sortKeys {
+		if sortKey.Column == typedColumnAdapterPrimaryIDColumn {
+			continue
+		}
+		direction := ColumnSortAscending
+		if sortKey.Direction == typedcolumn.SortKeyDesc {
+			direction = ColumnSortDescending
+		}
+		out = append(out, ColumnSortKey{Column: sortKey.Column, Direction: direction})
+	}
+	return out
+}
+
+func validateTypedColumnAdapterStringDictionaryLogicalOrder(column typedColumnAdapterColumn) error {
+	if len(column.Dictionary) == 0 {
+		if column.Field.Nullable {
+			return nil
+		}
+		return fmt.Errorf("string dictionary is empty")
+	}
+	valuesByCode := make([]string, len(column.Dictionary))
+	seenCode := make([]bool, len(column.Dictionary))
+	for value, code := range column.Dictionary {
+		if code < 0 || int(code) >= len(valuesByCode) {
+			return fmt.Errorf("dictionary code %d outside cardinality %d", code, len(valuesByCode))
+		}
+		if seenCode[code] {
+			return fmt.Errorf("duplicate dictionary code %d", code)
+		}
+		seenCode[code] = true
+		valuesByCode[code] = value
+	}
+	for i := 1; i < len(valuesByCode); i++ {
+		if valuesByCode[i-1] > valuesByCode[i] {
+			return fmt.Errorf("dictionary code order is not logical bytewise ascending at code %d (%q > %q)", i, valuesByCode[i-1], valuesByCode[i])
+		}
+	}
+	return nil
+}
+
 func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedColumnAdapterRow) (*typedColumnAdapterPart, error) {
 	if opts.PartID == 0 {
 		opts.PartID = 1
@@ -446,6 +547,10 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	if rowsPerGranule == 0 {
 		rowsPerGranule = typedcolumn.DefaultRowsPerGranule
 	}
+	sortKey, err := typedColumnAdapterSortKey(opts, columns)
+	if err != nil {
+		return nil, err
+	}
 	partOpts := typedcolumn.Options{
 		SchemaVersion: opts.SchemaVersion,
 		SchemaMode:    typedcolumn.ColumnSchemaFixed,
@@ -453,7 +558,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{
 			Columns: []string{typedColumnAdapterPrimaryIDColumn},
 		},
-		SortKey:     typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
+		SortKey:     typedcolumn.SortKey{Columns: sortKey},
 		PartPolicy:  typedcolumn.ColumnPartPolicy{RowsPerGranule: rowsPerGranule},
 		Compression: typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
 	}
@@ -492,7 +597,7 @@ func typedColumnAdapterPartFromBytesForReconstructionWithSummary(opts typedColum
 			sectionBytes += uint64(section.Length)
 		}
 	}
-	return part, typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: sectionBytes}, nil
+	return part, typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: sectionBytes, SortKey: columnSortKeysFromTypedColumnSortKeys(part.Part.Descriptor.SortKey)}, nil
 }
 
 func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
@@ -656,6 +761,14 @@ func (p *typedColumnAdapterPart) scanDecodedValues() (typedColumnPartDecodedValu
 }
 
 func (p *typedColumnAdapterPart) scanDecodedValuesSelected(selected []bool) (typedColumnPartDecodedValues, error) {
+	return p.scanDecodedValuesSelectedWithPrimaryLocator(selected, false)
+}
+
+func (p *typedColumnAdapterPart) scanDecodedValuesSelectedForReconstruction(selected []bool) (typedColumnPartDecodedValues, error) {
+	return p.scanDecodedValuesSelectedWithPrimaryLocator(selected, true)
+}
+
+func (p *typedColumnAdapterPart) scanDecodedValuesSelectedWithPrimaryLocator(selected []bool, includePrimaryLocator bool) (typedColumnPartDecodedValues, error) {
 	if p == nil || p.Part == nil {
 		return typedColumnPartDecodedValues{}, errors.New("collections: nil typed-column adapter part")
 	}
@@ -680,14 +793,51 @@ func (p *typedColumnAdapterPart) scanDecodedValuesSelected(selected []bool) (typ
 		}
 		values[i] = columnValues
 	}
-	return typedColumnPartDecodedValues{PrimaryIDs: ids, Values: values}, nil
+	var rowByPrimaryID []int
+	if includePrimaryLocator {
+		var err error
+		rowByPrimaryID, err = typedColumnAdapterRowsByPrimaryID(ids)
+		if err != nil {
+			return typedColumnPartDecodedValues{}, err
+		}
+	}
+	return typedColumnPartDecodedValues{PrimaryIDs: ids, RowByPrimaryID: rowByPrimaryID, Values: values}, nil
+}
+
+func typedColumnAdapterRowsByPrimaryID(ids []int64) ([]int, error) {
+	rowByPrimaryID := make([]int, len(ids))
+	for i := range rowByPrimaryID {
+		rowByPrimaryID[i] = -1
+	}
+	for partRow, primaryID := range ids {
+		if primaryID < 0 || primaryID >= int64(len(ids)) {
+			return nil, fmt.Errorf("collections: typed-column reconstruction primary_id=%d outside rows=%d", primaryID, len(ids))
+		}
+		idx := int(primaryID)
+		if rowByPrimaryID[idx] >= 0 {
+			return nil, fmt.Errorf("collections: typed-column reconstruction duplicate primary_id=%d", primaryID)
+		}
+		rowByPrimaryID[idx] = partRow
+	}
+	for primaryID, partRow := range rowByPrimaryID {
+		if partRow < 0 {
+			return nil, fmt.Errorf("collections: typed-column reconstruction missing primary_id=%d", primaryID)
+		}
+	}
+	return rowByPrimaryID, nil
 }
 
 func (d typedColumnPartDecodedValues) valuesForRowInto(rowIdx int, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
 	if rowIdx < 0 || rowIdx >= len(d.PrimaryIDs) {
 		return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside typed_column_part rows=%d", rowIdx, len(d.PrimaryIDs))
 	}
-	if d.PrimaryIDs[rowIdx] != int64(rowIdx) {
+	partRow := rowIdx
+	if len(d.RowByPrimaryID) != 0 {
+		if rowIdx >= len(d.RowByPrimaryID) || d.RowByPrimaryID[rowIdx] < 0 {
+			return nil, fmt.Errorf("collections: typed-column reconstruction missing locator for row_index=%d", rowIdx)
+		}
+		partRow = d.RowByPrimaryID[rowIdx]
+	} else if d.PrimaryIDs[rowIdx] != int64(rowIdx) {
 		return nil, fmt.Errorf("collections: typed-column reconstruction locator=%d want row_index=%d", d.PrimaryIDs[rowIdx], rowIdx)
 	}
 	if cap(dst) < len(d.Values) {
@@ -700,10 +850,10 @@ func (d typedColumnPartDecodedValues) valuesForRowInto(rowIdx int, dst []columnD
 			dst[i] = columnDeclaredValue{}
 			continue
 		}
-		if rowIdx >= len(d.Values[i]) {
-			return nil, fmt.Errorf("collections: typed-column reconstruction row_index=%d outside field[%d] rows=%d", rowIdx, i, len(d.Values[i]))
+		if partRow >= len(d.Values[i]) {
+			return nil, fmt.Errorf("collections: typed-column reconstruction part_row=%d outside field[%d] rows=%d", partRow, i, len(d.Values[i]))
 		}
-		dst[i] = d.Values[i][rowIdx]
+		dst[i] = d.Values[i][partRow]
 	}
 	return dst, nil
 }
@@ -1226,10 +1376,16 @@ func validateTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn,
 		}
 		seen[code] = value
 	}
+	var previous string
 	for code := int64(0); code < int64(cardinality); code++ {
-		if _, ok := seen[code]; !ok {
+		value, ok := seen[code]
+		if !ok {
 			return fmt.Errorf("collections: typed-column adapter image dictionary missing code %d for %q", code, column.Definition.Name)
 		}
+		if code > 0 && previous > value {
+			return fmt.Errorf("collections: typed-column adapter image dictionary for %q is not logical bytewise ascending at code %d (%q > %q)", column.Definition.Name, code, previous, value)
+		}
+		previous = value
 	}
 	return nil
 }

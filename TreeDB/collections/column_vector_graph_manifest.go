@@ -166,12 +166,16 @@ func encodeColumnVectorGraphManifestRecord(snapshot columnVectorGraphManifestSna
 	return b.Bytes(), nil
 }
 
+func isSupportedColumnVectorGraphManifestRecordVersion(version uint16) bool {
+	return version == columnManifestRecordVersion || version == columnManifestRecordVersionV3
+}
+
 func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifestSnapshot, error) {
 	cur := manifestCursor{raw: raw}
 	if magic := cur.u32(); magic != columnManifestVectorGraphMagic {
 		return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: bad column vector graph manifest magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion {
+	if version := cur.u16(); !isSupportedColumnVectorGraphManifestRecordVersion(version) {
 		return columnVectorGraphManifestSnapshot{}, fmt.Errorf("collections: unsupported column vector graph manifest version=%d", version)
 	}
 	snapshot := columnVectorGraphManifestSnapshot{

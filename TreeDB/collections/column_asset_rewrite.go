@@ -690,8 +690,11 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
 	reason := cur.stringBytes()
 	role := ColumnManifestPartRole("")
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV3 {
 		role = ColumnManifestPartRole(string(cur.stringBytes()))
+	}
+	if version >= columnManifestRecordVersion {
+		skipColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
@@ -704,7 +707,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
 	if role == "" {
-		if version >= columnManifestRecordVersion && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+		if version >= columnManifestRecordVersionV3 && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
 			return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
 		}
 		role = inferColumnManifestPartRole(kind, string(reason))
@@ -752,7 +755,7 @@ func columnVectorGraphManifestAssetRefForPatch(raw []byte, expectedNamespace str
 	if magic := cur.u32(); magic != columnManifestVectorGraphMagic {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: bad column vector graph manifest magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion {
+	if version := cur.u16(); !isSupportedColumnVectorGraphManifestRecordVersion(version) {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: unsupported column vector graph manifest version=%d", version)
 	}
 	_ = cur.stringBytes() // index_name

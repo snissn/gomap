@@ -77,7 +77,7 @@ func TestColumnManifestRecordDecodeAcceptsV1CompatibilityM1634(t *testing.T) {
 }
 
 func TestColumnManifestRecordDecodeSidecarOperationReasonDoesNotInferRole1787(t *testing.T) {
-	for _, version := range []uint16{columnManifestRecordVersionV2, columnManifestRecordVersion} {
+	for _, version := range []uint16{columnManifestRecordVersionV2, columnManifestRecordVersionV3, columnManifestRecordVersion} {
 		t.Run("v"+string(rune('0'+version)), func(t *testing.T) {
 			asset := ColumnPreparedAsset{
 				Ref: ColumnAssetRef{
@@ -112,6 +112,83 @@ func TestColumnManifestRecordDecodeSidecarOperationReasonDoesNotInferRole1787(t 
 				t.Fatalf("rewrite ref=%+v want %+v", rewriteRef, asset.Ref)
 			}
 		})
+	}
+}
+
+func TestColumnManifestPartRecordSortKeyV4Compatibility1948(t *testing.T) {
+	asset := ColumnPreparedAsset{
+		Ref: ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1TypedColumnPart,
+			Namespace:  "events_column_assets",
+			Generation: 9,
+			PartID:     typedColumnPartAssetPartID,
+			FileID:     1,
+			Offset:     32,
+			Length:     256,
+			Checksum:   123,
+		},
+		Rows:         8,
+		Bytes:        256,
+		PublishID:    17,
+		GenerationID: 9,
+		Reason:       string(ColumnPublishOperationInsert),
+		PartRole:     ColumnManifestPartRoleBase,
+		SortKey:      columnSortKeyMatchString([]ColumnSortKey{{Column: "time_us"}, {Column: "did"}}),
+	}
+
+	current := mustEncodeColumnManifestPartRecordVersionM1634(t, asset, columnManifestRecordVersion)
+	decoded, err := decodeColumnManifestPartRecord(current)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestPartRecord v4: %v", err)
+	}
+	if !columnSortKeysEqual(decoded.SortKey, []ColumnSortKey{{Column: "time_us"}, {Column: "did"}}) {
+		t.Fatalf("decoded sort key=%+v", decoded.SortKey)
+	}
+	scanSortKey, err := decodeColumnManifestPartSortKeyForScan(current)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestPartSortKeyForScan v4: %v", err)
+	}
+	if !columnSortKeysEqual(scanSortKey, decoded.SortKey) {
+		t.Fatalf("scan sort key=%+v want %+v", scanSortKey, decoded.SortKey)
+	}
+	ref, rows, bytesN, publishID, generationID, reason, err := decodeColumnManifestPartFieldsForScan(current, asset.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestPartFieldsForScan v4: %v", err)
+	}
+	if ref != asset.Ref || rows != asset.Rows || bytesN != asset.Bytes || publishID != asset.PublishID || generationID != asset.GenerationID || string(reason) != asset.Reason {
+		t.Fatalf("scan fields ref=%+v rows=%d bytes=%d publish=%d generation=%d reason=%q", ref, rows, bytesN, publishID, generationID, string(reason))
+	}
+	role, err := decodeColumnManifestPartRoleForScan(current, asset.Ref, []byte(asset.Reason))
+	if err != nil {
+		t.Fatalf("decodeColumnManifestPartRoleForScan v4: %v", err)
+	}
+	if role != asset.PartRole {
+		t.Fatalf("scan role=%q want %q", role, asset.PartRole)
+	}
+	rewriteRef, _, err := columnAssetRewriteManifestPartRefForPatch(current, asset.Ref.Namespace)
+	if err != nil {
+		t.Fatalf("columnAssetRewriteManifestPartRefForPatch v4: %v", err)
+	}
+	if rewriteRef != asset.Ref {
+		t.Fatalf("rewrite ref=%+v want %+v", rewriteRef, asset.Ref)
+	}
+
+	v3 := mustEncodeColumnManifestPartRecordVersionM1634(t, asset, columnManifestRecordVersionV3)
+	decodedV3, err := decodeColumnManifestPartRecord(v3)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestPartRecord v3: %v", err)
+	}
+	if len(decodedV3.SortKey) != 0 {
+		t.Fatalf("v3 sort key=%+v want empty", decodedV3.SortKey)
+	}
+	if _, _, _, _, _, _, err := decodeColumnManifestPartFieldsForScan(v3, asset.Ref.Namespace); err != nil {
+		t.Fatalf("decodeColumnManifestPartFieldsForScan v3: %v", err)
+	}
+	if role, err := decodeColumnManifestPartRoleForScan(v3, asset.Ref, []byte(asset.Reason)); err != nil || role != asset.PartRole {
+		t.Fatalf("decodeColumnManifestPartRoleForScan v3 role=%q err=%v", role, err)
+	}
+	if sortKey, err := decodeColumnManifestPartSortKeyForScan(v3); err != nil || len(sortKey) != 0 {
+		t.Fatalf("decodeColumnManifestPartSortKeyForScan v3 sort_key=%+v err=%v", sortKey, err)
 	}
 }
 
@@ -153,8 +230,15 @@ func mustEncodeColumnManifestPartRecordVersionM1634(t *testing.T, asset ColumnPr
 	writeManifestUint64(&b, asset.PublishID)
 	writeManifestUint64(&b, asset.GenerationID)
 	writeManifestString(&b, asset.Reason)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV3 {
 		writeManifestString(&b, string(asset.PartRole))
+	}
+	if version >= columnManifestRecordVersion {
+		sortKey, err := columnSortKeysFromMatchString(asset.SortKey)
+		if err != nil {
+			t.Fatalf("columnSortKeysFromMatchString: %v", err)
+		}
+		writeColumnManifestSortKey(&b, sortKey)
 	}
 	return b.Bytes()
 }

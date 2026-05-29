@@ -141,10 +141,15 @@ Rows:
 - rows are split into granules; default granule size is `8192` rows
 - the last granule may contain fewer rows
 
-Current production limitation:
+Current production support:
 
-- `ColumnStoreConfig.SortKey` is not yet used here
-- the adapter currently sorts typed-column rows by `__treedb_primary_id`
+- when every declared sort-key column is owned by `typed_column_part`, is ascending,
+  non-null, and uses a supported bool/int64/string carrier, publication sorts
+  typed-column rows by that logical `ColumnStoreConfig.SortKey`
+- mixed-owner or unsupported sort-key layouts keep typed-column parts in
+  `__treedb_primary_id` order and do not advertise typed-column sort metadata
+- sorted query pruning/early-stop remains deferred to the mark/planner/kernel
+  work; current production physical queries still full-scan validated parts
 
 Important code:
 
@@ -791,7 +796,7 @@ Draft label mapping:
 
 | Feature family | Reference experiment | Internal typedcolumn | Production collections status |
 | --- | --- | --- | --- |
-| Physical sort key | Rows are physically sorted by declared sort key. | Supports ascending physical sort and marks; descending is rejected today. | `ColumnStoreConfig.SortKey` is validated and hashed, but the adapter currently sorts by synthetic primary id for typed-column parts. Compatibility per-column assets use insertion/current row order. |
+| Physical sort key | Rows are physically sorted by declared sort key. | Supports ascending physical sort and marks; descending is rejected today. | `typed_column_part` publication persists and validates ascending non-null bool/int64/string `ColumnStoreConfig.SortKey` order when the full key is typed-column-owned; mixed-owner/unsupported keys fall back to synthetic primary-id order without sorted metadata. Compatibility per-column assets use insertion/current row order. |
 | Granules and marks | Per-granule descriptors and sort-key prefix marks support pruning. | Present in the data plane. | Not used by production dictionary/int64 physical query paths. |
 | Sectioned column part image | One row-aligned image contains descriptors, marks, locators, dictionaries, metadata, and payloads. | Present, with extra stats/pruning/layout sections. | Published for `typed_column_part` owners, but JSONBench string/int64 production query paths still largely use compatibility per-column assets. |
 | Encodings and compression | Delta, double-delta, nullable, bool bitpack/RLE, compact string codes, adaptive codec block sizing, Snappy/LZ4 keep-if-smaller. | Mostly present or extended. | Production JSONBench-style physical queries do not consistently consume the typed-column codec/block model. |
@@ -868,8 +873,16 @@ Acceptance criteria:
   both q2 grouped-distinct and q4b prefix-scan layouts.
 - Reopen tests verify that sort metadata and row locators survive checkpoint and
   reopen.
-- Direct q4 time-order early-stop tests prove that the query stops after it can
-  no longer find an earlier top-3 result.
+- Direct q4 time-order early-stop is a later P3/P4 acceptance gate; #1948 only
+  provides the persisted/validated physical order that those planners can consume.
+
+Implementation note for #1948: P2 persists and validates the physical typed-column
+part SortKey contract for ascending non-null bool/int64/string columns. String
+sort keys use adapter dictionaries whose codes are assigned in logical bytewise
+ascending order and are certified in adapter metadata; nullable/defaulted and
+descending SortKey columns fail closed until their ordering semantics are
+specified. q4 early-stop remains deferred to the P3/P4 mark/pruning/kernel work
+rather than being claimed by the full-scan typed-column query path.
 
 ### P3: Promote granule marks and sorted-prefix pruning into production queries
 

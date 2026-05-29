@@ -26,7 +26,8 @@ const (
 	columnManifestPartMagic       = uint32(0x54434d50) // TCMP
 	columnManifestRecordVersionV1 = uint16(1)
 	columnManifestRecordVersionV2 = uint16(2)
-	columnManifestRecordVersion   = uint16(3)
+	columnManifestRecordVersionV3 = uint16(3)
+	columnManifestRecordVersion   = uint16(4)
 )
 
 var (
@@ -68,6 +69,7 @@ type columnManifestPartSnapshot struct {
 	GenerationID uint64
 	Reason       string
 	PartRole     ColumnManifestPartRole
+	SortKey      []ColumnSortKey
 }
 
 type columnManifestAggregateMetadataSnapshot struct {
@@ -379,6 +381,11 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 	writeManifestUint64(&b, asset.GenerationID)
 	writeManifestString(&b, asset.Reason)
 	writeManifestString(&b, string(asset.PartRole))
+	sortKey, err := columnSortKeysFromMatchString(asset.SortKey)
+	if err != nil {
+		return nil, err
+	}
+	writeColumnManifestSortKey(&b, sortKey)
 	return b.Bytes(), nil
 }
 
@@ -674,14 +681,18 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	generationID := cur.u64()
 	reason := cur.string()
 	role := ColumnManifestPartRole("")
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV3 {
 		role = ColumnManifestPartRole(cur.string())
+	}
+	sortKey := []ColumnSortKey(nil)
+	if version >= columnManifestRecordVersion {
+		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
 		return columnManifestPartSnapshot{}, err
 	}
 	if role == "" {
-		if version >= columnManifestRecordVersion && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+		if version >= columnManifestRecordVersionV3 && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
 			return columnManifestPartSnapshot{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
 		}
 		role = inferColumnManifestPartRole(kind, reason)
@@ -711,7 +722,7 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason, PartRole: role}
+	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason, PartRole: role, SortKey: columnSortKeyMatchString(sortKey)}
 	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
 		return columnManifestPartSnapshot{}, err
 	}
@@ -723,11 +734,12 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		GenerationID: generationID,
 		Reason:       reason,
 		PartRole:     role,
+		SortKey:      sortKey,
 	}, nil
 }
 
 func isSupportedColumnManifestRecordVersion(version uint16) bool {
-	return version == columnManifestRecordVersion || version == columnManifestRecordVersionV2 || version == columnManifestRecordVersionV1
+	return version == columnManifestRecordVersion || version == columnManifestRecordVersionV3 || version == columnManifestRecordVersionV2 || version == columnManifestRecordVersionV1
 }
 
 func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnManifestPartRole {
@@ -1036,6 +1048,50 @@ func writeManifestUint64(b *bytes.Buffer, value uint64) {
 func writeManifestString(b *bytes.Buffer, value string) {
 	writeManifestUint64(b, uint64(len(value)))
 	_, _ = b.WriteString(value)
+}
+
+func writeColumnManifestSortKey(b *bytes.Buffer, sortKeys []ColumnSortKey) {
+	writeManifestUint64(b, uint64(len(sortKeys)))
+	for _, sortKey := range sortKeys {
+		writeManifestString(b, sortKey.Column)
+		writeManifestString(b, string(sortKey.Direction))
+	}
+}
+
+func readColumnManifestSortKey(cur *manifestCursor) []ColumnSortKey {
+	count := cur.u64()
+	if cur.err != nil {
+		return nil
+	}
+	if count > 64 {
+		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap 64", count)
+		return nil
+	}
+	if count == 0 {
+		return nil
+	}
+	out := make([]ColumnSortKey, 0, count)
+	for i := uint64(0); i < count; i++ {
+		column := cur.string()
+		direction := ColumnSortDirection(cur.string())
+		out = append(out, ColumnSortKey{Column: column, Direction: direction})
+	}
+	return out
+}
+
+func skipColumnManifestSortKey(cur *manifestCursor) {
+	count := cur.u64()
+	if cur.err != nil {
+		return
+	}
+	if count > 64 {
+		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap 64", count)
+		return
+	}
+	for i := uint64(0); i < count; i++ {
+		cur.skipStringBytes()
+		cur.skipStringBytes()
+	}
 }
 
 type manifestCursor struct {
