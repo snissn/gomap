@@ -615,6 +615,18 @@ without the trailer remain row-asset fallback readable. Do not add new storage
 features to this `TCGA`/`TCGL` path; #1989 owns removal or compatibility
 isolation after typed-column `uint32_list` vector-index state is in use.
 
+Issue #1986 adds a separate vector-index state control record under
+`\x06vector-index-state/v1/index/<index_name>` with magic `TVIS` and version
+`1`. The record stores index identity, row count, base manifest
+identity, and typed-column asset refs by logical type plus physical encoding.
+Its asset roles include adjacency (`uint32_list` over
+`raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
+optional normalized vectors (`float32_vector` over `raw_float32_vector`), and
+future row/document refs. The active manifest checksum includes the control
+record, but the record's base checksum excludes vector-index derived records so
+stale-state checks compare against authoritative collection data. See
+`vector-index-state-manifest.md` for validation and fail-closed rules.
+
 As of the #1895 pre-alpha format update, newly written `typed_column_part` images
 carry a writer-built `layout_contract` section. The contract may mark only raw
 non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
@@ -999,12 +1011,12 @@ collection vector-index rebuild path for the named index. For explicit
 `column_graph` indexes, that path rebuilds vector, inverse-norm, and row-asset
 adjacency data into physical column assets, also publishes durable per-layer
 `raw_uint32_offsets_list` typed-column adjacency sources for validation/reopen
-coverage, and records the row graph ref plus layer count/per-layer source refs
-in the graph manifest through the normal collection column manifest/root
-lifecycle. Those adjacency-source refs are current #1983-quarantined
-compatibility, not the target storage architecture; #1986/#1988/#1989 own
-replacement with vector-index state, search consumption, and legacy isolation or
-removal. Replay outcomes that are
+coverage, and records vector-index control identity in the `TVIS` state record.
+Those adjacency-source refs are current #1983-quarantined
+compatibility. Current graph manifests may still contain row graph refs and
+quarantined layer-source trailer refs for compatibility; new derived-state refs
+belong in vector-index state. #1988/#1989 own search consumption and legacy
+isolation or removal. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and

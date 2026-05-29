@@ -227,7 +227,23 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
-	if !columnVectorGraphManifestMatchesDefinition(catalog.meta.Name, graph, def, *cfg, manifest, records) {
+	baseChecksum, err := columnVectorGraphBaseManifestChecksum(manifest, records, *cfg)
+	if err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q base manifest checksum unavailable: %w: %v", def.Name, errColumnVectorGraphManifestMismatch, err)
+	}
+	if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
+		state, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
+		if err != nil {
+			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+		}
+		if columnVectorIndexStateMatchStatusWithBaseChecksum(state, def, *cfg, baseChecksum) != columnVectorIndexStateMatchLoaded || !columnVectorIndexStateMatchesGraph(state, graph) {
+			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q vector-index state does not match graph manifest: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if err := validateColumnVectorIndexStateAssetRefsAvailable(c.db.ColumnAssetRootDir(), state); err != nil {
+			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+		}
+	}
+	if columnVectorGraphManifestMatchStatusWithBaseChecksum(catalog.meta.Name, graph, def, *cfg, baseChecksum) != columnVectorGraphManifestMatchLoaded {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q graph manifest does not match vector index definition: %w", def.Name, errColumnVectorGraphManifestMismatch)
 	}
 	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {

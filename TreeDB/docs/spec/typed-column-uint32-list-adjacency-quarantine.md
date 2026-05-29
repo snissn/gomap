@@ -115,7 +115,7 @@ should be added through the generic primitive/vector-index-state route instead.
 | --- | --- | --- |
 | #1984 | Define first-class `uint32_list` semantics and public vocabulary. | `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`, `typed-column-semantics.md`, `typed-column-layout-capabilities.md`, `typed-column-adapter.md`, `typed-storage-naming.md`, docs/spec assertions. |
 | #1985 | Promote raw offsets-list machinery into a generic typed-column primitive. | `TreeDB/internal/typedcolumn/raw_uint32_offsets_list.go`, `TreeDB/internal/typeddecode/plan.go`, `TreeDB/internal/columnlayout`, `TreeDB/internal/columnsemantics`, `TreeDB/collections/typed_column_adapter.go`, `typed_column_offsets_list_test.go`, direct-view/conformance tests, primitive microbenchmarks. |
-| #1986 | Move vector-index state refs out of special column-graph manifest records. | `TreeDB/collections/column_vector_graph_manifest.go`, vector-index metadata/status tests, manifest encode/decode tests, docs for vector-index state identity. |
+| #1986 | Move vector-index state refs out of special column-graph manifest records. | `TreeDB/collections/column_vector_index_state_manifest.go`, `TreeDB/collections/column_vector_graph_manifest.go`, vector-index metadata/status tests, manifest encode/decode tests, `vector-index-state-manifest.md`. |
 | #1987 | Publish HNSW adjacency as typed-column `uint32_list` vector-index state. | `TreeDB/collections/vector_index_rebuild.go`, graph rebuild/publication tests, row-count/ordinal/layer validation, state refs from #1986. |
 | #1988 | Switch `column_graph` search to consume typed-column list state. | `TreeDB/collections/column_vector_graph_search.go`, `column_vector_graph_row_reader.go`, search stats/counters, direct-view lifetime/fallback tests, parity benchmarks. |
 | #1989 | Remove or explicitly quarantine legacy adjacency-source paths. | `column_vector_graph_adjacency_source.go`, `column_vector_graph_adjacency_direct_source.go`, legacy schema strings, `TCGA`/`TCGL` decode policy, compatibility tests and docs. |
@@ -134,3 +134,6 @@ should be added through the generic primitive/vector-index-state route instead.
   layer.
 - Do fail closed or ask callers to rebuild pre-alpha assets when the corrected
   format/state identity cannot safely interpret old graph-specific metadata.
+- Do put new vector-index derived-state refs in the `TVIS` vector-index state
+  control record documented by `vector-index-state-manifest.md`, not in new
+  `TCGA`/`TCGL` graph-record trailer fields.

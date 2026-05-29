@@ -241,6 +241,23 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			})
 			continue
 		}
+		if bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+			if !retainColumnVectorIndexStateRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				continue
+			}
+			retain, err := validateRetainedColumnVectorIndexStateRecordForWrite(record, generation)
+			if err != nil {
+				return nil, err
+			}
+			if !retain {
+				continue
+			}
+			retained = append(retained, columnManifestRecord{
+				key:   bytes.Clone(record.key),
+				value: bytes.Clone(record.value),
+			})
+			continue
+		}
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) &&
 			!bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes) &&
 			!bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes) &&
@@ -787,6 +804,39 @@ func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAss
 		return nil, err
 	}
 	refs = append(refs, int64Refs...)
+	stateRefs, err := enumerateColumnVectorIndexStateAssetRefs(iter)
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, stateRefs...)
+	return refs, iter.Error()
+}
+
+func enumerateColumnVectorIndexStateAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAssetRef, error) {
+	iter.Seek(columnVectorIndexStateRecordPrefixBytes)
+	var refs []ColumnAssetRef
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if !bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes) {
+			break
+		}
+		if iter.IsDeleted() {
+			iter.Next()
+			continue
+		}
+		value, _, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			return nil, errors.New("collections: vector-index state record must be inline")
+		}
+		state, err := decodeColumnVectorIndexStateRecord(value)
+		if err != nil {
+			return nil, err
+		}
+		for _, asset := range state.Assets {
+			refs = append(refs, asset.Ref)
+		}
+		iter.Next()
+	}
 	return refs, iter.Error()
 }
 

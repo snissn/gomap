@@ -757,6 +757,15 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	stateRaw, err := encodeColumnVectorIndexStateRecord(columnVectorIndexStateSnapshotFromGraph(graph))
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
+	stateRecord := columnManifestRecord{key: columnVectorIndexStateRecordKey(def.Name), value: stateRaw}
+	nextRecords, err = replaceColumnVectorGraphManifestRecord(nextRecords, manifest.Generation, stateRecord)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	identity := ColumnManifestIdentity{
 		Generation: manifest.Generation,
 		Format:     columnManifestFormatTCS1,
@@ -800,6 +809,10 @@ func columnVectorGraphManifestRecordsWithAppliedCommandLSN(manifest columnManife
 		}
 		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) &&
 			!retainColumnManifestVectorGraphRecordForWrite(record.key, true, activeVectorIndexes) {
+			continue
+		}
+		if bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) &&
+			!retainColumnVectorIndexStateRecordForWrite(record.key, true, activeVectorIndexes) {
 			continue
 		}
 		out = append(out, columnManifestRecord{key: bytes.Clone(record.key), value: bytes.Clone(record.value)})
@@ -881,24 +894,35 @@ func nextColumnVectorGraphPartID(records []columnManifestRecord, namespace strin
 			next = nextColumnVectorGraphPartIDAfter(next, partID)
 			continue
 		}
-		if !bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+			graph, err := decodeColumnVectorGraphManifestRecord(record.value)
+			if err != nil {
+				continue
+			}
+			if graph.AssetRef.Namespace == namespace {
+				next = nextColumnVectorGraphPartIDAfter(next, graph.AssetRef.PartID)
+			}
+			if len(graph.AdjacencyLayerSources) > 0 {
+				for _, source := range graph.AdjacencyLayerSources {
+					if source.Present && source.Ref.Namespace == namespace {
+						next = nextColumnVectorGraphPartIDAfter(next, source.Ref.PartID)
+					}
+				}
+			} else if graph.Layer0AdjacencySource.Present && graph.Layer0AdjacencySource.Ref.Namespace == namespace {
+				next = nextColumnVectorGraphPartIDAfter(next, graph.Layer0AdjacencySource.Ref.PartID)
+			}
 			continue
 		}
-		graph, err := decodeColumnVectorGraphManifestRecord(record.value)
-		if err != nil {
-			continue
-		}
-		if graph.AssetRef.Namespace == namespace {
-			next = nextColumnVectorGraphPartIDAfter(next, graph.AssetRef.PartID)
-		}
-		if len(graph.AdjacencyLayerSources) > 0 {
-			for _, source := range graph.AdjacencyLayerSources {
-				if source.Present && source.Ref.Namespace == namespace {
-					next = nextColumnVectorGraphPartIDAfter(next, source.Ref.PartID)
+		if bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+			state, err := decodeColumnVectorIndexStateRecord(record.value)
+			if err != nil {
+				continue
+			}
+			for _, asset := range state.Assets {
+				if asset.Ref.Namespace == namespace {
+					next = nextColumnVectorGraphPartIDAfter(next, asset.Ref.PartID)
 				}
 			}
-		} else if graph.Layer0AdjacencySource.Present && graph.Layer0AdjacencySource.Ref.Namespace == namespace {
-			next = nextColumnVectorGraphPartIDAfter(next, graph.Layer0AdjacencySource.Ref.PartID)
 		}
 	}
 	return next
