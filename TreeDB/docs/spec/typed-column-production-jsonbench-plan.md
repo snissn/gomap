@@ -806,10 +806,10 @@ Draft label mapping:
 | Feature family | Reference experiment | Internal typedcolumn | Production collections status |
 | --- | --- | --- | --- |
 | Physical sort key | Rows are physically sorted by declared sort key. | Supports ascending physical sort and marks; descending is rejected today. | `typed_column_part` publication persists and validates ascending non-null bool/int64/string `ColumnStoreConfig.SortKey` order when the full key is typed-column-owned and has at most `typedColumnPartSortKeyMaxColumns == 8` columns; mixed-owner keys fall back to synthetic primary-id order without sorted metadata, while typed-column-owned unsupported/nullable/descending/wider-than-8 keys fail closed. Compatibility per-column assets use insertion/current row order. |
-| Granules and marks | Per-granule descriptors and sort-key prefix marks support pruning. | Present in the data plane. | Not used by production dictionary/int64 physical query paths. |
+| Granules and marks | Per-granule descriptors and sort-key prefix marks support pruning. | Present in the data plane. | Production typed-column physical queries validate typed-column part marks and use equality sorted-prefix pruning for supported SortKey predicates, with explicit diagnostics/fallback reasons. Compatibility dictionary/int64 sidecar paths still do not consume typed-column part marks. |
 | Sectioned column part image | One row-aligned image contains descriptors, marks, locators, dictionaries, metadata, and payloads. | Present, with extra stats/pruning/layout sections. | Published for `typed_column_part` owners, but JSONBench string/int64 production query paths still largely use compatibility per-column assets. |
 | Encodings and compression | Delta, double-delta, nullable, bool bitpack/RLE, compact string codes, adaptive codec block sizing, Snappy/LZ4 keep-if-smaller. | Mostly present or extended. | Production JSONBench-style physical queries do not consistently consume the typed-column codec/block model. |
-| q1-q5 kernels | Dense low-allocation kernels, fused q2, q2 sorted-prefix grouped distinct, q4 time-order early stop, q4 prefix-pruned scan, q4/q5 metadata paths. | General primitives exist, but JSONBench kernels are not production APIs. | Prepared paths are strong in some cases, but direct paths still pay avoidable setup/mapping costs, direct q2 rebuilds high-cardinality distinct state, and q4 sort-order operators are absent. |
+| q1-q5 kernels | Dense low-allocation kernels, fused q2, q2 sorted-prefix grouped distinct, q4 time-order early stop, q4 prefix-pruned scan, q4/q5 metadata paths. | General primitives exist, but JSONBench kernels are not production APIs. | Typed-column direct q2/q4b now expose the sorted-prefix mark-pruning contract and diagnostics. Direct q2 execution is still the exact map-backed grouped-distinct reducer; the streaming grouped-distinct kernel over `(collection,did)` is a #1950 consumer of the readiness metadata. Other q1/q3/q5 dense kernels remain deferred. |
 | Predicate-qualified aggregate metadata | Per-granule metadata can be built only for rows matching declared predicates. | Present in the data plane. | Production `ColumnAggregateMetadata` has no predicate declaration and aggregate metadata queries reject physical predicates. |
 | Multipart visibility and compaction | Base/delta/tombstones, latest-row visibility, part-set scans, compaction planning. | Data-plane subset exists. | Production has mutation manifests and visibility fallback, but optimized physical predicates, aggregate metadata, and prepared paths are mostly insert-only. |
 | Lifecycle control plane | Workspace inventory, prepared assets, reachability/reclaim/rewrite debt/quarantine planning. | Mostly deferred from internal typedcolumn. | Production has real asset manager/publish/GC/rewrite plumbing, but not a sorted typed-column part-set lifecycle model with full JSONBench diagnostics. |
@@ -902,22 +902,25 @@ Deliverables:
 - Add a production pruning plan for sort-key prefix ranges.
 - Add diagnostics for granules considered, granules skipped by marks, granules
   decoded, rows scanned, and bytes decoded.
-- Make q2 use the ClickHouse-style sort key to restrict to the
-  `kind=commit`, `operation=create` prefix and stream grouped distinct over
-  `(collection, did)` without rebuilding a global `did` string map per direct
-  run.
+- Make q2 plan over the ClickHouse-style sort key for the `kind=commit`,
+  `operation=create` prefix and expose sorted grouped-distinct streaming
+  readiness over `(collection, did)`. #1949 keeps direct q2 execution on the
+  existing exact grouped-distinct reducer; #1950 owns replacing that reducer with
+  the streaming kernel that consumes this readiness contract.
 - Make q4b use the ClickHouse-style sort key to prune on
   `kind=commit`, `operation=create`, and `collection=app.bsky.feed.post`.
 
 Acceptance criteria:
 
 - q2 direct production query uses sorted-prefix planning for the
-  `kind/operation` predicate and exact grouped distinct over `collection/did`
-  when the physical sort key is available and validated.
+  `kind/operation` predicate, exposes readiness/fallback diagnostics for exact
+  streaming grouped distinct over `collection/did`, and continues to return exact
+  grouped-distinct results until #1950 swaps in the streaming reducer.
 - q4b direct production query skips granules when marks prove they cannot match.
 - Mark-pruning and sorted-prefix result hashes match full-scan result hashes.
 - Tests cover empty ranges, boundary equality, multi-column prefixes, missing
-  marks, corrupt marks, and unsupported descending marks.
+  marks, corrupt/stale marks, unsupported descending marks, and uncertified
+  dictionary/code ordering.
 
 ### P4: Implement production q1-q5 direct kernels first
 

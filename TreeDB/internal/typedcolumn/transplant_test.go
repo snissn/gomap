@@ -411,6 +411,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
+		// #1949 is the scoped production typed-column SortKey mark-pruning planner
+		// that consumes validated section marks without publishing a new data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "column_physical_sortkey_pruning.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {

@@ -108,60 +108,71 @@ type ColumnPhysicalQueryGroup struct {
 // ColumnPhysicalQueryDiagnostics reports scan and reduce work for a physical
 // query without counting full-document row materialization.
 type ColumnPhysicalQueryDiagnostics struct {
-	ManifestRoot                uint64
-	ManifestRootName            string
-	ManifestGeneration          uint64
-	ActiveManifestChecksum      uint64
-	RecoveryManifestGeneration  uint64
-	RecoveryManifestChecksum    uint64
-	AppliedCommandLSN           uint64
-	ManifestRecords             int
-	AssetRefs                   int
-	MutationParts               int
-	DecodedBlocks               int
-	DirectReduceBlocks          int
-	TypedColumnPartSections     int
-	TypedColumnPartSectionBytes uint64
-	MetadataHits                int
-	MetadataMisses              int
-	DictionaryCodeHits          int
-	PredicateDictionaryCodeHits int
-	Int64ValueHits              int
-	ScheduledGranules           int
-	SkippedGranules             int
-	RowsScanned                 int
-	RowsMatched                 int
-	DeletedRows                 int
-	ProjectedColumns            int
-	PredicateCount              int
-	PredicateColumns            []string
-	PredicateKinds              []string
-	PredicateLiterals           int
-	FallbackReads               int
-	RowMaterializations         int
-	DocumentMaterializations    int
-	PhysicalBytesScanned        int64
-	DecodedMetadataBytes        uint64
-	MappedBytes                 uint64
-	HeapCopyBytes               uint64
-	ReduceRows                  int
-	TopKLimit                   int
-	TopKCandidates              int
-	TopKOrder                   string
-	VisibilityRows              int
-	ReconstructionRows          int
-	ResultGroups                int
-	WorkerCount                 int
-	SegmentFileCacheHits        uint64
-	SegmentFileCacheMisses      uint64
-	ColumnAssetReadIntegrity    string
-	StorageSource               ColumnPhysicalQueryStorageSource
-	FallbackReason              ColumnPhysicalQueryFallbackReason
-	ScanNanos                   int64
-	VisibilityNanos             int64
-	ReduceNanos                 int64
-	ResultShapeNanos            int64
-	ReconstructionNanos         int64
+	ManifestRoot                        uint64
+	ManifestRootName                    string
+	ManifestGeneration                  uint64
+	ActiveManifestChecksum              uint64
+	RecoveryManifestGeneration          uint64
+	RecoveryManifestChecksum            uint64
+	AppliedCommandLSN                   uint64
+	ManifestRecords                     int
+	AssetRefs                           int
+	MutationParts                       int
+	DecodedBlocks                       int
+	DirectReduceBlocks                  int
+	TypedColumnPartSections             int
+	TypedColumnPartSectionBytes         uint64
+	MetadataHits                        int
+	MetadataMisses                      int
+	DictionaryCodeHits                  int
+	PredicateDictionaryCodeHits         int
+	Int64ValueHits                      int
+	ScheduledGranules                   int
+	SkippedGranules                     int
+	DecodedGranules                     int
+	RowsScanned                         int
+	RowsMatched                         int
+	DeletedRows                         int
+	ProjectedColumns                    int
+	PredicateCount                      int
+	PredicateColumns                    []string
+	PredicateKinds                      []string
+	PredicateLiterals                   int
+	SortKeyPrefixPlanned                bool
+	SortKeyPrefixColumns                []string
+	SortKeyPrefixLiterals               int
+	SortKeyMarkChecks                   int
+	SortKeyMarkMatches                  int
+	SortKeyMarkSkips                    int
+	SortKeyMarkFallbackReason           string
+	SortedGroupedDistinctReady          bool
+	SortedGroupedDistinctFallbackReason string
+	DecodedPayloadBytes                 uint64
+	FallbackReads                       int
+	RowMaterializations                 int
+	DocumentMaterializations            int
+	PhysicalBytesScanned                int64
+	DecodedMetadataBytes                uint64
+	MappedBytes                         uint64
+	HeapCopyBytes                       uint64
+	ReduceRows                          int
+	TopKLimit                           int
+	TopKCandidates                      int
+	TopKOrder                           string
+	VisibilityRows                      int
+	ReconstructionRows                  int
+	ResultGroups                        int
+	WorkerCount                         int
+	SegmentFileCacheHits                uint64
+	SegmentFileCacheMisses              uint64
+	ColumnAssetReadIntegrity            string
+	StorageSource                       ColumnPhysicalQueryStorageSource
+	FallbackReason                      ColumnPhysicalQueryFallbackReason
+	ScanNanos                           int64
+	VisibilityNanos                     int64
+	ReduceNanos                         int64
+	ResultShapeNanos                    int64
+	ReconstructionNanos                 int64
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -1290,6 +1301,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.Int64ValueHits += right.Int64ValueHits
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
+	left.DecodedGranules += right.DecodedGranules
 	left.RowsScanned += right.RowsScanned
 	left.RowsMatched += right.RowsMatched
 	left.DeletedRows += right.DeletedRows
@@ -1302,6 +1314,28 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 		left.PredicateKinds = append([]string(nil), right.PredicateKinds...)
 		left.PredicateLiterals = right.PredicateLiterals
 	}
+	if !left.SortKeyPrefixPlanned && right.SortKeyPrefixPlanned {
+		left.SortKeyPrefixPlanned = true
+		left.SortKeyPrefixColumns = append([]string(nil), right.SortKeyPrefixColumns...)
+		left.SortKeyPrefixLiterals = right.SortKeyPrefixLiterals
+	}
+	left.SortKeyMarkChecks += right.SortKeyMarkChecks
+	left.SortKeyMarkMatches += right.SortKeyMarkMatches
+	left.SortKeyMarkSkips += right.SortKeyMarkSkips
+	if left.SortKeyMarkFallbackReason == "" {
+		left.SortKeyMarkFallbackReason = right.SortKeyMarkFallbackReason
+	} else if right.SortKeyMarkFallbackReason != "" && right.SortKeyMarkFallbackReason != left.SortKeyMarkFallbackReason {
+		left.SortKeyMarkFallbackReason = "mixed"
+	}
+	if right.SortedGroupedDistinctReady {
+		left.SortedGroupedDistinctReady = true
+	}
+	if left.SortedGroupedDistinctFallbackReason == "" {
+		left.SortedGroupedDistinctFallbackReason = right.SortedGroupedDistinctFallbackReason
+	} else if right.SortedGroupedDistinctFallbackReason != "" && right.SortedGroupedDistinctFallbackReason != left.SortedGroupedDistinctFallbackReason {
+		left.SortedGroupedDistinctFallbackReason = "mixed"
+	}
+	left.DecodedPayloadBytes += right.DecodedPayloadBytes
 	left.PhysicalBytesScanned += right.PhysicalBytesScanned
 	left.DecodedMetadataBytes += right.DecodedMetadataBytes
 	left.MappedBytes += right.MappedBytes

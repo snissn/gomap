@@ -365,6 +365,71 @@ func (s *ColumnPartScanner) ScanProjectedInto(dst map[string][]int64, columns []
 	return out, nil
 }
 
+func (s *ColumnPartScanner) ScanProjectedRows(columns []string, rows []int) (ProjectedScanResult, error) {
+	return s.ScanProjectedRowsInto(make(map[string][]int64, len(columns)), columns, rows)
+}
+
+func (s *ColumnPartScanner) ScanProjectedRowsInto(dst map[string][]int64, columns []string, rows []int) (ProjectedScanResult, error) {
+	if s.part == nil {
+		return ProjectedScanResult{}, errors.New("typedcolumn: nil part scanner")
+	}
+	projection, err := s.validateProjection(columns)
+	if err != nil {
+		return ProjectedScanResult{}, err
+	}
+	if err := validateProjectedScanRows(rows, s.part.Descriptor.RowCount); err != nil {
+		return ProjectedScanResult{}, err
+	}
+	if dst == nil {
+		dst = make(map[string][]int64, len(projection))
+	}
+	out := ProjectedScanResult{
+		Rows:    len(rows),
+		Columns: dst,
+		Diagnostics: PartScanDiagnostics{
+			RowsScanned:        len(rows),
+			ColumnsProjected:   len(projection),
+			GranulesConsidered: len(s.part.Descriptor.Granules),
+		},
+	}
+	next := make(map[string][]int64, len(projection))
+	for _, name := range projection {
+		values, diagnostics, err := s.scanColumnRowsInto(name, dst[name], rows)
+		if err != nil {
+			return ProjectedScanResult{}, err
+		}
+		next[name] = values
+		if diagnostics.GranulesDecoded > out.Diagnostics.GranulesDecoded {
+			out.Diagnostics.GranulesDecoded = diagnostics.GranulesDecoded
+		}
+		out.Diagnostics.BlocksDecoded += diagnostics.BlocksDecoded
+		out.Diagnostics.BytesDecoded += diagnostics.BytesDecoded
+	}
+	for name := range dst {
+		if _, ok := next[name]; !ok {
+			delete(dst, name)
+		}
+	}
+	for name, values := range next {
+		dst[name] = values
+	}
+	return out, nil
+}
+
+func validateProjectedScanRows(rows []int, totalRows int) error {
+	previous := -1
+	for i, row := range rows {
+		if row < 0 || row >= totalRows {
+			return fmt.Errorf("typedcolumn: projected row[%d]=%d outside part rows=%d", i, row, totalRows)
+		}
+		if row <= previous {
+			return fmt.Errorf("typedcolumn: projected rows must be strictly increasing at index %d (%d after %d)", i, row, previous)
+		}
+		previous = row
+	}
+	return nil
+}
+
 func (s *ColumnPartScanner) validateProjection(columns []string) ([]string, error) {
 	if len(columns) == 0 {
 		return nil, errors.New("typedcolumn: empty projection")
@@ -456,6 +521,8 @@ func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []
 		out = make([]int64, 0, len(rows))
 	}
 	var diagnostics PartScanDiagnostics
+	coveredStart := -1
+	coveredEnd := -1
 	rowIndex := 0
 	for _, block := range column.Blocks {
 		first := block.Descriptor.FirstRow
@@ -482,12 +549,30 @@ func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []
 		}
 		diagnostics.BlocksDecoded++
 		diagnostics.BytesDecoded += block.Granule.RawBytes
+		coveredStart, coveredEnd = extendGranuleCoverage(coveredStart, coveredEnd, block.Descriptor.FirstGranule, block.Descriptor.LastGranule, &diagnostics.GranulesDecoded)
+	}
+	if coveredStart >= 0 {
+		diagnostics.GranulesDecoded += coveredEnd - coveredStart + 1
 	}
 	if rowIndex != len(rows) {
 		return nil, diagnostics, fmt.Errorf("typedcolumn: %d visible rows outside column %s blocks", len(rows)-rowIndex, name)
 	}
 	diagnostics.RowsScanned = len(rows)
 	return out, diagnostics, nil
+}
+
+func extendGranuleCoverage(coveredStart, coveredEnd, first, last int, total *int) (int, int) {
+	if coveredStart < 0 {
+		return first, last
+	}
+	if first <= coveredEnd+1 {
+		if last > coveredEnd {
+			coveredEnd = last
+		}
+		return coveredStart, coveredEnd
+	}
+	*total += coveredEnd - coveredStart + 1
+	return first, last
 }
 
 func countGranulesCoveredByBlocks(blocks []ColumnBlock) (int, error) {
