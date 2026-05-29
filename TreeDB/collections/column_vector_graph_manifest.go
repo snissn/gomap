@@ -889,7 +889,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 				status.RebuildNeeded = true
 				return status, nil
 			}
-			if err := validateColumnVectorIndexStateAssets(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, state, graph); err != nil {
+			if err := validateColumnVectorIndexStateAssetsForStatus(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, state, graph); err != nil {
 				status.State = VectorIndexStateColumnGraphUnavailable
 				status.Reason = VectorIndexReasonColumnGraphCorrupt
 				status.RebuildNeeded = true

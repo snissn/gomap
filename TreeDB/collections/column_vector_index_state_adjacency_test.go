@@ -126,7 +126,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "outside row_count")
+		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "outside row_count")
 	})
 
 	t.Run("row_count_mismatch", func(t *testing.T) {
@@ -138,7 +138,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "image part/rows")
+		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "image part/rows")
 	})
 
 	t.Run("final_offset_value_count_mismatch", func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "final offset=2 values=1")
+		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "final offset=2 values=1")
 	})
 
 	t.Run("embedded_schema_version_mismatch", func(t *testing.T) {
@@ -181,7 +181,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "schema_version")
+		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "schema_version")
 	})
 
 	t.Run("stale_base_identity", func(t *testing.T) {
@@ -343,6 +343,26 @@ func assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(tb testing.TB, d *ba
 	}
 	if status.State != VectorIndexStateColumnGraphUnavailable || status.Reason != VectorIndexReasonColumnGraphCorrupt || !status.RebuildNeeded {
 		tb.Fatalf("status=%+v want corrupt/unavailable", status)
+	}
+}
+
+func assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(tb testing.TB, d *backenddb.DB, def VectorIndexDefinition, wantErr string) {
+	tb.Helper()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		tb.Fatalf("OpenCollection: %v", err)
+	}
+	status, err := col.VectorIndexStatus(def.Name)
+	if err != nil || status.State != VectorIndexStateColumnGraphLoaded || !status.Loaded || status.RebuildNeeded {
+		tb.Fatalf("VectorIndexStatus status=%+v err=%v want cheap loaded status before payload validation", status, err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err == nil {
+		_ = reader.Close()
+		tb.Fatalf("openColumnVectorGraphPhysicalRowReader err=nil want containing %q", wantErr)
+	}
+	if !strings.Contains(err.Error(), wantErr) {
+		tb.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want containing %q", err, wantErr)
 	}
 }
 
