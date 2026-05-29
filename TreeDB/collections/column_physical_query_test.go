@@ -652,20 +652,76 @@ func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t
 }
 
 func TestMergeColumnPhysicalQueryDiagnosticsSortKeyNoneSentinel1949(t *testing.T) {
-	left := ColumnPhysicalQueryDiagnostics{
-		SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
-		SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+	tests := []struct {
+		name                        string
+		left                        ColumnPhysicalQueryDiagnostics
+		right                       ColumnPhysicalQueryDiagnostics
+		wantSortKeyFallback         string
+		wantGroupedDistinctFallback string
+	}{
+		{
+			name: "left none right actual",
+			left: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+			},
+			right: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackMissingMarks,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackMissingPrefix,
+			},
+			wantSortKeyFallback:         columnSortKeyMarkFallbackMissingMarks,
+			wantGroupedDistinctFallback: columnSortedGroupedDistinctFallbackMissingPrefix,
+		},
+		{
+			name: "left actual right none",
+			left: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackMissingMarks,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackMissingPrefix,
+			},
+			right: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+			},
+			wantSortKeyFallback:         columnSortKeyMarkFallbackMissingMarks,
+			wantGroupedDistinctFallback: columnSortedGroupedDistinctFallbackMissingPrefix,
+		},
+		{
+			name: "both none",
+			left: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+			},
+			right: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+			},
+			wantSortKeyFallback:         columnSortKeyMarkFallbackNone,
+			wantGroupedDistinctFallback: columnSortKeyMarkFallbackNone,
+		},
+		{
+			name: "conflicting actual reasons become mixed",
+			left: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackMissingMarks,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackMissingPrefix,
+			},
+			right: ColumnPhysicalQueryDiagnostics{
+				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackStaleMarks,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackSortKeyLayout,
+			},
+			wantSortKeyFallback:         "mixed",
+			wantGroupedDistinctFallback: "mixed",
+		},
 	}
-	right := ColumnPhysicalQueryDiagnostics{
-		SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackMissingMarks,
-		SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackMissingPrefix,
-	}
-	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
-	if got, want := merged.SortKeyMarkFallbackReason, columnSortKeyMarkFallbackMissingMarks; got != want {
-		t.Fatalf("sort-key mark fallback=%q want %q", got, want)
-	}
-	if got, want := merged.SortedGroupedDistinctFallbackReason, columnSortedGroupedDistinctFallbackMissingPrefix; got != want {
-		t.Fatalf("sorted grouped distinct fallback=%q want %q", got, want)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			merged := mergeColumnPhysicalQueryDiagnostics(tc.left, tc.right)
+			if got := merged.SortKeyMarkFallbackReason; got != tc.wantSortKeyFallback {
+				t.Fatalf("sort-key mark fallback=%q want %q", got, tc.wantSortKeyFallback)
+			}
+			if got := merged.SortedGroupedDistinctFallbackReason; got != tc.wantGroupedDistinctFallback {
+				t.Fatalf("sorted grouped distinct fallback=%q want %q", got, tc.wantGroupedDistinctFallback)
+			}
+		})
 	}
 }
 
