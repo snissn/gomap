@@ -86,10 +86,11 @@ type columnVectorGraphAdjacencySourceSnapshot struct {
 type columnVectorGraphLayer0AdjacencySourceSnapshot = columnVectorGraphAdjacencySourceSnapshot
 
 type columnVectorGraphAssetRow struct {
-	ID        []byte
-	Vector    []float32
-	InvNorm   float32
-	Adjacency []uint32
+	ID         []byte
+	Vector     []float32
+	InvNorm    float32
+	Adjacency  []uint32
+	BaseRowRef DocumentRowRef
 }
 
 type columnVectorGraphPreparedPhysicalAsset struct {

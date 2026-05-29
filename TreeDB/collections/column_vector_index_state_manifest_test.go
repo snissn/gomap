@@ -479,6 +479,7 @@ func columnVectorIndexStateAssetSnapshotForTest(role, assetID string, ref Column
 
 func columnVectorIndexStateTypedColumnEncodingNamesMatchConstants() bool {
 	return columnVectorIndexStateEncodingRawUint32List == typedcolumn.EncodingRawUint32OffsetsList.String() &&
+		columnVectorIndexStateEncodingRawInt64 == typedcolumn.EncodingRawInt64.String() &&
 		columnVectorIndexStateEncodingRawFloat32 == typedcolumn.EncodingRawFloat32.String() &&
 		columnVectorIndexStateEncodingRawFloat32Vector == typedcolumn.EncodingRawFloat32Vector.String()
 }

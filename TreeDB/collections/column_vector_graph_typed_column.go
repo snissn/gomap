@@ -36,10 +36,19 @@ func (o columnVectorGraphTypedColumnVectorOutcome) String() string {
 	}
 }
 
+type columnVectorGraphTypedColumnVectorLocationSource string
+
+const (
+	columnVectorGraphTypedColumnVectorLocationSourceUnknown        columnVectorGraphTypedColumnVectorLocationSource = ""
+	columnVectorGraphTypedColumnVectorLocationSourceRowRefState    columnVectorGraphTypedColumnVectorLocationSource = "row_ref_state"
+	columnVectorGraphTypedColumnVectorLocationSourceLegacyGraphIDs columnVectorGraphTypedColumnVectorLocationSource = "legacy_graph_ids"
+)
+
 type columnVectorGraphTypedColumnVectorSource struct {
-	field  TypedStorageField
-	column typedColumnAdapterColumn
-	dims   int
+	field          TypedStorageField
+	column         typedColumnAdapterColumn
+	dims           int
+	locationSource columnVectorGraphTypedColumnVectorLocationSource
 
 	locations []columnVectorGraphTypedColumnVectorLocation
 	parts     []*columnVectorGraphTypedColumnVectorPart
@@ -54,8 +63,9 @@ type columnVectorGraphTypedColumnVectorSource struct {
 }
 
 type columnVectorGraphTypedColumnVectorLocation struct {
-	part     *columnVectorGraphTypedColumnVectorPart
-	rowIndex int
+	part       *columnVectorGraphTypedColumnVectorPart
+	generation uint64
+	rowIndex   int
 }
 
 type columnVectorGraphTypedColumnVectorPart struct {
@@ -69,9 +79,10 @@ type columnVectorGraphTypedColumnVectorPart struct {
 }
 
 type columnVectorGraphTypedColumnPhysicalLocation struct {
-	generation uint64
-	partID     uint64
-	rowIndex   int
+	generation        uint64
+	partID            uint64
+	rowIndex          int
+	appliedCommandLSN uint64
 }
 
 func (c *Collection) openColumnVectorGraphTypedColumnVectorSourceForReader(catalog *collectionCatalog, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord, graph columnVectorGraphManifestSnapshot, reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphTypedColumnVectorSource, string) {
@@ -123,43 +134,74 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		return nil, fmt.Errorf("%w: column_graph typed-column vector source over sorted typed_column_part assets is deferred", ErrColumnQueryPlanUnsupported)
 	}
 
-	graphIDs, err := columnVectorGraphDocumentIDsFromReader(reader)
+	locations := make([]columnVectorGraphTypedColumnVectorLocation, graph.RowCount)
+	physicalRowsByGeneration, physicalPartByGeneration, err := columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(physicalRefs)
 	if err != nil {
 		return nil, err
 	}
-	if len(graphIDs) != graph.RowCount {
-		return nil, fmt.Errorf("collections: column_graph %q typed-column vector source graph ids=%d want row_count=%d", graph.IndexName, len(graphIDs), graph.RowCount)
-	}
-	physicalLocations, physicalRowsByGeneration, err := c.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
-	if err != nil {
-		return nil, err
-	}
-	locations := make([]columnVectorGraphTypedColumnVectorLocation, len(graphIDs))
-	// The #1782 vector source is intentionally limited to the current insert-only
-	// publication shape: one physical row asset and one typed_column_part per
-	// manifest generation. Multipart lifecycle/compaction is deferred to #1787;
-	// columnVectorGraphTypedColumnPhysicalLocations and
-	// typedColumnPartRefsByGenerationFromManifestRecords fail closed if the
+	// The #1782/#1993 vector source is intentionally limited to the current
+	// insert-only publication shape: one physical row asset and one
+	// typed_column_part per manifest generation. Multipart lifecycle/compaction is
+	// deferred to #1787; row-ref state and manifest refs fail closed if the
 	// manifest violates that shape.
 	usedGenerations := make(map[uint64]struct{})
-	for ordinal, id := range graphIDs {
-		loc, ok := physicalLocations[string(id)]
-		if !ok {
-			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing physical row for graph ordinal=%d id=%q", graph.IndexName, ordinal, string(id))
+	locationSource := columnVectorGraphTypedColumnVectorLocationSourceUnknown
+	if rowRefs, ok := reader.rowRefSource.rowRefs(); ok {
+		if len(rowRefs) != graph.RowCount {
+			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row refs=%d want row_count=%d", graph.IndexName, len(rowRefs), graph.RowCount)
 		}
-		if _, ok := typedRefs[loc.generation]; !ok {
-			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing typed_column_part for generation=%d", graph.IndexName, loc.generation)
+		for ordinal, ref := range rowRefs {
+			if _, ok := typedRefs[ref.Generation]; !ok {
+				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing typed_column_part for row-ref generation=%d", graph.IndexName, ref.Generation)
+			}
+			physicalPartID, ok := physicalPartByGeneration[ref.Generation]
+			if !ok || physicalPartID != ref.PartID {
+				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row-ref generation=%d part_id=%d does not match base physical part_id=%d", graph.IndexName, ref.Generation, ref.PartID, physicalPartID)
+			}
+			physicalRows, ok := physicalRowsByGeneration[ref.Generation]
+			if !ok || ref.RowIndex < 0 || ref.RowIndex >= physicalRows {
+				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row-ref ordinal=%d row_index=%d outside physical rows=%d", graph.IndexName, ordinal, ref.RowIndex, physicalRows)
+			}
+			usedGenerations[ref.Generation] = struct{}{}
+			locations[ordinal].generation = ref.Generation
+			locations[ordinal].rowIndex = ref.RowIndex
 		}
-		usedGenerations[loc.generation] = struct{}{}
-		locations[ordinal].rowIndex = loc.rowIndex
+		locationSource = columnVectorGraphTypedColumnVectorLocationSourceRowRefState
+	} else {
+		graphIDs, err := columnVectorGraphDocumentIDsFromReader(reader)
+		if err != nil {
+			return nil, err
+		}
+		if len(graphIDs) != graph.RowCount {
+			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source graph ids=%d want row_count=%d", graph.IndexName, len(graphIDs), graph.RowCount)
+		}
+		physicalLocations, scannedRowsByGeneration, err := c.columnVectorGraphTypedColumnPhysicalLocations(catalog.meta.Name, cfg, physicalRefs)
+		if err != nil {
+			return nil, err
+		}
+		physicalRowsByGeneration = scannedRowsByGeneration
+		for ordinal, id := range graphIDs {
+			loc, ok := physicalLocations[string(id)]
+			if !ok {
+				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing physical row for graph ordinal=%d id=%q", graph.IndexName, ordinal, string(id))
+			}
+			if _, ok := typedRefs[loc.generation]; !ok {
+				return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing typed_column_part for generation=%d", graph.IndexName, loc.generation)
+			}
+			usedGenerations[loc.generation] = struct{}{}
+			locations[ordinal].generation = loc.generation
+			locations[ordinal].rowIndex = loc.rowIndex
+		}
+		locationSource = columnVectorGraphTypedColumnVectorLocationSourceLegacyGraphIDs
 	}
 
 	source := &columnVectorGraphTypedColumnVectorSource{
-		field:     field,
-		column:    adapterColumn,
-		dims:      graph.Dimensions,
-		locations: locations,
-		manager:   mappedresource.NewManager(),
+		field:          field,
+		column:         adapterColumn,
+		dims:           graph.Dimensions,
+		locationSource: locationSource,
+		locations:      locations,
+		manager:        mappedresource.NewManager(),
 	}
 	success := false
 	defer func() {
@@ -182,14 +224,14 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		partsByGeneration[generation] = part
 		source.decodedDerivedBytes += decodedBytes
 	}
-	for ordinal, id := range graphIDs {
-		loc := physicalLocations[string(id)]
-		part := partsByGeneration[loc.generation]
+	for ordinal := range locations {
+		generation := locations[ordinal].generation
+		part := partsByGeneration[generation]
 		if part == nil {
-			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing loaded part for graph ordinal=%d generation=%d", graph.IndexName, ordinal, loc.generation)
+			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source missing loaded part for graph ordinal=%d generation=%d", graph.IndexName, ordinal, generation)
 		}
-		if loc.rowIndex < 0 || loc.rowIndex >= part.rows {
-			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row_index=%d outside typed_column_part rows=%d", graph.IndexName, loc.rowIndex, part.rows)
+		if locations[ordinal].rowIndex < 0 || locations[ordinal].rowIndex >= part.rows {
+			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row_index=%d outside typed_column_part rows=%d", graph.IndexName, locations[ordinal].rowIndex, part.rows)
 		}
 		locations[ordinal].part = part
 	}
@@ -266,6 +308,28 @@ func columnVectorGraphDocumentIDsFromReader(reader *columnVectorGraphPhysicalRow
 	return ids, nil
 }
 
+func columnVectorGraphTypedColumnPhysicalRowsByGenerationFromRefs(refs []columnManifestAssetRefForScan) (map[uint64]int, map[uint64]uint64, error) {
+	if len(refs) == 0 {
+		return nil, nil, errors.New("collections: column_graph typed-column vector source missing physical row refs")
+	}
+	rowsByGeneration := make(map[uint64]int, len(refs))
+	partByGeneration := make(map[uint64]uint64, len(refs))
+	for _, asset := range refs {
+		if asset.Ref.Kind != ColumnAssetKindTCS1PartImage {
+			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source physical ref kind=%q", asset.Ref.Kind)
+		}
+		if asset.Reason != ColumnPublishOperationInsert {
+			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source requires insert-only physical refs, got %s", asset.Reason)
+		}
+		if _, exists := rowsByGeneration[asset.Ref.Generation]; exists {
+			return nil, nil, fmt.Errorf("collections: column_graph typed-column vector source generation=%d has multiple physical row parts; multipart typed-column vector graph reads are deferred", asset.Ref.Generation)
+		}
+		rowsByGeneration[asset.Ref.Generation] = asset.Rows
+		partByGeneration[asset.Ref.Generation] = asset.Ref.PartID
+	}
+	return rowsByGeneration, partByGeneration, nil
+}
+
 func (c *Collection) columnVectorGraphTypedColumnPhysicalLocations(collection string, cfg ColumnStoreConfig, refs []columnManifestAssetRefForScan) (map[string]columnVectorGraphTypedColumnPhysicalLocation, map[uint64]int, error) {
 	if len(refs) == 0 {
 		return nil, nil, errors.New("collections: column_graph typed-column vector source missing physical row refs")
@@ -307,7 +371,7 @@ func (c *Collection) columnVectorGraphTypedColumnPhysicalLocations(collection st
 			if _, exists := locations[key]; exists {
 				return fmt.Errorf("collections: column_graph typed-column vector source duplicate document id %q", key)
 			}
-			locations[key] = columnVectorGraphTypedColumnPhysicalLocation{generation: row.Generation, partID: row.PartID, rowIndex: row.RowIndex}
+			locations[key] = columnVectorGraphTypedColumnPhysicalLocation{generation: row.Generation, partID: row.PartID, rowIndex: row.RowIndex, appliedCommandLSN: row.AppliedCommandLSN}
 			return nil
 		})
 		if err != nil {
@@ -625,6 +689,12 @@ func (r *columnVectorGraphPhysicalRowReader) populateTypedColumnVectorSearchStat
 	stats.TypedColumnDecodedBytes = source.decodedDerivedBytes
 	stats.TypedColumnActiveHandles = source.activeHandles
 	stats.TypedColumnDeniedResources = source.deniedResources
+	switch source.locationSource {
+	case columnVectorGraphTypedColumnVectorLocationSourceRowRefState:
+		stats.RowRefVectorSourceState = 1
+	case columnVectorGraphTypedColumnVectorLocationSourceLegacyGraphIDs:
+		stats.RowRefVectorSourceLegacyGraphIDs = 1
+	}
 }
 
 func (s *columnVectorGraphTypedColumnVectorSource) vectorForOrdinal(ordinal int) ([]float32, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, bool) {
@@ -683,6 +753,7 @@ func (s *columnVectorGraphTypedColumnVectorSource) Close() error {
 	}
 	for i := range s.locations {
 		s.locations[i].part = nil
+		s.locations[i].generation = 0
 		s.locations[i].rowIndex = 0
 	}
 	return closeErr

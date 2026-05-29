@@ -164,8 +164,8 @@ func TestSearchVectorIndexColumnGraphMaterializesDocumentsAfterTopKV4(t *testing
 	if got.Stats.DocumentsFetched != uint64(len(got.Results)) {
 		t.Fatalf("DocumentsFetched=%d want %d", got.Stats.DocumentsFetched, len(got.Results))
 	}
-	if got.Stats.DocumentRowLocatorLookups != uint64(len(got.Results)) || got.Stats.DocumentRowLocatorMisses != 0 || got.Stats.DocumentPointRowFetches != uint64(len(got.Results)) || got.Stats.DocumentPointRowDecodes != uint64(len(got.Results)) {
-		t.Fatalf("stats=%+v want row-locator lookup and point row fetch per document", got.Stats)
+	if got.Stats.DocumentRowRefStateFetches != uint64(len(got.Results)) || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorLookups != 0 || got.Stats.DocumentRowLocatorMisses != 0 || got.Stats.DocumentPointRowFetches != uint64(len(got.Results)) || got.Stats.DocumentPointRowDecodes != uint64(len(got.Results)) {
+		t.Fatalf("stats=%+v want vector-index row refs and point row fetch per document", got.Stats)
 	}
 	if got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 || got.Stats.DocumentVisibilityRowsScanned != 0 {
 		t.Fatalf("stats=%+v want IncludeDocuments to avoid row-ref scan fallback on supported manifest", got.Stats)
@@ -475,8 +475,8 @@ func TestOpenVectorIndexSearcherFetchesDocumentsFromBoundSnapshotV4(t *testing.T
 	if got.Stats.DocumentsFetched != 1 {
 		t.Fatalf("DocumentsFetched=%d want 1", got.Stats.DocumentsFetched)
 	}
-	if got.Stats.DocumentRowLocatorLookups != 1 || got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentPointRowDecodes != 1 || got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 {
-		t.Fatalf("stats=%+v want prepared IncludeDocuments to use row refs and point fetches", got.Stats)
+	if got.Stats.DocumentRowRefStateFetches != 1 || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorLookups != 0 || got.Stats.DocumentPointRowFetches != 1 || got.Stats.DocumentPointRowDecodes != 1 || got.Stats.DocumentRowRefFallbackScans != 0 || got.Stats.DocumentVisibilityScans != 0 {
+		t.Fatalf("stats=%+v want prepared IncludeDocuments to use vector-index row refs and point fetches", got.Stats)
 	}
 	if searcher.documentView == nil || searcher.documentView.assetScopeKind != mappedresource.ScopePreparedSearch {
 		t.Fatalf("document view=%+v want prepared_search scope", searcher.documentView)
@@ -2103,6 +2103,10 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.TypedColumnActiveHandles), "typed_column_active_handles")
 	b.ReportMetric(float64(stats.TypedColumnDeniedResources), "typed_column_denied_resources")
 	b.ReportMetric(float64(stats.TypedColumnFallbacks), "typed_column_vector_fallbacks/search")
+	b.ReportMetric(float64(stats.RowRefVectorSourceState), "row_ref_vector_source_state/search")
+	b.ReportMetric(float64(stats.RowRefVectorSourceLegacyGraphIDs), "row_ref_vector_source_legacy_graph_ids/search")
+	b.ReportMetric(float64(stats.RowRefStateResultRefs), "row_ref_state_result_refs/search")
+	b.ReportMetric(float64(stats.ResultIDGraphFallbacks), "result_id_graph_fallbacks/search")
 	b.ReportMetric(float64(stats.RowFetches), "row_fetches/search")
 	b.ReportMetric(float64(stats.BatchFetches), "batch_fetches/search")
 	b.ReportMetric(float64(stats.RowsFetched), "rows_fetched/search")
@@ -2153,6 +2157,8 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.DocumentRowLocatorRowsScanned), "doc_row_locator_rows_scanned/search")
 	b.ReportMetric(float64(stats.DocumentRowLocatorPhysicalBytes), "doc_row_locator_physical_B/search")
 	b.ReportMetric(float64(stats.DocumentRowLocatorNanos), "doc_row_locator_ns/search")
+	b.ReportMetric(float64(stats.DocumentRowRefStateFetches), "doc_row_ref_state_fetches/search")
+	b.ReportMetric(float64(stats.DocumentRowRefLookupFallbacks), "doc_row_ref_lookup_fallbacks/search")
 	b.ReportMetric(float64(stats.DocumentPointRowFetches), "doc_point_row_fetches/search")
 	b.ReportMetric(float64(stats.DocumentPointRowDecodes), "doc_point_row_decodes/search")
 	b.ReportMetric(float64(stats.DocumentRowRefFallbackScans), "doc_row_ref_fallback_scans/search")
