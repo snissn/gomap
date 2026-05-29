@@ -4,7 +4,7 @@ package vectorops
 
 import simdf32 "github.com/tphakala/simd/f32"
 
-const dotFloat32Implementation = "simd_tphakala_f32"
+const dotFloat32Implementation = "simd_snissn_f32"
 
 // DotFloat32 returns the float32 dot product over the shared prefix of left and
 // right using the amd64 SIMD implementation. Callers must pass validated
