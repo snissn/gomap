@@ -523,6 +523,7 @@ func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []
 	var diagnostics PartScanDiagnostics
 	coveredStart := -1
 	coveredEnd := -1
+	prevFirstGranule := -1
 	rowIndex := 0
 	for _, block := range column.Blocks {
 		first := block.Descriptor.FirstRow
@@ -549,6 +550,13 @@ func (s *ColumnPartScanner) scanColumnRowsInto(name string, dst []int64, rows []
 		}
 		diagnostics.BlocksDecoded++
 		diagnostics.BytesDecoded += block.Granule.RawBytes
+		if block.Descriptor.FirstGranule < 0 || block.Descriptor.LastGranule < block.Descriptor.FirstGranule {
+			return nil, diagnostics, fmt.Errorf("typedcolumn: invalid granule range %d..%d", block.Descriptor.FirstGranule, block.Descriptor.LastGranule)
+		}
+		if prevFirstGranule >= 0 && block.Descriptor.FirstGranule < prevFirstGranule {
+			return nil, diagnostics, fmt.Errorf("typedcolumn: granule ranges out of order: %d after %d", block.Descriptor.FirstGranule, prevFirstGranule)
+		}
+		prevFirstGranule = block.Descriptor.FirstGranule
 		coveredStart, coveredEnd = extendGranuleCoverage(coveredStart, coveredEnd, block.Descriptor.FirstGranule, block.Descriptor.LastGranule, &diagnostics.GranulesDecoded)
 	}
 	if coveredStart >= 0 {
