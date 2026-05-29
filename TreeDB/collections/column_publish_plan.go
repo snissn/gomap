@@ -976,6 +976,9 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if uint64(len(sortKeys)) > columnManifestSortKeyMaxColumns {
 		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), columnManifestSortKeyMaxColumns)
 	}
+	if asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKeys) > typedColumnPartSortKeyMaxColumns {
+		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), typedColumnPartSortKeyMaxColumns)
+	}
 	seenSortKeyColumns := make(map[string]struct{}, len(sortKeys))
 	for _, sortKey := range sortKeys {
 		if sortKey.Column == "" {

@@ -218,6 +218,24 @@ func TestTypedColumnPartSortKeyAllowsRowAssetDescendingFallback1948(t *testing.T
 	}
 }
 
+func TestTypedColumnPartSortKeyAllowsMixedOwnerTypedDescendingFallback1948(t *testing.T) {
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "row_sort", Path: "row_sort", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "typed_value", Path: "typed_value", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+	}, SortKey: []ColumnSortKey{{Column: "row_sort"}, {Column: "typed_value", Direction: ColumnSortDescending}}}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalize mixed-owner typed descending SortKey: %v", err)
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(*normalized, columnStoreTypedColumnPartFields(*normalized))
+	if err != nil {
+		t.Fatalf("typedColumnPartPublicationSortKey: %v", err)
+	}
+	if len(sortKey) != 0 {
+		t.Fatalf("typed-column sort key=%+v want mixed-owner primary-id fallback", sortKey)
+	}
+}
+
 func TestTypedColumnPartSortKeyRejectsDescending1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948([]ColumnSortKey{{Column: "time_us", Direction: ColumnSortDescending}})
 	_, err := normalizeColumnStoreConfig("events", cfg)
@@ -419,6 +437,24 @@ func TestColumnPreparedAssetSortKeyRejectsOversized1948(t *testing.T) {
 	}
 	if err := validateColumnPreparedAssetForPlan(asset); err == nil || !strings.Contains(err.Error(), "exceeds cap") {
 		t.Fatalf("validateColumnPreparedAssetForPlan oversized err=%v want exceeds cap", err)
+	}
+}
+
+func TestColumnPreparedAssetSortKeyRejectsTypedEngineCap1948(t *testing.T) {
+	sortKeys := make([]ColumnSortKey, typedColumnPartSortKeyMaxColumns+1)
+	for i := range sortKeys {
+		sortKeys[i] = ColumnSortKey{Column: fmt.Sprintf("c%02d", i)}
+	}
+	asset := ColumnPreparedAsset{
+		Ref:      ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "events_column_assets", Generation: 1, PartID: typedColumnPartAssetPartID, FileID: 1, Length: 1, Checksum: 1},
+		Rows:     1,
+		Bytes:    1,
+		Reason:   string(ColumnPublishOperationInsert),
+		PartRole: ColumnManifestPartRoleBase,
+		SortKey:  columnSortKeyMatchString(sortKeys),
+	}
+	if err := validateColumnPreparedAssetForPlan(asset); err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("validateColumnPreparedAssetForPlan typed engine cap err=%v want exceeds cap", err)
 	}
 }
 
