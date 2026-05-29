@@ -443,17 +443,22 @@ Dir/maindb/column_assets/events/column-assets/
   tmp/
 ```
 
-Segment file names use `segment-%06d.tca`. Durable manifest records store
-typed `ColumnAssetRef` values containing kind, namespace, generation, part id,
-segment file id, offset, length, and checksum. Part records also carry a
-`part_role` lifecycle value: `base`, `delta`, or `tombstone`. Current part refs
-may use `tcs1_part_image` for compatibility typed-row/TCPA assets or
-`tcs1_typed_column_part` for sectioned scalar typed-column parts. `base` parts
-are complete insert/base spans, `delta` parts carry update rows layered over the
-older visible set, and `tombstone` parts are typed-row delete assets with no
-matching typed-column payload. GC/rewrite must enumerate these refs from
-manifest/control roots and snapshots; it must not scan row documents to discover
-typed-storage assets.
+Segment file names use `segment-%06d.tca`. Durable manifest part records
+store typed `ColumnAssetRef` values containing kind, namespace, generation,
+part id, segment file id, offset, length, and checksum. Part records also carry
+a `part_role` lifecycle value: `base`, `delta`, or `tombstone`. Part record
+version 4 appends a SortKey trailer after `part_role`: `u64 column_count`, then
+for each column a manifest string column name and manifest string direction
+(currently empty/ascending only). Version 1/2/3 part records have no SortKey
+trailer. Only `tcs1_typed_column_part` records may publish a non-empty SortKey;
+readers and rewrite tooling must preserve or skip this trailer by version.
+Current part refs may use `tcs1_part_image` for compatibility typed-row/TCPA
+assets or `tcs1_typed_column_part` for sectioned scalar typed-column parts.
+`base` parts are complete insert/base spans, `delta` parts carry update rows
+layered over the older visible set, and `tombstone` parts are typed-row delete
+assets with no matching typed-column payload. GC/rewrite must enumerate these
+refs from manifest/control roots and snapshots; it must not scan row documents
+to discover typed-storage assets.
 
 Compatibility typed-row physical part payloads use the `TCPA` envelope:
 
@@ -552,7 +557,14 @@ payloads are intentionally rejected by current pre-alpha readers; rebuild old DB
 directories instead of migrating in place.
 
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
-images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. The durable
+images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. When a
+collection SortKey is fully owned by `typed_column_part` and uses supported
+ascending non-null bool/int64/string columns, the typed-column image descriptor
+SortKey and the v4 manifest part SortKey trailer must match exactly. String
+SortKey columns rely on part-local dictionary codes only when those codes are
+assigned in logical bytewise-ascending order and the dictionary metadata certifies
+that collation. Mixed-owner or unsupported SortKeys fall back to the synthetic
+`__treedb_primary_id` order and publish no typed-column SortKey trailer. The durable
 Issue `#1755` scalar path represents bool, int64, float32, double/float64, and
 string fields. Int64 typed-column fields use `delta_varint` by default; a
 non-null scalar `typed_column_part` field that explicitly sets
