@@ -10,11 +10,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
-// Quarantine: graph-specific adjacency-source storage is transitional
-// compatibility for the #1901 path, not the target architecture. Do not add new
-// storage features here; #1985 should salvage the raw_uint32_offsets_list
-// offsets/value mechanics under a generic uint32_list primitive, and #1986/#1988
-// should layer vector-index state/search above that primitive.
+// Quarantine: graph-specific adjacency-source storage is legacy compatibility
+// for old column_graph assets and explicit tests, not the target architecture.
+// New graph builds must publish vector-index state uint32_list assets instead;
+// do not add storage features here. Reuse only the generic raw_uint32_offsets_list
+// mechanics through the uint32_list path.
 const (
 	columnVectorGraphLayer0AdjacencySourceSchema     = "column_graph_layer0_adjacency/raw_uint32_offsets_list/v1"
 	columnVectorGraphAdjacencyLayerSourceSchema      = "column_graph_adjacency_layer/raw_uint32_offsets_list/v1"
@@ -636,10 +636,6 @@ func validateColumnVectorGraphAdjacencySourceMatchesGraph(graph columnVectorGrap
 		return fmt.Errorf("collections: column_graph adjacency layer %d source padding_bytes=%d", source.Layer, source.PaddingBytes)
 	}
 	return nil
-}
-
-func columnVectorGraphLayer0AdjacencySourceFromPrepared(graph columnVectorGraphManifestSnapshot, prepared columnVectorGraphPreparedLayer0AdjacencySource) columnVectorGraphLayer0AdjacencySourceSnapshot {
-	return columnVectorGraphAdjacencySourceFromPrepared(graph, prepared)
 }
 
 func columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph columnVectorGraphManifestSnapshot, prepared []columnVectorGraphPreparedAdjacencySource) []columnVectorGraphLayer0AdjacencySourceSnapshot {

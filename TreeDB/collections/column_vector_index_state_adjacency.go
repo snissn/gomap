@@ -394,7 +394,10 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	if len(seenAdjacencyLayers) == 0 {
 		return errors.New("collections: vector-index state missing adjacency uint32_list assets")
 	}
-	expectedLayers := graph.AdjacencyLayerCount
+	expectedLayers := state.AdjacencyLayerCount
+	if expectedLayers <= 0 {
+		expectedLayers = graph.AdjacencyLayerCount
+	}
 	if expectedLayers <= 0 {
 		expectedLayers = maxAdjacencyLayer + 1
 	}

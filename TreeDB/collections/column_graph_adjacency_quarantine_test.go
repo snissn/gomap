@@ -31,15 +31,16 @@ func TestColumnGraphAdjacencySourceQuarantineAuditDoc(t *testing.T) {
 	doc := readRepoText(t, "TreeDB/docs/spec/typed-column-uint32-list-adjacency-quarantine.md")
 
 	requireTextContains(t, "adjacency quarantine audit doc", doc,
-		"Status: audit/quarantine contract for the #1982 typed-column integer-list stack.",
+		"Status: #1989 quarantine/removal contract for the #1982 typed-column integer-list stack.",
+		"New `column_graph` rebuilds publish HNSW adjacency as vector-index state `uint32_list` typed-column assets",
 		"## Target model",
 		"ClickHouse `Array(T)` separation",
 		"`raw_uint32_offsets_list` is a physical encoding for generic `uint32_list`",
 		"## Inventory buckets",
 		"### Keep as low-level mechanics",
-		"### Generalize/rename in child issues",
+		"### Generalized primary path",
 		"### Quarantine/remove as graph-specific storage architecture",
-		"### Current transitional behavior",
+		"### Current #1989 behavior",
 		"## Remediation ownership",
 		"## Guardrails for new code",
 	)
@@ -61,6 +62,7 @@ func TestColumnGraphAdjacencySourceQuarantineAuditDoc(t *testing.T) {
 	requireTextContains(t, "adjacency quarantine audit doc", doc,
 		"#1984", "#1985", "#1986", "#1987", "#1988", "#1989", "#1990", "#1992",
 		"Do not add new storage features to `"+"Column"+"StoreValueAdjacencyList`",
+		"Do not publish graph-specific adjacency-source assets from primary rebuild",
 		"Do reuse the offsets/value split, validation, alignment, mappedresource",
 		"Do keep graph-specific validation",
 		"Do fail closed or ask callers to rebuild pre-alpha assets",
@@ -70,28 +72,28 @@ func TestColumnGraphAdjacencySourceQuarantineAuditDoc(t *testing.T) {
 func TestColumnGraphAdjacencySourceQuarantineMarkers(t *testing.T) {
 	markers := map[string][]string{
 		"TreeDB/collections/column_vector_graph_adjacency_source.go": {
-			"Quarantine: graph-specific adjacency-source storage is transitional",
-			"#1985 should salvage the raw_uint32_offsets_list",
+			"Quarantine: graph-specific adjacency-source storage is legacy compatibility",
+			"New graph builds must publish vector-index state uint32_list assets instead",
 		},
 		"TreeDB/collections/column_vector_graph_adjacency_direct_source.go": {
-			"Quarantine: graph-specific adjacency-source storage direct readers",
-			"not the target\n// uint32_list datastore primitive",
+			"Quarantine: graph-specific adjacency-source storage direct readers keep old",
+			"New graph builds/search use\n// vector-index state uint32_list assets",
 		},
 		"TreeDB/collections/column_vector_graph_manifest.go": {
 			"Quarantine: graph-specific adjacency-source storage refs embedded",
-			"#1986 owns moving\n// vector-index state refs",
+			"New graph builds leave\n// these fields empty",
 		},
 		"TreeDB/collections/column_store.go": {
 			"must not become the target variable-list datastore primitive",
-			"future generic uint32_list API",
+			"not the generic uint32_list API",
 		},
 		"TreeDB/collections/typed_column_adapter.go": {
 			"quarantined adjacency_list selector",
 			"generic uint32_list adapter path",
 		},
 		"TreeDB/internal/typeddecode/plan.go": {
-			"quarantined compatibility; #1985 owns the generic uint32_list direct-view plan",
-			"Graph-specific\n// naming is quarantined by #1983",
+			"quarantined\n// compatibility; generic uint32_list direct-view planning owns the reusable",
+			"Graph-specific\n// naming is quarantined by #1989",
 		},
 		"TreeDB/internal/typedcolumn/raw_uint32_offsets_list.go": {
 			"consumer-neutral storage\n// machinery",
@@ -111,34 +113,35 @@ func TestColumnGraphAdjacencySourceDocsPointToQuarantine(t *testing.T) {
 	docs := map[string][]string{
 		"TreeDB/docs/spec/README.md": {
 			"typed-column-uint32-list-adjacency-quarantine.md",
-			"separating reusable\n    `raw_uint32_offsets_list` mechanics from graph-specific adjacency-source",
+			"issue #1989 quarantine/removal contract",
+			"vector-index state\n    `uint32_list` adjacency on the primary path",
 		},
 		"TreeDB/docs/spec/typed-column-direct-view-alignment.md": {
-			"quarantined by #1983",
+			"quarantined by #1989",
 			"See `typed-column-uint32-list-adjacency-quarantine.md`",
-			"future generic `uint32_list` primitive",
+			"primary path is the physical split offsets/value\nmechanics behind generic `uint32_list` vector-index state",
 		},
 		"TreeDB/docs/spec/typed-column-adapter.md": {
-			"#1983 quarantines the graph-specific storage integration",
-			"generic `uint32_list` primitive",
-			"New storage work must route through\ngeneric `uint32_list` typed-column assets and vector-index state",
+			"#1989 quarantines graph-specific storage integration",
+			"primary list storage is generic `uint32_list`",
+			"New\nstorage work must route through generic `uint32_list` typed-column assets and\nvector-index state",
 		},
 		"TreeDB/docs/spec/typed-column-layout-capabilities.md": {
-			"#1983 quarantines\n  that graph-specific integration",
-			"generic\n  `uint32_list` primitive",
+			"#1989 quarantines that\n  graph-specific integration",
+			"primary variable-list storage is generic\n  `uint32_list`",
 		},
 		"TreeDB/docs/spec/typed-column-semantics.md": {
-			"#1983 quarantines that graph-specific logical integration",
+			"#1989 quarantines that graph-specific logical integration",
 			"first-class `uint32_list` semantics",
 		},
 		"TreeDB/docs/spec/storage-format.md": {
-			"Issue #1983 quarantines the\nconsumer-specific storage integration",
-			"Do not add new storage\nfeatures to this `TCGA`/`TCGL` path",
-			"Those adjacency-source refs are current #1983-quarantined\ncompatibility",
+			"Issue #1989 quarantines that\nconsumer-specific selector",
+			"New graph builds leave\nthese `TCGA`/`TCGL` fields empty",
+			"Old adjacency-source refs are #1989-quarantined\ncompatibility",
 		},
 		"TreeDB/docs/guides/vector-search-typed-column.md": {
-			"current quarantined `column_graph` adjacency direct sources",
-			"generic `uint32_list` assets owned by vector-index state",
+			"typed-column `uint32_list` assets owned by vector-index state",
+			"new graph builds should not publish those graph-specific source assets",
 		},
 	}
 

@@ -36,7 +36,7 @@ Recommended starting point for new performance work:
 | Grouped min/max/span aggregate metadata over typed-column parts | Landed scoped MVP for insert-only string-group + int64-value aggregate metadata when both columns are `typed_column_part` owners; metadata is derived and generation/schema/part-bound. | `BenchmarkAggregateMetadataTypedColumnPart1786`. |
 | Dense fixed-dimension `float32_vector` typed-column sections | Landed durable publication/reconstruction and direct-view tests. | `BenchmarkTypedColumnVectorDense...` under `TreeDB/internal/typedcolumn`. |
 | Dense fixed-degree `adjacency_list` typed-column sections | Landed durable publication/reconstruction for non-nullable owners with positive `adjacency_degree`; legacy dense direct-view reads remain fallback-only while explicit offsets-list variable adjacency uses the adapter direct-view path. | `BenchmarkTypedColumnAdjacencyDenseFallbackScan`, `BenchmarkTypedColumnAdapterVariableAdjacencyScan1917`. |
-| Vector graph typed-column reads | Landed native-reader path for `column_graph`; graph/search switching to authoritative typed-column adjacency remains separate work. | [#1782](https://github.com/snissn/gomap/issues/1782), `cmd/treedb_column_graph_demo`, and column graph benchmarks. |
+| Vector graph typed-column reads | Landed native-reader path for `column_graph`; HNSW adjacency now uses typed-column `uint32_list` vector-index state on the healthy path, with legacy row/source fallback quarantined. | [#1782](https://github.com/snissn/gomap/issues/1782), `cmd/treedb_column_graph_demo`, and column graph benchmarks. |
 
 ## Current caveats and linked work
 

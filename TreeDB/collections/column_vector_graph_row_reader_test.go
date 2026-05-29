@@ -577,7 +577,7 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeMetaManifestRowsAnd
 	for _, asset := range assets {
 		payloadBytes += asset.Bytes
 	}
-	stateRows := columnVectorGraphStateRowsForTest1987(rows, manifestRows, dims, graph.AdjacencyLayerCount)
+	stateRows := columnVectorGraphStateRowsForTest1987(rows, manifestRows, dims, columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(tb, rows))
 	records, manifestIdentity = appendCompleteVectorIndexStateForGraphTest1987(tb, d, "docs", *baseCfg, def, graph, records, manifestIdentity, ColumnPublishManifestEncodeInput{
 		Collection:        "docs",
 		ColumnStore:       *baseCfg,

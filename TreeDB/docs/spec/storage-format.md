@@ -585,8 +585,9 @@ dense `uint32` sections whose element count per row is `adjacency_degree`;
 that dense layout remains fallback/compatibility. Issue #1914 selected the #1901
 variable-list compatibility path as an explicit `ColumnStoreValueAdjacencyList`
 layout extension selected by `adjacency_layout: "uint32_offsets_list"` and the
-internal encoding `raw_uint32_offsets_list`. Issue #1983 quarantines the
-consumer-specific storage integration; the reusable physical mechanics are:
+internal encoding `raw_uint32_offsets_list`. Issue #1989 quarantines that
+consumer-specific selector; the primary `uint32_list` path uses the reusable
+physical mechanics:
 
 ```text
 offsets []uint64  // row_count + 1, little-endian
@@ -605,19 +606,21 @@ little-endian identity, and separate section metadata/checksums for offsets
 (8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
 fallback reader into owned Go slices; #1916 adds certified direct-view readers
 for paired offsets/value handles, and #1917 wires that variable adjacency reader
-through typed-column adapters. #1918 records a durable `column_graph` layer-0
-adjacency source as a `raw_uint32_offsets_list` typed-column asset during
-physical graph rebuilds, and later graph-source work extends manifests to record
-per-layer sources. Those `column_graph` source records are transitional
-compatibility, not the target datastore primitive; #1984 defines
-`uint32_list` semantics in `typed-column-uint32-list-semantics.md`, #1985 adds
-the generic runtime primitive implementation, and #1986/#1988 own vector-index
-state/search consumption.
+through typed-column adapters. #1918 recorded durable `column_graph` layer-0
+adjacency sources as `raw_uint32_offsets_list` typed-column assets during
+physical graph rebuilds, and later graph-source work extended manifests to record
+per-layer sources. Those `column_graph` source records are legacy compatibility,
+not the target datastore primitive; current primary adjacency uses `uint32_list`
+vector-index state. #1984 defines `uint32_list` semantics in
+`typed-column-uint32-list-semantics.md`, #1985 adds the generic runtime
+primitive implementation, and #1986/#1988 own vector-index state/search
+consumption.
 
 The `column_graph` manifest keeps the row graph asset ref as the canonical graph
-asset. The quarantined all-layer source metadata is an optional manifest trailer
-with magic `TCGL` and version `1`: it records `layer_count`, `source_count`, and
-then one `TCGA` v1 source record per layer in ascending layer order. Each source
+asset. The legacy all-layer source metadata is an optional compatibility
+manifest trailer with magic `TCGL` and version `1`: it records `layer_count`,
+`source_count`, and then one `TCGA` v1 source record per layer in ascending layer
+order. Each source
 record binds the source schema/column name, value type/encoding, layer number,
 source schema hash, row count, value count, offsets/value/padding byte
 accounting, source `tcs1_typed_column_part` ref, base-manifest identity, graph
@@ -625,15 +628,17 @@ schema hash, and graph-asset identity. `source_count` must equal `layer_count`;
 layer `i` must have `Layer=i`; layer 0 is also exposed through the legacy
 optional layer-0 field for older readers. Empty rows and layers are represented
 by equal adjacent offsets in the per-layer offsets array. Old graph manifests
-without the trailer remain row-asset fallback readable. Do not add new storage
-features to this `TCGA`/`TCGL` path; #1989 owns removal or compatibility
-isolation after typed-column `uint32_list` vector-index state is in use.
+without the trailer remain row-asset fallback readable. New graph builds leave
+these `TCGA`/`TCGL` fields empty and publish typed-column `uint32_list`
+vector-index state instead. Do not add new storage features to this
+`TCGA`/`TCGL` compatibility path.
 
 Issue #1986 adds a separate vector-index state control record under
 `\x06vector-index-state/v1/index/<index_name>` with magic `TVIS` and version
-`1`. The record stores index identity, row count, base manifest
-identity, and typed-column asset refs by logical type plus physical encoding.
-Its asset roles include adjacency (`uint32_list` over
+`2` (`1` is still accepted for pre-alpha compatibility). The record stores
+index identity, row count, base manifest identity, expected adjacency layer
+count, and typed-column asset refs by logical type plus physical encoding. Its
+asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
 optional normalized vectors (`float32_vector` over `raw_float32_vector`), and
 future row/document refs. The active manifest checksum includes the control
@@ -1023,14 +1028,12 @@ logical rebuild request only; it does not carry vector graph bytes, physical roo
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
 `column_graph` indexes, that path rebuilds vector, inverse-norm, and row-asset
-adjacency data into physical column assets, also publishes durable per-layer
-`raw_uint32_offsets_list` typed-column adjacency sources for validation/reopen
-coverage, and records vector-index control identity in the `TVIS` state record.
-Those adjacency-source refs are current #1983-quarantined
+adjacency data into physical column assets, publishes HNSW adjacency as
+`uint32_list` vector-index state, and records vector-index control identity in
+the `TVIS` state record. Old adjacency-source refs are #1989-quarantined
 compatibility. Current graph manifests may still contain row graph refs and
-quarantined layer-source trailer refs for compatibility; new derived-state refs
-belong in vector-index state. #1988/#1989 own search consumption and legacy
-isolation or removal. Replay outcomes that are
+legacy layer-source trailer refs for compatibility; new derived-state refs belong
+in vector-index state. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and

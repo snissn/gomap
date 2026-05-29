@@ -11,10 +11,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// Quarantine: graph-specific adjacency-source storage direct readers keep the
-// current column_graph compatibility path safe/readable. They are not the target
-// uint32_list datastore primitive; do not extend them beyond compatibility,
-// validation, and removal prep owned by #1988/#1989.
+// Quarantine: graph-specific adjacency-source storage direct readers keep old
+// column_graph compatibility paths safe/readable. New graph builds/search use
+// vector-index state uint32_list assets; do not extend legacy graph-source
+// opening beyond compatibility, validation, and safe fallback.
 const columnVectorGraphLayer0AdjacencySourceScopeID = "column-vector-graph-adjacency-source"
 
 type columnVectorGraphLayer0AdjacencySourceOutcome uint8
