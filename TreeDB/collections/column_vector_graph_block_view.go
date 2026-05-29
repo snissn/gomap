@@ -37,6 +37,7 @@ type columnVectorGraphSearchPlan struct {
 	blockViews         map[int]*columnVectorGraphBlockView
 	singleBlockView    *columnVectorGraphBlockView
 	ordinalRefs        []columnVectorGraphOrdinalRef
+	ordinalAssigned    []bool
 	ordinalRefsReady   bool
 	singleOrdinalRange bool
 	scoreSource        columnVectorGraphSearchSource
@@ -64,6 +65,7 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 		plan.reader = reader
 		plan.singleBlockView = nil
 		plan.ordinalRefs = plan.ordinalRefs[:0]
+		plan.ordinalAssigned = plan.ordinalAssigned[:0]
 		plan.ordinalRefsReady = false
 		plan.singleOrdinalRange = false
 	}
@@ -120,24 +122,44 @@ func (p *columnVectorGraphSearchPlan) prepareOrdinalRefs() error {
 		return nil
 	}
 	p.singleOrdinalRange = len(reader.ranges) == 1
+	rowCount := reader.totalRows
 	if p.singleOrdinalRange {
+		rowRange := reader.ranges[0]
+		if rowRange.assetOrdinal != 0 || rowRange.startOrdinal != 0 || rowRange.rowCount != rowCount {
+			return fmt.Errorf("collections: column_graph single ordinal range asset=%d start=%d rows=%d row_count=%d: %w", rowRange.assetOrdinal, rowRange.startOrdinal, rowRange.rowCount, rowCount, errColumnPhysicalRowOrdinalOutOfBounds)
+		}
 		p.ordinalRefs = p.ordinalRefs[:0]
+		p.ordinalAssigned = p.ordinalAssigned[:0]
 		p.ordinalRefsReady = true
 		return nil
 	}
-	rowCount := reader.totalRows
 	if cap(p.ordinalRefs) < rowCount {
 		p.ordinalRefs = make([]columnVectorGraphOrdinalRef, rowCount)
 	} else {
 		p.ordinalRefs = p.ordinalRefs[:rowCount]
 	}
+	if cap(p.ordinalAssigned) < rowCount {
+		p.ordinalAssigned = make([]bool, rowCount)
+	} else {
+		p.ordinalAssigned = p.ordinalAssigned[:rowCount]
+		clear(p.ordinalAssigned)
+	}
 	for _, rowRange := range reader.ranges {
 		end := rowRange.startOrdinal + rowRange.rowCount
 		if rowRange.startOrdinal < 0 || rowRange.rowCount < 0 || end < rowRange.startOrdinal || end > rowCount {
-			return fmt.Errorf("collections: column_graph ordinal range asset=%d start=%d rows=%d outside row_count=%d", rowRange.assetOrdinal, rowRange.startOrdinal, rowRange.rowCount, rowCount)
+			return fmt.Errorf("collections: column_graph ordinal range asset=%d start=%d rows=%d outside row_count=%d: %w", rowRange.assetOrdinal, rowRange.startOrdinal, rowRange.rowCount, rowCount, errColumnPhysicalRowOrdinalOutOfBounds)
 		}
 		for ordinal := rowRange.startOrdinal; ordinal < end; ordinal++ {
+			if p.ordinalAssigned[ordinal] {
+				return fmt.Errorf("collections: column_graph ordinal=%d assigned by overlapping physical ranges: %w", ordinal, errColumnPhysicalRowOrdinalOutOfBounds)
+			}
+			p.ordinalAssigned[ordinal] = true
 			p.ordinalRefs[ordinal] = columnVectorGraphOrdinalRef{assetOrdinal: rowRange.assetOrdinal, rowIndex: ordinal - rowRange.startOrdinal}
+		}
+	}
+	for ordinal, assigned := range p.ordinalAssigned {
+		if !assigned {
+			return fmt.Errorf("collections: column_graph ordinal=%d not covered by physical ranges: %w", ordinal, errColumnPhysicalRowOrdinalOutOfBounds)
 		}
 	}
 	p.ordinalRefsReady = true
