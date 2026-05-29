@@ -178,7 +178,7 @@ func TestColumnPhysicalJSONBenchTypedColumnPartStoresFullQ2Columns1947(t *testin
 	if !columnPhysicalJSONBenchQ2CountsEqualP0(got, want) {
 		t.Fatalf("q2 counts/distinct=%v want %v groups=%+v", got, want, result.Groups)
 	}
-	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.PredicateCount != 2 {
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.PredicateCount != len(q2.Predicates) {
 		t.Fatalf("q2 diagnostics=%+v want typed-column source and real predicates", result.Diagnostics)
 	}
 }
