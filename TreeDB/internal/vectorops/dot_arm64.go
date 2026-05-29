@@ -4,7 +4,7 @@ package vectorops
 
 import axiomsimd "github.com/axiomhq/simd-go"
 
-const dotFloat32Implementation = "simd_axiomhq"
+const dotFloat32Implementation = "simd_axiomhq_simdgo"
 
 // DotFloat32 returns the float32 dot product over the shared prefix of left and
 // right using the arm64 SIMD implementation. Callers must pass validated
