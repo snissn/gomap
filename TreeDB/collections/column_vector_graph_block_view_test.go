@@ -155,6 +155,11 @@ func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
 	defer func() { _ = reader.Close() }()
+	if reader.invNormSource != nil {
+		_ = reader.invNormSource.Close()
+		reader.invNormSource = nil
+		reader.invNormStateUnavailable = true
+	}
 	plan, err := newColumnVectorGraphSearchPlan(reader)
 	if err != nil {
 		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)

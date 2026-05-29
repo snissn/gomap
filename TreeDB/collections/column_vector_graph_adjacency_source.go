@@ -168,53 +168,9 @@ func prepareColumnVectorGraphAdjacencySourcePayloads(assetRootDir, collection st
 }
 
 func buildColumnVectorGraphAdjacencyLayerLists(rows []columnVectorGraphAssetRow) ([]typedcolumn.RawUint32OffsetsList, error) {
-	maxLayer := 0
-	for rowIdx := range rows {
-		rowMaxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].Adjacency)
-		if err != nil {
-			return nil, fmt.Errorf("collections: column_graph adjacency row %d max layer: %w", rowIdx, err)
-		}
-		if rowMaxLayer > maxLayer {
-			maxLayer = rowMaxLayer
-		}
-	}
-	layers := make([]typedcolumn.RawUint32OffsetsList, maxLayer+1)
-	for layer := range layers {
-		layers[layer].Rows = len(rows)
-		layers[layer].Offsets = make([]uint64, len(rows)+1)
-	}
-	for rowIdx := range rows {
-		adjacency := rows[rowIdx].Adjacency
-		if !columnVectorGraphAdjacencyIsLayered(adjacency) {
-			if len(adjacency) > math.MaxInt-len(layers[0].Values) {
-				return nil, fmt.Errorf("collections: column_graph adjacency layer 0 values overflow int")
-			}
-			layers[0].Values = append(layers[0].Values, adjacency...)
-		} else {
-			rowMaxLayer := int(adjacency[1])
-			pos := 2
-			for layer := 0; layer <= rowMaxLayer; layer++ {
-				if pos >= len(adjacency) {
-					return nil, fmt.Errorf("collections: column_graph adjacency row %d layer=%d missing count", rowIdx, layer)
-				}
-				count := int(adjacency[pos])
-				pos++
-				if count > len(adjacency)-pos {
-					return nil, fmt.Errorf("collections: column_graph adjacency row %d layer=%d count=%d exceeds remaining=%d", rowIdx, layer, count, len(adjacency)-pos)
-				}
-				if count > math.MaxInt-len(layers[layer].Values) {
-					return nil, fmt.Errorf("collections: column_graph adjacency layer %d values overflow int", layer)
-				}
-				layers[layer].Values = append(layers[layer].Values, adjacency[pos:pos+count]...)
-				pos += count
-			}
-			if pos != len(adjacency) {
-				return nil, fmt.Errorf("collections: column_graph adjacency row %d trailing adjacency values=%d", rowIdx, len(adjacency)-pos)
-			}
-		}
-		for layer := range layers {
-			layers[layer].Offsets[rowIdx+1] = uint64(len(layers[layer].Values))
-		}
+	layers, err := buildColumnVectorIndexStateAdjacencyLists(rows)
+	if err != nil {
+		return nil, fmt.Errorf("collections: column_graph adjacency source layer lists: %w", err)
 	}
 	return layers, nil
 }
@@ -741,6 +697,18 @@ func columnVectorGraphStorageBytes(graph columnVectorGraphManifestSnapshot) int6
 	}
 	if graph.Layer0AdjacencySource.Present {
 		bytes += graph.Layer0AdjacencySource.AssetBytes
+	}
+	return bytes
+}
+
+func columnVectorGraphStorageBytesWithState(graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) int64 {
+	return columnVectorGraphStorageBytes(graph) + columnVectorIndexStateAssetsStorageBytes(state)
+}
+
+func columnVectorIndexStateAssetsStorageBytes(state columnVectorIndexStateSnapshot) int64 {
+	var bytes int64
+	for _, asset := range state.Assets {
+		bytes += asset.AssetBytes
 	}
 	return bytes
 }

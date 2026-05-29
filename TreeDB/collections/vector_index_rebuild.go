@@ -753,6 +753,14 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	} else {
 		graph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceFromPrepared(graph, prepared.Layer0AdjacencySource)
 	}
+	statePartID := invNormPartID
+	if preparedInvNorm.Present {
+		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, preparedInvNorm.Ref.PartID)
+	}
+	stateAdjacencyAssets, err := prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection, cfg, def, manifest.Generation, statePartID, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -763,6 +771,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
 	state := columnVectorIndexStateSnapshotFromGraph(graph)
+	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(stateAdjacencyAssets)
 	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
 		state.Assets = append(state.Assets, invNormAsset)
 	}

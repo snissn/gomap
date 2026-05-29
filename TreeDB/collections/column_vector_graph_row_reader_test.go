@@ -568,6 +568,27 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeMetaManifestRowsAnd
 	}
 	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	records, manifestIdentity := testColumnGraphManifestRecordsWithBaseAssetsV2B(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, manifestRows, assets)
+	graph := graphManifestFromRecords1918(tb, records, def)
+	operation := ColumnPublishOperationInsert
+	if len(assets) != 0 {
+		operation = ColumnPublishOperationUpdate
+	}
+	var payloadBytes int64
+	for _, asset := range assets {
+		payloadBytes += asset.Bytes
+	}
+	stateRows := columnVectorGraphStateRowsForTest1987(rows, manifestRows, dims, graph.AdjacencyLayerCount)
+	records, manifestIdentity = appendCompleteVectorIndexStateForGraphTest1987(tb, d, "docs", *baseCfg, def, graph, records, manifestIdentity, ColumnPublishManifestEncodeInput{
+		Collection:        "docs",
+		ColumnStore:       *baseCfg,
+		Operation:         operation,
+		AppliedCommandLSN: 1,
+		Prepared: ColumnPublishPreparedAssets{
+			Assets:             append([]ColumnPreparedAsset(nil), assets...),
+			RowCount:           manifestRows,
+			ColumnPayloadBytes: payloadBytes,
+		},
+	}, stateRows)
 	meta := CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{

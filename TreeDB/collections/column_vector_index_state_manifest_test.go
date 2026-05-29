@@ -191,7 +191,7 @@ func TestColumnVectorIndexStatePublishedReopenAndFailClosed1986(t *testing.T) {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
-	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
 	stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name)
 	if !ok {
 		_ = d.Close()
@@ -207,10 +207,11 @@ func TestColumnVectorIndexStatePublishedReopenAndFailClosed1986(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("state=%+v does not match graph=%+v", state, graph)
 	}
+	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, d, "docs", cfg, def, graph, state, loadColumnGraphRebuildScannedRowsOnly1987(t, d, "docs", def))
 	asset, ok := findColumnVectorGraphInvNormStateAsset(state)
-	if !ok || len(state.Assets) != 1 || asset.RowCount != len(rows) || asset.LogicalType != columnVectorIndexStateLogicalTypeFloat32 || asset.PhysicalEncoding != columnVectorIndexStateEncodingRawFloat32 {
+	if !ok || asset.RowCount != len(rows) || asset.LogicalType != columnVectorIndexStateLogicalTypeFloat32 || asset.PhysicalEncoding != columnVectorIndexStateEncodingRawFloat32 {
 		_ = d.Close()
-		t.Fatalf("rebuilt vector-index state assets=%+v want one raw_float32 inverse-norm state asset", state.Assets)
+		t.Fatalf("rebuilt vector-index state assets=%+v want raw_float32 inverse-norm state asset", state.Assets)
 	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
@@ -239,8 +240,8 @@ func TestColumnGraphVectorIndexStatusValidatesVectorIndexState1986(t *testing.T)
 		t.Fatalf("open db: %v", err)
 	}
 	defer func() { _ = d.Close() }()
-	ctx := makeColumnVectorIndexStateStatusContextWithDB1986(t, d)
-	baseState := columnVectorIndexStateSnapshotFromGraph(ctx.graph)
+	ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
+	baseState := ctx.state
 	meta := CollectionMeta{
 		Name:          "docs",
 		Options:       CollectionOptions{ColumnStore: testColumnGraphBaseColumnStoreConfigV2A()},
@@ -263,7 +264,11 @@ func TestColumnGraphVectorIndexStatusValidatesVectorIndexState1986(t *testing.T)
 
 	t.Run("state_row_count_mismatch", func(t *testing.T) {
 		state := baseState
+		state.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), baseState.Assets...)
 		state.RowCount++
+		for i := range state.Assets {
+			state.Assets[i].RowCount = state.RowCount
+		}
 		records, identity := appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, state)
 		publishColumnGraphCatalogForTestV2A(t, d, meta, identity, records)
 		col, err := NewCollectionManager(d).OpenCollection("docs")
