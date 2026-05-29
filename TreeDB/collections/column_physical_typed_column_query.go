@@ -599,7 +599,7 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) groups(req ColumnPhysicalQue
 			if count == 0 {
 				continue
 			}
-			out = append(out, ColumnPhysicalQueryGroup{Key: columnPhysicalQueryHourKey(hour), Count: count})
+			out = append(out, ColumnPhysicalQueryGroup{Key: columnPhysicalQueryHourKey(hour), Hour: hour, Count: count})
 		}
 	case ColumnPhysicalQueryGroupHourCount:
 		for key, byHour := range a.groupHours {
