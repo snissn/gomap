@@ -373,6 +373,9 @@ func (s *ColumnPartScanner) ScanProjectedRowsInto(dst map[string][]int64, column
 	if s.part == nil {
 		return ProjectedScanResult{}, errors.New("typedcolumn: nil part scanner")
 	}
+	if rows == nil {
+		return s.ScanProjectedInto(dst, columns)
+	}
 	projection, err := s.validateProjection(columns)
 	if err != nil {
 		return ProjectedScanResult{}, err

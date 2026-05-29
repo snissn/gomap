@@ -151,8 +151,11 @@ Current production support:
   order and do not advertise typed-column sort metadata
 - typed-column-owned unsupported, nullable, descending, or wider-than-8 sort-key
   layouts fail closed until their ordering semantics are specified
-- sorted query pruning/early-stop remains deferred to the mark/planner/kernel
-  work; current production physical queries still full-scan validated parts
+- production typed-column physical queries validate typed-column part marks and
+  use equality sorted-prefix pruning for supported `SortKey` predicates, with
+  explicit diagnostics and fallback reasons; compatibility dictionary-code/
+  int64-value asset query paths and JSONBench per-column asset paths still do not
+  consume typed-column part marks
 
 Important code:
 
