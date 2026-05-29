@@ -289,11 +289,6 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars
 		return columnPhysicalScanSnapshotView{}, nil, err
 	}
 	collectionName := catalog.meta.Name
-	rootName := catalog.columnManifestRootName
-	if rootName == "" {
-		rootName = collectionColumnManifestRootName(collectionName)
-	}
-	rootID := catalog.rootID(rootName)
 	cfgPtr := catalog.meta.Options.ColumnStore
 	columnStoreEnabled := cfgPtr != nil
 	var cfg ColumnStoreConfig
@@ -302,6 +297,14 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewWithContextAndSidecars
 		// only read the config, so a shallow copy avoids per-scan slice clones.
 		cfg = *cfgPtr
 	}
+	rootName := catalog.columnManifestRootName
+	if rootName == "" && cfg.ManifestRoot != nil {
+		rootName = cfg.ManifestRoot.Name
+	}
+	if rootName == "" {
+		rootName = collectionColumnManifestRootName(collectionName)
+	}
+	rootID := catalog.rootID(rootName)
 
 	view, err := c.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(snap, catalog, collectionName, rootID, cfg, columnStoreEnabled, filter)
 	if err != nil {
