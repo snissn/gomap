@@ -93,6 +93,13 @@ type typedColumnAdapterResourceReader struct {
 	AllowHeapCopy bool
 }
 
+type typedColumnAdapterImageSummary struct {
+	PartID       uint64
+	Rows         int
+	Sections     int
+	SectionBytes uint64
+}
+
 func typedColumnAdapterTypeMatrix() []typedColumnAdapterTypeMapping {
 	return []typedColumnAdapterTypeMapping{
 		{ValueType: ColumnStoreValueBool, Status: typedColumnAdapterRepresented, ColumnType: typedcolumn.ColumnTypeBool, Encoding: typedcolumn.EncodingBoolBitpackRLE},
@@ -466,11 +473,26 @@ func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte)
 }
 
 func typedColumnAdapterPartFromBytesForReconstruction(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
+	part, _, err := typedColumnAdapterPartFromBytesForReconstructionWithSummary(opts, raw)
+	return part, err
+}
+
+func typedColumnAdapterPartFromBytesForReconstructionWithSummary(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, typedColumnAdapterImageSummary, error) {
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
-		return nil, err
+		return nil, typedColumnAdapterImageSummary{}, err
 	}
-	return typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+	part, err := typedColumnAdapterPartFromImageWithoutRowLocators(opts, image)
+	if err != nil {
+		return nil, typedColumnAdapterImageSummary{}, err
+	}
+	sectionBytes := uint64(0)
+	for _, section := range image.Sections {
+		if section.Length > 0 {
+			sectionBytes += uint64(section.Length)
+		}
+	}
+	return part, typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: sectionBytes}, nil
 }
 
 func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {

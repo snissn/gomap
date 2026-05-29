@@ -1842,19 +1842,22 @@ func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
 	assertJSONEqualM13C(t, afterGC, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`))
 }
 
-func TestTypedColumnPhysicalQueryTypedColumnFieldsFailClosed(t *testing.T) {
-	runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t)
+func TestTypedColumnPhysicalQueryTypedColumnFieldsSucceed(t *testing.T) {
+	runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t)
 }
 
-func TestTypedColumnPhysicalQueryFailsClosedForColumnPartFields(t *testing.T) {
-	runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t)
-}
-
-func runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t *testing.T) {
+func runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t *testing.T) {
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
-	if _, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); !errors.Is(err, ErrColumnQueryPlanUnsupported) {
-		t.Fatalf("RunColumnPhysicalQuery typed-column group err=%v want ErrColumnQueryPlanUnsupported", err)
+	typedResult, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery typed-column group: %v", err)
+	}
+	if typedResult.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || typedResult.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone || typedResult.Diagnostics.TypedColumnPartSections == 0 || typedResult.Diagnostics.TypedColumnPartSectionBytes == 0 {
+		t.Fatalf("typed-column group diagnostics=%+v want typed_column_part_section without fallback", typedResult.Diagnostics)
+	}
+	if len(typedResult.Groups) != 1 || typedResult.Groups[0].Key != "like" || typedResult.Groups[0].Count != 1 {
+		t.Fatalf("typed-column group result=%+v want one like group with count 1", typedResult.Groups)
 	}
 	result, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"})
 	if err != nil {

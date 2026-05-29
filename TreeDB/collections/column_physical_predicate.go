@@ -29,9 +29,21 @@ type ColumnPhysicalQueryPredicate struct {
 }
 
 type columnPhysicalQueryPredicateSpec struct {
-	column string
-	kind   ColumnPhysicalQueryPredicateKind
-	values []string
+	column     string
+	kind       ColumnPhysicalQueryPredicateKind
+	values     []string
+	valueBytes [][]byte
+}
+
+func columnPhysicalQueryPredicateValueBytes(values []string) [][]byte {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(values))
+	for i, value := range values {
+		out[i] = []byte(value)
+	}
+	return out
 }
 
 type columnDictionaryPredicateAsset struct {
