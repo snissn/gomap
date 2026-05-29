@@ -1364,7 +1364,7 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencyState19
 	}
 	identity := ColumnManifestIdentity{Generation: generation, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	records, manifestIdentity := testColumnGraphManifestRecordsFromSnapshot1920(tb, *baseCfg, graph, identity)
-	stateRows := columnVectorGraphStateRowsForTest1987(rows, graph.RowCount, def.Dimensions, graph.AdjacencyLayerCount)
+	stateRows := columnVectorGraphStateRowsForTest1987(rows, graph.RowCount, def.Dimensions, columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(tb, rows))
 	records, manifestIdentity = appendCompleteVectorIndexStateForGraphTest1987(tb, d, "docs", *baseCfg, def, graph, records, manifestIdentity, columnVectorIndexStateChecksumInput1986(*baseCfg), stateRows)
 	meta := CollectionMeta{
 		Name: "docs",

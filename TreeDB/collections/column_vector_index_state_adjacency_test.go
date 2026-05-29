@@ -324,6 +324,36 @@ func nextColumnVectorGraphPartIDAfterGraphSnapshot1987(graph columnVectorGraphMa
 	return next
 }
 
+func columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(tb testing.TB, rows []columnVectorGraphAssetRow) int {
+	tb.Helper()
+	expectedLayers := 1
+	for rowIdx := range rows {
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].Adjacency)
+		if err != nil {
+			tb.Fatalf("asset row %d adjacency max layer: %v", rowIdx, err)
+		}
+		if maxLayer+1 > expectedLayers {
+			expectedLayers = maxLayer + 1
+		}
+	}
+	return expectedLayers
+}
+
+func columnVectorGraphExpectedAdjacencyLayerCountFromScannedRows1989(tb testing.TB, rows []columnGraphRebuildScannedRowV2A) int {
+	tb.Helper()
+	expectedLayers := 1
+	for rowIdx := range rows {
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].adjacency)
+		if err != nil {
+			tb.Fatalf("scanned row %d adjacency max layer: %v", rowIdx, err)
+		}
+		if maxLayer+1 > expectedLayers {
+			expectedLayers = maxLayer + 1
+		}
+	}
+	return expectedLayers
+}
+
 func columnVectorGraphStateRowsForTest1987(rows []columnVectorGraphAssetRow, rowCount, dims, layerCount int) []columnVectorGraphAssetRow {
 	if rowCount < 0 {
 		rowCount = 0
@@ -497,11 +527,7 @@ func assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(tb testing.TB, 
 	assets := columnVectorIndexStateAdjacencyAssetsByLayer1987(tb, state)
 	expectedLayers := graph.AdjacencyLayerCount
 	if expectedLayers <= 0 {
-		for layer := range assets {
-			if layer+1 > expectedLayers {
-				expectedLayers = layer + 1
-			}
-		}
+		expectedLayers = columnVectorGraphExpectedAdjacencyLayerCountFromScannedRows1989(tb, rows)
 	}
 	if len(assets) != expectedLayers || expectedLayers == 0 {
 		tb.Fatalf("state adjacency assets=%d expected layers=%d graph legacy layers=%d", len(assets), expectedLayers, graph.AdjacencyLayerCount)
