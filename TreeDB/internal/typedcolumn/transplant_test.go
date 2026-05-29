@@ -414,6 +414,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
+		// #1949 is the scoped production typed-column SortKey mark-pruning planner
+		// that consumes validated section marks without publishing a new data plane.
+		filepath.Clean(filepath.Join(collectionsDir, "column_physical_sortkey_pruning.go")): {},
 	}
 	fset := token.NewFileSet()
 	err := filepath.WalkDir(collectionsDir, func(path string, d fs.DirEntry, walkErr error) error {
@@ -434,7 +437,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph)", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state)", path)
 		}
 		return nil
 	})

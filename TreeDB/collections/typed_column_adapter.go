@@ -791,6 +791,53 @@ func (p *typedColumnAdapterPart) scanDecodedValuesSelectedForReconstruction(sele
 	return p.scanDecodedValuesSelectedWithPrimaryLocator(selected, true)
 }
 
+func (p *typedColumnAdapterPart) scanDecodedValuesSelectedRows(selected []bool, rows []int) (typedColumnPartDecodedValues, typedcolumn.PartScanDiagnostics, error) {
+	if p == nil || p.Part == nil {
+		return typedColumnPartDecodedValues{}, typedcolumn.PartScanDiagnostics{}, errors.New("collections: nil typed-column adapter part")
+	}
+	if selected != nil && len(selected) != len(p.Columns) {
+		return typedColumnPartDecodedValues{}, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter projection columns=%d want %d", len(selected), len(p.Columns))
+	}
+	selectedRowCount := len(rows)
+	if rows == nil {
+		selectedRowCount = p.Part.Descriptor.RowCount
+	}
+	values := make([][]columnDeclaredValue, len(p.Columns))
+	var outDiag typedcolumn.PartScanDiagnostics
+	for i, column := range p.Columns {
+		if selected != nil && !selected[i] {
+			continue
+		}
+		columnValues, diag, err := p.scanColumnValuesRows(column.Definition.Name, rows)
+		if err != nil {
+			return typedColumnPartDecodedValues{}, outDiag, err
+		}
+		if len(columnValues) != selectedRowCount {
+			return typedColumnPartDecodedValues{}, outDiag, fmt.Errorf("collections: typed-column adapter column %q rows=%d want selected rows=%d", column.Definition.Name, len(columnValues), selectedRowCount)
+		}
+		values[i] = columnValues
+		if diag.GranulesDecoded > outDiag.GranulesDecoded {
+			outDiag.GranulesDecoded = diag.GranulesDecoded
+		}
+		outDiag.BlocksDecoded += diag.BlocksDecoded
+		outDiag.BytesDecoded += diag.BytesDecoded
+	}
+	outDiag.RowsScanned = selectedRowCount
+	outDiag.ColumnsProjected = 0
+	for _, selectedColumn := range selected {
+		if selectedColumn {
+			outDiag.ColumnsProjected++
+		}
+	}
+	if selected == nil {
+		outDiag.ColumnsProjected = len(p.Columns)
+	}
+	if p.Part != nil {
+		outDiag.GranulesConsidered = len(p.Part.Descriptor.Granules)
+	}
+	return typedColumnPartDecodedValues{Values: values}, outDiag, nil
+}
+
 func (p *typedColumnAdapterPart) scanDecodedValuesSelectedWithPrimaryLocator(selected []bool, includePrimaryLocator bool) (typedColumnPartDecodedValues, error) {
 	if p == nil || p.Part == nil {
 		return typedColumnPartDecodedValues{}, errors.New("collections: nil typed-column adapter part")
@@ -972,6 +1019,47 @@ func (p *typedColumnAdapterPart) scanColumnValues(columnName string) ([]columnDe
 		out[i] = value
 	}
 	return out, nil
+}
+
+func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []int) ([]columnDeclaredValue, typedcolumn.PartScanDiagnostics, error) {
+	if p == nil || p.Part == nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, errors.New("collections: nil typed-column adapter part")
+	}
+	column, ok := p.columnByName(columnName)
+	if !ok {
+		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter missing column %q", columnName)
+	}
+	if rows != nil && len(rows) == 0 {
+		return []columnDeclaredValue{}, typedcolumn.PartScanDiagnostics{RowsScanned: 0, ColumnsProjected: 1, GranulesConsidered: len(p.Part.Descriptor.Granules)}, nil
+	}
+	if column.Field.Nullable {
+		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: typed-column adapter selected-row scan does not support nullable column %q", ErrColumnQueryPlanUnsupported, columnName)
+	}
+	switch column.Field.ValueType {
+	case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
+	default:
+		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: typed-column adapter selected-row scan does not support value_type=%q column %q", ErrColumnQueryPlanUnsupported, column.Field.ValueType, columnName)
+	}
+	var scan typedcolumn.ProjectedScanResult
+	var err error
+	if rows == nil {
+		scan, err = p.Part.NewScanner().ScanProjected([]string{column.Definition.Name})
+	} else {
+		scan, err = p.Part.NewScanner().ScanProjectedRows([]string{column.Definition.Name}, rows)
+	}
+	if err != nil {
+		return nil, typedcolumn.PartScanDiagnostics{}, err
+	}
+	encoded := scan.Columns[column.Definition.Name]
+	out := make([]columnDeclaredValue, len(encoded))
+	for i, raw := range encoded {
+		value, err := decodeTypedColumnAdapterValue(column, raw)
+		if err != nil {
+			return nil, scan.Diagnostics, fmt.Errorf("collections: typed-column adapter selected row %d column %q: %w", i, columnName, err)
+		}
+		out[i] = value
+	}
+	return out, scan.Diagnostics, nil
 }
 
 func (p *typedColumnAdapterPart) scanNativeFloat32ColumnValues(column typedColumnAdapterColumn) ([]columnDeclaredValue, error) {

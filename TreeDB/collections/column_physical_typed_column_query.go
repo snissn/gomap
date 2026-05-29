@@ -19,27 +19,47 @@ type columnTypedColumnPhysicalQueryPlan struct {
 	DistinctColumn       string
 	PredicateSpecs       []columnPhysicalQueryPredicateSpec
 	SortKey              []ColumnSortKey
+	SortKeyPrefix        columnTypedColumnSortKeyPrefixPlan
 }
 
 type columnTypedColumnPhysicalQueryPart struct {
-	Ref          columnManifestAssetRefForScan
-	PhysicalRef  columnManifestAssetRefForScan
-	Values       map[string][]columnDeclaredValue
-	Rows         int
-	Bytes        int64
-	Sections     int
-	SectionBytes uint64
+	Ref                       columnManifestAssetRefForScan
+	PhysicalRef               columnManifestAssetRefForScan
+	Values                    map[string][]columnDeclaredValue
+	RowIndexes                []int
+	Rows                      int
+	Bytes                     int64
+	Sections                  int
+	SectionBytes              uint64
+	GranulesConsidered        int
+	GranulesDecoded           int
+	GranulesSkipped           int
+	DecodedBlocks             int
+	DecodedPayloadBytes       uint64
+	SortKeyMarkChecks         int
+	SortKeyMarkMatches        int
+	SortKeyMarkSkips          int
+	SortKeyMarkFallbackReason string
 }
 
 type columnTypedColumnPhysicalQueryRunner struct {
-	plan                   columnTypedColumnPhysicalQueryPlan
-	parts                  []columnTypedColumnPhysicalQueryPart
-	assetBytes             int64
-	sections               int
-	sectionBytes           uint64
-	segmentFileCacheHits   uint64
-	segmentFileCacheMisses uint64
-	resultGroups           []ColumnPhysicalQueryGroup
+	plan                      columnTypedColumnPhysicalQueryPlan
+	parts                     []columnTypedColumnPhysicalQueryPart
+	assetBytes                int64
+	sections                  int
+	sectionBytes              uint64
+	granulesConsidered        int
+	granulesDecoded           int
+	granulesSkipped           int
+	decodedBlocks             int
+	decodedPayloadBytes       uint64
+	sortKeyMarkChecks         int
+	sortKeyMarkMatches        int
+	sortKeyMarkSkips          int
+	sortKeyMarkFallbackReason string
+	segmentFileCacheHits      uint64
+	segmentFileCacheMisses    uint64
+	resultGroups              []ColumnPhysicalQueryGroup
 }
 
 func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
@@ -130,6 +150,15 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		runner.assetBytes += part.Bytes
 		runner.sections += part.Sections
 		runner.sectionBytes += part.SectionBytes
+		runner.granulesConsidered += part.GranulesConsidered
+		runner.granulesDecoded += part.GranulesDecoded
+		runner.granulesSkipped += part.GranulesSkipped
+		runner.decodedBlocks += part.DecodedBlocks
+		runner.decodedPayloadBytes += part.DecodedPayloadBytes
+		runner.sortKeyMarkChecks += part.SortKeyMarkChecks
+		runner.sortKeyMarkMatches += part.SortKeyMarkMatches
+		runner.sortKeyMarkSkips += part.SortKeyMarkSkips
+		runner.sortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(runner.sortKeyMarkFallbackReason, part.SortKeyMarkFallbackReason)
 		runner.parts = append(runner.parts, part)
 	}
 	if len(runner.parts) == 0 && len(view.AssetRefs) != 0 {
@@ -224,6 +253,7 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPlan{}, true, err
 	}
+	plan.SortKeyPrefix = planColumnTypedColumnSortKeyPrefix(cfg, sortKey, req)
 	plan.Fields = fields
 	plan.Selected = selected
 	plan.PredicateSpecs = predicateSpecs
@@ -416,12 +446,19 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 	if err := validateTypedColumnPhysicalQuerySortMetadata(plan.SortKey, typedRef.SortKey, summary.SortKey); err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
-	decoded, err := adapterPart.scanDecodedValuesSelected(plan.Selected)
+	pruned, err := plan.SortKeyPrefix.prunePartRows(adapterPart)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
-	if len(decoded.PrimaryIDs) != summary.Rows {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part decoded primary rows=%d want %d", len(decoded.PrimaryIDs), summary.Rows)
+	selectedRows := pruned.Rows
+	if pruned.AllRows {
+		selectedRows = nil
+	} else if selectedRows == nil {
+		selectedRows = []int{}
+	}
+	decoded, scanDiag, err := adapterPart.scanDecodedValuesSelectedRows(plan.Selected, selectedRows)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
 	}
 	values := make(map[string][]columnDeclaredValue, len(plan.ProjectedColumns))
 	for idx, field := range plan.Fields {
@@ -433,15 +470,37 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 			name = field.Path
 		}
 		columnValues := decoded.Values[idx]
-		if len(columnValues) != summary.Rows {
-			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part column %q decoded rows=%d want %d", name, len(columnValues), summary.Rows)
+		wantRows := len(pruned.Rows)
+		if pruned.AllRows {
+			wantRows = summary.Rows
+		}
+		if len(columnValues) != wantRows {
+			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part column %q decoded rows=%d want selected rows=%d", name, len(columnValues), wantRows)
 		}
 		values[name] = columnValues
 		if field.Path != "" && field.Path != name {
 			values[field.Path] = columnValues
 		}
 	}
-	return columnTypedColumnPhysicalQueryPart{Ref: typedRef, PhysicalRef: physical, Values: values, Rows: summary.Rows, Bytes: int64(len(raw)), Sections: summary.Sections, SectionBytes: summary.SectionBytes}, nil
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                       typedRef,
+		PhysicalRef:               physical,
+		Values:                    values,
+		RowIndexes:                selectedRows,
+		Rows:                      summary.Rows,
+		Bytes:                     int64(len(raw)),
+		Sections:                  summary.Sections,
+		SectionBytes:              summary.SectionBytes,
+		GranulesConsidered:        pruned.Considered,
+		GranulesDecoded:           scanDiag.GranulesDecoded,
+		GranulesSkipped:           pruned.Skips,
+		DecodedBlocks:             scanDiag.BlocksDecoded,
+		DecodedPayloadBytes:       uint64(scanDiag.BytesDecoded),
+		SortKeyMarkChecks:         pruned.Checks,
+		SortKeyMarkMatches:        pruned.Matches,
+		SortKeyMarkSkips:          pruned.Skips,
+		SortKeyMarkFallbackReason: pruned.FallbackReason,
+	}, nil
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -450,7 +509,11 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	rowsScanned := 0
 	matchedRows := 0
 	for _, part := range r.parts {
-		for rowIdx := 0; rowIdx < part.Rows; rowIdx++ {
+		partRows := len(part.RowIndexes)
+		if part.RowIndexes == nil {
+			partRows = part.Rows
+		}
+		for rowIdx := 0; rowIdx < partRows; rowIdx++ {
 			rowsScanned++
 			matched, err := typedColumnPhysicalQueryPredicatesMatch(part.Values, r.plan.PredicateSpecs, rowIdx)
 			if err != nil {
@@ -479,19 +542,33 @@ func (r *columnTypedColumnPhysicalQueryRunner) diagnostics(view columnPhysicalSc
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = len(r.plan.ProjectedColumns)
-	diag.ScheduledGranules = len(r.parts)
-	diag.DecodedBlocks = len(r.parts)
-	diag.DirectReduceBlocks = len(r.parts)
+	diag.ScheduledGranules = r.granulesConsidered
+	diag.SkippedGranules = r.granulesSkipped
+	diag.DecodedGranules = r.granulesDecoded
+	diag.DecodedBlocks = r.decodedBlocks
+	diag.DirectReduceBlocks = r.decodedBlocks
 	diag.TypedColumnPartSections = r.sections
 	diag.TypedColumnPartSectionBytes = r.sectionBytes
 	diag.RowsScanned = rowsScanned
 	diag.PhysicalBytesScanned = r.assetBytes
+	diag.DecodedPayloadBytes = r.decodedPayloadBytes
 	diag.ReduceRows = reduceRows
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
 	diag.StorageSource = ColumnPhysicalQueryStorageSourceTypedColumnPartSection
 	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
 	diag.SegmentFileCacheHits = r.segmentFileCacheHits
 	diag.SegmentFileCacheMisses = r.segmentFileCacheMisses
+	diag.SortKeyPrefixPlanned = r.plan.SortKeyPrefix.Planned
+	if r.plan.SortKeyPrefix.Planned {
+		diag.SortKeyPrefixColumns = r.plan.SortKeyPrefix.prefixColumns()
+		diag.SortKeyPrefixLiterals = r.plan.SortKeyPrefix.PrefixLen
+	}
+	diag.SortKeyMarkChecks = r.sortKeyMarkChecks
+	diag.SortKeyMarkMatches = r.sortKeyMarkMatches
+	diag.SortKeyMarkSkips = r.sortKeyMarkSkips
+	diag.SortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(r.plan.SortKeyPrefix.FallbackReason, r.sortKeyMarkFallbackReason)
+	diag.SortedGroupedDistinctReady = r.plan.SortKeyPrefix.SortedGroupedDistinctReady
+	diag.SortedGroupedDistinctFallbackReason = r.plan.SortKeyPrefix.SortedGroupedDistinctFallbackReason
 	applyColumnPhysicalQueryPredicateDiagnostics(&diag, r.plan.PredicateDiagnostics, matchedRows, 0)
 	diag.ScanNanos = scanNanos
 	return diag

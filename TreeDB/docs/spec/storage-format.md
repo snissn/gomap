@@ -567,10 +567,14 @@ ascending non-null bool/int64/string columns, and has at most
 descriptor SortKey and the v4 manifest part SortKey trailer must match exactly.
 String SortKey columns rely on part-local dictionary codes only when those codes
 are assigned in logical bytewise-ascending order and the dictionary metadata
-certifies that collation. Mixed-owner SortKeys fall back to the synthetic
-`__treedb_primary_id` order and publish no typed-column SortKey trailer;
-typed-column-owned unsupported, nullable, descending, or wider-than-8 SortKeys
-fail closed.
+certifies that collation. Each typed-column image stores a `sort_key_marks`
+section with one validated mark per granule. Mark prefixes record lower and
+exclusive-upper bounds in the same logical/certified ordered code space as the
+persisted SortKey; readers reject corrupt/stale mark counts, row counts,
+ordinals, prefix widths, and invalid bounds rather than pruning silently. Mixed-
+owner SortKeys fall back to the synthetic `__treedb_primary_id` order and publish
+no typed-column SortKey trailer; typed-column-owned unsupported, nullable,
+descending, or wider-than-8 SortKeys fail closed.
 The durable Issue `#1755` scalar path represents bool, int64, float32,
 double/float64, and
 string fields. Int64 typed-column fields use `delta_varint` by default; a
