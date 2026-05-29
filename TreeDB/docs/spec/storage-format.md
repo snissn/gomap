@@ -486,12 +486,30 @@ Insert/update rows must have `Deleted=false` and exactly one value per declared
 `Deleted=true` and zero column values. For layouts with `typed_column_part`
 owners, a `TCPA` row asset is still published for row IDs/tombstones and any
 row-owned fields; the matching `tcs1_typed_column_part` for the same non-delete
-generation contains authoritative scalar and fixed-dimension `float32_vector`
-typed-column values keyed by row index. Latest-visible readers resolve document
-identity from the typed-row row/tombstone assets first, then read the typed-column
-part for the winning non-deleted generation+row. Readers validate namespace,
-generation, part id, schema hash, declared column descriptors, length, role,
-operation, and checksum before accepting an asset ref.
+generation contains authoritative scalar, fixed-dimension `float32_vector`, and
+non-null variable-width `uint32_list` typed-column values keyed by row index.
+Latest-visible readers resolve document identity from the typed-row
+row/tombstone assets first, then read the typed-column part for the winning
+non-deleted generation+row. Readers validate namespace, generation, part id,
+schema hash, declared column descriptors, length, role, operation, and checksum
+before accepting an asset ref.
+
+Typed-column part descriptor column type codes are currently:
+
+| Code | Type string | Notes |
+| ---: | --- | --- |
+| 1 | `int64` | Signed integer scalar and default float bit-pattern carrier. |
+| 2 | `low_cardinality_code` | String dictionary code carrier. |
+| 3 | `bool` | Boolean bitpack/RLE carrier. |
+| 4 | `float32_vector` | Fixed-dimension dense little-endian `float32` rows. |
+| 5 | `adjacency_list` | Legacy/consumer-specific dense or explicit offsets-list adjacency compatibility. |
+| 6 | `float32` | Native raw little-endian IEEE-754 scalar. |
+| 7 | `float64` | Native raw little-endian IEEE-754 scalar. |
+| 8 | `uint32_list` | Generic non-null offsets/value list primitive added by #1985. |
+
+`uint32_list` descriptors must use `raw_uint32_offsets_list` encoding,
+`fixed_width_elements=0`, and uncompressed split offsets/value sections. Readers
+must fail closed on unknown type codes rather than guessing a payload shape.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -578,9 +596,9 @@ adjacency source as a `raw_uint32_offsets_list` typed-column asset during
 physical graph rebuilds, and later graph-source work extends manifests to record
 per-layer sources. Those `column_graph` source records are transitional
 compatibility, not the target datastore primitive; #1984 defines
-`uint32_list` semantics in `typed-column-uint32-list-semantics.md`, #1985 owns
-runtime primitive implementation, and #1986/#1988 own vector-index state/search
-consumption.
+`uint32_list` semantics in `typed-column-uint32-list-semantics.md`, #1985 adds
+the generic runtime primitive implementation, and #1986/#1988 own vector-index
+state/search consumption.
 
 The `column_graph` manifest keeps the row graph asset ref as the canonical graph
 asset. The quarantined all-layer source metadata is an optional manifest trailer
@@ -665,13 +683,16 @@ evidence before it is accepted or explicitly deferred. Checksum, lifetime,
 schema, null/missing, and fail-closed validation must not be weakened to meet the
 allocation budget.
 
-Production `float32_vector` and `adjacency_list` nullable/missing support remains
-staged and fail-closed. Authoritative dense `adjacency_list` typed-column fields
-must be non-nullable, must declare positive `adjacency_degree`, and must fail
-closed when any source row length, schema descriptor, or asset payload length
-disagrees with that fixed degree. The offsets-list selector is also non-nullable,
-must not declare `adjacency_degree`, and uses the #1915/#1916 concrete encoding
-for safe publication/reopen/fallback reconstruction and adapter direct reads.
+Production `float32_vector`, `uint32_list`, and `adjacency_list`
+nullable/missing support remains staged and fail-closed. Authoritative
+`uint32_list` typed-column fields are non-null in v1 and reject adjacency-degree
+or adjacency-layout selectors; empty lists are represented by equal adjacent
+offsets. Authoritative dense `adjacency_list` typed-column fields must be
+non-nullable, must declare positive `adjacency_degree`, and must fail closed when
+any source row length, schema descriptor, or asset payload length disagrees with
+that fixed degree. The adjacency offsets-list selector is also non-nullable, must
+not declare `adjacency_degree`, and uses the #1915/#1916 concrete encoding for
+safe publication/reopen/fallback reconstruction and adapter direct reads.
 
 ## 8. Commit-Log Segment Format
 

@@ -174,7 +174,7 @@ func TestDocs_NullableTypedColumnSemantics(t *testing.T) {
 		"target 0 allocs/op after setup when benchmarking the core typed-column loop separately from document materialization",
 		"Touched inner loops must be measurably no worse, and preferably better, on `B/op` and `allocs/op`",
 		"Checksum, lifetime, schema, null/missing, and fail-closed validation must not be weakened",
-		"Production `float32_vector` and `adjacency_list` nullable/missing support remains staged and fail-closed",
+		"Production `float32_vector`, `uint32_list`, and `adjacency_list` nullable/missing support remains staged and fail-closed",
 	} {
 		if !strings.Contains(storageDoc, want) {
 			t.Fatalf("storage-format doc missing nullable typed-column wording %q", want)
