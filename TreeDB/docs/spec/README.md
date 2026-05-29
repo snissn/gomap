@@ -214,6 +214,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1989 quarantine/removal contract for using vector-index state
     `uint32_list` adjacency on the primary path while isolating legacy
     graph-specific adjacency-source storage.
+- `TreeDB/docs/spec/typed-column-list-adjacency-benchmark-1990.md`
+  - issue #1990 benchmark/profile closeout proving corrected vector-index state
+    `uint32_list` / `raw_uint32_offsets_list` adjacency preserves or improves
+    integrated search while removing legacy adjacency-source scratch decodes.
 - `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`
   - issue #1984 first-class `uint32_list` semantic contract, including
     `uint32[]` / conceptual `Array(UInt32)` aliases, `raw_uint32_offsets_list`

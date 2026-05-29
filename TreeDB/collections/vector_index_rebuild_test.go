@@ -1392,6 +1392,7 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 	state := columnVectorIndexStateFromRecords1987(b, records, def)
 	b.ReportMetric(float64(graph.AssetBytes), "graph_asset_B/op")
 	b.ReportMetric(float64(columnVectorIndexStateAssetsStorageBytes(state)), "state_assets_B/op")
+	reportColumnVectorIndexStateAdjacencyStorageMetrics1990(b, d, state)
 	b.ReportMetric(float64(columnVectorGraphStorageBytesWithState(graph, state)), "graph_total_storage_B/op")
 	if len(graph.AdjacencyLayerSources) > 0 {
 		b.ReportMetric(float64(graph.AdjacencyLayerCount), "adjacency_layer_count")
@@ -1417,6 +1418,61 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.ValuesBytes), "layer0_values_B/op")
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.PaddingBytes), "layer0_padding_B/op")
 	}
+}
+
+func reportColumnVectorIndexStateAdjacencyStorageMetrics1990(b *testing.B, d *backenddb.DB, state columnVectorIndexStateSnapshot) {
+	b.Helper()
+	var layers, offsetsBytes, valuesBytes, valuesCount, assetBytes, paddingBytes int64
+	for _, asset := range state.Assets {
+		if asset.Role != columnVectorIndexStateAssetRoleAdjacency {
+			continue
+		}
+		if asset.LogicalType != columnVectorIndexStateLogicalTypeUint32List || asset.PhysicalEncoding != columnVectorIndexStateEncodingRawUint32List {
+			b.Fatalf("state adjacency asset %q type/encoding=(%q,%q), want uint32_list/raw_uint32_offsets_list", asset.AssetID, asset.LogicalType, asset.PhysicalEncoding)
+		}
+		layer, err := columnVectorIndexStateAdjacencyLayerFromAssetID(asset.AssetID)
+		if err != nil {
+			b.Fatalf("state adjacency asset id %q: %v", asset.AssetID, err)
+		}
+		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+		if err != nil {
+			b.Fatalf("read state adjacency asset %q: %v", asset.AssetID, err)
+		}
+		image, err := typedcolumn.ParseColumnPartImage(raw)
+		if err != nil {
+			b.Fatalf("parse state adjacency asset %q: %v", asset.AssetID, err)
+		}
+		offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections(columnVectorIndexStateAdjacencyColumnName)
+		if !ok {
+			b.Fatalf("state adjacency asset %q missing offsets/value sections for %q", asset.AssetID, columnVectorIndexStateAdjacencyColumnName)
+		}
+		wantOffsetsBytes, err := columnVectorIndexStateAdjacencyOffsetsBytes(asset.RowCount)
+		if err != nil {
+			b.Fatalf("state adjacency asset %q offsets bytes: %v", asset.AssetID, err)
+		}
+		if offsetsSection.Length != wantOffsetsBytes {
+			b.Fatalf("state adjacency asset %q offsets bytes=%d want %d", asset.AssetID, offsetsSection.Length, wantOffsetsBytes)
+		}
+		if valuesSection.Length%4 != 0 {
+			b.Fatalf("state adjacency asset %q values bytes=%d not uint32 aligned", asset.AssetID, valuesSection.Length)
+		}
+		layers++
+		offsetsBytes += int64(offsetsSection.Length)
+		valuesBytes += int64(valuesSection.Length)
+		valuesCount += int64(valuesSection.Length / 4)
+		assetBytes += asset.AssetBytes
+		paddingBytes += int64(image.PaddingBytes())
+		b.ReportMetric(float64(offsetsSection.Length), fmt.Sprintf("state_layer%d_offsets_B/op", layer))
+		b.ReportMetric(float64(valuesSection.Length), fmt.Sprintf("state_layer%d_values_B/op", layer))
+		b.ReportMetric(float64(valuesSection.Length/4), fmt.Sprintf("state_layer%d_values/op", layer))
+		b.ReportMetric(float64(asset.AssetBytes), fmt.Sprintf("state_layer%d_asset_B/op", layer))
+	}
+	b.ReportMetric(float64(layers), "state_adjacency_layers/op")
+	b.ReportMetric(float64(offsetsBytes), "state_adjacency_offsets_B/op")
+	b.ReportMetric(float64(valuesBytes), "state_adjacency_values_B/op")
+	b.ReportMetric(float64(valuesCount), "state_adjacency_values/op")
+	b.ReportMetric(float64(assetBytes), "state_adjacency_assets_B/op")
+	b.ReportMetric(float64(paddingBytes), "state_adjacency_padding_B/op")
 }
 
 type columnGraphRebuildInputRowV2A struct {
