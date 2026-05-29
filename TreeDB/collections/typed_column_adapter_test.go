@@ -1461,11 +1461,21 @@ func TestTypedColumnAdapterLegacyDictionaryOrderMetadataAcceptedWhenSorted1948(t
 	if !ok {
 		t.Fatal("missing kind column")
 	}
+	nextMetadataCode := func(m map[string]int64) int64 {
+		var maxCode int64 = -1
+		for _, code := range m {
+			if code > maxCode {
+				maxCode = code
+			}
+		}
+		return maxCode + 1
+	}
 	metadata := part.Dictionary[typedColumnAdapterMetadataDictionary]
 	delete(metadata, typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
 	delete(metadata, typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
-	metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryLegacyOrder)] = 100
-	metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryLegacyCollation)] = 101
+	legacyCode := nextMetadataCode(metadata)
+	metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryLegacyOrder)] = legacyCode
+	metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryLegacyCollation)] = legacyCode + 1
 	image, err := part.buildImage()
 	if err != nil {
 		t.Fatalf("buildImage legacy metadata: %v", err)
@@ -1482,8 +1492,9 @@ func TestTypedColumnAdapterLegacyDictionaryOrderMetadataAcceptedWhenSorted1948(t
 	badMetadata := badPart.Dictionary[typedColumnAdapterMetadataDictionary]
 	delete(badMetadata, typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
 	delete(badMetadata, typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
-	badMetadata[typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryLegacyOrder)] = 100
-	badMetadata[typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryLegacyCollation)] = 101
+	badLegacyCode := nextMetadataCode(badMetadata)
+	badMetadata[typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryLegacyOrder)] = badLegacyCode
+	badMetadata[typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryLegacyCollation)] = badLegacyCode + 1
 	badPart.Dictionary["kind"]["alpha"] = 1
 	badPart.Dictionary["kind"]["beta"] = 0
 	badImage, err := badPart.buildImage()
