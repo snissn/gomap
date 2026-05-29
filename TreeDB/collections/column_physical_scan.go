@@ -1842,7 +1842,7 @@ func decodeColumnManifestPartSortKeyForScan(raw []byte) ([]ColumnSortKey, error)
 	if !isSupportedColumnManifestRecordVersion(version) {
 		return nil, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
-	_ = cur.stringBytes()
+	kindBytes := cur.stringBytes()
 	_ = cur.stringBytes()
 	_ = cur.u64()
 	_ = cur.u64()
@@ -1869,6 +1869,26 @@ func decodeColumnManifestPartSortKeyForScan(raw []byte) ([]ColumnSortKey, error)
 	}
 	if cur.pos != len(raw) {
 		return nil, errors.New("collections: trailing bytes in column manifest part record")
+	}
+	kind, ok := columnAssetKindFromBytesForScan(kindBytes)
+	if !ok {
+		return nil, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+	}
+	if len(sortKey) != 0 && kind != ColumnAssetKindTCS1TypedColumnPart {
+		return nil, fmt.Errorf("collections: column manifest sort key requires %q part records, got %q", ColumnAssetKindTCS1TypedColumnPart, kind)
+	}
+	seen := make(map[string]struct{}, len(sortKey))
+	for _, sortKeyColumn := range sortKey {
+		if sortKeyColumn.Column == "" {
+			return nil, errors.New("collections: column manifest sort key column is required")
+		}
+		if _, exists := seen[sortKeyColumn.Column]; exists {
+			return nil, fmt.Errorf("collections: column manifest duplicate sort key column %q", sortKeyColumn.Column)
+		}
+		seen[sortKeyColumn.Column] = struct{}{}
+		if sortKeyColumn.Direction != ColumnSortAscending {
+			return nil, fmt.Errorf("collections: unsupported column manifest sort direction %q", sortKeyColumn.Direction)
+		}
 	}
 	return sortKey, nil
 }

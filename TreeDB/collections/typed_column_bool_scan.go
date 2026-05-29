@@ -237,6 +237,8 @@ func (c *Collection) prepareTypedColumnBoolPredicateAggregateSessionFromView(vie
 		}
 	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return nil, diag, err
+	} else if typedColumnRefsHaveSortKey(refsByGeneration) {
+		return nil, diag, typedColumnSortedMutationVisibilityUnsupported("typed-column bool predicate aggregate")
 	}
 
 	mgr := mappedresource.NewManager()

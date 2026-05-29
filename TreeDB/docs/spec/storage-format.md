@@ -453,7 +453,9 @@ for each column a manifest string column name and manifest string direction
 trailer. Only `tcs1_typed_column_part` records may publish a non-empty SortKey;
 readers and rewrite tooling must preserve or skip this trailer by version.
 Current part refs may use `tcs1_part_image` for compatibility typed-row/TCPA
-assets or `tcs1_typed_column_part` for sectioned scalar typed-column parts.
+assets or `tcs1_typed_column_part` for sectioned typed-column payloads,
+including scalar columns plus vector/list/adjacency payload sections described
+below.
 `base` parts are complete insert/base spans, `delta` parts carry update rows
 layered over the older visible set, and `tombstone` parts are typed-row delete
 assets with no matching typed-column payload. GC/rewrite must enumerate these

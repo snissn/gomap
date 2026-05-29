@@ -64,6 +64,32 @@ func TestTypedColumnPartSortKeyTimeUSPersistsAscendingReopen1948(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPartSortKeyInt64ScanMapsPrimaryIDsToDocuments1948(t *testing.T) {
+	events := []columnPhysicalJSONBenchParityEventP0{
+		{ID: "e0", TimeUS: 30, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:3"},
+		{ID: "e1", TimeUS: 10, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:1"},
+		{ID: "e2", TimeUS: 20, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.like", Did: "did:2"},
+		{ID: "e3", TimeUS: 10, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.repost", Did: "did:4"},
+	}
+	_, col, closeFn := openTypedColumnSortKeyFixture1948(t, []ColumnSortKey{{Column: "time_us"}}, events)
+	defer closeFn()
+
+	result, err := col.RunTypedColumnInt64PredicateScan(TypedColumnInt64PredicateScanRequest{Column: "time_us", Kind: TypedColumnInt64PredicateAll})
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateScan: %v", err)
+	}
+	wantIDs := []string{"e1", "e3", "e2", "e0"}
+	wantRows := []int{1, 3, 2, 0}
+	if len(result.Rows) != len(wantIDs) {
+		t.Fatalf("scan rows=%+v want %d", result.Rows, len(wantIDs))
+	}
+	for i, row := range result.Rows {
+		if string(row.DocumentID) != wantIDs[i] || row.RowIndex != wantRows[i] || int(row.PrimaryID) != wantRows[i] {
+			t.Fatalf("row[%d]=%+v want document_id=%q physical_row=%d", i, row, wantIDs[i], wantRows[i])
+		}
+	}
+}
+
 func TestTypedColumnPartSortKeyClickHouseLogicalOrder1948(t *testing.T) {
 	sortKey := []ColumnSortKey{{Column: "kind"}, {Column: "operation"}, {Column: "collection"}, {Column: "did"}, {Column: "time_us"}}
 	events := []columnPhysicalJSONBenchParityEventP0{

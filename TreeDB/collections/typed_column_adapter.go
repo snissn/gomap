@@ -2630,17 +2630,23 @@ func scanTypedColumnInt64PredicatePartWithVisibility(part *typedcolumn.ColumnPar
 		result.Diagnostics.RowsScanned += len(values)
 		for i, v := range values {
 			rowIndex := block.Descriptor.FirstRow + i
-			if visibility != nil && !visibility.rowVisible(rowIndex) {
+			primaryID := ids[i]
+			physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(primaryID, part.Descriptor.RowCount)
+			if err != nil {
+				return false, err
+			}
+			if visibility != nil && !visibility.rowVisible(physicalRowIndex) {
 				continue
 			}
 			if !typedColumnInt64PredicateMatches(req, v) {
 				continue
 			}
-			row := TypedColumnInt64PredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: ids[i], Value: v}
+			row := TypedColumnInt64PredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: primaryID, Value: v}
 			if visibility != nil {
 				row.Generation = visibility.Ref.Generation
 				row.PartID = visibility.Ref.PartID
-				row.DocumentID = visibility.documentID(rowIndex)
+				row.RowIndex = physicalRowIndex
+				row.DocumentID = visibility.documentID(physicalRowIndex)
 			}
 			result.Rows = append(result.Rows, row)
 			result.Diagnostics.RowsMatched++
@@ -3086,11 +3092,18 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 				matchedValue = valueByCode[codesForRows[row]]
 			}
 			rowIndex := block.Descriptor.FirstRow + row
-			out := TypedColumnStringPredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: ids[row], Value: matchedValue}
+			primaryID := ids[row]
+			physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(primaryID, preparedPart.Descriptor.RowCount)
+			if err != nil {
+				forEachErr = err
+				return
+			}
+			out := TypedColumnStringPredicateScanRow{Generation: generation, PartID: partID, RowIndex: rowIndex, PrimaryID: primaryID, Value: matchedValue}
 			if visibility != nil {
 				out.Generation = visibility.Ref.Generation
 				out.PartID = visibility.Ref.PartID
-				out.DocumentID = visibility.documentID(rowIndex)
+				out.RowIndex = physicalRowIndex
+				out.DocumentID = visibility.documentID(physicalRowIndex)
 			}
 			result.Rows = append(result.Rows, out)
 			result.Diagnostics.RowsMatched++

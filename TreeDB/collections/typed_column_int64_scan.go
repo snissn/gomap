@@ -464,6 +464,26 @@ func typedColumnPhysicalAssetPairingAggregateError(err error) error {
 	return err
 }
 
+func typedColumnRefsHaveSortKey(refsByGeneration map[uint64]columnManifestAssetRefForScan) bool {
+	for _, ref := range refsByGeneration {
+		if len(ref.SortKey) != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnSortedMutationVisibilityUnsupported(operation string) error {
+	return fmt.Errorf("%w: %s with mutation visibility requires primary-id ordered typed_column_part assets; sorted typed-column mutation visibility is deferred", ErrColumnQueryPlanUnsupported, operation)
+}
+
+func typedColumnPhysicalRowIndexFromPrimaryID(primaryID int64, rows int) (int, error) {
+	if primaryID < 0 || primaryID >= int64(rows) {
+		return 0, fmt.Errorf("primary_id=%d outside physical rows=%d", primaryID, rows)
+	}
+	return int(primaryID), nil
+}
+
 func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalScanSnapshotView, req TypedColumnInt64PredicateScanRequest, cfg ColumnStoreConfig, start time.Time) (TypedColumnInt64PredicateScanResult, error) {
 	diag := typedColumnInt64PredicateDiagnosticsFromView(view)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
@@ -502,6 +522,8 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 		}
 	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, err
+	} else if typedColumnRefsHaveSortKey(refsByGeneration) {
+		return TypedColumnInt64PredicateScanResult{Diagnostics: diag}, typedColumnSortedMutationVisibilityUnsupported("typed-column int64 predicate scan")
 	}
 
 	mgr := mappedresource.NewManager()
@@ -574,18 +596,23 @@ func (c *Collection) runTypedColumnInt64PredicateScanDirect(view columnPhysicalS
 			rawScratch = physicalRaw
 			result.Diagnostics.PhysicalBytesScanned += int64(len(physicalRaw))
 			result.Diagnostics.PhysicalRowIDLookups++
-			ids, err := typedColumnInt64PredicatePhysicalRowIDs(physicalRaw, physical.Ref, view.CollectionName, view.Config, result.Rows[matchedStart:])
+			ids, err := typedColumnInt64PredicatePhysicalRowIDs(physicalRaw, physical.Ref, view.CollectionName, view.Config, physical.Rows, result.Rows[matchedStart:])
 			if err != nil {
 				return result, fmt.Errorf("collections: typed-column int64 predicate physical id decode generation=%d part_id=%d: %w", physical.Ref.Generation, physical.Ref.PartID, err)
 			}
 			for rowIdx := matchedStart; rowIdx < len(result.Rows); rowIdx++ {
 				matched := &result.Rows[rowIdx]
-				documentID, ok := ids[matched.RowIndex]
+				physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(matched.PrimaryID, physical.Rows)
+				if err != nil {
+					return result, err
+				}
+				documentID, ok := ids[physicalRowIndex]
 				if !ok {
-					return result, fmt.Errorf("collections: typed-column int64 predicate missing physical document id for row_index=%d", matched.RowIndex)
+					return result, fmt.Errorf("collections: typed-column int64 predicate missing physical document id for row_index=%d", physicalRowIndex)
 				}
 				matched.Generation = physical.Ref.Generation
 				matched.PartID = physical.Ref.PartID
+				matched.RowIndex = physicalRowIndex
 				matched.DocumentID = documentID
 			}
 		}
@@ -645,6 +672,8 @@ func (c *Collection) prepareTypedColumnInt64PredicateAggregateSessionFromView(vi
 		}
 	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return nil, diag, err
+	} else if typedColumnRefsHaveSortKey(refsByGeneration) {
+		return nil, diag, typedColumnSortedMutationVisibilityUnsupported("typed-column int64 predicate aggregate")
 	}
 
 	mgr := mappedresource.NewManager()
@@ -1055,17 +1084,18 @@ func (c *Collection) typedColumnInt64PredicateCatalogColumn(column string) (Colu
 	return cfg, col, ok, nil
 }
 
-func typedColumnInt64PredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, matchedRows []TypedColumnInt64PredicateScanRow) (map[int][]byte, error) {
+func typedColumnInt64PredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, physicalRows int, matchedRows []TypedColumnInt64PredicateScanRow) (map[int][]byte, error) {
 	projection := columnPhysicalScanProjection{outputByColumn: make([]int, len(cfg.Columns))}
 	for i := range projection.outputByColumn {
 		projection.outputByColumn[i] = -1
 	}
 	wanted := make(map[int]struct{}, len(matchedRows))
 	for _, row := range matchedRows {
-		if row.RowIndex < 0 {
-			return nil, fmt.Errorf("matched row_index=%d is negative", row.RowIndex)
+		physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(row.PrimaryID, physicalRows)
+		if err != nil {
+			return nil, err
 		}
-		wanted[row.RowIndex] = struct{}{}
+		wanted[physicalRowIndex] = struct{}{}
 	}
 	ids := make(map[int][]byte, len(wanted))
 	_, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collection, &cfg, projection, ColumnPublishOperationInsert, func(row columnPhysicalScanRowView) error {
