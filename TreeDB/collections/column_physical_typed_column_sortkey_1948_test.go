@@ -155,6 +155,20 @@ func TestTypedColumnPartSortKeyMixedOwnerFallsBackToPrimaryID1948(t *testing.T) 
 	}
 }
 
+func TestColumnPreparedAssetSortKeyRejectsDuplicate1948(t *testing.T) {
+	asset := ColumnPreparedAsset{
+		Ref:      ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "events_column_assets", Generation: 1, PartID: typedColumnPartAssetPartID, FileID: 1, Length: 1, Checksum: 1},
+		Rows:     1,
+		Bytes:    1,
+		Reason:   string(ColumnPublishOperationInsert),
+		PartRole: ColumnManifestPartRoleBase,
+		SortKey:  columnSortKeyMatchString([]ColumnSortKey{{Column: "time_us"}, {Column: "time_us"}}),
+	}
+	if err := validateColumnPreparedAssetForPlan(asset); err == nil || !strings.Contains(err.Error(), "duplicate sort key column") {
+		t.Fatalf("validateColumnPreparedAssetForPlan duplicate err=%v want duplicate sort key column", err)
+	}
+}
+
 func TestTypedColumnPartSortKeyQueryValidationFailsClosed1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

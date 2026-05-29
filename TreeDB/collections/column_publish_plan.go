@@ -973,10 +973,15 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if err != nil {
 		return err
 	}
+	seenSortKeyColumns := make(map[string]struct{}, len(sortKeys))
 	for _, sortKey := range sortKeys {
 		if sortKey.Column == "" {
 			return errors.New("collections: column prepared asset sort key column is required")
 		}
+		if _, exists := seenSortKeyColumns[sortKey.Column]; exists {
+			return fmt.Errorf("collections: column prepared asset duplicate sort key column %q", sortKey.Column)
+		}
+		seenSortKeyColumns[sortKey.Column] = struct{}{}
 		if sortKey.Direction != ColumnSortAscending {
 			return fmt.Errorf("collections: column prepared asset sort key column %q direction %q is unsupported", sortKey.Column, sortKey.Direction)
 		}

@@ -26,9 +26,11 @@ const (
 	typedColumnAdapterMetadataDictionaryOrderMark     = "dictionary_order"
 	typedColumnAdapterMetadataDictionaryCollationMark = "dictionary_collation"
 
-	typedColumnAdapterStringDictionaryIdentity  = "part_local_string_dictionary_v1"
-	typedColumnAdapterStringDictionaryOrder     = "logical_bytewise_ascending"
-	typedColumnAdapterStringDictionaryCollation = "utf8_bytewise"
+	typedColumnAdapterStringDictionaryIdentity        = "part_local_string_dictionary_v1"
+	typedColumnAdapterStringDictionaryOrder           = "logical_bytewise_ascending"
+	typedColumnAdapterStringDictionaryCollation       = "utf8_bytewise"
+	typedColumnAdapterStringDictionaryLegacyOrder     = "none"
+	typedColumnAdapterStringDictionaryLegacyCollation = "none"
 )
 
 type typedColumnAdapterTypeStatus string
@@ -1411,18 +1413,27 @@ func validateTypedColumnAdapterMetadata(dictionaries map[string]map[string]int64
 			return fmt.Errorf("collections: typed-column adapter image value type metadata mismatch for column %q", column.Definition.Name)
 		}
 		if column.Field.ValueType == ColumnStoreValueString {
-			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity)]; !ok {
+			if !typedColumnAdapterMetadataEntryExists(metadata, column, typedColumnAdapterMetadataDictionaryIdentityMark, typedColumnAdapterStringDictionaryIdentity) {
 				return fmt.Errorf("collections: typed-column adapter image dictionary identity metadata mismatch for column %q", column.Definition.Name)
 			}
-			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder)]; !ok {
+			if !typedColumnAdapterMetadataEntryExists(metadata, column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder, typedColumnAdapterStringDictionaryLegacyOrder) {
 				return fmt.Errorf("collections: typed-column adapter image dictionary order metadata mismatch for column %q", column.Definition.Name)
 			}
-			if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation)]; !ok {
+			if !typedColumnAdapterMetadataEntryExists(metadata, column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation, typedColumnAdapterStringDictionaryLegacyCollation) {
 				return fmt.Errorf("collections: typed-column adapter image dictionary collation metadata mismatch for column %q", column.Definition.Name)
 			}
 		}
 	}
 	return nil
+}
+
+func typedColumnAdapterMetadataEntryExists(metadata map[string]int64, column typedColumnAdapterColumn, mark string, values ...string) bool {
+	for _, value := range values {
+		if _, ok := metadata[typedColumnAdapterMetadataEntryKey(column, mark, value)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func typedColumnAdapterDictionaries(columns []typedColumnAdapterColumn) map[string]map[string]int64 {

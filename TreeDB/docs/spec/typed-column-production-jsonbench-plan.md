@@ -146,8 +146,10 @@ Current production support:
 - when every declared sort-key column is owned by `typed_column_part`, is ascending,
   non-null, and uses a supported bool/int64/string carrier, publication sorts
   typed-column rows by that logical `ColumnStoreConfig.SortKey`
-- mixed-owner or unsupported sort-key layouts keep typed-column parts in
-  `__treedb_primary_id` order and do not advertise typed-column sort metadata
+- mixed-owner sort-key layouts keep typed-column parts in `__treedb_primary_id`
+  order and do not advertise typed-column sort metadata
+- typed-column-owned unsupported, nullable, or descending sort-key layouts fail
+  closed until their ordering semantics are specified
 - sorted query pruning/early-stop remains deferred to the mark/planner/kernel
   work; current production physical queries still full-scan validated parts
 
@@ -291,17 +293,22 @@ Rows:
 - equal sort-key values must tie-break by logical primary id so the order is
   deterministic
 
-Current production limitation:
+Current production support:
 
 - `ColumnStoreConfig.SortKey` is validated and hashed
-- production typed-column publishing currently sorts by `__treedb_primary_id`
-  instead of the declared `ColumnStoreConfig.SortKey`
+- production typed-column publishing physically sorts by the declared SortKey
+  when the full key is typed-column-owned, ascending, non-null, and uses a
+  supported bool/int64/string carrier
+- mixed-owner layouts fall back to `__treedb_primary_id` order and do not
+  advertise typed-column SortKey metadata
+- typed-column-owned nullable, descending, or unsupported carriers fail closed
+  until their ordering semantics are specified
 
 Important code:
 
 - reference: `experiments/colgranule/part.go`
 - internal data plane: `TreeDB/internal/typedcolumn/part.go`
-- production adapter gap: `TreeDB/collections/typed_column_adapter.go`
+- production adapter support: `TreeDB/collections/typed_column_adapter.go`
 
 #### Granule
 
@@ -796,7 +803,7 @@ Draft label mapping:
 
 | Feature family | Reference experiment | Internal typedcolumn | Production collections status |
 | --- | --- | --- | --- |
-| Physical sort key | Rows are physically sorted by declared sort key. | Supports ascending physical sort and marks; descending is rejected today. | `typed_column_part` publication persists and validates ascending non-null bool/int64/string `ColumnStoreConfig.SortKey` order when the full key is typed-column-owned; mixed-owner/unsupported keys fall back to synthetic primary-id order without sorted metadata. Compatibility per-column assets use insertion/current row order. |
+| Physical sort key | Rows are physically sorted by declared sort key. | Supports ascending physical sort and marks; descending is rejected today. | `typed_column_part` publication persists and validates ascending non-null bool/int64/string `ColumnStoreConfig.SortKey` order when the full key is typed-column-owned; mixed-owner keys fall back to synthetic primary-id order without sorted metadata, while typed-column-owned unsupported/nullable/descending keys fail closed. Compatibility per-column assets use insertion/current row order. |
 | Granules and marks | Per-granule descriptors and sort-key prefix marks support pruning. | Present in the data plane. | Not used by production dictionary/int64 physical query paths. |
 | Sectioned column part image | One row-aligned image contains descriptors, marks, locators, dictionaries, metadata, and payloads. | Present, with extra stats/pruning/layout sections. | Published for `typed_column_part` owners, but JSONBench string/int64 production query paths still largely use compatibility per-column assets. |
 | Encodings and compression | Delta, double-delta, nullable, bool bitpack/RLE, compact string codes, adaptive codec block sizing, Snappy/LZ4 keep-if-smaller. | Mostly present or extended. | Production JSONBench-style physical queries do not consistently consume the typed-column codec/block model. |

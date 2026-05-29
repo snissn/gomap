@@ -563,9 +563,11 @@ ascending non-null bool/int64/string columns, the typed-column image descriptor
 SortKey and the v4 manifest part SortKey trailer must match exactly. String
 SortKey columns rely on part-local dictionary codes only when those codes are
 assigned in logical bytewise-ascending order and the dictionary metadata certifies
-that collation. Mixed-owner or unsupported SortKeys fall back to the synthetic
-`__treedb_primary_id` order and publish no typed-column SortKey trailer. The durable
-Issue `#1755` scalar path represents bool, int64, float32, double/float64, and
+that collation. Mixed-owner SortKeys fall back to the synthetic
+`__treedb_primary_id` order and publish no typed-column SortKey trailer;
+typed-column-owned unsupported, nullable, or descending SortKeys fail closed.
+The durable Issue `#1755` scalar path represents bool, int64, float32,
+double/float64, and
 string fields. Int64 typed-column fields use `delta_varint` by default; a
 non-null scalar `typed_column_part` field that explicitly sets
 `fixed_width_encoding: "little_endian"` uses an uncompressed native raw
