@@ -73,6 +73,7 @@ type columnVectorGraphNativeSearchStats struct {
 	VisitedNodes                     uint64
 	VisitedEdges                     uint64
 	VectorBytesRead                  uint64
+	NormBytesRead                    uint64
 	AdjacencyBytesRead               uint64
 	CandidateFetches                 uint64
 	ExpansionFetches                 uint64
@@ -93,6 +94,21 @@ type columnVectorGraphNativeSearchStats struct {
 	AdjacencyAbsoluteOffsetUnaligned uint64
 	AdjacencyActualPointerUnaligned  uint64
 	AdjacencyStaleHandles            uint64
+	NormDirectViews                  uint64
+	NormMmapDirectViews              uint64
+	NormHeapCopyTypedViews           uint64
+	NormScratchDecodes               uint64
+	NormSourceUnavailable            uint64
+	NormSourceFallbacks              uint64
+	NormValidationFailures           uint64
+	NormAbsoluteOffsetUnaligned      uint64
+	NormActualPointerUnaligned       uint64
+	NormStaleHandles                 uint64
+	NormMappedBytes                  uint64
+	NormHeapCopyBytes                uint64
+	NormDecodedBytes                 uint64
+	NormActiveHandles                int64
+	NormDeniedResources              uint64
 	VectorDirectViews                uint64
 	VectorMmapDirectViews            uint64
 	VectorHeapCopyTypedViews         uint64
@@ -316,6 +332,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 
 	defer func() {
 		r.populateTypedColumnVectorSearchStats(&stats)
+		r.populateInvNormStateSearchStats(&stats)
 		r.populateLayer0AdjacencySourceSearchStats(&stats)
 	}()
 	plan, err := scratch.prepareSearchPlan(r)
@@ -613,10 +630,26 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGrap
 			stats.VectorScratchDecodes++
 		}
 	}
-	invNorm := view.invNormUnchecked(rowIndex)
+	invNorm, normOutcome, normFallbackReason, normOK := r.invNormForOrdinal(ordinal)
+	if normOK {
+		recordColumnVectorGraphInvNormSourceStats(stats, normOutcome, normFallbackReason)
+	} else {
+		if normFallbackReason != "" {
+			recordColumnVectorGraphInvNormFallbackReasonStats(stats, normFallbackReason)
+			if stats != nil {
+				stats.NormSourceFallbacks++
+			}
+		}
+		var err error
+		invNorm, err = view.legacyInvNorm(rowIndex)
+		if err != nil {
+			return 0, err
+		}
+	}
 	if stats != nil {
 		stats.CandidateFetches++
 		stats.VectorBytesRead += uint64(len(vector)) * 4
+		stats.NormBytesRead += 4
 	}
 	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
 	if err != nil {
@@ -662,6 +695,40 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan 
 		stats.BlockViewBuilds = plan.builds
 	}
 	return layerAdjacency, nil
+}
+
+func recordColumnVectorGraphInvNormSourceStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphInvNormStateOutcome, fallbackReason typeddecode.Reason) {
+	if stats == nil {
+		return
+	}
+	switch outcome {
+	case columnVectorGraphInvNormStateOutcomeMmapDirect:
+		stats.NormMmapDirectViews++
+		stats.NormDirectViews++
+	case columnVectorGraphInvNormStateOutcomeHeapCopyTypedView:
+		stats.NormHeapCopyTypedViews++
+	case columnVectorGraphInvNormStateOutcomeScratchDecode:
+		stats.NormScratchDecodes++
+	default:
+		stats.NormScratchDecodes++
+	}
+	recordColumnVectorGraphInvNormFallbackReasonStats(stats, fallbackReason)
+}
+
+func recordColumnVectorGraphInvNormFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
+	if stats == nil || reason == "" || reason == typeddecode.ReasonSupported {
+		return
+	}
+	switch reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonUnaligned:
+		stats.NormAbsoluteOffsetUnaligned++
+	case typeddecode.ReasonActualPointerUnaligned:
+		stats.NormActualPointerUnaligned++
+	case typeddecode.ReasonNilHandle, typeddecode.ReasonStaleHandle:
+		stats.NormStaleHandles++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonValidationFailed:
+		stats.NormValidationFailures++
+	}
 }
 
 func recordColumnVectorGraphVectorSourceStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphTypedColumnVectorOutcome, fallbackReason typeddecode.Reason) {

@@ -847,6 +847,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.VisitedNodes += stats.VisitedNodes
 		searchStats.VisitedEdges += stats.VisitedEdges
 		searchStats.VectorBytesRead += stats.VectorBytesRead
+		searchStats.NormBytesRead += stats.NormBytesRead
 		searchStats.AdjacencyBytesRead += stats.AdjacencyBytesRead
 		searchStats.CandidateFetches += stats.CandidateFetches
 		searchStats.ExpansionFetches += stats.ExpansionFetches
@@ -867,6 +868,21 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.AdjacencyAbsoluteOffsetUnaligned += stats.AdjacencyAbsoluteOffsetUnaligned
 		searchStats.AdjacencyActualPointerUnaligned += stats.AdjacencyActualPointerUnaligned
 		searchStats.AdjacencyStaleHandles += stats.AdjacencyStaleHandles
+		searchStats.NormDirectViews += stats.NormDirectViews
+		searchStats.NormMmapDirectViews += stats.NormMmapDirectViews
+		searchStats.NormHeapCopyTypedViews += stats.NormHeapCopyTypedViews
+		searchStats.NormScratchDecodes += stats.NormScratchDecodes
+		searchStats.NormSourceUnavailable += stats.NormSourceUnavailable
+		searchStats.NormSourceFallbacks += stats.NormSourceFallbacks
+		searchStats.NormValidationFailures += stats.NormValidationFailures
+		searchStats.NormAbsoluteOffsetUnaligned += stats.NormAbsoluteOffsetUnaligned
+		searchStats.NormActualPointerUnaligned += stats.NormActualPointerUnaligned
+		searchStats.NormStaleHandles += stats.NormStaleHandles
+		searchStats.NormMappedBytes = stats.NormMappedBytes
+		searchStats.NormHeapCopyBytes = stats.NormHeapCopyBytes
+		searchStats.NormDecodedBytes = stats.NormDecodedBytes
+		searchStats.NormActiveHandles = stats.NormActiveHandles
+		searchStats.NormDeniedResources = stats.NormDeniedResources
 		searchStats.VectorDirectViews += stats.VectorDirectViews
 		searchStats.VectorMmapDirectViews += stats.VectorMmapDirectViews
 		searchStats.VectorHeapCopyTypedViews += stats.VectorHeapCopyTypedViews
@@ -968,6 +984,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalVisitedNodes atomic.Uint64
 	var totalVisitedEdges atomic.Uint64
 	var totalVectorBytesRead atomic.Uint64
+	var totalNormBytesRead atomic.Uint64
 	var totalAdjacencyBytesRead atomic.Uint64
 	var totalCandidateFetches atomic.Uint64
 	var totalExpansionFetches atomic.Uint64
@@ -988,6 +1005,21 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalAdjacencyAbsoluteOffsetUnaligned atomic.Uint64
 	var totalAdjacencyActualPointerUnaligned atomic.Uint64
 	var totalAdjacencyStaleHandles atomic.Uint64
+	var totalNormDirectViews atomic.Uint64
+	var totalNormMmapDirectViews atomic.Uint64
+	var totalNormHeapCopyTypedViews atomic.Uint64
+	var totalNormScratchDecodes atomic.Uint64
+	var totalNormSourceUnavailable atomic.Uint64
+	var totalNormSourceFallbacks atomic.Uint64
+	var totalNormValidationFailures atomic.Uint64
+	var totalNormAbsoluteOffsetUnaligned atomic.Uint64
+	var totalNormActualPointerUnaligned atomic.Uint64
+	var totalNormStaleHandles atomic.Uint64
+	var totalNormMappedBytes atomic.Uint64
+	var totalNormHeapCopyBytes atomic.Uint64
+	var totalNormDecodedBytes atomic.Uint64
+	var totalNormActiveHandles atomic.Int64
+	var totalNormDeniedResources atomic.Uint64
 	var totalVectorDirectViews atomic.Uint64
 	var totalVectorMmapDirectViews atomic.Uint64
 	var totalVectorHeapCopyTypedViews atomic.Uint64
@@ -1037,6 +1069,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.VisitedNodes += stats.VisitedNodes
 			localStats.VisitedEdges += stats.VisitedEdges
 			localStats.VectorBytesRead += stats.VectorBytesRead
+			localStats.NormBytesRead += stats.NormBytesRead
 			localStats.AdjacencyBytesRead += stats.AdjacencyBytesRead
 			localStats.CandidateFetches += stats.CandidateFetches
 			localStats.ExpansionFetches += stats.ExpansionFetches
@@ -1057,6 +1090,21 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.AdjacencyAbsoluteOffsetUnaligned += stats.AdjacencyAbsoluteOffsetUnaligned
 			localStats.AdjacencyActualPointerUnaligned += stats.AdjacencyActualPointerUnaligned
 			localStats.AdjacencyStaleHandles += stats.AdjacencyStaleHandles
+			localStats.NormDirectViews += stats.NormDirectViews
+			localStats.NormMmapDirectViews += stats.NormMmapDirectViews
+			localStats.NormHeapCopyTypedViews += stats.NormHeapCopyTypedViews
+			localStats.NormScratchDecodes += stats.NormScratchDecodes
+			localStats.NormSourceUnavailable += stats.NormSourceUnavailable
+			localStats.NormSourceFallbacks += stats.NormSourceFallbacks
+			localStats.NormValidationFailures += stats.NormValidationFailures
+			localStats.NormAbsoluteOffsetUnaligned += stats.NormAbsoluteOffsetUnaligned
+			localStats.NormActualPointerUnaligned += stats.NormActualPointerUnaligned
+			localStats.NormStaleHandles += stats.NormStaleHandles
+			localStats.NormMappedBytes = stats.NormMappedBytes
+			localStats.NormHeapCopyBytes = stats.NormHeapCopyBytes
+			localStats.NormDecodedBytes = stats.NormDecodedBytes
+			localStats.NormActiveHandles = stats.NormActiveHandles
+			localStats.NormDeniedResources = stats.NormDeniedResources
 			localStats.VectorDirectViews += stats.VectorDirectViews
 			localStats.VectorMmapDirectViews += stats.VectorMmapDirectViews
 			localStats.VectorHeapCopyTypedViews += stats.VectorHeapCopyTypedViews
@@ -1079,6 +1127,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalVisitedNodes.Add(localStats.VisitedNodes)
 		totalVisitedEdges.Add(localStats.VisitedEdges)
 		totalVectorBytesRead.Add(localStats.VectorBytesRead)
+		totalNormBytesRead.Add(localStats.NormBytesRead)
 		totalAdjacencyBytesRead.Add(localStats.AdjacencyBytesRead)
 		totalCandidateFetches.Add(localStats.CandidateFetches)
 		totalExpansionFetches.Add(localStats.ExpansionFetches)
@@ -1099,6 +1148,21 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalAdjacencyAbsoluteOffsetUnaligned.Add(localStats.AdjacencyAbsoluteOffsetUnaligned)
 		totalAdjacencyActualPointerUnaligned.Add(localStats.AdjacencyActualPointerUnaligned)
 		totalAdjacencyStaleHandles.Add(localStats.AdjacencyStaleHandles)
+		totalNormDirectViews.Add(localStats.NormDirectViews)
+		totalNormMmapDirectViews.Add(localStats.NormMmapDirectViews)
+		totalNormHeapCopyTypedViews.Add(localStats.NormHeapCopyTypedViews)
+		totalNormScratchDecodes.Add(localStats.NormScratchDecodes)
+		totalNormSourceUnavailable.Add(localStats.NormSourceUnavailable)
+		totalNormSourceFallbacks.Add(localStats.NormSourceFallbacks)
+		totalNormValidationFailures.Add(localStats.NormValidationFailures)
+		totalNormAbsoluteOffsetUnaligned.Add(localStats.NormAbsoluteOffsetUnaligned)
+		totalNormActualPointerUnaligned.Add(localStats.NormActualPointerUnaligned)
+		totalNormStaleHandles.Add(localStats.NormStaleHandles)
+		totalNormMappedBytes.Add(localStats.NormMappedBytes)
+		totalNormHeapCopyBytes.Add(localStats.NormHeapCopyBytes)
+		totalNormDecodedBytes.Add(localStats.NormDecodedBytes)
+		totalNormActiveHandles.Add(localStats.NormActiveHandles)
+		totalNormDeniedResources.Add(localStats.NormDeniedResources)
 		totalVectorDirectViews.Add(localStats.VectorDirectViews)
 		totalVectorMmapDirectViews.Add(localStats.VectorMmapDirectViews)
 		totalVectorHeapCopyTypedViews.Add(localStats.VectorHeapCopyTypedViews)
@@ -1132,6 +1196,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		VisitedNodes:                     totalVisitedNodes.Load(),
 		VisitedEdges:                     totalVisitedEdges.Load(),
 		VectorBytesRead:                  totalVectorBytesRead.Load(),
+		NormBytesRead:                    totalNormBytesRead.Load(),
 		AdjacencyBytesRead:               totalAdjacencyBytesRead.Load(),
 		CandidateFetches:                 totalCandidateFetches.Load(),
 		ExpansionFetches:                 totalExpansionFetches.Load(),
@@ -1152,6 +1217,21 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		AdjacencyAbsoluteOffsetUnaligned: totalAdjacencyAbsoluteOffsetUnaligned.Load(),
 		AdjacencyActualPointerUnaligned:  totalAdjacencyActualPointerUnaligned.Load(),
 		AdjacencyStaleHandles:            totalAdjacencyStaleHandles.Load(),
+		NormDirectViews:                  totalNormDirectViews.Load(),
+		NormMmapDirectViews:              totalNormMmapDirectViews.Load(),
+		NormHeapCopyTypedViews:           totalNormHeapCopyTypedViews.Load(),
+		NormScratchDecodes:               totalNormScratchDecodes.Load(),
+		NormSourceUnavailable:            totalNormSourceUnavailable.Load(),
+		NormSourceFallbacks:              totalNormSourceFallbacks.Load(),
+		NormValidationFailures:           totalNormValidationFailures.Load(),
+		NormAbsoluteOffsetUnaligned:      totalNormAbsoluteOffsetUnaligned.Load(),
+		NormActualPointerUnaligned:       totalNormActualPointerUnaligned.Load(),
+		NormStaleHandles:                 totalNormStaleHandles.Load(),
+		NormMappedBytes:                  totalNormMappedBytes.Load(),
+		NormHeapCopyBytes:                totalNormHeapCopyBytes.Load(),
+		NormDecodedBytes:                 totalNormDecodedBytes.Load(),
+		NormActiveHandles:                totalNormActiveHandles.Load(),
+		NormDeniedResources:              totalNormDeniedResources.Load(),
 		VectorDirectViews:                totalVectorDirectViews.Load(),
 		VectorMmapDirectViews:            totalVectorMmapDirectViews.Load(),
 		VectorHeapCopyTypedViews:         totalVectorHeapCopyTypedViews.Load(),
@@ -1405,6 +1485,7 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.VisitedNodes)/float64(n), "visited_nodes/search")
 	b.ReportMetric(float64(searchStats.VisitedEdges)/float64(n), "visited_edges/search")
 	b.ReportMetric(float64(searchStats.VectorBytesRead)/float64(n), "vector_B/search")
+	b.ReportMetric(float64(searchStats.NormBytesRead)/float64(n), "norm_B/search")
 	b.ReportMetric(float64(searchStats.AdjacencyBytesRead)/float64(n), "adjacency_B/search")
 	if searchStats.Candidates > 0 {
 		b.ReportMetric(float64(searchStats.Edges)/float64(searchStats.Candidates), "edges/node")
@@ -1426,6 +1507,22 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.AdjacencyAbsoluteOffsetUnaligned)/float64(n), "adjacency_absolute_offset_unaligned/search")
 	b.ReportMetric(float64(searchStats.AdjacencyActualPointerUnaligned)/float64(n), "adjacency_actual_pointer_unaligned/search")
 	b.ReportMetric(float64(searchStats.AdjacencyStaleHandles)/float64(n), "adjacency_stale_handles/search")
+	b.ReportMetric(float64(searchStats.NormDirectViews)/float64(n), "norm_direct_views/search")
+	b.ReportMetric(float64(searchStats.NormMmapDirectViews)/float64(n), "norm_mmap_direct/search")
+	b.ReportMetric(float64(searchStats.NormHeapCopyTypedViews)/float64(n), "norm_heap_copy_typed_view/search")
+	b.ReportMetric(float64(searchStats.NormScratchDecodes)/float64(n), "norm_scratch_decode/search")
+	b.ReportMetric(float64(searchStats.NormScratchDecodes)/float64(n), "norm_scratch_decodes/search")
+	b.ReportMetric(float64(searchStats.NormSourceUnavailable)/float64(n), "norm_source_unavailable/search")
+	b.ReportMetric(float64(searchStats.NormSourceFallbacks)/float64(n), "norm_source_fallbacks/search")
+	b.ReportMetric(float64(searchStats.NormValidationFailures)/float64(n), "norm_validation_failures/search")
+	b.ReportMetric(float64(searchStats.NormAbsoluteOffsetUnaligned)/float64(n), "norm_absolute_offset_unaligned/search")
+	b.ReportMetric(float64(searchStats.NormActualPointerUnaligned)/float64(n), "norm_actual_pointer_unaligned/search")
+	b.ReportMetric(float64(searchStats.NormStaleHandles)/float64(n), "norm_stale_handles/search")
+	b.ReportMetric(float64(searchStats.NormMappedBytes), "norm_mapped_B")
+	b.ReportMetric(float64(searchStats.NormHeapCopyBytes), "norm_heap_copy_B")
+	b.ReportMetric(float64(searchStats.NormDecodedBytes), "norm_decoded_B")
+	b.ReportMetric(float64(searchStats.NormActiveHandles), "norm_active_handles")
+	b.ReportMetric(float64(searchStats.NormDeniedResources), "norm_denied_resources")
 	b.ReportMetric(float64(searchStats.VectorDirectViews)/float64(n), "vector_direct_views/search")
 	b.ReportMetric(float64(searchStats.VectorMmapDirectViews)/float64(n), "vector_mmap_direct/search")
 	b.ReportMetric(float64(searchStats.VectorHeapCopyTypedViews)/float64(n), "vector_heap_copy_typed_view/search")

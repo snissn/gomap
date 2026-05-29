@@ -47,6 +47,9 @@ type columnVectorGraphPhysicalRowReader struct {
 	reader                              *columnPhysicalRowReader
 	typedVectorSource                   *columnVectorGraphTypedColumnVectorSource
 	typedVectorFallbackReason           string
+	invNormSource                       *columnVectorGraphInvNormStateSource
+	invNormStateUnavailable             bool
+	invNormStateFallbackReason          typeddecode.Reason
 	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
 	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
 	layer0AdjacencySourceUnavailable    bool
@@ -112,6 +115,27 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 	}
 	if catalog != nil && catalog.meta.Options.ColumnStore != nil {
 		baseCfg := catalog.meta.Options.ColumnStore
+		var baseManifest columnManifestSnapshot
+		var baseRecords []columnManifestRecord
+		var baseManifestLoaded bool
+		loadBaseManifestRecords := func() (columnManifestSnapshot, []columnManifestRecord, error) {
+			if baseManifestLoaded {
+				return baseManifest, baseRecords, nil
+			}
+			rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+			records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, err
+			}
+			manifest, err := decodeColumnManifestSnapshotForScan(records)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, err
+			}
+			baseManifest = manifest
+			baseRecords = records
+			baseManifestLoaded = true
+			return baseManifest, baseRecords, nil
+		}
 		if sources, fallbackReason, sourceErr := c.openColumnVectorGraphAdjacencyDirectSourcesForReader(catalog.meta.Name, *baseCfg, def, graph); sourceErr == nil && sources != nil {
 			graphReader.adjacencyLayerSources = sources
 			if len(sources.sources) > 0 {
@@ -125,15 +149,37 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		} else {
 			graphReader.layer0AdjacencySourceUnavailable = true
 		}
+		if _, records, recordsErr := loadBaseManifestRecords(); recordsErr == nil {
+			if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
+				state, stateErr := decodeColumnVectorIndexStateRecord(stateRecord.value)
+				if stateErr != nil {
+					_ = graphReader.Close()
+					return nil, stateErr
+				}
+				if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
+					source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+					if sourceErr != nil {
+						_ = graphReader.Close()
+						return nil, sourceErr
+					}
+					graphReader.invNormSource = source
+					graphReader.invNormStateFallbackReason = fallbackReason
+				} else {
+					graphReader.invNormStateUnavailable = true
+				}
+			} else {
+				graphReader.invNormStateUnavailable = true
+			}
+		} else {
+			graphReader.invNormStateUnavailable = true
+			graphReader.invNormStateFallbackReason = typeddecode.ReasonValidationFailed
+		}
 		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
 			graphReader.typedVectorFallbackReason = ownerErr.Error()
 		} else if typedVectorOwner {
-			rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
-			records, recordsErr := loadColumnManifestRecordsFromRoot(snap, rootID)
+			manifest, records, recordsErr := loadBaseManifestRecords()
 			if recordsErr != nil {
 				graphReader.typedVectorFallbackReason = recordsErr.Error()
-			} else if manifest, manifestErr := decodeColumnManifestSnapshotForScan(records); manifestErr != nil {
-				graphReader.typedVectorFallbackReason = manifestErr.Error()
 			} else if source, fallbackReason := c.openColumnVectorGraphTypedColumnVectorSourceForReader(catalog, *baseCfg, manifest, records, graph, graphReader); source != nil {
 				graphReader.typedVectorSource = source
 			} else if fallbackReason != "" {
@@ -242,6 +288,9 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		if err := validateColumnVectorIndexStateAssetRefsAvailable(c.db.ColumnAssetRootDir(), state); err != nil {
 			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 		}
+		if err := validateColumnVectorGraphInvNormStateAssetIfPresent(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph, state); err != nil {
+			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+		}
 	}
 	if columnVectorGraphManifestMatchStatusWithBaseChecksum(catalog.meta.Name, graph, def, *cfg, baseChecksum) != columnVectorGraphManifestMatchLoaded {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q graph manifest does not match vector index definition: %w", def.Name, errColumnVectorGraphManifestMismatch)
@@ -294,6 +343,12 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 			closeErr = err
 		}
 		r.typedVectorSource = nil
+	}
+	if r.invNormSource != nil {
+		if err := r.invNormSource.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.invNormSource = nil
 	}
 	if r.adjacencyLayerSources != nil {
 		if err := r.adjacencyLayerSources.Close(); closeErr == nil && err != nil {

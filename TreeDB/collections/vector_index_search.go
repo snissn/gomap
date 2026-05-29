@@ -81,6 +81,8 @@ type VectorIndexSearchStats struct {
 	VisitedEdges uint64 `json:"visited_edges,omitempty"`
 	// VectorBytesRead is the logical vector payload bytes read while scoring candidates.
 	VectorBytesRead uint64 `json:"vector_bytes_read,omitempty"`
+	// NormBytesRead is the logical inverse-norm payload bytes read while scoring candidates.
+	NormBytesRead uint64 `json:"norm_bytes_read,omitempty"`
 	// AdjacencyBytesRead is the logical adjacency payload bytes read while expanding graph nodes.
 	AdjacencyBytesRead uint64 `json:"adjacency_bytes_read,omitempty"`
 	// CandidateFetches is the per-search count of vector row fetches for scored candidates.
@@ -226,6 +228,36 @@ type VectorIndexSearchStats struct {
 	AdjacencyStaleHandles uint64 `json:"adjacency_stale_handles,omitempty"`
 	// AdjacencyScratchDecodes is the per-search count of adjacency payloads served from scratch/fallback decodes.
 	AdjacencyScratchDecodes uint64 `json:"adjacency_scratch_decodes,omitempty"`
+	// NormDirectViews is a legacy alias for inverse norms served from certified mmap direct views.
+	NormDirectViews uint64 `json:"norm_direct_views,omitempty"`
+	// NormMmapDirectViews is the per-search count of inverse norms served from certified zero-copy mmap direct views.
+	NormMmapDirectViews uint64 `json:"norm_mmap_direct,omitempty"`
+	// NormHeapCopyTypedViews is the per-search count of inverse norms served from typed heap-copy fallback views.
+	NormHeapCopyTypedViews uint64 `json:"norm_heap_copy_typed_view,omitempty"`
+	// NormScratchDecodes is the per-search count of inverse norms served from scratch/fallback decoded state.
+	NormScratchDecodes uint64 `json:"norm_scratch_decodes,omitempty"`
+	// NormSourceUnavailable reports that this searcher had no usable inverse-norm state source and used graph-row fallback.
+	NormSourceUnavailable uint64 `json:"norm_source_unavailable,omitempty"`
+	// NormSourceFallbacks reports searches or observations that fell back from inverse-norm state to graph rows.
+	NormSourceFallbacks uint64 `json:"norm_source_fallbacks,omitempty"`
+	// NormValidationFailures counts inverse-norm state source certification, shape, or validation failures.
+	NormValidationFailures uint64 `json:"norm_validation_failures,omitempty"`
+	// NormAbsoluteOffsetUnaligned counts inverse-norm state fallbacks caused by absolute storage offset misalignment.
+	NormAbsoluteOffsetUnaligned uint64 `json:"norm_absolute_offset_unaligned,omitempty"`
+	// NormActualPointerUnaligned counts inverse-norm state fallbacks caused by actual mapped pointer misalignment.
+	NormActualPointerUnaligned uint64 `json:"norm_actual_pointer_unaligned,omitempty"`
+	// NormStaleHandles counts inverse-norm state fallbacks caused by released/stale mappedresource handles.
+	NormStaleHandles uint64 `json:"norm_stale_handles,omitempty"`
+	// NormMappedBytes is the mapped-resource mapped byte total backing the bound inverse-norm state source.
+	NormMappedBytes uint64 `json:"norm_mapped_bytes,omitempty"`
+	// NormHeapCopyBytes is the mapped-resource heap-copy byte total backing the bound inverse-norm state source.
+	NormHeapCopyBytes uint64 `json:"norm_heap_copy_bytes,omitempty"`
+	// NormDecodedBytes is decoded fallback inverse-norm state bytes held by the bound source.
+	NormDecodedBytes uint64 `json:"norm_decoded_bytes,omitempty"`
+	// NormActiveHandles is the current active mappedresource handle count for inverse-norm state views.
+	NormActiveHandles int64 `json:"norm_active_handles,omitempty"`
+	// NormDeniedResources is the total denied mappedresource acquisition count for the inverse-norm state source.
+	NormDeniedResources uint64 `json:"norm_denied_resources,omitempty"`
 	// TypedColumnMappedBytes is the typed-column mapped-resource mapped byte total backing the bound vector source.
 	TypedColumnMappedBytes uint64 `json:"typed_column_mapped_bytes,omitempty"`
 	// TypedColumnHeapCopyBytes is the typed-column mapped-resource heap-copy byte total backing the bound vector source.
@@ -794,6 +826,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		VisitedNodes:                     searchStats.VisitedNodes,
 		VisitedEdges:                     searchStats.VisitedEdges,
 		VectorBytesRead:                  searchStats.VectorBytesRead,
+		NormBytesRead:                    searchStats.NormBytesRead,
 		AdjacencyBytesRead:               searchStats.AdjacencyBytesRead,
 		CandidateFetches:                 searchStats.CandidateFetches,
 		ExpansionFetches:                 searchStats.ExpansionFetches,
@@ -827,6 +860,21 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		AdjacencyActualPointerUnaligned:  searchStats.AdjacencyActualPointerUnaligned,
 		AdjacencyStaleHandles:            searchStats.AdjacencyStaleHandles,
 		AdjacencyScratchDecodes:          searchStats.AdjacencyScratchDecodes,
+		NormDirectViews:                  searchStats.NormDirectViews,
+		NormMmapDirectViews:              searchStats.NormMmapDirectViews,
+		NormHeapCopyTypedViews:           searchStats.NormHeapCopyTypedViews,
+		NormScratchDecodes:               searchStats.NormScratchDecodes,
+		NormSourceUnavailable:            searchStats.NormSourceUnavailable,
+		NormSourceFallbacks:              searchStats.NormSourceFallbacks,
+		NormValidationFailures:           searchStats.NormValidationFailures,
+		NormAbsoluteOffsetUnaligned:      searchStats.NormAbsoluteOffsetUnaligned,
+		NormActualPointerUnaligned:       searchStats.NormActualPointerUnaligned,
+		NormStaleHandles:                 searchStats.NormStaleHandles,
+		NormMappedBytes:                  searchStats.NormMappedBytes,
+		NormHeapCopyBytes:                searchStats.NormHeapCopyBytes,
+		NormDecodedBytes:                 searchStats.NormDecodedBytes,
+		NormActiveHandles:                searchStats.NormActiveHandles,
+		NormDeniedResources:              searchStats.NormDeniedResources,
 		TypedColumnMappedBytes:           searchStats.TypedColumnMappedBytes,
 		TypedColumnHeapCopyBytes:         searchStats.TypedColumnHeapCopyBytes,
 		TypedColumnDecodedBytes:          searchStats.TypedColumnDecodedBytes,
