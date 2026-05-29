@@ -144,11 +144,29 @@ func TestTypedColumnPartSortKeyRejectsNullable1948(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPartSortKeyAllowsRowAssetDescendingFallback1948(t *testing.T) {
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "row_sort", Path: "row_sort", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "typed_value", Path: "typed_value", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+	}, SortKey: []ColumnSortKey{{Column: "row_sort", Direction: ColumnSortDescending}}}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalize row-asset descending SortKey: %v", err)
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(*normalized, columnStoreTypedColumnPartFields(*normalized))
+	if err != nil {
+		t.Fatalf("typedColumnPartPublicationSortKey: %v", err)
+	}
+	if len(sortKey) != 0 {
+		t.Fatalf("typed-column sort key=%+v want row-asset descending fallback", sortKey)
+	}
+}
+
 func TestTypedColumnPartSortKeyRejectsDescending1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948([]ColumnSortKey{{Column: "time_us", Direction: ColumnSortDescending}})
 	_, err := normalizeColumnStoreConfig("events", cfg)
-	if err == nil || !strings.Contains(err.Error(), "descending sort key") {
-		t.Fatalf("normalize descending sort key err=%v want descending rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "descending typed_column_part sort key") {
+		t.Fatalf("normalize descending sort key err=%v want descending typed_column_part rejection", err)
 	}
 }
 

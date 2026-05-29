@@ -587,13 +587,14 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			return fmt.Errorf("collections: sort key column %q value_type %q is not orderable", sortKey.Column, columnTypes[sortKey.Column])
 		}
 		switch sortKey.Direction {
-		case ColumnSortAscending:
-		case ColumnSortDescending:
-			return fmt.Errorf("collections: descending sort key column %q is not supported yet", sortKey.Column)
+		case ColumnSortAscending, ColumnSortDescending:
 		default:
 			return fmt.Errorf("collections: unsupported sort direction %q", sortKey.Direction)
 		}
 		if columnStoreColumnIsTypedColumnPart(col) {
+			if sortKey.Direction == ColumnSortDescending {
+				return fmt.Errorf("collections: descending typed_column_part sort key column %q is not supported yet", sortKey.Column)
+			}
 			if col.Nullable {
 				return fmt.Errorf("collections: typed_column_part sort key column %q is nullable; null/default ordering is not defined", sortKey.Column)
 			}
