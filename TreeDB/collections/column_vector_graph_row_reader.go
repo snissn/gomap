@@ -307,7 +307,10 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if columnVectorIndexStateMatchStatusWithBaseChecksum(vectorState, def, *cfg, baseChecksum) != columnVectorIndexStateMatchLoaded || !columnVectorIndexStateMatchesGraph(vectorState, graph) {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q vector-index state does not match graph manifest: %w", def.Name, errColumnVectorGraphManifestMismatch)
 	}
-	if err := validateColumnVectorIndexStateAssets(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, vectorState, graph); err != nil {
+	// Keep snapshot-view validation cheap: this path is also used by status/open
+	// setup. The adjacency state source binder below performs the single full
+	// typed-list payload validation/read when it acquires offset/value sections.
+	if err := validateColumnVectorIndexStateAssetsForStatus(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, vectorState, graph); err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
 	if err := validateColumnVectorGraphInvNormStateAssetIfPresent(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph, vectorState); err != nil {
