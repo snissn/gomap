@@ -32,13 +32,17 @@ type columnVectorGraphAdjacencySpan struct {
 }
 
 type columnVectorGraphSearchPlan struct {
-	reader          *columnVectorGraphPhysicalRowReader
-	physicalReader  *columnPhysicalRowReader
-	blockViews      map[int]*columnVectorGraphBlockView
-	singleBlockView *columnVectorGraphBlockView
-	hits            uint64
-	misses          uint64
-	builds          uint64
+	reader             *columnVectorGraphPhysicalRowReader
+	physicalReader     *columnPhysicalRowReader
+	blockViews         map[int]*columnVectorGraphBlockView
+	singleBlockView    *columnVectorGraphBlockView
+	ordinalRefs        []columnVectorGraphOrdinalRef
+	ordinalRefsReady   bool
+	singleOrdinalRange bool
+	scoreSource        columnVectorGraphSearchSource
+	hits               uint64
+	misses             uint64
+	builds             uint64
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
@@ -59,11 +63,20 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 		}
 		plan.reader = reader
 		plan.singleBlockView = nil
+		plan.ordinalRefs = plan.ordinalRefs[:0]
+		plan.ordinalRefsReady = false
+		plan.singleOrdinalRange = false
 	}
 	plan.physicalReader = physicalReader
 	plan.hits = 0
 	plan.misses = 0
 	plan.builds = 0
+	if err := plan.prepareOrdinalRefs(); err != nil {
+		return nil, err
+	}
+	if err := plan.scoreSource.prepare(plan); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 
@@ -90,6 +103,47 @@ func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) 
 	return &columnVectorGraphSearchPlan{reader: reader, physicalReader: physicalReader}, nil
 }
 
+func (p *columnVectorGraphSearchPlan) prepareOrdinalRefs() error {
+	if p == nil || p.reader == nil {
+		return errNilColumnVectorGraphPhysicalRowReader
+	}
+	reader := p.physicalReader
+	if reader == nil {
+		var err error
+		reader, err = p.reader.rowReader()
+		if err != nil {
+			return err
+		}
+		p.physicalReader = reader
+	}
+	if p.ordinalRefsReady {
+		return nil
+	}
+	p.singleOrdinalRange = len(reader.ranges) == 1
+	if p.singleOrdinalRange {
+		p.ordinalRefs = p.ordinalRefs[:0]
+		p.ordinalRefsReady = true
+		return nil
+	}
+	rowCount := reader.totalRows
+	if cap(p.ordinalRefs) < rowCount {
+		p.ordinalRefs = make([]columnVectorGraphOrdinalRef, rowCount)
+	} else {
+		p.ordinalRefs = p.ordinalRefs[:rowCount]
+	}
+	for _, rowRange := range reader.ranges {
+		end := rowRange.startOrdinal + rowRange.rowCount
+		if rowRange.startOrdinal < 0 || rowRange.rowCount < 0 || end < rowRange.startOrdinal || end > rowCount {
+			return fmt.Errorf("collections: column_graph ordinal range asset=%d start=%d rows=%d outside row_count=%d", rowRange.assetOrdinal, rowRange.startOrdinal, rowRange.rowCount, rowCount)
+		}
+		for ordinal := rowRange.startOrdinal; ordinal < end; ordinal++ {
+			p.ordinalRefs[ordinal] = columnVectorGraphOrdinalRef{assetOrdinal: rowRange.assetOrdinal, rowIndex: ordinal - rowRange.startOrdinal}
+		}
+	}
+	p.ordinalRefsReady = true
+	return nil
+}
+
 func (p *columnVectorGraphSearchPlan) ordinalRef(ordinal int) (columnVectorGraphOrdinalRef, error) {
 	if p == nil || p.reader == nil {
 		return columnVectorGraphOrdinalRef{}, errNilColumnVectorGraphPhysicalRowReader
@@ -103,21 +157,21 @@ func (p *columnVectorGraphSearchPlan) ordinalRef(ordinal int) (columnVectorGraph
 		}
 		p.physicalReader = reader
 	}
-	if len(reader.ranges) == 1 {
-		if uint64(ordinal) >= uint64(reader.totalRows) {
-			return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
+	if !p.ordinalRefsReady {
+		if err := p.prepareOrdinalRefs(); err != nil {
+			return columnVectorGraphOrdinalRef{}, err
 		}
-		return columnVectorGraphOrdinalRef{assetOrdinal: 0, rowIndex: ordinal}, nil
 	}
-	rangeIdx := reader.rangeIndexForOrdinal(ordinal)
-	if rangeIdx < 0 {
+	if uint64(ordinal) >= uint64(reader.totalRows) {
 		return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
 	}
-	rowRange := reader.ranges[rangeIdx]
-	return columnVectorGraphOrdinalRef{
-		assetOrdinal: rowRange.assetOrdinal,
-		rowIndex:     ordinal - rowRange.startOrdinal,
-	}, nil
+	if p.singleOrdinalRange {
+		return columnVectorGraphOrdinalRef{assetOrdinal: 0, rowIndex: ordinal}, nil
+	}
+	if ordinal >= len(p.ordinalRefs) {
+		return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
+	}
+	return p.ordinalRefs[ordinal], nil
 }
 
 func (p *columnVectorGraphSearchPlan) blockViewForOrdinal(ordinal int) (*columnVectorGraphBlockView, columnVectorGraphOrdinalRef, error) {

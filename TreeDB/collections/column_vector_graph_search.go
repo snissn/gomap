@@ -353,12 +353,16 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 
+	var plan *columnVectorGraphSearchPlan
 	defer func() {
 		r.populateTypedColumnVectorSearchStats(&stats)
 		r.populateInvNormStateSearchStats(&stats)
 		r.populateLayer0AdjacencySourceSearchStats(&stats)
+		if plan != nil {
+			plan.scoreSource.populateConstructionStats(&stats)
+		}
 	}()
-	plan, err := scratch.prepareSearchPlan(r)
+	plan, err = scratch.prepareSearchPlan(r)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -622,6 +626,13 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if plan != nil && plan.scoreSource.reader != nil {
+		return plan.scoreSource.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
+	}
+	return r.scoreOrdinalLegacy(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
 	view := singleBlockView
 	rowIndex := ordinal
 	if view == nil {
