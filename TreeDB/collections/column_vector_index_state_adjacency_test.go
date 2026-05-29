@@ -233,9 +233,6 @@ func makeColumnVectorIndexStateAdjacencyStatusContext1987(tb testing.TB, d *back
 	records, identity := testColumnGraphManifestRecordsV2A(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
 	graph := graphManifestFromRecords1918(tb, records, def)
 	statePartID := nextColumnVectorGraphPartIDAfter(prepared.Ref.PartID, prepared.Ref.PartID)
-	for _, source := range prepared.AdjacencyLayerSources {
-		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, source.Ref.PartID)
-	}
 	preparedStateAssets, err := prepareColumnVectorIndexStateAdjacencyAssets(d.ColumnAssetRootDir(), "docs", *baseCfg, def, graph.BaseManifestGeneration, statePartID, rows)
 	if err != nil {
 		tb.Fatalf("prepareColumnVectorIndexStateAdjacencyAssets: %v", err)
@@ -474,10 +471,18 @@ func assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(tb testing.TB, 
 		tb.Fatalf("state=%+v does not match graph=%+v", state, graph)
 	}
 	assets := columnVectorIndexStateAdjacencyAssetsByLayer1987(tb, state)
-	if len(assets) != graph.AdjacencyLayerCount || len(assets) == 0 {
-		tb.Fatalf("state adjacency assets=%d graph layers=%d", len(assets), graph.AdjacencyLayerCount)
+	expectedLayers := graph.AdjacencyLayerCount
+	if expectedLayers <= 0 {
+		for layer := range assets {
+			if layer+1 > expectedLayers {
+				expectedLayers = layer + 1
+			}
+		}
 	}
-	for layer := 0; layer < graph.AdjacencyLayerCount; layer++ {
+	if len(assets) != expectedLayers || expectedLayers == 0 {
+		tb.Fatalf("state adjacency assets=%d expected layers=%d graph legacy layers=%d", len(assets), expectedLayers, graph.AdjacencyLayerCount)
+	}
+	for layer := 0; layer < expectedLayers; layer++ {
 		asset, ok := assets[layer]
 		if !ok {
 			tb.Fatalf("missing state adjacency layer %d assets=%+v", layer, assets)

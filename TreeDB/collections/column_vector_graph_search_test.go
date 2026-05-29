@@ -1300,7 +1300,7 @@ func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnV
 	}
 	if shape.directPhysicalAsset && !shape.typedColumnVector {
 		rows := columnVectorGraphNativeSearchBenchAssetRowsV3(b, shape.rows, shape.dims, shape.m)
-		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencySources1921(b, shape.dims, shape.m, rows)
+		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencyState1989(b, shape.dims, shape.m, rows)
 		query := append([]float32(nil), rows[shape.queryOrdinal].Vector...)
 		return func() { _ = d.Close() }, col, def, query
 	}
@@ -1323,7 +1323,7 @@ func openColumnVectorGraphNativeSearchBenchFixtureV3(b *testing.B, shape columnV
 	return func() { _ = d.Close() }, col, def, query
 }
 
-func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencySources1921(tb testing.TB, dims, m int, rows []columnVectorGraphAssetRow) (*backenddb.DB, *Collection, VectorIndexDefinition) {
+func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencyState1989(tb testing.TB, dims, m int, rows []columnVectorGraphAssetRow) (*backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
 	if err != nil {
@@ -1361,11 +1361,6 @@ func publishColumnVectorGraphPhysicalReaderTestAssetWithShapeAndAdjacencySources
 		RowCount:               prepared.RowCount,
 		AssetRef:               prepared.Ref,
 		AssetBytes:             prepared.Bytes,
-		AdjacencyLayerCount:    len(prepared.AdjacencyLayerSources),
-	}
-	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, prepared.AdjacencyLayerSources)
-	if len(graph.AdjacencyLayerSources) > 0 {
-		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
 	}
 	identity := ColumnManifestIdentity{Generation: generation, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	records, manifestIdentity := testColumnGraphManifestRecordsFromSnapshot1920(tb, *baseCfg, graph, identity)

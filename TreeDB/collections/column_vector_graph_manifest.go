@@ -26,9 +26,9 @@ const (
 var columnManifestVectorGraphRecordPrefixBytes = []byte(columnManifestVectorGraphRecordPrefix)
 
 // Quarantine: graph-specific adjacency-source storage refs embedded in this
-// manifest (TCGA/TCGL) are transitional compatibility. #1986 owns moving
-// vector-index state refs out of these special graph records, and #1989 owns
-// removal or legacy isolation after uint32_list adjacency state is in use.
+// manifest (TCGA/TCGL) are legacy compatibility only. New graph builds leave
+// these fields empty and publish HNSW adjacency through vector-index state
+// uint32_list assets instead.
 type columnVectorGraphManifestSnapshot struct {
 	IndexName              string
 	Field                  string
@@ -93,13 +93,11 @@ type columnVectorGraphAssetRow struct {
 }
 
 type columnVectorGraphPreparedPhysicalAsset struct {
-	AssetRootDir          string
-	Config                ColumnStoreConfig
-	Ref                   ColumnAssetRef
-	Bytes                 int64
-	RowCount              int
-	Layer0AdjacencySource columnVectorGraphPreparedLayer0AdjacencySource
-	AdjacencyLayerSources []columnVectorGraphPreparedAdjacencySource
+	AssetRootDir string
+	Config       ColumnStoreConfig
+	Ref          ColumnAssetRef
+	Bytes        int64
+	RowCount     int
 }
 
 func columnVectorGraphManifestRecordKey(indexName string) []byte {
@@ -642,6 +640,9 @@ func columnVectorGraphPhysicalColumnStoreConfig(collection string, base ColumnSt
 	if base.AssetManager == nil {
 		return ColumnStoreConfig{}, errors.New("collections: column vector graph physical config requires base asset manager")
 	}
+	// The physical graph row asset keeps adjacency in the legacy adjacency_list
+	// row-image format for compatibility/fallback only. Primary HNSW adjacency
+	// storage is published separately as vector-index state uint32_list assets.
 	cfg, err := normalizeColumnStoreConfig(collection, &ColumnStoreConfig{
 		Enabled: true,
 		Columns: []ColumnStoreColumn{
@@ -709,23 +710,12 @@ func prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection string, base
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, err
 	}
-	sourcePartID := nextColumnVectorGraphPartIDAfter(partID, partID)
-	adjacencySources, err := prepareColumnVectorGraphAdjacencySourcesAssets(assetRootDir, collection, base, normalizedDef, generation, sourcePartID, rows)
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, err
-	}
-	var layer0Source columnVectorGraphPreparedLayer0AdjacencySource
-	if len(adjacencySources) > 0 {
-		layer0Source = adjacencySources[0]
-	}
 	return columnVectorGraphPreparedPhysicalAsset{
-		AssetRootDir:          assetRootDir,
-		Config:                graphCfg,
-		Ref:                   ref,
-		Bytes:                 summary.PayloadBytes,
-		RowCount:              summary.RowCount,
-		Layer0AdjacencySource: layer0Source,
-		AdjacencyLayerSources: adjacencySources,
+		AssetRootDir: assetRootDir,
+		Config:       graphCfg,
+		Ref:          ref,
+		Bytes:        summary.PayloadBytes,
+		RowCount:     summary.RowCount,
 	}, nil
 }
 

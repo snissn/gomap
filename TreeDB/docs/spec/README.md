@@ -211,9 +211,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     accounting, and JSONBench reporting into production `TreeDB/collections`,
     with direct query performance as the first-class target.
 - `TreeDB/docs/spec/typed-column-uint32-list-adjacency-quarantine.md`
-  - issue #1983 audit/quarantine contract for separating reusable
-    `raw_uint32_offsets_list` mechanics from graph-specific adjacency-source
-    storage, with downstream ownership for the #1982 list-adjacency stack.
+  - issue #1989 quarantine/removal contract for using vector-index state
+    `uint32_list` adjacency on the primary path while isolating legacy
+    graph-specific adjacency-source storage.
 - `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`
   - issue #1984 first-class `uint32_list` semantic contract, including
     `uint32[]` / conceptual `Array(UInt32)` aliases, `raw_uint32_offsets_list`

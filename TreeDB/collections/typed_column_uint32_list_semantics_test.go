@@ -80,7 +80,7 @@ func TestUint32ListCompatibilityNamingAndLegacyClassification(t *testing.T) {
 
 	requireTextContains(t, "adjacency quarantine doc", quarantineDoc,
 		"validation invariants, length-only offsets behavior, and compatibility naming strategy are defined in `typed-column-uint32-list-semantics.md`.",
-		"HNSW adjacency should become a consumer that reads row `i` as `values[offsets[i]:offsets[i+1]]` from vector-index state.",
+		"HNSW adjacency is a consumer that reads row `i` as `values[offsets[i]:offsets[i+1]]` from vector-index state.",
 	)
 }
 

@@ -24,7 +24,7 @@ The active stack targets typed-column fixed-width scalar/vector payloads only:
 | `ColumnStoreValueFloat32Vector` | yes | fixed-dim row-major little-endian `float32` payloads. |
 | `ColumnStoreValueBool` | no | bitpack/RLE and future bool encodings remain fallback-only until separately specified. |
 | `ColumnStoreValueString` | no | string values and dictionary string tables are not string direct-view payloads. Derived dictionary-code sidecar row-code payloads are a separate `uint32` sidecar direct-view format. |
-| `ColumnStoreValueAdjacencyList` | transitional offsets-list compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support, and #1917 wires that reader through the adapter. The current graph-specific `column_graph` adjacency-source publication/consumption path is quarantined by #1983; future work must generalize the offsets/value mechanics into `uint32_list` and layer HNSW adjacency above that primitive. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility. |
+| `ColumnStoreValueAdjacencyList` | legacy offsets-list compatibility | #1916 enables certified typed-column `raw_uint32_offsets_list` direct views (`uint64` offsets, `uint32` values) after #1915 writer/fallback-reader support, and #1917 wires that reader through the adapter. The graph-specific `column_graph` adjacency-source publication/consumption path is quarantined by #1989; primary HNSW adjacency now uses `uint32_list` vector-index state above the reusable offsets/value mechanics. Existing dense fixed-degree `raw_uint32_dense` and physical row-asset adjacency remain fallback/compatibility. |
 
 Physical row assets are deferred/fallback-only for this stack and must remain
 linked to #1897. Row-asset vector/adjacency/generic consumers must not be counted
@@ -88,8 +88,8 @@ valid.
 | --- | --- | --- |
 | `typed_column_part` | generic typed-column scalar/vector consumers | `int64`, native `float32`, native `double`, and `float32_vector` are active little-endian candidates after certification and read-time checks. |
 | `typed_column_part` | `column_graph` typed-column vector source | `float32_vector` is the active candidate. Other value types fallback or are inapplicable. |
-| `typed_column_part` | adapter `adjacency_list` offsets-list consumer | `raw_uint32_offsets_list` is active for variable adjacency reads with safe writer/fallback-reader plus certified primitive direct-view support, but remains a compatibility selector until #1984/#1985 define `uint32_list`. |
-| `typed_column_part` | quarantined column_graph adjacency sources or legacy dense adjacency | Durable graph-specific `raw_uint32_offsets_list` sources may be published, validated/reopened, and consumed per graph layer by current column-graph search, but #1983 marks this as transitional storage architecture. Row-asset adjacency remains canonical/fallback compatibility. Legacy fixed-degree `raw_uint32_dense` remains fallback/deferred compatibility. |
+| `typed_column_part` | vector-index state `uint32_list` consumer | `raw_uint32_offsets_list` is active for HNSW adjacency state with safe writer/fallback-reader plus certified primitive direct-view support. The `adjacency_list` selector remains compatibility-only. |
+| `typed_column_part` | legacy column_graph adjacency sources or legacy dense adjacency | Graph-specific `raw_uint32_offsets_list` source assets may be validated/reopened for old pre-alpha records and explicit compatibility fixtures, but #1989 quarantines them and new graph builds must not publish them. Row-asset adjacency remains fallback compatibility. Legacy fixed-degree `raw_uint32_dense` remains fallback/deferred compatibility. |
 | physical row asset | vector, adjacency, or generic row consumers | deferred/fallback-only; #1897 owns row-record alignment/padding; #1899 records this as a safe deferral, not current-stack mmap evidence. |
 
 ## Required payload byte order fixtures
@@ -135,15 +135,15 @@ later writer/reader PRs only when the same fail-closed behavior is preserved.
   writers, the segment/appender layer supplies deterministic zero prefix padding
   before active direct-view candidates so newly written assets satisfy this rule.
 
-### `raw_uint32_offsets_list` offsets/value mechanics (#1914, quarantined by #1983)
+### `raw_uint32_offsets_list` offsets/value mechanics (#1914, #1989 quarantine)
 
 The #1901 path implemented an offsets-list extension of
 `ColumnStoreValueAdjacencyList` selected by the explicit metadata selector
 `adjacency_layout: "uint32_offsets_list"` plus the internal encoding
 `raw_uint32_offsets_list`, not a new public value type and not an accidental
-missing `adjacency_degree` dense row. Issue #1983 quarantines that graph-specific
-integration: the salvageable target is the physical split offsets/value mechanics
-for a future generic `uint32_list` primitive. Its physical shape is:
+missing `adjacency_degree` dense row. Issue #1989 keeps that graph-specific
+selector compatibility-only: the primary path is the physical split offsets/value
+mechanics behind generic `uint32_list` vector-index state. Its physical shape is:
 
 ```text
 offsets []uint64  // row_count + 1, little-endian
@@ -178,11 +178,10 @@ Validation is split by layer:
   semantics, deleted-row rejection, row identity, candidate ordering, and score
   correctness are not primitive checks.
 
-See `typed-column-uint32-list-adjacency-quarantine.md` for the #1983 inventory of
-what to keep, generalize, remove, or quarantine. See
+See `typed-column-uint32-list-adjacency-quarantine.md` for the #1989 inventory of
+what to keep, remove, or quarantine. See
 `typed-column-uint32-list-semantics.md` for the #1984 logical `uint32_list`
-semantics, validation invariants, and length-only offsets behavior before
-Issue #1985 treats this encoding as a runtime storage primitive.
+semantics, validation invariants, and length-only offsets behavior.
 
 Empty lists are represented by equal adjacent offsets. V1 direct views are only
 for non-null, non-default, uncompressed offsets-list payloads. Fixed dense
@@ -194,14 +193,13 @@ physical row-asset adjacency direct views remain deferred to #1897.
 Bool bitpack/RLE, strings/dictionaries, nullable/default wrappers, compressed
 payloads, variable-width varint/delta/double-delta layouts, physical row assets,
 and legacy dense adjacency direct views are fallback-only or deferred unless a
-future issue adds a new explicit encoding and conformance row. For the current quarantined adjacency compatibility path, that explicit row is
-`raw_uint32_offsets_list`; issue `#1915` enables the safe writer/fallback reader,
-issue `#1916` enables the primitive direct-view reader, and issue `#1917` wires
-that reader through adapter scans. Column-graph rebuild/search may currently use
-derived per-layer sources, but new storage work must not extend that graph-specific
-source path as the target architecture; #1984 owns the generic `uint32_list`
-semantic contract, #1985 owns runtime primitive implementation, and #1986/#1988
-own vector-index state/search consumption.
+future issue adds a new explicit encoding and conformance row. The old
+`adjacency_layout` compatibility row remains `raw_uint32_offsets_list`; issue
+`#1915` enables the safe writer/fallback reader, issue `#1916` enables the
+primitive direct-view reader, and issue `#1917` wires that reader through adapter
+scans. Column-graph rebuild/search now uses vector-index state `uint32_list`
+assets on the primary path; new storage work must not extend the graph-specific
+source path as the target architecture.
 
 ## Old/non-certified behavior
 

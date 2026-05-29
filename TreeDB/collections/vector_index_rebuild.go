@@ -746,13 +746,6 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		AssetRef:               prepared.Ref,
 		AssetBytes:             prepared.Bytes,
 	}
-	graph.AdjacencyLayerCount = len(prepared.AdjacencyLayerSources)
-	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, prepared.AdjacencyLayerSources)
-	if len(graph.AdjacencyLayerSources) > 0 {
-		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
-	} else {
-		graph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceFromPrepared(graph, prepared.Layer0AdjacencySource)
-	}
 	statePartID := invNormPartID
 	if preparedInvNorm.Present {
 		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, preparedInvNorm.Ref.PartID)

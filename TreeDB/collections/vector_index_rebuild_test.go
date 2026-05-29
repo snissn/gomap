@@ -20,6 +20,13 @@ import (
 
 var columnGraphRebuildBenchSinkV2A VectorIndexStatus
 
+func assertColumnGraphNoLegacyAdjacencySources1989(tb testing.TB, graph columnVectorGraphManifestSnapshot) {
+	tb.Helper()
+	if graph.Layer0AdjacencySource.Present || graph.AdjacencyLayerCount != 0 || len(graph.AdjacencyLayerSources) != 0 {
+		tb.Fatalf("graph manifest has legacy adjacency sources layer0=%+v count=%d sources=%d; new graph builds must use vector-index state uint32_list assets", graph.Layer0AdjacencySource, graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
+	}
+}
+
 func TestColumnGraphRebuildVectorIndexPublishesPhysicalManifestV2A(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
@@ -127,21 +134,19 @@ func TestColumnGraphRebuildVectorIndexPublishesEmptyPhysicalManifestV2A(t *testi
 		t.Fatalf("empty graph scanned rows=%d want 0", len(scanned))
 	}
 	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
-	_ = records
-	list := loadColumnGraphLayer0AdjacencySourceList1918(t, d, "docs", cfg, def, graph)
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	list := loadColumnVectorIndexStateAdjacencyList1987(t, d, "docs", cfg, def, state, 0)
 	if list.Rows != 0 || len(list.Offsets) != 1 || list.Offsets[0] != 0 || len(list.Values) != 0 {
-		t.Fatalf("empty layer-0 source=%+v want rows=0 offsets=[0] values=[]", list)
+		t.Fatalf("empty state layer-0 list=%+v want rows=0 offsets=[0] values=[]", list)
 	}
-	if graph.AdjacencyLayerCount != 1 || len(graph.AdjacencyLayerSources) != 1 {
-		t.Fatalf("empty graph adjacency layer count=%d sources=%d want explicit layer 0 only", graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
-	}
+	assertColumnGraphNoLegacyAdjacencySources1989(t, graph)
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
-	for _, source := range graph.AdjacencyLayerSources {
-		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, source.Ref)
+	for _, asset := range columnVectorIndexStateAdjacencyAssetsByLayer1987(t, state) {
+		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, asset.Ref)
 	}
 }
 
-func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
+func TestColumnGraphRebuildPublishesUint32ListAdjacencyStateNotLegacySource1989(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0.95, 0.05, 0}},
@@ -158,22 +163,14 @@ func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 
 	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
-	if !graph.Layer0AdjacencySource.Present {
-		t.Fatalf("graph manifest missing layer-0 adjacency source: %+v", graph)
-	}
+	assertColumnGraphNoLegacyAdjacencySources1989(t, graph)
 	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
 	state := columnVectorIndexStateFromRecords1987(t, records, def)
 	if status.Stats.BytesDisk != columnVectorGraphStorageBytesWithState(graph, state) {
-		t.Fatalf("status bytes_disk=%d want graph+source+state=%d", status.Stats.BytesDisk, columnVectorGraphStorageBytesWithState(graph, state))
+		t.Fatalf("status bytes_disk=%d want graph+state=%d", status.Stats.BytesDisk, columnVectorGraphStorageBytesWithState(graph, state))
 	}
-	list := loadColumnGraphLayer0AdjacencySourceList1918(t, d, "docs", cfg, def, graph)
-	want := layer0AdjacencySourceFromScannedRows1918(t, scanned)
-	assertRawUint32OffsetsListEqual1918(t, list, want)
-	assertColumnGraphAllLayerSourcesMatchScanned1920(t, d, "docs", cfg, def, graph, scanned)
+	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, d, "docs", cfg, def, graph, state, scanned)
 	assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, graph.AssetRef)
-	for _, source := range graph.AdjacencyLayerSources {
-		assertColumnAssetReachabilityProtectsGraphRefV2A(t, col, source.Ref)
-	}
 
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
@@ -193,14 +190,13 @@ func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, reopenedStatus, def.Name)
 	reopenedGraph, reopenedRows := loadAndScanColumnGraphRebuildRowsV2A(t, reopened, "docs", def)
+	assertColumnGraphNoLegacyAdjacencySources1989(t, reopenedGraph)
 	reopenedRecords, reopenedCfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, reopened, "docs")
-	_ = reopenedRecords
-	reopenedList := loadColumnGraphLayer0AdjacencySourceList1918(t, reopened, "docs", reopenedCfg, def, reopenedGraph)
-	assertRawUint32OffsetsListEqual1918(t, reopenedList, layer0AdjacencySourceFromScannedRows1918(t, reopenedRows))
-	assertColumnGraphAllLayerSourcesMatchScanned1920(t, reopened, "docs", reopenedCfg, def, reopenedGraph, reopenedRows)
+	reopenedState := columnVectorIndexStateFromRecords1987(t, reopenedRecords, def)
+	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, reopened, "docs", reopenedCfg, def, reopenedGraph, reopenedState, reopenedRows)
 }
 
-func TestColumnGraphRebuildPublishesMultiLayerAdjacencySources1920(t *testing.T) {
+func TestColumnGraphRebuildPublishesMultiLayerUint32ListAdjacencyState1989(t *testing.T) {
 	rows := columnGraphRebuildSyntheticRowsV2A(96, 3)
 	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
@@ -208,12 +204,10 @@ func TestColumnGraphRebuildPublishesMultiLayerAdjacencySources1920(t *testing.T)
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
-	if graph.AdjacencyLayerCount <= 1 || len(graph.AdjacencyLayerSources) != graph.AdjacencyLayerCount {
-		_ = d.Close()
-		t.Fatalf("adjacency layer count=%d sources=%d want multiple layers", graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
-	}
-	_, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
-	assertColumnGraphAllLayerSourcesMatchScanned1920(t, d, "docs", cfg, def, graph, scanned)
+	assertColumnGraphNoLegacyAdjacencySources1989(t, graph)
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, d, "docs", cfg, def, graph, state, scanned)
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)
@@ -224,11 +218,13 @@ func TestColumnGraphRebuildPublishesMultiLayerAdjacencySources1920(t *testing.T)
 	reopened := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = reopened.Close() }()
 	reopenedGraph, reopenedRows := loadAndScanColumnGraphRebuildRowsV2A(t, reopened, "docs", def)
-	_, reopenedCfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, reopened, "docs")
-	assertColumnGraphAllLayerSourcesMatchScanned1920(t, reopened, "docs", reopenedCfg, def, reopenedGraph, reopenedRows)
+	assertColumnGraphNoLegacyAdjacencySources1989(t, reopenedGraph)
+	reopenedRecords, reopenedCfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, reopened, "docs")
+	reopenedState := columnVectorIndexStateFromRecords1987(t, reopenedRecords, def)
+	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, reopened, "docs", reopenedCfg, def, reopenedGraph, reopenedState, reopenedRows)
 }
 
-func TestColumnGraphRebuildPublishesEmptyNeighborLayer0Source1918(t *testing.T) {
+func TestColumnGraphRebuildPublishesEmptyNeighborUint32ListState1989(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "solo", vector: []float32{1, 0, 0}}}
 	_, d, _, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
 	defer func() { _ = d.Close() }()
@@ -243,17 +239,16 @@ func TestColumnGraphRebuildPublishesEmptyNeighborLayer0Source1918(t *testing.T) 
 	if len(scanned) != 1 || len(scanned[0].adjacency) != 0 {
 		t.Fatalf("single-row graph adjacency=%v want empty", scanned)
 	}
-	_, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
-	list := loadColumnGraphLayer0AdjacencySourceList1918(t, d, "docs", cfg, def, graph)
+	assertColumnGraphNoLegacyAdjacencySources1989(t, graph)
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	list := loadColumnVectorIndexStateAdjacencyList1987(t, d, "docs", cfg, def, state, 0)
 	if list.Rows != 1 || len(list.Offsets) != 2 || list.Offsets[0] != 0 || list.Offsets[1] != 0 || len(list.Values) != 0 {
-		t.Fatalf("single-row layer-0 source=%+v want one empty row", list)
-	}
-	if graph.AdjacencyLayerCount != 1 || len(graph.AdjacencyLayerSources) != 1 || graph.AdjacencyLayerSources[0].Layer != 0 {
-		t.Fatalf("single-row all-layer sources count=%d sources=%+v want layer 0 only", graph.AdjacencyLayerCount, graph.AdjacencyLayerSources)
+		t.Fatalf("single-row state layer-0 list=%+v want one empty row", list)
 	}
 }
 
-func TestColumnGraphRebuildPublishesAllLayerAdjacencySources1920(t *testing.T) {
+func TestColumnGraphLegacyAllLayerAdjacencySourcesCompatibility1920(t *testing.T) {
 	d, cfg, def, graph, rows := prepareManualColumnGraphAllLayerSources1920(t)
 	defer func() { _ = d.Close() }()
 	if graph.AdjacencyLayerCount != 3 || len(graph.AdjacencyLayerSources) != 3 {
@@ -286,7 +281,7 @@ func TestColumnGraphRebuildPublishesAllLayerAdjacencySources1920(t *testing.T) {
 	}
 }
 
-func TestColumnGraphAllLayerAdjacencySourcesRejectSingleLayerDefect1920(t *testing.T) {
+func TestColumnGraphLegacyAllLayerAdjacencySourcesRejectSingleLayerDefect1920(t *testing.T) {
 	t.Run("missing_single_layer", func(t *testing.T) {
 		d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
 		defer func() { _ = d.Close() }()
@@ -472,7 +467,7 @@ func TestColumnGraphAllLayerManifestRejectsMalformedSourceBlock1920(t *testing.T
 	})
 }
 
-func TestColumnGraphReachabilityProtectsAllLayerAdjacencySourceRefs1920(t *testing.T) {
+func TestColumnGraphReachabilityProtectsLegacyAllLayerAdjacencySourceRefs1920(t *testing.T) {
 	d, cfg, def, graph, _ := prepareManualColumnGraphAllLayerSources1920(t)
 	defer func() { _ = d.Close() }()
 	identity := ColumnManifestIdentity{Generation: graph.BaseManifestGeneration, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
@@ -493,39 +488,27 @@ func TestColumnGraphReachabilityProtectsAllLayerAdjacencySourceRefs1920(t *testi
 	}
 }
 
-func TestColumnGraphLayer0AdjacencySourceCorruptionFallsBack1919(t *testing.T) {
-	rows := []columnGraphRebuildInputRowV2A{
-		{id: "doc-a", vector: []float32{1, 0, 0}},
-		{id: "doc-b", vector: []float32{0, 1, 0}},
-		{id: "doc-c", vector: []float32{0, 0, 1}},
-	}
+func TestColumnGraphLegacyAdjacencySourceCorruptionFallsBack1919(t *testing.T) {
 	t.Run("missing_source", func(t *testing.T) {
-		_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+		d, col, def, graph, _ := openManualColumnGraphAllLayerSourceSearchFixture1921(t, nil)
 		defer func() { _ = d.Close() }()
-		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-			t.Fatalf("RebuildVectorIndex: %v", err)
-		}
-		graph, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
 		path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), graph.Layer0AdjacencySource.Ref)
 		if err != nil {
 			t.Fatalf("columnAssetSegmentPath: %v", err)
 		}
 		if err := os.Remove(path); err != nil {
-			t.Fatalf("remove source segment: %v", err)
+			t.Fatalf("remove legacy source segment: %v", err)
 		}
 		status, err := col.VectorIndexStatus(def.Name)
 		if err != nil {
-			t.Fatalf("VectorIndexStatus with missing optional source: %v", err)
+			t.Fatalf("VectorIndexStatus with missing optional legacy source: %v", err)
 		}
 		assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 	})
 
 	t.Run("wrong_row_count_identity", func(t *testing.T) {
-		_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+		d, _, def, _, _ := openManualColumnGraphAllLayerSourceSearchFixture1921(t, nil)
 		defer func() { _ = d.Close() }()
-		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-			t.Fatalf("RebuildVectorIndex: %v", err)
-		}
 		records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
 		manifest, err := decodeColumnManifestSnapshotForScan(records)
 		if err != nil {
@@ -534,21 +517,16 @@ func TestColumnGraphLayer0AdjacencySourceCorruptionFallsBack1919(t *testing.T) {
 		graph := graphManifestFromRecords1918(t, records, def)
 		graph.Layer0AdjacencySource.RowCount++
 		if !columnVectorGraphManifestMatchesDefinition("docs", graph, def, *cfg, manifest, records) {
-			t.Fatal("graph manifest mismatch for stale optional layer-0 source row_count; row-asset graph should remain loaded")
+			t.Fatal("graph manifest mismatch for stale optional legacy layer-0 source row_count; vector-index state should remain loaded")
 		}
 	})
 
 	t.Run("corrupt_offsets_payload", func(t *testing.T) {
-		_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+		d, col, def, graph, _ := openManualColumnGraphAllLayerSourceSearchFixture1921(t, nil)
 		defer func() { _ = d.Close() }()
-		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-			t.Fatalf("RebuildVectorIndex: %v", err)
-		}
-		records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
-		graph := graphManifestFromRecords1918(t, records, def)
 		raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), graph.Layer0AdjacencySource.Ref)
 		if err != nil {
-			t.Fatalf("read source: %v", err)
+			t.Fatalf("read legacy source: %v", err)
 		}
 		image, err := typedcolumn.ParseColumnPartImage(raw)
 		if err != nil {
@@ -556,7 +534,7 @@ func TestColumnGraphLayer0AdjacencySourceCorruptionFallsBack1919(t *testing.T) {
 		}
 		offsetsSection, _, ok := image.ColumnOffsetsListSections(columnVectorGraphLayer0AdjacencySourceColumnName)
 		if !ok || offsetsSection.Length < 16 {
-			t.Fatalf("offsets section=%+v ok=%v", offsetsSection, ok)
+			t.Fatalf("legacy offsets section=%+v ok=%v", offsetsSection, ok)
 		}
 		corrupt := append([]byte(nil), raw...)
 		corrupt[offsetsSection.Offset+8] ^= 0xff
@@ -566,19 +544,18 @@ func TestColumnGraphLayer0AdjacencySourceCorruptionFallsBack1919(t *testing.T) {
 		}
 		file, err := os.OpenFile(path, os.O_WRONLY, 0)
 		if err != nil {
-			t.Fatalf("OpenFile source: %v", err)
+			t.Fatalf("OpenFile legacy source: %v", err)
 		}
 		if _, err := file.WriteAt(corrupt, graph.Layer0AdjacencySource.Ref.Offset); err != nil {
 			_ = file.Close()
-			t.Fatalf("WriteAt corrupt source: %v", err)
+			t.Fatalf("WriteAt corrupt legacy source: %v", err)
 		}
 		if err := file.Close(); err != nil {
-			t.Fatalf("Close corrupt source: %v", err)
+			t.Fatalf("Close corrupt legacy source: %v", err)
 		}
-		_ = cfg
 		status, err := col.VectorIndexStatus(def.Name)
 		if err != nil {
-			t.Fatalf("VectorIndexStatus with corrupt optional source: %v", err)
+			t.Fatalf("VectorIndexStatus with corrupt optional legacy source: %v", err)
 		}
 		assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 	})
@@ -1903,9 +1880,15 @@ func prepareManualColumnGraphAllLayerSources1920(tb testing.TB) (*backenddb.DB, 
 		RowCount:               prepared.RowCount,
 		AssetRef:               prepared.Ref,
 		AssetBytes:             prepared.Bytes,
-		AdjacencyLayerCount:    len(prepared.AdjacencyLayerSources),
 	}
-	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, prepared.AdjacencyLayerSources)
+	legacyPartID := nextColumnVectorGraphPartIDAfter(prepared.Ref.PartID, prepared.Ref.PartID)
+	legacySources, err := prepareColumnVectorGraphAdjacencySourcesAssets(d.ColumnAssetRootDir(), "docs", *baseCfg, def, generation, legacyPartID, rows)
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("prepare legacy column_graph adjacency sources: %v", err)
+	}
+	graph.AdjacencyLayerCount = len(legacySources)
+	graph.AdjacencyLayerSources = columnVectorGraphAdjacencyLayerSourcesFromPrepared(graph, legacySources)
 	if len(graph.AdjacencyLayerSources) > 0 {
 		graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
 	}

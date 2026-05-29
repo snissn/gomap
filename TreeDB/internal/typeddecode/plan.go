@@ -364,9 +364,9 @@ func DenseFloat32VectorPlan(cert typedcolumn.ColumnPartLayoutContractColumn, dim
 }
 
 // AdjacencyListPlan intentionally keeps the legacy dense fixed-degree adjacency
-// layout as deferred/fallback-only. The current #1901 offsets-list path is
-// quarantined compatibility; #1985 owns the generic uint32_list direct-view plan
-// that should salvage the raw_uint32_offsets_list mechanics.
+// layout as deferred/fallback-only. The #1901 offsets-list path is quarantined
+// compatibility; generic uint32_list direct-view planning owns the reusable
+// raw_uint32_offsets_list mechanics.
 func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree int) Plan {
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
 		Logical:            columnsemantics.LogicalAdjacencyList,
@@ -389,7 +389,7 @@ func Uint32ListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
 
 // AdjacencyOffsetsListPlan selects a direct-view candidate for the legacy
 // adjacency_list/raw_uint32_offsets_list compatibility selector. Graph-specific
-// naming is quarantined by #1983; prefer Uint32ListPlan for generic datastore
+// naming is quarantined by #1989; prefer Uint32ListPlan for generic datastore
 // primitives.
 func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
 	return uint32OffsetsListPlan(cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList)

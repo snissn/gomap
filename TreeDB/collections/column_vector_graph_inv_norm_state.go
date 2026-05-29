@@ -270,16 +270,7 @@ func columnVectorGraphInvNormStateAssetSnapshot(prepared columnVectorGraphPrepar
 }
 
 func columnVectorGraphNextPartIDAfterPreparedAssets(prepared columnVectorGraphPreparedPhysicalAsset) uint64 {
-	next := nextColumnVectorGraphPartIDAfter(prepared.Ref.PartID, prepared.Ref.PartID)
-	for _, source := range prepared.AdjacencyLayerSources {
-		if source.Present {
-			next = nextColumnVectorGraphPartIDAfter(next, source.Ref.PartID)
-		}
-	}
-	if prepared.Layer0AdjacencySource.Present {
-		next = nextColumnVectorGraphPartIDAfter(next, prepared.Layer0AdjacencySource.Ref.PartID)
-	}
-	return next
+	return nextColumnVectorGraphPartIDAfter(prepared.Ref.PartID, prepared.Ref.PartID)
 }
 
 func findColumnVectorGraphInvNormStateAsset(state columnVectorIndexStateSnapshot) (columnVectorIndexStateAssetSnapshot, bool) {
