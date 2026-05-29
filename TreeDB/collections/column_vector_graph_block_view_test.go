@@ -38,6 +38,38 @@ func TestColumnVectorGraphSearchPlanOrdinalRefV1(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphSearchPlanOrdinalRefRejectsMalformedRanges1968(t *testing.T) {
+	cases := []struct {
+		name   string
+		reader *columnPhysicalRowReader
+	}{
+		{
+			name:   "single_range_not_identity",
+			reader: &columnPhysicalRowReader{totalRows: 2, ranges: []columnPhysicalRowReaderRange{{assetOrdinal: 0, startOrdinal: 1, rowCount: 1}}},
+		},
+		{
+			name:   "overlap",
+			reader: &columnPhysicalRowReader{totalRows: 3, ranges: []columnPhysicalRowReaderRange{{assetOrdinal: 0, startOrdinal: 0, rowCount: 2}, {assetOrdinal: 1, startOrdinal: 1, rowCount: 2}}},
+		},
+		{
+			name:   "gap",
+			reader: &columnPhysicalRowReader{totalRows: 3, ranges: []columnPhysicalRowReaderRange{{assetOrdinal: 0, startOrdinal: 0, rowCount: 1}, {assetOrdinal: 1, startOrdinal: 2, rowCount: 1}}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := &columnVectorGraphSearchPlan{reader: &columnVectorGraphPhysicalRowReader{}, physicalReader: tc.reader}
+			err := plan.prepareOrdinalRefs()
+			if !errors.Is(err, errColumnPhysicalRowOrdinalOutOfBounds) {
+				t.Fatalf("prepareOrdinalRefs err=%v want ordinal bounds sentinel", err)
+			}
+			if plan.ordinalRefsReady {
+				t.Fatalf("ordinalRefsReady=true after malformed range")
+			}
+		})
+	}
+}
+
 func TestColumnVectorGraphBlockViewAccessorsV1(t *testing.T) {
 	d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, []columnVectorGraphAssetRow{
 		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
