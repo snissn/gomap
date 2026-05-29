@@ -392,49 +392,55 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			return nil, fmt.Errorf("%w: prepared physical column query requires direct asset reducer", ErrColumnQueryPlanUnsupported)
 		}
 	}
-	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
-	}
-	dictDistinct, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
-	}
+	var dictCount *columnDictionaryCodeGroupCountRunner
+	var dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
 	var int64Hour *columnInt64ValueHourCountRunner
-	if !columnPhysicalQueryHasPredicates(req) {
-		int64Hour, err = prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
-		if err != nil {
-			_ = readCache.close()
-			return nil, err
-		}
-	}
-	dictInt64, err := prepareColumnDictionaryInt64GroupRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
-	}
-	dictHour, err := prepareColumnDictionaryHourCountRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
-	}
+	var dictInt64 *columnDictionaryInt64GroupRunner
+	var dictHour *columnDictionaryHourCountRunner
 	if typedColumnCandidate && typedColumn == nil {
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: typed-column part physical query was selected but no runner was prepared", ErrColumnQueryPlanUnsupported)
 	}
-	if typedColumn == nil && req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
-		_ = readCache.close()
-		return nil, fmt.Errorf("%w: fused count-distinct physical query requires dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
-	}
-	if typedColumn == nil && req.Kind == ColumnPhysicalQueryGroupHourCount && dictHour == nil {
-		_ = readCache.close()
-		return nil, fmt.Errorf("%w: grouped-hour physical query requires dictionary/int64 sidecar reducers", ErrColumnQueryPlanUnsupported)
-	}
-	if typedColumn == nil && columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil && dictHour == nil {
-		_ = readCache.close()
-		return nil, fmt.Errorf("%w: physical predicates require supported dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
+	if typedColumn == nil {
+		dictCount, err = prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		dictDistinct, err = prepareColumnDictionaryCodeGroupCountDistinctRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		if !columnPhysicalQueryHasPredicates(req) {
+			int64Hour, err = prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
+			if err != nil {
+				_ = readCache.close()
+				return nil, err
+			}
+		}
+		dictInt64, err = prepareColumnDictionaryInt64GroupRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		dictHour, err = prepareColumnDictionaryHourCountRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		if req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: fused count-distinct physical query requires dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
+		if req.Kind == ColumnPhysicalQueryGroupHourCount && dictHour == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: grouped-hour physical query requires dictionary/int64 sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
+		if columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil && dictHour == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: physical predicates require supported dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
 	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
