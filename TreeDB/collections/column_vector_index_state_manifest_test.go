@@ -207,9 +207,10 @@ func TestColumnVectorIndexStatePublishedReopenAndFailClosed1986(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("state=%+v does not match graph=%+v", state, graph)
 	}
-	if len(state.Assets) != 0 {
+	asset, ok := findColumnVectorGraphInvNormStateAsset(state)
+	if !ok || len(state.Assets) != 1 || asset.RowCount != len(rows) || asset.LogicalType != columnVectorIndexStateLogicalTypeFloat32 || asset.PhysicalEncoding != columnVectorIndexStateEncodingRawFloat32 {
 		_ = d.Close()
-		t.Fatalf("current #1986 rebuild should publish control identity only, got assets=%+v", state.Assets)
+		t.Fatalf("rebuilt vector-index state assets=%+v want one raw_float32 inverse-norm state asset", state.Assets)
 	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()

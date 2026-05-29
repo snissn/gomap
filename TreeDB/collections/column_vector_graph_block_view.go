@@ -76,6 +76,7 @@ type columnVectorGraphBlockView struct {
 	adjSpans            []columnVectorGraphAdjacencySpan
 	rowValidated        []bool
 	adjacencyDirectView bool
+	invNormStateSource  bool
 }
 
 func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
@@ -212,10 +213,13 @@ func newColumnVectorGraphBlockView(reader *columnVectorGraphPhysicalRowReader, b
 		block:               block,
 		idSpans:             make([]columnVectorGraphByteSpan, rows),
 		vectorSpans:         make([]columnVectorGraphVectorSpan, rows),
-		invNorms:            make([]float32, rows),
 		adjSpans:            make([]columnVectorGraphAdjacencySpan, rows),
 		rowValidated:        make([]bool, rows),
 		adjacencyDirectView: columnVectorGraphBlockViewAdjacencyDirectView(reader),
+		invNormStateSource:  reader.usesInvNormStateSource(),
+	}
+	if !view.invNormStateSource {
+		view.invNorms = make([]float32, rows)
 	}
 	for rowIndex := 0; rowIndex < rows; rowIndex++ {
 		if err := view.indexRow(rowIndex); err != nil {
@@ -257,9 +261,17 @@ func (v *columnVectorGraphBlockView) indexRow(rowIndex int) error {
 	if err != nil {
 		return fmt.Errorf("row[%d]: %w", rowIndex, err)
 	}
-	invNorm, err := v.indexInvNorm(&cur, ordinal)
-	if err != nil {
-		return fmt.Errorf("row[%d]: %w", rowIndex, err)
+	var invNorm float32
+	if v.invNormStateSource {
+		if err := v.skipInvNorm(&cur, ordinal); err != nil {
+			return fmt.Errorf("row[%d]: %w", rowIndex, err)
+		}
+	} else {
+		var err error
+		invNorm, err = v.indexInvNorm(&cur, ordinal)
+		if err != nil {
+			return fmt.Errorf("row[%d]: %w", rowIndex, err)
+		}
 	}
 	adjSpan, err := v.indexAdjacency(&cur, ordinal)
 	if err != nil {
@@ -269,7 +281,9 @@ func (v *columnVectorGraphBlockView) indexRow(rowIndex int) error {
 		return cur.err
 	}
 	v.vectorSpans[rowIndex] = vectorSpan
-	v.invNorms[rowIndex] = invNorm
+	if !v.invNormStateSource {
+		v.invNorms[rowIndex] = invNorm
+	}
 	v.adjSpans[rowIndex] = adjSpan
 	v.rowValidated[rowIndex] = true
 	return nil
@@ -318,6 +332,14 @@ func (v *columnVectorGraphBlockView) indexInvNorm(cur *manifestCursor, ordinal i
 		return 0, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", v.reader.def.Name, ordinal, invNorm)
 	}
 	return invNorm, nil
+}
+
+func (v *columnVectorGraphBlockView) skipInvNorm(cur *manifestCursor, ordinal int) error {
+	if err := v.readGraphHeader(cur, v.block.version, ordinal, 1, ColumnStoreValueFloat32); err != nil {
+		return err
+	}
+	_ = cur.u32()
+	return cur.err
 }
 
 func (v *columnVectorGraphBlockView) indexAdjacency(cur *manifestCursor, ordinal int) (columnVectorGraphAdjacencySpan, error) {
@@ -421,7 +443,34 @@ func (v *columnVectorGraphBlockView) invNorm(rowIndex int) (float32, error) {
 	return v.invNormUnchecked(rowIndex), nil
 }
 
+func (v *columnVectorGraphBlockView) legacyInvNorm(rowIndex int) (float32, error) {
+	if err := v.checkRowIndex(rowIndex); err != nil {
+		return 0, err
+	}
+	if rowIndex < len(v.invNorms) {
+		return v.invNorms[rowIndex], nil
+	}
+	ordinal := v.ordinalForRowIndex(rowIndex)
+	cur := manifestCursor{raw: v.block.raw, pos: v.block.rowOffsets[rowIndex]}
+	if _, _, err := columnVectorGraphReadBytesSpan(&cur); err != nil {
+		return 0, err
+	}
+	if v.block.version >= columnPhysicalAssetVersionV2 {
+		_ = cur.bool()
+		if cur.err != nil {
+			return 0, cur.err
+		}
+	}
+	if _, err := v.indexVector(&cur, ordinal); err != nil {
+		return 0, err
+	}
+	return v.indexInvNorm(&cur, ordinal)
+}
+
 func (v *columnVectorGraphBlockView) invNormUnchecked(rowIndex int) float32 {
+	if rowIndex < 0 || rowIndex >= len(v.invNorms) {
+		return 0
+	}
 	return v.invNorms[rowIndex]
 }
 
