@@ -93,6 +93,12 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		return nil, true, typedColumnPhysicalQueryPairingError(err)
 	}
 
+	// Disable returnViews during decode to avoid pinning mmaps/handles for the runner lifetime,
+	// since we fully decode to Go types and don't retain references to raw bytes.
+	savedReturnViews := readCache.returnViews
+	readCache.returnViews = false
+	defer func() { readCache.returnViews = savedReturnViews }()
+
 	var rawScratch []byte
 	for _, physical := range view.AssetRefs {
 		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {

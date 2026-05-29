@@ -1846,10 +1846,6 @@ func TestTypedColumnPhysicalQueryTypedColumnFieldsSucceed(t *testing.T) {
 	runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t)
 }
 
-func TestTypedColumnPhysicalQueryTypedColumnPartFields(t *testing.T) {
-	runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t)
-}
-
 func runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t *testing.T) {
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
