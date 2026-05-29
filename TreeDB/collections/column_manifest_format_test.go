@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -136,7 +137,7 @@ func TestColumnManifestPartRecordSortKeyV4Compatibility1948(t *testing.T) {
 		SortKey:      columnSortKeyMatchString([]ColumnSortKey{{Column: "time_us"}, {Column: "did"}}),
 	}
 
-	current := mustEncodeColumnManifestPartRecordVersionM1634(t, asset, columnManifestRecordVersion)
+	current := mustEncodeColumnManifestPartRecordVersionM1634(t, asset, columnManifestRecordVersionV4)
 	decoded, err := decodeColumnManifestPartRecord(current)
 	if err != nil {
 		t.Fatalf("decodeColumnManifestPartRecord v4: %v", err)
@@ -192,6 +193,32 @@ func TestColumnManifestPartRecordSortKeyV4Compatibility1948(t *testing.T) {
 	}
 }
 
+func TestColumnManifestPartRecordRejectsSortKeyOnNonTypedAsset1948(t *testing.T) {
+	asset := ColumnPreparedAsset{
+		Ref: ColumnAssetRef{
+			Kind:       ColumnAssetKindTCS1PartImage,
+			Namespace:  "events_column_assets",
+			Generation: 9,
+			PartID:     1,
+			FileID:     1,
+			Offset:     32,
+			Length:     256,
+			Checksum:   123,
+		},
+		Rows:         8,
+		Bytes:        256,
+		PublishID:    17,
+		GenerationID: 9,
+		Reason:       string(ColumnPublishOperationInsert),
+		PartRole:     ColumnManifestPartRoleBase,
+		SortKey:      columnSortKeyMatchString([]ColumnSortKey{{Column: "time_us"}}),
+	}
+	raw := mustEncodeColumnManifestPartRecordVersionM1634(t, asset, columnManifestRecordVersionV4)
+	if _, err := decodeColumnManifestPartRecord(raw); err == nil || !strings.Contains(err.Error(), "sort key") {
+		t.Fatalf("decodeColumnManifestPartRecord err=%v want sort-key rejection", err)
+	}
+}
+
 func mustEncodeColumnManifestHeaderRecordVersionM1634(t *testing.T, version uint16) []byte {
 	t.Helper()
 	var b bytes.Buffer
@@ -233,7 +260,7 @@ func mustEncodeColumnManifestPartRecordVersionM1634(t *testing.T, asset ColumnPr
 	if version >= columnManifestRecordVersionV3 {
 		writeManifestString(&b, string(asset.PartRole))
 	}
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV4 {
 		sortKey, err := columnSortKeysFromMatchString(asset.SortKey)
 		if err != nil {
 			t.Fatalf("columnSortKeysFromMatchString: %v", err)

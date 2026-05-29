@@ -27,7 +27,8 @@ const (
 	columnManifestRecordVersionV1   = uint16(1)
 	columnManifestRecordVersionV2   = uint16(2)
 	columnManifestRecordVersionV3   = uint16(3)
-	columnManifestRecordVersion     = uint16(4)
+	columnManifestRecordVersionV4   = uint16(4)
+	columnManifestRecordVersion     = columnManifestRecordVersionV4
 	columnManifestSortKeyMaxColumns = uint64(64)
 )
 
@@ -693,6 +694,9 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
+		return columnManifestPartSnapshot{}, err
+	}
+	if err := validateColumnManifestPartSortKeyForScan(kind, sortKey); err != nil {
 		return columnManifestPartSnapshot{}, err
 	}
 	if role == "" {

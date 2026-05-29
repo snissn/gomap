@@ -306,6 +306,9 @@ func typedColumnAdapterSortKey(opts typedColumnAdapterOptions, columns []typedCo
 	if len(opts.SortKey) == 0 {
 		return []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}, nil
 	}
+	if len(opts.SortKey) > typedColumnPartSortKeyMaxColumns {
+		return nil, fmt.Errorf("collections: typed-column adapter sort key columns=%d exceeds cap %d", len(opts.SortKey), typedColumnPartSortKeyMaxColumns)
+	}
 	byName := make(map[string]typedColumnAdapterColumn, len(columns))
 	for _, column := range columns {
 		if column.Field.Name != "" {

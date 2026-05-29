@@ -77,6 +77,24 @@ func TestTypedColumnAdapterMapFieldSelectsNativeScalarFixedWidthEncoding(t *test
 	}
 }
 
+func TestTypedColumnAdapterSortKeyRejectsEngineCap1948(t *testing.T) {
+	columns := make([]typedColumnAdapterColumn, typedColumnPartSortKeyMaxColumns+1)
+	sortKeys := make([]ColumnSortKey, len(columns))
+	for i := range columns {
+		name := fmt.Sprintf("c%02d", i)
+		column, err := typedColumnAdapterMapField(typedColumnAdapterField(name, ColumnStoreValueInt64))
+		if err != nil {
+			t.Fatalf("typedColumnAdapterMapField(%s): %v", name, err)
+		}
+		columns[i] = column
+		sortKeys[i] = ColumnSortKey{Column: name}
+	}
+	_, err := typedColumnAdapterSortKey(typedColumnAdapterOptions{SortKey: sortKeys}, columns)
+	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("typedColumnAdapterSortKey oversized err=%v want exceeds cap", err)
+	}
+}
+
 func TestTypedColumnAdapterMapFieldRejectsInvalidScalarFixedWidthEncoding(t *testing.T) {
 	field := typedColumnAdapterField("score", ColumnStoreValueFloat32)
 	field.FixedWidthEncoding = ColumnFixedWidthEncoding("future")
