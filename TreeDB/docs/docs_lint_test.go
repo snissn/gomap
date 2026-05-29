@@ -136,6 +136,7 @@ func TestDocs_VectorIndexStateWordingDoesNotRecanonicalizeGraphRows(t *testing.T
 		"row graph asset ref as the canonical graph asset",
 		"canonical graph row asset plus vector-index state",
 		"future row/document refs",
+		"gating tied to the canonical row-asset",
 	}
 	roots := []string{
 		filepath.Join(treeRoot, "collections"),

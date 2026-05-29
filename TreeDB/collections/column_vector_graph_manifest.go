@@ -939,9 +939,9 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		return status, nil
 	}
 	// Certified adjacency sources are optional accelerators. Keep loaded-status
-	// gating tied to the canonical row-asset graph; search opens and validates
-	// sources independently and falls back to row assets when they are absent,
-	// corrupt, stale, incomplete, or non-certified.
+	// gating tied to the base graph asset; search opens and validates sources
+	// independently and falls back to row assets when they are absent, corrupt,
+	// stale, incomplete, or non-certified.
 	bytesDisk := columnVectorGraphStorageBytesWithState(graph, *loadedState)
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
