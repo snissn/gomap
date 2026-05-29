@@ -165,7 +165,7 @@ func encodeColumnVectorGraphManifestRecord(snapshot columnVectorGraphManifestSna
 }
 
 func isSupportedColumnVectorGraphManifestRecordVersion(version uint16) bool {
-	return version == columnManifestRecordVersion || version == columnManifestRecordVersionV3
+	return version == columnManifestRecordVersionV4 || version == columnManifestRecordVersionV3
 }
 
 func decodeColumnVectorGraphManifestRecord(raw []byte) (columnVectorGraphManifestSnapshot, error) {

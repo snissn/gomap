@@ -747,7 +747,13 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 }
 
 func isSupportedColumnManifestRecordVersion(version uint16) bool {
-	return version == columnManifestRecordVersion || version == columnManifestRecordVersionV3 || version == columnManifestRecordVersionV2 || version == columnManifestRecordVersionV1
+	if version == columnManifestRecordVersion {
+		return true
+	}
+	return version == columnManifestRecordVersionV4 ||
+		version == columnManifestRecordVersionV3 ||
+		version == columnManifestRecordVersionV2 ||
+		version == columnManifestRecordVersionV1
 }
 
 func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnManifestPartRole {

@@ -87,7 +87,7 @@ func TestTypedColumnAdapterSortKeyRejectsEngineCap1948(t *testing.T) {
 			t.Fatalf("typedColumnAdapterMapField(%s): %v", name, err)
 		}
 		columns[i] = column
-		sortKeys[i] = ColumnSortKey{Column: name}
+		sortKeys[i] = ColumnSortKey{Column: name, Direction: ColumnSortAscending}
 	}
 	_, err := typedColumnAdapterSortKey(typedColumnAdapterOptions{SortKey: sortKeys}, columns)
 	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
