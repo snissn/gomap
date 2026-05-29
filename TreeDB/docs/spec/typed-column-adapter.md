@@ -41,7 +41,7 @@ time.
 | `double` / `float64` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` double column selects native uncompressed `raw_float64` little-endian IEEE-754 payload bytes. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
-| `adjacency_list` | represented for dense compatibility; offsets-list primitive direct reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the #1915/#1916/#1901 variable-list target (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified primitive direct views. |
+| `adjacency_list` | represented for dense compatibility; transitional offsets-list direct reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the current #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1983 quarantines the graph-specific storage integration; #1984/#1985 own the generic `uint32_list` primitive. |
 
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit
@@ -54,12 +54,11 @@ positive `adjacency_degree` and each present row must contain exactly that many
 uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
 "uint32_offsets_list"`; it must not be inferred from a missing degree and is
 supported by the safe #1915 writer/fallback reader path plus the #1916 certified
-primitive direct-view reader wired through the adapter in #1917. Column-graph
-rebuilds publish derived offsets-list adjacency sources per graph layer;
-certified column-graph search consumes those sources for max-layer discovery,
-upper-layer greedy traversal, and layer-0 expansion while preserving row-asset
-adjacency as the compatibility fallback. Serialized typed-column images publish offsets-list
-columns as one global
+primitive direct-view reader wired through the adapter in #1917. Current
+column-graph rebuild/search code may publish and consume derived offsets-list
+adjacency sources per graph layer, but #1983 marks that source path as
+transitional compatibility rather than the datastore target. Serialized
+typed-column images publish offsets-list columns as one global
 `row_count + 1` little-endian `uint64` offsets section plus one global flattened
 `uint32` values section, even when the typed-column part has multiple codec
 blocks/granules.
@@ -77,8 +76,8 @@ records are sufficient.
 ## Durable Publication / Reconstruction Seam (#1755)
 
 For inserts and updates with scalar, fixed-dimension vector, fixed-degree dense
-adjacency, or explicit offsets-list variable adjacency `typed_column_part` owners,
-TreeDB writes:
+adjacency, or current explicit offsets-list variable adjacency `typed_column_part`
+owners, TreeDB writes:
 
 - a compatibility `tcs1_part_image`/`TCPA` typed-row asset containing row IDs,
   tombstones, and any `typed_row_asset` owned fields;
@@ -188,11 +187,14 @@ Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay
 limited to the adapter seam and scoped vector-graph source/reader seams.
 Publication/reopen logic calls through those seams. Query/vector search
 integration remains graph-owned by the vector-index issues. The active adapter
-stack consumes certified typed-column `float32_vector` payloads and the explicit
-`raw_uint32_offsets_list` variable adjacency reader; physical row-asset direct
-views and legacy dense adjacency direct views remain fallback/deferred. This path
-publishes fixed-dimension `float32_vector`, fixed-degree dense `adjacency_list`,
-and explicit offsets-list variable `adjacency_list` values; `column_graph`
-rebuilds additionally publish, validate, and consume durable per-layer
-offsets-list sources for certified graph search while preserving row-asset
-adjacency as the canonical compatibility source.
+stack consumes certified typed-column `float32_vector` payloads and the current
+explicit `raw_uint32_offsets_list` variable adjacency reader; physical row-asset
+direct views and legacy dense adjacency direct views remain fallback/deferred.
+This path publishes fixed-dimension `float32_vector`, fixed-degree dense
+`adjacency_list`, and current explicit offsets-list variable `adjacency_list`
+values. `column_graph` rebuilds may additionally publish, validate, and consume
+durable per-layer offsets-list sources for certified graph search while
+preserving row-asset adjacency as the canonical compatibility source, but #1983
+quarantines that graph-specific source path. New storage work must route through
+generic `uint32_list` typed-column assets and vector-index state; see
+`typed-column-uint32-list-adjacency-quarantine.md`.

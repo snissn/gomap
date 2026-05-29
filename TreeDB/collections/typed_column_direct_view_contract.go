@@ -108,7 +108,7 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		base.FollowUpIssues = []int{1897}
 		if valueType == ColumnStoreValueAdjacencyList || consumer == typedColumnDirectViewConsumerRowAssetAdjacency {
 			base.AdjacencyLayout = typedColumnDirectViewAdjacencyLayoutPhysicalRowAsset
-			base.Reason = "physical row assets are deferred to #1897; row-asset adjacency remains legacy/fallback while #1901 targets typed-column raw_uint32_offsets_list"
+			base.Reason = "physical row assets are deferred to #1897; row-asset adjacency remains legacy/fallback while #1983 quarantines the graph-specific raw_uint32_offsets_list path"
 			base.FollowUpIssues = []int{1897, 1901}
 		}
 		return base
@@ -140,12 +140,12 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 				base.FollowUpIssue = 0
 				base.FollowUpIssues = nil
 			} else {
-				base.Reason = "typed-column ColumnStoreValueAdjacencyList raw_uint32_offsets_list uses uint64 offsets plus uint32 values; adapter direct reads are active, while column_graph/search runtime consumption remains deferred to follow-up work"
+				base.Reason = "typed-column adjacency_list raw_uint32_offsets_list uses uint64 offsets plus uint32 values; adapter direct reads are active, while #1983 quarantines column_graph/search source consumption until generic uint32_list state lands"
 				base.FollowUpIssues = []int{1901, 1915, 1916, 1917}
 			}
 		case typedColumnDirectViewAdjacencyLayoutRawUint32Dense:
 			base.RequiresElementsPerRow = true
-			base.Reason = "legacy dense fixed-degree raw_uint32_dense adjacency remains fallback/compatibility; #1901 v1 target is raw_uint32_offsets_list"
+			base.Reason = "legacy dense fixed-degree raw_uint32_dense adjacency remains fallback/compatibility; #1983 quarantines graph-specific raw_uint32_offsets_list storage while #1985 defines uint32_list"
 		default:
 			base.Reason = "unknown adjacency layout selector requires explicit direct-view classification"
 		}

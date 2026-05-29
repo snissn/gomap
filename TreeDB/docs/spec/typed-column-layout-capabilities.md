@@ -18,8 +18,10 @@ not just encodings. A key includes:
 - `typedcolumn.Compression`;
 - nullable/default/dictionary wrappers;
 - fixed-width element count for dense vector/adjacency layouts; or
-- an explicit adjacency layout selector/internal encoding for the variable-list
-  `raw_uint32_offsets_list` primitive.
+- the current explicit adjacency layout selector/internal encoding for the
+  transitional `raw_uint32_offsets_list` compatibility path. #1983 quarantines
+  that graph-specific integration while #1984/#1985 define a generic
+  `uint32_list` primitive.
 
 ## Current reference layouts
 
@@ -33,8 +35,8 @@ not just encodings. A key includes:
 | `float32` | `float32` + `raw_float32` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
 | `double` | `float64` + `raw_float64` + `compression=none` | Explicit `fixed_width_encoding: "little_endian"` native scalar payload. It is a fixed-width direct-view candidate for downstream certification/readers, preserves raw IEEE-754 bits, and does not yet enable float numeric aggregate/range/stats/pruning fast paths. |
 | `float32_vector` | `float32_vector` + `raw_float32_vector` | Fixed-width little-endian dense rows with explicit vector direct-payload, similarity, dot-product, and vector-metric capabilities. Scalar aggregate/range shortcuts are rejected. |
-| `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Legacy fixed-width little-endian dense fallback/compatibility payload bytes. Direct-view certification remains deferred; this is not the #1901 v1 target. Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
-| `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | #1915/#1916-selected v1 variable-list primitive selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication and certified primitive direct-view readers are enabled through the adapter; `column_graph` rebuilds publish durable validated per-layer sources, with row-asset adjacency retained as canonical/fallback compatibility. |
+| `adjacency_list` | `adjacency_list` + `raw_uint32_dense` | Legacy fixed-width little-endian dense fallback/compatibility payload bytes. Direct-view certification remains deferred; this is not the generic `uint32_list` target. Graph traversal/metrics may use decoded payloads; scalar aggregate/range shortcuts are rejected. |
+| `adjacency_list` | `adjacency_list` + `raw_uint32_offsets_list` | Current #1915/#1916 variable-list compatibility path selected by `adjacency_layout: "uint32_offsets_list"`: `uint64` offsets plus flattened `uint32` values. Safe writer/fallback-reader publication and certified direct-view readers are enabled through the adapter. #1983 quarantines the graph-specific `column_graph` source integration; #1984/#1985 own the generic `uint32_list` capability split from graph traversal semantics. |
 
 Nullable/default wrappers expose null and default-mask dependencies separately
 from carrier-value capabilities. Value predicates and aggregates over nullable
@@ -169,9 +171,10 @@ New layouts should declare unsupported operations explicitly. Examples:
 - vector layouts expose vector-specific direct payload, similarity/dot-product,
   and vector metrics; legacy dense adjacency direct payloads are deferred while
   adjacency traversal/metrics continue through decoded/fallback dense payloads;
-  the #1901 v1 target is the distinct `raw_uint32_offsets_list` variable-list
-  layout with `uint64` offsets and `uint32` values, whose safe writer/fallback
-  reader and certified primitive direct-view reader are available through the
-  adapter while column_graph runtime consumption remains graph-owned staged work;
-  vector/adjacency layouts reject scalar aggregate/range shortcuts unless a
-  future issue implements and tests them through the shared substrate.
+  the current `raw_uint32_offsets_list` variable-list compatibility layout has
+  `uint64` offsets and `uint32` values, with safe writer/fallback reader and
+  certified direct-view mechanics available through the adapter. #1983
+  quarantines column_graph runtime consumption as graph-specific staged work;
+  #1984/#1985 own the generic `uint32_list` substrate. Vector/adjacency layouts
+  reject scalar aggregate/range shortcuts unless a future issue implements and
+  tests them through the shared substrate.
