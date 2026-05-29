@@ -136,37 +136,8 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			baseManifestLoaded = true
 			return baseManifest, baseRecords, nil
 		}
-		var vectorState columnVectorIndexStateSnapshot
-		var vectorStateFound bool
-		var vectorStateLoaded bool
-		loadVectorIndexState := func() (columnVectorIndexStateSnapshot, bool, error) {
-			if vectorStateLoaded {
-				return vectorState, vectorStateFound, nil
-			}
-			_, records, recordsErr := loadBaseManifestRecords()
-			if recordsErr != nil {
-				return columnVectorIndexStateSnapshot{}, false, recordsErr
-			}
-			stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name)
-			if !ok {
-				vectorStateLoaded = true
-				return columnVectorIndexStateSnapshot{}, false, nil
-			}
-			state, stateErr := decodeColumnVectorIndexStateRecord(stateRecord.value)
-			if stateErr != nil {
-				return columnVectorIndexStateSnapshot{}, false, stateErr
-			}
-			vectorState = state
-			vectorStateFound = true
-			vectorStateLoaded = true
-			return vectorState, true, nil
-		}
-		state, stateFound, stateErr := loadVectorIndexState()
-		if stateErr != nil {
-			_ = graphReader.Close()
-			return nil, stateErr
-		}
-		if !stateFound {
+		state := view.VectorIndexState
+		if !view.VectorIndexStateFound {
 			_ = graphReader.Close()
 			return nil, fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
@@ -334,11 +305,13 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
 	view := columnPhysicalScanSnapshotView{
-		CollectionName:     catalog.meta.Name,
-		Catalog:            catalog,
-		Config:             graphCfg,
-		ColumnStoreEnabled: true,
-		CommitSeq:          state.CommitSeq,
+		CollectionName:        catalog.meta.Name,
+		Catalog:               catalog,
+		Config:                graphCfg,
+		ColumnStoreEnabled:    true,
+		CommitSeq:             state.CommitSeq,
+		VectorIndexState:      vectorState,
+		VectorIndexStateFound: true,
 		AssetRefs: []columnManifestAssetRefForScan{{
 			Ref:    graph.AssetRef,
 			Reason: ColumnPublishOperationInsert,
