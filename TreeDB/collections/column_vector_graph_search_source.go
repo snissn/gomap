@@ -57,9 +57,6 @@ type columnVectorGraphSearchSource struct {
 	invNormFallback    typeddecode.Reason
 	normFallbackReason typeddecode.Reason
 
-	// Source-construction metadata. These counters describe whether the prepared
-	// source was selected directly or failed closed to scalar graph-row fallback.
-	construction columnVectorGraphSourceCounterSnapshot
 }
 
 func (s *columnVectorGraphSearchSource) reset() {
@@ -91,22 +88,9 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		s.vectorKind = columnVectorGraphSearchVectorSourceTypedColumn
 		s.typedVectorSource = reader.typedVectorSource
 		s.typedVectorLocations = reader.typedVectorSource.locations
-		for _, part := range reader.typedVectorSource.parts {
-			if part == nil {
-				continue
-			}
-			s.construction.addVectorOutcome(part.outcome, part.fallbackReason)
-		}
 	} else if reader.typedVectorSource != nil {
 		s.vectorFallbackReason = reason
 		s.vectorFallbackDescription = description
-		s.construction.Fallbacks = 1
-		var counters columnVectorGraphNativeSearchStats
-		recordColumnVectorGraphVectorFallbackReasonStats(&counters, reason)
-		s.construction.CertificationFailures = counters.VectorCertificationFailures
-		s.construction.AbsoluteOffsetUnaligned = counters.VectorAbsoluteOffsetUnaligned
-		s.construction.ActualPointerUnaligned = counters.VectorActualPointerUnaligned
-		s.construction.StaleHandles = counters.VectorStaleHandles
 	}
 
 	if values, outcome, fallbackReason, reason, ok := columnVectorGraphInvNormSourceUsableForSearch(reader.invNormSource, s.rowCount); ok {
@@ -115,7 +99,6 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		s.invNormByOrdinal = values
 		s.invNormOutcome = outcome
 		s.invNormFallback = fallbackReason
-		s.construction.addNormOutcome(outcome, fallbackReason)
 	} else if reader.invNormSource != nil {
 		s.normFallbackReason = reason
 	}
@@ -308,65 +291,6 @@ func (s *columnVectorGraphSearchSource) populateConstructionStats(stats *columnV
 	if s.vectorFallbackReason != "" && stats.TypedColumnFallbacks == 0 {
 		stats.TypedColumnFallbacks = 1
 	}
-}
-
-type columnVectorGraphSourceCounterSnapshot struct {
-	DirectViews             uint64
-	MmapDirectViews         uint64
-	HeapCopyTypedViews      uint64
-	ScratchDecodes          uint64
-	Fallbacks               uint64
-	CertificationFailures   uint64
-	ValidationFailures      uint64
-	AbsoluteOffsetUnaligned uint64
-	ActualPointerUnaligned  uint64
-	StaleHandles            uint64
-}
-
-func (c *columnVectorGraphSourceCounterSnapshot) addVectorOutcome(outcome columnVectorGraphTypedColumnVectorOutcome, fallbackReason typeddecode.Reason) {
-	if c == nil {
-		return
-	}
-	switch outcome {
-	case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
-		c.DirectViews++
-		c.MmapDirectViews++
-	case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
-		c.HeapCopyTypedViews++
-	case columnVectorGraphTypedColumnVectorOutcomeScratchDecode:
-		c.ScratchDecodes++
-	default:
-		c.ScratchDecodes++
-	}
-	var stats columnVectorGraphNativeSearchStats
-	recordColumnVectorGraphVectorFallbackReasonStats(&stats, fallbackReason)
-	c.CertificationFailures += stats.VectorCertificationFailures
-	c.AbsoluteOffsetUnaligned += stats.VectorAbsoluteOffsetUnaligned
-	c.ActualPointerUnaligned += stats.VectorActualPointerUnaligned
-	c.StaleHandles += stats.VectorStaleHandles
-}
-
-func (c *columnVectorGraphSourceCounterSnapshot) addNormOutcome(outcome columnVectorGraphInvNormStateOutcome, fallbackReason typeddecode.Reason) {
-	if c == nil {
-		return
-	}
-	switch outcome {
-	case columnVectorGraphInvNormStateOutcomeMmapDirect:
-		c.DirectViews++
-		c.MmapDirectViews++
-	case columnVectorGraphInvNormStateOutcomeHeapCopyTypedView:
-		c.HeapCopyTypedViews++
-	case columnVectorGraphInvNormStateOutcomeScratchDecode:
-		c.ScratchDecodes++
-	default:
-		c.ScratchDecodes++
-	}
-	var stats columnVectorGraphNativeSearchStats
-	recordColumnVectorGraphInvNormFallbackReasonStats(&stats, fallbackReason)
-	c.ValidationFailures += stats.NormValidationFailures
-	c.AbsoluteOffsetUnaligned += stats.NormAbsoluteOffsetUnaligned
-	c.ActualPointerUnaligned += stats.NormActualPointerUnaligned
-	c.StaleHandles += stats.NormStaleHandles
 }
 
 type columnVectorGraphAggregateSourceCounters struct {
