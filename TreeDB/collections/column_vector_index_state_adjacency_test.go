@@ -529,10 +529,12 @@ func assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(tb testing.TB, 
 	}
 	assets := columnVectorIndexStateAdjacencyAssetsByLayer1987(tb, state)
 	expectedLayers := columnVectorGraphExpectedAdjacencyLayerCountFromScannedRows1989(tb, rows)
-	if state.AdjacencyLayerCount > 0 && state.AdjacencyLayerCount != expectedLayers {
-		tb.Fatalf("state adjacency layer count=%d want %d from scanned rows", state.AdjacencyLayerCount, expectedLayers)
-	}
-	if graph.AdjacencyLayerCount > 0 {
+	if state.AdjacencyLayerCount > 0 {
+		if state.AdjacencyLayerCount != expectedLayers {
+			tb.Fatalf("state adjacency layer count=%d want %d from scanned rows", state.AdjacencyLayerCount, expectedLayers)
+		}
+		expectedLayers = state.AdjacencyLayerCount
+	} else if graph.AdjacencyLayerCount > 0 {
 		expectedLayers = graph.AdjacencyLayerCount
 	}
 	if len(assets) != expectedLayers || expectedLayers == 0 {

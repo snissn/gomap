@@ -52,6 +52,43 @@ func TestColumnVectorIndexStateManifestRecordRoundTrip1986(t *testing.T) {
 	}
 }
 
+func TestColumnVectorIndexStateManifestEncodeInfersAdjacencyLayerCount1986(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	state := testColumnVectorIndexStateSnapshot1986(*baseCfg, def, 11, 3)
+	layer1 := state.Assets[0]
+	layer1.AssetID = "hnsw/layer/1"
+	layer1.Ref.PartID = 31
+	layer1.Ref.FileID = 131
+	layer1.Ref.Checksum = 31
+	layer2 := state.Assets[0]
+	layer2.AssetID = "hnsw/layer/2"
+	layer2.Ref.PartID = 32
+	layer2.Ref.FileID = 132
+	layer2.Ref.Checksum = 32
+	state.Assets = append(state.Assets, layer1, layer2)
+	state.AdjacencyLayerCount = 0
+	wantLayers, err := columnVectorIndexStateAdjacencyLayerCountFromAssets(state.Assets)
+	if err != nil {
+		t.Fatalf("columnVectorIndexStateAdjacencyLayerCountFromAssets: %v", err)
+	}
+
+	encoded, err := encodeColumnVectorIndexStateRecord(state)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorIndexStateRecord: %v", err)
+	}
+	decoded, err := decodeColumnVectorIndexStateRecord(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnVectorIndexStateRecord: %v", err)
+	}
+	if got := decoded.AdjacencyLayerCount; got != wantLayers {
+		t.Fatalf("decoded adjacency layer count=%d want inferred %d", got, wantLayers)
+	}
+}
+
 func TestColumnVectorIndexStateManifestRecordV1Compatibility1986(t *testing.T) {
 	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
 	if err != nil {

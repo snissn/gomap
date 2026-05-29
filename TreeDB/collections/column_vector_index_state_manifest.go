@@ -84,6 +84,11 @@ func findColumnVectorIndexStateRecord(records []columnManifestRecord, indexName 
 }
 
 func encodeColumnVectorIndexStateRecord(snapshot columnVectorIndexStateSnapshot) ([]byte, error) {
+	var err error
+	snapshot, err = normalizeColumnVectorIndexStateSnapshotForEncode(snapshot)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateColumnVectorIndexStateSnapshot(snapshot); err != nil {
 		return nil, err
 	}
@@ -200,6 +205,37 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 		return columnVectorIndexStateSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func normalizeColumnVectorIndexStateSnapshotForEncode(snapshot columnVectorIndexStateSnapshot) (columnVectorIndexStateSnapshot, error) {
+	if snapshot.AdjacencyLayerCount > 0 {
+		return snapshot, nil
+	}
+	layerCount, err := columnVectorIndexStateAdjacencyLayerCountFromAssets(snapshot.Assets)
+	if err != nil {
+		return columnVectorIndexStateSnapshot{}, err
+	}
+	if layerCount > 0 {
+		snapshot.AdjacencyLayerCount = layerCount
+	}
+	return snapshot, nil
+}
+
+func columnVectorIndexStateAdjacencyLayerCountFromAssets(assets []columnVectorIndexStateAssetSnapshot) (int, error) {
+	layerCount := 0
+	for _, asset := range assets {
+		if asset.Role != columnVectorIndexStateAssetRoleAdjacency {
+			continue
+		}
+		layer, err := columnVectorIndexStateAdjacencyLayerFromAssetID(asset.AssetID)
+		if err != nil {
+			return 0, err
+		}
+		if layer+1 > layerCount {
+			layerCount = layer + 1
+		}
+	}
+	return layerCount, nil
 }
 
 func decodeColumnVectorIndexStateAsset(cur *manifestCursor) (columnVectorIndexStateAssetSnapshot, error) {
