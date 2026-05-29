@@ -651,6 +651,24 @@ func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t
 	}
 }
 
+func TestMergeColumnPhysicalQueryDiagnosticsSortKeyNoneSentinel1949(t *testing.T) {
+	left := ColumnPhysicalQueryDiagnostics{
+		SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
+		SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+	}
+	right := ColumnPhysicalQueryDiagnostics{
+		SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackMissingMarks,
+		SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackMissingPrefix,
+	}
+	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
+	if got, want := merged.SortKeyMarkFallbackReason, columnSortKeyMarkFallbackMissingMarks; got != want {
+		t.Fatalf("sort-key mark fallback=%q want %q", got, want)
+	}
+	if got, want := merged.SortedGroupedDistinctFallbackReason, columnSortedGroupedDistinctFallbackMissingPrefix; got != want {
+		t.Fatalf("sorted grouped distinct fallback=%q want %q", got, want)
+	}
+}
+
 func TestColumnStoreGetReconstructsRetainedPayloadM13C(t *testing.T) {
 	dir, _ := prepareColumnStoreCommandWALDirM10B(t)
 	d := openCollectionCommandWALDB(t, dir)

@@ -1322,19 +1322,11 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.SortKeyMarkChecks += right.SortKeyMarkChecks
 	left.SortKeyMarkMatches += right.SortKeyMarkMatches
 	left.SortKeyMarkSkips += right.SortKeyMarkSkips
-	if left.SortKeyMarkFallbackReason == "" {
-		left.SortKeyMarkFallbackReason = right.SortKeyMarkFallbackReason
-	} else if right.SortKeyMarkFallbackReason != "" && right.SortKeyMarkFallbackReason != left.SortKeyMarkFallbackReason {
-		left.SortKeyMarkFallbackReason = "mixed"
-	}
+	left.SortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortKeyMarkFallbackReason, right.SortKeyMarkFallbackReason)
 	if right.SortedGroupedDistinctReady {
 		left.SortedGroupedDistinctReady = true
 	}
-	if left.SortedGroupedDistinctFallbackReason == "" {
-		left.SortedGroupedDistinctFallbackReason = right.SortedGroupedDistinctFallbackReason
-	} else if right.SortedGroupedDistinctFallbackReason != "" && right.SortedGroupedDistinctFallbackReason != left.SortedGroupedDistinctFallbackReason {
-		left.SortedGroupedDistinctFallbackReason = "mixed"
-	}
+	left.SortedGroupedDistinctFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortedGroupedDistinctFallbackReason, right.SortedGroupedDistinctFallbackReason)
 	left.DecodedPayloadBytes += right.DecodedPayloadBytes
 	left.PhysicalBytesScanned += right.PhysicalBytesScanned
 	left.DecodedMetadataBytes += right.DecodedMetadataBytes

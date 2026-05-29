@@ -242,7 +242,7 @@ func (plan columnTypedColumnSortKeyPrefixPlan) compilePartRanges(part *typedColu
 func encodeSortKeyPrefixPredicateValue(column typedColumnAdapterColumn, value string) (int64, bool, string, error) {
 	switch column.Field.ValueType {
 	case ColumnStoreValueString:
-		if err := validateTypedColumnAdapterStringDictionary(column, column.Definition.Cardinality, column.Dictionary); err != nil {
+		if validateTypedColumnAdapterStringDictionary(column, column.Definition.Cardinality, column.Dictionary) != nil {
 			return 0, false, columnSortKeyMarkFallbackUncertifiedDictionaryOrdering, nil
 		}
 		code, ok := column.Dictionary[value]
@@ -281,23 +281,4 @@ func mergeColumnPhysicalSortKeyFallbackReason(left, right string) string {
 		return left
 	}
 	return "mixed"
-}
-
-func applySortKeyPrefixDiagnostics(diag *ColumnPhysicalQueryDiagnostics, plan columnTypedColumnSortKeyPrefixPlan, mark columnTypedColumnSortKeyPartPruneResult) {
-	if diag == nil {
-		return
-	}
-	diag.SortKeyPrefixPlanned = plan.Planned
-	diag.SortKeyPrefixColumns = append(diag.SortKeyPrefixColumns[:0], (&plan).prefixColumns()...)
-	diag.SortKeyPrefixLiterals = plan.PrefixLen
-	diag.SortKeyMarkChecks += mark.Checks
-	diag.SortKeyMarkMatches += mark.Matches
-	diag.SortKeyMarkSkips += mark.Skips
-	if mark.FallbackReason != "" {
-		diag.SortKeyMarkFallbackReason = mark.FallbackReason
-	} else if plan.FallbackReason != "" {
-		diag.SortKeyMarkFallbackReason = plan.FallbackReason
-	}
-	diag.SortedGroupedDistinctReady = plan.SortedGroupedDistinctReady
-	diag.SortedGroupedDistinctFallbackReason = plan.SortedGroupedDistinctFallbackReason
 }
