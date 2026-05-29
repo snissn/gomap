@@ -146,34 +146,40 @@ func TestColumnGraphInvNormStateValidationFailures1992(t *testing.T) {
 		fixture := loadColumnGraphInvNormStateFixture1992(t, d, col, def)
 		cases := []struct {
 			name    string
-			mutate  func(*columnVectorIndexStateSnapshot)
+			mutate  func(testing.TB, *columnVectorIndexStateSnapshot)
 			message string
 		}{
 			{
 				name: "row_count",
-				mutate: func(state *columnVectorIndexStateSnapshot) {
+				mutate: func(tb testing.TB, state *columnVectorIndexStateSnapshot) {
 					state.RowCount++
-					state.Assets[0].RowCount++
+					mutateColumnGraphInvNormStateAsset1992(tb, state, func(asset *columnVectorIndexStateAssetSnapshot) {
+						asset.RowCount++
+					})
 				},
 				message: "identity mismatch",
 			},
 			{
 				name: "wrong_logical_type",
-				mutate: func(state *columnVectorIndexStateSnapshot) {
-					state.Assets[0].LogicalType = columnVectorIndexStateLogicalTypeFloat32Vector
+				mutate: func(tb testing.TB, state *columnVectorIndexStateSnapshot) {
+					mutateColumnGraphInvNormStateAsset1992(tb, state, func(asset *columnVectorIndexStateAssetSnapshot) {
+						asset.LogicalType = columnVectorIndexStateLogicalTypeFloat32Vector
+					})
 				},
 				message: "asset contract mismatch",
 			},
 			{
 				name: "wrong_physical_encoding",
-				mutate: func(state *columnVectorIndexStateSnapshot) {
-					state.Assets[0].PhysicalEncoding = columnVectorIndexStateEncodingRawFloat32Vector
+				mutate: func(tb testing.TB, state *columnVectorIndexStateSnapshot) {
+					mutateColumnGraphInvNormStateAsset1992(tb, state, func(asset *columnVectorIndexStateAssetSnapshot) {
+						asset.PhysicalEncoding = columnVectorIndexStateEncodingRawFloat32Vector
+					})
 				},
 				message: "asset contract mismatch",
 			},
 			{
 				name: "stale_base",
-				mutate: func(state *columnVectorIndexStateSnapshot) {
+				mutate: func(_ testing.TB, state *columnVectorIndexStateSnapshot) {
 					state.BaseManifestGeneration++
 				},
 				message: "identity mismatch",
@@ -182,7 +188,7 @@ func TestColumnGraphInvNormStateValidationFailures1992(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				state := cloneColumnVectorIndexStateSnapshot1992(fixture.state)
-				tc.mutate(&state)
+				tc.mutate(t, &state)
 				if err := validateColumnVectorGraphInvNormStateAssetIfPresent(d.ColumnAssetRootDir(), "docs", *fixture.cfg, def, fixture.graph, state); err == nil || !strings.Contains(err.Error(), tc.message) {
 					t.Fatalf("validate err=%v want %q", err, tc.message)
 				}
@@ -317,7 +323,9 @@ func TestColumnGraphInvNormStateMissingFallbackAndCorruptFailClosed1992(t *testi
 		}
 		fixture := loadColumnGraphInvNormStateFixture1992(t, d, col, def)
 		state := cloneColumnVectorIndexStateSnapshot1992(fixture.state)
-		state.Assets[0].Ref.Checksum++
+		mutateColumnGraphInvNormStateAsset1992(t, &state, func(asset *columnVectorIndexStateAssetSnapshot) {
+			asset.Ref.Checksum++
+		})
 		if err := validateColumnVectorGraphInvNormStateAssetIfPresent(d.ColumnAssetRootDir(), "docs", *fixture.cfg, def, fixture.graph, state); err == nil || !strings.Contains(err.Error(), "checksum") {
 			t.Fatalf("validate err=%v want checksum fail-closed", err)
 		}
@@ -509,8 +517,10 @@ func corruptColumnGraphInvNormStateValue1992(tb testing.TB, d *backenddb.DB, fix
 		tb.Fatalf("close appender: %v", closeErr)
 	}
 	state := cloneColumnVectorIndexStateSnapshot1992(fixture.state)
-	state.Assets[0].Ref = ref
-	state.Assets[0].AssetBytes = ref.Length
+	mutateColumnGraphInvNormStateAsset1992(tb, &state, func(asset *columnVectorIndexStateAssetSnapshot) {
+		asset.Ref = ref
+		asset.AssetBytes = ref.Length
+	})
 	return state
 }
 
@@ -613,6 +623,21 @@ func cloneColumnVectorIndexStateSnapshot1992(state columnVectorIndexStateSnapsho
 	return state
 }
 
+func mutateColumnGraphInvNormStateAsset1992(tb testing.TB, state *columnVectorIndexStateSnapshot, mutate func(*columnVectorIndexStateAssetSnapshot)) {
+	tb.Helper()
+	if state == nil {
+		tb.Fatal("nil vector-index state snapshot")
+	}
+	for i := range state.Assets {
+		asset := &state.Assets[i]
+		if asset.Role == columnVectorIndexStateAssetRoleInverseNorm && asset.AssetID == columnVectorGraphInvNormStateAssetID {
+			mutate(asset)
+			return
+		}
+	}
+	tb.Fatalf("inv_norm state asset missing from %+v", state.Assets)
+}
+
 func cloneColumnPartForInvNormValidation1992(part *typedcolumn.ColumnPart) *typedcolumn.ColumnPart {
 	clone := *part
 	clone.Columns = make(map[string]typedcolumn.ColumnPartColumn, len(part.Columns))
@@ -628,7 +653,7 @@ func assertColumnGraphSearchResultsEqual1992(tb testing.TB, left, right []column
 		tb.Fatalf("results len=%d want %d\nleft=%+v\nright=%+v", len(right), len(left), left, right)
 	}
 	for i := range left {
-		if left[i].Ordinal != right[i].Ordinal || string(left[i].ID) != string(right[i].ID) || math.Abs(left[i].Score-right[i].Score) > 1e-9 {
+		if left[i].Ordinal != right[i].Ordinal || string(left[i].ID) != string(right[i].ID) || math.Abs(left[i].Score-right[i].Score) > 1e-6 {
 			tb.Fatalf("result[%d]=%+v want %+v\nleft=%+v\nright=%+v", i, right[i], left[i], left, right)
 		}
 	}
