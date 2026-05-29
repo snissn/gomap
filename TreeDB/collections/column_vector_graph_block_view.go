@@ -32,13 +32,18 @@ type columnVectorGraphAdjacencySpan struct {
 }
 
 type columnVectorGraphSearchPlan struct {
-	reader          *columnVectorGraphPhysicalRowReader
-	physicalReader  *columnPhysicalRowReader
-	blockViews      map[int]*columnVectorGraphBlockView
-	singleBlockView *columnVectorGraphBlockView
-	hits            uint64
-	misses          uint64
-	builds          uint64
+	reader             *columnVectorGraphPhysicalRowReader
+	physicalReader     *columnPhysicalRowReader
+	blockViews         map[int]*columnVectorGraphBlockView
+	singleBlockView    *columnVectorGraphBlockView
+	ordinalRefs        []columnVectorGraphOrdinalRef
+	ordinalAssigned    []bool
+	ordinalRefsReady   bool
+	singleOrdinalRange bool
+	scoreSource        columnVectorGraphSearchSource
+	hits               uint64
+	misses             uint64
+	builds             uint64
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphSearchPlan, error) {
@@ -59,11 +64,21 @@ func (s *columnVectorGraphNativeSearchScratch) prepareSearchPlan(reader *columnV
 		}
 		plan.reader = reader
 		plan.singleBlockView = nil
+		plan.ordinalRefs = plan.ordinalRefs[:0]
+		plan.ordinalAssigned = plan.ordinalAssigned[:0]
+		plan.ordinalRefsReady = false
+		plan.singleOrdinalRange = false
 	}
 	plan.physicalReader = physicalReader
 	plan.hits = 0
 	plan.misses = 0
 	plan.builds = 0
+	if err := plan.prepareOrdinalRefs(); err != nil {
+		return nil, err
+	}
+	if err := plan.scoreSource.prepare(plan); err != nil {
+		return nil, err
+	}
 	return plan, nil
 }
 
@@ -90,6 +105,67 @@ func newColumnVectorGraphSearchPlan(reader *columnVectorGraphPhysicalRowReader) 
 	return &columnVectorGraphSearchPlan{reader: reader, physicalReader: physicalReader}, nil
 }
 
+func (p *columnVectorGraphSearchPlan) prepareOrdinalRefs() error {
+	if p == nil || p.reader == nil {
+		return errNilColumnVectorGraphPhysicalRowReader
+	}
+	reader := p.physicalReader
+	if reader == nil {
+		var err error
+		reader, err = p.reader.rowReader()
+		if err != nil {
+			return err
+		}
+		p.physicalReader = reader
+	}
+	if p.ordinalRefsReady {
+		return nil
+	}
+	p.singleOrdinalRange = len(reader.ranges) == 1
+	rowCount := reader.totalRows
+	if p.singleOrdinalRange {
+		rowRange := reader.ranges[0]
+		if rowRange.assetOrdinal != 0 || rowRange.startOrdinal != 0 || rowRange.rowCount != rowCount {
+			return fmt.Errorf("collections: column_graph single ordinal range asset=%d start=%d rows=%d row_count=%d: %w", rowRange.assetOrdinal, rowRange.startOrdinal, rowRange.rowCount, rowCount, errColumnPhysicalRowOrdinalOutOfBounds)
+		}
+		p.ordinalRefs = p.ordinalRefs[:0]
+		p.ordinalAssigned = p.ordinalAssigned[:0]
+		p.ordinalRefsReady = true
+		return nil
+	}
+	if cap(p.ordinalRefs) < rowCount {
+		p.ordinalRefs = make([]columnVectorGraphOrdinalRef, rowCount)
+	} else {
+		p.ordinalRefs = p.ordinalRefs[:rowCount]
+	}
+	if cap(p.ordinalAssigned) < rowCount {
+		p.ordinalAssigned = make([]bool, rowCount)
+	} else {
+		p.ordinalAssigned = p.ordinalAssigned[:rowCount]
+		clear(p.ordinalAssigned)
+	}
+	for _, rowRange := range reader.ranges {
+		end := rowRange.startOrdinal + rowRange.rowCount
+		if rowRange.startOrdinal < 0 || rowRange.rowCount < 0 || end < rowRange.startOrdinal || end > rowCount {
+			return fmt.Errorf("collections: column_graph ordinal range asset=%d start=%d rows=%d outside row_count=%d: %w", rowRange.assetOrdinal, rowRange.startOrdinal, rowRange.rowCount, rowCount, errColumnPhysicalRowOrdinalOutOfBounds)
+		}
+		for ordinal := rowRange.startOrdinal; ordinal < end; ordinal++ {
+			if p.ordinalAssigned[ordinal] {
+				return fmt.Errorf("collections: column_graph ordinal=%d assigned by overlapping physical ranges: %w", ordinal, errColumnPhysicalRowOrdinalOutOfBounds)
+			}
+			p.ordinalAssigned[ordinal] = true
+			p.ordinalRefs[ordinal] = columnVectorGraphOrdinalRef{assetOrdinal: rowRange.assetOrdinal, rowIndex: ordinal - rowRange.startOrdinal}
+		}
+	}
+	for ordinal, assigned := range p.ordinalAssigned {
+		if !assigned {
+			return fmt.Errorf("collections: column_graph ordinal=%d not covered by physical ranges: %w", ordinal, errColumnPhysicalRowOrdinalOutOfBounds)
+		}
+	}
+	p.ordinalRefsReady = true
+	return nil
+}
+
 func (p *columnVectorGraphSearchPlan) ordinalRef(ordinal int) (columnVectorGraphOrdinalRef, error) {
 	if p == nil || p.reader == nil {
 		return columnVectorGraphOrdinalRef{}, errNilColumnVectorGraphPhysicalRowReader
@@ -103,21 +179,21 @@ func (p *columnVectorGraphSearchPlan) ordinalRef(ordinal int) (columnVectorGraph
 		}
 		p.physicalReader = reader
 	}
-	if len(reader.ranges) == 1 {
-		if uint64(ordinal) >= uint64(reader.totalRows) {
-			return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
+	if !p.ordinalRefsReady {
+		if err := p.prepareOrdinalRefs(); err != nil {
+			return columnVectorGraphOrdinalRef{}, err
 		}
-		return columnVectorGraphOrdinalRef{assetOrdinal: 0, rowIndex: ordinal}, nil
 	}
-	rangeIdx := reader.rangeIndexForOrdinal(ordinal)
-	if rangeIdx < 0 {
+	if uint64(ordinal) >= uint64(reader.totalRows) {
 		return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
 	}
-	rowRange := reader.ranges[rangeIdx]
-	return columnVectorGraphOrdinalRef{
-		assetOrdinal: rowRange.assetOrdinal,
-		rowIndex:     ordinal - rowRange.startOrdinal,
-	}, nil
+	if p.singleOrdinalRange {
+		return columnVectorGraphOrdinalRef{assetOrdinal: 0, rowIndex: ordinal}, nil
+	}
+	if ordinal >= len(p.ordinalRefs) {
+		return columnVectorGraphOrdinalRef{}, fmt.Errorf("collections: physical column row ordinal=%d outside row_count=%d: %w", ordinal, reader.totalRows, errColumnPhysicalRowOrdinalOutOfBounds)
+	}
+	return p.ordinalRefs[ordinal], nil
 }
 
 func (p *columnVectorGraphSearchPlan) blockViewForOrdinal(ordinal int) (*columnVectorGraphBlockView, columnVectorGraphOrdinalRef, error) {

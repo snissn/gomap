@@ -128,6 +128,10 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		_ = snap.Close()
 		return VectorIndexStatus{}, err
 	}
+	if err := c.assignColumnVectorGraphRowRefsFromBaseManifest(baseMeta.Name, *cfg, records, manifest.Generation, rows); err != nil {
+		_ = snap.Close()
+		return VectorIndexStatus{}, err
+	}
 	_ = snap.Close()
 
 	if err := buildColumnVectorGraphAdjacency(rows, def); err != nil {
@@ -754,6 +758,14 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	rowRefPartID := statePartID
+	if len(stateAdjacencyAssets) > 0 {
+		rowRefPartID = nextColumnVectorGraphPartIDAfter(rowRefPartID, stateAdjacencyAssets[len(stateAdjacencyAssets)-1].Ref.PartID)
+	}
+	preparedRowRefs, err := prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection, cfg, def, manifest.Generation, rowRefPartID, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -769,6 +781,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
 		state.Assets = append(state.Assets, invNormAsset)
 	}
+	state.Assets = append(state.Assets, columnVectorGraphRowRefStateAssetSnapshots(preparedRowRefs)...)
 	stateRaw, err := encodeColumnVectorIndexStateRecord(state)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err

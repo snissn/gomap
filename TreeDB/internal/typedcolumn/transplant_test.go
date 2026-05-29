@@ -408,6 +408,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1992 is the scoped production vector graph writer/reader that publishes
 		// and consumes raw_float32 inverse-norm state through typed-column assets.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_inv_norm_state.go")): {},
+		// #1993 is the scoped production vector graph writer/reader that publishes
+		// and consumes raw_int64 row-reference state through typed-column assets.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_row_ref_state.go")): {},
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},

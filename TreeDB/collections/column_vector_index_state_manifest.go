@@ -19,9 +19,11 @@ const (
 	columnVectorIndexStateAssetRoleRowRefs           = "row_refs"
 
 	columnVectorIndexStateLogicalTypeUint32List    = "uint32_list"
+	columnVectorIndexStateLogicalTypeInt64         = "int64"
 	columnVectorIndexStateLogicalTypeFloat32       = "float32"
 	columnVectorIndexStateLogicalTypeFloat32Vector = "float32_vector"
 	columnVectorIndexStateEncodingRawUint32List    = "raw_uint32_offsets_list"
+	columnVectorIndexStateEncodingRawInt64         = "raw_int64"
 	columnVectorIndexStateEncodingRawFloat32       = "raw_float32"
 	columnVectorIndexStateEncodingRawFloat32Vector = "raw_float32_vector"
 )
@@ -374,7 +376,7 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 	case columnVectorIndexStateAssetRoleNormalizedVectors:
 		return columnVectorIndexStateLogicalTypeFloat32Vector, columnVectorIndexStateEncodingRawFloat32Vector, true
 	case columnVectorIndexStateAssetRoleRowRefs:
-		return "", "", false
+		return columnVectorIndexStateLogicalTypeInt64, columnVectorIndexStateEncodingRawInt64, true
 	default:
 		return "", "", false
 	}
