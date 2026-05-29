@@ -332,9 +332,10 @@ The suite writes:
 PR descriptions for column-store milestones should paste the command, row count,
 profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,
 planner time, scan time, reduce time, worker count, scheduled/skipped granules,
-cache hit/miss counters, materialized-row count, parity status, byte accounting,
-manifest/recovery identity, and the generated HTML artifact paths. If a forced
-physical column path is not implemented yet, the PR must call that out
+cache hit/miss counters, materialized-row count, parity status, storage source,
+fallback reason, manifest root name/id, active manifest generation/checksum,
+byte accounting, manifest/recovery identity, and the generated HTML artifact
+paths. If a forced physical column path is not implemented yet, the PR must call that out
 explicitly and include the fail-closed evidence. The suite reports measured
 `column_asset_bytes` from the isolated `column_assets/` tree after physical
 assets are published, plus explicit `column_asset_store_bytes`,

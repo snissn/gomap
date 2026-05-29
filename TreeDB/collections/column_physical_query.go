@@ -39,6 +39,35 @@ const (
 	ColumnPhysicalQueryGroupInt64Span        ColumnPhysicalQueryKind = "group_int64_span"
 )
 
+// ColumnPhysicalQueryStorageSource names the physical storage family that
+// satisfied a query/report row. It is diagnostic vocabulary for JSONBench
+// baselines and must not be used as a route selector.
+type ColumnPhysicalQueryStorageSource string
+
+const (
+	ColumnPhysicalQueryStorageSourceRowScan                               ColumnPhysicalQueryStorageSource = "row_scan"
+	ColumnPhysicalQueryStorageSourceTypedRowAsset                         ColumnPhysicalQueryStorageSource = "typed_row_asset"
+	ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset ColumnPhysicalQueryStorageSource = "compatibility_dictionary_code_int64_asset"
+	ColumnPhysicalQueryStorageSourceTypedColumnPartSection                ColumnPhysicalQueryStorageSource = "typed_column_part_section"
+	ColumnPhysicalQueryStorageSourceAggregateMetadata                     ColumnPhysicalQueryStorageSource = "aggregate_metadata"
+	ColumnPhysicalQueryStorageSourceFallback                              ColumnPhysicalQueryStorageSource = "fallback"
+	ColumnPhysicalQueryStorageSourceMixed                                 ColumnPhysicalQueryStorageSource = "mixed"
+)
+
+// ColumnPhysicalQueryFallbackReason explains why a benchmark/report row did not
+// use its most direct physical source. The "none" value is intentionally
+// explicit so baseline tables can carry a value for every row.
+type ColumnPhysicalQueryFallbackReason string
+
+const (
+	ColumnPhysicalQueryFallbackNone                         ColumnPhysicalQueryFallbackReason = "none"
+	ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported ColumnPhysicalQueryFallbackReason = "direct_asset_reduce_unsupported"
+	ColumnPhysicalQueryFallbackAggregateMetadataUnsupported ColumnPhysicalQueryFallbackReason = "aggregate_metadata_unsupported"
+	ColumnPhysicalQueryFallbackMutationVisibilityOverlay    ColumnPhysicalQueryFallbackReason = "mutation_visibility_overlay"
+	ColumnPhysicalQueryFallbackDocumentRootRowScan          ColumnPhysicalQueryFallbackReason = "document_root_row_scan"
+	ColumnPhysicalQueryFallbackMixed                        ColumnPhysicalQueryFallbackReason = "mixed"
+)
+
 const (
 	columnPhysicalQueryHourUS             = int64(3_600_000_000)
 	columnPhysicalQueryMaxParallelWorkers = 256
@@ -80,8 +109,11 @@ type ColumnPhysicalQueryGroup struct {
 // query without counting full-document row materialization.
 type ColumnPhysicalQueryDiagnostics struct {
 	ManifestRoot                uint64
+	ManifestRootName            string
 	ManifestGeneration          uint64
+	ActiveManifestChecksum      uint64
 	RecoveryManifestGeneration  uint64
+	RecoveryManifestChecksum    uint64
 	AppliedCommandLSN           uint64
 	ManifestRecords             int
 	AssetRefs                   int
@@ -121,6 +153,8 @@ type ColumnPhysicalQueryDiagnostics struct {
 	SegmentFileCacheHits        uint64
 	SegmentFileCacheMisses      uint64
 	ColumnAssetReadIntegrity    string
+	StorageSource               ColumnPhysicalQueryStorageSource
+	FallbackReason              ColumnPhysicalQueryFallbackReason
 	ScanNanos                   int64
 	VisibilityNanos             int64
 	ReduceNanos                 int64
@@ -430,22 +464,34 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
 	}
 	if r.dictCount != nil {
-		return r.dictCount.run(r.view, r.req), nil
+		result := r.dictCount.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.dictDistinct != nil {
-		return r.dictDistinct.run(r.view, r.req), nil
+		result := r.dictDistinct.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.int64Hour != nil {
-		return r.int64Hour.run(r.view, r.req), nil
+		result := r.int64Hour.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.dictInt64 != nil {
-		return r.dictInt64.run(r.view, r.req), nil
+		result := r.dictInt64.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.dictHour != nil {
-		return r.dictHour.run(r.view, r.req), nil
+		result := r.dictHour.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.metadata != nil {
-		return r.metadata.run(r.view, r.req), nil
+		result := r.metadata.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceAggregateMetadata, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	r.exec.resetForRun()
 	beforeHits := r.readCache.hits
@@ -458,6 +504,7 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackNone)
 	result.Diagnostics.DirectReduceBlocks = diag.DecodedBlocks
 	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.ScanNanos = scanNanos
@@ -492,6 +539,8 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	var rawScratch []byte
 	start := time.Now()
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
+	diag.StorageSource = ColumnPhysicalQueryStorageSourceAggregateMetadata
+	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = 2
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
@@ -551,6 +600,7 @@ func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysi
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackNone)
 	result.Diagnostics.DirectReduceBlocks = diag.DecodedBlocks
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
@@ -737,6 +787,10 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	wg.Wait()
 
 	result := ColumnPhysicalQueryResult{}
+	fallbackReason := ColumnPhysicalQueryFallbackNone
+	if !direct {
+		fallbackReason = ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported
+	}
 	var firstErr error
 	for worker := range results {
 		workerResult := results[worker]
@@ -756,6 +810,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	result.Diagnostics.WorkerCount = workers
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, fallbackReason)
 	if firstErr != nil {
 		result.Diagnostics.ReduceRows = merged.reduceRows
 		return result, firstErr
@@ -877,6 +932,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported)
 	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
@@ -904,11 +960,13 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 		if result, ok, err := runColumnDictionaryCodeGroupCountOneShot(view, req, &readCache); ok {
 			result.Diagnostics.SegmentFileCacheHits = readCache.hits
 			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 			return result, true, err
 		}
 		if result, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, req, &readCache); ok {
 			result.Diagnostics.SegmentFileCacheHits = readCache.hits
 			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 			return result, true, err
 		}
 	}
@@ -939,6 +997,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 	if !columnPhysicalQueryHasPredicates(req) {
 		result.Diagnostics.DictionaryCodeHits = result.Diagnostics.DecodedBlocks
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -966,6 +1025,7 @@ func (c *Collection) runColumnPhysicalQueryInt64ValuesInSnapshotView(view column
 	}
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -989,6 +1049,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryInt64InSnapshotView(view co
 		if ok {
 			result.Diagnostics.SegmentFileCacheHits = readCache.hits
 			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 			return result, true, nil
 		}
 	}
@@ -1006,6 +1067,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryInt64InSnapshotView(view co
 	result := runner.run(view, req)
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -1033,6 +1095,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryHourInSnapshotView(view col
 	result := runner.run(view, req)
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -1049,6 +1112,7 @@ func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig,
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(visible.Diagnostics),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackMutationVisibilityOverlay)
 	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.VisibilityRows = len(visible.Rows)
 	result.Diagnostics.ScanNanos = visibilityNanos
@@ -1107,8 +1171,11 @@ func (c *Collection) columnPhysicalQueryMutationPartsHint() (uint64, error) {
 func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) ColumnPhysicalQueryDiagnostics {
 	return ColumnPhysicalQueryDiagnostics{
 		ManifestRoot:               diag.ManifestRoot,
+		ManifestRootName:           diag.ManifestRootName,
 		ManifestGeneration:         diag.ManifestGeneration,
+		ActiveManifestChecksum:     diag.ActiveManifestChecksum,
 		RecoveryManifestGeneration: diag.RecoveryManifestGeneration,
+		RecoveryManifestChecksum:   diag.RecoveryManifestChecksum,
 		AppliedCommandLSN:          diag.AppliedCommandLSN,
 		ManifestRecords:            diag.ManifestRecords,
 		AssetRefs:                  diag.AssetRefs,
@@ -1124,23 +1191,53 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		SegmentFileCacheHits:       diag.SegmentFileCacheHits,
 		SegmentFileCacheMisses:     diag.SegmentFileCacheMisses,
 		ColumnAssetReadIntegrity:   diag.ColumnAssetReadIntegrity,
+		FallbackReason:             ColumnPhysicalQueryFallbackNone,
 	}
+}
+
+func annotateColumnPhysicalQueryResult(result *ColumnPhysicalQueryResult, source ColumnPhysicalQueryStorageSource, fallback ColumnPhysicalQueryFallbackReason) {
+	if result == nil {
+		return
+	}
+	if source != "" {
+		result.Diagnostics.StorageSource = source
+	}
+	if fallback == "" {
+		fallback = ColumnPhysicalQueryFallbackNone
+	}
+	result.Diagnostics.FallbackReason = fallback
 }
 
 func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnostics) ColumnPhysicalQueryDiagnostics {
 	if left.ManifestRoot == 0 {
 		left.ManifestRoot = right.ManifestRoot
+		left.ManifestRootName = right.ManifestRootName
 		left.ManifestGeneration = right.ManifestGeneration
+		left.ActiveManifestChecksum = right.ActiveManifestChecksum
 		left.RecoveryManifestGeneration = right.RecoveryManifestGeneration
+		left.RecoveryManifestChecksum = right.RecoveryManifestChecksum
 		left.AppliedCommandLSN = right.AppliedCommandLSN
 		left.ManifestRecords = right.ManifestRecords
 		left.AssetRefs = right.AssetRefs
 		left.ProjectedColumns = right.ProjectedColumns
 		left.ColumnAssetReadIntegrity = right.ColumnAssetReadIntegrity
+		left.StorageSource = right.StorageSource
+		left.FallbackReason = right.FallbackReason
+	}
+	if left.ManifestRootName == "" {
+		left.ManifestRootName = right.ManifestRootName
+	}
+	if left.ActiveManifestChecksum == 0 {
+		left.ActiveManifestChecksum = right.ActiveManifestChecksum
+	}
+	if left.RecoveryManifestChecksum == 0 {
+		left.RecoveryManifestChecksum = right.RecoveryManifestChecksum
 	}
 	if left.ColumnAssetReadIntegrity == "" {
 		left.ColumnAssetReadIntegrity = right.ColumnAssetReadIntegrity
 	}
+	left.StorageSource = mergeColumnPhysicalQueryStorageSource(left.StorageSource, right.StorageSource)
+	left.FallbackReason = mergeColumnPhysicalQueryFallbackReason(left.FallbackReason, right.FallbackReason)
 	if right.ManifestRecords > left.ManifestRecords {
 		left.ManifestRecords = right.ManifestRecords
 	}
@@ -1192,6 +1289,32 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.SegmentFileCacheHits += right.SegmentFileCacheHits
 	left.SegmentFileCacheMisses += right.SegmentFileCacheMisses
 	return left
+}
+
+func mergeColumnPhysicalQueryStorageSource(left, right ColumnPhysicalQueryStorageSource) ColumnPhysicalQueryStorageSource {
+	if left == "" {
+		return right
+	}
+	if right == "" || right == left {
+		return left
+	}
+	return ColumnPhysicalQueryStorageSourceMixed
+}
+
+func mergeColumnPhysicalQueryFallbackReason(left, right ColumnPhysicalQueryFallbackReason) ColumnPhysicalQueryFallbackReason {
+	if left == "" {
+		if right == "" {
+			return ColumnPhysicalQueryFallbackNone
+		}
+		return right
+	}
+	if right == "" || right == left || right == ColumnPhysicalQueryFallbackNone {
+		return left
+	}
+	if left == ColumnPhysicalQueryFallbackNone {
+		return right
+	}
+	return ColumnPhysicalQueryFallbackMixed
 }
 
 type columnPhysicalQueryExecutor struct {
