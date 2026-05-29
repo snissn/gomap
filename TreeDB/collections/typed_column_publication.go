@@ -175,6 +175,10 @@ func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStor
 	if len(cfg.SortKey) == 0 {
 		return nil, nil
 	}
+	declared := make(map[string]struct{}, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		declared[col.Name] = struct{}{}
+	}
 	fieldByName := make(map[string]TypedStorageField, len(fields))
 	for _, field := range fields {
 		if field.Name != "" {
@@ -183,6 +187,9 @@ func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStor
 	}
 	allOwnedByTypedPart := true
 	for _, sortKey := range cfg.SortKey {
+		if _, ok := declared[sortKey.Column]; !ok {
+			return nil, fmt.Errorf("collections: typed-column part publication sort key references unknown column %q", sortKey.Column)
+		}
 		if _, ok := fieldByName[sortKey.Column]; !ok {
 			allOwnedByTypedPart = false
 		}

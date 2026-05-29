@@ -398,6 +398,16 @@ func encodeColumnManifestPartRecordWithRawSortKey1948(t testing.TB, kind ColumnA
 	return b.Bytes()
 }
 
+func TestTypedColumnPartPublicationSortKeyRejectsUnknownColumn1948(t *testing.T) {
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+	}, SortKey: []ColumnSortKey{{Column: "missing"}}}
+	_, err := typedColumnPartPublicationSortKey(*cfg, columnStoreTypedColumnPartFields(*cfg))
+	if err == nil || !strings.Contains(err.Error(), "unknown column") {
+		t.Fatalf("typedColumnPartPublicationSortKey unknown err=%v want unknown column", err)
+	}
+}
+
 func TestTypedColumnPartSortKeyMixedOwnerNamePathCollisionFallsBack1948(t *testing.T) {
 	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
 		{Name: "row_sort", Path: "row_path", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
