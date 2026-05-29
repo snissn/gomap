@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
@@ -14,6 +15,7 @@ const (
 	columnSortKeyMarkFallbackUnsupportedDescending         = "unsupported_descending_sort_key"
 	columnSortKeyMarkFallbackNullableDefaulted             = "nullable_or_defaulted_sort_key"
 	columnSortKeyMarkFallbackUnsupportedColumnType         = "unsupported_sort_key_column_type"
+	columnSortKeyMarkFallbackUnsupportedSortKeyWidth       = "unsupported_sort_key_width"
 	columnSortKeyMarkFallbackMissingMarks                  = "missing_sort_key_marks"
 	columnSortKeyMarkFallbackStaleMarks                    = "stale_sort_key_marks"
 	columnSortKeyMarkFallbackUncertifiedDictionaryOrdering = "uncertified_dictionary_order"
@@ -89,6 +91,11 @@ func planColumnTypedColumnSortKeyPrefix(cfg ColumnStoreConfig, sortKey []ColumnS
 		if kind != ColumnPhysicalQueryPredicateEqual || len(predicate.Values) != 0 {
 			plan.FallbackReason = columnSortKeyMarkFallbackUnsupportedPredicate
 			break
+		}
+		if plan.PrefixLen >= typedColumnPartSortKeyMaxColumns {
+			plan.FallbackReason = columnSortKeyMarkFallbackUnsupportedSortKeyWidth
+			plan.SortedGroupedDistinctFallbackReason = columnSortedGroupedDistinctFallbackMissingPrefix
+			return plan
 		}
 		plan.Columns[plan.PrefixLen] = sortColumn.Column
 		plan.Values[plan.PrefixLen] = predicate.Value
@@ -259,8 +266,21 @@ func encodeSortKeyPrefixPredicateValue(column typedColumnAdapterColumn, value st
 		}
 		code, ok := column.Dictionary[value]
 		return code, ok, columnSortKeyMarkFallbackNone, nil
-	case ColumnStoreValueBool, ColumnStoreValueInt64:
-		return 0, false, columnSortKeyMarkFallbackUnsupportedPredicate, nil
+	case ColumnStoreValueBool:
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return 0, false, columnSortKeyMarkFallbackUnsupportedPredicate, nil
+		}
+		if parsed {
+			return 1, true, columnSortKeyMarkFallbackNone, nil
+		}
+		return 0, true, columnSortKeyMarkFallbackNone, nil
+	case ColumnStoreValueInt64:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, false, columnSortKeyMarkFallbackUnsupportedPredicate, nil
+		}
+		return parsed, true, columnSortKeyMarkFallbackNone, nil
 	default:
 		return 0, false, columnSortKeyMarkFallbackUnsupportedColumnType, nil
 	}

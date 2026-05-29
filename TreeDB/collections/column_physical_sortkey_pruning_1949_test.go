@@ -85,6 +85,46 @@ func TestTypedColumnSortKeyPrefixPlannerFallbacks1949(t *testing.T) {
 	}
 }
 
+func TestTypedColumnSortKeyPrefixPlannerCapsAndScalarLiterals1949(t *testing.T) {
+	var cfg ColumnStoreConfig
+	var sortKey []ColumnSortKey
+	var predicates []ColumnPhysicalQueryPredicate
+	for i := 0; i < typedColumnPartSortKeyMaxColumns+1; i++ {
+		name := "c" + strconv.Itoa(i)
+		cfg.Columns = append(cfg.Columns, ColumnStoreColumn{Name: name, ValueType: ColumnStoreValueString})
+		sortKey = append(sortKey, ColumnSortKey{Column: name})
+		predicates = append(predicates, ColumnPhysicalQueryPredicate{Column: name, Value: "v"})
+	}
+	plan := planColumnTypedColumnSortKeyPrefix(cfg, sortKey, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "c0", Predicates: predicates})
+	if plan.Planned || plan.FallbackReason != columnSortKeyMarkFallbackUnsupportedSortKeyWidth {
+		t.Fatalf("wide prefix plan=%+v want unsupported sort-key width fallback", plan)
+	}
+
+	boolColumn := typedColumnAdapterColumn{Field: TypedStorageField{ValueType: ColumnStoreValueBool}}
+	encoded, present, fallback, err := encodeSortKeyPrefixPredicateValue(boolColumn, "true")
+	if err != nil || !present || fallback != columnSortKeyMarkFallbackNone || encoded != 1 {
+		t.Fatalf("bool true encoded=%d present=%v fallback=%q err=%v", encoded, present, fallback, err)
+	}
+	encoded, present, fallback, err = encodeSortKeyPrefixPredicateValue(boolColumn, "false")
+	if err != nil || !present || fallback != columnSortKeyMarkFallbackNone || encoded != 0 {
+		t.Fatalf("bool false encoded=%d present=%v fallback=%q err=%v", encoded, present, fallback, err)
+	}
+	_, present, fallback, err = encodeSortKeyPrefixPredicateValue(boolColumn, "not-bool")
+	if err != nil || present || fallback != columnSortKeyMarkFallbackUnsupportedPredicate {
+		t.Fatalf("bool invalid present=%v fallback=%q err=%v", present, fallback, err)
+	}
+
+	intColumn := typedColumnAdapterColumn{Field: TypedStorageField{ValueType: ColumnStoreValueInt64}}
+	encoded, present, fallback, err = encodeSortKeyPrefixPredicateValue(intColumn, "-42")
+	if err != nil || !present || fallback != columnSortKeyMarkFallbackNone || encoded != -42 {
+		t.Fatalf("int64 encoded=%d present=%v fallback=%q err=%v", encoded, present, fallback, err)
+	}
+	_, present, fallback, err = encodeSortKeyPrefixPredicateValue(intColumn, "not-int")
+	if err != nil || present || fallback != columnSortKeyMarkFallbackUnsupportedPredicate {
+		t.Fatalf("int64 invalid present=%v fallback=%q err=%v", present, fallback, err)
+	}
+}
+
 func TestTypedColumnSortKeyQ4BMarkPrunedParity1949(t *testing.T) {
 	sortKey := []ColumnSortKey{{Column: "kind"}, {Column: "operation"}, {Column: "collection"}, {Column: "did"}, {Column: "time_us"}}
 	events := typedColumnSortKeyPruningEvents1949()
