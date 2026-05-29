@@ -41,11 +41,15 @@ type columnVectorGraphNativeSearchOptions struct {
 }
 
 type columnVectorGraphAdjacencySourceCounterSnapshot struct {
-	AdjacencyBytesRead          uint64
-	AdjacencyDirectViews        uint64
-	AdjacencyMmapDirectViews    uint64
-	AdjacencyHeapCopyTypedViews uint64
-	AdjacencyScratchDecodes     uint64
+	AdjacencyBytesRead                   uint64
+	AdjacencyDirectViews                 uint64
+	AdjacencyMmapDirectViews             uint64
+	AdjacencyHeapCopyTypedViews          uint64
+	AdjacencyScratchDecodes              uint64
+	AdjacencyTypedListDirectViews        uint64
+	AdjacencyTypedListMmapDirectViews    uint64
+	AdjacencyTypedListHeapCopyTypedViews uint64
+	AdjacencyTypedListScratchDecodes     uint64
 }
 
 func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
@@ -59,6 +63,19 @@ func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLe
 		c.AdjacencyMmapDirectViews++
 	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
 		c.AdjacencyHeapCopyTypedViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect:
+		c.AdjacencyDirectViews++
+		c.AdjacencyMmapDirectViews++
+		c.AdjacencyTypedListDirectViews++
+		c.AdjacencyTypedListMmapDirectViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView:
+		c.AdjacencyHeapCopyTypedViews++
+		c.AdjacencyTypedListHeapCopyTypedViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode:
+		if adjacencyLen > 0 {
+			c.AdjacencyScratchDecodes++
+			c.AdjacencyTypedListScratchDecodes++
+		}
 	default:
 		if adjacencyLen > 0 {
 			c.AdjacencyScratchDecodes++
@@ -67,62 +84,68 @@ func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLe
 }
 
 type columnVectorGraphNativeSearchStats struct {
-	CandidateRows                    uint64
-	Candidates                       uint64
-	Edges                            uint64
-	VisitedNodes                     uint64
-	VisitedEdges                     uint64
-	VectorBytesRead                  uint64
-	NormBytesRead                    uint64
-	AdjacencyBytesRead               uint64
-	CandidateFetches                 uint64
-	ExpansionFetches                 uint64
-	ResultFetches                    uint64
-	ScoreBatches                     uint64
-	OrdinalsGrouped                  uint64
-	BlockViewHits                    uint64
-	BlockViewMisses                  uint64
-	BlockViewBuilds                  uint64
-	AdjacencyExpansions              uint64
-	AdjacencyScratchDecodes          uint64
-	AdjacencyDirectViews             uint64
-	AdjacencyMmapDirectViews         uint64
-	AdjacencyHeapCopyTypedViews      uint64
-	AdjacencySourceUnavailable       uint64
-	AdjacencySourceFallbacks         uint64
-	AdjacencyCertificationFailures   uint64
-	AdjacencyAbsoluteOffsetUnaligned uint64
-	AdjacencyActualPointerUnaligned  uint64
-	AdjacencyStaleHandles            uint64
-	NormDirectViews                  uint64
-	NormMmapDirectViews              uint64
-	NormHeapCopyTypedViews           uint64
-	NormScratchDecodes               uint64
-	NormSourceUnavailable            uint64
-	NormSourceFallbacks              uint64
-	NormValidationFailures           uint64
-	NormAbsoluteOffsetUnaligned      uint64
-	NormActualPointerUnaligned       uint64
-	NormStaleHandles                 uint64
-	NormMappedBytes                  uint64
-	NormHeapCopyBytes                uint64
-	NormDecodedBytes                 uint64
-	NormActiveHandles                int64
-	NormDeniedResources              uint64
-	VectorDirectViews                uint64
-	VectorMmapDirectViews            uint64
-	VectorHeapCopyTypedViews         uint64
-	VectorScratchDecodes             uint64
-	VectorCertificationFailures      uint64
-	VectorAbsoluteOffsetUnaligned    uint64
-	VectorActualPointerUnaligned     uint64
-	VectorStaleHandles               uint64
-	TypedColumnMappedBytes           uint64
-	TypedColumnHeapCopyBytes         uint64
-	TypedColumnDecodedBytes          uint64
-	TypedColumnActiveHandles         int64
-	TypedColumnDeniedResources       uint64
-	TypedColumnFallbacks             uint64
+	CandidateRows                        uint64
+	Candidates                           uint64
+	Edges                                uint64
+	VisitedNodes                         uint64
+	VisitedEdges                         uint64
+	VectorBytesRead                      uint64
+	NormBytesRead                        uint64
+	AdjacencyBytesRead                   uint64
+	CandidateFetches                     uint64
+	ExpansionFetches                     uint64
+	ResultFetches                        uint64
+	ScoreBatches                         uint64
+	OrdinalsGrouped                      uint64
+	BlockViewHits                        uint64
+	BlockViewMisses                      uint64
+	BlockViewBuilds                      uint64
+	AdjacencyExpansions                  uint64
+	AdjacencyScratchDecodes              uint64
+	AdjacencyDirectViews                 uint64
+	AdjacencyMmapDirectViews             uint64
+	AdjacencyHeapCopyTypedViews          uint64
+	AdjacencyTypedListDirectViews        uint64
+	AdjacencyTypedListMmapDirectViews    uint64
+	AdjacencyTypedListHeapCopyTypedViews uint64
+	AdjacencyTypedListScratchDecodes     uint64
+	AdjacencyLegacyFallbacks             uint64
+	AdjacencySourceUnavailable           uint64
+	AdjacencySourceFallbacks             uint64
+	AdjacencyCertificationFailures       uint64
+	AdjacencyValidationFailures          uint64
+	AdjacencyAbsoluteOffsetUnaligned     uint64
+	AdjacencyActualPointerUnaligned      uint64
+	AdjacencyStaleHandles                uint64
+	NormDirectViews                      uint64
+	NormMmapDirectViews                  uint64
+	NormHeapCopyTypedViews               uint64
+	NormScratchDecodes                   uint64
+	NormSourceUnavailable                uint64
+	NormSourceFallbacks                  uint64
+	NormValidationFailures               uint64
+	NormAbsoluteOffsetUnaligned          uint64
+	NormActualPointerUnaligned           uint64
+	NormStaleHandles                     uint64
+	NormMappedBytes                      uint64
+	NormHeapCopyBytes                    uint64
+	NormDecodedBytes                     uint64
+	NormActiveHandles                    int64
+	NormDeniedResources                  uint64
+	VectorDirectViews                    uint64
+	VectorMmapDirectViews                uint64
+	VectorHeapCopyTypedViews             uint64
+	VectorScratchDecodes                 uint64
+	VectorCertificationFailures          uint64
+	VectorAbsoluteOffsetUnaligned        uint64
+	VectorActualPointerUnaligned         uint64
+	VectorStaleHandles                   uint64
+	TypedColumnMappedBytes               uint64
+	TypedColumnHeapCopyBytes             uint64
+	TypedColumnDecodedBytes              uint64
+	TypedColumnActiveHandles             int64
+	TypedColumnDeniedResources           uint64
+	TypedColumnFallbacks                 uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -770,6 +793,7 @@ func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeS
 		return
 	}
 	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
+	stats.AdjacencyLegacyFallbacks++
 	if adjacencyLen == 0 {
 		return
 	}
@@ -795,6 +819,10 @@ func recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats *columnVec
 	stats.AdjacencyMmapDirectViews += counters.AdjacencyMmapDirectViews
 	stats.AdjacencyHeapCopyTypedViews += counters.AdjacencyHeapCopyTypedViews
 	stats.AdjacencyScratchDecodes += counters.AdjacencyScratchDecodes
+	stats.AdjacencyTypedListDirectViews += counters.AdjacencyTypedListDirectViews
+	stats.AdjacencyTypedListMmapDirectViews += counters.AdjacencyTypedListMmapDirectViews
+	stats.AdjacencyTypedListHeapCopyTypedViews += counters.AdjacencyTypedListHeapCopyTypedViews
+	stats.AdjacencyTypedListScratchDecodes += counters.AdjacencyTypedListScratchDecodes
 }
 
 func recordColumnVectorGraphAdjacencyFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
@@ -808,7 +836,9 @@ func recordColumnVectorGraphAdjacencyFallbackReasonStats(stats *columnVectorGrap
 		stats.AdjacencyActualPointerUnaligned++
 	case typeddecode.ReasonNilHandle, typeddecode.ReasonStaleHandle:
 		stats.AdjacencyStaleHandles++
-	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonValidationFailed, typeddecode.ReasonOffsetsCountMismatch, typeddecode.ReasonOffsetsStartMismatch, typeddecode.ReasonOffsetsNonMonotonic, typeddecode.ReasonOffsetsGoIntRange, typeddecode.ReasonValuesLengthMismatch:
+	case typeddecode.ReasonValidationFailed:
+		stats.AdjacencyValidationFailures++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonOffsetsCountMismatch, typeddecode.ReasonOffsetsStartMismatch, typeddecode.ReasonOffsetsNonMonotonic, typeddecode.ReasonOffsetsGoIntRange, typeddecode.ReasonValuesLengthMismatch:
 		stats.AdjacencyCertificationFailures++
 	}
 }

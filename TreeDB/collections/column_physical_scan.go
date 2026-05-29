@@ -213,22 +213,24 @@ func columnManifestScanPartPreallocCapacity(expectedParts uint64) int {
 }
 
 type columnPhysicalScanSnapshotView struct {
-	CollectionName      string
-	Catalog             *collectionCatalog
-	Config              ColumnStoreConfig
-	FullConfig          ColumnStoreConfig
-	ColumnStoreEnabled  bool
-	CommitSeq           uint64
-	AssetRefs           []columnManifestAssetRefForScan
-	TypedColumnPartRefs []columnManifestAssetRefForScan
-	AggregateMetadata   []columnManifestAggregateMetadataSnapshot
-	DictionaryCodes     []columnManifestDictionaryCodesSnapshot
-	Int64Values         []columnManifestInt64ValuesSnapshot
-	GraphAssetRefs      []ColumnAssetRef
-	MutationParts       int
-	Diagnostics         columnPhysicalScanDiagnostics
-	ColumnAssetRootDir  string
-	AssetNamespace      string
+	CollectionName        string
+	Catalog               *collectionCatalog
+	Config                ColumnStoreConfig
+	FullConfig            ColumnStoreConfig
+	ColumnStoreEnabled    bool
+	CommitSeq             uint64
+	AssetRefs             []columnManifestAssetRefForScan
+	TypedColumnPartRefs   []columnManifestAssetRefForScan
+	AggregateMetadata     []columnManifestAggregateMetadataSnapshot
+	DictionaryCodes       []columnManifestDictionaryCodesSnapshot
+	Int64Values           []columnManifestInt64ValuesSnapshot
+	GraphAssetRefs        []ColumnAssetRef
+	VectorIndexState      columnVectorIndexStateSnapshot
+	VectorIndexStateFound bool
+	MutationParts         int
+	Diagnostics           columnPhysicalScanDiagnostics
+	ColumnAssetRootDir    string
+	AssetNamespace        string
 }
 
 var errColumnPhysicalAssetManifestOperationMismatch = errors.New("collections: column physical asset operation does not match manifest reason")
