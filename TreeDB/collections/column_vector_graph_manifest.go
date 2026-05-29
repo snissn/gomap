@@ -894,6 +894,12 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 				status.RebuildNeeded = true
 				return columnGraphVectorIndexStatusError(status, err)
 			}
+			if err := validateColumnVectorGraphInvNormStateAssetIfPresent(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph, state); err != nil {
+				status.State = VectorIndexStateColumnGraphUnavailable
+				status.Reason = VectorIndexReasonColumnGraphCorrupt
+				status.RebuildNeeded = true
+				return columnGraphVectorIndexStatusError(status, err)
+			}
 		case columnVectorIndexStateMatchUnsupportedVisibility:
 			status.State = VectorIndexStateColumnGraphRebuildNeeded
 			status.Reason = VectorIndexReasonColumnGraphUnsupportedVisibility
