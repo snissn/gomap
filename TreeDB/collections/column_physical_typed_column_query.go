@@ -381,9 +381,6 @@ func typedColumnPhysicalQueryPairingError(err error) error {
 }
 
 func validateTypedColumnPhysicalQuerySortMetadata(expected, manifest, image []ColumnSortKey) error {
-	if len(expected) == 0 {
-		return nil
-	}
 	if !columnSortKeysEqual(expected, manifest) {
 		return fmt.Errorf("collections: typed-column part physical query sort metadata mismatch: manifest=%v want %v", manifest, expected)
 	}

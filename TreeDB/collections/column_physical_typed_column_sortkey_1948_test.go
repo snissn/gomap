@@ -111,7 +111,7 @@ func TestTypedColumnPartSortKeyClickHouseLogicalOrder1948(t *testing.T) {
 
 func TestTypedColumnPartSortKeyRejectsNullable1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948([]ColumnSortKey{{Column: "kind"}})
-	cfg.Columns[1].Nullable = true
+	setTypedColumnSortKeyColumnNullable1948(t, cfg, "kind", true)
 	_, err := normalizeColumnStoreConfig("events", cfg)
 	if err == nil || !strings.Contains(err.Error(), "null/default ordering is not defined") {
 		t.Fatalf("normalize nullable sort key err=%v want null/default ordering rejection", err)
@@ -128,7 +128,7 @@ func TestTypedColumnPartSortKeyRejectsDescending1948(t *testing.T) {
 
 func TestTypedColumnPartSortKeyMixedOwnerFallsBackToPrimaryID1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948([]ColumnSortKey{{Column: "time_us"}})
-	cfg.Columns[0].Owner = TypedStorageOwnerRowAsset
+	setTypedColumnSortKeyColumnOwner1948(t, cfg, "time_us", TypedStorageOwnerRowAsset)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
 	if err != nil {
 		t.Fatalf("normalizeColumnStoreConfig: %v", err)
@@ -153,6 +153,28 @@ func TestTypedColumnPartSortKeyMixedOwnerFallsBackToPrimaryID1948(t *testing.T) 
 	if got := columnSortKeysFromTypedColumnSortKeys(part.Part.Descriptor.SortKey); len(got) != 0 {
 		t.Fatalf("mixed-owner typed-column sort metadata=%+v want empty primary-id fallback", got)
 	}
+}
+
+func setTypedColumnSortKeyColumnNullable1948(tb testing.TB, cfg *ColumnStoreConfig, name string, nullable bool) {
+	tb.Helper()
+	for i := range cfg.Columns {
+		if cfg.Columns[i].Name == name {
+			cfg.Columns[i].Nullable = nullable
+			return
+		}
+	}
+	tb.Fatalf("missing column %q in test fixture", name)
+}
+
+func setTypedColumnSortKeyColumnOwner1948(tb testing.TB, cfg *ColumnStoreConfig, name string, owner TypedStorageFieldOwner) {
+	tb.Helper()
+	for i := range cfg.Columns {
+		if cfg.Columns[i].Name == name {
+			cfg.Columns[i].Owner = owner
+			return
+		}
+	}
+	tb.Fatalf("missing column %q in test fixture", name)
 }
 
 func TestColumnPreparedAssetSortKeyRejectsDuplicate1948(t *testing.T) {
@@ -192,6 +214,16 @@ func TestTypedColumnPartSortKeyQueryValidationFailsClosed1948(t *testing.T) {
 		columnManifestAssetRefForScan{Rows: rowCount}, raw)
 	if err == nil || !strings.Contains(err.Error(), "sort metadata mismatch") {
 		t.Fatalf("decodeTypedColumnPhysicalQueryPart err=%v want sort metadata mismatch", err)
+	}
+}
+
+func TestTypedColumnPartSortKeyQueryRejectsUnexpectedMetadata1948(t *testing.T) {
+	unexpected := []ColumnSortKey{{Column: "time_us"}}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(nil, unexpected, nil); err == nil || !strings.Contains(err.Error(), "sort metadata mismatch") {
+		t.Fatalf("validate unexpected manifest metadata err=%v want sort metadata mismatch", err)
+	}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(nil, nil, unexpected); err == nil || !strings.Contains(err.Error(), "sort metadata mismatch") {
+		t.Fatalf("validate unexpected image metadata err=%v want sort metadata mismatch", err)
 	}
 }
 
