@@ -317,7 +317,7 @@ func typedColumnAdapterSortKey(opts typedColumnAdapterOptions, columns []typedCo
 	for _, sortKey := range opts.SortKey {
 		column, ok := byName[sortKey.Column]
 		if !ok {
-			return nil, fmt.Errorf("collections: typed-column adapter sort key column %q is not owned by typed_column_part", sortKey.Column)
+			return nil, fmt.Errorf("collections: typed-column adapter sort key column %q is not owned by typed_column_part by field name; sort keys must reference column names, not paths", sortKey.Column)
 		}
 		if _, exists := seen[column.Definition.Name]; exists {
 			return nil, fmt.Errorf("collections: typed-column adapter duplicate sort key column %q", sortKey.Column)

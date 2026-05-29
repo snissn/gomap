@@ -1457,7 +1457,10 @@ func TestTypedColumnAdapterLegacyDictionaryOrderMetadataAcceptedWhenSorted1948(t
 		{Type: ColumnStoreValueString, Present: true, String: "alpha"},
 	}
 	part := typedColumnAdapterBuildPart(t, field, values)
-	column := part.Columns[0]
+	column, ok := part.columnByName("kind")
+	if !ok {
+		t.Fatal("missing kind column")
+	}
 	metadata := part.Dictionary[typedColumnAdapterMetadataDictionary]
 	delete(metadata, typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
 	delete(metadata, typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
@@ -1472,7 +1475,10 @@ func TestTypedColumnAdapterLegacyDictionaryOrderMetadataAcceptedWhenSorted1948(t
 	}
 
 	badPart := typedColumnAdapterBuildPart(t, field, values)
-	badColumn := badPart.Columns[0]
+	badColumn, ok := badPart.columnByName("kind")
+	if !ok {
+		t.Fatal("missing kind column")
+	}
 	badMetadata := badPart.Dictionary[typedColumnAdapterMetadataDictionary]
 	delete(badMetadata, typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
 	delete(badMetadata, typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
