@@ -1842,15 +1842,15 @@ func runTypedColumnColumnAssetRewriteRoundTripMixedRefs1778(t *testing.T) {
 	assertJSONEqualM13C(t, afterGC, []byte(`{"time_us":1,"kind":"like","score":2.5,"flag":true}`))
 }
 
-func TestTypedColumnPhysicalQueryTypedColumnFieldsFailClosed(t *testing.T) {
-	runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t)
+func TestTypedColumnPhysicalQueryTypedColumnFieldsSucceed(t *testing.T) {
+	runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t)
 }
 
-func TestTypedColumnPhysicalQueryFailsClosedForColumnPartFields(t *testing.T) {
-	runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t)
+func TestTypedColumnPhysicalQueryTypedColumnPartFields(t *testing.T) {
+	runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t)
 }
 
-func runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t *testing.T) {
+func runTypedColumnPhysicalQueryTypedColumnFieldsSucceed1778(t *testing.T) {
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
 	typedResult, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})

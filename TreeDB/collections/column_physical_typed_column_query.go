@@ -46,6 +46,7 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 	if _, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req); err != nil || !candidate {
 		return ColumnPhysicalQueryResult{}, candidate, err
 	}
+	start := time.Now()
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
@@ -57,6 +58,9 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 		return ColumnPhysicalQueryResult{}, candidate, err
 	}
 	result, err := runner.run(view, req)
+	if err == nil {
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	}
 	return result, true, err
 }
 
@@ -392,8 +396,8 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	rowsScanned := 0
 	matchedRows := 0
 	for _, part := range r.parts {
-		rowsScanned += part.Rows
 		for rowIdx := 0; rowIdx < part.Rows; rowIdx++ {
+			rowsScanned++
 			matched, err := typedColumnPhysicalQueryPredicatesMatch(part.Values, r.plan.PredicateSpecs, rowIdx)
 			if err != nil {
 				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())}, err
