@@ -237,6 +237,7 @@ func TestColumnGraphVectorIndexStatusValidatesVectorIndexState1986(t *testing.T)
 	defer func() { _ = d.Close() }()
 	ctx := makeColumnVectorIndexStateStatusContextWithDB1986(t, d)
 	baseState := columnVectorIndexStateSnapshotFromGraph(ctx.graph)
+	baseState.Assets = append(baseState.Assets, makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d).state.Assets...)
 	meta := CollectionMeta{
 		Name:          "docs",
 		Options:       CollectionOptions{ColumnStore: testColumnGraphBaseColumnStoreConfigV2A()},
@@ -260,6 +261,7 @@ func TestColumnGraphVectorIndexStatusValidatesVectorIndexState1986(t *testing.T)
 	t.Run("state_row_count_mismatch", func(t *testing.T) {
 		state := baseState
 		state.RowCount++
+		state.Assets = nil
 		records, identity := appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, state)
 		publishColumnGraphCatalogForTestV2A(t, d, meta, identity, records)
 		col, err := NewCollectionManager(d).OpenCollection("docs")
