@@ -146,15 +146,23 @@ type columnVectorGraphNativeSearchStats struct {
 	TypedColumnActiveHandles             int64
 	TypedColumnDeniedResources           uint64
 	TypedColumnFallbacks                 uint64
+	RowRefVectorSourceState              uint64
+	RowRefVectorSourceLegacyGraphIDs     uint64
+	RowRefStateResultRefs                uint64
+	RowRefStateSourceUnavailable         uint64
+	RowRefStateSourceFallbacks           uint64
+	ResultIDGraphFallbacks               uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
 // scratch. Callers must copy the returned result slice and any retained result
 // IDs before the next search with the same scratch.
 type columnVectorGraphNativeSearchResult struct {
-	Ordinal int
-	ID      []byte
-	Score   float64
+	Ordinal   int
+	ID        []byte
+	RowRef    DocumentRowRef
+	HasRowRef bool
+	Score     float64
 }
 
 type columnVectorGraphSearchCandidate struct {
@@ -177,6 +185,8 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
+	resultRowRefs  []DocumentRowRef
+	resultHasRefs  []bool
 	searchPlan     columnVectorGraphSearchPlan
 }
 
@@ -209,6 +219,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
+	s.resultRowRefs = resizeColumnVectorGraphNativeRowRefScratch(s.resultRowRefs, topK)
+	s.resultHasRefs = resizeColumnVectorGraphNativeBoolScratch(s.resultHasRefs, topK)
 	return nil
 }
 
@@ -259,6 +271,26 @@ func resizeColumnVectorGraphNativeIntScratch(dst []int, target int) []int {
 func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint64 {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		return make([]uint64, target)
+	}
+	return dst[:target]
+}
+
+func resizeColumnVectorGraphNativeRowRefScratch(dst []DocumentRowRef, target int) []DocumentRowRef {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]DocumentRowRef, target)
+	}
+	if len(dst) > 0 {
+		clear(dst)
+	}
+	return dst[:target]
+}
+
+func resizeColumnVectorGraphNativeBoolScratch(dst []bool, target int) []bool {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]bool, target)
+	}
+	if len(dst) > 0 {
+		clear(dst)
 	}
 	return dst[:target]
 }
@@ -357,6 +389,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	defer func() {
 		r.populateTypedColumnVectorSearchStats(&stats)
 		r.populateInvNormStateSearchStats(&stats)
+		r.populateRowRefStateSearchStats(&stats)
 		r.populateLayer0AdjacencySourceSearchStats(&stats)
 		if plan != nil {
 			plan.scoreSource.populateConstructionStats(&stats)
@@ -553,6 +586,10 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 	for fetchPos, topIndex := range scratch.resultOrder {
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
+	scratch.resultRowRefs = scratch.resultRowRefs[:n]
+	scratch.resultHasRefs = scratch.resultHasRefs[:n]
+	clear(scratch.resultRowRefs)
+	clear(scratch.resultHasRefs)
 	for resultPos, topIndex := range scratch.resultOrder {
 		ordinal := scratch.resultOrdinals[resultPos]
 		view := singleBlockView
@@ -576,16 +613,25 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 		}
 		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(id)]
 		copy(scratch.idBuffers[topIndex], id)
+		if rowRef, ok := r.rowRefForOrdinal(ordinal); ok {
+			rowRef.DocumentID = scratch.idBuffers[topIndex]
+			scratch.resultRowRefs[topIndex] = rowRef
+			scratch.resultHasRefs[topIndex] = true
+			stats.RowRefStateResultRefs++
+		}
 	}
 	stats.ResultFetches += uint64(n)
+	stats.ResultIDGraphFallbacks += uint64(n)
 	stats.BlockViewHits = plan.hits
 	stats.BlockViewMisses = plan.misses
 	stats.BlockViewBuilds = plan.builds
 	for i, candidate := range scratch.top {
 		scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
-			Ordinal: candidate.ordinal,
-			ID:      scratch.idBuffers[i],
-			Score:   candidate.score,
+			Ordinal:   candidate.ordinal,
+			ID:        scratch.idBuffers[i],
+			RowRef:    scratch.resultRowRefs[i],
+			HasRowRef: scratch.resultHasRefs[i],
+			Score:     candidate.score,
 		})
 	}
 	return nil

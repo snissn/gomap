@@ -409,6 +409,9 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 			return fmt.Errorf("collections: vector-index state missing adjacency layer %d", layer)
 		}
 	}
+	if err := validateColumnVectorGraphRowRefStateManifestAssets(collection, cfg, def, state); err != nil {
+		return err
+	}
 	return nil
 }
 

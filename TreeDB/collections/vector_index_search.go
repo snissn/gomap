@@ -282,6 +282,22 @@ type VectorIndexSearchStats struct {
 	TypedColumnDeniedResources uint64 `json:"typed_column_denied_resources,omitempty"`
 	// TypedColumnFallbacks reports that typed-column vector ownership was selected but the reader fell back to graph row vectors.
 	TypedColumnFallbacks uint64 `json:"typed_column_fallbacks,omitempty"`
+	// RowRefVectorSourceState reports searches whose typed-column vector locator map came from vector-index row-ref state.
+	RowRefVectorSourceState uint64 `json:"row_ref_vector_source_state,omitempty"`
+	// RowRefVectorSourceLegacyGraphIDs reports searches whose typed-column vector locator map used legacy graph row ID scans.
+	RowRefVectorSourceLegacyGraphIDs uint64 `json:"row_ref_vector_source_legacy_graph_ids,omitempty"`
+	// RowRefStateResultRefs counts top-k result row refs served from vector-index row-ref state.
+	RowRefStateResultRefs uint64 `json:"row_ref_state_result_refs,omitempty"`
+	// RowRefStateSourceUnavailable reports that row-ref state was absent and compatibility source selection was used.
+	RowRefStateSourceUnavailable uint64 `json:"row_ref_state_source_unavailable,omitempty"`
+	// RowRefStateSourceFallbacks reports row-ref source fallback/quarantine observations.
+	RowRefStateSourceFallbacks uint64 `json:"row_ref_state_source_fallbacks,omitempty"`
+	// ResultIDGraphFallbacks counts returned document IDs copied from legacy graph row ID bytes.
+	ResultIDGraphFallbacks uint64 `json:"result_id_graph_fallbacks,omitempty"`
+	// DocumentRowRefStateFetches counts post-top-k document fetches served with vector-index row-ref state.
+	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
+	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
+	DocumentRowRefLookupFallbacks uint64 `json:"document_row_ref_lookup_fallbacks,omitempty"`
 }
 
 // VectorIndexSearchResponse is returned by public vector-index search APIs.
@@ -584,22 +600,37 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 		var documents DocumentFetchResponse
 		var err error
 		if columnStoreCanReconstructDocument(s.catalog.meta) {
-			rowRefs, lookupErr := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{ColumnAssetReadIntegrity: documentFetchOptions.ColumnAssetReadIntegrity})
-			if lookupErr != nil {
-				return response, lookupErr
-			}
-			if err := addDocumentMaterializationStatsToVectorStats(&response.Stats, rowRefs.Stats); err != nil {
-				return response, err
-			}
-			if len(rowRefs.Results) != len(response.Results) {
-				return response, errors.New("collections: vector index document row-ref result count mismatch")
-			}
-			refs := make([]DocumentRowRef, len(rowRefs.Results))
-			for i := range rowRefs.Results {
-				if !rowRefs.Results[i].Found {
-					return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
+			refs := make([]DocumentRowRef, len(results))
+			useResultRowRefs := true
+			for i := range results {
+				if !results[i].HasRowRef {
+					useResultRowRefs = false
+					break
 				}
-				refs[i] = rowRefs.Results[i].RowRef
+				ref := results[i].RowRef
+				ref.DocumentID = results[i].ID
+				refs[i] = ref
+			}
+			if useResultRowRefs {
+				response.Stats.DocumentRowRefStateFetches += uint64(len(refs))
+			} else {
+				response.Stats.DocumentRowRefLookupFallbacks++
+				rowRefs, lookupErr := s.documentView.LookupDocumentRowRefsByID(ids, DocumentFetchOptions{ColumnAssetReadIntegrity: documentFetchOptions.ColumnAssetReadIntegrity})
+				if lookupErr != nil {
+					return response, lookupErr
+				}
+				if err := addDocumentMaterializationStatsToVectorStats(&response.Stats, rowRefs.Stats); err != nil {
+					return response, err
+				}
+				if len(rowRefs.Results) != len(response.Results) {
+					return response, errors.New("collections: vector index document row-ref result count mismatch")
+				}
+				for i := range rowRefs.Results {
+					if !rowRefs.Results[i].Found {
+						return response, fmt.Errorf("collections: vector index %q result document %q not found", s.indexName, results[i].ID)
+					}
+					refs[i] = rowRefs.Results[i].RowRef
+				}
 			}
 			documents, err = s.documentView.FetchDocumentsByRowRef(refs, documentFetchOptions)
 			if err != nil {
@@ -899,5 +930,11 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		TypedColumnActiveHandles:             searchStats.TypedColumnActiveHandles,
 		TypedColumnDeniedResources:           searchStats.TypedColumnDeniedResources,
 		TypedColumnFallbacks:                 searchStats.TypedColumnFallbacks,
+		RowRefVectorSourceState:              searchStats.RowRefVectorSourceState,
+		RowRefVectorSourceLegacyGraphIDs:     searchStats.RowRefVectorSourceLegacyGraphIDs,
+		RowRefStateResultRefs:                searchStats.RowRefStateResultRefs,
+		RowRefStateSourceUnavailable:         searchStats.RowRefStateSourceUnavailable,
+		RowRefStateSourceFallbacks:           searchStats.RowRefStateSourceFallbacks,
+		ResultIDGraphFallbacks:               searchStats.ResultIDGraphFallbacks,
 	}
 }

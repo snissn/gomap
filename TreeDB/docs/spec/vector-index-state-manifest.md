@@ -65,11 +65,15 @@ Defined v1 roles and type contracts are:
 | `adjacency` | `uint32_list` | `raw_uint32_offsets_list` | HNSW adjacency consumers (#1987/#1988). |
 | `inverse_norm` | `float32` | `raw_float32` | cosine inverse norms (#1992). |
 | `normalized_vectors` | `float32_vector` | `raw_float32_vector` | optional derived normalized vectors (#1977). |
-| `row_refs` | decided by follow-up | decided by follow-up | row/document refs (#1993). |
+| `row_refs` | `int64` | `raw_int64` | ordinal-to-base-row `DocumentRowRef` coordinates (#1993). |
 
 The role contract deliberately names generic typed-column primitives. HNSW layer
 semantics, neighbor ordinal bounds, graph traversal, deleted-row policy, and row
-ref interpretation stay above the typed-column datastore layer.
+ref interpretation stay above the typed-column datastore layer. Row-ref state
+uses multiple `row_refs` assets distinguished by asset id (for generation,
+part id, row index, and applied command LSN); returned opaque document IDs remain
+legacy graph-row ID compatibility data until a first-class typed-column bytes
+primitive exists.
 
 ## Validation and fail-closed behavior
 
