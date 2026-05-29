@@ -200,16 +200,17 @@ func TestColumnVectorGraphBlockViewInvNormStateSourceAndLegacyFallbackV1(t *test
 	if err != nil {
 		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
 	}
-	view, ref, err := plan.blockViewForOrdinal(1)
+	targetOrdinal := len(rows) - 1
+	view, ref, err := plan.blockViewForOrdinal(targetOrdinal)
 	if err != nil {
 		t.Fatalf("blockViewForOrdinal: %v", err)
 	}
-	want, err := columnVectorGraphInvNorm(rows[1].vector)
+	want, err := columnVectorGraphInvNorm(rows[targetOrdinal].vector)
 	if err != nil {
 		t.Fatalf("columnVectorGraphInvNorm: %v", err)
 	}
-	if _, _, _, ok := reader.invNormForOrdinal(1); !ok {
-		t.Fatal("reader.invNormForOrdinal(1)=!ok want typed-state source hit before fallback")
+	if _, _, _, ok := reader.invNormForOrdinal(targetOrdinal); !ok {
+		t.Fatalf("reader.invNormForOrdinal(%d)=!ok want typed-state source hit before fallback", targetOrdinal)
 	}
 	if got, err := view.invNorm(ref.rowIndex); err != nil || math.Abs(float64(got-want)) > 1e-6 {
 		t.Fatalf("invNorm state got=%v err=%v want=%v", got, err, want)
@@ -219,6 +220,9 @@ func TestColumnVectorGraphBlockViewInvNormStateSourceAndLegacyFallbackV1(t *test
 	}
 	if err := reader.invNormSource.Close(); err != nil {
 		t.Fatalf("reader.invNormSource.Close: %v", err)
+	}
+	if _, _, _, ok := reader.invNormForOrdinal(targetOrdinal); ok {
+		t.Fatalf("reader.invNormForOrdinal(%d)=ok want typed-state miss after source close", targetOrdinal)
 	}
 	if got, err := view.invNorm(ref.rowIndex); err != nil || math.Abs(float64(got-want)) > 1e-6 {
 		t.Fatalf("invNorm legacy fallback got=%v err=%v want=%v", got, err, want)
