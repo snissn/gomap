@@ -77,6 +77,24 @@ func TestColumnVectorGraphSearchSourceDisablesUnsupportedTypedVector1968(t *test
 	}
 }
 
+func TestColumnVectorGraphTypedVectorSourceUsableForSearchFailsClosedOnRowsDimsOverflow1968(t *testing.T) {
+	dims := maxCollectionInt
+	source := &columnVectorGraphTypedColumnVectorSource{
+		dims: dims,
+		parts: []*columnVectorGraphTypedColumnVectorPart{
+			{
+				rows:   maxCollectionInt,
+				values: make([]float32, 1),
+			},
+		},
+	}
+
+	reason, _, ok := columnVectorGraphTypedVectorSourceUsableForSearch(source, 0, dims)
+	if ok || reason != typeddecode.ReasonPayloadLengthMismatch {
+		t.Fatalf("reason=%s ok=%v want payload length mismatch and fail-closed overflow guard", reason, ok)
+	}
+}
+
 func TestColumnVectorGraphSearchSourceScoresMatchLegacyContiguousAndScattered1968(t *testing.T) {
 	rows := columnGraphRebuildSyntheticRowsV2A(32, 10)
 	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 10, 6, rows)

@@ -142,6 +142,9 @@ func columnVectorGraphTypedVectorSourceUsableForSearch(source *columnVectorGraph
 		if part.rows < 0 {
 			return typeddecode.ReasonRowCountMismatch, fmt.Sprintf("typed-column vector source part[%d] rows=%d", partIndex, part.rows), false
 		}
+		if part.rows > 0 && part.rows > maxCollectionInt/dims {
+			return typeddecode.ReasonPayloadLengthMismatch, fmt.Sprintf("typed-column vector source part[%d] rows=%d dims=%d overflows rows*dims", partIndex, part.rows, dims), false
+		}
 		wantValues := part.rows * dims
 		if wantValues < 0 || len(part.values) != wantValues {
 			return typeddecode.ReasonPayloadLengthMismatch, fmt.Sprintf("typed-column vector source part[%d] values=%d want rows*dims=%d", partIndex, len(part.values), wantValues), false
