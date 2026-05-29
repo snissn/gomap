@@ -693,8 +693,9 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	if version >= columnManifestRecordVersionV3 {
 		role = ColumnManifestPartRole(string(cur.stringBytes()))
 	}
+	var sortKey []ColumnSortKey
 	if version >= columnManifestRecordVersion {
-		skipColumnManifestSortKey(&cur)
+		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
@@ -737,7 +738,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), Reason: string(reason), PartRole: role}); err != nil {
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), Reason: string(reason), PartRole: role, SortKey: columnSortKeyMatchString(sortKey)}); err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
 	}
 	return ref, offsets, nil

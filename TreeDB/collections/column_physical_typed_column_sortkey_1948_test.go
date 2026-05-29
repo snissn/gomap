@@ -343,6 +343,15 @@ func TestColumnManifestPartFieldsValidateSortKeyTrailer1948(t *testing.T) {
 	}
 }
 
+func TestColumnAssetRewriteManifestPartValidatesSortKeyTrailer1948(t *testing.T) {
+	namespace := "events_column_assets"
+	raw := encodeColumnManifestPartRecordWithRawSortKey1948(t, ColumnAssetKindTCS1PartImage, namespace, []ColumnSortKey{{Column: "time_us"}})
+	_, _, err := columnAssetRewriteManifestPartRefForPatch(raw, namespace)
+	if err == nil || !strings.Contains(err.Error(), "sort key is only valid") {
+		t.Fatalf("columnAssetRewriteManifestPartRefForPatch err=%v want sort-key trailer validation", err)
+	}
+}
+
 func TestColumnManifestPartFieldsRejectsTypedSortKeyEngineCap1948(t *testing.T) {
 	namespace := "events_column_assets"
 	sortKeys := make([]ColumnSortKey, typedColumnPartSortKeyMaxColumns+1)

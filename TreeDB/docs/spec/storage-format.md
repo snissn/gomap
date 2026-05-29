@@ -561,14 +561,16 @@ directories instead of migrating in place.
 
 Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
 images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. When a
-collection SortKey is fully owned by `typed_column_part` and uses supported
-ascending non-null bool/int64/string columns, the typed-column image descriptor
-SortKey and the v4 manifest part SortKey trailer must match exactly. String
-SortKey columns rely on part-local dictionary codes only when those codes are
-assigned in logical bytewise-ascending order and the dictionary metadata certifies
-that collation. Mixed-owner SortKeys fall back to the synthetic
+collection SortKey is fully owned by `typed_column_part`, uses supported
+ascending non-null bool/int64/string columns, and has at most
+`typedColumnPartSortKeyMaxColumns == 8` columns, the typed-column image
+descriptor SortKey and the v4 manifest part SortKey trailer must match exactly.
+String SortKey columns rely on part-local dictionary codes only when those codes
+are assigned in logical bytewise-ascending order and the dictionary metadata
+certifies that collation. Mixed-owner SortKeys fall back to the synthetic
 `__treedb_primary_id` order and publish no typed-column SortKey trailer;
-typed-column-owned unsupported, nullable, or descending SortKeys fail closed.
+typed-column-owned unsupported, nullable, descending, or wider-than-8 SortKeys
+fail closed.
 The durable Issue `#1755` scalar path represents bool, int64, float32,
 double/float64, and
 string fields. Int64 typed-column fields use `delta_varint` by default; a
