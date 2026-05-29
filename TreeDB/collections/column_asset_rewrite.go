@@ -694,7 +694,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		role = ColumnManifestPartRole(string(cur.stringBytes()))
 	}
 	var sortKey []ColumnSortKey
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV4 {
 		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {

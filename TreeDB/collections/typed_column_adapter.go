@@ -3044,19 +3044,8 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 		}
 		result.Diagnostics.KernelBlocks++
 		result.Diagnostics.KernelSelectedBlocks++
-		if visibility != nil && !selection.IsEmpty() {
-			visibilitySelection, err := typedColumnStringVisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, scratch)
-			if err != nil {
-				return false, err
-			}
-			selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &scratch.selection)
-			if err != nil {
-				return false, err
-			}
-			result.Diagnostics.SelectionCompositions++
-		}
-		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
 		if selection.IsEmpty() {
+			recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
 			continue
 		}
 		idBlock, ok := typedColumnAlignedBlock(idCol.Blocks, &idBlockIndex, block.Descriptor.FirstRow, block.Descriptor.RowCount)
@@ -3081,6 +3070,21 @@ func scanTypedColumnStringPreparedPartWithVisibility(preparedPart *typedColumnPr
 		scratch.ids = ids
 		if len(ids) != block.Descriptor.RowCount {
 			return false, fmt.Errorf("decoded primary ids=%d want %d", len(ids), block.Descriptor.RowCount)
+		}
+		if visibility != nil {
+			visibilitySelection, err := typedColumnStringVisibilitySelectionForPrimaryIDs(visibility, ids, preparedPart.Descriptor.RowCount, scratch)
+			if err != nil {
+				return false, err
+			}
+			selection, err = typedcolumn.ComposeRowSelectionsInto(block.Descriptor.RowCount, typedcolumn.RowSelectionComponents{Predicate: &selection, Visibility: &visibilitySelection}, &scratch.selection)
+			if err != nil {
+				return false, err
+			}
+			result.Diagnostics.SelectionCompositions++
+		}
+		recordTypedColumnSelectionDiagnostics(&result.Diagnostics, selection)
+		if selection.IsEmpty() {
+			continue
 		}
 		var codesForRows []uint32
 		if len(codes) != 1 {
@@ -3142,17 +3146,21 @@ func typedColumnStringCodesIntersectMinMax(codes []uint32, minCode uint32, maxCo
 	return false
 }
 
-func typedColumnStringVisibilitySelectionForBlock(visibility *typedColumnLatestPhysicalPart, firstRow int, rowCount int, scratch *typedColumnStringPredicateScanScratch) (typedcolumn.RowSelection, error) {
+func typedColumnStringVisibilitySelectionForPrimaryIDs(visibility *typedColumnLatestPhysicalPart, ids []int64, physicalRows int, scratch *typedColumnStringPredicateScanScratch) (typedcolumn.RowSelection, error) {
 	if visibility == nil {
-		return typedcolumn.NewAllRowSelection(rowCount)
+		return typedcolumn.NewAllRowSelection(len(ids))
 	}
 	scratch.visibilityRows = scratch.visibilityRows[:0]
-	for offset := 0; offset < rowCount; offset++ {
-		if visibility.rowVisible(firstRow + offset) {
+	for offset, primaryID := range ids {
+		physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(primaryID, physicalRows)
+		if err != nil {
+			return typedcolumn.RowSelection{}, err
+		}
+		if visibility.rowVisible(physicalRowIndex) {
 			scratch.visibilityRows = append(scratch.visibilityRows, offset)
 		}
 	}
-	return typedcolumn.NewSparseRowSelectionNoCopy(rowCount, scratch.visibilityRows)
+	return typedcolumn.NewSparseRowSelectionNoCopy(len(ids), scratch.visibilityRows)
 }
 
 func typedColumnStringResolvePreparedCodes(column *typedColumnPreparedColumnState, values []string) ([]uint32, map[uint32]string, bool, error) {

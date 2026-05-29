@@ -690,7 +690,7 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		role = ColumnManifestPartRole(cur.string())
 	}
 	sortKey := []ColumnSortKey(nil)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV4 {
 		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {

@@ -1784,7 +1784,7 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 		_ = cur.stringBytes()
 	}
 	var sortKey []ColumnSortKey
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV4 {
 		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
@@ -1865,7 +1865,7 @@ func decodeColumnManifestPartSortKeyForScan(raw []byte) ([]ColumnSortKey, error)
 		_ = cur.stringBytes()
 	}
 	var sortKey []ColumnSortKey
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV4 {
 		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
@@ -1940,7 +1940,7 @@ func decodeColumnManifestPartRoleForScan(raw []byte, ref ColumnAssetRef, reason 
 			return "", fmt.Errorf("collections: unsupported column manifest part role %q", string(roleBytes))
 		}
 	}
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV4 {
 		skipColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
