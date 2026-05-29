@@ -113,6 +113,9 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
 		layer1 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 503, 1, typedcolumn.Uint32List{Rows: 2, Offsets: []uint64{0, 1, 2}, Values: []uint32{1, 0}}, nil)
 		ctx.state.Assets = []columnVectorIndexStateAssetSnapshot{layer1}
+		if got, want := ctx.state.AdjacencyLayerCount, 1; got != want {
+			t.Fatalf("state adjacency layer count=%d want %d", got, want)
+		}
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
 		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency layer 0")
