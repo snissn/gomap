@@ -161,10 +161,11 @@ func TestColumnGraphRebuildPublishesLayer0AdjacencySource1918(t *testing.T) {
 	if !graph.Layer0AdjacencySource.Present {
 		t.Fatalf("graph manifest missing layer-0 adjacency source: %+v", graph)
 	}
-	if status.Stats.BytesDisk != columnVectorGraphStorageBytes(graph) {
-		t.Fatalf("status bytes_disk=%d want graph+source=%d", status.Stats.BytesDisk, columnVectorGraphStorageBytes(graph))
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	if status.Stats.BytesDisk != columnVectorGraphStorageBytesWithState(graph, state) {
+		t.Fatalf("status bytes_disk=%d want graph+source+state=%d", status.Stats.BytesDisk, columnVectorGraphStorageBytesWithState(graph, state))
 	}
-	_, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
 	list := loadColumnGraphLayer0AdjacencySourceList1918(t, d, "docs", cfg, def, graph)
 	want := layer0AdjacencySourceFromScannedRows1918(t, scanned)
 	assertRawUint32OffsetsListEqual1918(t, list, want)
@@ -1410,8 +1411,11 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 		b.ReportMetric(float64(b.N)/elapsed, "ops/sec")
 	}
 	graph, _ := loadAndScanColumnGraphRebuildRowsV2A(b, d, "docs", def)
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(b, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(b, records, def)
 	b.ReportMetric(float64(graph.AssetBytes), "graph_asset_B/op")
-	b.ReportMetric(float64(columnVectorGraphStorageBytes(graph)), "graph_total_storage_B/op")
+	b.ReportMetric(float64(columnVectorIndexStateAssetsStorageBytes(state)), "state_assets_B/op")
+	b.ReportMetric(float64(columnVectorGraphStorageBytesWithState(graph, state)), "graph_total_storage_B/op")
 	if len(graph.AdjacencyLayerSources) > 0 {
 		b.ReportMetric(float64(graph.AdjacencyLayerCount), "adjacency_layer_count")
 		var sourceBytes, offsetsBytes, valuesBytes, paddingBytes int64

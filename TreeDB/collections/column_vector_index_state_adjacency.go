@@ -349,6 +349,7 @@ func columnVectorIndexStateAdjacencyAssetsFromPrepared(prepared []columnVectorIn
 func validateColumnVectorIndexStateAssets(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot) error {
 	seenAdjacencyLayers := make(map[int]string)
 	maxAdjacencyLayer := -1
+	var rawScratch []byte
 	for _, asset := range state.Assets {
 		if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
 			return fmt.Errorf("collections: vector-index state asset role=%q id=%q unavailable: %w", asset.Role, asset.AssetID, err)
@@ -367,8 +368,10 @@ func validateColumnVectorIndexStateAssets(rootDir, collection string, cfg Column
 		if layer > maxAdjacencyLayer {
 			maxAdjacencyLayer = layer
 		}
-		if err := validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection, cfg, def, state, asset, layer); err != nil {
-			return fmt.Errorf("collections: vector-index state adjacency layer %d asset %q: %w", layer, asset.AssetID, err)
+		var validateErr error
+		rawScratch, validateErr = validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection, cfg, def, state, asset, layer, rawScratch)
+		if validateErr != nil {
+			return fmt.Errorf("collections: vector-index state adjacency layer %d asset %q: %w", layer, asset.AssetID, validateErr)
 		}
 	}
 	if len(seenAdjacencyLayers) == 0 {
@@ -394,59 +397,64 @@ func validateColumnVectorIndexStateAssetRefAvailable(rootDir string, asset colum
 }
 
 func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int) error {
+	_, err := validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection, cfg, def, state, asset, layer, nil)
+	return err
+}
+
+func validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int, rawScratch []byte) ([]byte, error) {
 	sourceCfg, adapterColumn, err := columnVectorIndexStateAdjacencyColumnStoreConfig(collection, cfg, def, layer)
 	if err != nil {
-		return err
+		return rawScratch, err
 	}
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
-		return fmt.Errorf("schema_hash=%d want %d", asset.SourceSchemaHash, sourceCfg.SchemaHash)
+		return rawScratch, fmt.Errorf("schema_hash=%d want %d", asset.SourceSchemaHash, sourceCfg.SchemaHash)
 	}
-	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
+	raw, err := readColumnPhysicalAssetFromManagerInto(rootDir, asset.Ref, rawScratch)
 	if err != nil {
-		return err
+		return rawScratch, err
 	}
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
-		return fmt.Errorf("bytes=%d manifest=%d ref=%d", len(raw), asset.AssetBytes, asset.Ref.Length)
+		return raw, fmt.Errorf("bytes=%d manifest=%d ref=%d", len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
-		return err
+		return raw, err
 	}
 	if image.PartID != asset.Ref.PartID || image.Rows != asset.RowCount || image.Rows != state.RowCount {
-		return fmt.Errorf("image part/rows=(%d,%d) asset/state=(%d,%d)", image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
+		return raw, fmt.Errorf("image part/rows=(%d,%d) asset/state=(%d,%d)", image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
 	}
 	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections(adapterColumn.Definition.Name)
 	if !ok {
-		return fmt.Errorf("missing offsets-list sections for column %q", adapterColumn.Definition.Name)
+		return raw, fmt.Errorf("missing offsets-list sections for column %q", adapterColumn.Definition.Name)
 	}
 	wantOffsetsBytes, err := columnVectorIndexStateAdjacencyOffsetsBytes(state.RowCount)
 	if err != nil {
-		return err
+		return raw, err
 	}
 	if offsetsSection.Length != wantOffsetsBytes {
-		return fmt.Errorf("offsets bytes=%d want %d", offsetsSection.Length, wantOffsetsBytes)
+		return raw, fmt.Errorf("offsets bytes=%d want %d", offsetsSection.Length, wantOffsetsBytes)
 	}
 	offsetsRaw, err := image.SectionBytes(offsetsSection)
 	if err != nil {
-		return err
+		return raw, err
 	}
 	valuesRaw, err := image.SectionBytes(valuesSection)
 	if err != nil {
-		return err
+		return raw, err
 	}
 	if err := validateColumnVectorIndexStateAdjacencySections(layer, offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount); err != nil {
-		return err
+		return raw, err
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
 	if err != nil {
-		return fmt.Errorf("layout certification: %w", err)
+		return raw, fmt.Errorf("layout certification: %w", err)
 	}
 	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
 	if !ok {
-		return fmt.Errorf("missing layout certification for column %q", adapterColumn.Definition.Name)
+		return raw, fmt.Errorf("missing layout certification for column %q", adapterColumn.Definition.Name)
 	}
 	if certColumn.LogicalType != columnVectorIndexStateLogicalTypeUint32List || certColumn.Type != typedcolumn.ColumnTypeUint32List || certColumn.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
-		return fmt.Errorf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", certColumn.LogicalType, certColumn.Type, certColumn.Encoding, columnVectorIndexStateLogicalTypeUint32List, typedcolumn.ColumnTypeUint32List, typedcolumn.EncodingRawUint32OffsetsList)
+		return raw, fmt.Errorf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", certColumn.LogicalType, certColumn.Type, certColumn.Encoding, columnVectorIndexStateLogicalTypeUint32List, typedcolumn.ColumnTypeUint32List, typedcolumn.EncodingRawUint32OffsetsList)
 	}
 	plan := typeddecode.Uint32ListPlan(certColumn)
 	status := typeddecode.ValidateUint32OffsetsListDirectViewSections(typeddecode.Uint32OffsetsListDirectViewRequest{
@@ -459,9 +467,9 @@ func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cf
 		HasAssetOffset: true,
 	})
 	if !status.Direct() {
-		return fmt.Errorf("direct-view section validation failed: %s", status.String())
+		return raw, fmt.Errorf("direct-view section validation failed: %s", status.String())
 	}
-	return nil
+	return raw, nil
 }
 
 func validateColumnVectorIndexStateAdjacencySections(layer int, offsetsSection typedcolumn.ColumnPartImageSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsRaw, valuesRaw []byte, rows int) error {

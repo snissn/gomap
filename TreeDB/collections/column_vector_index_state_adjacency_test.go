@@ -92,6 +92,9 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 			t.Fatalf("VectorIndexStatus: %v", err)
 		}
 		assertColumnGraphRebuildLoadedStatusV2A(t, status, ctx.def.Name)
+		if got, want := status.Stats.BytesDisk, columnVectorGraphStorageBytesWithState(ctx.graph, ctx.state); got != want {
+			t.Fatalf("status bytes_disk=%d want graph+state assets=%d", got, want)
+		}
 	})
 
 	t.Run("missing_adjacency_assets", func(t *testing.T) {

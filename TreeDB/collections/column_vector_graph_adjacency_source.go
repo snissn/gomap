@@ -701,6 +701,18 @@ func columnVectorGraphStorageBytes(graph columnVectorGraphManifestSnapshot) int6
 	return bytes
 }
 
+func columnVectorGraphStorageBytesWithState(graph columnVectorGraphManifestSnapshot, state columnVectorIndexStateSnapshot) int64 {
+	return columnVectorGraphStorageBytes(graph) + columnVectorIndexStateAssetsStorageBytes(state)
+}
+
+func columnVectorIndexStateAssetsStorageBytes(state columnVectorIndexStateSnapshot) int64 {
+	var bytes int64
+	for _, asset := range state.Assets {
+		bytes += asset.AssetBytes
+	}
+	return bytes
+}
+
 func columnVectorGraphUint32SlicesEqual(a, b []uint32) bool {
 	if len(a) != len(b) {
 		return false

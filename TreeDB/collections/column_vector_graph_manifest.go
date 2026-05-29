@@ -868,6 +868,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		baseChecksum = computed
 		baseChecksumOK = true
 	}
+	var loadedState *columnVectorIndexStateSnapshot
 	if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
 		state, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
 		if err != nil {
@@ -894,6 +895,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 				status.RebuildNeeded = true
 				return columnGraphVectorIndexStatusError(status, err)
 			}
+			loadedState = &state
 		case columnVectorIndexStateMatchUnsupportedVisibility:
 			status.State = VectorIndexStateColumnGraphRebuildNeeded
 			status.Reason = VectorIndexReasonColumnGraphUnsupportedVisibility
@@ -933,6 +935,10 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 	// gating tied to the canonical row-asset graph; search opens and validates
 	// sources independently and falls back to row assets when they are absent,
 	// corrupt, stale, incomplete, or non-certified.
+	bytesDisk := columnVectorGraphStorageBytes(graph)
+	if loadedState != nil {
+		bytesDisk = columnVectorGraphStorageBytesWithState(graph, *loadedState)
+	}
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	status.Stats = VectorIndexStats{
@@ -946,7 +952,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		EfSearch:       def.EfSearch,
 		Nodes:          graph.RowCount,
 		LiveDocs:       graph.RowCount,
-		BytesDisk:      columnVectorGraphStorageBytes(graph),
+		BytesDisk:      bytesDisk,
 		Epoch:          graph.BaseManifestGeneration,
 	}
 	return status, nil
