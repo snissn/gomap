@@ -559,8 +559,10 @@ func (r *columnTypedColumnPhysicalQueryRunner) diagnostics(view columnPhysicalSc
 	diag.SegmentFileCacheHits = r.segmentFileCacheHits
 	diag.SegmentFileCacheMisses = r.segmentFileCacheMisses
 	diag.SortKeyPrefixPlanned = r.plan.SortKeyPrefix.Planned
-	diag.SortKeyPrefixColumns = r.plan.SortKeyPrefix.prefixColumns()
-	diag.SortKeyPrefixLiterals = r.plan.SortKeyPrefix.PrefixLen
+	if r.plan.SortKeyPrefix.Planned {
+		diag.SortKeyPrefixColumns = r.plan.SortKeyPrefix.prefixColumns()
+		diag.SortKeyPrefixLiterals = r.plan.SortKeyPrefix.PrefixLen
+	}
 	diag.SortKeyMarkChecks = r.sortKeyMarkChecks
 	diag.SortKeyMarkMatches = r.sortKeyMarkMatches
 	diag.SortKeyMarkSkips = r.sortKeyMarkSkips
