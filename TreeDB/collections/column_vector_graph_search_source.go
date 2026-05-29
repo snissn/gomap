@@ -56,7 +56,6 @@ type columnVectorGraphSearchSource struct {
 	invNormOutcome     columnVectorGraphInvNormStateOutcome
 	invNormFallback    typeddecode.Reason
 	normFallbackReason typeddecode.Reason
-
 }
 
 func (s *columnVectorGraphSearchSource) reset() {
