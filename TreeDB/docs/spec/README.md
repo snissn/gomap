@@ -220,6 +220,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     as the physical encoding, `rows+1` sentinel offsets, validation invariants,
     length-only offset-substream behavior, v1 deferrals, and legacy
     `adjacency_list` classification.
+- `TreeDB/docs/spec/vector-index-state-manifest.md`
+  - issue #1986 v1 vector-index state control-record contract: record home,
+    index/base identity, typed-column asset refs by logical type plus physical
+    encoding, fail-closed validation, and legacy graph-record fallback policy.
 
 ## Canonical Ownership
 
@@ -257,7 +261,8 @@ closeout evidence is owned by `typed-column-direct-view-closeout-1899.md`, and
 `typed-column-uint32-list-adjacency-quarantine.md`; first-class
 `uint32_list` logical semantics are owned by
 `typed-column-uint32-list-semantics.md` until #1985 lands runtime primitive
-support and vector-index state work consumes it.
+support. Vector-index derived-state control records and typed-column asset ref
+identity are owned by `vector-index-state-manifest.md`.
 User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`,
 `WAL-rejected`, `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in

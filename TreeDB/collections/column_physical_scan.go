@@ -840,6 +840,24 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			}
 			writeHashBytes(&d, key)
 			writeHashBytes(&d, value)
+		case bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes):
+			if !sawHeader {
+				iter.Next()
+				continue
+			}
+			if retainColumnVectorIndexStateRecordForWrite(key, activeVectorIndexesKnown, activeVectorIndexes) {
+				state, err := decodeColumnVectorIndexStateRecord(value)
+				if err != nil {
+					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
+				}
+				refs, err := columnVectorIndexStateManifestAssetRefsForScan(state, snapshot.Generation, cfg.AssetManager.Namespace)
+				if err != nil {
+					return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
+				}
+				graphRefs = append(graphRefs, refs...)
+			}
+			writeHashBytes(&d, key)
+			writeHashBytes(&d, value)
 		}
 		iter.Next()
 	}
@@ -1074,6 +1092,11 @@ func loadColumnManifestPlannerCapabilitiesForScan(snap *backenddb.Snapshot, root
 				writeHashBytes(&d, key)
 				writeHashBytes(&d, value)
 			}
+		case bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes):
+			if sawHeader {
+				writeHashBytes(&d, key)
+				writeHashBytes(&d, value)
+			}
 		}
 		iter.Next()
 	}
@@ -1157,6 +1180,8 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 		case bytes.Equal(record.key, columnManifestHeaderRecordKeyBytes):
 			active = append(active, record)
 		case bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes):
+			active = append(active, record)
+		case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
 			active = append(active, record)
 		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
 			partGeneration, err := columnManifestPartGenerationFromRecordKeyForScan(record.key)

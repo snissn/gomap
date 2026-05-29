@@ -115,7 +115,8 @@ func columnManifestRecordKeyKnownForScan(key []byte) bool {
 		bytes.HasPrefix(key, columnManifestAggregateMetadataRecordPrefixBytes) ||
 		bytes.HasPrefix(key, columnManifestDictionaryCodesRecordPrefixBytes) ||
 		bytes.HasPrefix(key, columnManifestInt64ValuesRecordPrefixBytes) ||
-		bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes)
+		bytes.HasPrefix(key, columnManifestVectorGraphRecordPrefixBytes) ||
+		bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes)
 }
 
 func findColumnVectorGraphManifestRecord(records []columnManifestRecord, indexName string) (columnManifestRecord, bool) {
@@ -862,7 +863,54 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
-	switch columnVectorGraphManifestMatchStatus(catalog.meta.Name, graph, def, *cfg, manifest, records) {
+	baseChecksum, baseChecksumOK := uint64(0), false
+	if computed, err := columnVectorGraphBaseManifestChecksum(manifest, records, *cfg); err == nil {
+		baseChecksum = computed
+		baseChecksumOK = true
+	}
+	if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
+		state, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
+		if err != nil {
+			status.State = VectorIndexStateColumnGraphUnavailable
+			status.Reason = VectorIndexReasonColumnGraphCorrupt
+			status.RebuildNeeded = true
+			return columnGraphVectorIndexStatusError(status, err)
+		}
+		stateMatch := columnVectorIndexStateMatchMismatch
+		if baseChecksumOK {
+			stateMatch = columnVectorIndexStateMatchStatusWithBaseChecksum(state, def, *cfg, baseChecksum)
+		}
+		switch stateMatch {
+		case columnVectorIndexStateMatchLoaded:
+			if !columnVectorIndexStateMatchesGraph(state, graph) {
+				status.State = VectorIndexStateColumnGraphRebuildNeeded
+				status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+				status.RebuildNeeded = true
+				return status, nil
+			}
+			if err := validateColumnVectorIndexStateAssetRefsAvailable(c.db.ColumnAssetRootDir(), state); err != nil {
+				status.State = VectorIndexStateColumnGraphUnavailable
+				status.Reason = VectorIndexReasonColumnGraphCorrupt
+				status.RebuildNeeded = true
+				return columnGraphVectorIndexStatusError(status, err)
+			}
+		case columnVectorIndexStateMatchUnsupportedVisibility:
+			status.State = VectorIndexStateColumnGraphRebuildNeeded
+			status.Reason = VectorIndexReasonColumnGraphUnsupportedVisibility
+			status.RebuildNeeded = true
+			return status, nil
+		default:
+			status.State = VectorIndexStateColumnGraphRebuildNeeded
+			status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+			status.RebuildNeeded = true
+			return status, nil
+		}
+	}
+	graphMatch := columnVectorGraphManifestMatchMismatch
+	if baseChecksumOK {
+		graphMatch = columnVectorGraphManifestMatchStatusWithBaseChecksum(catalog.meta.Name, graph, def, *cfg, baseChecksum)
+	}
+	switch graphMatch {
 	case columnVectorGraphManifestMatchLoaded:
 	case columnVectorGraphManifestMatchUnsupportedVisibility:
 		status.State = VectorIndexStateColumnGraphRebuildNeeded
@@ -924,14 +972,18 @@ func columnVectorGraphManifestMatchesDefinition(collection string, graph columnV
 }
 
 func columnVectorGraphManifestMatchStatus(collection string, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, cfg ColumnStoreConfig, manifest columnManifestSnapshot, records []columnManifestRecord) columnVectorGraphManifestMatch {
+	baseChecksum, err := columnVectorGraphBaseManifestChecksum(manifest, records, cfg)
+	if err != nil {
+		return columnVectorGraphManifestMatchMismatch
+	}
+	return columnVectorGraphManifestMatchStatusWithBaseChecksum(collection, graph, def, cfg, baseChecksum)
+}
+
+func columnVectorGraphManifestMatchStatusWithBaseChecksum(collection string, graph columnVectorGraphManifestSnapshot, def VectorIndexDefinition, cfg ColumnStoreConfig, baseChecksum uint64) columnVectorGraphManifestMatch {
 	if cfg.ActiveManifest == nil {
 		return columnVectorGraphManifestMatchMismatch
 	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, cfg, def)
-	if err != nil {
-		return columnVectorGraphManifestMatchMismatch
-	}
-	baseChecksum, err := columnVectorGraphBaseManifestChecksum(manifest, records, cfg)
 	if err != nil {
 		return columnVectorGraphManifestMatchMismatch
 	}
@@ -981,7 +1033,7 @@ func columnVectorGraphBaseManifestChecksum(manifest columnManifestSnapshot, reco
 	}
 	baseRecords := activeRecords[:0]
 	for _, record := range activeRecords {
-		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
+		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) || bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
 			continue
 		}
 		baseRecords = append(baseRecords, record)
@@ -1014,6 +1066,11 @@ func columnVectorGraphAssetRefsFromManifestRecordsForReachability(records []colu
 		}
 		refs = append(refs, graphRefs...)
 	}
+	stateRefs, err := columnVectorIndexStateAssetRefsFromManifestRecordsForReachability(records, activeGeneration, expectedNamespace, activeVectorIndexesKnown, activeVectorIndexes)
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, stateRefs...)
 	return refs, nil
 }
 

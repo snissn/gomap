@@ -16,7 +16,8 @@ Typed asset reachability includes all refs exposed by the column manifest view:
 - typed-column `tcs1_typed_column_part` refs;
 - derived `tcs1_aggregate_metadata`, `tcs1_dictionary_codes`, and
   `tcs1_int64_values` refs;
-- vector graph derived refs recorded in vector-graph manifest records;
+- vector-index state refs recorded in `TVIS` vector-index state records;
+- legacy vector graph derived refs recorded in vector-graph manifest records;
 - explicit maintenance candidates;
 - pending-publish, prepared, and snapshot-pinned refs supplied by callers;
 - active process-local `mappedresource` pins converted from typed-row and
@@ -71,7 +72,7 @@ handle or snapshot permits a later plan to classify the segment normally.
 ## Non-goals and boundaries
 
 This contract does not introduce query routing, vector-search switching, public
-API cleanup, or a new authoritative vector graph owner. Vector graph assets and
-aggregate/dictionary/int64 sidecars remain derived refs tied to their owning
-manifest generation. Value-log and leaf-log lifecycle remain covered by their
-existing maintenance contracts.
+API cleanup, or a new search algorithm. Vector-index state assets, legacy vector
+graph assets, and aggregate/dictionary/int64 sidecars remain derived refs tied
+to their owning manifest generation. Value-log and leaf-log lifecycle remain
+covered by their existing maintenance contracts.
