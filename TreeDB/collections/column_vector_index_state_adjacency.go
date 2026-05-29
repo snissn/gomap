@@ -423,6 +423,10 @@ func validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection string
 	if image.PartID != asset.Ref.PartID || image.Rows != asset.RowCount || image.Rows != state.RowCount {
 		return raw, fmt.Errorf("image part/rows=(%d,%d) asset/state=(%d,%d)", image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
 	}
+	fields := columnStoreTypedColumnPartFields(sourceCfg)
+	if _, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(sourceCfg.SchemaHash)}, image); err != nil {
+		return raw, err
+	}
 	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections(adapterColumn.Definition.Name)
 	if !ok {
 		return raw, fmt.Errorf("missing offsets-list sections for column %q", adapterColumn.Definition.Name)

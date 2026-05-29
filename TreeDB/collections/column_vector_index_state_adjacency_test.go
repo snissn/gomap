@@ -158,6 +158,31 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "final offset=2 values=1")
 	})
 
+	t.Run("embedded_schema_version_mismatch", func(t *testing.T) {
+		d := openCollectionCommandWALDB(t, t.TempDir())
+		defer func() { _ = d.Close() }()
+		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
+		bad := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 504, 0, typedcolumn.Uint32List{Rows: 2, Offsets: []uint64{0, 1, 2}, Values: []uint32{1, 0}}, func(payload []byte, image typedcolumn.ColumnPartImage, adapterColumn typedColumnAdapterColumn) {
+			_ = adapterColumn
+			for _, section := range image.Sections {
+				if section.Kind != typedcolumn.ColumnPartImageSectionDescriptor {
+					continue
+				}
+				if section.Length < 14 {
+					t.Fatalf("descriptor section length=%d too short", section.Length)
+				}
+				current := binary.LittleEndian.Uint32(payload[section.Offset+10 : section.Offset+14])
+				binary.LittleEndian.PutUint32(payload[section.Offset+10:section.Offset+14], current+1)
+				return
+			}
+			t.Fatalf("descriptor section missing")
+		})
+		ctx.state.Assets[0] = bad
+		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
+		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "schema_version")
+	})
+
 	t.Run("stale_base_identity", func(t *testing.T) {
 		d := openCollectionCommandWALDB(t, t.TempDir())
 		defer func() { _ = d.Close() }()
