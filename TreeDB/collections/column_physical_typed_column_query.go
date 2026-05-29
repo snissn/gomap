@@ -51,18 +51,20 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 	start := time.Now()
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
-		return ColumnPhysicalQueryResult{}, true, err
+		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
 	}
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunner(view, req, &readCache)
 	if err != nil || !candidate {
-		return ColumnPhysicalQueryResult{}, candidate, err
+		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, candidate, err
 	}
 	result, err := runner.run(view, req)
-	if err == nil {
-		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
-	}
+	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, true, err
 }
 
