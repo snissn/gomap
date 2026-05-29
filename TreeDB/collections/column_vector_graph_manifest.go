@@ -868,6 +868,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		baseChecksum = computed
 		baseChecksumOK = true
 	}
+	var loadedState *columnVectorIndexStateSnapshot
 	if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
 		state, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
 		if err != nil {
@@ -888,7 +889,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 				status.RebuildNeeded = true
 				return status, nil
 			}
-			if err := validateColumnVectorIndexStateAssetRefsAvailable(c.db.ColumnAssetRootDir(), state); err != nil {
+			if err := validateColumnVectorIndexStateAssetsForStatus(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, state, graph); err != nil {
 				status.State = VectorIndexStateColumnGraphUnavailable
 				status.Reason = VectorIndexReasonColumnGraphCorrupt
 				status.RebuildNeeded = true
@@ -900,6 +901,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 				status.RebuildNeeded = true
 				return columnGraphVectorIndexStatusError(status, err)
 			}
+			loadedState = &state
 		case columnVectorIndexStateMatchUnsupportedVisibility:
 			status.State = VectorIndexStateColumnGraphRebuildNeeded
 			status.Reason = VectorIndexReasonColumnGraphUnsupportedVisibility
@@ -935,10 +937,17 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
+	if loadedState == nil {
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+		status.RebuildNeeded = true
+		return status, nil
+	}
 	// Certified adjacency sources are optional accelerators. Keep loaded-status
 	// gating tied to the canonical row-asset graph; search opens and validates
 	// sources independently and falls back to row assets when they are absent,
 	// corrupt, stale, incomplete, or non-certified.
+	bytesDisk := columnVectorGraphStorageBytesWithState(graph, *loadedState)
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	status.Stats = VectorIndexStats{
@@ -952,7 +961,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		EfSearch:       def.EfSearch,
 		Nodes:          graph.RowCount,
 		LiveDocs:       graph.RowCount,
-		BytesDisk:      columnVectorGraphStorageBytes(graph),
+		BytesDisk:      bytesDisk,
 		Epoch:          graph.BaseManifestGeneration,
 	}
 	return status, nil

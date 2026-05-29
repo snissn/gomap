@@ -389,7 +389,7 @@ func columnVectorGraphPhysicalAssetVersionForTestM1C(tb testing.TB, raw []byte) 
 	return version
 }
 
-func TestColumnGraphVectorIndexStatusUsesPublishedPhysicalManifestV2A(t *testing.T) {
+func TestColumnGraphVectorIndexStatusRequiresVectorIndexStateRecord1987(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
@@ -437,8 +437,11 @@ func TestColumnGraphVectorIndexStatusUsesPublishedPhysicalManifestV2A(t *testing
 	if err != nil {
 		t.Fatalf("VectorIndexStatus: %v", err)
 	}
-	if status.State != VectorIndexStateColumnGraphLoaded || !status.Loaded || status.RebuildNeeded || status.Reason != "" {
-		t.Fatalf("status=%+v want loaded column graph", status)
+	if status.State != VectorIndexStateColumnGraphRebuildNeeded || status.Reason != VectorIndexReasonColumnGraphAssetMismatch || !status.RebuildNeeded || status.Loaded {
+		t.Fatalf("status=%+v want missing vector-index state to be rebuild-needed", status)
+	}
+	if _, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{}); err == nil || !strings.Contains(err.Error(), "missing vector-index state record") {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader err=%v want missing state record failure", err)
 	}
 }
 
@@ -762,26 +765,9 @@ func BenchmarkColumnGraphVectorIndexStatusLoadedV2A(b *testing.B) {
 	}
 	defer func() { _ = d.Close() }()
 
-	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
-	if err != nil {
-		b.Fatalf("normalize base column store: %v", err)
-	}
-	def := testColumnGraphVectorIndexDefinitionV2A()
-	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, 2, 1, 1, []columnVectorGraphAssetRow{
-		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
-		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
-	})
-	if err != nil {
-		b.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
-	}
-	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
-	meta := CollectionMeta{
-		Name:          "docs",
-		Options:       CollectionOptions{ColumnStore: testColumnGraphBaseColumnStoreConfigV2A()},
-		VectorIndexes: []VectorIndexDefinition{def},
-	}
-	manifestRecords, identity := testColumnGraphManifestRecordsV2A(b, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
-	publishColumnGraphCatalogForTestV2A(b, d, meta, identity, manifestRecords)
+	ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(b, d)
+	publishColumnVectorIndexStateAdjacencyContext1987(b, d, ctx)
+	def := ctx.def
 	col, err := NewCollectionManager(d).OpenCollection("docs")
 	if err != nil {
 		b.Fatalf("open collection: %v", err)
@@ -789,8 +775,10 @@ func BenchmarkColumnGraphVectorIndexStatusLoadedV2A(b *testing.B) {
 
 	b.ReportAllocs()
 	b.ResetTimer()
-	b.ReportMetric(float64(prepared.RowCount), "graph_rows")
-	b.ReportMetric(float64(prepared.Bytes)/float64(prepared.RowCount), "asset_B/row")
+	b.ReportMetric(float64(ctx.graph.RowCount), "graph_rows")
+	if ctx.graph.RowCount > 0 {
+		b.ReportMetric(float64(columnVectorGraphStorageBytesWithState(ctx.graph, ctx.state))/float64(ctx.graph.RowCount), "asset_B/row")
+	}
 	for i := 0; i < b.N; i++ {
 		status, err := col.VectorIndexStatus(def.Name)
 		if err != nil {
