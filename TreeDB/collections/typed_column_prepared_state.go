@@ -207,6 +207,8 @@ func typedColumnPreparedLogicalTypeForValueType(valueType ColumnStoreValueType) 
 		return columnsemantics.LogicalString, true
 	case ColumnStoreValueFloat32Vector:
 		return columnsemantics.LogicalFloat32Vector, true
+	// uint32_list uses split offsets/value sections; prepared-state dependency
+	// planning remains fail-closed until a prepared consumer owns that path.
 	case ColumnStoreValueAdjacencyList:
 		return columnsemantics.LogicalAdjacencyList, true
 	default:

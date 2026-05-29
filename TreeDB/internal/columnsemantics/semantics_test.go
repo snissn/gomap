@@ -9,12 +9,12 @@ import (
 )
 
 func TestSemanticMatrixCoversCurrentLogicalTypesColumnTypesAndEncodings(t *testing.T) {
-	for _, logical := range []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalAdjacencyList} {
+	for _, logical := range []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalUint32List, LogicalAdjacencyList} {
 		if !IsKnownLogicalType(logical) {
 			t.Fatalf("logical type %q not covered", logical)
 		}
 	}
-	for _, columnType := range []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList} {
+	for _, columnType := range []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeAdjacencyList} {
 		if !slices.Contains(ColumnTypes(), columnType) || !IsKnownColumnType(columnType) {
 			t.Fatalf("typedcolumn column type %q not covered", columnType)
 		}
@@ -250,6 +250,7 @@ func TestCapabilityVectorAndAdjacencyRejectScalarShortcutSemantics(t *testing.T)
 		reason ReasonCode
 	}{
 		{"vector", Descriptor{Logical: LogicalFloat32Vector, Physical: typedcolumn.ColumnTypeFloat32Vector, Encoding: typedcolumn.EncodingRawFloat32Vector}, ReasonVectorScalarOperationUnsupported},
+		{"uint32_list", Descriptor{Logical: LogicalUint32List, Physical: typedcolumn.ColumnTypeUint32List, Encoding: typedcolumn.EncodingRawUint32OffsetsList}, ReasonUint32ListScalarOperationUnsupported},
 		{"adjacency", Descriptor{Logical: LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense}, ReasonAdjacencyScalarOperationUnsupported},
 	}
 	for _, tc := range cases {
@@ -280,6 +281,19 @@ func TestCapabilityVectorAndAdjacencySpecificOperationsAreExplicit(t *testing.T)
 		t.Fatalf("vector adjacency traversal capability=%+v want operation unsupported", cap)
 	}
 
+	uint32List := Descriptor{Logical: LogicalUint32List, Physical: typedcolumn.ColumnTypeUint32List, Encoding: typedcolumn.EncodingRawUint32OffsetsList}
+	if cap := CapabilityFor(uint32List, OpUint32ListDirectPayload); cap.Status != StatusSupported || cap.Reason != ReasonSupported || cap.Phase != PhasePrepare {
+		t.Fatalf("uint32_list direct payload capability=%+v want supported", cap)
+	}
+	for _, op := range []Operation{OpAdjacencyTraversal, OpAdjacencyDirectPayload, OpAdjacencyMetrics, OpVectorSimilarity, OpVectorDirectPayload} {
+		if cap := CapabilityFor(uint32List, op); cap.Status != StatusUnsupported || cap.Reason != ReasonOperationUnsupported {
+			t.Fatalf("uint32_list %s capability=%+v want operation unsupported", op, cap)
+		}
+	}
+	if cap := CapabilityFor(Descriptor{Logical: LogicalUint32List, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList}, OpUint32ListDirectPayload); cap.Status != StatusUnsupported || cap.Reason != ReasonLogicalPhysicalMismatch {
+		t.Fatalf("uint32_list adjacency physical capability=%+v want logical/physical mismatch", cap)
+	}
+
 	adjacency := Descriptor{Logical: LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense}
 	for _, op := range []Operation{OpAdjacencyTraversal, OpAdjacencyMetrics} {
 		cap := CapabilityFor(adjacency, op)
@@ -305,15 +319,16 @@ func TestCapabilityVectorAndAdjacencySpecificOperationsAreExplicit(t *testing.T)
 
 func TestCapabilityReasonCodesAreStable(t *testing.T) {
 	checks := map[ReasonCode]string{
-		ReasonFloatRawInt64BitPattern:             "float_raw_int64_bit_pattern",
-		ReasonDictionaryOrderUnproven:             "dictionary_order_unproven",
-		ReasonDictionaryCollationUnproven:         "dictionary_collation_unproven",
-		ReasonNullableCarrierAggregateSemantics:   "nullable_carrier_aggregate_semantics",
-		ReasonVectorScalarOperationUnsupported:    "vector_scalar_operation_unsupported",
-		ReasonAdjacencyScalarOperationUnsupported: "adjacency_scalar_operation_unsupported",
-		ReasonAdjacencyCapabilityDeferred:         "adjacency_capability_deferred",
-		ReasonStatsPayloadUnsupported:             "stats_payload_unsupported",
-		ReasonPruningPayloadUnsupported:           "pruning_payload_unsupported",
+		ReasonFloatRawInt64BitPattern:              "float_raw_int64_bit_pattern",
+		ReasonDictionaryOrderUnproven:              "dictionary_order_unproven",
+		ReasonDictionaryCollationUnproven:          "dictionary_collation_unproven",
+		ReasonNullableCarrierAggregateSemantics:    "nullable_carrier_aggregate_semantics",
+		ReasonVectorScalarOperationUnsupported:     "vector_scalar_operation_unsupported",
+		ReasonUint32ListScalarOperationUnsupported: "uint32_list_scalar_operation_unsupported",
+		ReasonAdjacencyScalarOperationUnsupported:  "adjacency_scalar_operation_unsupported",
+		ReasonAdjacencyCapabilityDeferred:          "adjacency_capability_deferred",
+		ReasonStatsPayloadUnsupported:              "stats_payload_unsupported",
+		ReasonPruningPayloadUnsupported:            "pruning_payload_unsupported",
 	}
 	for got, want := range checks {
 		if string(got) != want {

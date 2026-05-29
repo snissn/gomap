@@ -491,6 +491,10 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if fixedWidthElements <= 0 {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements", name, columnType)
 			}
+		case ColumnTypeUint32List:
+			if fixedWidthElements != 0 {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s requires fixed-width elements=0", name, columnType)
+			}
 		case ColumnTypeAdjacencyList:
 			if fixedWidthElements < 0 {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s has negative fixed-width elements %d", name, columnType, fixedWidthElements)
@@ -523,6 +527,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			switch columnType {
 			case ColumnTypeInt64:
 				column.Definition.Encoding = EncodingRawInt64
+				column.Definition.Compression = CompressionNone
+			case ColumnTypeUint32List:
+				column.Definition.Encoding = EncodingRawUint32OffsetsList
 				column.Definition.Compression = CompressionNone
 			case ColumnTypeAdjacencyList:
 				if fixedWidthElements == 0 {
@@ -576,6 +583,21 @@ func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType,
 	case ColumnTypeFloat32Vector:
 		if fixedWidthElements <= 0 {
 			return fmt.Errorf("typedcolumn: column %s type=%s requires positive fixed-width elements", name, columnType)
+		}
+	case ColumnTypeUint32List:
+		if fixedWidthElements != 0 {
+			return fmt.Errorf("typedcolumn: column %s type=%s requires fixed-width elements=0", name, columnType)
+		}
+		if len(blocks) == 0 {
+			if rows == 0 {
+				return nil
+			}
+			return fmt.Errorf("typedcolumn: column %s type=%s requires blocks for %s", name, columnType, EncodingRawUint32OffsetsList)
+		}
+		for _, block := range blocks {
+			if block.Encoding != EncodingRawUint32OffsetsList {
+				return fmt.Errorf("typedcolumn: column %s type=%s requires encoding=%s", name, columnType, EncodingRawUint32OffsetsList)
+			}
 		}
 	case ColumnTypeAdjacencyList:
 		if fixedWidthElements < 0 {
@@ -654,7 +676,7 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if block.FirstGranule != firstGranule || block.LastGranule != lastGranule {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d granule range [%d,%d] want [%d,%d] for rows [%d,%d)", column, blockIndex, block.FirstGranule, block.LastGranule, firstGranule, lastGranule, block.FirstRow, block.FirstRow+block.RowCount)
 	}
-	if columnType == ColumnTypeAdjacencyList && block.Encoding == EncodingRawUint32OffsetsList {
+	if (columnType == ColumnTypeUint32List || columnType == ColumnTypeAdjacencyList) && block.Encoding == EncodingRawUint32OffsetsList {
 		return validateDecodedOffsetsListColumnBlockDescriptor(column, blockIndex, fixedWidthElements, block)
 	}
 	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, fixedWidthElements, block.Encoding, block.RowCount)
@@ -813,6 +835,8 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 			return 0, err
 		}
 		return checkedMulInt(elements, 4, "float32_vector raw bytes")
+	case ColumnTypeUint32List:
+		return 0, fmt.Errorf("unsupported uint32_list encoding %d", encoding)
 	case ColumnTypeAdjacencyList:
 		if encoding != EncodingRawUint32Dense {
 			return 0, fmt.Errorf("unsupported adjacency_list encoding %d", encoding)
@@ -2402,6 +2426,8 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 		return ColumnTypeFloat32, nil
 	case 7:
 		return ColumnTypeFloat64, nil
+	case 8:
+		return ColumnTypeUint32List, nil
 	default:
 		return "", fmt.Errorf("typedcolumn: unknown column type code %d", code)
 	}

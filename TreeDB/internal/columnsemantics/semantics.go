@@ -18,6 +18,7 @@ const (
 	LogicalDouble        LogicalType = "double"
 	LogicalString        LogicalType = "string"
 	LogicalFloat32Vector LogicalType = "float32_vector"
+	LogicalUint32List    LogicalType = "uint32_list"
 	LogicalAdjacencyList LogicalType = "adjacency_list"
 )
 
@@ -44,6 +45,7 @@ const (
 	OpVectorSimilarity         Operation = "predicate.vector_similarity"
 	OpVectorDotProduct         Operation = "vector.dot_product"
 	OpVectorDirectPayload      Operation = "direct.vector_payload"
+	OpUint32ListDirectPayload  Operation = "direct.uint32_list_payload"
 	OpAdjacencyTraversal       Operation = "graph.adjacency_traversal"
 	OpAdjacencyDirectPayload   Operation = "direct.adjacency_payload"
 	OpCountRows                Operation = "aggregate.count_rows"
@@ -102,27 +104,28 @@ type ResultSemantics struct {
 type ReasonCode string
 
 const (
-	ReasonSupported                           ReasonCode = "supported"
-	ReasonUnknownLogicalType                  ReasonCode = "unknown_logical_type"
-	ReasonUnsupportedPhysicalType             ReasonCode = "unsupported_physical_type"
-	ReasonUnsupportedEncoding                 ReasonCode = "unsupported_encoding"
-	ReasonLogicalPhysicalMismatch             ReasonCode = "logical_physical_mismatch"
-	ReasonEncodingPhysicalMismatch            ReasonCode = "encoding_physical_mismatch"
-	ReasonOperationUnsupported                ReasonCode = "operation_unsupported"
-	ReasonFloatRawInt64BitPattern             ReasonCode = "float_raw_int64_bit_pattern"
-	ReasonNativeFloatLayoutMissing            ReasonCode = "native_float_layout_missing"
-	ReasonDictionaryOrderUnproven             ReasonCode = "dictionary_order_unproven"
-	ReasonDictionaryCollationUnproven         ReasonCode = "dictionary_collation_unproven"
-	ReasonNullableCarrierValueSemantics       ReasonCode = "nullable_carrier_value_semantics"
-	ReasonNullableCarrierAggregateSemantics   ReasonCode = "nullable_carrier_aggregate_semantics"
-	ReasonNotNullable                         ReasonCode = "not_nullable"
-	ReasonVectorScalarOperationUnsupported    ReasonCode = "vector_scalar_operation_unsupported"
-	ReasonAdjacencyScalarOperationUnsupported ReasonCode = "adjacency_scalar_operation_unsupported"
-	ReasonVectorCapabilityDeferred            ReasonCode = "vector_capability_deferred"
-	ReasonAdjacencyCapabilityDeferred         ReasonCode = "adjacency_capability_deferred"
-	ReasonBoolRangeUnsupported                ReasonCode = "bool_range_unsupported"
-	ReasonStatsPayloadUnsupported             ReasonCode = "stats_payload_unsupported"
-	ReasonPruningPayloadUnsupported           ReasonCode = "pruning_payload_unsupported"
+	ReasonSupported                            ReasonCode = "supported"
+	ReasonUnknownLogicalType                   ReasonCode = "unknown_logical_type"
+	ReasonUnsupportedPhysicalType              ReasonCode = "unsupported_physical_type"
+	ReasonUnsupportedEncoding                  ReasonCode = "unsupported_encoding"
+	ReasonLogicalPhysicalMismatch              ReasonCode = "logical_physical_mismatch"
+	ReasonEncodingPhysicalMismatch             ReasonCode = "encoding_physical_mismatch"
+	ReasonOperationUnsupported                 ReasonCode = "operation_unsupported"
+	ReasonFloatRawInt64BitPattern              ReasonCode = "float_raw_int64_bit_pattern"
+	ReasonNativeFloatLayoutMissing             ReasonCode = "native_float_layout_missing"
+	ReasonDictionaryOrderUnproven              ReasonCode = "dictionary_order_unproven"
+	ReasonDictionaryCollationUnproven          ReasonCode = "dictionary_collation_unproven"
+	ReasonNullableCarrierValueSemantics        ReasonCode = "nullable_carrier_value_semantics"
+	ReasonNullableCarrierAggregateSemantics    ReasonCode = "nullable_carrier_aggregate_semantics"
+	ReasonNotNullable                          ReasonCode = "not_nullable"
+	ReasonVectorScalarOperationUnsupported     ReasonCode = "vector_scalar_operation_unsupported"
+	ReasonUint32ListScalarOperationUnsupported ReasonCode = "uint32_list_scalar_operation_unsupported"
+	ReasonAdjacencyScalarOperationUnsupported  ReasonCode = "adjacency_scalar_operation_unsupported"
+	ReasonVectorCapabilityDeferred             ReasonCode = "vector_capability_deferred"
+	ReasonAdjacencyCapabilityDeferred          ReasonCode = "adjacency_capability_deferred"
+	ReasonBoolRangeUnsupported                 ReasonCode = "bool_range_unsupported"
+	ReasonStatsPayloadUnsupported              ReasonCode = "stats_payload_unsupported"
+	ReasonPruningPayloadUnsupported            ReasonCode = "pruning_payload_unsupported"
 )
 
 // Descriptor binds logical semantics to the current typedcolumn physical shape.
@@ -175,11 +178,11 @@ func Fallback(op Operation, reason ReasonCode, msg string) Capability {
 }
 
 func LogicalTypes() []LogicalType {
-	return []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalAdjacencyList}
+	return []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalUint32List, LogicalAdjacencyList}
 }
 
 func ColumnTypes() []typedcolumn.ColumnType {
-	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeAdjacencyList}
+	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeAdjacencyList}
 }
 
 func Encodings() []typedcolumn.Encoding {
@@ -253,6 +256,8 @@ func CapabilityFor(desc Descriptor, op Operation) Capability {
 		return stringCapability(desc, op)
 	case LogicalFloat32Vector:
 		return vectorCapability(desc, op)
+	case LogicalUint32List:
+		return uint32ListCapability(desc, op)
 	case LogicalAdjacencyList:
 		return adjacencyCapability(desc, op)
 	default:
@@ -291,6 +296,8 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat64
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
+	case typedcolumn.ColumnTypeUint32List:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32OffsetsList
 	case typedcolumn.ColumnTypeAdjacencyList:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense || encoding == typedcolumn.EncodingRawUint32OffsetsList
 	}
@@ -450,6 +457,33 @@ func vectorCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonVectorScalarOperationUnsupported, "vector columns are not scalar comparable or scalar aggregate values")
 	default:
 		return Unsupported(op, ReasonOperationUnsupported, "operation is not a vector semantic capability")
+	}
+}
+
+func uint32ListCapability(desc Descriptor, op Operation) Capability {
+	if desc.Physical != typedcolumn.ColumnTypeUint32List || desc.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "uint32_list semantics require uint32_list physical type and raw_uint32_offsets_list encoding")
+	}
+	if desc.Nullable {
+		return Unsupported(op, ReasonEncodingPhysicalMismatch, "uint32_list v1 is non-null")
+	}
+	switch op {
+	case OpAllRows:
+		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpUint32ListDirectPayload:
+		return Supported(op)
+	case OpAdjacencyTraversal, OpAdjacencyDirectPayload, OpAdjacencyMetrics:
+		return Unsupported(op, ReasonOperationUnsupported, "operation belongs to vector-index/HNSW consumers, not the generic uint32_list primitive")
+	case OpVectorSimilarity, OpVectorDotProduct, OpVectorDirectPayload, OpVectorMetrics:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a uint32_list semantic capability")
+	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
+		return Unsupported(op, ReasonUint32ListScalarOperationUnsupported, "uint32_list columns are not scalar comparable or scalar aggregate values")
+	case OpIsNull, OpIsNotNull:
+		return Unsupported(op, ReasonNotNullable, "non-null uint32_list column")
+	default:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a uint32_list semantic capability")
 	}
 }
 

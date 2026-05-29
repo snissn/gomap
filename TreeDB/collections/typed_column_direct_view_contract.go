@@ -113,6 +113,23 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		}
 		return base
 	}
+	if valueType == ColumnStoreValueUint32List {
+		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
+			base.Reason = "uint32_list direct-view classification only supports the generic typed-column consumer"
+			return base
+		}
+		base.Support = typedColumnDirectViewActiveLittleEndianCandidate
+		base.PayloadEndian = "little"
+		base.ElementSize = 4
+		base.Alignment = 4
+		base.RequiresElementsPerRow = false
+		base.OffsetsElementSize = 8
+		base.OffsetsAlignment = 8
+		base.ValuesElementSize = 4
+		base.ValuesAlignment = 4
+		base.Reason = "typed-column uint32_list raw_uint32_offsets_list uses certified uint64 offsets plus uint32 values direct views with fail-closed fallback diagnostics"
+		return base
+	}
 	if valueType == ColumnStoreValueAdjacencyList {
 		if adjacencyLayout == typedColumnDirectViewAdjacencyLayoutNone {
 			adjacencyLayout = typedColumnDirectViewAdjacencyLayoutRawUint32Dense
@@ -205,6 +222,7 @@ func typedColumnDirectViewAllTypeInventory() []ColumnStoreValueType {
 		ColumnStoreValueDouble,
 		ColumnStoreValueString,
 		ColumnStoreValueFloat32Vector,
+		ColumnStoreValueUint32List,
 		ColumnStoreValueAdjacencyList,
 	}
 }

@@ -82,6 +82,77 @@ func TestTypedColumnAdjacencyOffsetsListReopen1915(t *testing.T) {
 	}
 }
 
+func TestTypedColumnUint32ListReopen1985(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open DB: %v", err)
+	}
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+	cfg := &ColumnStoreConfig{
+		Enabled:         true,
+		RetainedPayload: ColumnRetainedPayloadNonColumn,
+		Reconstruction:  ColumnReconstructionRetainedPayloadAndColumns,
+		Columns: []ColumnStoreColumn{{
+			Name:      "tags",
+			Path:      "tags",
+			Owner:     TypedStorageOwnerColumnPart,
+			ValueType: ColumnStoreValueUint32List,
+		}},
+	}
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "lists", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("lists")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	ids := [][]byte{[]byte("r0"), []byte("r1"), []byte("r2"), []byte("r3")}
+	docs := [][]byte{
+		[]byte(`{"tags":[],"label":"zero"}`),
+		[]byte(`{"tags":[7,8],"label":"two"}`),
+		[]byte(`{"tags":[],"label":"empty"}`),
+		[]byte(`{"tags":[9,10,11],"label":"three"}`),
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d = nil
+
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open reopened DB: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("lists")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	want := map[string][]any{
+		"r0": []any{},
+		"r1": []any{float64(7), float64(8)},
+		"r2": []any{},
+		"r3": []any{float64(9), float64(10), float64(11)},
+	}
+	for _, id := range ids {
+		assertTypedColumnOffsetsListField(t, reopenedCol, id, "tags", want[string(id)])
+	}
+}
+
 func TestTypedColumnAdjacencyOffsetsListUpdateDeleteVisibility1917(t *testing.T) {
 	d, col := newTypedColumnAdjacencyOffsetsListTestCollection(t)
 	defer func() { _ = d.Close() }()
@@ -155,6 +226,11 @@ func newTypedColumnAdjacencyOffsetsListTestCollection(t *testing.T) (*backenddb.
 
 func assertTypedColumnOffsetsListNeighbors(t *testing.T, col *Collection, id []byte, want []any) {
 	t.Helper()
+	assertTypedColumnOffsetsListField(t, col, id, "neighbors", want)
+}
+
+func assertTypedColumnOffsetsListField(t *testing.T, col *Collection, id []byte, field string, want []any) {
+	t.Helper()
 	gotRaw, err := col.Get(id)
 	if err != nil {
 		t.Fatalf("Get %s: %v", id, err)
@@ -163,11 +239,11 @@ func assertTypedColumnOffsetsListNeighbors(t *testing.T, col *Collection, id []b
 	if err := json.Unmarshal(gotRaw, &got); err != nil {
 		t.Fatalf("json %s: %v raw=%s", id, err, gotRaw)
 	}
-	neighbors, ok := got["neighbors"].([]any)
+	values, ok := got[field].([]any)
 	if !ok {
-		t.Fatalf("neighbors for %s = %#v raw=%s", id, got["neighbors"], gotRaw)
+		t.Fatalf("%s for %s = %#v raw=%s", field, id, got[field], gotRaw)
 	}
-	if !reflect.DeepEqual(neighbors, want) {
-		t.Fatalf("neighbors for %s = %#v want %#v raw=%s", id, neighbors, want, gotRaw)
+	if !reflect.DeepEqual(values, want) {
+		t.Fatalf("%s for %s = %#v want %#v raw=%s", field, id, values, want, gotRaw)
 	}
 }

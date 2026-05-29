@@ -24,6 +24,7 @@ const (
 	ColumnTypeFloat32            ColumnType = "float32"
 	ColumnTypeFloat64            ColumnType = "float64"
 	ColumnTypeFloat32Vector      ColumnType = "float32_vector"
+	ColumnTypeUint32List         ColumnType = "uint32_list"
 	ColumnTypeAdjacencyList      ColumnType = "adjacency_list"
 )
 
@@ -748,6 +749,19 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Compression != CompressionNone {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: float32_vector column %s requires uncompressed dense sections", def.Name)
 		}
+	case ColumnTypeUint32List:
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawUint32OffsetsList
+		}
+		if def.Encoding != EncodingRawUint32OffsetsList {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported uint32_list encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.FixedWidthElements != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: uint32_list column %s requires fixed-width elements=0", def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: uint32_list column %s requires uncompressed offsets-list sections", def.Name)
+		}
 	case ColumnTypeAdjacencyList:
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawUint32Dense
@@ -773,7 +787,7 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 	default:
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported column type %s for %s", def.Type, def.Name)
 	}
-	if def.Type != ColumnTypeFloat32Vector && def.Type != ColumnTypeAdjacencyList && def.FixedWidthElements != 0 {
+	if def.Type != ColumnTypeFloat32Vector && def.Type != ColumnTypeAdjacencyList && def.Type != ColumnTypeUint32List && def.FixedWidthElements != 0 {
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: scalar column %s has fixed-width elements=%d", def.Name, def.FixedWidthElements)
 	}
 	return def, nil
@@ -826,6 +840,21 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			if err != nil {
 				return 0, err
 			}
+			if rows == 0 {
+				rows = columnRows
+			}
+			if columnRows != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, columnRows, rows)
+			}
+		case ColumnTypeUint32List:
+			list, ok := batch.Uint32OffsetsLists[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing uint32_list offsets-list column %s", def.Name)
+			}
+			if err := ValidateRawUint32OffsetsListShape(list.Rows, list.Offsets, uint64(len(list.Values))); err != nil {
+				return 0, fmt.Errorf("typedcolumn: column %s: %w", def.Name, err)
+			}
+			columnRows := list.Rows
 			if rows == 0 {
 				rows = columnRows
 			}
@@ -944,7 +973,7 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 	}
 	for name := range batch.Uint32OffsetsLists {
 		if _, ok := declared[name]; !ok {
-			return 0, fmt.Errorf("typedcolumn: undeclared adjacency_list offsets-list column %s", name)
+			return 0, fmt.Errorf("typedcolumn: undeclared uint32 offsets-list column %s", name)
 		}
 	}
 	if rows <= 0 {
@@ -960,7 +989,7 @@ func batchAllowsZeroRowsForOffsetsList(batch Batch, defs []ColumnDefinition) boo
 	hasOffsetsList := false
 	for _, def := range defs {
 		switch def.Type {
-		case ColumnTypeAdjacencyList:
+		case ColumnTypeUint32List, ColumnTypeAdjacencyList:
 			if def.Encoding != EncodingRawUint32OffsetsList {
 				return false
 			}
@@ -1127,6 +1156,12 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 			return EncodedGranule{}, err
 		}
 		return b.builder.BuildFloat32Vector(values, end-start, def.FixedWidthElements)
+	case ColumnTypeUint32List:
+		list, err := b.gatherUint32OffsetsList(batch.Uint32OffsetsLists[def.Name], start, end)
+		if err != nil {
+			return EncodedGranule{}, err
+		}
+		return b.builder.BuildUint32OffsetsList(list.Rows, list.Offsets, list.Values)
 	case ColumnTypeAdjacencyList:
 		if def.Encoding == EncodingRawUint32OffsetsList {
 			list, err := b.gatherUint32OffsetsList(batch.Uint32OffsetsLists[def.Name], start, end)

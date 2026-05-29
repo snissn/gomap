@@ -21,6 +21,8 @@ func columnStoreSemanticLogicalType(valueType ColumnStoreValueType) (columnseman
 		return columnsemantics.LogicalString, true
 	case ColumnStoreValueFloat32Vector:
 		return columnsemantics.LogicalFloat32Vector, true
+	case ColumnStoreValueUint32List:
+		return columnsemantics.LogicalUint32List, true
 	case ColumnStoreValueAdjacencyList:
 		return columnsemantics.LogicalAdjacencyList, true
 	default:
@@ -45,6 +47,9 @@ func typedColumnAdapterCapability(column typedColumnAdapterColumn, op columnsema
 	desc, err := typedColumnAdapterSemanticDescriptor(column)
 	if err != nil {
 		return columnsemantics.Unsupported(op, columnsemantics.ReasonUnknownLogicalType, err.Error()), err
+	}
+	if op == columnsemantics.OpUint32ListDirectPayload && typedColumnAdapterUint32ListDirectPayloadSupported(column) {
+		return columnsemantics.Supported(op), nil
 	}
 	if op == columnsemantics.OpAdjacencyDirectPayload && typedColumnAdapterOffsetsListAdjacencyDirectPayloadSupported(column) {
 		return columnsemantics.Supported(op), nil

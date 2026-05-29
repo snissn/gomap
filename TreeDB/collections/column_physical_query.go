@@ -1627,6 +1627,8 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			if n != uint64(col.VectorDims) {
 				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, col.VectorDims)
 			}
+		case ColumnStoreValueUint32List:
+			cur.skipUint32Slice()
 		case ColumnStoreValueAdjacencyList:
 			cur.skipUint32Slice()
 		default:

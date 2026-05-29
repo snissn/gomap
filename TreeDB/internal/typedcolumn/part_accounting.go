@@ -276,6 +276,8 @@ func logicalColumnValueBytes(def ColumnDefinition, rows int) int {
 		return rows * 4
 	case ColumnTypeFloat32Vector, ColumnTypeAdjacencyList:
 		return rows * def.FixedWidthElements * 4
+	case ColumnTypeUint32List:
+		return 0
 	default:
 		return rows * 8
 	}

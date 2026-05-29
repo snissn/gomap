@@ -618,6 +618,8 @@ func skipColumnPhysicalValue(cur *manifestCursor, col ColumnStoreColumn) error {
 		if n != uint64(col.VectorDims) {
 			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", n, col.VectorDims)
 		}
+	case ColumnStoreValueUint32List:
+		_ = cur.skipUint32Slice()
 	case ColumnStoreValueAdjacencyList:
 		_ = cur.skipUint32Slice()
 	default:
@@ -704,6 +706,14 @@ func readSelectedColumnPhysicalValueIntoScratch(cur *manifestCursor, col ColumnS
 			return err
 		}
 		value.Float32Vector = scratch.Float32Values[start:]
+	case ColumnStoreValueUint32List:
+		start := len(scratch.Uint32Values)
+		var err error
+		scratch.Uint32Values, err = cur.appendUint32SliceWithEncoding(scratch.Uint32Values, col.FixedWidthEncoding)
+		if err != nil {
+			return err
+		}
+		value.Uint32List = scratch.Uint32Values[start:]
 	case ColumnStoreValueAdjacencyList:
 		start := len(scratch.Uint32Values)
 		var err error

@@ -526,7 +526,7 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		// The primitive is sectioned into uint64 offsets and uint32 values. The
 		// shared element identity is the value width; direct-view validation checks
 		// offsets-section (8-byte) and values-section (4-byte) alignment separately.
-		direct := def.Compression == CompressionNone && logicalType == "adjacency_list" && def.Type == ColumnTypeAdjacencyList && def.FixedWidthElements == 0
+		direct := def.Compression == CompressionNone && def.FixedWidthElements == 0 && ((logicalType == "uint32_list" && def.Type == ColumnTypeUint32List) || (logicalType == "adjacency_list" && def.Type == ColumnTypeAdjacencyList))
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 		streaming := def.Compression == CompressionNone && logicalType == "int64"
@@ -642,7 +642,7 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 	if !ok {
 		return fmt.Errorf("typedcolumn: layout contract column %s missing offsets-list image sections", columnDesc.Name)
 	}
-	if contract.Type != columnDesc.Type || contract.Type != column.Definition.Type || contract.Type != ColumnTypeAdjacencyList {
+	if contract.Type != columnDesc.Type || contract.Type != column.Definition.Type || (contract.Type != ColumnTypeUint32List && contract.Type != ColumnTypeAdjacencyList) {
 		return fmt.Errorf("typedcolumn: layout contract column %s offsets-list type=%s descriptor=%s definition=%s", columnDesc.Name, contract.Type, columnDesc.Type, column.Definition.Type)
 	}
 	if contract.Encoding != EncodingRawUint32OffsetsList || column.Definition.Encoding != EncodingRawUint32OffsetsList || offsetsSection.Encoding != EncodingRawUint32OffsetsList || valuesSection.Encoding != EncodingRawUint32OffsetsList {
