@@ -182,7 +182,7 @@ See `typed-column-uint32-list-adjacency-quarantine.md` for the #1983 inventory o
 what to keep, generalize, remove, or quarantine. See
 `typed-column-uint32-list-semantics.md` for the #1984 logical `uint32_list`
 semantics, validation invariants, and length-only offsets behavior before
-#1985 treats this encoding as a runtime storage primitive.
+Issue #1985 treats this encoding as a runtime storage primitive.
 
 Empty lists are represented by equal adjacent offsets. V1 direct views are only
 for non-null, non-default, uncompressed offsets-list payloads. Fixed dense

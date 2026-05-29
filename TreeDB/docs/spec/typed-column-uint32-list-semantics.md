@@ -2,7 +2,7 @@
 
 Status: semantic contract for the #1982 typed-column integer-list stack. This
 spec defines the first-class logical list type and the validation vocabulary that
-#1985 must implement. It does **not** add a new runtime value type, writer,
+Issue #1985 must implement. It does **not** add a new runtime value type, writer,
 reader, vector-index manifest, or HNSW search integration.
 
 ## Vocabulary
@@ -101,8 +101,8 @@ adds runtime admission. This issue intentionally does not add that Go constant o
 adapter support because doing so without writer/reader/conformance behavior would
 make an unsupported public API look usable.
 
-#1985 owns adding the code constant (or an equivalent compatibility alias if the
-public API shape changes), mapping it to typed-column metadata, updating the
+Issue #1985 owns adding the code constant (or an equivalent compatibility alias
+if the public API shape changes), mapping it to typed-column metadata, updating the
 naming regression table, and proving round-trip/direct-view/fallback validation
 without `ColumnStoreValueAdjacencyList` semantics.
 
