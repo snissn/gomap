@@ -520,7 +520,7 @@ func BenchmarkTypedColumnPartSortKeyPublication1948(b *testing.B) {
 			if err != nil {
 				b.Fatalf("normalizeColumnStoreConfig: %v", err)
 			}
-			var bytes int
+			var imageBytes int
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -531,10 +531,10 @@ func BenchmarkTypedColumnPartSortKeyPublication1948(b *testing.B) {
 				if rowCount != len(rows) {
 					b.Fatalf("rowCount=%d want %d", rowCount, len(rows))
 				}
-				bytes = len(raw)
+				imageBytes = len(raw)
 			}
 			b.ReportMetric(float64(len(rows)), "rows/op")
-			b.ReportMetric(float64(bytes), "typed_part_bytes/op")
+			b.ReportMetric(float64(imageBytes), "typed_part_bytes/op")
 		})
 	}
 }

@@ -445,13 +445,14 @@ Dir/maindb/column_assets/events/column-assets/
 
 Segment file names use `segment-%06d.tca`. Durable manifest part records
 store typed `ColumnAssetRef` values containing kind, namespace, generation,
-part id, segment file id, offset, length, and checksum. Part records also carry
-a `part_role` lifecycle value: `base`, `delta`, or `tombstone`. Part record
-version 4 appends a SortKey trailer after `part_role`: `u64 column_count`, then
-for each column a manifest string column name and manifest string direction
-(currently empty/ascending only). Version 1/2/3 part records have no SortKey
-trailer. Only `tcs1_typed_column_part` records may publish a non-empty SortKey;
-readers and rewrite tooling must preserve or skip this trailer by version.
+part id, segment file id, offset, length, and checksum. Part record version 3
+and newer carries a `part_role` lifecycle value: `base`, `delta`, or
+`tombstone`; version 1/2 part records omit `part_role`. Part record version 4
+appends a SortKey trailer after `part_role`: `u64 column_count`, then for each
+column a manifest string column name and manifest string direction (currently
+empty/ascending only). Version 1/2/3 part records have no SortKey trailer. Only
+`tcs1_typed_column_part` records may publish a non-empty SortKey; readers and
+rewrite tooling must preserve or skip this trailer by version.
 Current part refs may use `tcs1_part_image` for compatibility typed-row/TCPA
 assets or `tcs1_typed_column_part` for sectioned typed-column payloads,
 including scalar columns plus vector/list/adjacency payload sections described
