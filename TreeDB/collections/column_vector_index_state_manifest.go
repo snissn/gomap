@@ -164,7 +164,10 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 	snapshot.EfSearch = int(efSearch64)
 	snapshot.RowCount = int(rowCount64)
 	remaining := uint64(len(raw) - cur.pos)
-	const minEncodedVectorIndexStateAssetBytes = uint64(4*8 + 7*8)
+	// Each asset has six length-prefixed strings and nine uint64 fields before
+	// any string payload bytes. Keep this lower bound exact so corrupt records
+	// cannot advertise more assets than the remaining bytes can encode.
+	const minEncodedVectorIndexStateAssetBytes = uint64(6*8 + 9*8)
 	if assetCount64 > 0 && assetCount64 > remaining/minEncodedVectorIndexStateAssetBytes {
 		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: vector-index state asset_count=%d exceeds remaining record bytes=%d", assetCount64, remaining)
 	}
