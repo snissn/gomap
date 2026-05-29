@@ -171,6 +171,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 				if section.Length < 14 {
 					t.Fatalf("descriptor section length=%d too short", section.Length)
 				}
+				// Offset 10 within the descriptor section is schema_version (uint32).
 				current := binary.LittleEndian.Uint32(payload[section.Offset+10 : section.Offset+14])
 				binary.LittleEndian.PutUint32(payload[section.Offset+10:section.Offset+14], current+1)
 				return

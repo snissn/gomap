@@ -170,7 +170,7 @@ func prepareColumnVectorGraphAdjacencySourcePayloads(assetRootDir, collection st
 func buildColumnVectorGraphAdjacencyLayerLists(rows []columnVectorGraphAssetRow) ([]typedcolumn.RawUint32OffsetsList, error) {
 	layers, err := buildColumnVectorIndexStateAdjacencyLists(rows)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("collections: column_graph adjacency source layer lists: %w", err)
 	}
 	return layers, nil
 }
