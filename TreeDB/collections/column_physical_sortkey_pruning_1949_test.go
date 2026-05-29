@@ -117,6 +117,33 @@ func TestTypedColumnSortKeyQ4BMarkPrunedParity1949(t *testing.T) {
 	assertQ4BMarkPrunedDiagnostics1949(t, "prepared", prepared.Diagnostics, len(events))
 }
 
+func TestTypedColumnSortKeyLiteralAbsentSkipsAllRows1949(t *testing.T) {
+	sortKey := []ColumnSortKey{{Column: "kind"}, {Column: "operation"}, {Column: "collection"}, {Column: "did"}, {Column: "time_us"}}
+	events := typedColumnSortKeyPruningEvents1949()
+	_, col, closeFn := openTypedColumnSortKeyFixture1948(t, sortKey, events)
+	defer closeFn()
+
+	req := columnPhysicalQ4BPostCreateRequest1949()
+	req.Predicates[2].Value = "app.bsky.feed.repost"
+	result, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(absent q4b): %v", err)
+	}
+	if len(result.Groups) != 0 {
+		t.Fatalf("absent q4b groups=%+v want none", result.Groups)
+	}
+	diag := result.Diagnostics
+	if !diag.SortKeyPrefixPlanned || diag.SortKeyMarkFallbackReason != columnSortKeyMarkFallbackLiteralAbsent {
+		t.Fatalf("absent q4b diagnostics=%+v want literal-absent prefix pruning", diag)
+	}
+	if diag.SortKeyMarkSkips != diag.ScheduledGranules || diag.ScheduledGranules == 0 {
+		t.Fatalf("absent q4b diagnostics=%+v want all granules skipped by marks", diag)
+	}
+	if diag.RowsScanned != 0 || diag.DecodedGranules != 0 || diag.DecodedPayloadBytes != 0 {
+		t.Fatalf("absent q4b scan diagnostics=%+v want no row/block decode", diag)
+	}
+}
+
 func TestTypedColumnSortKeyQ2StreamingReadinessDiagnostics1949(t *testing.T) {
 	sortKey := []ColumnSortKey{{Column: "kind"}, {Column: "operation"}, {Column: "collection"}, {Column: "did"}, {Column: "time_us"}}
 	events := typedColumnSortKeyPruningEvents1949()

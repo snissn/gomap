@@ -453,6 +453,8 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 	selectedRows := pruned.Rows
 	if pruned.AllRows {
 		selectedRows = nil
+	} else if selectedRows == nil {
+		selectedRows = []int{}
 	}
 	decoded, scanDiag, err := adapterPart.scanDecodedValuesSelectedRows(plan.Selected, selectedRows)
 	if err != nil {
