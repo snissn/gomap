@@ -354,7 +354,7 @@ func validateColumnVectorIndexStateAssetsForStatus(rootDir, collection string, c
 	return validateColumnVectorIndexStateAssetsWithMode(rootDir, collection, cfg, def, state, graph, false)
 }
 
-func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot, validatePayload bool) error {
+func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot, validateOrdinals bool) error {
 	seenAdjacencyLayers := make(map[int]string)
 	maxAdjacencyLayer := -1
 	var rawScratch []byte
@@ -383,12 +383,10 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 		if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 			return fmt.Errorf("collections: vector-index state adjacency layer %d schema_hash=%d want %d", layer, asset.SourceSchemaHash, sourceCfg.SchemaHash)
 		}
-		if validatePayload {
-			var validateErr error
-			rawScratch, validateErr = validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection, cfg, def, state, asset, layer, rawScratch)
-			if validateErr != nil {
-				return fmt.Errorf("collections: vector-index state adjacency layer %d asset %q: %w", layer, asset.AssetID, validateErr)
-			}
+		var validateErr error
+		rawScratch, validateErr = validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection, cfg, def, state, asset, layer, validateOrdinals, rawScratch)
+		if validateErr != nil {
+			return fmt.Errorf("collections: vector-index state adjacency layer %d asset %q: %w", layer, asset.AssetID, validateErr)
 		}
 	}
 	if len(seenAdjacencyLayers) == 0 {
@@ -414,11 +412,11 @@ func validateColumnVectorIndexStateAssetRefAvailable(rootDir string, asset colum
 }
 
 func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int) error {
-	_, err := validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection, cfg, def, state, asset, layer, nil)
+	_, err := validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection, cfg, def, state, asset, layer, true, nil)
 	return err
 }
 
-func validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int, rawScratch []byte) ([]byte, error) {
+func validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, layer int, validateOrdinals bool, rawScratch []byte) ([]byte, error) {
 	sourceCfg, adapterColumn, err := columnVectorIndexStateAdjacencyColumnStoreConfig(collection, cfg, def, layer)
 	if err != nil {
 		return rawScratch, err
@@ -463,7 +461,7 @@ func validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection string
 	if err != nil {
 		return raw, err
 	}
-	if err := validateColumnVectorIndexStateAdjacencySections(layer, offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount); err != nil {
+	if err := validateColumnVectorIndexStateAdjacencySections(layer, offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount, validateOrdinals); err != nil {
 		return raw, err
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
@@ -493,9 +491,12 @@ func validateColumnVectorIndexStateAdjacencyAssetInto(rootDir, collection string
 	return raw, nil
 }
 
-func validateColumnVectorIndexStateAdjacencySections(layer int, offsetsSection typedcolumn.ColumnPartImageSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsRaw, valuesRaw []byte, rows int) error {
+func validateColumnVectorIndexStateAdjacencySections(layer int, offsetsSection typedcolumn.ColumnPartImageSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsRaw, valuesRaw []byte, rows int, validateOrdinals bool) error {
 	if err := typedcolumn.ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, rows); err != nil {
 		return fmt.Errorf("collections: vector-index state adjacency layer %d shape: %w", layer, err)
+	}
+	if !validateOrdinals {
+		return nil
 	}
 	for row := 0; row < rows; row++ {
 		begin := binary.LittleEndian.Uint64(offsetsRaw[row*8:])

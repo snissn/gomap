@@ -138,7 +138,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "image part/rows")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "image part/rows")
 	})
 
 	t.Run("final_offset_value_count_mismatch", func(t *testing.T) {
@@ -155,7 +155,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "final offset=2 values=1")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "final offset=2 values=1")
 	})
 
 	t.Run("embedded_schema_version_mismatch", func(t *testing.T) {
@@ -181,7 +181,7 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets[0] = bad
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyOpenCorrupt1987(t, d, ctx.def, "schema_version")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "schema_version")
 	})
 
 	t.Run("stale_base_identity", func(t *testing.T) {
