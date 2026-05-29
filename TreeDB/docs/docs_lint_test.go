@@ -129,6 +129,56 @@ func TestDocs_CanonicalStoragePaths(t *testing.T) {
 	}
 }
 
+func TestDocs_VectorIndexStateWordingDoesNotRecanonicalizeGraphRows(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	stalePhrases := []string{
+		"row-asset graph remains the canonical searchable index",
+		"row graph asset ref as the canonical graph asset",
+		"canonical graph row asset plus vector-index state",
+		"future row/document refs",
+	}
+	roots := []string{
+		filepath.Join(treeRoot, "collections"),
+		filepath.Join(treeRoot, "docs", "spec"),
+		filepath.Join(treeRoot, "docs", "guides"),
+	}
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() || (!strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, ".md")) {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			text := string(data)
+			for _, phrase := range stalePhrases {
+				if strings.Contains(text, phrase) {
+					t.Fatalf("%s still contains stale vector-index wording %q", path, phrase)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", root, err)
+		}
+	}
+
+	guide, err := os.ReadFile(filepath.Join(treeRoot, "docs", "guides", "vector-search-typed-column.md"))
+	if err != nil {
+		t.Fatalf("read vector search guide: %v", err)
+	}
+	guideText := string(guide)
+	for _, want := range []string{"vector-index state `row_refs` assets", "Returned opaque document IDs", "graph row ID bytes, compatibility only"} {
+		if !strings.Contains(guideText, want) {
+			t.Fatalf("vector search guide missing current row-ref wording %q", want)
+		}
+	}
+}
+
 func TestTypedStorageStorageFormatDocsMentionCompatibilityDirectory(t *testing.T) {
 	treeRoot, _ := repoRoots(t)
 	path := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")

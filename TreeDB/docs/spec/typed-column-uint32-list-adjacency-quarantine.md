@@ -103,9 +103,11 @@ old refs; do not add new storage features to them:
 
 ### Current #1989 behavior
 
-- New graph builds publish the canonical graph row asset plus vector-index state
-  assets. HNSW adjacency state is `uint32_list` with `raw_uint32_offsets_list`
-  sections owned by the vector-index state record.
+- New graph builds publish vector-index state assets for healthy search state.
+  HNSW adjacency state is `uint32_list` with `raw_uint32_offsets_list` sections
+  owned by the vector-index state record. The graph row asset remains a legacy
+  compatibility record for opaque result IDs and controlled fallback, not the
+  canonical adjacency source.
 - New graph builds do not publish `Layer0AdjacencySource`,
   `AdjacencyLayerSources`, `TCGA`, or `TCGL` graph-specific adjacency-source
   metadata.

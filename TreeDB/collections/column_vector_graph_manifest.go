@@ -1006,9 +1006,10 @@ func columnVectorGraphManifestMatchStatusWithBaseChecksum(collection string, gra
 	if graph.BaseManifestChecksum != baseChecksum {
 		return columnVectorGraphManifestMatchMismatch
 	}
-	// Layer-0 adjacency-source metadata is intentionally not part of the loaded
-	// graph match. A bad optional source disables only the direct adjacency fast
-	// path; the row-asset graph remains the canonical searchable index.
+	// Legacy graph-specific adjacency-source metadata is intentionally not part of
+	// the cheap loaded-status match. Healthy search state is validated through the
+	// vector-index state manifest; corrupt legacy source metadata must not make the
+	// row-asset compatibility record look like the target architecture.
 	return columnVectorGraphManifestMatchLoaded
 }
 

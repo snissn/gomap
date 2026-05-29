@@ -18,6 +18,8 @@ changes.
 | Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
 | Vector graph/ANN data | `derived_accelerator` | It accelerates search but is not the authoritative owner of the embedding field. |
 | Adjacency list | typed-column `uint32_list` assets owned by vector-index state | `raw_uint32_offsets_list` is the physical encoding for HNSW adjacency state. Legacy `column_graph` adjacency direct sources and the `adjacency_layout: "uint32_offsets_list"` selector are quarantined compatibility only; new graph builds should not publish those graph-specific source assets. |
+| Ordinal-to-base-row references | vector-index state `row_refs` assets (`int64` / `raw_int64`) | Search uses row-ref state to map HNSW ordinals to base rows and to materialize documents without an ID-to-row-ref locator lookup. |
+| Returned opaque document IDs | graph row ID bytes, compatibility only | Exact arbitrary binary IDs stay on the graph row compatibility path until a first-class typed-column bytes primitive exists. |
 
 Best practice: keep vector payloads out of retained JSON for search-heavy
 workloads when the typed-column vector section is the intended search data plane.
@@ -289,6 +291,8 @@ counters.
 - Keep source documents and metadata out of the search/scoring hot loop.
 - Use retained document or typed-row metadata for final fetch and display data;
   use typed-column scalar metadata only when filters/scans justify it.
+- Treat vector-index `row_refs` as the healthy ordinal-to-base-row mapping. Do
+  not treat graph row ID scans as the target row-reference source.
 - Prefer reusable searchers for serving throughput; use one-shot APIs when you
   intentionally want setup/open included.
 - Run checkpoint/reopen demos when proving durable manifest/root discovery.
@@ -306,3 +310,4 @@ counters.
 | Search benchmark allocates heavily | You may be timing setup/open, public document materialization, or fallback decode. | Compare reusable-searcher vs one-shot names and inspect allocation profiles. |
 | Results differ across branches | On-disk formats/APIs are pre-alpha. | Rebuild DB directories and rerun with the same rows/dims/degree/top-k/seed. |
 | Adjacency typed-list counters show scratch decodes or legacy fallback | The vector-index state `uint32_list` direct source is missing, stale, disabled, or failed validation, so search fell back to row-asset adjacency or dense compatibility/corruption recovery. | Rebuild the graph so vector-index state owns certified `uint32_list` / `raw_uint32_offsets_list` adjacency assets. Treat old `column_graph` adjacency-source assets as compatibility-only, not a fix target. |
+| `row_ref_vector_source_legacy_graph_ids` is non-zero | The vector-index row-ref state is missing or stale, so typed-column vector source setup used legacy graph row ID scans. | Rebuild the graph so TVIS publishes `row_refs` assets; keep graph ID reads only as explicit compatibility fallback. |
