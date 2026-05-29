@@ -191,7 +191,7 @@ func TestColumnVectorIndexStatePublishedReopenAndFailClosed1986(t *testing.T) {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
-	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
 	stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name)
 	if !ok {
 		_ = d.Close()
@@ -207,10 +207,7 @@ func TestColumnVectorIndexStatePublishedReopenAndFailClosed1986(t *testing.T) {
 		_ = d.Close()
 		t.Fatalf("state=%+v does not match graph=%+v", state, graph)
 	}
-	if len(state.Assets) != 0 {
-		_ = d.Close()
-		t.Fatalf("current #1986 rebuild should publish control identity only, got assets=%+v", state.Assets)
-	}
+	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, d, "docs", cfg, def, graph, state, loadColumnGraphRebuildScannedRowsOnly1987(t, d, "docs", def))
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)
