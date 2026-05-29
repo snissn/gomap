@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -124,17 +125,19 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 	t.Run("missing_highest_adjacency_layer_preserves_expected_count", func(t *testing.T) {
 		d := openCollectionCommandWALDB(t, t.TempDir())
 		defer func() { _ = d.Close() }()
-		ctx := makeColumnVectorIndexStateAdjacencyStatusContextWithRows1987(t, d, []columnVectorGraphAssetRow{
+		assetRows1989 := []columnVectorGraphAssetRow{
 			{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 1, 1, 1}},
 			{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 0, 1, 0}},
-		})
-		if got, want := ctx.state.AdjacencyLayerCount, 2; got != want {
-			t.Fatalf("state adjacency layer count=%d want %d", got, want)
+		}
+		ctx := makeColumnVectorIndexStateAdjacencyStatusContextWithRows1987(t, d, assetRows1989)
+		wantLayers := columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(t, assetRows1989)
+		if got := ctx.state.AdjacencyLayerCount; got != wantLayers {
+			t.Fatalf("state adjacency layer count=%d want %d", got, wantLayers)
 		}
 		ctx.state.Assets = ctx.state.Assets[:1]
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "adjacency layers=1 want 2")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, fmt.Sprintf("adjacency layers=1 want %d", wantLayers))
 	})
 
 	t.Run("out_of_bounds_ordinal", func(t *testing.T) {
