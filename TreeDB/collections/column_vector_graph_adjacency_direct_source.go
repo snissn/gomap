@@ -23,6 +23,10 @@ const (
 	columnVectorGraphLayer0AdjacencySourceOutcomeUnknown columnVectorGraphLayer0AdjacencySourceOutcome = iota
 	columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect
 	columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView
+	columnVectorGraphLayer0AdjacencySourceOutcomeScratchDecode
+	columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect
+	columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView
+	columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode
 )
 
 func (o columnVectorGraphLayer0AdjacencySourceOutcome) String() string {
@@ -31,6 +35,14 @@ func (o columnVectorGraphLayer0AdjacencySourceOutcome) String() string {
 		return "mmap_direct"
 	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
 		return "heap_copy_typed_view"
+	case columnVectorGraphLayer0AdjacencySourceOutcomeScratchDecode:
+		return "scratch_decode"
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect:
+		return "typed_list_mmap_direct"
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView:
+		return "typed_list_heap_copy_typed_view"
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode:
+		return "typed_list_scratch_decode"
 	default:
 		return "unknown"
 	}
@@ -49,8 +61,10 @@ type columnVectorGraphLayer0AdjacencyDirectSource struct {
 
 	mappedBytes     uint64
 	heapCopyBytes   uint64
+	decodedBytes    uint64
 	activeHandles   int64
 	deniedResources uint64
+	owned           bool
 	closed          bool
 }
 
@@ -261,38 +275,68 @@ func (c *Collection) acquireColumnVectorGraphLayer0AdjacencySourceSection(collec
 }
 
 func columnVectorGraphLayer0AdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, directReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
+	return columnVectorGraphAdjacencyDirectSourceFromHandles(manager, layer, rows, valuesCount, directReq, offsetsHandle, valuesHandle, columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect, columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView, columnVectorGraphLayer0AdjacencySourceOutcomeScratchDecode, false, "column_graph adjacency source")
+}
+
+func columnVectorGraphTypedListAdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, directReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
+	return columnVectorGraphAdjacencyDirectSourceFromHandles(manager, layer, rows, valuesCount, directReq, offsetsHandle, valuesHandle, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode, true, "vector-index state adjacency")
+}
+
+func columnVectorGraphAdjacencyDirectSourceFromHandles(manager *mappedresource.Manager, layer int, rows int, valuesCount int, directReq typeddecode.Uint32OffsetsListDirectViewRequest, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, mmapOutcome, heapOutcome, scratchOutcome columnVectorGraphLayer0AdjacencySourceOutcome, allowScratch bool, label string) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
 	if offsetsHandle == nil || valuesHandle == nil {
 		status := typeddecode.StreamingStatus(typeddecode.ReasonNilHandle, "nil adjacency source handle")
-		return nil, status.Reason, fmt.Errorf("collections: column_graph adjacency source handle validation: %s", status.String())
+		return nil, status.Reason, fmt.Errorf("collections: %s handle validation: %s", label, status.String())
 	}
 	if offsetsHandle.Released() || valuesHandle.Released() {
 		status := typeddecode.UnsupportedStatus(typeddecode.ReasonStaleHandle, "released adjacency source handle")
-		return nil, status.Reason, fmt.Errorf("collections: column_graph adjacency source handle validation: %s", status.String())
+		return nil, status.Reason, fmt.Errorf("collections: %s handle validation: %s", label, status.String())
+	}
+	decodeScratch := func(firstStatus typeddecode.Status, fallbackReason typeddecode.Reason) (*columnVectorGraphLayer0AdjacencyDirectSource, typeddecode.Reason, error) {
+		decoded, decodeErr := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsHandle.Bytes(), valuesHandle.Bytes(), rows)
+		releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
+		if decodeErr != nil {
+			return nil, typeddecode.ReasonValidationFailed, errors.Join(fmt.Errorf("collections: %s direct-view validation: %s", label, firstStatus.String()), decodeErr, releaseErr)
+		}
+		if releaseErr != nil {
+			return nil, fallbackReason, errors.Join(fmt.Errorf("collections: %s direct-view validation: %s", label, firstStatus.String()), releaseErr)
+		}
+		if len(decoded.Values) != valuesCount {
+			return nil, typeddecode.ReasonValuesLengthMismatch, fmt.Errorf("collections: %s layer %d decoded values=%d want %d", label, layer, len(decoded.Values), valuesCount)
+		}
+		return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: decoded.Offsets, values: decoded.Values, outcome: scratchOutcome, manager: manager, decodedBytes: uint64(len(decoded.Offsets))*8 + uint64(len(decoded.Values))*4, owned: true}, fallbackReason, nil
 	}
 	if status := typeddecode.ValidateUint32OffsetsListDirectViewSections(directReq); !status.Direct() {
-		return nil, status.Reason, fmt.Errorf("collections: column_graph adjacency source section validation: %s", status.String())
+		if allowScratch && typedColumnUint32OffsetsListScratchFallbackAllowed(status) {
+			return decodeScratch(status, status.Reason)
+		}
+		return nil, status.Reason, fmt.Errorf("collections: %s section validation: %s", label, status.String())
 	}
 	offsets, values, status := typeddecode.Uint32OffsetsListView(manager, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: true})
 	if status.Direct() {
 		if len(values) != valuesCount {
-			return nil, typeddecode.ReasonValuesLengthMismatch, fmt.Errorf("collections: column_graph adjacency source layer %d values=%d want %d", layer, len(values), valuesCount)
+			return nil, typeddecode.ReasonValuesLengthMismatch, fmt.Errorf("collections: %s layer %d values=%d want %d", label, layer, len(values), valuesCount)
 		}
-		return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: offsets, values: values, outcome: columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect, manager: manager, offsetsHandle: offsetsHandle, valuesHandle: valuesHandle}, "", nil
+		return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: offsets, values: values, outcome: mmapOutcome, manager: manager, offsetsHandle: offsetsHandle, valuesHandle: valuesHandle}, "", nil
 	}
 	firstStatus := status
+	fallbackReason := status.Reason
 	if status.Reason == typeddecode.ReasonHandleSourceUnsupported || status.Reason == typeddecode.ReasonActualPointerUnaligned {
 		offsets, values, status = typeddecode.Uint32OffsetsListView(manager, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: false})
 		if status.Direct() {
 			if len(values) != valuesCount {
-				return nil, typeddecode.ReasonValuesLengthMismatch, fmt.Errorf("collections: column_graph adjacency source layer %d values=%d want %d", layer, len(values), valuesCount)
+				return nil, typeddecode.ReasonValuesLengthMismatch, fmt.Errorf("collections: %s layer %d values=%d want %d", label, layer, len(values), valuesCount)
 			}
-			return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: offsets, values: values, outcome: columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView, manager: manager, offsetsHandle: offsetsHandle, valuesHandle: valuesHandle}, "", nil
+			return &columnVectorGraphLayer0AdjacencyDirectSource{layer: layer, rows: rows, offsets: offsets, values: values, outcome: heapOutcome, manager: manager, offsetsHandle: offsetsHandle, valuesHandle: valuesHandle}, "", nil
 		}
+		fallbackReason = status.Reason
+	}
+	if allowScratch && typedColumnUint32OffsetsListScratchFallbackAllowed(status) {
+		return decodeScratch(firstStatus, fallbackReason)
 	}
 	if status.Reason == "" {
 		status = firstStatus
 	}
-	return nil, status.Reason, fmt.Errorf("collections: column_graph adjacency source direct-view validation: %s", status.String())
+	return nil, status.Reason, fmt.Errorf("collections: %s direct-view validation: %s", label, status.String())
 }
 
 func (g *columnVectorGraphAdjacencyDirectSources) Neighbors(layer, ordinal int) ([]uint32, columnVectorGraphLayer0AdjacencySourceOutcome, typeddecode.Reason, bool) {
@@ -355,7 +399,7 @@ func (s *columnVectorGraphLayer0AdjacencyDirectSource) Neighbors(ordinal int) ([
 	if s.closed {
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, typeddecode.ReasonStaleHandle, false
 	}
-	if s.offsetsHandle == nil || s.valuesHandle == nil || s.offsetsHandle.Released() || s.valuesHandle.Released() {
+	if !s.owned && (s.offsetsHandle == nil || s.valuesHandle == nil || s.offsetsHandle.Released() || s.valuesHandle.Released()) {
 		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, typeddecode.ReasonStaleHandle, false
 	}
 	if ordinal < 0 || ordinal >= s.rows || ordinal+1 >= len(s.offsets) {
@@ -398,6 +442,8 @@ func (s *columnVectorGraphLayer0AdjacencyDirectSource) Close() error {
 	s.values = nil
 	s.outcome = columnVectorGraphLayer0AdjacencySourceOutcomeUnknown
 	s.rows = 0
+	s.decodedBytes = 0
 	s.activeHandles = 0
+	s.owned = false
 	return closeErr
 }

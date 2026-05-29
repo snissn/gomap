@@ -505,7 +505,7 @@ func validateColumnVectorIndexStateAdjacencySections(layer int, offsetsSection t
 		for idx := beginInt; idx < endInt; idx++ {
 			neighbor := binary.LittleEndian.Uint32(valuesRaw[idx*4:])
 			if uint64(neighbor) >= uint64(rows) {
-				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d", layer, row, idx-beginInt, neighbor, rows)
+				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d: %w", layer, row, idx-beginInt, neighbor, rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
 		}
 	}
@@ -535,7 +535,7 @@ func validateColumnVectorIndexStateAdjacencyList(layer int, list typedcolumn.Uin
 		for idx := begin; idx < end; idx++ {
 			neighbor := list.Values[idx]
 			if uint64(neighbor) >= uint64(list.Rows) {
-				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d", layer, row, idx-begin, neighbor, list.Rows)
+				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d: %w", layer, row, idx-begin, neighbor, list.Rows, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
 		}
 	}

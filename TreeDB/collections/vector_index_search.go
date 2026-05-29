@@ -214,12 +214,24 @@ type VectorIndexSearchStats struct {
 	AdjacencyMmapDirectViews uint64 `json:"adjacency_mmap_direct,omitempty"`
 	// AdjacencyHeapCopyTypedViews is the per-search count of adjacency payloads served from typed heap-copy fallback views.
 	AdjacencyHeapCopyTypedViews uint64 `json:"adjacency_heap_copy_typed_view,omitempty"`
+	// AdjacencyTypedListDirectViews is the per-search count of vector-index state uint32_list adjacency payloads served from direct typed-list views.
+	AdjacencyTypedListDirectViews uint64 `json:"adjacency_typed_list_direct_views,omitempty"`
+	// AdjacencyTypedListMmapDirectViews is the per-search count of vector-index state uint32_list adjacency payloads served from mmap direct views.
+	AdjacencyTypedListMmapDirectViews uint64 `json:"adjacency_typed_list_mmap_direct,omitempty"`
+	// AdjacencyTypedListHeapCopyTypedViews is the per-search count of vector-index state uint32_list adjacency payloads served from heap-copy typed views.
+	AdjacencyTypedListHeapCopyTypedViews uint64 `json:"adjacency_typed_list_heap_copy_typed_view,omitempty"`
+	// AdjacencyTypedListScratchDecodes is the per-search count of vector-index state uint32_list adjacency payloads served from decoded fallback views.
+	AdjacencyTypedListScratchDecodes uint64 `json:"adjacency_typed_list_scratch_decodes,omitempty"`
+	// AdjacencyLegacyFallbacks counts row-image graph adjacency fallback/quarantine reads.
+	AdjacencyLegacyFallbacks uint64 `json:"adjacency_legacy_fallbacks,omitempty"`
 	// AdjacencySourceUnavailable reports that this searcher had no usable certified adjacency source and used row-asset fallback.
 	AdjacencySourceUnavailable uint64 `json:"adjacency_source_unavailable,omitempty"`
 	// AdjacencySourceFallbacks reports searches or observations that fell back from certified adjacency sources to row assets.
 	AdjacencySourceFallbacks uint64 `json:"adjacency_source_fallbacks,omitempty"`
 	// AdjacencyCertificationFailures counts adjacency source certification, shape, or validation failures.
 	AdjacencyCertificationFailures uint64 `json:"adjacency_certification_failures,omitempty"`
+	// AdjacencyValidationFailures counts typed-list adjacency validation failures.
+	AdjacencyValidationFailures uint64 `json:"adjacency_validation_failures,omitempty"`
 	// AdjacencyAbsoluteOffsetUnaligned counts adjacency source fallbacks caused by absolute storage offset misalignment.
 	AdjacencyAbsoluteOffsetUnaligned uint64 `json:"adjacency_absolute_offset_unaligned,omitempty"`
 	// AdjacencyActualPointerUnaligned counts adjacency source fallbacks caused by actual mapped pointer misalignment.
@@ -820,66 +832,72 @@ func deltaInt64(before, after int64) int64 {
 
 func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearchStats, readerStats columnPhysicalRowReaderStats) VectorIndexSearchStats {
 	return VectorIndexSearchStats{
-		CandidateRows:                    searchStats.CandidateRows,
-		Candidates:                       searchStats.Candidates,
-		Edges:                            searchStats.Edges,
-		VisitedNodes:                     searchStats.VisitedNodes,
-		VisitedEdges:                     searchStats.VisitedEdges,
-		VectorBytesRead:                  searchStats.VectorBytesRead,
-		NormBytesRead:                    searchStats.NormBytesRead,
-		AdjacencyBytesRead:               searchStats.AdjacencyBytesRead,
-		CandidateFetches:                 searchStats.CandidateFetches,
-		ExpansionFetches:                 searchStats.ExpansionFetches,
-		ResultFetches:                    searchStats.ResultFetches,
-		RowFetches:                       readerStats.RowFetches,
-		BatchFetches:                     readerStats.BatchFetches,
-		RowsFetched:                      readerStats.RowsFetched,
-		CacheHits:                        readerStats.CacheHits,
-		CacheMisses:                      readerStats.CacheMisses,
-		DecodedBlocks:                    readerStats.DecodedBlocks,
-		GranulesTouched:                  readerStats.GranulesTouched,
-		PhysicalBytesRead:                readerStats.PhysicalBytesRead,
-		MaxResidentBytes:                 readerStats.MaxResidentBytes,
-		OpenGranulesRead:                 uint64(readerStats.OpenGranulesRead),
-		OpenPhysicalBytesRead:            readerStats.OpenPhysicalBytesRead,
-		VectorDirectViews:                searchStats.VectorDirectViews,
-		VectorMmapDirectViews:            searchStats.VectorMmapDirectViews,
-		VectorHeapCopyTypedViews:         searchStats.VectorHeapCopyTypedViews,
-		VectorScratchDecodes:             searchStats.VectorScratchDecodes,
-		VectorCertificationFailures:      searchStats.VectorCertificationFailures,
-		VectorAbsoluteOffsetUnaligned:    searchStats.VectorAbsoluteOffsetUnaligned,
-		VectorActualPointerUnaligned:     searchStats.VectorActualPointerUnaligned,
-		VectorStaleHandles:               searchStats.VectorStaleHandles,
-		AdjacencyDirectViews:             searchStats.AdjacencyDirectViews,
-		AdjacencyMmapDirectViews:         searchStats.AdjacencyMmapDirectViews,
-		AdjacencyHeapCopyTypedViews:      searchStats.AdjacencyHeapCopyTypedViews,
-		AdjacencySourceUnavailable:       searchStats.AdjacencySourceUnavailable,
-		AdjacencySourceFallbacks:         searchStats.AdjacencySourceFallbacks,
-		AdjacencyCertificationFailures:   searchStats.AdjacencyCertificationFailures,
-		AdjacencyAbsoluteOffsetUnaligned: searchStats.AdjacencyAbsoluteOffsetUnaligned,
-		AdjacencyActualPointerUnaligned:  searchStats.AdjacencyActualPointerUnaligned,
-		AdjacencyStaleHandles:            searchStats.AdjacencyStaleHandles,
-		AdjacencyScratchDecodes:          searchStats.AdjacencyScratchDecodes,
-		NormDirectViews:                  searchStats.NormDirectViews,
-		NormMmapDirectViews:              searchStats.NormMmapDirectViews,
-		NormHeapCopyTypedViews:           searchStats.NormHeapCopyTypedViews,
-		NormScratchDecodes:               searchStats.NormScratchDecodes,
-		NormSourceUnavailable:            searchStats.NormSourceUnavailable,
-		NormSourceFallbacks:              searchStats.NormSourceFallbacks,
-		NormValidationFailures:           searchStats.NormValidationFailures,
-		NormAbsoluteOffsetUnaligned:      searchStats.NormAbsoluteOffsetUnaligned,
-		NormActualPointerUnaligned:       searchStats.NormActualPointerUnaligned,
-		NormStaleHandles:                 searchStats.NormStaleHandles,
-		NormMappedBytes:                  searchStats.NormMappedBytes,
-		NormHeapCopyBytes:                searchStats.NormHeapCopyBytes,
-		NormDecodedBytes:                 searchStats.NormDecodedBytes,
-		NormActiveHandles:                searchStats.NormActiveHandles,
-		NormDeniedResources:              searchStats.NormDeniedResources,
-		TypedColumnMappedBytes:           searchStats.TypedColumnMappedBytes,
-		TypedColumnHeapCopyBytes:         searchStats.TypedColumnHeapCopyBytes,
-		TypedColumnDecodedBytes:          searchStats.TypedColumnDecodedBytes,
-		TypedColumnActiveHandles:         searchStats.TypedColumnActiveHandles,
-		TypedColumnDeniedResources:       searchStats.TypedColumnDeniedResources,
-		TypedColumnFallbacks:             searchStats.TypedColumnFallbacks,
+		CandidateRows:                        searchStats.CandidateRows,
+		Candidates:                           searchStats.Candidates,
+		Edges:                                searchStats.Edges,
+		VisitedNodes:                         searchStats.VisitedNodes,
+		VisitedEdges:                         searchStats.VisitedEdges,
+		VectorBytesRead:                      searchStats.VectorBytesRead,
+		NormBytesRead:                        searchStats.NormBytesRead,
+		AdjacencyBytesRead:                   searchStats.AdjacencyBytesRead,
+		CandidateFetches:                     searchStats.CandidateFetches,
+		ExpansionFetches:                     searchStats.ExpansionFetches,
+		ResultFetches:                        searchStats.ResultFetches,
+		RowFetches:                           readerStats.RowFetches,
+		BatchFetches:                         readerStats.BatchFetches,
+		RowsFetched:                          readerStats.RowsFetched,
+		CacheHits:                            readerStats.CacheHits,
+		CacheMisses:                          readerStats.CacheMisses,
+		DecodedBlocks:                        readerStats.DecodedBlocks,
+		GranulesTouched:                      readerStats.GranulesTouched,
+		PhysicalBytesRead:                    readerStats.PhysicalBytesRead,
+		MaxResidentBytes:                     readerStats.MaxResidentBytes,
+		OpenGranulesRead:                     uint64(readerStats.OpenGranulesRead),
+		OpenPhysicalBytesRead:                readerStats.OpenPhysicalBytesRead,
+		VectorDirectViews:                    searchStats.VectorDirectViews,
+		VectorMmapDirectViews:                searchStats.VectorMmapDirectViews,
+		VectorHeapCopyTypedViews:             searchStats.VectorHeapCopyTypedViews,
+		VectorScratchDecodes:                 searchStats.VectorScratchDecodes,
+		VectorCertificationFailures:          searchStats.VectorCertificationFailures,
+		VectorAbsoluteOffsetUnaligned:        searchStats.VectorAbsoluteOffsetUnaligned,
+		VectorActualPointerUnaligned:         searchStats.VectorActualPointerUnaligned,
+		VectorStaleHandles:                   searchStats.VectorStaleHandles,
+		AdjacencyDirectViews:                 searchStats.AdjacencyDirectViews,
+		AdjacencyMmapDirectViews:             searchStats.AdjacencyMmapDirectViews,
+		AdjacencyHeapCopyTypedViews:          searchStats.AdjacencyHeapCopyTypedViews,
+		AdjacencyTypedListDirectViews:        searchStats.AdjacencyTypedListDirectViews,
+		AdjacencyTypedListMmapDirectViews:    searchStats.AdjacencyTypedListMmapDirectViews,
+		AdjacencyTypedListHeapCopyTypedViews: searchStats.AdjacencyTypedListHeapCopyTypedViews,
+		AdjacencyTypedListScratchDecodes:     searchStats.AdjacencyTypedListScratchDecodes,
+		AdjacencyLegacyFallbacks:             searchStats.AdjacencyLegacyFallbacks,
+		AdjacencySourceUnavailable:           searchStats.AdjacencySourceUnavailable,
+		AdjacencySourceFallbacks:             searchStats.AdjacencySourceFallbacks,
+		AdjacencyCertificationFailures:       searchStats.AdjacencyCertificationFailures,
+		AdjacencyValidationFailures:          searchStats.AdjacencyValidationFailures,
+		AdjacencyAbsoluteOffsetUnaligned:     searchStats.AdjacencyAbsoluteOffsetUnaligned,
+		AdjacencyActualPointerUnaligned:      searchStats.AdjacencyActualPointerUnaligned,
+		AdjacencyStaleHandles:                searchStats.AdjacencyStaleHandles,
+		AdjacencyScratchDecodes:              searchStats.AdjacencyScratchDecodes,
+		NormDirectViews:                      searchStats.NormDirectViews,
+		NormMmapDirectViews:                  searchStats.NormMmapDirectViews,
+		NormHeapCopyTypedViews:               searchStats.NormHeapCopyTypedViews,
+		NormScratchDecodes:                   searchStats.NormScratchDecodes,
+		NormSourceUnavailable:                searchStats.NormSourceUnavailable,
+		NormSourceFallbacks:                  searchStats.NormSourceFallbacks,
+		NormValidationFailures:               searchStats.NormValidationFailures,
+		NormAbsoluteOffsetUnaligned:          searchStats.NormAbsoluteOffsetUnaligned,
+		NormActualPointerUnaligned:           searchStats.NormActualPointerUnaligned,
+		NormStaleHandles:                     searchStats.NormStaleHandles,
+		NormMappedBytes:                      searchStats.NormMappedBytes,
+		NormHeapCopyBytes:                    searchStats.NormHeapCopyBytes,
+		NormDecodedBytes:                     searchStats.NormDecodedBytes,
+		NormActiveHandles:                    searchStats.NormActiveHandles,
+		NormDeniedResources:                  searchStats.NormDeniedResources,
+		TypedColumnMappedBytes:               searchStats.TypedColumnMappedBytes,
+		TypedColumnHeapCopyBytes:             searchStats.TypedColumnHeapCopyBytes,
+		TypedColumnDecodedBytes:              searchStats.TypedColumnDecodedBytes,
+		TypedColumnActiveHandles:             searchStats.TypedColumnActiveHandles,
+		TypedColumnDeniedResources:           searchStats.TypedColumnDeniedResources,
+		TypedColumnFallbacks:                 searchStats.TypedColumnFallbacks,
 	}
 }

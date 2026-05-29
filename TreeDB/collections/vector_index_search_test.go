@@ -61,6 +61,9 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	if got.Stats.CandidateRows != uint64(len(rows)) || got.Stats.VisitedNodes < got.Stats.Candidates || got.Stats.VisitedEdges != got.Stats.Edges || got.Stats.VectorBytesRead == 0 || got.Stats.AdjacencyBytesRead == 0 {
 		t.Fatalf("stats=%+v want public operation-specific candidate row, non-undercounting visited graph, vector-byte, and adjacency-byte counters", got.Stats)
 	}
+	if got.Stats.AdjacencyTypedListMmapDirectViews+got.Stats.AdjacencyTypedListHeapCopyTypedViews+got.Stats.AdjacencyTypedListScratchDecodes == 0 || got.Stats.AdjacencyLegacyFallbacks != 0 {
+		t.Fatalf("stats=%+v want public search to expose typed-list adjacency and no legacy fallback on healthy state", got.Stats)
+	}
 	if got.Stats.DocumentsFetched != 0 {
 		t.Fatalf("DocumentsFetched=%d want no document fetch without IncludeDocuments", got.Stats.DocumentsFetched)
 	}
@@ -2052,9 +2055,15 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.AdjacencyDirectViews), "adjacency_direct_views/search")
 	b.ReportMetric(float64(stats.AdjacencyMmapDirectViews), "adjacency_mmap_direct/search")
 	b.ReportMetric(float64(stats.AdjacencyHeapCopyTypedViews), "adjacency_heap_copy_typed_view/search")
+	b.ReportMetric(float64(stats.AdjacencyTypedListDirectViews), "adjacency_typed_list_direct_views/search")
+	b.ReportMetric(float64(stats.AdjacencyTypedListMmapDirectViews), "adjacency_typed_list_mmap_direct/search")
+	b.ReportMetric(float64(stats.AdjacencyTypedListHeapCopyTypedViews), "adjacency_typed_list_heap_copy_typed_view/search")
+	b.ReportMetric(float64(stats.AdjacencyTypedListScratchDecodes), "adjacency_typed_list_scratch_decodes/search")
+	b.ReportMetric(float64(stats.AdjacencyLegacyFallbacks), "adjacency_legacy_fallbacks/search")
 	b.ReportMetric(float64(stats.AdjacencySourceUnavailable), "adjacency_source_unavailable/search")
 	b.ReportMetric(float64(stats.AdjacencySourceFallbacks), "adjacency_source_fallbacks/search")
 	b.ReportMetric(float64(stats.AdjacencyCertificationFailures), "adjacency_certification_failures/search")
+	b.ReportMetric(float64(stats.AdjacencyValidationFailures), "adjacency_validation_failures/search")
 	b.ReportMetric(float64(stats.AdjacencyAbsoluteOffsetUnaligned), "adjacency_absolute_offset_unaligned/search")
 	b.ReportMetric(float64(stats.AdjacencyActualPointerUnaligned), "adjacency_actual_pointer_unaligned/search")
 	b.ReportMetric(float64(stats.AdjacencyStaleHandles), "adjacency_stale_handles/search")

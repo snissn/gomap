@@ -312,6 +312,9 @@ func columnVectorGraphStateRowsForTest1987(rows []columnVectorGraphAssetRow, row
 		if i < len(rows) {
 			out[i].ID = append([]byte(nil), rows[i].ID...)
 			out[i].Vector = append([]float32(nil), rows[i].Vector...)
+			if err := validateColumnVectorGraphAdjacency("vector-index-state-test", i, rows[i].Adjacency, rowCount); err == nil {
+				out[i].Adjacency = append([]uint32(nil), rows[i].Adjacency...)
+			}
 		}
 		if len(out[i].ID) == 0 {
 			out[i].ID = []byte("state-row")
@@ -322,7 +325,7 @@ func columnVectorGraphStateRowsForTest1987(rows []columnVectorGraphAssetRow, row
 		if _, err := columnVectorGraphInvNorm(out[i].Vector); err != nil && dims > 0 {
 			out[i].Vector[0] = 1
 		}
-		if layerCount > 1 {
+		if len(out[i].Adjacency) == 0 && layerCount > 1 {
 			out[i].Adjacency = make([]uint32, 2+layerCount)
 			out[i].Adjacency[0] = columnVectorGraphLayeredAdjacencyMagic
 			out[i].Adjacency[1] = uint32(layerCount - 1)

@@ -136,43 +136,62 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			baseManifestLoaded = true
 			return baseManifest, baseRecords, nil
 		}
-		if sources, fallbackReason, sourceErr := c.openColumnVectorGraphAdjacencyDirectSourcesForReader(catalog.meta.Name, *baseCfg, def, graph); sourceErr == nil && sources != nil {
+		var vectorState columnVectorIndexStateSnapshot
+		var vectorStateFound bool
+		var vectorStateLoaded bool
+		loadVectorIndexState := func() (columnVectorIndexStateSnapshot, bool, error) {
+			if vectorStateLoaded {
+				return vectorState, vectorStateFound, nil
+			}
+			_, records, recordsErr := loadBaseManifestRecords()
+			if recordsErr != nil {
+				return columnVectorIndexStateSnapshot{}, false, recordsErr
+			}
+			stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name)
+			if !ok {
+				vectorStateLoaded = true
+				return columnVectorIndexStateSnapshot{}, false, nil
+			}
+			state, stateErr := decodeColumnVectorIndexStateRecord(stateRecord.value)
+			if stateErr != nil {
+				return columnVectorIndexStateSnapshot{}, false, stateErr
+			}
+			vectorState = state
+			vectorStateFound = true
+			vectorStateLoaded = true
+			return vectorState, true, nil
+		}
+		state, stateFound, stateErr := loadVectorIndexState()
+		if stateErr != nil {
+			_ = graphReader.Close()
+			return nil, stateErr
+		}
+		if !stateFound {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if sources, _, sourceErr := c.openColumnVectorGraphAdjacencyStateSourcesForReader(catalog.meta.Name, *baseCfg, def, graph, state); sourceErr != nil {
+			_ = graphReader.Close()
+			return nil, sourceErr
+		} else if sources != nil {
 			graphReader.adjacencyLayerSources = sources
 			if len(sources.sources) > 0 {
 				graphReader.layer0AdjacencySource = sources.sources[0]
 			}
-		} else if len(graph.AdjacencyLayerSources) > 0 || graph.Layer0AdjacencySource.Present {
-			if fallbackReason == "" {
-				fallbackReason = typeddecode.ReasonValidationFailed
-			}
-			graphReader.layer0AdjacencySourceFallbackReason = fallbackReason
 		} else {
-			graphReader.layer0AdjacencySourceUnavailable = true
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
-		if _, records, recordsErr := loadBaseManifestRecords(); recordsErr == nil {
-			if stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name); ok {
-				state, stateErr := decodeColumnVectorIndexStateRecord(stateRecord.value)
-				if stateErr != nil {
-					_ = graphReader.Close()
-					return nil, stateErr
-				}
-				if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
-					source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
-					if sourceErr != nil {
-						_ = graphReader.Close()
-						return nil, sourceErr
-					}
-					graphReader.invNormSource = source
-					graphReader.invNormStateFallbackReason = fallbackReason
-				} else {
-					graphReader.invNormStateUnavailable = true
-				}
-			} else {
-				graphReader.invNormStateUnavailable = true
+		if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
+			source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+			if sourceErr != nil {
+				_ = graphReader.Close()
+				return nil, sourceErr
 			}
+			graphReader.invNormSource = source
+			graphReader.invNormStateFallbackReason = fallbackReason
 		} else {
 			graphReader.invNormStateUnavailable = true
-			graphReader.invNormStateFallbackReason = typeddecode.ReasonValidationFailed
 		}
 		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
 			graphReader.typedVectorFallbackReason = ownerErr.Error()
