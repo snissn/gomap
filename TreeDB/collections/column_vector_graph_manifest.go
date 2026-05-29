@@ -931,6 +931,12 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		status.RebuildNeeded = true
 		return columnGraphVectorIndexStatusError(status, err)
 	}
+	if loadedState == nil {
+		status.State = VectorIndexStateColumnGraphRebuildNeeded
+		status.Reason = VectorIndexReasonColumnGraphAssetMismatch
+		status.RebuildNeeded = true
+		return status, nil
+	}
 	// Certified adjacency sources are optional accelerators. Keep loaded-status
 	// gating tied to the canonical row-asset graph; search opens and validates
 	// sources independently and falls back to row assets when they are absent,
