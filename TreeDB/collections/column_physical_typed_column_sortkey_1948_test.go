@@ -217,6 +217,39 @@ func TestColumnPreparedAssetSortKeyRejectsDuplicate1948(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPartSortKeyMixedOwnerNamePathCollisionFallsBack1948(t *testing.T) {
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "row_sort", Path: "row_path", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "typed_value", Path: "row_sort", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+	}, SortKey: []ColumnSortKey{{Column: "row_sort"}}}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(*normalized, columnStoreTypedColumnPartFields(*normalized))
+	if err != nil {
+		t.Fatalf("typedColumnPartPublicationSortKey: %v", err)
+	}
+	if len(sortKey) != 0 {
+		t.Fatalf("typed-column sort key=%+v want mixed-owner primary-id fallback", sortKey)
+	}
+}
+
+func TestTypedColumnPartSortKeyRejectsEngineCap1948(t *testing.T) {
+	columns := make([]ColumnStoreColumn, typedColumnPartSortKeyMaxColumns+1)
+	sortKeys := make([]ColumnSortKey, len(columns))
+	for i := range columns {
+		name := fmt.Sprintf("c%02d", i)
+		columns[i] = ColumnStoreColumn{Name: name, Path: name, ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart}
+		sortKeys[i] = ColumnSortKey{Column: name}
+	}
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: columns, SortKey: sortKeys}
+	_, err := normalizeColumnStoreConfig("events", cfg)
+	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("normalize oversized typed-column sort key err=%v want exceeds cap", err)
+	}
+}
+
 func TestColumnPreparedAssetSortKeyRejectsOversized1948(t *testing.T) {
 	sortKeys := make([]ColumnSortKey, int(columnManifestSortKeyMaxColumns)+1)
 	for i := range sortKeys {

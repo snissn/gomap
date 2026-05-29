@@ -306,14 +306,10 @@ func typedColumnAdapterSortKey(opts typedColumnAdapterOptions, columns []typedCo
 	if len(opts.SortKey) == 0 {
 		return []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}, nil
 	}
-	byName := make(map[string]typedColumnAdapterColumn, len(columns)*2)
+	byName := make(map[string]typedColumnAdapterColumn, len(columns))
 	for _, column := range columns {
-		byName[column.Definition.Name] = column
 		if column.Field.Name != "" {
 			byName[column.Field.Name] = column
-		}
-		if column.Field.Path != "" {
-			byName[column.Field.Path] = column
 		}
 	}
 	out := make([]typedcolumn.SortKeyColumn, 0, len(opts.SortKey))

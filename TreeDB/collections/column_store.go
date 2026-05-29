@@ -24,6 +24,11 @@ const (
 	columnManifestIdentityReservedSize          = 4
 	columnManifestIdentityRecordSize            = columnManifestIdentityReservedOffset + columnManifestIdentityReservedSize
 	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
+
+	// typedcolumn currently encodes sort-key marks with a fixed eight-column cap.
+	// Keep typed-column-owned publication validation aligned with that engine cap
+	// until the internal mark format grows.
+	typedColumnPartSortKeyMaxColumns = 8
 )
 
 func newColumnManifestIdentityRecordKey() []byte {
@@ -568,6 +573,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		return fmt.Errorf("collections: sort key columns=%d exceeds cap %d", len(cfg.SortKey), columnManifestSortKeyMaxColumns)
 	}
 	sortKeyColumns := make(map[string]struct{}, len(cfg.SortKey))
+	allSortKeyColumnsTypedPart := len(cfg.SortKey) != 0
 	for _, sortKey := range cfg.SortKey {
 		col, ok := columnByName[sortKey.Column]
 		if !ok {
@@ -594,7 +600,12 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			if !columnStoreValueTypeSupportsTypedColumnPartSort(col.ValueType) {
 				return fmt.Errorf("collections: typed_column_part sort key column %q value_type %q is not supported yet", sortKey.Column, col.ValueType)
 			}
+		} else {
+			allSortKeyColumnsTypedPart = false
 		}
+	}
+	if allSortKeyColumnsTypedPart && len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
+		return fmt.Errorf("collections: typed_column_part sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
 	}
 	aggregateNames := make(map[string]struct{}, len(cfg.AggregateMetadata))
 	for _, aggregate := range cfg.AggregateMetadata {

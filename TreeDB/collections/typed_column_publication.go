@@ -175,13 +175,10 @@ func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStor
 	if len(cfg.SortKey) == 0 {
 		return nil, nil
 	}
-	fieldByName := make(map[string]TypedStorageField, len(fields)*2)
+	fieldByName := make(map[string]TypedStorageField, len(fields))
 	for _, field := range fields {
 		if field.Name != "" {
 			fieldByName[field.Name] = field
-		}
-		if field.Path != "" {
-			fieldByName[field.Path] = field
 		}
 	}
 	allOwnedByTypedPart := true
@@ -203,6 +200,9 @@ func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStor
 	}
 	if !allOwnedByTypedPart {
 		return nil, nil
+	}
+	if len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
+		return nil, fmt.Errorf("collections: typed-column part publication sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
 	}
 	return cloneColumnSortKeys(cfg.SortKey), nil
 }
