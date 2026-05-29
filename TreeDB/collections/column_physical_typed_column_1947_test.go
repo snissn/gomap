@@ -183,6 +183,38 @@ func TestColumnPhysicalJSONBenchTypedColumnPartStoresFullQ2Columns1947(t *testin
 	}
 }
 
+func TestColumnPhysicalJSONBenchTypedColumnPartEdgeShapes1947(t *testing.T) {
+	events := columnPhysicalJSONBenchParityEventsP0()
+	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
+	defer closeFn()
+
+	sameColumn, err := collection.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountDistinct, GroupColumn: "collection", DistinctColumn: "collection"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery same-column count-distinct: %v", err)
+	}
+	if sameColumn.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || len(sameColumn.Groups) == 0 {
+		t.Fatalf("same-column count-distinct result=%+v diagnostics=%+v want typed source groups", sameColumn.Groups, sameColumn.Diagnostics)
+	}
+	for _, group := range sameColumn.Groups {
+		if group.Count != 1 {
+			t.Fatalf("same-column count-distinct group=%+v want distinct count 1", group)
+		}
+	}
+
+	hourCount, err := collection.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery hour-count: %v", err)
+	}
+	if hourCount.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || len(hourCount.Groups) == 0 {
+		t.Fatalf("hour-count result=%+v diagnostics=%+v want typed source groups", hourCount.Groups, hourCount.Diagnostics)
+	}
+	for _, group := range hourCount.Groups {
+		if group.Key == "" || group.Count == 0 || group.Hour != 0 {
+			t.Fatalf("hour-count group=%+v want key/count populated and Hour left at zero", group)
+		}
+	}
+}
+
 func TestColumnPhysicalJSONBenchTypedColumnPartAssetFailureFailClosed1947(t *testing.T) {
 	events := columnPhysicalJSONBenchParityEventsP0()
 	cases := []struct {
@@ -403,20 +435,26 @@ func openColumnPhysicalJSONBenchTypedColumnPartFixture1947(tb testing.TB, events
 		_ = d.Close()
 		tb.Fatalf("OpenCollection setup: %v", err)
 	}
-	ids := make([][]byte, len(events))
-	docs := make([][]byte, len(events))
-	for i, event := range events {
-		ids[i] = []byte(event.ID)
-		docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":%q,"operation":%q,"collection":%q,"did":%q}`, event.TimeUS, event.Kind, event.Operation, event.Collection, event.Did))
-	}
-	if _, err := col.InsertBatch(ids, docs); err != nil {
-		_ = d.Close()
-		tb.Fatalf("InsertBatch: %v", err)
+	if len(events) != 0 {
+		ids := make([][]byte, len(events))
+		docs := make([][]byte, len(events))
+		for i, event := range events {
+			ids[i] = []byte(event.ID)
+			docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":%q,"operation":%q,"collection":%q,"did":%q}`, event.TimeUS, event.Kind, event.Operation, event.Collection, event.Did))
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			_ = d.Close()
+			tb.Fatalf("InsertBatch: %v", err)
+		}
 	}
 	preCloseTypedRefs := typedColumnPartRefs1755(columnManifestAssetRefsForCollectionM12A(tb, d, col))
-	if len(preCloseTypedRefs) != 1 {
+	wantTypedRefs := 0
+	if len(events) != 0 {
+		wantTypedRefs = 1
+	}
+	if len(preCloseTypedRefs) != wantTypedRefs {
 		_ = d.Close()
-		tb.Fatalf("typed refs=%+v want one", preCloseTypedRefs)
+		tb.Fatalf("typed refs=%+v want %d", preCloseTypedRefs, wantTypedRefs)
 	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()

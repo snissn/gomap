@@ -82,14 +82,17 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 	if err != nil {
 		return nil, true, err
 	}
+	runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
 	if len(refsByGeneration) == 0 {
+		if len(view.AssetRefs) == 0 {
+			return runner, true, nil
+		}
 		return nil, true, errors.New("collections: missing typed_column_part assets for typed-column part physical query")
 	}
 	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return nil, true, typedColumnPhysicalQueryPairingError(err)
 	}
 
-	runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
 	var rawScratch []byte
 	for _, physical := range view.AssetRefs {
 		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
@@ -115,7 +118,7 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		runner.sectionBytes += part.SectionBytes
 		runner.parts = append(runner.parts, part)
 	}
-	if len(runner.parts) == 0 {
+	if len(runner.parts) == 0 && len(view.AssetRefs) != 0 {
 		return nil, true, errors.New("collections: typed-column part physical query has no live typed_column_part assets")
 	}
 	return runner, true, nil
@@ -189,11 +192,12 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 	selected := make([]bool, len(fields))
 	fieldIndexByName := make(map[string]int, len(fields))
 	for idx, field := range fields {
-		name := field.Name
-		if name == "" {
-			name = field.Path
+		if field.Name != "" {
+			fieldIndexByName[field.Name] = idx
 		}
-		fieldIndexByName[name] = idx
+		if field.Path != "" {
+			fieldIndexByName[field.Path] = idx
+		}
 	}
 	for column := range requiredTypes {
 		idx, ok := fieldIndexByName[column]
@@ -248,7 +252,7 @@ func columnTypedColumnPhysicalQueryRequiredTypes(req ColumnPhysicalQueryRequest)
 		if err := add(req.DistinctColumn, ColumnStoreValueString, "distinct"); err != nil {
 			return nil, err
 		}
-		if req.GroupColumn == req.DistinctColumn {
+		if req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && req.GroupColumn == req.DistinctColumn {
 			return nil, fmt.Errorf("%w: typed-column part physical query group and distinct columns must differ", ErrColumnQueryPlanUnsupported)
 		}
 	case ColumnPhysicalQueryHourCount:
@@ -386,6 +390,9 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part column %q decoded rows=%d want %d", name, len(columnValues), summary.Rows)
 		}
 		values[name] = columnValues
+		if field.Path != "" && field.Path != name {
+			values[field.Path] = columnValues
+		}
 	}
 	return columnTypedColumnPhysicalQueryPart{Ref: typedRef, PhysicalRef: physical, Values: values, Rows: summary.Rows, Bytes: int64(len(raw)), Sections: summary.Sections, SectionBytes: summary.SectionBytes}, nil
 }
@@ -581,7 +588,7 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) groups(req ColumnPhysicalQue
 			if count == 0 {
 				continue
 			}
-			out = append(out, ColumnPhysicalQueryGroup{Key: columnPhysicalQueryHourKey(hour), Hour: hour, Count: count})
+			out = append(out, ColumnPhysicalQueryGroup{Key: columnPhysicalQueryHourKey(hour), Count: count})
 		}
 	case ColumnPhysicalQueryGroupHourCount:
 		for key, byHour := range a.groupHours {
