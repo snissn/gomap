@@ -621,9 +621,10 @@ vector-index state instead. Do not add new storage features to this
 
 Issue #1986 adds a separate vector-index state control record under
 `\x06vector-index-state/v1/index/<index_name>` with magic `TVIS` and version
-`1`. The record stores index identity, row count, base manifest
-identity, and typed-column asset refs by logical type plus physical encoding.
-Its asset roles include adjacency (`uint32_list` over
+`2` (`1` is still accepted for pre-alpha compatibility). The record stores
+index identity, row count, base manifest identity, expected adjacency layer
+count, and typed-column asset refs by logical type plus physical encoding. Its
+asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
 optional normalized vectors (`float32_vector` over `raw_float32_vector`), and
 future row/document refs. The active manifest checksum includes the control

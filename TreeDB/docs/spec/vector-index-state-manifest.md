@@ -1,6 +1,6 @@
 # Vector-Index State Manifest (#1986)
 
-Status: v1 control-record contract for durable vector-index derived state. This
+Status: v2 control-record contract for durable vector-index derived state. This
 record is separate from authoritative collection field/part records and from the
 legacy `column_graph` graph-record trailers.
 
@@ -16,7 +16,8 @@ separate control keyspace:
 \x06vector-index-state/v1/index/<index_name>
 ```
 
-The record value uses magic `TVIS` and version `1`. The keyspace is a
+The record value uses magic `TVIS` and current version `2` (`1` remains a
+read-only compatibility format). The keyspace is a
 vector-index control layer: it is not a base field owner, not a synthetic user
 column, and not a graph-specific adjacency-source trailer. The active manifest
 checksum includes the state record for durability, while the state record's
@@ -29,13 +30,15 @@ state should be described here and should reference generic typed-column assets.
 
 ## Record identity
 
-Each v1 state record contains:
+Each current state record contains:
 
 - index identity: index name, field, metric, vector encoding, dimensions, `M`,
   `efConstruction`, and `efSearch`;
 - graph/state shape: row count by vector ordinal;
 - base identity: base manifest generation, base manifest checksum, and base
   schema hash;
+- expected HNSW adjacency layer count for validating typed adjacency assets even
+  when legacy graph-specific adjacency-source trailers are absent;
 - zero or more typed-column asset refs.
 
 A reader validates the state identity against the declared vector-index

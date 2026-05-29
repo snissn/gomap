@@ -10,7 +10,8 @@ import (
 const (
 	columnVectorIndexStateRecordPrefix = "\x06vector-index-state/v1/index/"
 	columnVectorIndexStateMagic        = uint32(0x54564953) // TVIS
-	columnVectorIndexStateVersion      = uint16(1)
+	columnVectorIndexStateVersionV1    = uint16(1)
+	columnVectorIndexStateVersion      = uint16(2)
 
 	columnVectorIndexStateAssetRoleAdjacency         = "adjacency"
 	columnVectorIndexStateAssetRoleInverseNorm       = "inverse_norm"
@@ -46,6 +47,7 @@ type columnVectorIndexStateSnapshot struct {
 	BaseManifestGeneration uint64
 	BaseManifestChecksum   uint64
 	BaseSchemaHash         uint64
+	AdjacencyLayerCount    int
 	Assets                 []columnVectorIndexStateAssetSnapshot
 }
 
@@ -100,6 +102,7 @@ func encodeColumnVectorIndexStateRecord(snapshot columnVectorIndexStateSnapshot)
 	writeManifestUint64(&b, snapshot.BaseManifestGeneration)
 	writeManifestUint64(&b, snapshot.BaseManifestChecksum)
 	writeManifestUint64(&b, snapshot.BaseSchemaHash)
+	writeManifestUint64(&b, uint64(snapshot.AdjacencyLayerCount))
 	writeManifestUint64(&b, uint64(len(snapshot.Assets)))
 	for _, asset := range snapshot.Assets {
 		writeManifestString(&b, asset.Role)
@@ -126,7 +129,8 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 	if magic := cur.u32(); magic != columnVectorIndexStateMagic {
 		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: bad vector-index state magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnVectorIndexStateVersion {
+	version := cur.u16()
+	if version != columnVectorIndexStateVersion && version != columnVectorIndexStateVersionV1 {
 		return columnVectorIndexStateSnapshot{}, fmt.Errorf("collections: unsupported vector-index state version=%d", version)
 	}
 	snapshot := columnVectorIndexStateSnapshot{
@@ -151,11 +155,15 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 	snapshot.BaseManifestGeneration = cur.u64()
 	snapshot.BaseManifestChecksum = cur.u64()
 	snapshot.BaseSchemaHash = cur.u64()
+	adjacencyLayerCount64 := uint64(0)
+	if version >= columnVectorIndexStateVersion {
+		adjacencyLayerCount64 = cur.u64()
+	}
 	assetCount64 := cur.u64()
 	if err := cur.err; err != nil {
 		return columnVectorIndexStateSnapshot{}, err
 	}
-	if dims64 > uint64(math.MaxInt) || m64 > uint64(math.MaxInt) || efConstruction64 > uint64(math.MaxInt) || efSearch64 > uint64(math.MaxInt) || rowCount64 > uint64(math.MaxInt) || assetCount64 > uint64(math.MaxInt) {
+	if dims64 > uint64(math.MaxInt) || m64 > uint64(math.MaxInt) || efConstruction64 > uint64(math.MaxInt) || efSearch64 > uint64(math.MaxInt) || rowCount64 > uint64(math.MaxInt) || adjacencyLayerCount64 > uint64(math.MaxInt) || assetCount64 > uint64(math.MaxInt) {
 		return columnVectorIndexStateSnapshot{}, errors.New("collections: vector-index state integer overflow")
 	}
 	snapshot.Dimensions = int(dims64)
@@ -163,6 +171,7 @@ func decodeColumnVectorIndexStateRecord(raw []byte) (columnVectorIndexStateSnaps
 	snapshot.EfConstruction = int(efConstruction64)
 	snapshot.EfSearch = int(efSearch64)
 	snapshot.RowCount = int(rowCount64)
+	snapshot.AdjacencyLayerCount = int(adjacencyLayerCount64)
 	remaining := uint64(len(raw) - cur.pos)
 	// Each asset has six length-prefixed strings and nine uint64 fields before
 	// any string payload bytes. Keep this lower bound exact so corrupt records
@@ -267,6 +276,9 @@ func validateColumnVectorIndexStateSnapshot(snapshot columnVectorIndexStateSnaps
 	}
 	if snapshot.BaseManifestGeneration == 0 || snapshot.BaseManifestChecksum == 0 || snapshot.BaseSchemaHash == 0 {
 		return errors.New("collections: vector-index state missing base manifest identity")
+	}
+	if snapshot.AdjacencyLayerCount < 0 {
+		return errors.New("collections: vector-index state adjacency layer count must be non-negative")
 	}
 	seen := make(map[string]struct{}, len(snapshot.Assets))
 	for i, asset := range snapshot.Assets {
@@ -431,6 +443,7 @@ func columnVectorIndexStateSnapshotFromGraph(graph columnVectorGraphManifestSnap
 		BaseManifestGeneration: graph.BaseManifestGeneration,
 		BaseManifestChecksum:   graph.BaseManifestChecksum,
 		BaseSchemaHash:         graph.BaseSchemaHash,
+		AdjacencyLayerCount:    graph.AdjacencyLayerCount,
 	}
 }
 

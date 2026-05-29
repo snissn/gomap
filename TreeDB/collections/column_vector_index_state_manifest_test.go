@@ -52,6 +52,59 @@ func TestColumnVectorIndexStateManifestRecordRoundTrip1986(t *testing.T) {
 	}
 }
 
+func TestColumnVectorIndexStateManifestRecordV1Compatibility1986(t *testing.T) {
+	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
+	if err != nil {
+		t.Fatalf("normalize base column store: %v", err)
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	state := testColumnVectorIndexStateSnapshot1986(*baseCfg, def, 11, 3)
+	var b bytes.Buffer
+	writeManifestUint32(&b, columnVectorIndexStateMagic)
+	writeManifestUint16(&b, columnVectorIndexStateVersionV1)
+	writeManifestString(&b, state.IndexName)
+	writeManifestString(&b, state.Field)
+	writeManifestString(&b, state.Metric.String())
+	writeManifestString(&b, state.Encoding.String())
+	writeManifestUint64(&b, uint64(state.Dimensions))
+	writeManifestUint64(&b, uint64(state.M))
+	writeManifestUint64(&b, uint64(state.EfConstruction))
+	writeManifestUint64(&b, uint64(state.EfSearch))
+	writeManifestUint64(&b, uint64(state.RowCount))
+	writeManifestUint64(&b, state.BaseManifestGeneration)
+	writeManifestUint64(&b, state.BaseManifestChecksum)
+	writeManifestUint64(&b, state.BaseSchemaHash)
+	writeManifestUint64(&b, uint64(len(state.Assets)))
+	for _, asset := range state.Assets {
+		writeManifestString(&b, asset.Role)
+		writeManifestString(&b, asset.AssetID)
+		writeManifestString(&b, asset.LogicalType)
+		writeManifestString(&b, asset.PhysicalEncoding)
+		writeManifestUint64(&b, uint64(asset.RowCount))
+		writeManifestUint64(&b, asset.SourceSchemaHash)
+		writeManifestString(&b, string(asset.Ref.Kind))
+		writeManifestString(&b, asset.Ref.Namespace)
+		writeManifestUint64(&b, asset.Ref.Generation)
+		writeManifestUint64(&b, asset.Ref.PartID)
+		writeManifestUint64(&b, uint64(asset.Ref.FileID))
+		writeManifestUint64(&b, uint64(asset.Ref.Offset))
+		writeManifestUint64(&b, uint64(asset.Ref.Length))
+		writeManifestUint64(&b, uint64(asset.Ref.Checksum))
+		writeManifestUint64(&b, uint64(asset.AssetBytes))
+	}
+	decoded, err := decodeColumnVectorIndexStateRecord(b.Bytes())
+	if err != nil {
+		t.Fatalf("decodeColumnVectorIndexStateRecord v1: %v", err)
+	}
+	if decoded.AdjacencyLayerCount != 0 {
+		t.Fatalf("decoded adjacency layer count=%d want 0 for v1 record", decoded.AdjacencyLayerCount)
+	}
+	state.AdjacencyLayerCount = 0
+	if !reflect.DeepEqual(decoded, state) {
+		t.Fatalf("decoded=%+v want %+v", decoded, state)
+	}
+}
+
 func TestColumnVectorIndexStateValidationRejectsTypedAssetMismatches1986(t *testing.T) {
 	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
 	if err != nil {
@@ -410,6 +463,7 @@ func testColumnVectorIndexStateSnapshot1986(cfg ColumnStoreConfig, def VectorInd
 		BaseManifestGeneration: generation,
 		BaseManifestChecksum:   0xabcddcba,
 		BaseSchemaHash:         cfg.SchemaHash,
+		AdjacencyLayerCount:    1,
 		Assets: []columnVectorIndexStateAssetSnapshot{
 			columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleAdjacency, "hnsw/layer/0", mkRef(21), rows, cfg.SchemaHash+1),
 			columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleInverseNorm, "inv_norm_by_ordinal", mkRef(22), rows, cfg.SchemaHash+2),

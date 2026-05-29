@@ -67,7 +67,10 @@ func columnVectorGraphAdjacencyStateAssetsByLayer(state columnVectorIndexStateSn
 	if len(seen) == 0 {
 		return nil, typeddecode.ReasonValidationFailed, errors.New("collections: vector-index state missing adjacency uint32_list assets")
 	}
-	expectedLayers := graph.AdjacencyLayerCount
+	expectedLayers := state.AdjacencyLayerCount
+	if expectedLayers <= 0 {
+		expectedLayers = graph.AdjacencyLayerCount
+	}
 	if expectedLayers <= 0 {
 		expectedLayers = maxLayer + 1
 	}

@@ -764,6 +764,7 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
 	state := columnVectorIndexStateSnapshotFromGraph(graph)
+	state.AdjacencyLayerCount = len(stateAdjacencyAssets)
 	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(stateAdjacencyAssets)
 	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
 		state.Assets = append(state.Assets, invNormAsset)
