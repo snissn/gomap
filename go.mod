@@ -99,12 +99,3 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// The snissn forks retain the upstream module paths, so Go cannot require them
-// directly as github.com/snissn/* modules. Pin gomap's main module to the fork
-// commits that expose indexed FP32 row-major dot wrappers; these wrappers live
-// under TreeDB/internal/vectorops and are consumed by gomap, not as a downstream
-// public module API.
-replace github.com/tphakala/simd => github.com/snissn/simd v0.0.0-20260528214641-c127f49be664 // #1966
-
-replace github.com/axiomhq/simd-go => github.com/snissn/simd-go v0.0.0-20260528204200-2ee8ceaf4134 // #1967

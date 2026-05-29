@@ -90,7 +90,7 @@ func dotFloat32IndexedScalar(dst []float32, base []float32, query []float32, row
 	query = query[:dims]
 	for i := 0; i < rows; i++ {
 		start := int(rowIDs[i]) * dims
-		dst[i] = DotFloat32Scalar(base[start:start+dims], query)
+		dst[i] = DotFloat32(base[start:start+dims], query)
 	}
 }
 
@@ -98,6 +98,6 @@ func dotFloat32StridedScalar(dst []float32, base []float32, query []float32, row
 	query = query[:dims]
 	for i := 0; i < rows; i++ {
 		start := i * stride
-		dst[i] = DotFloat32Scalar(base[start:start+dims], query)
+		dst[i] = DotFloat32(base[start:start+dims], query)
 	}
 }

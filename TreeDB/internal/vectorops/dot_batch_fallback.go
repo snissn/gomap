@@ -1,11 +1,10 @@
-//go:build purego || (!amd64 && !arm64)
+//go:build purego || !gomap_simd_batch || (!amd64 && !arm64)
 
 package vectorops
 
-const (
-	dotFloat32BatchImplementation     = "scalar"
-	dotFloat32BatchOptimizedAvailable = false
-)
+var dotFloat32BatchImplementation = "per_row_" + DotFloat32Implementation()
+
+const dotFloat32BatchOptimizedAvailable = false
 
 // DotFloat32Indexed writes dot products for row-major base rows selected by
 // rowIDs using the portable scalar fallback. It writes min(len(dst), len(rowIDs))

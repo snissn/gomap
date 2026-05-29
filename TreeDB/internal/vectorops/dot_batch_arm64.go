@@ -1,4 +1,4 @@
-//go:build arm64 && !purego
+//go:build arm64 && !purego && gomap_simd_batch
 
 package vectorops
 
