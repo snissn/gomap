@@ -183,11 +183,18 @@ func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStor
 	}
 	allOwnedByTypedPart := true
 	for _, sortKey := range cfg.SortKey {
-		field, ok := fieldByName[sortKey.Column]
-		if !ok {
+		if _, ok := fieldByName[sortKey.Column]; !ok {
 			allOwnedByTypedPart = false
-			continue
 		}
+	}
+	if !allOwnedByTypedPart {
+		return nil, nil
+	}
+	if len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
+		return nil, fmt.Errorf("collections: typed-column part publication sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
+	}
+	for _, sortKey := range cfg.SortKey {
+		field := fieldByName[sortKey.Column]
 		if sortKey.Direction != ColumnSortAscending {
 			return nil, fmt.Errorf("collections: typed-column part publication sort key column %q direction %q is unsupported; only ascending is supported", sortKey.Column, sortKey.Direction)
 		}
@@ -197,12 +204,6 @@ func typedColumnPartPublicationSortKey(cfg ColumnStoreConfig, fields []TypedStor
 		if !columnStoreValueTypeSupportsTypedColumnPartSort(field.ValueType) {
 			return nil, fmt.Errorf("collections: typed-column part publication sort key column %q value_type %q is unsupported", sortKey.Column, field.ValueType)
 		}
-	}
-	if !allOwnedByTypedPart {
-		return nil, nil
-	}
-	if len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
-		return nil, fmt.Errorf("collections: typed-column part publication sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
 	}
 	return cloneColumnSortKeys(cfg.SortKey), nil
 }

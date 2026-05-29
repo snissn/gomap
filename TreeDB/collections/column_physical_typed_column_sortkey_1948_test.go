@@ -226,6 +226,30 @@ func TestTypedColumnPartSortKeyRejectsDescending1948(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPartSortKeyMixedOwnerWithUnsupportedTypedColumnFallsBack1948(t *testing.T) {
+	// Mixed-owner key (row_asset + typed_col DESC): config validation must not
+	// reject it even though the typed-column direction is descending, because the
+	// key is not fully typed-column-owned and falls back to primary-id ordering.
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "row_sort", Path: "row_sort", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+		{Name: "typed_value", Path: "typed_value", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+	}, SortKey: []ColumnSortKey{
+		{Column: "row_sort", Direction: ColumnSortDescending},
+		{Column: "typed_value", Direction: ColumnSortDescending},
+	}}
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalize mixed-owner SortKey with descending typed column: %v", err)
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(*normalized, columnStoreTypedColumnPartFields(*normalized))
+	if err != nil {
+		t.Fatalf("typedColumnPartPublicationSortKey: %v", err)
+	}
+	if len(sortKey) != 0 {
+		t.Fatalf("typed-column sort key=%+v want mixed-owner primary-id fallback", sortKey)
+	}
+}
+
 func TestTypedColumnPartSortKeyMixedOwnerFallsBackToPrimaryID1948(t *testing.T) {
 	cfg := typedColumnSortKeyConfig1948([]ColumnSortKey{{Column: "time_us"}})
 	setTypedColumnSortKeyColumnOwner1948(t, cfg, "time_us", TypedStorageOwnerRowAsset)

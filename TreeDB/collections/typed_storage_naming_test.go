@@ -330,7 +330,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_physical_jsonbench_parity_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 8},
 	{path: "TreeDB/collections/column_physical_typed_column_1947_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 8},
 	{path: "TreeDB/collections/column_physical_typed_column_query.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 19},
-	{path: "TreeDB/collections/column_physical_typed_column_sortkey_1948_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 41, occurrences: 46},
+	{path: "TreeDB/collections/column_physical_typed_column_sortkey_1948_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 45, occurrences: 51},
 	{path: "TreeDB/collections/column_physical_query_test.go", classification: typedStorageLegacyDeferred, matchingLines: 144, occurrences: 158},
 	{path: "TreeDB/collections/column_physical_row_reader.go", classification: typedStorageLegacyDeferred, matchingLines: 23, occurrences: 23},
 	{path: "TreeDB/collections/column_physical_row_reader_test.go", classification: typedStorageLegacyDeferred, matchingLines: 19, occurrences: 20},

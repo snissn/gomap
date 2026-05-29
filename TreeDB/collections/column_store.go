@@ -591,7 +591,16 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		default:
 			return fmt.Errorf("collections: unsupported sort direction %q", sortKey.Direction)
 		}
-		if columnStoreColumnIsTypedColumnPart(col) {
+		if !columnStoreColumnIsTypedColumnPart(col) {
+			allSortKeyColumnsTypedPart = false
+		}
+	}
+	if allSortKeyColumnsTypedPart {
+		if len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
+			return fmt.Errorf("collections: typed_column_part sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
+		}
+		for _, sortKey := range cfg.SortKey {
+			col := columnByName[sortKey.Column]
 			if sortKey.Direction == ColumnSortDescending {
 				return fmt.Errorf("collections: descending typed_column_part sort key column %q is not supported yet", sortKey.Column)
 			}
@@ -601,12 +610,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			if !columnStoreValueTypeSupportsTypedColumnPartSort(col.ValueType) {
 				return fmt.Errorf("collections: typed_column_part sort key column %q value_type %q is not supported yet", sortKey.Column, col.ValueType)
 			}
-		} else {
-			allSortKeyColumnsTypedPart = false
 		}
-	}
-	if allSortKeyColumnsTypedPart && len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
-		return fmt.Errorf("collections: typed_column_part sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
 	}
 	aggregateNames := make(map[string]struct{}, len(cfg.AggregateMetadata))
 	for _, aggregate := range cfg.AggregateMetadata {
