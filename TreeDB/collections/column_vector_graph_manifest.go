@@ -947,10 +947,7 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 	// gating tied to the canonical row-asset graph; search opens and validates
 	// sources independently and falls back to row assets when they are absent,
 	// corrupt, stale, incomplete, or non-certified.
-	bytesDisk := columnVectorGraphStorageBytes(graph)
-	if loadedState != nil {
-		bytesDisk = columnVectorGraphStorageBytesWithState(graph, *loadedState)
-	}
+	bytesDisk := columnVectorGraphStorageBytesWithState(graph, *loadedState)
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
 	status.Stats = VectorIndexStats{
