@@ -402,6 +402,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1987 is the scoped production vector-index state writer/validator that
 		// publishes HNSW adjacency as generic uint32_list typed-column assets.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_index_state_adjacency.go")): {},
+		// #1992 is the scoped production vector graph writer/reader that publishes
+		// and consumes raw_float32 inverse-norm state through typed-column assets.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_inv_norm_state.go")): {},
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},

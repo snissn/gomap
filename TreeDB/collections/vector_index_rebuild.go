@@ -724,6 +724,11 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	invNormPartID := columnVectorGraphNextPartIDAfterPreparedAssets(prepared)
+	preparedInvNorm, err := prepareColumnVectorGraphInvNormStateAsset(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	graph := columnVectorGraphManifestSnapshot{
 		IndexName:              def.Name,
 		Field:                  def.Field,
@@ -748,13 +753,9 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	} else {
 		graph.Layer0AdjacencySource = columnVectorGraphLayer0AdjacencySourceFromPrepared(graph, prepared.Layer0AdjacencySource)
 	}
-	statePartID := nextColumnVectorGraphPartIDAfter(prepared.Ref.PartID, prepared.Ref.PartID)
-	if len(prepared.AdjacencyLayerSources) > 0 {
-		for _, source := range prepared.AdjacencyLayerSources {
-			statePartID = nextColumnVectorGraphPartIDAfter(statePartID, source.Ref.PartID)
-		}
-	} else if prepared.Layer0AdjacencySource.Present {
-		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, prepared.Layer0AdjacencySource.Ref.PartID)
+	statePartID := invNormPartID
+	if preparedInvNorm.Present {
+		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, preparedInvNorm.Ref.PartID)
 	}
 	stateAdjacencyAssets, err := prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection, cfg, def, manifest.Generation, statePartID, rows)
 	if err != nil {
@@ -771,6 +772,9 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	}
 	state := columnVectorIndexStateSnapshotFromGraph(graph)
 	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(stateAdjacencyAssets)
+	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
+		state.Assets = append(state.Assets, invNormAsset)
+	}
 	stateRaw, err := encodeColumnVectorIndexStateRecord(state)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err

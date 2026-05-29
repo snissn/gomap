@@ -208,6 +208,11 @@ func TestColumnVectorIndexStatePublishedReopenAndFailClosed1986(t *testing.T) {
 		t.Fatalf("state=%+v does not match graph=%+v", state, graph)
 	}
 	assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(t, d, "docs", cfg, def, graph, state, loadColumnGraphRebuildScannedRowsOnly1987(t, d, "docs", def))
+	asset, ok := findColumnVectorGraphInvNormStateAsset(state)
+	if !ok || asset.RowCount != len(rows) || asset.LogicalType != columnVectorIndexStateLogicalTypeFloat32 || asset.PhysicalEncoding != columnVectorIndexStateEncodingRawFloat32 {
+		_ = d.Close()
+		t.Fatalf("rebuilt vector-index state assets=%+v want raw_float32 inverse-norm state asset", state.Assets)
+	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
 		t.Fatalf("Checkpoint: %v", err)

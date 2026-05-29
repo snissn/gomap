@@ -155,6 +155,11 @@ func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
 	}
 	defer func() { _ = reader.Close() }()
+	if reader.invNormSource != nil {
+		_ = reader.invNormSource.Close()
+		reader.invNormSource = nil
+		reader.invNormStateUnavailable = true
+	}
 	plan, err := newColumnVectorGraphSearchPlan(reader)
 	if err != nil {
 		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
@@ -162,6 +167,70 @@ func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 	_, _, err = plan.blockViewForOrdinal(0)
 	if err == nil || !strings.Contains(err.Error(), "invalid inv_norm") {
 		t.Fatalf("blockViewForOrdinal err=%v want invalid inv_norm", err)
+	}
+}
+
+func TestColumnVectorGraphBlockViewInvNormStateSourceAndLegacyFallbackV1(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{0, 2, 0}},
+	}
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	reader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if !reader.usesInvNormStateSource() {
+		t.Fatal("reader did not bind inverse-norm state source")
+	}
+	plan, err := newColumnVectorGraphSearchPlan(reader)
+	if err != nil {
+		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
+	}
+	targetOrdinal := len(rows) - 1
+	view, ref, err := plan.blockViewForOrdinal(targetOrdinal)
+	if err != nil {
+		t.Fatalf("blockViewForOrdinal: %v", err)
+	}
+	want, err := columnVectorGraphInvNorm(rows[targetOrdinal].vector)
+	if err != nil {
+		t.Fatalf("columnVectorGraphInvNorm: %v", err)
+	}
+	if _, _, _, ok := reader.invNormForOrdinal(targetOrdinal); !ok {
+		t.Fatalf("reader.invNormForOrdinal(%d)=!ok want typed-state source hit before fallback", targetOrdinal)
+	}
+	if got, err := view.invNorm(ref.rowIndex); err != nil || math.Abs(float64(got-want)) > 1e-6 {
+		t.Fatalf("invNorm state got=%v err=%v want=%v", got, err, want)
+	}
+	if reader.invNormSource == nil {
+		t.Fatal("reader.invNormSource=nil want bound source")
+	}
+	if err := reader.invNormSource.Close(); err != nil {
+		t.Fatalf("reader.invNormSource.Close: %v", err)
+	}
+	if _, _, _, ok := reader.invNormForOrdinal(targetOrdinal); ok {
+		t.Fatalf("reader.invNormForOrdinal(%d)=ok want typed-state miss after source close", targetOrdinal)
+	}
+	if got, err := view.invNorm(ref.rowIndex); err != nil || math.Abs(float64(got-want)) > 1e-6 {
+		t.Fatalf("invNorm legacy fallback got=%v err=%v want=%v", got, err, want)
 	}
 }
 

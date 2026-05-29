@@ -657,6 +657,8 @@ func openManualColumnGraphAllLayerSourceSearchFixture1921(tb testing.TB, mutateG
 	}
 	identity := ColumnManifestIdentity{Generation: graph.BaseManifestGeneration, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	records, manifestIdentity := testColumnGraphManifestRecordsFromSnapshot1920(tb, *cfg, graph, identity)
+	stateRows := columnVectorGraphStateRowsForTest1987(rows, graph.RowCount, def.Dimensions, graph.AdjacencyLayerCount)
+	records, manifestIdentity = appendCompleteVectorIndexStateForGraphTest1987(tb, d, "docs", *cfg, def, graph, records, manifestIdentity, columnVectorIndexStateChecksumInput1986(*cfg), stateRows)
 	meta := CollectionMeta{
 		Name: "docs",
 		Options: CollectionOptions{

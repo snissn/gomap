@@ -258,6 +258,79 @@ func publishColumnVectorIndexStateAdjacencyContext1987(tb testing.TB, d *backend
 	publishColumnGraphCatalogForTestV2A(tb, d, meta, ctx.identity, ctx.records)
 }
 
+func appendCompleteVectorIndexStateForGraphTest1987(tb testing.TB, d *backenddb.DB, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, records []columnManifestRecord, identity ColumnManifestIdentity, input ColumnPublishManifestEncodeInput, rows []columnVectorGraphAssetRow) ([]columnManifestRecord, ColumnManifestIdentity) {
+	tb.Helper()
+	invNormPartID := nextColumnVectorGraphPartIDAfterGraphSnapshot1987(graph)
+	preparedInvNorm, err := prepareColumnVectorGraphInvNormStateAsset(d.ColumnAssetRootDir(), collection, cfg, def, graph.BaseManifestGeneration, invNormPartID, rows)
+	if err != nil {
+		tb.Fatalf("prepareColumnVectorGraphInvNormStateAsset: %v", err)
+	}
+	adjacencyPartID := invNormPartID
+	if preparedInvNorm.Present {
+		adjacencyPartID = nextColumnVectorGraphPartIDAfter(adjacencyPartID, preparedInvNorm.Ref.PartID)
+	}
+	preparedAdjacency, err := prepareColumnVectorIndexStateAdjacencyAssets(d.ColumnAssetRootDir(), collection, cfg, def, graph.BaseManifestGeneration, adjacencyPartID, rows)
+	if err != nil {
+		tb.Fatalf("prepareColumnVectorIndexStateAdjacencyAssets: %v", err)
+	}
+	state := columnVectorIndexStateSnapshotFromGraph(graph)
+	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(preparedAdjacency)
+	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
+		state.Assets = append(state.Assets, invNormAsset)
+	}
+	raw, err := encodeColumnVectorIndexStateRecord(state)
+	if err != nil {
+		tb.Fatalf("encodeColumnVectorIndexStateRecord: %v", err)
+	}
+	out, err := replaceColumnVectorGraphManifestRecord(records, identity.Generation, columnManifestRecord{key: columnVectorIndexStateRecordKey(def.Name), value: raw})
+	if err != nil {
+		tb.Fatalf("replace vector-index state record: %v", err)
+	}
+	identity.Checksum = checksumColumnManifestRecords(input, identity.Generation, out)
+	return out, identity
+}
+
+func nextColumnVectorGraphPartIDAfterGraphSnapshot1987(graph columnVectorGraphManifestSnapshot) uint64 {
+	next := nextColumnVectorGraphPartIDAfter(graph.AssetRef.PartID, graph.AssetRef.PartID)
+	for _, source := range graph.AdjacencyLayerSources {
+		if source.Present {
+			next = nextColumnVectorGraphPartIDAfter(next, source.Ref.PartID)
+		}
+	}
+	if graph.Layer0AdjacencySource.Present {
+		next = nextColumnVectorGraphPartIDAfter(next, graph.Layer0AdjacencySource.Ref.PartID)
+	}
+	return next
+}
+
+func columnVectorGraphStateRowsForTest1987(rows []columnVectorGraphAssetRow, rowCount, dims, layerCount int) []columnVectorGraphAssetRow {
+	if rowCount < 0 {
+		rowCount = 0
+	}
+	out := make([]columnVectorGraphAssetRow, rowCount)
+	for i := range out {
+		if i < len(rows) {
+			out[i].ID = append([]byte(nil), rows[i].ID...)
+			out[i].Vector = append([]float32(nil), rows[i].Vector...)
+		}
+		if len(out[i].ID) == 0 {
+			out[i].ID = []byte("state-row")
+		}
+		if len(out[i].Vector) != dims {
+			out[i].Vector = make([]float32, dims)
+		}
+		if _, err := columnVectorGraphInvNorm(out[i].Vector); err != nil && dims > 0 {
+			out[i].Vector[0] = 1
+		}
+		if layerCount > 1 {
+			out[i].Adjacency = make([]uint32, 2+layerCount)
+			out[i].Adjacency[0] = columnVectorGraphLayeredAdjacencyMagic
+			out[i].Adjacency[1] = uint32(layerCount - 1)
+		}
+	}
+	return out
+}
+
 func assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(tb testing.TB, d *backenddb.DB, def VectorIndexDefinition, wantErr string) {
 	tb.Helper()
 	col, err := NewCollectionManager(d).OpenCollection("docs")
