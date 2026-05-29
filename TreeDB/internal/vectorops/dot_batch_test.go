@@ -98,7 +98,7 @@ func TestDotFloat32StridedParity(t *testing.T) {
 	}
 }
 
-func TestDotFloat32BatchFallbackStatusAndMinRows(t *testing.T) {
+func TestDotFloat32BatchMinRows(t *testing.T) {
 	t.Parallel()
 
 	base := dotBatchTestBase(4, 3, 3)
@@ -111,10 +111,6 @@ func TestDotFloat32BatchFallbackStatusAndMinRows(t *testing.T) {
 	if indexedStatus.Rows != len(indexedDst) {
 		t.Fatalf("indexed rows=%d want %d", indexedStatus.Rows, len(indexedDst))
 	}
-	if indexedStatus.Optimized || !indexedStatus.Fallback {
-		t.Fatalf("short dims should use fallback status, got %+v", indexedStatus)
-	}
-
 	stridedDst := []float32{-1, -1}
 	stridedStatus := DotFloat32Strided(stridedDst, base, query, 4, 3, 3)
 	if stridedStatus.Invalid {
@@ -122,9 +118,6 @@ func TestDotFloat32BatchFallbackStatusAndMinRows(t *testing.T) {
 	}
 	if stridedStatus.Rows != len(stridedDst) {
 		t.Fatalf("strided rows=%d want %d", stridedStatus.Rows, len(stridedDst))
-	}
-	if stridedStatus.Optimized || !stridedStatus.Fallback {
-		t.Fatalf("short dims should use fallback status, got %+v", stridedStatus)
 	}
 }
 

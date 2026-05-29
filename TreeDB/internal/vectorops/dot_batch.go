@@ -3,13 +3,14 @@ package vectorops
 // DotFloat32BatchStatus reports how a row-major FP32 batch dot wrapper handled
 // a call. Rows is the number of dst entries written. Optimized is true only
 // when the active platform backend reports that a batch SIMD kernel handled at
-// least one row batch. Fallback is true when valid rows were written without a
-// batch SIMD kernel. Invalid is true when the wrapper rejected the shape and
-// left dst unchanged.
+// least one row batch. Fallback is true when valid rows were written and the
+// call was completed without a batch SIMD kernel. Invalid is true when the
+// wrapper rejected the shape and left dst unchanged.
 //
-// A call can be both valid and non-optimized: unsupported platforms, purego
-// builds, short dims, tiny row counts, or backend-specific thresholds all use
-// the non-batch fallback and return Optimized=false, Fallback=true. The purego
+// Status is call-level: Optimized and Fallback are mutually exclusive. A call
+// can be valid and non-optimized: unsupported platforms, purego builds, short
+// dims, tiny row counts, or backend-specific thresholds all use the non-batch
+// fallback and return Optimized=false, Fallback=true. The purego
 // and unsupported-platform fallback is the portable scalar implementation.
 type DotFloat32BatchStatus struct {
 	Rows      int
