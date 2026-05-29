@@ -1029,6 +1029,9 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 	if !ok {
 		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("collections: typed-column adapter missing column %q", columnName)
 	}
+	if rows != nil && len(rows) == 0 {
+		return []columnDeclaredValue{}, typedcolumn.PartScanDiagnostics{RowsScanned: 0, ColumnsProjected: 1, GranulesConsidered: len(p.Part.Descriptor.Granules)}, nil
+	}
 	if column.Field.Nullable {
 		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: typed-column adapter selected-row scan does not support nullable column %q", ErrColumnQueryPlanUnsupported, columnName)
 	}
@@ -1036,9 +1039,6 @@ func (p *typedColumnAdapterPart) scanColumnValuesRows(columnName string, rows []
 	case ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueBool:
 	default:
 		return nil, typedcolumn.PartScanDiagnostics{}, fmt.Errorf("%w: typed-column adapter selected-row scan does not support value_type=%q column %q", ErrColumnQueryPlanUnsupported, column.Field.ValueType, columnName)
-	}
-	if rows != nil && len(rows) == 0 {
-		return []columnDeclaredValue{}, typedcolumn.PartScanDiagnostics{RowsScanned: 0, ColumnsProjected: 1, GranulesConsidered: len(p.Part.Descriptor.Granules)}, nil
 	}
 	var scan typedcolumn.ProjectedScanResult
 	var err error

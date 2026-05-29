@@ -663,7 +663,7 @@ func TestMergeColumnPhysicalQueryDiagnosticsSortKeyNoneSentinel1949(t *testing.T
 			name: "left none right actual",
 			left: ColumnPhysicalQueryDiagnostics{
 				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
-				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackNone,
 			},
 			right: ColumnPhysicalQueryDiagnostics{
 				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackMissingMarks,
@@ -680,7 +680,7 @@ func TestMergeColumnPhysicalQueryDiagnosticsSortKeyNoneSentinel1949(t *testing.T
 			},
 			right: ColumnPhysicalQueryDiagnostics{
 				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
-				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackNone,
 			},
 			wantSortKeyFallback:         columnSortKeyMarkFallbackMissingMarks,
 			wantGroupedDistinctFallback: columnSortedGroupedDistinctFallbackMissingPrefix,
@@ -689,14 +689,14 @@ func TestMergeColumnPhysicalQueryDiagnosticsSortKeyNoneSentinel1949(t *testing.T
 			name: "both none",
 			left: ColumnPhysicalQueryDiagnostics{
 				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
-				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackNone,
 			},
 			right: ColumnPhysicalQueryDiagnostics{
 				SortKeyMarkFallbackReason:           columnSortKeyMarkFallbackNone,
-				SortedGroupedDistinctFallbackReason: columnSortKeyMarkFallbackNone,
+				SortedGroupedDistinctFallbackReason: columnSortedGroupedDistinctFallbackNone,
 			},
 			wantSortKeyFallback:         columnSortKeyMarkFallbackNone,
-			wantGroupedDistinctFallback: columnSortKeyMarkFallbackNone,
+			wantGroupedDistinctFallback: columnSortedGroupedDistinctFallbackNone,
 		},
 		{
 			name: "conflicting actual reasons become mixed",

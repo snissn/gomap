@@ -18,6 +18,7 @@ const (
 	columnSortKeyMarkFallbackStaleMarks                    = "stale_sort_key_marks"
 	columnSortKeyMarkFallbackUncertifiedDictionaryOrdering = "uncertified_dictionary_order"
 	columnSortKeyMarkFallbackLiteralAbsent                 = "prefix_literal_absent_from_part_dictionary"
+	columnSortedGroupedDistinctFallbackNone                = "none"
 	columnSortedGroupedDistinctFallbackNotQ2               = "not_group_count_and_distinct"
 	columnSortedGroupedDistinctFallbackMissingPrefix       = "missing_sorted_prefix_plan"
 	columnSortedGroupedDistinctFallbackSortKeyLayout       = "sort_key_layout_not_group_distinct"
@@ -141,7 +142,7 @@ func sortedGroupedDistinctReadiness(plan columnTypedColumnSortKeyPrefixPlan, sor
 	if sortKey[prefixLen].Column != req.GroupColumn || sortKey[prefixLen+1].Column != req.DistinctColumn {
 		return false, columnSortedGroupedDistinctFallbackSortKeyLayout
 	}
-	return true, columnSortKeyMarkFallbackNone
+	return true, columnSortedGroupedDistinctFallbackNone
 }
 
 func (plan columnTypedColumnSortKeyPrefixPlan) prunePartRows(part *typedColumnAdapterPart) (columnTypedColumnSortKeyPartPruneResult, error) {
