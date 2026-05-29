@@ -18,6 +18,7 @@ type columnTypedColumnPhysicalQueryPlan struct {
 	ValueColumn          string
 	DistinctColumn       string
 	PredicateSpecs       []columnPhysicalQueryPredicateSpec
+	SortKey              []ColumnSortKey
 }
 
 type columnTypedColumnPhysicalQueryPart struct {
@@ -219,12 +220,17 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 		}
 		selected[idx] = true
 	}
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPlan{}, true, err
+	}
 	plan.Fields = fields
 	plan.Selected = selected
 	plan.PredicateSpecs = predicateSpecs
 	plan.GroupColumn = req.GroupColumn
 	plan.ValueColumn = req.ValueColumn
 	plan.DistinctColumn = req.DistinctColumn
+	plan.SortKey = sortKey
 	plan.ProjectedColumns = make([]string, 0, len(requiredTypes))
 	for column := range requiredTypes {
 		plan.ProjectedColumns = append(plan.ProjectedColumns, column)
@@ -374,6 +380,28 @@ func typedColumnPhysicalQueryPairingError(err error) error {
 	return err
 }
 
+func validateTypedColumnPhysicalQuerySortMetadata(expected, manifest, image []ColumnSortKey) error {
+	if !columnSortKeysEqual(expected, manifest) {
+		return fmt.Errorf("collections: typed-column part physical query sort metadata mismatch: manifest=%v want %v", manifest, expected)
+	}
+	if !columnSortKeysEqual(expected, image) {
+		return fmt.Errorf("collections: typed-column part physical query sort metadata mismatch: image=%v want %v", image, expected)
+	}
+	return nil
+}
+
+func columnSortKeysEqual(left, right []ColumnSortKey) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
 	adapterPart, summary, err := typedColumnAdapterPartFromBytesForReconstructionWithSummary(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, raw)
 	if err != nil {
@@ -384,6 +412,9 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 	}
 	if physical.Rows != 0 && summary.Rows != physical.Rows {
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part rows=%d do not match physical rows=%d", summary.Rows, physical.Rows)
+	}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(plan.SortKey, typedRef.SortKey, summary.SortKey); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
 	}
 	decoded, err := adapterPart.scanDecodedValuesSelected(plan.Selected)
 	if err != nil {

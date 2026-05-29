@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -89,6 +90,7 @@ type ColumnPreparedAsset struct {
 	GenerationID uint64
 	Reason       string
 	PartRole     ColumnManifestPartRole
+	SortKey      string
 }
 
 // ColumnPublishPlanInput contains the normalized collection state and stage
@@ -873,7 +875,7 @@ func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedA
 	}
 	matchesOrder := true
 	for i := range prepared.Assets {
-		if closure.PreparedAssets[i] != prepared.Assets[i] {
+		if !columnPreparedAssetsEqual(closure.PreparedAssets[i], prepared.Assets[i]) {
 			matchesOrder = false
 			break
 		}
@@ -903,6 +905,11 @@ type columnPreparedAssetMatchKey struct {
 	PublishID    uint64
 	GenerationID uint64
 	PartRole     ColumnManifestPartRole
+	SortKey      string
+}
+
+func columnPreparedAssetsEqual(left, right ColumnPreparedAsset) bool {
+	return left == right
 }
 
 func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAssetMatchKey {
@@ -913,7 +920,34 @@ func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAsse
 		PublishID:    asset.PublishID,
 		GenerationID: asset.GenerationID,
 		PartRole:     asset.PartRole,
+		SortKey:      asset.SortKey,
 	}
+}
+
+func columnSortKeyMatchString(sortKeys []ColumnSortKey) string {
+	if len(sortKeys) == 0 {
+		return ""
+	}
+	var out string
+	for _, sortKey := range sortKeys {
+		out += sortKey.Column + "\x00" + string(sortKey.Direction) + "\x00"
+	}
+	return out
+}
+
+func columnSortKeysFromMatchString(raw string) ([]ColumnSortKey, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, "\x00")
+	if len(parts) < 3 || parts[len(parts)-1] != "" || (len(parts)-1)%2 != 0 {
+		return nil, fmt.Errorf("collections: malformed column sort key metadata")
+	}
+	out := make([]ColumnSortKey, 0, (len(parts)-1)/2)
+	for i := 0; i < len(parts)-1; i += 2 {
+		out = append(out, ColumnSortKey{Column: parts[i], Direction: ColumnSortDirection(parts[i+1])})
+	}
+	return out, nil
 }
 
 func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
@@ -931,6 +965,32 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	}
 	if err := validateColumnManifestPartRoleForAsset(asset.PartRole, asset.Ref.Kind, asset.Reason); err != nil {
 		return err
+	}
+	if asset.SortKey != "" && asset.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
+		return fmt.Errorf("collections: column prepared asset sort key is only valid for %s refs, got %s", ColumnAssetKindTCS1TypedColumnPart, asset.Ref.Kind)
+	}
+	sortKeys, err := columnSortKeysFromMatchString(asset.SortKey)
+	if err != nil {
+		return err
+	}
+	if uint64(len(sortKeys)) > columnManifestSortKeyMaxColumns {
+		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), columnManifestSortKeyMaxColumns)
+	}
+	if asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKeys) > typedColumnPartSortKeyMaxColumns {
+		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), typedColumnPartSortKeyMaxColumns)
+	}
+	seenSortKeyColumns := make(map[string]struct{}, len(sortKeys))
+	for _, sortKey := range sortKeys {
+		if sortKey.Column == "" {
+			return errors.New("collections: column prepared asset sort key column is required")
+		}
+		if _, exists := seenSortKeyColumns[sortKey.Column]; exists {
+			return fmt.Errorf("collections: column prepared asset duplicate sort key column %q", sortKey.Column)
+		}
+		seenSortKeyColumns[sortKey.Column] = struct{}{}
+		if sortKey.Direction != ColumnSortAscending {
+			return fmt.Errorf("collections: column prepared asset sort key column %q direction %q is unsupported", sortKey.Column, sortKey.Direction)
+		}
 	}
 	return nil
 }

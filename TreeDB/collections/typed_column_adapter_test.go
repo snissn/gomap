@@ -77,6 +77,24 @@ func TestTypedColumnAdapterMapFieldSelectsNativeScalarFixedWidthEncoding(t *test
 	}
 }
 
+func TestTypedColumnAdapterSortKeyRejectsEngineCap1948(t *testing.T) {
+	columns := make([]typedColumnAdapterColumn, typedColumnPartSortKeyMaxColumns+1)
+	sortKeys := make([]ColumnSortKey, len(columns))
+	for i := range columns {
+		name := fmt.Sprintf("c%02d", i)
+		column, err := typedColumnAdapterMapField(typedColumnAdapterField(name, ColumnStoreValueInt64))
+		if err != nil {
+			t.Fatalf("typedColumnAdapterMapField(%s): %v", name, err)
+		}
+		columns[i] = column
+		sortKeys[i] = ColumnSortKey{Column: name, Direction: ColumnSortAscending}
+	}
+	_, err := typedColumnAdapterSortKey(typedColumnAdapterOptions{SortKey: sortKeys}, columns)
+	if err == nil || !strings.Contains(err.Error(), "exceeds cap") {
+		t.Fatalf("typedColumnAdapterSortKey oversized err=%v want exceeds cap", err)
+	}
+}
+
 func TestTypedColumnAdapterMapFieldRejectsInvalidScalarFixedWidthEncoding(t *testing.T) {
 	field := typedColumnAdapterField("score", ColumnStoreValueFloat32)
 	field.FixedWidthEncoding = ColumnFixedWidthEncoding("future")
@@ -1447,6 +1465,62 @@ func TestTypedColumnAdapterStringDictionaryHighCardinalityStable(t *testing.T) {
 		if got[i].String != values[i].String {
 			t.Fatalf("string[%d]=%q want %q", i, got[i].String, values[i].String)
 		}
+	}
+}
+
+func TestTypedColumnAdapterLegacyDictionaryOrderMetadataAcceptedWhenSorted1948(t *testing.T) {
+	field := typedColumnAdapterField("kind", ColumnStoreValueString)
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, String: "beta"},
+		{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+	}
+	part := typedColumnAdapterBuildPart(t, field, values)
+	column, ok := part.columnByName("kind")
+	if !ok {
+		t.Fatal("missing kind column")
+	}
+	nextMetadataCode := func(m map[string]int64) int64 {
+		var maxCode int64 = -1
+		for _, code := range m {
+			if code > maxCode {
+				maxCode = code
+			}
+		}
+		return maxCode + 1
+	}
+	metadata := part.Dictionary[typedColumnAdapterMetadataDictionary]
+	delete(metadata, typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
+	delete(metadata, typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
+	legacyCode := nextMetadataCode(metadata)
+	metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryLegacyOrder)] = legacyCode
+	metadata[typedColumnAdapterMetadataEntryKey(column, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryLegacyCollation)] = legacyCode + 1
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage legacy metadata: %v", err)
+	}
+	if _, err := typedColumnAdapterPartFromImage(part.Options, image); err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage legacy sorted dictionary metadata: %v", err)
+	}
+
+	badPart := typedColumnAdapterBuildPart(t, field, values)
+	badColumn, ok := badPart.columnByName("kind")
+	if !ok {
+		t.Fatal("missing kind column")
+	}
+	badMetadata := badPart.Dictionary[typedColumnAdapterMetadataDictionary]
+	delete(badMetadata, typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryOrder))
+	delete(badMetadata, typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryCollation))
+	badLegacyCode := nextMetadataCode(badMetadata)
+	badMetadata[typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryOrderMark, typedColumnAdapterStringDictionaryLegacyOrder)] = badLegacyCode
+	badMetadata[typedColumnAdapterMetadataEntryKey(badColumn, typedColumnAdapterMetadataDictionaryCollationMark, typedColumnAdapterStringDictionaryLegacyCollation)] = badLegacyCode + 1
+	badPart.Dictionary["kind"]["alpha"] = 1
+	badPart.Dictionary["kind"]["beta"] = 0
+	badImage, err := badPart.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage bad legacy metadata: %v", err)
+	}
+	if _, err := typedColumnAdapterPartFromImage(badPart.Options, badImage); err == nil || !strings.Contains(err.Error(), "not logical bytewise ascending") {
+		t.Fatalf("typedColumnAdapterPartFromImage bad legacy dictionary err=%v want logical order rejection", err)
 	}
 }
 
