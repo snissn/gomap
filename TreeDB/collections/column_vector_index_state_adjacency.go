@@ -346,8 +346,9 @@ func columnVectorIndexStateAdjacencyAssetsFromPrepared(prepared []columnVectorIn
 	return assets
 }
 
-func validateColumnVectorIndexStateAssets(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot) error {
+func validateColumnVectorIndexStateAssets(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, graph columnVectorGraphManifestSnapshot) error {
 	seenAdjacencyLayers := make(map[int]string)
+	maxAdjacencyLayer := -1
 	for _, asset := range state.Assets {
 		if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
 			return fmt.Errorf("collections: vector-index state asset role=%q id=%q unavailable: %w", asset.Role, asset.AssetID, err)
@@ -363,20 +364,24 @@ func validateColumnVectorIndexStateAssets(rootDir, collection string, cfg Column
 			return fmt.Errorf("collections: vector-index state duplicate adjacency layer=%d asset ids %q and %q", layer, previous, asset.AssetID)
 		}
 		seenAdjacencyLayers[layer] = asset.AssetID
+		if layer > maxAdjacencyLayer {
+			maxAdjacencyLayer = layer
+		}
 		if err := validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection, cfg, def, state, asset, layer); err != nil {
 			return fmt.Errorf("collections: vector-index state adjacency layer %d asset %q: %w", layer, asset.AssetID, err)
 		}
 	}
 	if len(seenAdjacencyLayers) == 0 {
-		return errors.New("collections: vector-index state missing adjacency assets")
+		return errors.New("collections: vector-index state missing adjacency uint32_list assets")
 	}
-	maxLayer := 0
-	for layer := range seenAdjacencyLayers {
-		if layer > maxLayer {
-			maxLayer = layer
-		}
+	expectedLayers := graph.AdjacencyLayerCount
+	if expectedLayers <= 0 {
+		expectedLayers = maxAdjacencyLayer + 1
 	}
-	for layer := 0; layer <= maxLayer; layer++ {
+	if len(seenAdjacencyLayers) != expectedLayers {
+		return fmt.Errorf("collections: vector-index state adjacency layers=%d want %d", len(seenAdjacencyLayers), expectedLayers)
+	}
+	for layer := 0; layer < expectedLayers; layer++ {
 		if _, ok := seenAdjacencyLayers[layer]; !ok {
 			return fmt.Errorf("collections: vector-index state missing adjacency layer %d", layer)
 		}
@@ -429,10 +434,7 @@ func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cf
 	if err != nil {
 		return err
 	}
-	if err := typedcolumn.ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount); err != nil {
-		return err
-	}
-	if err := validateColumnVectorIndexStateAdjacencyValuesRaw(layer, state.RowCount, offsetsRaw, valuesRaw); err != nil {
+	if err := validateColumnVectorIndexStateAdjacencySections(layer, offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount); err != nil {
 		return err
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
@@ -462,14 +464,19 @@ func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cf
 	return nil
 }
 
-func validateColumnVectorIndexStateAdjacencyValuesRaw(layer int, rows int, offsetsRaw []byte, valuesRaw []byte) error {
+func validateColumnVectorIndexStateAdjacencySections(layer int, offsetsSection typedcolumn.ColumnPartImageSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsRaw, valuesRaw []byte, rows int) error {
+	if err := typedcolumn.ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, rows); err != nil {
+		return fmt.Errorf("collections: vector-index state adjacency layer %d shape: %w", layer, err)
+	}
 	for row := 0; row < rows; row++ {
-		begin := int(binary.LittleEndian.Uint64(offsetsRaw[row*8:]))
-		end := int(binary.LittleEndian.Uint64(offsetsRaw[(row+1)*8:]))
-		for idx := begin; idx < end; idx++ {
+		begin := binary.LittleEndian.Uint64(offsetsRaw[row*8:])
+		end := binary.LittleEndian.Uint64(offsetsRaw[(row+1)*8:])
+		beginInt := int(begin)
+		endInt := int(end)
+		for idx := beginInt; idx < endInt; idx++ {
 			neighbor := binary.LittleEndian.Uint32(valuesRaw[idx*4:])
-			if int(neighbor) >= rows {
-				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d", layer, row, idx-begin, neighbor, rows)
+			if uint64(neighbor) >= uint64(rows) {
+				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d", layer, row, idx-beginInt, neighbor, rows)
 			}
 		}
 	}

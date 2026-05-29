@@ -239,7 +239,7 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		if columnVectorIndexStateMatchStatusWithBaseChecksum(state, def, *cfg, baseChecksum) != columnVectorIndexStateMatchLoaded || !columnVectorIndexStateMatchesGraph(state, graph) {
 			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q vector-index state does not match graph manifest: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
-		if err := validateColumnVectorIndexStateAssets(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, state); err != nil {
+		if err := validateColumnVectorIndexStateAssets(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, state, graph); err != nil {
 			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 		}
 	}

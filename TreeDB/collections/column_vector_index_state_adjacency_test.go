@@ -101,37 +101,18 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx.state.Assets = nil
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency assets")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency uint32_list assets")
 	})
 
-	t.Run("missing_layer_zero", func(t *testing.T) {
+	t.Run("adjacency_layer_gap", func(t *testing.T) {
 		d := openCollectionCommandWALDB(t, t.TempDir())
 		defer func() { _ = d.Close() }()
 		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
-		layer1 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 503, 1, typedcolumn.Uint32List{
-			Rows:    2,
-			Offsets: []uint64{0, 1, 2},
-			Values:  []uint32{1, 0},
-		}, nil)
+		layer1 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 503, 1, typedcolumn.Uint32List{Rows: 2, Offsets: []uint64{0, 1, 2}, Values: []uint32{1, 0}}, nil)
 		ctx.state.Assets = []columnVectorIndexStateAssetSnapshot{layer1}
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency layer 0")
-	})
-
-	t.Run("missing_layer_gap", func(t *testing.T) {
-		d := openCollectionCommandWALDB(t, t.TempDir())
-		defer func() { _ = d.Close() }()
-		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
-		layer2 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 504, 2, typedcolumn.Uint32List{
-			Rows:    2,
-			Offsets: []uint64{0, 1, 2},
-			Values:  []uint32{1, 0},
-		}, nil)
-		ctx.state.Assets = []columnVectorIndexStateAssetSnapshot{ctx.state.Assets[0], layer2}
-		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
-		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency layer 1")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "adjacency layers=1 want 2")
 	})
 
 	t.Run("out_of_bounds_ordinal", func(t *testing.T) {
@@ -319,7 +300,7 @@ func loadColumnVectorIndexStateAdjacencyList1987(tb testing.TB, d *backenddb.DB,
 		tb.Fatalf("columnVectorIndexStateAdjacencyColumnStoreConfig: %v", err)
 	}
 	if len(sourceCfg.Columns) != 1 || sourceCfg.Columns[0].ValueType != ColumnStoreValueUint32List || sourceCfg.Columns[0].AdjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
-		tb.Fatalf("state adjacency config column=%+v want generic uint32_list with no adjacency_layout", sourceCfg.Columns)
+		tb.Fatalf("state adjacency config column=%+v want uint32_list with default fixed-dense/no explicit adjacency_layout", sourceCfg.Columns)
 	}
 	if adapterColumn.Definition.Type != typedcolumn.ColumnTypeUint32List || adapterColumn.Definition.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
 		tb.Fatalf("state adjacency adapter definition=%+v want uint32_list raw offsets-list", adapterColumn.Definition)
