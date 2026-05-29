@@ -159,6 +159,10 @@ github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721 h1:2XY
 github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a h1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=
 github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a/go.mod h1:PDwKLbWpRDAN2IPbK9PxIgSx0YdwQaSOLWObRawQJ58=
+github.com/snissn/simd v0.0.0-20260528214641-c127f49be664 h1:QwHuQQiWhCFfgxt495cEM8wCst+HACdbt703gUAql/w=
+github.com/snissn/simd v0.0.0-20260528214641-c127f49be664/go.mod h1:8xsPUbOTnNI4WUdPlXVlWXt85Y8RCm3xqGAo8PLxYyA=
+github.com/snissn/simd-go v0.0.0-20260528204200-2ee8ceaf4134 h1:pUAb20aIPa0coelnoEiop10sMi9Qfa45i5zRH+xv2+0=
+github.com/snissn/simd-go v0.0.0-20260528204200-2ee8ceaf4134/go.mod h1:+R+n1WwZSFNWdcizTHorLkOwe2s+1L4VkyAXF4i6ahM=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=

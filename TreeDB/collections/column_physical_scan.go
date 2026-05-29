@@ -93,10 +93,11 @@ type columnPhysicalAssetScanHeader struct {
 }
 
 type columnManifestAssetRefForScan struct {
-	Ref    ColumnAssetRef
-	Reason ColumnPublishOperation
-	Role   ColumnManifestPartRole
-	Rows   int
+	Ref     ColumnAssetRef
+	Reason  ColumnPublishOperation
+	Role    ColumnManifestPartRole
+	Rows    int
+	SortKey []ColumnSortKey
 }
 
 type columnManifestScanSidecarFilter struct {
@@ -754,14 +755,18 @@ func loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap *backenddb.S
 			if err != nil {
 				return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
 			}
+			sortKey, err := decodeColumnManifestPartSortKeyForScan(value)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, nil, nil, 0, manifestRecords, err
+			}
 			livePartRows.add(ref.Generation, ref.PartID, rows)
 			if ref.Kind == ColumnAssetKindTCS1PartImage {
-				refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+				refs = append(refs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows, SortKey: sortKey})
 				if role != ColumnManifestPartRoleBase {
 					mutationParts++
 				}
 			} else {
-				typedColumnPartRefs = append(typedColumnPartRefs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows})
+				typedColumnPartRefs = append(typedColumnPartRefs, columnManifestAssetRefForScan{Ref: ref, Reason: operation, Role: role, Rows: rows, SortKey: sortKey})
 			}
 			if ref.Generation == snapshot.Generation {
 				activeParts++
@@ -1775,8 +1780,12 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 	publishID := cur.u64()
 	generationID := cur.u64()
 	reason := cur.stringBytes()
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV3 {
 		_ = cur.stringBytes()
+	}
+	var sortKey []ColumnSortKey
+	if version >= columnManifestRecordVersionV4 {
+		sortKey = readColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, err
@@ -1803,6 +1812,9 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 	if !ok {
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
 	}
+	if err := validateColumnManifestPartSortKeyForScan(kind, sortKey); err != nil {
+		return ColumnAssetRef{}, 0, 0, 0, 0, nil, err
+	}
 	ref := ColumnAssetRef{
 		Kind:       kind,
 		Namespace:  expectedNamespace,
@@ -1823,6 +1835,76 @@ func decodeColumnManifestPartFieldsForScan(raw []byte, expectedNamespace string)
 		return ColumnAssetRef{}, 0, 0, 0, 0, nil, fmt.Errorf("collections: column prepared asset bytes=%d does not match ref length=%d", bytes64, ref.Length)
 	}
 	return ref, int(rows64), int64(bytes64), publishID, generationID, reason, nil
+}
+
+func decodeColumnManifestPartSortKeyForScan(raw []byte) ([]ColumnSortKey, error) {
+	cur := manifestCursor{raw: raw}
+	if magic := cur.u32(); magic != columnManifestPartMagic {
+		return nil, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
+	}
+	version := cur.u16()
+	if !isSupportedColumnManifestRecordVersion(version) {
+		return nil, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
+	}
+	kindBytes := cur.stringBytes()
+	_ = cur.stringBytes()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	if version >= columnManifestRecordVersionV2 {
+		_ = cur.u64()
+	}
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.u64()
+	_ = cur.stringBytes()
+	if version >= columnManifestRecordVersionV3 {
+		_ = cur.stringBytes()
+	}
+	var sortKey []ColumnSortKey
+	if version >= columnManifestRecordVersionV4 {
+		sortKey = readColumnManifestSortKey(&cur)
+	}
+	if err := cur.err; err != nil {
+		return nil, err
+	}
+	if cur.pos != len(raw) {
+		return nil, errors.New("collections: trailing bytes in column manifest part record")
+	}
+	kind, ok := columnAssetKindFromBytesForScan(kindBytes)
+	if !ok {
+		return nil, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+	}
+	if err := validateColumnManifestPartSortKeyForScan(kind, sortKey); err != nil {
+		return nil, err
+	}
+	return sortKey, nil
+}
+
+func validateColumnManifestPartSortKeyForScan(kind ColumnAssetKind, sortKey []ColumnSortKey) error {
+	if len(sortKey) != 0 && kind != ColumnAssetKindTCS1TypedColumnPart {
+		return fmt.Errorf("collections: column manifest sort key requires %q part records, got %q", ColumnAssetKindTCS1TypedColumnPart, kind)
+	}
+	if kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKey) > typedColumnPartSortKeyMaxColumns {
+		return fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", len(sortKey), typedColumnPartSortKeyMaxColumns)
+	}
+	seen := make(map[string]struct{}, len(sortKey))
+	for _, sortKeyColumn := range sortKey {
+		if sortKeyColumn.Column == "" {
+			return errors.New("collections: column manifest sort key column is required")
+		}
+		if _, exists := seen[sortKeyColumn.Column]; exists {
+			return fmt.Errorf("collections: column manifest duplicate sort key column %q", sortKeyColumn.Column)
+		}
+		seen[sortKeyColumn.Column] = struct{}{}
+		if sortKeyColumn.Direction != ColumnSortAscending {
+			return fmt.Errorf("collections: unsupported column manifest sort direction %q", sortKeyColumn.Direction)
+		}
+	}
+	return nil
 }
 
 func decodeColumnManifestPartRoleForScan(raw []byte, ref ColumnAssetRef, reason []byte) (ColumnManifestPartRole, error) {
@@ -1850,13 +1932,16 @@ func decodeColumnManifestPartRoleForScan(raw []byte, ref ColumnAssetRef, reason 
 	_ = cur.u64()
 	_ = cur.stringBytes()
 	role := ColumnManifestPartRole("")
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV3 {
 		roleBytes := cur.stringBytes()
 		var ok bool
 		role, ok = columnManifestPartRoleFromBytesForScan(roleBytes)
 		if !ok {
 			return "", fmt.Errorf("collections: unsupported column manifest part role %q", string(roleBytes))
 		}
+	}
+	if version >= columnManifestRecordVersionV4 {
+		skipColumnManifestSortKey(&cur)
 	}
 	if err := cur.err; err != nil {
 		return "", err

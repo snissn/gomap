@@ -193,6 +193,8 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 		}
 	} else if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, err
+	} else if typedColumnRefsHaveSortKey(refsByGeneration) {
+		return TypedColumnStringPredicateScanResult{Diagnostics: diag}, typedColumnSortedMutationVisibilityUnsupported("typed-column string predicate scan")
 	}
 
 	mgr := mappedresource.NewManager()
@@ -280,6 +282,9 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 				return result, fmt.Errorf("collections: typed-column string predicate missing latest-visible physical generation=%d", physical.Ref.Generation)
 			}
 		}
+		if visibility != nil && typedColumnPreparedPartHasLogicalSortKey(preparedPart) {
+			return result, typedColumnSortedMutationVisibilityUnsupported("typed-column string predicate scan")
+		}
 		partPruned, err := scanTypedColumnStringPreparedPartWithVisibility(preparedPart, adapterColumn.Definition.Name, codes, valueByCode, typedRef.Ref.Generation, typedRef.Ref.PartID, &result, visibility, readRange, &scanScratch)
 		if err != nil {
 			return result, fmt.Errorf("collections: typed-column string predicate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
@@ -300,18 +305,23 @@ func (c *Collection) runTypedColumnStringPredicateScanDirect(view columnPhysical
 			rawScratch = physicalRaw
 			result.Diagnostics.PhysicalBytesScanned += int64(len(physicalRaw))
 			result.Diagnostics.PhysicalRowIDLookups++
-			ids, err := typedColumnStringPredicatePhysicalRowIDs(physicalRaw, physical.Ref, view.CollectionName, view.Config, result.Rows[matchedStart:])
+			ids, err := typedColumnStringPredicatePhysicalRowIDs(physicalRaw, physical.Ref, view.CollectionName, view.Config, physical.Rows, result.Rows[matchedStart:])
 			if err != nil {
 				return result, fmt.Errorf("collections: typed-column string predicate physical id decode generation=%d part_id=%d: %w", physical.Ref.Generation, physical.Ref.PartID, err)
 			}
 			for rowIdx := matchedStart; rowIdx < len(result.Rows); rowIdx++ {
 				matched := &result.Rows[rowIdx]
-				documentID, ok := ids[matched.RowIndex]
+				physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(matched.PrimaryID, physical.Rows)
+				if err != nil {
+					return result, err
+				}
+				documentID, ok := ids[physicalRowIndex]
 				if !ok {
-					return result, fmt.Errorf("collections: typed-column string predicate missing physical document id for row_index=%d", matched.RowIndex)
+					return result, fmt.Errorf("collections: typed-column string predicate missing physical document id for row_index=%d", physicalRowIndex)
 				}
 				matched.Generation = physical.Ref.Generation
 				matched.PartID = physical.Ref.PartID
+				matched.RowIndex = physicalRowIndex
 				matched.DocumentID = documentID
 			}
 		}
@@ -465,17 +475,18 @@ func typedColumnStringAddPreparedDiagnostics(diag *TypedColumnStringPredicateSca
 	diag.PruningValidationFailureReason = src.PruningValidationFailureReason
 }
 
-func typedColumnStringPredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, matchedRows []TypedColumnStringPredicateScanRow) (map[int][]byte, error) {
+func typedColumnStringPredicatePhysicalRowIDs(raw []byte, ref ColumnAssetRef, collection string, cfg ColumnStoreConfig, physicalRows int, matchedRows []TypedColumnStringPredicateScanRow) (map[int][]byte, error) {
 	projection := columnPhysicalScanProjection{outputByColumn: make([]int, len(cfg.Columns))}
 	for i := range projection.outputByColumn {
 		projection.outputByColumn[i] = -1
 	}
 	wanted := make(map[int]struct{}, len(matchedRows))
 	for _, row := range matchedRows {
-		if row.RowIndex < 0 {
-			return nil, fmt.Errorf("matched row_index=%d is negative", row.RowIndex)
+		physicalRowIndex, err := typedColumnPhysicalRowIndexFromPrimaryID(row.PrimaryID, physicalRows)
+		if err != nil {
+			return nil, err
 		}
-		wanted[row.RowIndex] = struct{}{}
+		wanted[physicalRowIndex] = struct{}{}
 	}
 	ids := make(map[int][]byte, len(wanted))
 	_, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, ref, collection, &cfg, projection, ColumnPublishOperationInsert, func(row columnPhysicalScanRowView) error {

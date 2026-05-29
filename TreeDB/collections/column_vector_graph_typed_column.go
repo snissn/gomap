@@ -119,6 +119,9 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	if len(typedRefs) == 0 {
 		return nil, errors.New("collections: column_graph typed-column vector source missing typed_column_part refs")
 	}
+	if typedColumnRefsHaveSortKey(typedRefs) {
+		return nil, fmt.Errorf("%w: column_graph typed-column vector source over sorted typed_column_part assets is deferred", ErrColumnQueryPlanUnsupported)
+	}
 
 	graphIDs, err := columnVectorGraphDocumentIDsFromReader(reader)
 	if err != nil {

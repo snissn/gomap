@@ -24,6 +24,11 @@ const (
 	columnManifestIdentityReservedSize          = 4
 	columnManifestIdentityRecordSize            = columnManifestIdentityReservedOffset + columnManifestIdentityReservedSize
 	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
+
+	// typedcolumn currently encodes sort-key marks with a fixed eight-column cap.
+	// Keep typed-column-owned publication validation aligned with that engine cap
+	// until the internal mark format grows.
+	typedColumnPartSortKeyMaxColumns = 8
 )
 
 func newColumnManifestIdentityRecordKey() []byte {
@@ -560,10 +565,24 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		columnTypes[col.Name] = valueType
 		columnPaths[col.Path] = struct{}{}
 	}
+	columnByName := make(map[string]ColumnStoreColumn, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		columnByName[col.Name] = col
+	}
+	if uint64(len(cfg.SortKey)) > columnManifestSortKeyMaxColumns {
+		return fmt.Errorf("collections: sort key columns=%d exceeds cap %d", len(cfg.SortKey), columnManifestSortKeyMaxColumns)
+	}
+	sortKeyColumns := make(map[string]struct{}, len(cfg.SortKey))
+	allSortKeyColumnsTypedPart := len(cfg.SortKey) != 0
 	for _, sortKey := range cfg.SortKey {
-		if _, ok := columnNames[sortKey.Column]; !ok {
+		col, ok := columnByName[sortKey.Column]
+		if !ok {
 			return fmt.Errorf("collections: sort key references unknown column %q", sortKey.Column)
 		}
+		if _, exists := sortKeyColumns[sortKey.Column]; exists {
+			return fmt.Errorf("collections: duplicate sort key column %q", sortKey.Column)
+		}
+		sortKeyColumns[sortKey.Column] = struct{}{}
 		if !columnStoreValueTypeSupportsSort(columnTypes[sortKey.Column]) {
 			return fmt.Errorf("collections: sort key column %q value_type %q is not orderable", sortKey.Column, columnTypes[sortKey.Column])
 		}
@@ -571,6 +590,26 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		case ColumnSortAscending, ColumnSortDescending:
 		default:
 			return fmt.Errorf("collections: unsupported sort direction %q", sortKey.Direction)
+		}
+		if !columnStoreColumnIsTypedColumnPart(col) {
+			allSortKeyColumnsTypedPart = false
+		}
+	}
+	if allSortKeyColumnsTypedPart {
+		if len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
+			return fmt.Errorf("collections: typed_column_part sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
+		}
+		for _, sortKey := range cfg.SortKey {
+			col := columnByName[sortKey.Column]
+			if sortKey.Direction == ColumnSortDescending {
+				return fmt.Errorf("collections: descending typed_column_part sort key column %q is not supported yet", sortKey.Column)
+			}
+			if col.Nullable {
+				return fmt.Errorf("collections: typed_column_part sort key column %q is nullable; null/default ordering is not defined", sortKey.Column)
+			}
+			if !columnStoreValueTypeSupportsTypedColumnPartSort(col.ValueType) {
+				return fmt.Errorf("collections: typed_column_part sort key column %q value_type %q is not supported yet", sortKey.Column, col.ValueType)
+			}
 		}
 	}
 	aggregateNames := make(map[string]struct{}, len(cfg.AggregateMetadata))
@@ -758,6 +797,15 @@ func columnStoreValueTypeSupportsDictionary(valueType ColumnStoreValueType) bool
 func columnStoreValueTypeSupportsSort(valueType ColumnStoreValueType) bool {
 	switch valueType {
 	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
+		return true
+	default:
+		return false
+	}
+}
+
+func columnStoreValueTypeSupportsTypedColumnPartSort(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
 		return true
 	default:
 		return false
@@ -964,6 +1012,13 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		cfg.Locator == nil &&
 		cfg.ControlRootStoragePolicy == "" &&
 		cfg.SchemaHash == 0
+}
+
+func cloneColumnSortKeys(sortKeys []ColumnSortKey) []ColumnSortKey {
+	if len(sortKeys) == 0 {
+		return nil
+	}
+	return append([]ColumnSortKey(nil), sortKeys...)
 }
 
 func (cfg ColumnStoreConfig) copy() ColumnStoreConfig {

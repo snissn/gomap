@@ -550,6 +550,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			return ColumnPublishPreparedAssets{}, err
 		}
 		if len(typedColumnImage) != 0 {
+			typedColumnSortKey, err := typedColumnPartPublicationSortKey(hookInput.ColumnStore, columnStoreTypedColumnPartFields(hookInput.ColumnStore))
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
 			typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
@@ -566,6 +570,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				GenerationID: generation,
 				Reason:       string(input.operation),
 				PartRole:     role,
+				SortKey:      columnSortKeyMatchString(typedColumnSortKey),
 			}
 			prepared.Assets = append(prepared.Assets, prepped)
 		}
