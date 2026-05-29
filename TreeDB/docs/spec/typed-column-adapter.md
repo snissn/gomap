@@ -43,6 +43,26 @@ time.
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
 | `adjacency_list` | represented for dense compatibility; transitional offsets-list direct reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the current #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1983 quarantines the graph-specific storage integration; #1984/#1985 own the generic `uint32_list` primitive. |
 
+## `uint32_list` adapter naming boundary (#1984)
+
+`typed-column-uint32-list-semantics.md` defines the generic logical primitive
+that #1985 must admit through the adapter. The preferred public compatibility
+constant is `ColumnStoreValueUint32List` with string `uint32_list`, but this
+issue intentionally does not add the constant or treat `uint32_list` as a usable
+runtime value type. #1985 owns adding that code vocabulary, adapter
+mapping, conformance tests, writer/fallback reader/direct-view paths, and naming
+regression updates.
+
+When admitted, `uint32_list` uses `raw_uint32_offsets_list` as the physical
+encoding: a first-class offsets/size substream of little-endian `uint64` sentinel
+offsets (`rows+1`, `offsets[0] == 0`) plus a flattened little-endian `uint32`
+values substream. Offset/length-only adapter APIs may read and validate offsets
+without decoding values, but full row-value reconstruction must validate the
+values section and fail closed on missing, corrupt, mismatched, compressed,
+nullable, or nested list assets. The current `ColumnStoreValueAdjacencyList` and
+`adjacency_layout` selector remain legacy/consumer-specific compatibility, not
+the generic primitive.
+
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit
 JSON null maps to null bitmap rows, omitted paths map to default/missing bitmap

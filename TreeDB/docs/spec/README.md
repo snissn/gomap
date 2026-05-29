@@ -214,6 +214,12 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - issue #1983 audit/quarantine contract for separating reusable
     `raw_uint32_offsets_list` mechanics from graph-specific adjacency-source
     storage, with downstream ownership for the #1982 list-adjacency stack.
+- `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`
+  - issue #1984 first-class `uint32_list` semantic contract, including
+    `uint32[]` / conceptual `Array(UInt32)` aliases, `raw_uint32_offsets_list`
+    as the physical encoding, `rows+1` sentinel offsets, validation invariants,
+    length-only offset-substream behavior, v1 deferrals, and legacy
+    `adjacency_list` classification.
 
 ## Canonical Ownership
 
@@ -248,8 +254,10 @@ typed-column maintenance behavior is recorded in
 policy is owned by `typed-column-schema-evolution.md`, #1886 direct-view
 closeout evidence is owned by `typed-column-direct-view-closeout-1899.md`, and
 `uint32_list` adjacency quarantine/audit ownership is recorded in
-`typed-column-uint32-list-adjacency-quarantine.md` until the #1982 stack lands a
-first-class list primitive and vector-index state path.
+`typed-column-uint32-list-adjacency-quarantine.md`; first-class
+`uint32_list` logical semantics are owned by
+`typed-column-uint32-list-semantics.md` until #1985 lands runtime primitive
+support and vector-index state work consumes it.
 User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`,
 `WAL-rejected`, `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in

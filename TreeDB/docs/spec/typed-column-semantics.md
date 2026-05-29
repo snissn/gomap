@@ -7,7 +7,8 @@ scan/reducer code and must not call generic semantic interfaces per row.
 The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 
 - collection logical value type (`bool`, `int64`, `float32`, `double`, `string`,
-  `float32_vector`, `adjacency_list`);
+  `float32_vector`, `adjacency_list`; #1984 defines target `uint32_list`
+  semantics for #1985 runtime admission);
 - `typedcolumn.ColumnType` physical carrier;
 - `typedcolumn.Encoding` layout/codec;
 - operation capability status: `supported`, `unsupported`, or `fallback` with a
@@ -24,6 +25,33 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
 | `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null plus vector direct-payload, similarity, dot-product, and vector-metric capabilities are explicit prepare-time entries for specialized vector kernels. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
 | `adjacency_list` | `adjacency_list` | legacy `raw_uint32_dense`; transitional `raw_uint32_offsets_list` compatibility path | count rows/non-null plus adjacency graph traversal and adjacency-metric semantics are graph-specific entries. Direct payload views are fallback/deferred to #1901 (`adjacency_capability_deferred`). The current offsets-list path is an explicit `ColumnStoreValueAdjacencyList` variable-list selector (`adjacency_layout: "uint32_offsets_list"`) plus internal encoding with `uint64` offsets and `uint32` values, not fixed padded rows. #1983 quarantines that graph-specific logical integration; #1984/#1985 own first-class `uint32_list` semantics where primitive shape validation stays separate from graph ordinal/layer/search validation. Scalar range/sum/min/max/stats/pruning shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
+
+## First-class `uint32_list` semantic contract (#1984)
+
+`TreeDB/docs/spec/typed-column-uint32-list-semantics.md` is the canonical
+semantic contract for the generic integer-list primitive. `uint32_list` is the
+canonical logical type name; `uint32[]` and conceptual `Array(UInt32)` are aliases
+for reasoning and documentation only. The v1 primitive is non-null and
+uint32-focused: every row has one list value, empty rows are valid, null/missing
+lists are out of scope, and compressed, nullable, nested, shared-offset,
+`int32_list`, and `uint64_list` variants are deferred.
+
+The physical encoding for v1 is `raw_uint32_offsets_list`, not a graph type. It
+stores a first-class offsets/size substream and a flattened values substream:
+`offsets []uint64` little-endian with length `rows+1`, `offsets[0] == 0`, and
+`values []uint32` little-endian, where row `i` is
+`values[offsets[i]:offsets[i+1]]`. Validation requires exact offsets byte length
+`(rows+1)*8`, monotonic host-int-bounded offsets, values bytes divisible by 4,
+and final offset equal to the flattened value count.
+
+Offset/length metadata may be validated independently for length-only APIs. Such
+paths can prove row lengths and the required value count from offsets, and can
+compare the final offset to values-section length metadata when available, but
+they must not claim value checksum/integrity or direct-view eligibility until the
+values substream is validated. HNSW adjacency is a consumer above this primitive;
+neighbor ordinal bounds, graph layers, deleted rows, and traversal semantics are
+not primitive `uint32_list` checks. `adjacency_list` remains legacy and
+consumer-specific compatibility until downstream issues replace or isolate it.
 
 ## Scalar float fail-closed policy
 
