@@ -42,7 +42,7 @@ time.
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
 | `uint32_list` | represented | Generic non-null variable-width integer-list sections using `raw_uint32_offsets_list`: a `uint64` sentinel offsets substream (`rows+1`) plus flattened little-endian `uint32` values. Writer, owned fallback reader, and certified direct-view reader are generic and do not require adjacency semantics. |
-| `adjacency_list` | represented for dense compatibility; transitional offsets-list direct reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the current #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1983 quarantines the graph-specific storage integration; #1984/#1985 own the generic `uint32_list` primitive. |
+| `adjacency_list` | represented for dense compatibility; legacy offsets-list compatibility reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1989 quarantines graph-specific storage integration; primary list storage is generic `uint32_list`. |
 
 ## `uint32_list` adapter naming boundary (#1984)
 
@@ -73,11 +73,11 @@ positive `adjacency_degree` and each present row must contain exactly that many
 uint32 neighbors. Offsets-list adjacency uses explicit `adjacency_layout:
 "uint32_offsets_list"`; it must not be inferred from a missing degree and is
 supported by the safe #1915 writer/fallback reader path plus the #1916 certified
-primitive direct-view reader wired through the adapter in #1917. Current
-column-graph rebuild/search code may publish and consume derived offsets-list
-adjacency sources per graph layer, but #1983 marks that source path as
-transitional compatibility rather than the datastore target. Serialized
-typed-column images publish offsets-list columns as one global
+primitive direct-view reader wired through the adapter in #1917. Column-graph
+rebuild/search now publishes and consumes generic `uint32_list` vector-index
+state; #1989 keeps graph-specific offsets-list adjacency sources compatibility-only
+rather than the datastore target. Serialized typed-column images publish
+offsets-list columns as one global
 `row_count + 1` little-endian `uint64` offsets section plus one global flattened
 `uint32` values section, even when the typed-column part has multiple codec
 blocks/granules.
@@ -206,14 +206,13 @@ Production `TreeDB/collections` imports of `TreeDB/internal/typedcolumn` stay
 limited to the adapter seam and scoped vector-graph source/reader seams.
 Publication/reopen logic calls through those seams. Query/vector search
 integration remains graph-owned by the vector-index issues. The active adapter
-stack consumes certified typed-column `float32_vector` payloads and the current
-explicit `raw_uint32_offsets_list` variable adjacency reader; physical row-asset
-direct views and legacy dense adjacency direct views remain fallback/deferred.
-This path publishes fixed-dimension `float32_vector`, fixed-degree dense
-`adjacency_list`, and current explicit offsets-list variable `adjacency_list`
-values. `column_graph` rebuilds may additionally publish, validate, and consume
-durable per-layer offsets-list sources for certified graph search while
-preserving row-asset adjacency as the canonical compatibility source, but #1983
-quarantines that graph-specific source path. New storage work must route through
-generic `uint32_list` typed-column assets and vector-index state; see
-`typed-column-uint32-list-adjacency-quarantine.md`.
+stack consumes certified typed-column `float32_vector` payloads and generic
+`uint32_list` / `raw_uint32_offsets_list` variable-list payloads; physical
+row-asset direct views and legacy dense adjacency direct views remain
+fallback/deferred. This path publishes fixed-dimension `float32_vector`,
+fixed-degree dense `adjacency_list`, compatibility offsets-list
+`adjacency_list`, and primary generic `uint32_list` values. `column_graph`
+rebuilds publish HNSW adjacency through vector-index state `uint32_list` assets;
+#1989 quarantines old per-layer graph-source assets as compatibility-only. New
+storage work must route through generic `uint32_list` typed-column assets and
+vector-index state; see `typed-column-uint32-list-adjacency-quarantine.md`.

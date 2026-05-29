@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -113,9 +114,30 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
 		layer1 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 503, 1, typedcolumn.Uint32List{Rows: 2, Offsets: []uint64{0, 1, 2}, Values: []uint32{1, 0}}, nil)
 		ctx.state.Assets = []columnVectorIndexStateAssetSnapshot{layer1}
+		if got, want := ctx.state.AdjacencyLayerCount, 1; got != want {
+			t.Fatalf("state adjacency layer count=%d want %d", got, want)
+		}
 		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
 		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
-		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "adjacency layers=1 want 2")
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency layer 0")
+	})
+
+	t.Run("missing_highest_adjacency_layer_preserves_expected_count", func(t *testing.T) {
+		d := openCollectionCommandWALDB(t, t.TempDir())
+		defer func() { _ = d.Close() }()
+		assetRows1989 := []columnVectorGraphAssetRow{
+			{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 1, 1, 1}},
+			{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{columnVectorGraphLayeredAdjacencyMagic, 1, 1, 0, 1, 0}},
+		}
+		ctx := makeColumnVectorIndexStateAdjacencyStatusContextWithRows1987(t, d, assetRows1989)
+		wantLayers := columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(t, assetRows1989)
+		if got := ctx.state.AdjacencyLayerCount; got != wantLayers {
+			t.Fatalf("state adjacency layer count=%d want %d", got, wantLayers)
+		}
+		ctx.state.Assets = ctx.state.Assets[:1]
+		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
+		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, fmt.Sprintf("adjacency layers=1 want %d", wantLayers))
 	})
 
 	t.Run("out_of_bounds_ordinal", func(t *testing.T) {
@@ -215,16 +237,19 @@ type columnVectorIndexStateAdjacencyStatusContext1987 struct {
 }
 
 func makeColumnVectorIndexStateAdjacencyStatusContext1987(tb testing.TB, d *backenddb.DB) columnVectorIndexStateAdjacencyStatusContext1987 {
+	return makeColumnVectorIndexStateAdjacencyStatusContextWithRows1987(tb, d, []columnVectorGraphAssetRow{
+		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
+		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
+	})
+}
+
+func makeColumnVectorIndexStateAdjacencyStatusContextWithRows1987(tb testing.TB, d *backenddb.DB, rows []columnVectorGraphAssetRow) columnVectorIndexStateAdjacencyStatusContext1987 {
 	tb.Helper()
 	baseCfg, err := normalizeColumnStoreConfig("docs", testColumnGraphBaseColumnStoreConfigV2A())
 	if err != nil {
 		tb.Fatalf("normalize base column store: %v", err)
 	}
 	def := testColumnGraphVectorIndexDefinitionV2A()
-	rows := []columnVectorGraphAssetRow{
-		{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1}},
-		{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0}},
-	}
 	prepared, err := prepareColumnVectorGraphPhysicalAsset(d.ColumnAssetRootDir(), "docs", *baseCfg, def, 2, 1, 1, rows)
 	if err != nil {
 		tb.Fatalf("prepareColumnVectorGraphPhysicalAsset: %v", err)
@@ -233,14 +258,12 @@ func makeColumnVectorIndexStateAdjacencyStatusContext1987(tb testing.TB, d *back
 	records, identity := testColumnGraphManifestRecordsV2A(tb, *baseCfg, def, identity, prepared.Ref, prepared.Bytes, prepared.RowCount)
 	graph := graphManifestFromRecords1918(tb, records, def)
 	statePartID := nextColumnVectorGraphPartIDAfter(prepared.Ref.PartID, prepared.Ref.PartID)
-	for _, source := range prepared.AdjacencyLayerSources {
-		statePartID = nextColumnVectorGraphPartIDAfter(statePartID, source.Ref.PartID)
-	}
 	preparedStateAssets, err := prepareColumnVectorIndexStateAdjacencyAssets(d.ColumnAssetRootDir(), "docs", *baseCfg, def, graph.BaseManifestGeneration, statePartID, rows)
 	if err != nil {
 		tb.Fatalf("prepareColumnVectorIndexStateAdjacencyAssets: %v", err)
 	}
 	state := columnVectorIndexStateSnapshotFromGraph(graph)
+	state.AdjacencyLayerCount = len(preparedStateAssets)
 	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(preparedStateAssets)
 	records, identity = appendVectorIndexStateRecordForTest1986(tb, *baseCfg, records, identity, state)
 	baseCfg.ActiveManifest = &identity
@@ -274,6 +297,7 @@ func appendCompleteVectorIndexStateForGraphTest1987(tb testing.TB, d *backenddb.
 		tb.Fatalf("prepareColumnVectorIndexStateAdjacencyAssets: %v", err)
 	}
 	state := columnVectorIndexStateSnapshotFromGraph(graph)
+	state.AdjacencyLayerCount = len(preparedAdjacency)
 	state.Assets = columnVectorIndexStateAdjacencyAssetsFromPrepared(preparedAdjacency)
 	if invNormAsset, ok := columnVectorGraphInvNormStateAssetSnapshot(preparedInvNorm); ok {
 		state.Assets = append(state.Assets, invNormAsset)
@@ -301,6 +325,36 @@ func nextColumnVectorGraphPartIDAfterGraphSnapshot1987(graph columnVectorGraphMa
 		next = nextColumnVectorGraphPartIDAfter(next, graph.Layer0AdjacencySource.Ref.PartID)
 	}
 	return next
+}
+
+func columnVectorGraphExpectedAdjacencyLayerCountFromAssetRows1989(tb testing.TB, rows []columnVectorGraphAssetRow) int {
+	tb.Helper()
+	expectedLayers := 1
+	for rowIdx := range rows {
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].Adjacency)
+		if err != nil {
+			tb.Fatalf("asset row %d adjacency max layer: %v", rowIdx, err)
+		}
+		if maxLayer+1 > expectedLayers {
+			expectedLayers = maxLayer + 1
+		}
+	}
+	return expectedLayers
+}
+
+func columnVectorGraphExpectedAdjacencyLayerCountFromScannedRows1989(tb testing.TB, rows []columnGraphRebuildScannedRowV2A) int {
+	tb.Helper()
+	expectedLayers := 1
+	for rowIdx := range rows {
+		maxLayer, err := columnVectorGraphAdjacencyMaxLayer(rows[rowIdx].adjacency)
+		if err != nil {
+			tb.Fatalf("scanned row %d adjacency max layer: %v", rowIdx, err)
+		}
+		if maxLayer+1 > expectedLayers {
+			expectedLayers = maxLayer + 1
+		}
+	}
+	return expectedLayers
 }
 
 func columnVectorGraphStateRowsForTest1987(rows []columnVectorGraphAssetRow, rowCount, dims, layerCount int) []columnVectorGraphAssetRow {
@@ -474,10 +528,19 @@ func assertColumnVectorIndexStateAdjacencyAssetsMatchScanned1987(tb testing.TB, 
 		tb.Fatalf("state=%+v does not match graph=%+v", state, graph)
 	}
 	assets := columnVectorIndexStateAdjacencyAssetsByLayer1987(tb, state)
-	if len(assets) != graph.AdjacencyLayerCount || len(assets) == 0 {
-		tb.Fatalf("state adjacency assets=%d graph layers=%d", len(assets), graph.AdjacencyLayerCount)
+	expectedLayers := columnVectorGraphExpectedAdjacencyLayerCountFromScannedRows1989(tb, rows)
+	if state.AdjacencyLayerCount > 0 {
+		if state.AdjacencyLayerCount != expectedLayers {
+			tb.Fatalf("state adjacency layer count=%d want %d from scanned rows", state.AdjacencyLayerCount, expectedLayers)
+		}
+		expectedLayers = state.AdjacencyLayerCount
+	} else if graph.AdjacencyLayerCount > 0 {
+		expectedLayers = graph.AdjacencyLayerCount
 	}
-	for layer := 0; layer < graph.AdjacencyLayerCount; layer++ {
+	if len(assets) != expectedLayers || expectedLayers == 0 {
+		tb.Fatalf("state adjacency assets=%d expected layers=%d graph legacy layers=%d state layers=%d", len(assets), expectedLayers, graph.AdjacencyLayerCount, state.AdjacencyLayerCount)
+	}
+	for layer := 0; layer < expectedLayers; layer++ {
 		asset, ok := assets[layer]
 		if !ok {
 			tb.Fatalf("missing state adjacency layer %d assets=%+v", layer, assets)

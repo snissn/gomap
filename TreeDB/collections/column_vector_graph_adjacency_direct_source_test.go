@@ -180,18 +180,15 @@ func TestColumnVectorGraphLayer0AdjacencySourceAbsentFallback1919(t *testing.T) 
 	}
 }
 
-func TestColumnVectorGraphLayer0AdjacencySourceChecksumFallback1919(t *testing.T) {
-	input := columnGraphRebuildSyntheticRowsV2A(48, 16)
-	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 16, 8, input)
+func TestColumnVectorGraphLegacyAdjacencySourceChecksumIgnoredWithState1989(t *testing.T) {
+	d, col, def, graph, rows := openManualColumnGraphAllLayerSourceSearchFixture1921(t, nil)
 	defer func() { _ = d.Close() }()
-	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-		t.Fatalf("RebuildVectorIndex: %v", err)
+	if !graph.Layer0AdjacencySource.Present {
+		t.Fatalf("manual compatibility fixture missing legacy layer-0 source: %+v", graph)
 	}
-	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
-	graph := graphManifestFromRecords1918(t, records, def)
 	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), graph.Layer0AdjacencySource.Ref)
 	if err != nil {
-		t.Fatalf("read source: %v", err)
+		t.Fatalf("read legacy source: %v", err)
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
@@ -199,7 +196,7 @@ func TestColumnVectorGraphLayer0AdjacencySourceChecksumFallback1919(t *testing.T
 	}
 	offsetsSection, _, ok := image.ColumnOffsetsListSections(columnVectorGraphLayer0AdjacencySourceColumnName)
 	if !ok || offsetsSection.Length < 16 {
-		t.Fatalf("offsets section=%+v ok=%v", offsetsSection, ok)
+		t.Fatalf("legacy offsets section=%+v ok=%v", offsetsSection, ok)
 	}
 	path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), graph.Layer0AdjacencySource.Ref)
 	if err != nil {
@@ -207,34 +204,34 @@ func TestColumnVectorGraphLayer0AdjacencySourceChecksumFallback1919(t *testing.T
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
-		t.Fatalf("OpenFile source: %v", err)
+		t.Fatalf("OpenFile legacy source: %v", err)
 	}
 	corruptByte := []byte{raw[offsetsSection.Offset+8] ^ 0xff}
 	if _, err := file.WriteAt(corruptByte, graph.Layer0AdjacencySource.Ref.Offset+int64(offsetsSection.Offset+8)); err != nil {
 		_ = file.Close()
-		t.Fatalf("WriteAt corrupt source: %v", err)
+		t.Fatalf("WriteAt corrupt legacy source: %v", err)
 	}
 	if err := file.Close(); err != nil {
-		t.Fatalf("Close corrupt source: %v", err)
+		t.Fatalf("Close corrupt legacy source: %v", err)
 	}
 	status, err := col.VectorIndexStatus(def.Name)
 	if err != nil {
-		t.Fatalf("VectorIndexStatus after corrupt optional source: %v", err)
+		t.Fatalf("VectorIndexStatus after corrupt compatibility source: %v", err)
 	}
 	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
 
 	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 	if err != nil {
-		t.Fatalf("open reader after corrupt source: %v", err)
+		t.Fatalf("open reader after corrupt compatibility source: %v", err)
 	}
 	defer func() { _ = reader.Close() }()
 	if reader.layer0AdjacencySource == nil || reader.adjacencyLayerSources == nil {
 		t.Fatalf("source=%v all_layers=%v fallback=%s want typed adjacency state despite corrupt legacy source", reader.layer0AdjacencySource != nil, reader.adjacencyLayerSources != nil, reader.layer0AdjacencySourceFallbackReason)
 	}
 	var scratch columnVectorGraphNativeSearchScratch
-	got, stats, err := reader.SearchCosine(input[5].vector, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: 32}, &scratch)
+	got, stats, err := reader.SearchCosine(rows[0].Vector, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: len(rows)}, &scratch)
 	if err != nil {
-		t.Fatalf("SearchCosine after corrupt source: %v", err)
+		t.Fatalf("SearchCosine after corrupt compatibility source: %v", err)
 	}
 	if len(got) == 0 || stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
 		t.Fatalf("results=%d stats=%+v want typed adjacency state and quarantined legacy source corruption", len(got), stats)

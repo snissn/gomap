@@ -198,7 +198,7 @@ type ColumnStoreColumn struct {
 	// AdjacencyLayout selects the explicit adjacency_list physical layout. Empty
 	// means fixed dense compatibility; uint32_offsets_list is the current
 	// quarantined compatibility selector for adapter writer/fallback/direct reads,
-	// not the future generic uint32_list API.
+	// not the generic uint32_list API.
 	AdjacencyLayout    ColumnAdjacencyListLayout `json:"adjacency_layout,omitempty"`
 	FixedWidthEncoding ColumnFixedWidthEncoding  `json:"fixed_width_encoding,omitempty"`
 }
