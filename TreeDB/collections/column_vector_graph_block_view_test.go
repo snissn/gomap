@@ -165,6 +165,63 @@ func TestColumnVectorGraphBlockViewRejectsMalformedRowsV1(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphBlockViewInvNormStateFallbackV1(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{0, 2, 0}},
+	}
+	dir, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		_ = d.Close()
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	reader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	if !reader.usesInvNormStateSource() {
+		t.Fatal("reader did not bind inverse-norm state source")
+	}
+	plan, err := newColumnVectorGraphSearchPlan(reader)
+	if err != nil {
+		t.Fatalf("newColumnVectorGraphSearchPlan: %v", err)
+	}
+	view, ref, err := plan.blockViewForOrdinal(1)
+	if err != nil {
+		t.Fatalf("blockViewForOrdinal: %v", err)
+	}
+	want, err := columnVectorGraphInvNorm(rows[1].vector)
+	if err != nil {
+		t.Fatalf("columnVectorGraphInvNorm: %v", err)
+	}
+	if got, err := view.invNorm(ref.rowIndex); err != nil || math.Abs(float64(got-want)) > 1e-6 {
+		t.Fatalf("invNorm state got=%v err=%v want=%v", got, err, want)
+	}
+	if reader.invNormSource == nil {
+		t.Fatal("reader.invNormSource=nil want bound source")
+	}
+	if err := reader.invNormSource.Close(); err != nil {
+		t.Fatalf("reader.invNormSource.Close: %v", err)
+	}
+	if got, err := view.invNorm(ref.rowIndex); err != nil || math.Abs(float64(got-want)) > 1e-6 {
+		t.Fatalf("invNorm legacy fallback got=%v err=%v want=%v", got, err, want)
+	}
+}
+
 func TestColumnVectorGraphAdjacencyLittleEndianPayloadFixtureV1(t *testing.T) {
 	raw := columnVectorGraphAlignedBytesForTest(t, 8)
 	columnVectorGraphPutLittleEndianUint32sForTest(raw, []uint32{7, 11})

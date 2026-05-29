@@ -440,6 +440,13 @@ func (v *columnVectorGraphBlockView) invNorm(rowIndex int) (float32, error) {
 	if err := v.checkRowIndex(rowIndex); err != nil {
 		return 0, err
 	}
+	if v.invNormStateSource {
+		ordinal := v.ordinalForRowIndex(rowIndex)
+		if invNorm, _, _, ok := v.reader.invNormForOrdinal(ordinal); ok {
+			return invNorm, nil
+		}
+		return v.legacyInvNorm(rowIndex)
+	}
 	return v.invNormUnchecked(rowIndex), nil
 }
 
