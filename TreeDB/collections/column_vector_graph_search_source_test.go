@@ -214,6 +214,36 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 			t.Fatalf("source=%g legacy=%g stats=%+v want graph-row norm fallback parity", sourceScore, legacyScore, stats)
 		}
 	})
+
+	t.Run("stale_prebound_norm_state_fallback", func(t *testing.T) {
+		staleReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+		if err != nil {
+			t.Fatalf("open stale reader: %v", err)
+		}
+		defer func() { _ = staleReader.Close() }()
+		stalePlan, staleScratch, queryInvNorm := prepareColumnVectorGraphScoreSourceTestPlan1968(t, staleReader, rows[1].vector)
+		if stalePlan.scoreSource.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal || stalePlan.scoreSource.invNormSource == nil {
+			t.Fatalf("stale test source norm=%s invNormSource=%v want prebound state", stalePlan.scoreSource.normKind, stalePlan.scoreSource.invNormSource != nil)
+		}
+		if err := staleReader.invNormSource.Close(); err != nil {
+			t.Fatalf("close inv_norm source: %v", err)
+		}
+		var stats columnVectorGraphNativeSearchStats
+		sourceScore, err := stalePlan.scoreSource.scoreOrdinal(stalePlan, nil, rows[1].vector, queryInvNorm, 1, staleScratch, &stats)
+		if err != nil {
+			t.Fatalf("stale source score: %v", err)
+		}
+		legacyReader := *staleReader
+		legacyReader.invNormSource = nil
+		legacyReader.invNormStateUnavailable = true
+		legacyScore, err := legacyReader.scoreOrdinalLegacy(stalePlan, nil, rows[1].vector, queryInvNorm, 1, staleScratch, nil)
+		if err != nil {
+			t.Fatalf("stale legacy score: %v", err)
+		}
+		if math.Abs(sourceScore-legacyScore) > 1e-6 || stats.NormSourceFallbacks != 1 || stats.NormStaleHandles != 1 || stats.NormMmapDirectViews+stats.NormHeapCopyTypedViews+stats.NormScratchDecodes != 0 {
+			t.Fatalf("source=%g legacy=%g stats=%+v want stale norm fallback with counters", sourceScore, legacyScore, stats)
+		}
+	})
 }
 
 func TestColumnVectorGraphSearchSourceAggregateCounters1968(t *testing.T) {

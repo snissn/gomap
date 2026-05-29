@@ -51,6 +51,7 @@ type columnVectorGraphSearchSource struct {
 	vectorFallbackDescription string
 
 	normKind           columnVectorGraphSearchNormSourceKind
+	invNormSource      *columnVectorGraphInvNormStateSource
 	invNormByOrdinal   []float32
 	invNormOutcome     columnVectorGraphInvNormStateOutcome
 	invNormFallback    typeddecode.Reason
@@ -110,6 +111,7 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 
 	if values, outcome, fallbackReason, reason, ok := columnVectorGraphInvNormSourceUsableForSearch(reader.invNormSource, s.rowCount); ok {
 		s.normKind = columnVectorGraphSearchNormSourceInvNormByOrdinal
+		s.invNormSource = reader.invNormSource
 		s.invNormByOrdinal = values
 		s.invNormOutcome = outcome
 		s.invNormFallback = fallbackReason
@@ -278,11 +280,14 @@ func (s *columnVectorGraphSearchSource) vectorForOrdinal(view *columnVectorGraph
 
 func (s *columnVectorGraphSearchSource) invNormForOrdinal(view *columnVectorGraphBlockView, rowIndex int, ordinal int, stats *columnVectorGraphNativeSearchStats) (float32, error) {
 	if s.normKind == columnVectorGraphSearchNormSourceInvNormByOrdinal {
-		if ordinal >= 0 && ordinal < len(s.invNormByOrdinal) {
+		if s.invNormSource != nil && (s.invNormSource.closed || (s.invNormSource.handle != nil && s.invNormSource.handle.Released())) {
+			s.normFallbackReason = typeddecode.ReasonStaleHandle
+		} else if ordinal >= 0 && ordinal < len(s.invNormByOrdinal) {
 			recordColumnVectorGraphInvNormSourceStats(stats, s.invNormOutcome, s.invNormFallback)
 			return s.invNormByOrdinal[ordinal], nil
+		} else {
+			s.normFallbackReason = typeddecode.ReasonRowCountMismatch
 		}
-		s.normFallbackReason = typeddecode.ReasonRowCountMismatch
 	}
 	if s.normFallbackReason != "" {
 		recordColumnVectorGraphInvNormFallbackReasonStats(stats, s.normFallbackReason)
