@@ -64,6 +64,62 @@ func TestTypedColumnPartSortKeyTimeUSPersistsAscendingReopen1948(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPartSortKeyBoolPersistsAscendingReopen1948(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
+		{Name: "flag", Path: "flag", ValueType: ColumnStoreValueBool, Owner: TypedStorageOwnerColumnPart},
+	}, SortKey: []ColumnSortKey{{Column: "flag"}}}
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("OpenCollection setup: %v", err)
+	}
+	ids := [][]byte{[]byte("e0"), []byte("e1"), []byte("e2"), []byte("e3")}
+	docs := [][]byte{[]byte(`{"flag":true}`), []byte(`{"flag":false}`), []byte(`{"flag":true}`), []byte(`{"flag":false}`)}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		_ = d.Close()
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close before reopen: %v", err)
+	}
+	reopen, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open reopened DB: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	reopened, err := NewCollectionManager(reopen).OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	rows := typedColumnPartRowsForGeneration1778(t, reopen, reopened, 1)
+	assertTypedColumnSortKeyPrimaryIDs1948(t, rows, []int64{1, 3, 0, 2})
+	assertTypedColumnSortKeyManifestAndImage1948(t, reopen, reopened, []ColumnSortKey{{Column: "flag"}}, []int64{1, 3, 0, 2})
+	gotFlags := make([]bool, len(rows))
+	for i, row := range rows {
+		gotFlags[i] = row.Values["flag"].Bool
+	}
+	if fmt.Sprint(gotFlags) != "[false false true true]" {
+		t.Fatalf("bool sort order=%v want false/false/true/true", gotFlags)
+	}
+}
+
 func TestTypedColumnPartSortKeyInt64ScanMapsPrimaryIDsToDocuments1948(t *testing.T) {
 	events := []columnPhysicalJSONBenchParityEventP0{
 		{ID: "e0", TimeUS: 30, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:3"},
