@@ -120,6 +120,8 @@ type ColumnPhysicalQueryDiagnostics struct {
 	MutationParts               int
 	DecodedBlocks               int
 	DirectReduceBlocks          int
+	TypedColumnPartSections     int
+	TypedColumnPartSectionBytes uint64
 	MetadataHits                int
 	MetadataMisses              int
 	DictionaryCodeHits          int
@@ -189,6 +191,7 @@ type ColumnPhysicalQueryRunner struct {
 	int64Hour    *columnInt64ValueHourCountRunner
 	dictInt64    *columnDictionaryInt64GroupRunner
 	dictHour     *columnDictionaryHourCountRunner
+	typedColumn  *columnTypedColumnPhysicalQueryRunner
 	metadata     *columnAggregateMetadataRunner
 	closed       bool
 }
@@ -346,15 +349,24 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	readCache.returnViews = true
 	var metadata *columnAggregateMetadataRunner
 	var exec *columnPhysicalQueryExecutor
+	typedColumn, typedColumnCandidate, err := prepareColumnTypedColumnPhysicalQueryRunner(view, req, &readCache)
+	if err != nil {
+		_ = readCache.close()
+		return nil, err
+	}
 	if req.AggregateMetadataName != "" && columnPhysicalQueryHasPredicates(req) {
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
 	}
-	if req.Kind == ColumnPhysicalQueryHourCount && columnPhysicalQueryHasPredicates(req) {
+	if typedColumn == nil && req.Kind == ColumnPhysicalQueryHourCount && columnPhysicalQueryHasPredicates(req) {
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: hour-count physical predicates require a fused grouped-hour reducer", ErrColumnQueryPlanUnsupported)
 	}
-	if req.AggregateMetadataName != "" {
+	if typedColumn != nil {
+		// The typed-column part runner is prepared before compatibility sidecar
+		// runners so JSONBench-style typed-owned fields use the sectioned
+		// tcs1_typed_column_part image as their production substrate.
+	} else if req.AggregateMetadataName != "" {
 		metadata, err = prepareColumnAggregateMetadataRunner(view, req, &readCache)
 		if err != nil {
 			_ = readCache.close()
@@ -408,15 +420,19 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		_ = readCache.close()
 		return nil, err
 	}
-	if req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
+	if typedColumnCandidate && typedColumn == nil {
+		_ = readCache.close()
+		return nil, fmt.Errorf("%w: typed-column part physical query was selected but no runner was prepared", ErrColumnQueryPlanUnsupported)
+	}
+	if typedColumn == nil && req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: fused count-distinct physical query requires dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
 	}
-	if req.Kind == ColumnPhysicalQueryGroupHourCount && dictHour == nil {
+	if typedColumn == nil && req.Kind == ColumnPhysicalQueryGroupHourCount && dictHour == nil {
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: grouped-hour physical query requires dictionary/int64 sidecar reducers", ErrColumnQueryPlanUnsupported)
 	}
-	if columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil && dictHour == nil {
+	if typedColumn == nil && columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil && dictHour == nil {
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: physical predicates require supported dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
 	}
@@ -433,6 +449,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		int64Hour:    int64Hour,
 		dictInt64:    dictInt64,
 		dictHour:     dictHour,
+		typedColumn:  typedColumn,
 		metadata:     metadata,
 	}, nil
 }
@@ -462,6 +479,9 @@ func (r *ColumnPhysicalQueryRunner) Close() error {
 func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	if r == nil || r.closed {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
+	}
+	if r.typedColumn != nil {
+		return r.typedColumn.run(r.view, r.req)
 	}
 	if r.dictCount != nil {
 		result := r.dictCount.run(r.view, r.req)
@@ -892,6 +912,9 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 }
 
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
+		return result, err
+	}
 	if result, ok, err := c.runColumnPhysicalQueryDictionaryCodesInSnapshotView(view, req); ok {
 		return result, err
 	}
@@ -1252,6 +1275,8 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	}
 	left.DecodedBlocks += right.DecodedBlocks
 	left.DirectReduceBlocks += right.DirectReduceBlocks
+	left.TypedColumnPartSections += right.TypedColumnPartSections
+	left.TypedColumnPartSectionBytes += right.TypedColumnPartSectionBytes
 	left.MetadataHits += right.MetadataHits
 	left.MetadataMisses += right.MetadataMisses
 	left.DictionaryCodeHits += right.DictionaryCodeHits

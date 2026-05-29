@@ -1853,8 +1853,12 @@ func TestTypedColumnPhysicalQueryFailsClosedForColumnPartFields(t *testing.T) {
 func runTypedColumnPhysicalQueryFailsClosedForColumnPartFields1778(t *testing.T) {
 	d, col, _ := setupSingleTypedColumnPart1755(t)
 	defer func() { _ = d.Close() }()
-	if _, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"}); !errors.Is(err, ErrColumnQueryPlanUnsupported) {
-		t.Fatalf("RunColumnPhysicalQuery typed-column group err=%v want ErrColumnQueryPlanUnsupported", err)
+	typedResult, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "kind"})
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery typed-column group: %v", err)
+	}
+	if typedResult.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || typedResult.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone || typedResult.Diagnostics.TypedColumnPartSections == 0 {
+		t.Fatalf("typed-column group diagnostics=%+v want typed_column_part_section without fallback", typedResult.Diagnostics)
 	}
 	result, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryHourCount, ValueColumn: "time_us"})
 	if err != nil {
