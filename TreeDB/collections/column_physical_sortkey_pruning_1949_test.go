@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -320,17 +321,7 @@ func assertQ4BMarkPrunedDiagnostics1949(t testing.TB, label string, diag ColumnP
 }
 
 func intString1949(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	buf := [20]byte{}
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	return string(buf[i:])
+	return strconv.Itoa(v)
 }
 
 func equalInts1949(left, right []int) bool {
