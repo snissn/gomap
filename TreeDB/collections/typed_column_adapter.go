@@ -223,7 +223,7 @@ func typedColumnAdapterMapField(field TypedStorageField) (typedColumnAdapterColu
 		if field.AdjacencyDegree != 0 {
 			return typedColumnAdapterColumn{}, fmt.Errorf("%w: uint32_list adjacency_degree=%d must be zero", errTypedColumnAdapterUnsupportedType, field.AdjacencyDegree)
 		}
-		if field.AdjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
+		if field.AdjacencyLayout != "" {
 			return typedColumnAdapterColumn{}, fmt.Errorf("%w: uint32_list must not set adjacency_layout %q", errTypedColumnAdapterUnsupportedType, field.AdjacencyLayout)
 		}
 		if field.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {

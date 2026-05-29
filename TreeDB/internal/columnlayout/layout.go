@@ -471,7 +471,9 @@ func (c Capabilities) Supports(op Operation) Capability {
 		switch op {
 		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
 			return Unsupported(op, ReasonUint32ListScalarUnsupported, "uint32_list layouts reject scalar aggregate/range shortcuts")
-		case OpUint32ListDirectView, OpDirectView:
+		case OpDirectView:
+			return Unsupported(op, ReasonOperationUnsupported, "uint32_list direct views require split offsets/value validation through OpUint32ListDirectView")
+		case OpUint32ListDirectView:
 			if c.Descriptor.FixedWidthElements != 0 {
 				return Unsupported(op, ReasonEncodingPhysicalMismatch, "raw_uint32_offsets_list uint32_list layouts require fixed_width_elements=0")
 			}

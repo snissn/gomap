@@ -114,6 +114,10 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		return base
 	}
 	if valueType == ColumnStoreValueUint32List {
+		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
+			base.Reason = "uint32_list direct-view classification only supports the generic typed-column consumer"
+			return base
+		}
 		base.Support = typedColumnDirectViewActiveLittleEndianCandidate
 		base.PayloadEndian = "little"
 		base.ElementSize = 4

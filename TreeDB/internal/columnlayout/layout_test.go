@@ -224,6 +224,9 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 	if cap := uint32List.Supports(OpUint32ListDirectView); !cap.Supported() {
 		t.Fatalf("uint32_list direct cap=%+v want supported", cap)
 	}
+	if cap := uint32List.Supports(OpDirectView); cap.Supported() || cap.Reason != ReasonOperationUnsupported {
+		t.Fatalf("uint32_list generic direct cap=%+v want split-section operation unsupported", cap)
+	}
 	if cap := uint32List.SupportsSemanticOperation(columnsemantics.OpUint32ListDirectPayload); !cap.Supported() {
 		t.Fatalf("uint32_list semantic direct cap=%+v want supported", cap)
 	}
