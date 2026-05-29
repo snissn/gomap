@@ -1,5 +1,3 @@
-//go:build purego || !gomap_simd_batch || (!amd64 && !arm64)
-
 package vectorops
 
 var dotFloat32BatchImplementation = "per_row_" + DotFloat32Implementation()
