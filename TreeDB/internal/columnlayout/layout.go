@@ -27,6 +27,7 @@ const (
 	OpDictionaryReducer      Operation = "aggregate.dictionary_reducer"
 	OpScalarNumericAggregate Operation = "aggregate.scalar_numeric"
 	OpVectorDirectView       Operation = "direct.vector_payload"
+	OpUint32ListDirectView   Operation = "direct.uint32_list_payload"
 	OpAdjacencyDirectView    Operation = "direct.adjacency_payload"
 	OpVectorSimilarity       Operation = "predicate.vector_similarity"
 	OpVectorMetricReducer    Operation = "aggregate.vector_metrics"
@@ -71,6 +72,7 @@ const (
 	ReasonDictionaryCollationUnproven            ReasonCode = "layout_dictionary_collation_unproven"
 	ReasonFloatBitPatternNotNumeric              ReasonCode = "layout_float_bit_pattern_not_numeric"
 	ReasonVectorScalarUnsupported                ReasonCode = "layout_vector_scalar_unsupported"
+	ReasonUint32ListScalarUnsupported            ReasonCode = "layout_uint32_list_scalar_unsupported"
 	ReasonAdjacencyScalarUnsupported             ReasonCode = "layout_adjacency_scalar_unsupported"
 	ReasonAdjacencyDirectViewDeferred            ReasonCode = "layout_adjacency_direct_view_deferred"
 	ReasonAdjacencyOffsetsListDirectViewDeferred ReasonCode = "layout_adjacency_offsets_list_direct_view_deferred"
@@ -368,11 +370,11 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		caps.Layout.Endian = EndianLittle
 		caps.Layout.AlignmentBytes = 4
 		caps.Layout.LengthMultipleBytes = 4
-		if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList && desc.FixedWidthElements == 0 {
+		if ((desc.Logical == columnsemantics.LogicalUint32List && desc.Physical == typedcolumn.ColumnTypeUint32List) || (desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList)) && desc.FixedWidthElements == 0 {
 			caps.DirectView = directView(desc, 4, EndianLittle, 4)
 			caps.DirectView.Lifetime = "caller-owned prepared/session offsets and values resource handles"
 			caps.DirectView.ValidationBoundary = "prepare_and_offsets_values_read"
-		} else if desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList {
+		} else if (desc.Logical == columnsemantics.LogicalUint32List && desc.Physical == typedcolumn.ColumnTypeUint32List) || (desc.Logical == columnsemantics.LogicalAdjacencyList && desc.Physical == typedcolumn.ColumnTypeAdjacencyList) {
 			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
 		} else {
 			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
@@ -465,6 +467,18 @@ func (c Capabilities) Supports(op Operation) Capability {
 			}
 		}
 	}
+	if c.Descriptor.Logical == columnsemantics.LogicalUint32List {
+		switch op {
+		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
+			return Unsupported(op, ReasonUint32ListScalarUnsupported, "uint32_list layouts reject scalar aggregate/range shortcuts")
+		case OpDirectView:
+			return Unsupported(op, ReasonOperationUnsupported, "uint32_list direct views require split offsets/value validation through OpUint32ListDirectView")
+		case OpUint32ListDirectView:
+			if c.Descriptor.FixedWidthElements != 0 {
+				return Unsupported(op, ReasonEncodingPhysicalMismatch, "raw_uint32_offsets_list uint32_list layouts require fixed_width_elements=0")
+			}
+		}
+	}
 	if c.Descriptor.Logical == columnsemantics.LogicalAdjacencyList {
 		switch op {
 		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
@@ -551,6 +565,14 @@ func (c Capabilities) Supports(op Operation) Capability {
 			return Supported(op)
 		}
 		return Unsupported(op, c.DirectView.Reason, "vector payload layout is not eligible for direct view")
+	case OpUint32ListDirectView:
+		if c.Descriptor.Logical != columnsemantics.LogicalUint32List {
+			return Unsupported(op, ReasonOperationUnsupported, "layout is not a uint32_list payload")
+		}
+		if c.DirectView.Eligible {
+			return Supported(op)
+		}
+		return Unsupported(op, c.DirectView.Reason, "uint32_list payload layout is not eligible for direct view")
 	case OpAdjacencyDirectView:
 		if c.Descriptor.Logical != columnsemantics.LogicalAdjacencyList {
 			return Unsupported(op, ReasonOperationUnsupported, "layout is not an adjacency payload")
@@ -630,6 +652,8 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		return Unsupported(Operation(op), ReasonOperationUnsupported, "layout lacks bool count support")
 	case columnsemantics.OpVectorDirectPayload:
 		return c.Supports(OpVectorDirectView)
+	case columnsemantics.OpUint32ListDirectPayload:
+		return c.Supports(OpUint32ListDirectView)
 	case columnsemantics.OpVectorSimilarity:
 		return c.Supports(OpVectorSimilarity)
 	case columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorMetrics:
@@ -667,6 +691,8 @@ func (c Capabilities) supportsDirectScalarValueCarrier() Capability {
 		return Unsupported(op, ReasonFloatBitPatternNotNumeric, "float bit-pattern storage is not a direct scalar value carrier")
 	case columnsemantics.LogicalFloat32Vector:
 		return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar direct-value carriers")
+	case columnsemantics.LogicalUint32List:
+		return Unsupported(op, ReasonUint32ListScalarUnsupported, "uint32_list layouts reject scalar direct-value carriers")
 	case columnsemantics.LogicalAdjacencyList:
 		return Unsupported(op, ReasonAdjacencyScalarUnsupported, "adjacency layouts reject scalar direct-value carriers")
 	default:
@@ -724,6 +750,8 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat64
 	case typedcolumn.ColumnTypeFloat32Vector:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
+	case typedcolumn.ColumnTypeUint32List:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32OffsetsList
 	case typedcolumn.ColumnTypeAdjacencyList:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense || encoding == typedcolumn.EncodingRawUint32OffsetsList
 	}

@@ -2,15 +2,51 @@ package typedcolumn
 
 import "fmt"
 
-// RawUint32OffsetsList is the owned fallback representation for the v1
-// variable-length uint32 list primitive. It is consumer-neutral storage
+// Uint32List is the generic owned representation for the v1 non-null
+// variable-length uint32_list primitive. It is consumer-neutral storage
 // machinery: HNSW adjacency may consume it, but graph-specific semantics belong
 // above this layer. Offsets has Rows+1 entries and Values stores all row values
 // concatenated; row i spans Values[Offsets[i]:Offsets[i+1]].
-type RawUint32OffsetsList struct {
+type Uint32List struct {
 	Rows    int
 	Offsets []uint64
 	Values  []uint32
+}
+
+// RawUint32OffsetsList is retained as the physical-encoding compatibility name
+// for existing raw_uint32_offsets_list code. New logical APIs should prefer
+// Uint32List.
+type RawUint32OffsetsList = Uint32List
+
+// Uint32ListView is the same row-slicing contract used by direct views: Offsets
+// and Values may alias a mmap/heap resource whose lifetime is owned elsewhere.
+type Uint32ListView = Uint32List
+
+// Validate checks the complete offsets/value shape for this uint32_list value.
+func (l Uint32List) Validate() error {
+	return ValidateRawUint32OffsetsListShape(l.Rows, l.Offsets, uint64(len(l.Values)))
+}
+
+// Row returns the row slice Values[Offsets[row]:Offsets[row+1]] after validating
+// row bounds and host-int conversions. The returned slice aliases Values.
+func (l Uint32List) Row(row int) ([]uint32, error) {
+	if row < 0 || row >= l.Rows {
+		return nil, fmt.Errorf("typedcolumn: uint32_list row=%d outside rows=%d", row, l.Rows)
+	}
+	if len(l.Offsets) != l.Rows+1 {
+		return nil, fmt.Errorf("typedcolumn: uint32_list offsets=%d want row_count+1=%d", len(l.Offsets), l.Rows+1)
+	}
+	begin := l.Offsets[row]
+	end := l.Offsets[row+1]
+	if begin > maxHostIntUint64() || end > maxHostIntUint64() || begin > end {
+		return nil, fmt.Errorf("typedcolumn: uint32_list row %d invalid offsets [%d,%d)", row, begin, end)
+	}
+	beginInt := int(begin)
+	endInt := int(end)
+	if beginInt > len(l.Values) || endInt > len(l.Values) {
+		return nil, fmt.Errorf("typedcolumn: uint32_list row %d values range [%d,%d) outside values=%d", row, begin, end, len(l.Values))
+	}
+	return l.Values[beginInt:endInt], nil
 }
 
 // EncodeRawUint32OffsetsListOffsets writes offsets as little-endian uint64
@@ -92,6 +128,23 @@ func DecodeRawUint32OffsetsListPayload(offsetsDst []uint64, valuesDst []uint32, 
 // ValidateRawUint32OffsetsListShape validates owned offset/value counts before
 // encoding or row slicing. values is the number of uint32 values, not bytes.
 func ValidateRawUint32OffsetsListShape(rows int, offsets []uint64, values uint64) error {
+	if err := ValidateRawUint32OffsetsListOffsets(rows, offsets); err != nil {
+		return err
+	}
+	if values > maxHostIntUint64() {
+		return fmt.Errorf("typedcolumn: offsets-list values=%d exceeds host int", values)
+	}
+	if final := offsets[rows]; final != values {
+		return fmt.Errorf("typedcolumn: offsets-list final offset=%d values=%d", final, values)
+	}
+	return nil
+}
+
+// ValidateRawUint32OffsetsListOffsets validates the length-only offsets
+// substream shape without requiring the values substream. It is intended for
+// row-length APIs and offset-only integrity checks; full value integrity still
+// requires ValidateRawUint32OffsetsListShape or section validation.
+func ValidateRawUint32OffsetsListOffsets(rows int, offsets []uint64) error {
 	if rows < 0 {
 		return fmt.Errorf("typedcolumn: negative offsets-list rows=%d", rows)
 	}
@@ -110,9 +163,6 @@ func ValidateRawUint32OffsetsListShape(rows int, offsets []uint64, values uint64
 		return fmt.Errorf("typedcolumn: offsets-list offsets[0]=%d want 0", offsets[0])
 	}
 	maxIndex := uint64(maxInt)
-	if values > maxIndex {
-		return fmt.Errorf("typedcolumn: offsets-list values=%d exceeds host int", values)
-	}
 	prev := uint64(0)
 	for i, offset := range offsets {
 		if offset > maxIndex {
@@ -123,10 +173,46 @@ func ValidateRawUint32OffsetsListShape(rows int, offsets []uint64, values uint64
 		}
 		prev = offset
 	}
-	if final := offsets[rows]; final != values {
-		return fmt.Errorf("typedcolumn: offsets-list final offset=%d values=%d", final, values)
-	}
 	return nil
+}
+
+// DecodeRawUint32OffsetsListOffsetsFallback decodes only the little-endian
+// uint64 offsets substream. It validates rows+1 shape, offsets[0]==0,
+// monotonicity, and host-int bounds, but intentionally does not verify the final
+// offset against values bytes.
+func DecodeRawUint32OffsetsListOffsetsFallback(dst []uint64, offsetsRaw []byte, rows int) ([]uint64, error) {
+	offsetCount, err := ValidateRawUint32OffsetsListOffsetsBytes(offsetsRaw, rows)
+	if err != nil {
+		return nil, err
+	}
+	offsets := resizeFixedWidthValues(dst, offsetCount)
+	for i := range offsets {
+		offsets[i] = readLittleEndianUint64(offsetsRaw[i*8:])
+	}
+	if err := ValidateRawUint32OffsetsListOffsets(rows, offsets); err != nil {
+		return nil, err
+	}
+	return offsets, nil
+}
+
+// ValidateRawUint32OffsetsListOffsetsBytes validates only the byte length of the
+// offsets substream and returns its uint64 element count.
+func ValidateRawUint32OffsetsListOffsetsBytes(offsetsRaw []byte, rows int) (int, error) {
+	if rows < 0 {
+		return 0, fmt.Errorf("typedcolumn: negative offsets-list rows=%d", rows)
+	}
+	offsetCount, err := checkedAddInt(rows, 1, "raw uint32 offsets-list offset count")
+	if err != nil {
+		return 0, err
+	}
+	wantOffsetsBytes, err := checkedMulInt(offsetCount, 8, "raw uint32 offsets-list offsets bytes")
+	if err != nil {
+		return 0, err
+	}
+	if len(offsetsRaw) != wantOffsetsBytes {
+		return 0, fmt.Errorf("typedcolumn: offsets-list offsets bytes=%d want=%d", len(offsetsRaw), wantOffsetsBytes)
+	}
+	return offsetCount, nil
 }
 
 // RawUint32OffsetsListBlockPayloadBytes returns the split byte lengths for a

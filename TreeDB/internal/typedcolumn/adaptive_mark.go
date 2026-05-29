@@ -126,6 +126,21 @@ func EstimateBatchUncompressedBytes(batch Batch, defs []ColumnDefinition) (int, 
 				return 0, err
 			}
 			total += bytes
+		case ColumnTypeUint32List:
+			list := batch.Uint32OffsetsLists[def.Name]
+			offsetsBytes, err := checkedMulInt(list.Rows+1, 8, "offsets-list offsets bytes")
+			if err != nil {
+				return 0, err
+			}
+			valuesBytes, err := checkedMulInt(len(list.Values), 4, "offsets-list values bytes")
+			if err != nil {
+				return 0, err
+			}
+			bytes, err := checkedAddInt(offsetsBytes, valuesBytes, "offsets-list bytes")
+			if err != nil {
+				return 0, err
+			}
+			total += bytes
 		case ColumnTypeAdjacencyList:
 			if def.Encoding == EncodingRawUint32OffsetsList {
 				list := batch.Uint32OffsetsLists[def.Name]

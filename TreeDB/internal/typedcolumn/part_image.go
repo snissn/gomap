@@ -494,6 +494,16 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 			if column.FixedWidthElements <= 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires positive fixed-width elements", column.Name, column.Type)
 			}
+		case ColumnTypeUint32List:
+			if column.FixedWidthElements != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires fixed-width elements=0", column.Name, column.Type)
+			}
+			if !columnDescriptorAllBlocksEncoding(column, EncodingRawUint32OffsetsList) {
+				zeroRowOffsetsList := desc.RowCount == 0 && len(column.Blocks) == 0 && partColumn.Definition.Encoding == EncodingRawUint32OffsetsList
+				if !zeroRowOffsetsList {
+					return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires encoding=%s", column.Name, column.Type, EncodingRawUint32OffsetsList)
+				}
+			}
 		case ColumnTypeAdjacencyList:
 			if column.FixedWidthElements < 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has negative fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
@@ -1132,6 +1142,8 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 6, nil
 	case ColumnTypeFloat64:
 		return 7, nil
+	case ColumnTypeUint32List:
+		return 8, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

@@ -316,13 +316,27 @@ func (p *ColumnPart) DenseUint32Column(name string, dst []uint32) (DenseUint32Co
 	return DenseUint32Column{Rows: p.Descriptor.RowCount, ElementsPerRow: column.Definition.FixedWidthElements, Values: out}, nil
 }
 
+func (p *ColumnPart) Uint32ListColumn(name string, offsetsDst []uint64, valuesDst []uint32) (Uint32List, error) {
+	column, ok := p.Columns[name]
+	if !ok {
+		return Uint32List{}, fmt.Errorf("typedcolumn: missing column %s", name)
+	}
+	if column.Definition.Type != ColumnTypeUint32List || column.Definition.Encoding != EncodingRawUint32OffsetsList {
+		return Uint32List{}, fmt.Errorf("typedcolumn: column %s type/encoding=(%s,%s) is not uint32_list/raw_uint32_offsets_list", name, column.Definition.Type, column.Definition.Encoding)
+	}
+	return uint32OffsetsListColumnInto(offsetsDst, valuesDst, p.Descriptor.RowCount, column)
+}
+
+// Uint32OffsetsListColumn is the physical-encoding compatibility reader. It
+// accepts the generic uint32_list type and the legacy adjacency_list offsets-list
+// selector while new callers should prefer Uint32ListColumn for generic data.
 func (p *ColumnPart) Uint32OffsetsListColumn(name string, offsetsDst []uint64, valuesDst []uint32) (RawUint32OffsetsList, error) {
 	column, ok := p.Columns[name]
 	if !ok {
 		return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: missing column %s", name)
 	}
-	if column.Definition.Type != ColumnTypeAdjacencyList || column.Definition.Encoding != EncodingRawUint32OffsetsList {
-		return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: column %s type/encoding=(%s,%s) is not raw_uint32_offsets_list adjacency_list", name, column.Definition.Type, column.Definition.Encoding)
+	if column.Definition.Encoding != EncodingRawUint32OffsetsList || (column.Definition.Type != ColumnTypeUint32List && column.Definition.Type != ColumnTypeAdjacencyList) {
+		return RawUint32OffsetsList{}, fmt.Errorf("typedcolumn: column %s type/encoding=(%s,%s) is not raw_uint32_offsets_list", name, column.Definition.Type, column.Definition.Encoding)
 	}
 	return uint32OffsetsListColumnInto(offsetsDst, valuesDst, p.Descriptor.RowCount, column)
 }

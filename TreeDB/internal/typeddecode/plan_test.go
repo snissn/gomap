@@ -394,6 +394,66 @@ func TestUint32OffsetsListShapeValidation1914(t *testing.T) {
 	}
 }
 
+func TestUint32ListDirectViewPlanValidationAndView1985(t *testing.T) {
+	cert := testUint32ListSpecCert(3, 5)
+	plan := Uint32ListPlan(cert)
+	if !plan.DirectCandidate() {
+		t.Fatalf("plan=%+v want direct candidate", plan)
+	}
+	if wrong := AdjacencyOffsetsListPlan(cert); wrong.Path != PathUnsupported || wrong.Reason != ReasonValidationFailed {
+		t.Fatalf("adjacency plan for uint32_list=%+v want identity mismatch", wrong)
+	}
+	req := Uint32OffsetsListDirectViewRequest{Plan: plan, Certification: cert, Rows: 3, OffsetsBytes: 32, ValuesBytes: 20, AssetOffset: 0, HasAssetOffset: true}
+	if status := ValidateUint32OffsetsListDirectViewSections(req); !status.Direct() {
+		t.Fatalf("sections status=%+v want direct", status)
+	}
+	offsetsRaw := alignedBytes(8, 32)
+	for i, v := range []uint64{0, 2, 2, 5} {
+		binary.LittleEndian.PutUint64(offsetsRaw[i*8:], v)
+	}
+	valuesRaw := alignedBytes(4, 20)
+	for i, v := range []uint32{7, 8, 9, 10, 11} {
+		binary.LittleEndian.PutUint32(valuesRaw[i*4:], v)
+	}
+	mgr := mappedresource.NewManager()
+	t.Cleanup(func() {
+		if stats := mgr.Stats(); stats.ActiveHandles != 0 {
+			t.Fatalf("active handles after cleanup: stats=%+v", stats)
+		}
+	})
+	offsetsHandle, err := mgr.AcquireBytes(testKeyWithPart(198501, int64(len(offsetsRaw))), testScope(), mappedresource.SourceMapped, offsetsRaw, mappedresource.AcquireOptions{Reason: "uint32_list offsets"})
+	if err != nil {
+		t.Fatalf("AcquireBytes offsets: %v", err)
+	}
+	defer offsetsHandle.Release()
+	valuesHandle, err := mgr.AcquireBytes(testKeyWithPart(198502, int64(len(valuesRaw))), testScope(), mappedresource.SourceMapped, valuesRaw, mappedresource.AcquireOptions{Reason: "uint32_list values"})
+	if err != nil {
+		t.Fatalf("AcquireBytes values: %v", err)
+	}
+	defer valuesHandle.Release()
+	offsets, values, status := Uint32ListView(mgr, offsetsHandle, valuesHandle, req, ResourceViewOptions{RequireMapped: true})
+	if !status.Direct() {
+		t.Fatalf("view status=%+v want direct", status)
+	}
+	if !equalUint64s(offsets, []uint64{0, 2, 2, 5}) || !equalUint32s(values, []uint32{7, 8, 9, 10, 11}) {
+		t.Fatalf("offsets=%v values=%v", offsets, values)
+	}
+	if stats := mgr.Stats(); stats.DirectViewSuccesses != 2 || stats.DirectViewFailures != 0 {
+		t.Fatalf("stats=%+v want two mmap direct-view successes", stats)
+	}
+
+	badOffsets := append([]uint64(nil), offsets...)
+	badOffsets[len(badOffsets)-1]++
+	if status := ValidateUint32OffsetsListDirectView(req, badOffsets, values); status.Reason != ReasonValuesLengthMismatch {
+		t.Fatalf("bad final offset status=%+v want %s", status, ReasonValuesLengthMismatch)
+	}
+	nullable := cert
+	nullable.NullMaskPresent = true
+	if got := Uint32ListPlan(nullable); got.Path != PathUnsupported || got.Reason != ReasonNullableWrapper {
+		t.Fatalf("nullable uint32_list plan=%+v want unsupported nullable wrapper", got)
+	}
+}
+
 func TestAdjacencyOffsetsListDirectViewPlanValidationAndView(t *testing.T) {
 	cert := testAdjacencyOffsetsListSpecCert(2, 2)
 	plan := AdjacencyOffsetsListPlan(cert)
@@ -784,8 +844,16 @@ func testAdjacencyDirectCert(rows, degree int) typedcolumn.ColumnPartLayoutContr
 }
 
 func testAdjacencyOffsetsListSpecCert(rows, values int) typedcolumn.ColumnPartLayoutContractColumn {
+	return testUint32OffsetsListSpecCert("neighbors", "adjacency_list", typedcolumn.ColumnTypeAdjacencyList, rows, values)
+}
+
+func testUint32ListSpecCert(rows, values int) typedcolumn.ColumnPartLayoutContractColumn {
+	return testUint32OffsetsListSpecCert("tags", "uint32_list", typedcolumn.ColumnTypeUint32List, rows, values)
+}
+
+func testUint32OffsetsListSpecCert(name, logical string, columnType typedcolumn.ColumnType, rows, values int) typedcolumn.ColumnPartLayoutContractColumn {
 	return typedcolumn.ColumnPartLayoutContractColumn{
-		Name: "neighbors", LogicalType: "adjacency_list", Type: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone,
+		Name: name, LogicalType: logical, Type: columnType, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone,
 		Rows:                rows,
 		OffsetsSection:      typedcolumn.ColumnPartLayoutContractSection{Offset: 0, Length: (rows + 1) * 8},
 		ValuesSection:       typedcolumn.ColumnPartLayoutContractSection{Offset: (rows + 1) * 8, Length: values * 4},

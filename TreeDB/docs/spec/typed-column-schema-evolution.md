@@ -41,8 +41,12 @@ Current and future typed-column code must fail closed on at least these classes:
   typed-row asset, retained document payload, or derived accelerator as a silent
   substitute, and overlapping authoritative owners must be rejected.
 - **Value type:** declared typed-storage value type must match the typed-column
-  column descriptor. Authoritative `adjacency_list` is supported only in the
-  fixed-degree dense `uint32` shape described by `adjacency_degree`.
+  column descriptor. Authoritative `uint32_list` uses the non-null
+  `uint32_list`/`raw_uint32_offsets_list` descriptor identity with `rows+1`
+  offsets. Authoritative `adjacency_list` remains consumer-specific: dense
+  compatibility uses the fixed-degree `uint32` shape described by
+  `adjacency_degree`, while explicit offsets-list compatibility must stay
+  classified separately from the generic list primitive.
 - **Vector dimensions / adjacency degree:** `float32_vector` fields must have positive
   `vector_dims`; `adjacency_list` `typed_column_part` fields must be non-nullable
   and have positive `adjacency_degree`. Descriptor fixed-width element counts

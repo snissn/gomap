@@ -57,25 +57,25 @@ func TestUint32ListCompatibilityNamingAndLegacyClassification(t *testing.T) {
 	legacySymbol := "Column" + "StoreValueAdjacencyList"
 
 	requireTextContains(t, "uint32_list semantic naming", doc,
-		"The public compatibility name for the generic logical type should be `"+preferredSymbol+"` with documented string `uint32_list` when #1985 adds runtime admission.",
-		"This issue intentionally does not add that Go constant or adapter support",
-		"#1985 owns adding the code constant",
+		"The public compatibility name for the generic logical type is `"+preferredSymbol+"` with documented string `uint32_list`.",
+		"Issue #1985 adds that Go constant, adapter admission, the code vocabulary row, and",
+		"round-trip/direct-view/fallback validation without requiring\n`"+legacySymbol+"` semantics.",
 		"`"+legacySymbol+"`, `adjacency_layout`, and existing `column_graph` adjacency-source schema strings remain legacy/consumer-specific compatibility.",
 	)
 
 	requireTextContains(t, "typed-storage naming", nameDoc,
 		"## `uint32_list` Compatibility Naming Strategy (#1984)",
-		"The preferred public compatibility symbol is `"+preferredSymbol+"` with documented string `uint32_list`.",
-		"intentionally does not add it to the code vocabulary table above or the Go constants because the runtime writer/reader/direct-view implementation belongs to #1985.",
+		"The preferred public compatibility symbol is `"+preferredSymbol+"` with\ndocumented string `uint32_list`.",
+		"Issue #1985 adds the runtime\nwriter/reader/direct-view implementation and updates the code vocabulary table,",
 		"`"+legacySymbol+"` remains the legacy graph-adjacency compatibility name.",
-		"`adjacency_list` must remain classified as consumer-specific/legacy rather than a first-class datastore list type.",
+		"`adjacency_list` must remain classified as consumer-specific/legacy rather than a\nfirst-class datastore list type.",
 	)
 
 	requireTextContains(t, "typed-column adapter", adapterDoc,
 		"## `uint32_list` adapter naming boundary (#1984)",
-		"The preferred public compatibility constant is `"+preferredSymbol+"` with string `uint32_list`",
-		"#1985 owns adding that code vocabulary, adapter mapping, conformance tests, writer/fallback reader/direct-view paths, and naming regression updates.",
-		"The current `"+legacySymbol+"` and `adjacency_layout` selector remain legacy/consumer-specific compatibility, not the generic primitive.",
+		"The preferred public compatibility\nconstant is `"+preferredSymbol+"` with string `uint32_list`; #1985 adds",
+		"that code vocabulary, adapter mapping, conformance tests, writer/fallback\nreader/direct-view paths, and naming regression updates.",
+		"The current `"+legacySymbol+"` and\n`adjacency_layout` selector remain legacy/consumer-specific compatibility, not\nthe generic primitive.",
 	)
 
 	requireTextContains(t, "adjacency quarantine doc", quarantineDoc,

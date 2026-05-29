@@ -48,6 +48,7 @@ drift from the runtime vocabulary strings.
 | `ColumnStoreValueDouble` | `double` | Legacy public declared-type compatibility name; docs may also say `float64`. |
 | `ColumnStoreValueString` | `string` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
+| `ColumnStoreValueUint32List` | `uint32_list` | Generic integer-list declared-type compatibility name. |
 | `ColumnStoreValueAdjacencyList` | `adjacency_list` | Legacy public declared-type compatibility name. |
 
 ## `uint32_list` Compatibility Naming Strategy (#1984)
@@ -59,11 +60,10 @@ sentinel offsets (`rows+1`, `offsets[0] == 0`) plus flattened little-endian
 `uint32` values.
 
 The preferred public compatibility symbol is `ColumnStoreValueUint32List` with
-documented string `uint32_list`. This #1984 semantic-contract issue records that
-name but intentionally does not add it to the code vocabulary table above or the
-Go constants because the runtime writer/reader/direct-view implementation belongs
-to #1985. When #1985 adds the constant, it must update this table, the naming
-regression tests, adapter admission, and conformance evidence in the same PR.
+documented string `uint32_list`. Issue #1985 adds the runtime
+writer/reader/direct-view implementation and updates the code vocabulary table,
+naming regression tests, adapter admission, and conformance evidence in the same
+PR.
 
 `ColumnStoreValueAdjacencyList` remains the legacy graph-adjacency compatibility
 name. It must not be reused as the generic `uint32_list` primitive, and

@@ -118,6 +118,18 @@ func TestTypedColumnPreparedStateNonInt64DependencyDescriptions(t *testing.T) {
 	assertPreparedPlanDependency(t, adjacencyPlan, typedcolumn.SectionDependencyAdjacencyPayload)
 	assertPreparedPlanNoDependency(t, adjacencyPlan, typedcolumn.SectionDependencyValues)
 
+	uint32ListPlan, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
+		Field:     TypedStorageField{Name: "tags", Path: "tags", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueUint32List},
+		Role:      typedcolumn.ColumnRoleProjection,
+		Operation: columnsemantics.OpUint32ListDirectPayload,
+	}, span)
+	if err != nil {
+		t.Fatalf("describe uint32_list prepared payload: %v", err)
+	}
+	if uint32ListPlan.Capability.Status != columnsemantics.StatusUnsupported || uint32ListPlan.Capability.Reason != columnsemantics.ReasonUnknownLogicalType || len(uint32ListPlan.Dependencies) != 0 {
+		t.Fatalf("uint32_list prepared plan=%+v want fail-closed until split-section prepared dependency support exists", uint32ListPlan)
+	}
+
 	vectorScalar, err := typedColumnDescribePreparedColumn(typedColumnPreparedColumnRequest{
 		Field:     TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 4},
 		Role:      typedcolumn.ColumnRoleMeasure,

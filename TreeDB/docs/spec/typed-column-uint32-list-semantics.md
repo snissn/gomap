@@ -95,16 +95,11 @@ APIs that explicitly request lengths/offsets; full row-value APIs fail closed.
 
 ## Compatibility naming strategy
 
-The public compatibility name for the generic logical type should be
-`ColumnStoreValueUint32List` with documented string `uint32_list` when #1985
-adds runtime admission. This issue intentionally does not add that Go constant or
-adapter support because doing so without writer/reader/conformance behavior would
-make an unsupported public API look usable.
-
-Issue #1985 owns adding the code constant (or an equivalent compatibility alias
-if the public API shape changes), mapping it to typed-column metadata, updating the
-naming regression table, and proving round-trip/direct-view/fallback validation
-without `ColumnStoreValueAdjacencyList` semantics.
+The public compatibility name for the generic logical type is
+`ColumnStoreValueUint32List` with documented string `uint32_list`. Issue #1985
+adds that Go constant, adapter admission, the code vocabulary row, and
+round-trip/direct-view/fallback validation without requiring
+`ColumnStoreValueAdjacencyList` semantics.
 
 `ColumnStoreValueAdjacencyList`, `adjacency_layout`, and existing
 `column_graph` adjacency-source schema strings remain legacy/consumer-specific
