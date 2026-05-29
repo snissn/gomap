@@ -349,8 +349,11 @@ func columnTypedColumnPhysicalQueryPredicateSpecs(cfg ColumnStoreConfig, req Col
 func typedColumnPhysicalQueryRefsByGeneration(view columnPhysicalScanSnapshotView) (map[uint64]columnManifestAssetRefForScan, error) {
 	refsByGeneration := make(map[uint64]columnManifestAssetRefForScan, len(view.TypedColumnPartRefs))
 	for _, ref := range view.TypedColumnPartRefs {
-		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Ref.PartID != typedColumnPartAssetPartID {
+		if ref.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 			continue
+		}
+		if ref.Ref.PartID != typedColumnPartAssetPartID {
+			return nil, fmt.Errorf("collections: typed-column part physical query generation=%d part_id=%d has multipart/non-primary typed_column_part ref; multipart/non-primary typed_column_part refs are unsupported by this physical query path", ref.Ref.Generation, ref.Ref.PartID)
 		}
 		if ref.Role == ColumnManifestPartRoleTombstone || ref.Reason == ColumnPublishOperationDelete {
 			return nil, fmt.Errorf("collections: typed-column part physical query got tombstone typed ref generation=%d", ref.Ref.Generation)

@@ -247,6 +247,27 @@ func TestColumnPhysicalJSONBenchTypedColumnPartAssetFailureFailClosed1947(t *tes
 	}
 }
 
+func TestColumnPhysicalJSONBenchTypedColumnPartMultipartRefFailsClosed1947(t *testing.T) {
+	events := columnPhysicalJSONBenchParityEventsP0()
+	d, collection, closeFn, typedRefs := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
+	defer closeFn()
+	if len(typedRefs) != 1 {
+		t.Fatalf("typed refs=%+v want one primary typed_column_part", typedRefs)
+	}
+	extraRef := publishTypedColumnMultipartPartRef1787(t, d, collection, 3)
+
+	_, err := collection.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"})
+	if err == nil {
+		t.Fatalf("RunColumnPhysicalQuery with multipart typed_column_part ref succeeded; want fail-closed error")
+	}
+	errText := err.Error()
+	if !strings.Contains(errText, fmt.Sprintf("generation=%d", extraRef.Generation)) ||
+		!strings.Contains(errText, fmt.Sprintf("part_id=%d", extraRef.PartID)) ||
+		!strings.Contains(errText, "multipart/non-primary typed_column_part refs are unsupported by this physical query path") {
+		t.Fatalf("multipart typed_column_part error=%v want generation, part_id, and unsupported physical-query-path context", err)
+	}
+}
+
 func TestColumnPhysicalJSONBenchTypedColumnPartDecodeMismatchesFailClosed1947(t *testing.T) {
 	events := columnPhysicalJSONBenchParityEventsP0()
 	d, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
