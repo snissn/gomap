@@ -402,8 +402,8 @@ func benchmarkColumnVectorGraphScoreSourceScalarTile1968(b *testing.B, tile int,
 		b.ReportMetric(float64(counters.MmapDirectViews)/float64(b.N), "source_mmap_direct/op")
 		b.ReportMetric(float64(counters.HeapCopyTypedViews)/float64(b.N), "source_heap_copy_typed_views/op")
 		b.ReportMetric(float64(counters.ScratchDecodes)/float64(b.N), "source_scratch_decodes/op")
-		b.ReportMetric(float64(counters.Fallbacks)/float64(b.N), "source_fallbacks/op")
 		b.ReportMetric(float64(counters.CertificationFailures)/float64(b.N), "source_certification_failures/op")
+		b.ReportMetric(float64(counters.Fallbacks), "source_fallbacks/run")
 	}
 }
 
