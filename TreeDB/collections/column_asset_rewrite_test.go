@@ -289,6 +289,115 @@ func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorGraphRefsV2A(t *testi
 	}
 }
 
+func TestPatchColumnAssetRewriteManifestRecordsRemapsVectorIndexStateRefs1986(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+	if _, err := col.InsertBatch([][]byte{[]byte("e1"), []byte("e2")}, [][]byte{
+		[]byte(`{"time_us":1,"kind":"like","did":"d1"}`),
+		[]byte(`{"time_us":2,"kind":"post","did":"d2"}`),
+	}); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	state, err := col.loadColumnAssetRewriteManifestState()
+	if err != nil {
+		t.Fatalf("loadColumnAssetRewriteManifestState: %v", err)
+	}
+	if state.cfg.ActiveManifest == nil {
+		t.Fatal("test collection missing active manifest")
+	}
+	def := testColumnGraphVectorIndexDefinitionV2A()
+	oldGraphRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Namespace: state.cfg.AssetManager.Namespace, Generation: state.cfg.ActiveManifest.Generation, PartID: 90, FileID: 7, Offset: 128, Length: 2048, Checksum: 0x19860001}
+	oldGraphRecord := testColumnVectorGraphManifestRecordV2A(t, &state.cfg, def, *state.cfg.ActiveManifest, oldGraphRef)
+	oldGraph, err := decodeColumnVectorGraphManifestRecord(oldGraphRecord.value)
+	if err != nil {
+		t.Fatalf("decode old graph record: %v", err)
+	}
+	oldAdjacencyRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: oldGraphRef.Namespace, Generation: oldGraph.BaseManifestGeneration, PartID: oldGraphRef.PartID + 1, FileID: oldGraphRef.FileID + 11, Offset: oldGraphRef.Offset + oldGraphRef.Length + 64, Length: 512, Checksum: 0x19860002}
+	oldNormRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: oldGraphRef.Namespace, Generation: oldGraph.BaseManifestGeneration, PartID: oldGraphRef.PartID + 2, FileID: oldGraphRef.FileID + 12, Offset: oldAdjacencyRef.Offset + oldAdjacencyRef.Length + 64, Length: 256, Checksum: 0x19860003}
+	indexState := columnVectorIndexStateSnapshotFromGraph(oldGraph)
+	indexState.Assets = []columnVectorIndexStateAssetSnapshot{
+		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleAdjacency, "hnsw/layer/0", oldAdjacencyRef, indexState.RowCount, state.cfg.SchemaHash+1),
+		columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleInverseNorm, "inv_norm_by_ordinal", oldNormRef, indexState.RowCount, state.cfg.SchemaHash+2),
+	}
+	stateRaw, err := encodeColumnVectorIndexStateRecord(indexState)
+	if err != nil {
+		t.Fatalf("encodeColumnVectorIndexStateRecord: %v", err)
+	}
+	records := append(cloneColumnManifestRecords(state.records), oldGraphRecord, columnManifestRecord{key: columnVectorIndexStateRecordKey(def.Name), value: stateRaw})
+	sortColumnManifestRecords(records)
+
+	newAdjacencyRef := oldAdjacencyRef
+	newAdjacencyRef.FileID += 101
+	newAdjacencyRef.Offset += oldAdjacencyRef.Length + 17
+	newNormRef := oldNormRef
+	newNormRef.FileID += 102
+	newNormRef.Offset += oldNormRef.Length + 19
+	patched, count, err := patchColumnAssetRewriteManifestRecords(
+		records,
+		map[ColumnAssetRef]ColumnAssetRef{
+			oldAdjacencyRef: newAdjacencyRef,
+			oldNormRef:      newNormRef,
+		},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecords: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("patch count=%d want 2", count)
+	}
+	stateRecord, ok := findColumnVectorIndexStateRecord(patched, def.Name)
+	if !ok {
+		t.Fatal("patched vector-index state record missing")
+	}
+	patchedState, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
+	if err != nil {
+		t.Fatalf("decode patched vector-index state record: %v", err)
+	}
+	if len(patchedState.Assets) != 2 {
+		t.Fatalf("patched state assets=%d want 2", len(patchedState.Assets))
+	}
+	if patchedState.Assets[0].Ref != newAdjacencyRef || patchedState.Assets[0].AssetBytes != newAdjacencyRef.Length {
+		t.Fatalf("patched adjacency asset=%+v want ref=%+v bytes=%d", patchedState.Assets[0], newAdjacencyRef, newAdjacencyRef.Length)
+	}
+	if patchedState.Assets[1].Ref != newNormRef || patchedState.Assets[1].AssetBytes != newNormRef.Length {
+		t.Fatalf("patched norm asset=%+v want ref=%+v bytes=%d", patchedState.Assets[1], newNormRef, newNormRef.Length)
+	}
+
+	inPlaceRecords := cloneColumnManifestRecords(records)
+	inPlacePatched, inPlaceCount, err := patchColumnAssetRewriteManifestRecordsInPlace(
+		inPlaceRecords,
+		map[ColumnAssetRef]ColumnAssetRef{
+			oldAdjacencyRef: newAdjacencyRef,
+			oldNormRef:      newNormRef,
+		},
+		state.cfg.AssetManager.Namespace,
+	)
+	if err != nil {
+		t.Fatalf("patchColumnAssetRewriteManifestRecordsInPlace: %v", err)
+	}
+	if inPlaceCount != 2 {
+		t.Fatalf("in-place patch count=%d want 2", inPlaceCount)
+	}
+	if len(inPlacePatched) != 0 && &inPlacePatched[0] != &inPlaceRecords[0] {
+		t.Fatal("in-place vector-index state patch returned a copied record slice")
+	}
+	stateRecord, ok = findColumnVectorIndexStateRecord(inPlacePatched, def.Name)
+	if !ok {
+		t.Fatal("in-place patched vector-index state record missing")
+	}
+	patchedState, err = decodeColumnVectorIndexStateRecord(stateRecord.value)
+	if err != nil {
+		t.Fatalf("decode in-place patched vector-index state record: %v", err)
+	}
+	if patchedState.Assets[0].Ref != newAdjacencyRef || patchedState.Assets[1].Ref != newNormRef {
+		t.Fatalf("in-place patched state assets=%+v", patchedState.Assets)
+	}
+}
+
 func TestPatchColumnAssetRewriteManifestRecordsInPlaceM15C(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)

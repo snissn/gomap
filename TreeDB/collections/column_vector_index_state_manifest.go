@@ -432,11 +432,11 @@ func columnVectorIndexStateSnapshotFromGraph(graph columnVectorGraphManifestSnap
 }
 
 func retainColumnVectorIndexStateRecordForWrite(key []byte, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) bool {
-	if !activeVectorIndexesKnown {
-		return true
-	}
 	if !bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes) {
 		return false
+	}
+	if !activeVectorIndexesKnown {
+		return true
 	}
 	indexName := key[len(columnVectorIndexStateRecordPrefixBytes):]
 	for _, def := range activeVectorIndexes {
@@ -448,6 +448,9 @@ func retainColumnVectorIndexStateRecordForWrite(key []byte, activeVectorIndexesK
 }
 
 func validateRetainedColumnVectorIndexStateRecordForWrite(record columnManifestRecord, generation uint64) (bool, error) {
+	if !bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+		return false, errors.New("collections: invalid vector-index state record key prefix")
+	}
 	state, err := decodeColumnVectorIndexStateRecord(record.value)
 	if err != nil {
 		return false, err

@@ -547,6 +547,41 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 			}
 			continue
 		}
+		if bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+			state, err := decodeColumnVectorIndexStateRecord(record.value)
+			if err != nil {
+				return nil, 0, err
+			}
+			if _, err := columnVectorIndexStateManifestAssetRefsForScan(state, state.BaseManifestGeneration, expectedNamespace); err != nil {
+				return nil, 0, err
+			}
+			changed := false
+			for idx := range state.Assets {
+				oldRef := state.Assets[idx].Ref
+				newRef, ok := byOldRef[oldRef]
+				if !ok {
+					continue
+				}
+				if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
+					return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector-index state role=%q id=%q ref %+v to %+v", state.Assets[idx].Role, state.Assets[idx].AssetID, oldRef, newRef)
+				}
+				if err := validateColumnAssetRefForPlan(newRef); err != nil {
+					return nil, 0, err
+				}
+				state.Assets[idx].Ref = newRef
+				state.Assets[idx].AssetBytes = newRef.Length
+				changed = true
+				count++
+			}
+			if changed {
+				value, err := encodeColumnVectorIndexStateRecord(state)
+				if err != nil {
+					return nil, 0, err
+				}
+				patched[i].value = value
+			}
+			continue
+		}
 		isPart := bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes)
 		isMetadata := bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes)
 		isDictionary := bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes)
