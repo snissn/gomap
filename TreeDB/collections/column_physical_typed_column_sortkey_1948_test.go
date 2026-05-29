@@ -291,6 +291,39 @@ func TestColumnPreparedAssetSortKeyRejectsDuplicate1948(t *testing.T) {
 	}
 }
 
+func TestColumnManifestPartFieldsValidateSortKeyTrailer1948(t *testing.T) {
+	namespace := "events_column_assets"
+	raw := encodeColumnManifestPartRecordWithRawSortKey1948(t, ColumnAssetKindTCS1PartImage, namespace, []ColumnSortKey{{Column: "time_us"}})
+	records := []columnManifestRecord{{key: columnManifestPartRecordKey(1, 2), value: raw}}
+	_, _, err := columnManifestAssetRefsFromRecordsForScan(records, 1, namespace)
+	if err == nil || !strings.Contains(err.Error(), "sort key requires") {
+		t.Fatalf("columnManifestAssetRefsFromRecordsForScan err=%v want shared sort-key trailer validation", err)
+	}
+}
+
+func encodeColumnManifestPartRecordWithRawSortKey1948(t testing.TB, kind ColumnAssetKind, namespace string, sortKey []ColumnSortKey) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	writeManifestUint32(&b, columnManifestPartMagic)
+	writeManifestUint16(&b, columnManifestRecordVersion)
+	writeManifestString(&b, string(kind))
+	writeManifestString(&b, namespace)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 2)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 0)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 1)
+	writeManifestUint64(&b, 1)
+	writeManifestString(&b, string(ColumnPublishOperationInsert))
+	writeManifestString(&b, string(ColumnManifestPartRoleBase))
+	writeColumnManifestSortKey(&b, sortKey)
+	return b.Bytes()
+}
+
 func TestTypedColumnPartSortKeyMixedOwnerNamePathCollisionFallsBack1948(t *testing.T) {
 	cfg := &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{
 		{Name: "row_sort", Path: "row_path", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
