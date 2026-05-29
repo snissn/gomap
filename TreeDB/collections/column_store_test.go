@@ -348,6 +348,30 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "only float32_vector columns may set vector_dims",
 		},
 		{
+			name: "uint32 list rejects nullable",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "tags", Path: "tags", ValueType: ColumnStoreValueUint32List, Owner: TypedStorageOwnerColumnPart, Nullable: true}},
+			},
+			want: "nullable uint32_list",
+		},
+		{
+			name: "uint32 list rejects adjacency degree",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "tags", Path: "tags", ValueType: ColumnStoreValueUint32List, Owner: TypedStorageOwnerColumnPart, AdjacencyDegree: 3}},
+			},
+			want: "only adjacency_list columns may set adjacency_degree",
+		},
+		{
+			name: "uint32 list rejects adjacency layout selector",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "tags", Path: "tags", ValueType: ColumnStoreValueUint32List, Owner: TypedStorageOwnerColumnPart, AdjacencyLayout: ColumnAdjacencyListLayoutUint32OffsetsList}},
+			},
+			want: "only adjacency_list columns may set adjacency_layout",
+		},
+		{
 			name: "typed column adjacency requires degree",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

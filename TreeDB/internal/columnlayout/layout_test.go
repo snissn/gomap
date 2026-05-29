@@ -214,6 +214,38 @@ func TestFloatAndNonInt64LayoutsDoNotAdvertiseUnsafeScalarCapabilities(t *testin
 		}
 	}
 
+	uint32List := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32List, Physical: typedcolumn.ColumnTypeUint32List, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone})
+	if uint32List.Layout.Kind != LayoutVariableWidth || !uint32List.Layout.VariableWidth || uint32List.Layout.FixedWidth || uint32List.Layout.ElementsPerRow != 0 {
+		t.Fatalf("uint32_list caps=%+v want variable-length offsets/value layout", uint32List)
+	}
+	if !uint32List.DirectView.Eligible || uint32List.DirectView.Reason != ReasonSupported || uint32List.DirectView.WidthBytes != 4 {
+		t.Fatalf("uint32_list direct=%+v want eligible uint32 value direct view", uint32List.DirectView)
+	}
+	if cap := uint32List.Supports(OpUint32ListDirectView); !cap.Supported() {
+		t.Fatalf("uint32_list direct cap=%+v want supported", cap)
+	}
+	if cap := uint32List.SupportsSemanticOperation(columnsemantics.OpUint32ListDirectPayload); !cap.Supported() {
+		t.Fatalf("uint32_list semantic direct cap=%+v want supported", cap)
+	}
+	if cap := uint32List.Supports(OpAdjacencyDirectView); cap.Supported() || cap.Reason != ReasonOperationUnsupported {
+		t.Fatalf("uint32_list adjacency direct cap=%+v want operation unsupported", cap)
+	}
+	for _, op := range []Operation{OpInt64RangePredicate, OpScalarNumericAggregate} {
+		if cap := uint32List.Supports(op); cap.Supported() || cap.Reason != ReasonUint32ListScalarUnsupported {
+			t.Fatalf("uint32_list scalar %s cap=%+v want %s", op, cap, ReasonUint32ListScalarUnsupported)
+		}
+	}
+	if cap := uint32List.SupportsSemanticOperation(columnsemantics.OpDirectScalarValueCarrier); cap.Supported() || cap.Reason != ReasonUint32ListScalarUnsupported {
+		t.Fatalf("uint32_list semantic direct scalar cap=%+v want %s", cap, ReasonUint32ListScalarUnsupported)
+	}
+	uint32ListWithFixedWidth := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalUint32List, Physical: typedcolumn.ColumnTypeUint32List, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: typedcolumn.CompressionNone, FixedWidthElements: 2})
+	if uint32ListWithFixedWidth.DirectView.Eligible || uint32ListWithFixedWidth.DirectView.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("uint32_list fixed-width direct=%+v want %s", uint32ListWithFixedWidth.DirectView, ReasonEncodingPhysicalMismatch)
+	}
+	if cap := uint32ListWithFixedWidth.Supports(OpUint32ListDirectView); cap.Supported() || cap.Reason != ReasonEncodingPhysicalMismatch {
+		t.Fatalf("uint32_list fixed-width direct cap=%+v want %s", cap, ReasonEncodingPhysicalMismatch)
+	}
+
 	adjacency := CapabilitiesFor(Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32Dense, Compression: typedcolumn.CompressionNone, FixedWidthElements: 8})
 	if adjacency.DirectView.Eligible {
 		t.Fatalf("adjacency caps=%+v want direct view deferred", adjacency)

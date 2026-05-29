@@ -302,7 +302,11 @@ func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities
 	if cert.FixedWidthElements != 0 {
 		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("fixed_width_elements=%d want variable-width offsets list", cert.FixedWidthElements))
 	}
-	if cap := layout.Supports(columnlayout.OpAdjacencyDirectView); !cap.Supported() {
+	op := columnlayout.OpAdjacencyDirectView
+	if cert.LogicalType == string(columnsemantics.LogicalUint32List) || cert.Type == typedcolumn.ColumnTypeUint32List {
+		op = columnlayout.OpUint32ListDirectView
+	}
+	if cap := layout.Supports(op); !cap.Supported() {
 		status := statusFromLayoutCapability(cap)
 		if status.Streaming() {
 			return MaterializeStatus(status.Reason, status.Message)
@@ -376,19 +380,29 @@ func AdjacencyListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, degree i
 	return denseDirectViewPlan(layout, cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32Dense, 4, degree)
 }
 
-// AdjacencyOffsetsListPlan selects a direct-view candidate only for the current
-// writer-certified raw_uint32_offsets_list adjacency compatibility sections:
-// little-endian uint64 offsets plus little-endian uint32 values. Graph-specific
-// naming is quarantined by #1983; the validation/view mechanics should move to a
-// generic uint32_list plan in #1985.
+// Uint32ListPlan selects a direct-view candidate only for writer-certified
+// generic uint32_list/raw_uint32_offsets_list sections: little-endian uint64
+// offsets plus little-endian uint32 values.
+func Uint32ListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	return uint32OffsetsListPlan(cert, columnsemantics.LogicalUint32List, typedcolumn.ColumnTypeUint32List)
+}
+
+// AdjacencyOffsetsListPlan selects a direct-view candidate for the legacy
+// adjacency_list/raw_uint32_offsets_list compatibility selector. Graph-specific
+// naming is quarantined by #1983; prefer Uint32ListPlan for generic datastore
+// primitives.
 func AdjacencyOffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	return uint32OffsetsListPlan(cert, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList)
+}
+
+func uint32OffsetsListPlan(cert typedcolumn.ColumnPartLayoutContractColumn, logical columnsemantics.LogicalType, physical typedcolumn.ColumnType) Plan {
 	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
-	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
-		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
+	if cert.LogicalType != string(logical) || cert.Type != physical || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, logical, physical, typedcolumn.EncodingRawUint32OffsetsList), ElementSize: 4, ElementsPerRow: 0, Alignment: 4, Rows: cert.Rows}
 	}
 	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
-		Logical:     columnsemantics.LogicalAdjacencyList,
-		Physical:    typedcolumn.ColumnTypeAdjacencyList,
+		Logical:     logical,
+		Physical:    physical,
 		Encoding:    typedcolumn.EncodingRawUint32OffsetsList,
 		Compression: cert.Compression,
 		Nullable:    cert.NullMaskPresent || cert.NullCount != 0,
@@ -675,10 +689,11 @@ func ValidateUint32OffsetsListDirectViewSections(req Uint32OffsetsListDirectView
 		return req.Plan.Status()
 	}
 	cert := req.Certification
-	if cert.LogicalType != string(columnsemantics.LogicalAdjacencyList) || cert.Type != typedcolumn.ColumnTypeAdjacencyList || cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
-		return UnsupportedStatus(ReasonValidationFailed, fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList))
+	logical, physical, ok := uint32OffsetsListIdentity(cert)
+	if !ok {
+		return UnsupportedStatus(ReasonValidationFailed, fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s) or (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalUint32List, typedcolumn.ColumnTypeUint32List, typedcolumn.EncodingRawUint32OffsetsList, columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, typedcolumn.EncodingRawUint32OffsetsList))
 	}
-	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{Logical: columnsemantics.LogicalAdjacencyList, Physical: typedcolumn.ColumnTypeAdjacencyList, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: cert.Compression, Nullable: cert.NullMaskPresent || cert.NullCount != 0, Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0})
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{Logical: logical, Physical: physical, Encoding: typedcolumn.EncodingRawUint32OffsetsList, Compression: cert.Compression, Nullable: cert.NullMaskPresent || cert.NullCount != 0, Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0})
 	if status := validateOffsetsListDirectViewCertification(layout, cert); !status.Direct() {
 		return status
 	}
@@ -720,6 +735,19 @@ func ValidateUint32OffsetsListDirectViewSections(req Uint32OffsetsListDirectView
 		return status
 	}
 	return DirectStatus()
+}
+
+func uint32OffsetsListIdentity(cert typedcolumn.ColumnPartLayoutContractColumn) (columnsemantics.LogicalType, typedcolumn.ColumnType, bool) {
+	if cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
+		return "", "", false
+	}
+	if cert.LogicalType == string(columnsemantics.LogicalUint32List) && cert.Type == typedcolumn.ColumnTypeUint32List {
+		return columnsemantics.LogicalUint32List, typedcolumn.ColumnTypeUint32List, true
+	}
+	if cert.LogicalType == string(columnsemantics.LogicalAdjacencyList) && cert.Type == typedcolumn.ColumnTypeAdjacencyList {
+		return columnsemantics.LogicalAdjacencyList, typedcolumn.ColumnTypeAdjacencyList, true
+	}
+	return "", "", false
 }
 
 func (req Uint32OffsetsListDirectViewRequest) offsetsCount() int {
@@ -967,6 +995,10 @@ func AdjacencyListView(mgr *mappedresource.Manager, h *mappedresource.Handle, re
 		return nil, status
 	}
 	return Uint32View(mgr, h, opts)
+}
+
+func Uint32ListView(mgr *mappedresource.Manager, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, req Uint32OffsetsListDirectViewRequest, opts ResourceViewOptions) ([]uint64, []uint32, Status) {
+	return Uint32OffsetsListView(mgr, offsetsHandle, valuesHandle, req, opts)
 }
 
 func Uint32OffsetsListView(mgr *mappedresource.Manager, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, req Uint32OffsetsListDirectViewRequest, opts ResourceViewOptions) ([]uint64, []uint32, Status) {

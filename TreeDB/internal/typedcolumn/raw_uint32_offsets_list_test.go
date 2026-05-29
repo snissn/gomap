@@ -109,6 +109,38 @@ func TestRawUint32OffsetsListLittleEndianFixtures(t *testing.T) {
 	}
 }
 
+func TestUint32ListOwnedRowsAndOffsetOnlyValidation1985(t *testing.T) {
+	t.Parallel()
+	list := Uint32List{Rows: 3, Offsets: []uint64{0, 2, 2, 5}, Values: []uint32{10, 11, 12, 13, 14}}
+	if err := list.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	for row, want := range [][]uint32{{10, 11}, {}, {12, 13, 14}} {
+		got, err := list.Row(row)
+		if err != nil {
+			t.Fatalf("Row(%d): %v", row, err)
+		}
+		if !equalUint32s(got, want) {
+			t.Fatalf("Row(%d)=%v want %v", row, got, want)
+		}
+	}
+	if _, err := list.Row(3); err == nil || !strings.Contains(err.Error(), "outside rows") {
+		t.Fatalf("Row out of range err=%v want row bound failure", err)
+	}
+
+	offsetsRaw := mustOffsetsListOffsets(t, []uint64{0, 7, 7})
+	offsets, err := DecodeRawUint32OffsetsListOffsetsFallback(nil, offsetsRaw, 2)
+	if err != nil {
+		t.Fatalf("DecodeRawUint32OffsetsListOffsetsFallback: %v", err)
+	}
+	if !equalUint64s(offsets, []uint64{0, 7, 7}) {
+		t.Fatalf("offset-only decode=%v", offsets)
+	}
+	if _, err := DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, nil, 2); err == nil || !strings.Contains(err.Error(), "final offset=7 values=0") {
+		t.Fatalf("full decode err=%v want values mismatch after offset-only success", err)
+	}
+}
+
 func TestRawUint32OffsetsListCorruptionValidation(t *testing.T) {
 	t.Parallel()
 	offsetsRaw := mustOffsetsListOffsets(t, []uint64{0, 1, 3})
@@ -371,6 +403,76 @@ func TestRawUint32OffsetsListColumnPartImageRoundTrip1915(t *testing.T) {
 	}
 	if accounting.SerializedPaddingBytes != image.PaddingBytes() {
 		t.Fatalf("accounting padding=%d image padding=%d", accounting.SerializedPaddingBytes, image.PaddingBytes())
+	}
+}
+
+func TestUint32ListColumnPartImageRoundTrip1985(t *testing.T) {
+	opts := Options{
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: "tags", Type: ColumnTypeUint32List, Encoding: EncodingRawUint32OffsetsList, Compression: CompressionNone, CompressionSet: true},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+	}
+	batch := Batch{
+		Rows:    4,
+		Columns: map[string][]int64{"id": []int64{1, 2, 3, 4}},
+		Uint32OffsetsLists: map[string]RawUint32OffsetsList{
+			"tags": {Rows: 4, Offsets: []uint64{0, 2, 2, 5, 6}, Values: []uint32{7, 8, 9, 10, 11, 12}},
+		},
+	}
+	part, err := BuildColumnPart(1985, opts, batch)
+	if err != nil {
+		t.Fatalf("BuildColumnPart uint32_list: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{"tags": "uint32_list"}})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage uint32_list: %v", err)
+	}
+	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections("tags")
+	if !ok {
+		t.Fatalf("missing uint32_list offsets/value sections: %+v", image.Sections)
+	}
+	if offsetsSection.Length != 5*8 || valuesSection.Length != 6*4 {
+		t.Fatalf("sections offsets=%+v values=%+v", offsetsSection, valuesSection)
+	}
+	cert, err := CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	certColumn, ok := cert.Column("tags")
+	if !ok {
+		t.Fatalf("missing certified tags column")
+	}
+	if certColumn.LogicalType != "uint32_list" || certColumn.Type != ColumnTypeUint32List || certColumn.Encoding != EncodingRawUint32OffsetsList || !certColumn.DirectViewCertified {
+		t.Fatalf("certified uint32_list column=%+v", certColumn)
+	}
+	parsed, err := ParseColumnPartImage(image.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	decodedPart, err := ColumnPartFromImage(parsed)
+	if err != nil {
+		t.Fatalf("ColumnPartFromImage: %v", err)
+	}
+	decoded, err := decodedPart.Uint32ListColumn("tags", nil, nil)
+	if err != nil {
+		t.Fatalf("Uint32ListColumn: %v", err)
+	}
+	if !equalUint64s(decoded.Offsets, []uint64{0, 2, 2, 5, 6}) || !equalUint32s(decoded.Values, []uint32{7, 8, 9, 10, 11, 12}) {
+		t.Fatalf("decoded=%+v", decoded)
+	}
+	compat, err := decodedPart.Uint32OffsetsListColumn("tags", nil, nil)
+	if err != nil {
+		t.Fatalf("Uint32OffsetsListColumn generic compatibility: %v", err)
+	}
+	row, err := compat.Row(2)
+	if err != nil {
+		t.Fatalf("compat Row(2): %v", err)
+	}
+	if !equalUint32s(row, []uint32{9, 10, 11}) {
+		t.Fatalf("compat Row(2)=%v", row)
 	}
 }
 

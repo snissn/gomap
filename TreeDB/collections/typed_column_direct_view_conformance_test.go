@@ -51,7 +51,7 @@ func TestTypedColumnDirectViewConformanceMatrixRowsAreExplicit(t *testing.T) {
 	for _, valueType := range typedColumnDirectViewAllTypeInventory() {
 		support := typedColumnDirectViewFallbackOnly
 		switch valueType {
-		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector:
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List:
 			support = typedColumnDirectViewActiveLittleEndianCandidate
 		case ColumnStoreValueAdjacencyList:
 			support = typedColumnDirectViewDeferredFallbackOnly
@@ -109,6 +109,7 @@ func TestTypedColumnDirectViewOwnershipMatrix(t *testing.T) {
 		{name: "typed native float32", valueType: ColumnStoreValueFloat32, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
 		{name: "typed native double", valueType: ColumnStoreValueDouble, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 8, align: 8},
 		{name: "typed vector", valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
+		{name: "typed uint32 list", valueType: ColumnStoreValueUint32List, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
 		{name: "column graph typed vector source", valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
 		{name: "typed adapter offsets-list adjacency source", valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartAdjacencyOffsets, support: typedColumnDirectViewActiveLittleEndianCandidate, endian: "little", size: 4, align: 4},
 		{name: "bool fallback", valueType: ColumnStoreValueBool, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric, support: typedColumnDirectViewFallbackOnly},
@@ -182,6 +183,7 @@ func TestTypedColumnDirectViewActiveRowsAreCertifiedSetOnly(t *testing.T) {
 		{valueType: ColumnStoreValueFloat32, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                       true,
 		{valueType: ColumnStoreValueDouble, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                        true,
 		{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                 true,
+		{valueType: ColumnStoreValueUint32List, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartGeneric}:                                                                                    true,
 		{valueType: ColumnStoreValueFloat32Vector, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerColumnGraphTypedVector}:                                                                                 true,
 		{valueType: ColumnStoreValueAdjacencyList, owner: typedColumnDirectViewStorageTypedColumnPart, consumer: typedColumnDirectViewConsumerTypedColumnPartAdjacencyOffsets, adjacencyLayout: typedColumnDirectViewAdjacencyLayoutRawUint32Offsets}: true,
 	}

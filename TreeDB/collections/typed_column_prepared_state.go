@@ -207,6 +207,8 @@ func typedColumnPreparedLogicalTypeForValueType(valueType ColumnStoreValueType) 
 		return columnsemantics.LogicalString, true
 	case ColumnStoreValueFloat32Vector:
 		return columnsemantics.LogicalFloat32Vector, true
+	case ColumnStoreValueUint32List:
+		return columnsemantics.LogicalUint32List, true
 	case ColumnStoreValueAdjacencyList:
 		return columnsemantics.LogicalAdjacencyList, true
 	default:

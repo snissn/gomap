@@ -2181,6 +2181,18 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 					return cur.err
 				}
 			}
+		case ColumnStoreValueUint32List:
+			if selected {
+				rowValues[outputIdx].Uint32List = cur.uint32SliceWithEncoding(col.FixedWidthEncoding)
+				if cur.err != nil {
+					return cur.err
+				}
+			} else {
+				cur.skipUint32Slice()
+				if cur.err != nil {
+					return cur.err
+				}
+			}
 		case ColumnStoreValueAdjacencyList:
 			if selected {
 				rowValues[outputIdx].AdjacencyList = cur.uint32SliceWithEncoding(col.FixedWidthEncoding)

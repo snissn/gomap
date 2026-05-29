@@ -41,17 +41,16 @@ time.
 | `double` / `float64` | represented | Default compatibility layout remains a raw int64 column carrying `math.Float64bits`; these bits must not be treated as int64 ordering/sum/min/max/stats/pruning semantics or native direct-view evidence. Explicit `fixed_width_encoding: "little_endian"` on a non-null `typed_column_part` double column selects native uncompressed `raw_float64` little-endian IEEE-754 payload bytes. |
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
+| `uint32_list` | represented | Generic non-null variable-width integer-list sections using `raw_uint32_offsets_list`: a `uint64` sentinel offsets substream (`rows+1`) plus flattened little-endian `uint32` values. Writer, owned fallback reader, and certified direct-view reader are generic and do not require adjacency semantics. |
 | `adjacency_list` | represented for dense compatibility; transitional offsets-list direct reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the current #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1983 quarantines the graph-specific storage integration; #1984/#1985 own the generic `uint32_list` primitive. |
 
 ## `uint32_list` adapter naming boundary (#1984)
 
 `typed-column-uint32-list-semantics.md` defines the generic logical primitive
-that #1985 must admit through the adapter. The preferred public compatibility
-constant is `ColumnStoreValueUint32List` with string `uint32_list`, but this
-issue intentionally does not add the constant or treat `uint32_list` as a usable
-runtime value type. #1985 owns adding that code vocabulary, adapter
-mapping, conformance tests, writer/fallback reader/direct-view paths, and naming
-regression updates.
+that #1985 admits through the adapter. The preferred public compatibility
+constant is `ColumnStoreValueUint32List` with string `uint32_list`; #1985 adds
+that code vocabulary, adapter mapping, conformance tests, writer/fallback
+reader/direct-view paths, and naming regression updates.
 
 When admitted, `uint32_list` uses `raw_uint32_offsets_list` as the physical
 encoding: a first-class offsets/size substream of little-endian `uint64` sentinel
