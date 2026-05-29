@@ -94,6 +94,46 @@ func TestColumnVectorIndexStateAdjacencyStatusValidation1987(t *testing.T) {
 		assertColumnGraphRebuildLoadedStatusV2A(t, status, ctx.def.Name)
 	})
 
+	t.Run("missing_adjacency_assets", func(t *testing.T) {
+		d := openCollectionCommandWALDB(t, t.TempDir())
+		defer func() { _ = d.Close() }()
+		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
+		ctx.state.Assets = nil
+		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
+		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency assets")
+	})
+
+	t.Run("missing_layer_zero", func(t *testing.T) {
+		d := openCollectionCommandWALDB(t, t.TempDir())
+		defer func() { _ = d.Close() }()
+		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
+		layer1 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 503, 1, typedcolumn.Uint32List{
+			Rows:    2,
+			Offsets: []uint64{0, 1, 2},
+			Values:  []uint32{1, 0},
+		}, nil)
+		ctx.state.Assets = []columnVectorIndexStateAssetSnapshot{layer1}
+		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
+		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency layer 0")
+	})
+
+	t.Run("missing_layer_gap", func(t *testing.T) {
+		d := openCollectionCommandWALDB(t, t.TempDir())
+		defer func() { _ = d.Close() }()
+		ctx := makeColumnVectorIndexStateAdjacencyStatusContext1987(t, d)
+		layer2 := writeUncheckedColumnVectorIndexStateAdjacencyAsset1987(t, d, *ctx.cfg, ctx.def, ctx.identity.Generation, 504, 2, typedcolumn.Uint32List{
+			Rows:    2,
+			Offsets: []uint64{0, 1, 2},
+			Values:  []uint32{1, 0},
+		}, nil)
+		ctx.state.Assets = []columnVectorIndexStateAssetSnapshot{ctx.state.Assets[0], layer2}
+		ctx.records, ctx.identity = appendVectorIndexStateRecordForTest1986(t, *ctx.cfg, ctx.records, ctx.identity, ctx.state)
+		publishColumnVectorIndexStateAdjacencyContext1987(t, d, ctx)
+		assertColumnVectorIndexStateAdjacencyStatusCorrupt1987(t, d, ctx.def, "missing adjacency layer 1")
+	})
+
 	t.Run("out_of_bounds_ordinal", func(t *testing.T) {
 		d := openCollectionCommandWALDB(t, t.TempDir())
 		defer func() { _ = d.Close() }()

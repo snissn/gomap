@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -366,6 +367,20 @@ func validateColumnVectorIndexStateAssets(rootDir, collection string, cfg Column
 			return fmt.Errorf("collections: vector-index state adjacency layer %d asset %q: %w", layer, asset.AssetID, err)
 		}
 	}
+	if len(seenAdjacencyLayers) == 0 {
+		return errors.New("collections: vector-index state missing adjacency assets")
+	}
+	maxLayer := 0
+	for layer := range seenAdjacencyLayers {
+		if layer > maxLayer {
+			maxLayer = layer
+		}
+	}
+	for layer := 0; layer <= maxLayer; layer++ {
+		if _, ok := seenAdjacencyLayers[layer]; !ok {
+			return fmt.Errorf("collections: vector-index state missing adjacency layer %d", layer)
+		}
+	}
 	return nil
 }
 
@@ -414,11 +429,10 @@ func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cf
 	if err != nil {
 		return err
 	}
-	list, err := typedcolumn.DecodeRawUint32OffsetsListFallback(nil, nil, offsetsRaw, valuesRaw, state.RowCount)
-	if err != nil {
+	if err := typedcolumn.ValidateRawUint32OffsetsListSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount); err != nil {
 		return err
 	}
-	if err := validateColumnVectorIndexStateAdjacencyList(layer, list); err != nil {
+	if err := validateColumnVectorIndexStateAdjacencyValuesRaw(layer, state.RowCount, offsetsRaw, valuesRaw); err != nil {
 		return err
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
@@ -444,6 +458,20 @@ func validateColumnVectorIndexStateAdjacencyAsset(rootDir, collection string, cf
 	})
 	if !status.Direct() {
 		return fmt.Errorf("direct-view section validation failed: %s", status.String())
+	}
+	return nil
+}
+
+func validateColumnVectorIndexStateAdjacencyValuesRaw(layer int, rows int, offsetsRaw []byte, valuesRaw []byte) error {
+	for row := 0; row < rows; row++ {
+		begin := int(binary.LittleEndian.Uint64(offsetsRaw[row*8:]))
+		end := int(binary.LittleEndian.Uint64(offsetsRaw[(row+1)*8:]))
+		for idx := begin; idx < end; idx++ {
+			neighbor := binary.LittleEndian.Uint32(valuesRaw[idx*4:])
+			if int(neighbor) >= rows {
+				return fmt.Errorf("collections: vector-index state adjacency layer %d row %d value[%d]=%d outside row_count=%d", layer, row, idx-begin, neighbor, rows)
+			}
+		}
 	}
 	return nil
 }
