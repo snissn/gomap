@@ -22,7 +22,8 @@ Operator-facing behavior is covered by:
   - `Dir/dictdb/`: dictionary store (for value-log compression)
 - Large values can be stored out-of-line in `Dir/maindb/value_vlog/` and referenced by `page.ValuePtr` pointers stored in the B+Tree.
 - The value log is **persistent storage**: pointers are valid long-term; segments are deleted only when unreachable (GC) or after rewrite/compaction.
-- Column-store physical assets are **value-log-shaped column assets**, not generic row `value_vlog` payloads. They live under the isolated typed column asset manager namespace.
+- Typed-storage physical assets are **value-log-shaped typed assets**, not generic row `value_vlog` payloads. Production typed-row assets and opt-in scalar/vector typed-column parts live under the isolated typed asset manager namespace.
+- Typed-storage closeout evidence, naming-audit classification, and the #1736 COW-maintenance handoff are recorded in `TreeDB/docs/spec/typed-storage-closeout-1758.md`.
 
 ## Directory layout
 
@@ -34,7 +35,7 @@ TreeDB creates/manages two sub-databases under the root directory:
 - `Dir/maindb/wal/`: redo journal segments named `commit-l<lane>-<seq>.log`.
 - `Dir/maindb/value_vlog/`: persistent large-value segments named `value-l<lane>-<seq>.log`.
 - `Dir/maindb/leaf_vlog/`: optional persistent outer-leaf generation segments named `value-l<lane>-<seq>.log`.
-- `Dir/maindb/column_assets/`: isolated typed column asset manager root for column-store physical assets.
+- `Dir/maindb/column_assets/`: compatibility directory name for the isolated typed asset manager root used by typed-storage physical assets.
 - `Dir/maindb/LOCK`: cross-process exclusive-open lock for the main DB.
 
 ### Dictionary store (`Dir/dictdb/`)
@@ -45,11 +46,11 @@ TreeDB creates/manages two sub-databases under the root directory:
 The dictionary store is used to persist trained dictionary bytes so value-log
 compressed frames can be decoded after restart.
 
-### Column assets (`column_assets/`)
+### Typed-storage assets (`column_assets/`)
 
-Column-store assets use an isolated value-log-shaped manager instead of ordinary
-row value-log entries. A collection namespace such as `events/column-assets`
-maps to:
+Typed-storage assets use an isolated value-log-shaped manager instead of ordinary
+row value-log entries. The `column_assets` directory name is compatibility
+metadata. A collection namespace such as `events/column-assets` maps to:
 
 ```text
 Dir/maindb/column_assets/events/column-assets/
@@ -62,10 +63,17 @@ Dir/maindb/column_assets/events/column-assets/
 
 Column manifest records stored in B-tree/root metadata hold durable
 `ColumnAssetRef` values: kind, namespace, generation, part id, segment file id,
-offset, length, and checksum. GC/rewrite must enumerate those refs from
+offset, length, and checksum. `tcs1_part_image` refs identify compatibility
+`TCPA` typed-row assets; `tcs1_typed_column_part` refs identify sectioned
+scalar and fixed-dimension vector typed-column parts. `TCMP` manifest part
+records version 3 also persist multipart roles: `base`, `delta`, and
+`tombstone`. Readers fail closed on malformed key/ref/checksum/role/operation
+combinations; typed-column part refs must pair with the same generation's
+row-locator `TCPA` asset and row count, while delete/tombstone generations have
+only the row-locator/tombstone part. GC/rewrite must enumerate those refs from
 manifest/control roots, not by scanning row documents.
 
-The current physical part payload uses the `TCPA` envelope, version 3:
+The typed-row physical part payload uses the `TCPA` envelope, version 3:
 
 ```text
 u32      Magic = "TCPA"
@@ -84,10 +92,17 @@ rows     row id + deleted flag + optional declared column values
 ```
 
 Insert and update rows must have `deleted=false` and one declared value per
-column. Each declared value stores its type, null bit, and present bit; the
-present bit distinguishes an omitted nullable JSON path from an explicit JSON
-`null` so retained-payload reconstruction remains lossless. Delete/tombstone
-rows must have `deleted=true` and no column values.
+`typed_row_asset` column in the row asset. Each declared value stores its type,
+null bit, and present bit; the present bit distinguishes an omitted nullable JSON
+path from an explicit JSON `null` so retained-payload reconstruction remains
+lossless. Delete/tombstone rows must have `deleted=true` and no column values.
+For layouts with `typed_column_part` owners, a `TCPA` row asset is still
+published for row IDs/tombstones and row-owned fields; the matching
+`tcs1_typed_column_part` for the same generation contains authoritative scalar
+and fixed-dimension `float32_vector` typed-column values keyed by row index. The
+current typed-column publication matrix is bool, int64, float32, double/float64,
+string, and fixed-dimension float32 vectors; nullable/missing values and
+production adjacency sections fail closed until later typed-storage issues.
 Readers validate namespace, generation, part id, schema hash, column
 descriptors, length, and checksum before accepting an asset ref.
 
@@ -139,7 +154,7 @@ u8       Version          // 1=single KV, 2=multi-KV, 3=typed entries
 u8       Codec            // 0=raw, 1=snappy, 2=lz4
 u16      RestartInterval  // restart interval for prefix-compressed keys
 u16/u32  Version-specific metadata
-u32      Checksum         // CRC32C(header-with-zero-checksum || encoded-payload)
+u32      Checksum         // CRC-32/IEEE(header-with-zero-checksum || encoded-payload)
 bytes    EncodedPayload
 ```
 
@@ -326,7 +341,7 @@ exclusive; an empty `high` means unbounded (e.g. root upper bound).
 Value-log segments are append-only. Each record is:
 
 ```text
-[ u32 CRC32C ]  little-endian; CRC32C(Castagnoli) of (header_without_crc || payload)
+[ u32 CRC32 ]  little-endian; CRC-32/IEEE of (header_without_crc || payload)
 [ u8  Version ]
 [ u8  Flags   ]  bit0: grouped record
 [ u16 Reserved ]
@@ -425,7 +440,7 @@ Constraints:
 
 ## Read integrity controls
 
-Value-log records are checksummed (CRC32C). Reads can be configured via:
+Value-log records are checksummed (CRC-32/IEEE). Reads can be configured via:
 
 - `Options.ValueLog.ReadIntegrity` (see `docs/TREEDB_WRITE_PATHS.md` for migration mapping)
 

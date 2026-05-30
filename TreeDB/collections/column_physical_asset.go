@@ -44,6 +44,7 @@ type columnDeclaredValue struct {
 	// Float32Vector stores a decoded vector column value. It is used for first-
 	// class vector physical assets and is not part of scalar query hot paths.
 	Float32Vector []float32
+	Uint32List    []uint32
 	AdjacencyList []uint32
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view valid only for the current scan callback / pinned prepared runner
@@ -215,8 +216,14 @@ func convertColumnDeclaredValue(col ColumnStoreColumn, raw any, exists bool) (co
 			return columnDeclaredValue{}, err
 		}
 		value.Float32Vector = values
+	case ColumnStoreValueUint32List:
+		values, err := convertJSONUint32List(raw, "uint32_list")
+		if err != nil {
+			return columnDeclaredValue{}, err
+		}
+		value.Uint32List = values
 	case ColumnStoreValueAdjacencyList:
-		values, err := convertJSONUint32List(raw)
+		values, err := convertJSONUint32List(raw, "adjacency_list")
 		if err != nil {
 			return columnDeclaredValue{}, err
 		}
@@ -261,23 +268,23 @@ func convertJSONFloat32Vector(raw any, dims int) ([]float32, error) {
 	return out, nil
 }
 
-func convertJSONUint32List(raw any) ([]uint32, error) {
+func convertJSONUint32List(raw any, label string) ([]uint32, error) {
 	values, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("expected adjacency_list array got %T", raw)
+		return nil, fmt.Errorf("expected %s array got %T", label, raw)
 	}
 	out := make([]uint32, len(values))
 	for i, rawValue := range values {
 		n, ok := rawValue.(json.Number)
 		if !ok {
-			return nil, fmt.Errorf("adjacency_list[%d] expected integer got %T", i, rawValue)
+			return nil, fmt.Errorf("%s[%d] expected integer got %T", label, i, rawValue)
 		}
 		v, err := n.Int64()
 		if err != nil {
-			return nil, fmt.Errorf("adjacency_list[%d]: %w", i, err)
+			return nil, fmt.Errorf("%s[%d]: %w", label, i, err)
 		}
 		if v < 0 || v > int64(1<<32-1) {
-			return nil, fmt.Errorf("adjacency_list[%d]=%d outside uint32 range", i, v)
+			return nil, fmt.Errorf("%s[%d]=%d outside uint32 range", label, i, v)
 		}
 		out[i] = uint32(v)
 	}
@@ -389,6 +396,10 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 				if err := writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding); err != nil {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] float32_vector: %w", colIdx, err)
 				}
+			case ColumnStoreValueUint32List:
+				if err := writeManifestUint32SliceWithEncoding(&b, value.Uint32List, col.FixedWidthEncoding); err != nil {
+					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] uint32_list: %w", colIdx, err)
+				}
 			case ColumnStoreValueAdjacencyList:
 				if err := writeManifestUint32SliceWithEncoding(&b, value.AdjacencyList, col.FixedWidthEncoding); err != nil {
 					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] adjacency_list: %w", colIdx, err)
@@ -462,6 +473,9 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			if asset.Columns[i].FixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(asset.Columns[i].ValueType) {
 				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, asset.Columns[i].ValueType)
 			}
+			if asset.Columns[i].FixedWidthEncoding != ColumnFixedWidthEncodingDefault && columnStoreValueTypeHasScalarFixedWidthPayload(asset.Columns[i].ValueType) {
+				return columnPhysicalAsset{}, fmt.Errorf("collections: column physical asset column[%d] scalar fixed_width_encoding for value_type %q is typed_column_part-only", i, asset.Columns[i].ValueType)
+			}
 		}
 	}
 	for rowIdx := 0; rowIdx < int(rowCount); rowIdx++ {
@@ -508,6 +522,8 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 						} else {
 							value.Float32Vector = cur.float32Slice()
 						}
+					case ColumnStoreValueUint32List:
+						value.Uint32List = cur.uint32SliceWithEncoding(asset.Columns[colIdx].FixedWidthEncoding)
 					case ColumnStoreValueAdjacencyList:
 						value.AdjacencyList = cur.uint32SliceWithEncoding(asset.Columns[colIdx].FixedWidthEncoding)
 					default:
@@ -528,7 +544,29 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	return asset, nil
 }
 
+func columnPhysicalAssetColumnMatchesManifestConfig(got, want ColumnStoreColumn) (bool, error) {
+	gotOwner, err := columnStoreColumnOwner(got)
+	if err != nil {
+		return false, fmt.Errorf("decoded owner: %w", err)
+	}
+	wantOwner, err := columnStoreColumnOwner(want)
+	if err != nil {
+		return false, fmt.Errorf("manifest owner: %w", err)
+	}
+	if gotOwner != TypedStorageOwnerRowAsset || wantOwner != TypedStorageOwnerRowAsset {
+		return false, nil
+	}
+	// TCPA row assets predate typed-storage owner metadata and do not encode an
+	// owner field. Treat the legacy zero owner and explicit typed_row_asset owner
+	// as the same physical schema while still requiring all encoded fields to
+	// match exactly.
+	got.Owner = ""
+	want.Owner = ""
+	return got == want, nil
+}
+
 func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig) error {
+	cfg = columnStoreRowAssetConfig(cfg)
 	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return err
 	}
@@ -561,7 +599,11 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 		return fmt.Errorf("collections: column physical asset columns=%d want %d", len(asset.Columns), len(cfg.Columns))
 	}
 	for i := range cfg.Columns {
-		if asset.Columns[i] != cfg.Columns[i] {
+		match, err := columnPhysicalAssetColumnMatchesManifestConfig(asset.Columns[i], cfg.Columns[i])
+		if err != nil {
+			return fmt.Errorf("collections: column physical asset column[%d]: %w", i, err)
+		}
+		if !match {
 			return fmt.Errorf("collections: column physical asset column[%d]=%+v want %+v", i, asset.Columns[i], cfg.Columns[i])
 		}
 	}
@@ -634,6 +676,9 @@ func columnPhysicalAssetVersionForColumns(columns []ColumnStoreColumn) (uint16, 
 			if !columnStoreValueTypeSupportsFixedWidthEncoding(col.ValueType) {
 				return 0, fmt.Errorf("collections: column physical asset column[%d] fixed_width_encoding unsupported for value_type %q", i, col.ValueType)
 			}
+			if columnStoreValueTypeHasScalarFixedWidthPayload(col.ValueType) {
+				return 0, fmt.Errorf("collections: column physical asset column[%d] scalar fixed_width_encoding for value_type %q is typed_column_part-only", i, col.ValueType)
+			}
 			requiresV5 = true
 		}
 	}
@@ -651,6 +696,14 @@ func validateColumnDeclaredPhysicalValueShape(col ColumnStoreColumn, value colum
 		}
 		if len(value.Float32Vector) != col.VectorDims {
 			return fmt.Errorf("float32_vector length=%d want vector_dims=%d", len(value.Float32Vector), col.VectorDims)
+		}
+	case ColumnStoreValueUint32List:
+		if !value.Present || value.Null {
+			return fmt.Errorf("uint32_list is non-null in v1")
+		}
+	case ColumnStoreValueAdjacencyList:
+		if col.AdjacencyDegree > 0 && len(value.AdjacencyList) != col.AdjacencyDegree {
+			return fmt.Errorf("adjacency_list length=%d want adjacency_degree=%d", len(value.AdjacencyList), col.AdjacencyDegree)
 		}
 	}
 	return nil

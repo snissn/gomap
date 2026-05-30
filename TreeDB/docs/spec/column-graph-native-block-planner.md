@@ -75,10 +75,12 @@ Adjacency(rowIndex int, scratch []uint32) ([]uint32, []uint32)
 ID(rowIndex int) []byte
 ```
 
-The first returned adjacency slice is a direct typed view when supported by the
-on-disk encoding and host. The second is scratch-backed fallback storage when a
-byte-swap decode is required. Callers treat both as ephemeral aliases tied to the
-block view or scratch.
+For the current #1893/#1886 stack, physical row-asset adjacency is decoded into
+scratch even when the bytes are already little-endian; row-asset alignment is
+issue #1897 and certified adjacency direct views are issue #1901. Later phases
+may return a first adjacency slice that aliases block bytes when the storage
+owner/path is eligible. Callers must treat either slice as an ephemeral alias
+tied to the block view or scratch.
 
 ## Search Algorithm
 
@@ -166,8 +168,12 @@ tests are updated with the format change.
   `MaxGraphBlockViews`) and must not become a hidden full graph decode.
 - Returned vector, adjacency, and ID spans alias block bytes or scratch. They are
   not retained across cache eviction or the next scratch reuse.
-- Unsafe typed views are allowed only when encoding, host endianness, length, and
-  lifetime checks pass. Otherwise use scratch-backed decode.
+- Unsafe typed views are allowed only when the active direct-view contract says
+  the storage owner/path is eligible and encoding, host endianness, length,
+  absolute storage offset, actual pointer alignment, and lifetime checks pass.
+  Physical row-asset direct views are deferred to #1897 and adjacency mmap
+  direct views are deferred to #1901; use scratch-backed decode in the current
+  stack.
 - Search remains one reader/searcher per worker unless synchronization is added
   above the planner.
 
@@ -181,7 +187,7 @@ The planner should keep or add metrics that make path identity obvious:
 - `ordinals_grouped/search`,
 - `score_batches/search`,
 - `adjacency_expansions/search`,
-- `adjacency_direct_views/search`,
+- `adjacency_direct_views/search` (expected zero for current row-asset fallback paths),
 - `adjacency_scratch_decodes/search`,
 - `decoded_blocks/search == 0` for the generic row reader,
 - `physical_B/search == 0` after warmup,
@@ -197,7 +203,7 @@ not reintroduce generic row decode symbols in the hot path.
    graph rows and snapshot/cache lifetime behavior.
 3. Search loop switch from point fetch to pending-score grouped batches.
 4. Lazy adjacency expansion: frontier stores ordinal+score only.
-5. Optional physical encoding extension for invNorm and adjacency direct views.
+5. Optional physical encoding extension for invNorm and certified adjacency direct views (#1901).
 6. Heap/frontier tuning after fetch/decode no longer dominates.
 
 The expected outcome is a native vector search path where the column store sees

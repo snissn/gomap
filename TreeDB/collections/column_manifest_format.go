@@ -22,10 +22,14 @@ const (
 	columnManifestDictionaryCodesRecordPrefix   = "\x04column-manifest/v1/dictionary/"
 	columnManifestInt64ValuesRecordPrefix       = "\x05column-manifest/v1/int64/"
 
-	columnManifestHeaderMagic     = uint32(0x54434d48) // TCMH
-	columnManifestPartMagic       = uint32(0x54434d50) // TCMP
-	columnManifestRecordVersionV1 = uint16(1)
-	columnManifestRecordVersion   = uint16(2)
+	columnManifestHeaderMagic       = uint32(0x54434d48) // TCMH
+	columnManifestPartMagic         = uint32(0x54434d50) // TCMP
+	columnManifestRecordVersionV1   = uint16(1)
+	columnManifestRecordVersionV2   = uint16(2)
+	columnManifestRecordVersionV3   = uint16(3)
+	columnManifestRecordVersionV4   = uint16(4)
+	columnManifestRecordVersion     = columnManifestRecordVersionV4
+	columnManifestSortKeyMaxColumns = uint64(64)
 )
 
 var (
@@ -66,6 +70,8 @@ type columnManifestPartSnapshot struct {
 	PublishID    uint64
 	GenerationID uint64
 	Reason       string
+	PartRole     ColumnManifestPartRole
+	SortKey      []ColumnSortKey
 }
 
 type columnManifestAggregateMetadataSnapshot struct {
@@ -239,6 +245,23 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			})
 			continue
 		}
+		if bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+			if !retainColumnVectorIndexStateRecordForWrite(record.key, activeVectorIndexesKnown, activeVectorIndexes) {
+				continue
+			}
+			retain, err := validateRetainedColumnVectorIndexStateRecordForWrite(record, generation)
+			if err != nil {
+				return nil, err
+			}
+			if !retain {
+				continue
+			}
+			retained = append(retained, columnManifestRecord{
+				key:   bytes.Clone(record.key),
+				value: bytes.Clone(record.value),
+			})
+			continue
+		}
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) &&
 			!bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes) &&
 			!bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes) &&
@@ -329,7 +352,7 @@ func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, ge
 func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
 	count := 0
 	for _, asset := range assets {
-		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage {
+		if asset.Ref.Kind == ColumnAssetKindTCS1PartImage || asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart {
 			count++
 		}
 	}
@@ -337,6 +360,9 @@ func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
 }
 
 func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
+	if asset.PartRole == "" {
+		asset.PartRole = inferColumnManifestPartRole(asset.Ref.Kind, asset.Reason)
+	}
 	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
 		return nil, err
 	}
@@ -356,6 +382,15 @@ func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
 	writeManifestUint64(&b, asset.PublishID)
 	writeManifestUint64(&b, asset.GenerationID)
 	writeManifestString(&b, asset.Reason)
+	writeManifestString(&b, string(asset.PartRole))
+	sortKey, err := columnSortKeysFromMatchString(asset.SortKey)
+	if err != nil {
+		return nil, err
+	}
+	if uint64(len(sortKey)) > columnManifestSortKeyMaxColumns {
+		return nil, fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", len(sortKey), columnManifestSortKeyMaxColumns)
+	}
+	writeColumnManifestSortKey(&b, sortKey)
 	return b.Bytes(), nil
 }
 
@@ -586,7 +621,7 @@ func decodeColumnManifestHeaderRecord(raw []byte) (columnManifestSnapshot, error
 	if magic := cur.u32(); magic != columnManifestHeaderMagic {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: bad column manifest header magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if version := cur.u16(); !isSupportedColumnManifestRecordVersion(version) {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: unsupported column manifest header version=%d", version)
 	}
 	collection := cur.string()
@@ -631,7 +666,7 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if !isSupportedColumnManifestRecordVersion(version) {
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kind := ColumnAssetKind(cur.string())
@@ -643,15 +678,32 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 	length64 := cur.u64()
 	checksum64 := cur.u64()
 	rows64 := uint64(0)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		rows64 = cur.u64()
 	}
 	bytes64 := cur.u64()
 	publishID := cur.u64()
 	generationID := cur.u64()
 	reason := cur.string()
+	role := ColumnManifestPartRole("")
+	if version >= columnManifestRecordVersionV3 {
+		role = ColumnManifestPartRole(cur.string())
+	}
+	sortKey := []ColumnSortKey(nil)
+	if version >= columnManifestRecordVersionV4 {
+		sortKey = readColumnManifestSortKey(&cur)
+	}
 	if err := cur.err; err != nil {
 		return columnManifestPartSnapshot{}, err
+	}
+	if err := validateColumnManifestPartSortKeyForScan(kind, sortKey); err != nil {
+		return columnManifestPartSnapshot{}, err
+	}
+	if role == "" {
+		if version >= columnManifestRecordVersionV3 && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+			return columnManifestPartSnapshot{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
+		}
+		role = inferColumnManifestPartRole(kind, reason)
 	}
 	if fileID64 > uint64(math.MaxUint32) {
 		return columnManifestPartSnapshot{}, errors.New("collections: column manifest part file_id overflows uint32")
@@ -678,7 +730,7 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason}
+	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason, PartRole: role, SortKey: columnSortKeyMatchString(sortKey)}
 	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
 		return columnManifestPartSnapshot{}, err
 	}
@@ -689,7 +741,35 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		PublishID:    publishID,
 		GenerationID: generationID,
 		Reason:       reason,
+		PartRole:     role,
+		SortKey:      sortKey,
 	}, nil
+}
+
+func isSupportedColumnManifestRecordVersion(version uint16) bool {
+	if version == columnManifestRecordVersion {
+		return true
+	}
+	return version == columnManifestRecordVersionV4 ||
+		version == columnManifestRecordVersionV3 ||
+		version == columnManifestRecordVersionV2 ||
+		version == columnManifestRecordVersionV1
+}
+
+func inferColumnManifestPartRole(kind ColumnAssetKind, reason string) ColumnManifestPartRole {
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1TypedColumnPart {
+		return ""
+	}
+	switch reason {
+	case string(ColumnPublishOperationDelete):
+		return ColumnManifestPartRoleTombstone
+	case string(ColumnPublishOperationUpdate):
+		return ColumnManifestPartRoleDelta
+	case string(ColumnPublishOperationInsert):
+		return ColumnManifestPartRoleBase
+	default:
+		return ""
+	}
 }
 
 func decodeColumnManifestPartRecordKey(key []byte) (uint64, uint64, error) {
@@ -750,6 +830,39 @@ func enumerateColumnManifestAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAss
 		return nil, err
 	}
 	refs = append(refs, int64Refs...)
+	stateRefs, err := enumerateColumnVectorIndexStateAssetRefs(iter)
+	if err != nil {
+		return nil, err
+	}
+	refs = append(refs, stateRefs...)
+	return refs, iter.Error()
+}
+
+func enumerateColumnVectorIndexStateAssetRefs(iter iterator.UnsafeIterator) ([]ColumnAssetRef, error) {
+	iter.Seek(columnVectorIndexStateRecordPrefixBytes)
+	var refs []ColumnAssetRef
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		if !bytes.HasPrefix(key, columnVectorIndexStateRecordPrefixBytes) {
+			break
+		}
+		if iter.IsDeleted() {
+			iter.Next()
+			continue
+		}
+		value, _, flags := iter.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			return nil, errors.New("collections: vector-index state record must be inline")
+		}
+		state, err := decodeColumnVectorIndexStateRecord(value)
+		if err != nil {
+			return nil, err
+		}
+		for _, asset := range state.Assets {
+			refs = append(refs, asset.Ref)
+		}
+		iter.Next()
+	}
 	return refs, iter.Error()
 }
 
@@ -949,6 +1062,52 @@ func writeManifestUint64(b *bytes.Buffer, value uint64) {
 func writeManifestString(b *bytes.Buffer, value string) {
 	writeManifestUint64(b, uint64(len(value)))
 	_, _ = b.WriteString(value)
+}
+
+func writeColumnManifestSortKey(b *bytes.Buffer, sortKeys []ColumnSortKey) {
+	// Callers validate the cap before encoding; keep this defensive marker local
+	// to the manifest format so readers and writers share one bound.
+	writeManifestUint64(b, uint64(len(sortKeys)))
+	for _, sortKey := range sortKeys {
+		writeManifestString(b, sortKey.Column)
+		writeManifestString(b, string(sortKey.Direction))
+	}
+}
+
+func readColumnManifestSortKey(cur *manifestCursor) []ColumnSortKey {
+	count := cur.u64()
+	if cur.err != nil {
+		return nil
+	}
+	if count > columnManifestSortKeyMaxColumns {
+		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", count, columnManifestSortKeyMaxColumns)
+		return nil
+	}
+	if count == 0 {
+		return nil
+	}
+	out := make([]ColumnSortKey, 0, count)
+	for i := uint64(0); i < count; i++ {
+		column := cur.string()
+		direction := ColumnSortDirection(cur.string())
+		out = append(out, ColumnSortKey{Column: column, Direction: direction})
+	}
+	return out
+}
+
+func skipColumnManifestSortKey(cur *manifestCursor) {
+	count := cur.u64()
+	if cur.err != nil {
+		return
+	}
+	if count > columnManifestSortKeyMaxColumns {
+		cur.err = fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", count, columnManifestSortKeyMaxColumns)
+		return
+	}
+	for i := uint64(0); i < count; i++ {
+		cur.skipStringBytes()
+		cur.skipStringBytes()
+	}
 }
 
 type manifestCursor struct {

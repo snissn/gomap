@@ -2,7 +2,7 @@ package hashtournament
 
 import (
 	"crypto/sha256"
-	"hash/crc32"
+	crc32 "github.com/snissn/go-crc32-asm"
 	"hash/crc64"
 	"hash/fnv"
 	"hash/maphash"
@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	crc32cTable  = crc32.MakeTable(crc32.Castagnoli)
+	crc32Table   = crc32.MakeTable(crc32.IEEE)
 	koopmanTable = crc32.MakeTable(crc32.Koopman)
 	crc64ECMA    = crc64.MakeTable(crc64.ECMA)
 	crc64ISO     = crc64.MakeTable(crc64.ISO)
@@ -65,10 +65,10 @@ func BenchmarkContentHashTournament(b *testing.B) {
 	for _, size := range inputSizes {
 		data := makeInput(size.n)
 
-		b.Run(size.name+"/CRC32C_Castagnoli_TreeDB", func(b *testing.B) {
+		b.Run(size.name+"/CRC32_IEEE_Table_TreeDB", func(b *testing.B) {
 			b.SetBytes(int64(len(data)))
 			for i := 0; i < b.N; i++ {
-				sink32 ^= crc32.Checksum(data, crc32cTable)
+				sink32 ^= crc32.Checksum(data, crc32Table)
 			}
 		})
 

@@ -389,6 +389,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		if q.PlannerCandidates == 0 || q.PlannerReason == "" {
 			t.Fatalf("query %s missing planner diagnostics: %+v", q.Name, q)
 		}
+		if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceRowScan) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			t.Fatalf("query %s storage source/fallback=%q/%q want row scan/none", q.Name, q.StorageSource, q.FallbackReason)
+		}
+		if q.ManifestRootName == "" || q.ManifestRoot == 0 || q.ManifestGeneration == 0 || q.ActiveManifestChecksum == 0 {
+			t.Fatalf("query %s missing manifest identity fields: %+v", q.Name, q)
+		}
 		if q.RowMaterializations != report.Rows {
 			t.Fatalf("query %s row_materializations=%d want %d", q.Name, q.RowMaterializations, report.Rows)
 		}
@@ -477,7 +483,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.ByteAccounting.ManifestControlBytes == 0 || report.ByteAccounting.DBTotalBytes == 0 || report.ByteAccounting.DBTotalFiles == 0 {
 		t.Fatalf("expected measured manifest/control and DB byte accounting: %+v", report.ByteAccounting)
 	}
-	if report.Manifest.ActiveGeneration == 0 || report.Manifest.AppliedCommandLSN == 0 {
+	if report.Manifest.ActiveGeneration == 0 || report.Manifest.ActiveChecksum == 0 || report.Manifest.AppliedCommandLSN == 0 || report.Manifest.ManifestRootName == "" || report.Manifest.ManifestRoot == 0 {
 		t.Fatalf("expected active/recovery-authoritative manifest identity: %+v", report.Manifest)
 	}
 	if len(report.FailClosedForcedPaths) != 0 {
@@ -1602,6 +1608,12 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 		if q.BytesRead <= 0 || q.RowsPerSecond <= 0 || q.NsPerRow <= 0 {
 			t.Fatalf("query %s missing physical throughput metrics: %+v", q.Name, q)
 		}
+		if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			t.Fatalf("query %s storage source/fallback=%q/%q want compatibility sidecar/none", q.Name, q.StorageSource, q.FallbackReason)
+		}
+		if q.ManifestRootName == "" || q.ManifestRoot == 0 || q.ManifestGeneration == 0 || q.ActiveManifestChecksum == 0 {
+			t.Fatalf("query %s missing per-row manifest identity: %+v", q.Name, q)
+		}
 		if q.Name == columnStoreQueryQ1 || q.Name == columnStoreQueryQ2 {
 			if q.DictionaryCodeHits == 0 {
 				t.Fatalf("query %s dictionary_code_hits=%d want sidecar hits", q.Name, q.DictionaryCodeHits)
@@ -1700,6 +1712,23 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				}
 				if q.ThroughputInterpretation == "" {
 					t.Fatalf("query %s missing throughput_interpretation", q.Name)
+				}
+				if q.StorageSource == "" || q.FallbackReason == "" {
+					t.Fatalf("query %s missing storage source/fallback diagnostics: %+v", q.Name, q)
+				}
+				if tc.forcedPath == columnStorePathAggregateMetadata {
+					if q.MetadataHits > 0 {
+						if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+							t.Fatalf("query %s metadata storage/fallback=%q/%q want aggregate metadata/none", q.Name, q.StorageSource, q.FallbackReason)
+						}
+					} else if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported) {
+						t.Fatalf("query %s aggregate reroute storage/fallback=%q/%q want compatibility sidecar/aggregate unsupported", q.Name, q.StorageSource, q.FallbackReason)
+					}
+				}
+				if tc.forcedPath == columnStorePathParallelColumnScan {
+					if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedRowAsset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+						t.Fatalf("query %s parallel storage/fallback=%q/%q want typed-row asset/none", q.Name, q.StorageSource, q.FallbackReason)
+					}
 				}
 				if tc.forcedPath == columnStorePathParallelColumnScan && q.WorkerCount != tc.wantWorker {
 					t.Fatalf("query %s worker_count=%d want %d for parallel path", q.Name, q.WorkerCount, tc.wantWorker)

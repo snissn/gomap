@@ -85,6 +85,13 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 	if cfg.Reconstruction != ColumnReconstructionRetainedPayloadAndColumns {
 		return nil, diag, fmt.Errorf("collections: unsupported column reconstruction policy %q", cfg.Reconstruction)
 	}
+	layout, err := ResolveTypedStorageLayout(catalog.meta)
+	if err != nil {
+		return nil, diag, err
+	}
+	if err := layout.EnsureReadSupported(); err != nil {
+		return nil, diag, err
+	}
 	visibilityStart := time.Now()
 	row, scanDiag, found, err := c.latestColumnPhysicalVisibleRowAtSnapshot(snap, catalog, documentID, nil)
 	diag.VisibilityNanos = time.Since(visibilityStart).Nanoseconds()
@@ -100,7 +107,16 @@ func (c *Collection) reconstructColumnDocumentAtSnapshotWithDiagnostics(snap *ba
 		return nil, diag, fmt.Errorf("collections: column reconstruction latest physical row is deleted for id %q", string(documentID))
 	}
 	reconstructionStart := time.Now()
-	out, err := reconstructColumnDocumentFromVisibleRow(cfg, retained, row)
+	manifestRootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+	typedValues, err := c.typedColumnPartValuesForVisibleRowAtSnapshot(snap, manifestRootID, cfg, row)
+	if err != nil {
+		return nil, diag, err
+	}
+	fullValues, err := mergeColumnReconstructionValues(cfg, row.Values, typedValues.Values)
+	if err != nil {
+		return nil, diag, err
+	}
+	out, err := reconstructColumnDocumentFromVisibleRowValues(cfg, retained, row, fullValues)
 	if err != nil {
 		return nil, diag, err
 	}
@@ -113,10 +129,99 @@ func reconstructColumnDocumentFromVisibleRow(cfg ColumnStoreConfig, retained []b
 	if row.Deleted {
 		return nil, errors.New("collections: column reconstruction latest physical row is deleted")
 	}
-	return reconstructColumnJSONDocument(cfg, retained, row.Values)
+	values, err := mergeColumnReconstructionValues(cfg, row.Values, nil)
+	if err != nil {
+		return nil, err
+	}
+	return reconstructColumnJSONDocument(cfg, retained, values)
+}
+
+func reconstructColumnDocumentFromVisibleRowValues(cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue) ([]byte, error) {
+	return reconstructColumnDocumentFromVisibleRowValuesProjected(cfg, retained, row, values, nil, nil)
+}
+
+func reconstructColumnDocumentFromVisibleRowValuesProjected(cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	_, doc, err := reconstructColumnDocumentFromVisibleRowValuesProjectedInto(nil, cfg, retained, row, values, projection, stats)
+	return doc, err
+}
+
+func reconstructColumnDocumentFromVisibleRowValuesProjectedInto(arena []byte, cfg ColumnStoreConfig, retained []byte, row columnPhysicalVisibleRow, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, []byte, error) {
+	start := len(arena)
+	if row.Deleted {
+		return arena[:start], nil, errors.New("collections: column reconstruction latest physical row is deleted")
+	}
+	arena, doc, err := reconstructColumnJSONDocumentProjectedInto(arena, cfg, retained, values, projection, stats)
+	if err != nil {
+		return arena[:start], nil, err
+	}
+	return arena, doc, nil
+}
+
+func mergeColumnReconstructionValues(cfg ColumnStoreConfig, rowValues, typedColumnValues []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	return mergeColumnReconstructionValuesInto(cfg, rowValues, typedColumnValues, nil)
+}
+
+func mergeColumnReconstructionValuesInto(cfg ColumnStoreConfig, rowValues, typedColumnValues, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	return mergeColumnReconstructionValuesProjectedInto(cfg, rowValues, typedColumnValues, nil, dst)
+}
+
+func mergeColumnReconstructionValuesProjectedInto(cfg ColumnStoreConfig, rowValues, typedColumnValues []columnDeclaredValue, selected []bool, dst []columnDeclaredValue) ([]columnDeclaredValue, error) {
+	if selected != nil && len(selected) != len(cfg.Columns) {
+		return nil, fmt.Errorf("collections: column reconstruction projection columns=%d want %d", len(selected), len(cfg.Columns))
+	}
+	var values []columnDeclaredValue
+	if cap(dst) < len(cfg.Columns) {
+		values = make([]columnDeclaredValue, len(cfg.Columns))
+	} else {
+		values = dst[:len(cfg.Columns)]
+		if selected != nil {
+			clear(values)
+		}
+	}
+	rowIdx := 0
+	typedIdx := 0
+	for i, col := range cfg.Columns {
+		switch columnStoreColumnOwnerOrRowAsset(col) {
+		case TypedStorageOwnerRowAsset:
+			if selected != nil && !selected[i] {
+				continue
+			}
+			if rowIdx >= len(rowValues) {
+				return nil, fmt.Errorf("collections: column reconstruction missing typed_row_asset value for column %q", col.Name)
+			}
+			values[i] = rowValues[rowIdx]
+			rowIdx++
+		case TypedStorageOwnerColumnPart:
+			if typedIdx >= len(typedColumnValues) {
+				return nil, fmt.Errorf("collections: column reconstruction missing typed_column_part value for column %q", col.Name)
+			}
+			values[i] = typedColumnValues[typedIdx]
+			typedIdx++
+		default:
+			return nil, fmt.Errorf("collections: column reconstruction unsupported owner %q for column %q", col.Owner, col.Name)
+		}
+	}
+	if rowIdx != len(rowValues) {
+		return nil, fmt.Errorf("collections: column reconstruction unused typed_row_asset values=%d", len(rowValues)-rowIdx)
+	}
+	if typedIdx != len(typedColumnValues) {
+		return nil, fmt.Errorf("collections: column reconstruction unused typed_column_part values=%d", len(typedColumnValues)-typedIdx)
+	}
+	return values, nil
 }
 
 func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue) ([]byte, error) {
+	return reconstructColumnJSONDocumentProjected(cfg, retained, values, nil, nil)
+}
+
+func reconstructColumnJSONDocumentProjected(cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	_, doc, err := reconstructColumnJSONDocumentProjectedInto(nil, cfg, retained, values, projection, stats)
+	return doc, err
+}
+
+func reconstructColumnJSONDocumentProjectedInto(arena []byte, cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, []byte, error) {
+	start := len(arena)
+	projectionActive := projection.active()
 	var obj map[string]any
 	var err error
 	if len(bytes.TrimSpace(retained)) == 0 {
@@ -124,36 +229,64 @@ func reconstructColumnJSONDocument(cfg ColumnStoreConfig, retained []byte, value
 	} else {
 		obj, err = decodeColumnJSONObject(retained)
 		if err != nil {
-			return nil, err
+			return arena[:start], nil, err
 		}
 	}
 	if len(values) != len(cfg.Columns) {
-		return nil, fmt.Errorf("collections: column reconstruction values=%d columns=%d", len(values), len(cfg.Columns))
+		return arena[:start], nil, fmt.Errorf("collections: column reconstruction values=%d columns=%d", len(values), len(cfg.Columns))
 	}
 	declared := make([]columnReconstructedDeclaredValue, len(cfg.Columns))
-	for i, col := range cfg.Columns {
-		raw, err := columnDeclaredValueToJSON(values[i])
-		if err != nil {
-			return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+	if projectionActive {
+		for i, col := range cfg.Columns {
+			if !projection.wantsPath(col.Path) {
+				if stats != nil {
+					stats.FieldsSkipped++
+				}
+				continue
+			}
+			raw, err := columnDeclaredValueToJSON(values[i])
+			if err != nil {
+				return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+			}
+			declared[i] = columnReconstructedDeclaredValue{
+				Value:   raw,
+				Present: values[i].Present,
+			}
+			if !values[i].Present {
+				continue
+			}
+			if strings.Contains(col.Path, ".") {
+				if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
+					return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+				}
+			}
 		}
-		declared[i] = columnReconstructedDeclaredValue{
-			Value:   raw,
-			Present: values[i].Present,
-		}
-		if !values[i].Present {
-			continue
-		}
-		if strings.Contains(col.Path, ".") {
-			if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
-				return nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+	} else {
+		for i, col := range cfg.Columns {
+			raw, err := columnDeclaredValueToJSON(values[i])
+			if err != nil {
+				return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+			}
+			declared[i] = columnReconstructedDeclaredValue{
+				Value:   raw,
+				Present: values[i].Present,
+			}
+			if !values[i].Present {
+				continue
+			}
+			if strings.Contains(col.Path, ".") {
+				if err := setColumnJSONPath(obj, col.Path, raw); err != nil {
+					return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
+				}
 			}
 		}
 	}
-	out, err := marshalColumnReconstructedJSONObject(cfg, obj, declared)
+	arena, err = marshalColumnReconstructedJSONObjectProjectedInto(arena, cfg, obj, declared, projection, stats)
 	if err != nil {
-		return nil, fmt.Errorf("collections: encode reconstructed column payload: %w", err)
+		return arena[:start], nil, fmt.Errorf("collections: encode reconstructed column payload: %w", err)
 	}
-	return out, nil
+	doc := arena[start:len(arena):len(arena)]
+	return arena, doc, nil
 }
 
 type columnReconstructedDeclaredValue struct {
@@ -162,13 +295,26 @@ type columnReconstructedDeclaredValue struct {
 }
 
 func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue) ([]byte, error) {
-	var b bytes.Buffer
-	b.WriteByte('{')
+	return marshalColumnReconstructedJSONObjectProjected(cfg, retained, declared, nil, nil)
+}
+
+func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	out, err := marshalColumnReconstructedJSONObjectProjectedInto(nil, cfg, retained, declared, projection, stats)
+	if err != nil {
+		return nil, err
+	}
+	return out[:len(out):len(out)], nil
+}
+
+func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	projectionActive := projection.active()
+	arena = append(arena, '{')
 	written := make(map[string]struct{}, len(cfg.Columns))
 	first := true
+	reconstructed := uint64(0)
 	writeField := func(key string, value any) error {
 		if !first {
-			b.WriteByte(',')
+			arena = append(arena, ',')
 		}
 		first = false
 		keyBytes, err := json.Marshal(key)
@@ -179,26 +325,52 @@ func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[st
 		if err != nil {
 			return err
 		}
-		b.Write(keyBytes)
-		b.WriteByte(':')
-		b.Write(valueBytes)
+		arena = append(arena, keyBytes...)
+		arena = append(arena, ':')
+		arena = append(arena, valueBytes...)
+		reconstructed++
 		return nil
 	}
-	for i, col := range cfg.Columns {
-		if strings.Contains(col.Path, ".") {
-			continue
+	if projectionActive {
+		for i, col := range cfg.Columns {
+			if strings.Contains(col.Path, ".") {
+				continue
+			}
+			if !projection.wantsPath(col.Path) {
+				written[col.Path] = struct{}{}
+				continue
+			}
+			if !declared[i].Present {
+				continue
+			}
+			if err := writeField(col.Path, declared[i].Value); err != nil {
+				return arena, err
+			}
+			written[col.Path] = struct{}{}
 		}
-		if !declared[i].Present {
-			continue
+	} else {
+		for i, col := range cfg.Columns {
+			if strings.Contains(col.Path, ".") {
+				continue
+			}
+			if !declared[i].Present {
+				continue
+			}
+			if err := writeField(col.Path, declared[i].Value); err != nil {
+				return arena, err
+			}
+			written[col.Path] = struct{}{}
 		}
-		if err := writeField(col.Path, declared[i].Value); err != nil {
-			return nil, err
-		}
-		written[col.Path] = struct{}{}
 	}
 	keys := make([]string, 0, len(retained))
 	for key := range retained {
 		if _, ok := written[key]; ok {
+			continue
+		}
+		if projectionActive && !projection.wantsPath(key) {
+			if stats != nil {
+				stats.FieldsSkipped++
+			}
 			continue
 		}
 		keys = append(keys, key)
@@ -206,10 +378,58 @@ func marshalColumnReconstructedJSONObject(cfg ColumnStoreConfig, retained map[st
 	sort.Strings(keys)
 	for _, key := range keys {
 		if err := writeField(key, retained[key]); err != nil {
-			return nil, err
+			return arena, err
 		}
 	}
+	arena = append(arena, '}')
+	if stats != nil {
+		stats.FieldsReconstructed += reconstructed
+	}
+	return arena, nil
+}
+
+func projectJSONDocument(raw []byte, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	obj, err := decodeColumnJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	return marshalProjectedJSONObject(obj, projection, stats)
+}
+
+func marshalProjectedJSONObject(obj map[string]any, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		if !projection.wantsPath(key) {
+			if stats != nil {
+				stats.FieldsSkipped++
+			}
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		if i != 0 {
+			b.WriteByte(',')
+		}
+		keyBytes, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		valueBytes, err := json.Marshal(obj[key])
+		if err != nil {
+			return nil, err
+		}
+		b.Write(keyBytes)
+		b.WriteByte(':')
+		b.Write(valueBytes)
+	}
 	b.WriteByte('}')
+	if stats != nil {
+		stats.FieldsReconstructed += uint64(len(keys))
+	}
 	return b.Bytes(), nil
 }
 
@@ -294,6 +514,8 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 		return value.String, nil
 	case ColumnStoreValueFloat32Vector:
 		return value.Float32Vector, nil
+	case ColumnStoreValueUint32List:
+		return value.Uint32List, nil
 	case ColumnStoreValueAdjacencyList:
 		return value.AdjacencyList, nil
 	default:

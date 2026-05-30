@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"errors"
 	"fmt"
 	"time"
 )
@@ -9,16 +8,20 @@ import (
 const columnDictionaryInt64GroupMaxGroups = 1 << 20
 
 type columnDictionaryInt64GroupRunner struct {
-	groupColumn string
-	valueColumn string
-	kind        ColumnPhysicalQueryKind
-	groupDict   []string
-	assets      []columnDictionaryInt64GroupAsset
-	seen        []uint64
-	minValues   []int64
-	maxValues   []int64
-	result      []ColumnPhysicalQueryGroup
-	assetBytes  int64
+	groupColumn          string
+	valueColumn          string
+	kind                 ColumnPhysicalQueryKind
+	groupDict            []string
+	assets               []columnDictionaryInt64GroupAsset
+	predicateAssets      []columnDictionaryPredicateAsset
+	seen                 []uint64
+	minValues            []int64
+	maxValues            []int64
+	result               []ColumnPhysicalQueryGroup
+	assetBytes           int64
+	predicateBytes       int64
+	predicateCodeHit     int
+	predicateDiagnostics columnPhysicalQueryPredicateDiagnosticPlan
 }
 
 type columnDictionaryInt64GroupAsset struct {
@@ -47,6 +50,14 @@ func prepareColumnDictionaryInt64GroupRunner(view columnPhysicalScanSnapshotView
 		kind:        req.Kind,
 		assets:      make([]columnDictionaryInt64GroupAsset, 0, len(view.AssetRefs)),
 	}
+	predicateAssets, predicateBytes, err := prepareColumnDictionaryPredicateAssets(view, req, readCache)
+	if err != nil {
+		return nil, err
+	}
+	runner.predicateAssets = predicateAssets
+	runner.predicateBytes = predicateBytes
+	runner.predicateCodeHit = columnDictionaryPredicateAssetHits(predicateAssets)
+	runner.predicateDiagnostics = newColumnPhysicalQueryPredicateDiagnosticPlan(req)
 	groupByValue := make(map[string]uint32)
 	var scratch []byte
 	for _, part := range view.AssetRefs {
@@ -66,13 +77,23 @@ func prepareColumnDictionaryInt64GroupRunner(view columnPhysicalScanSnapshotView
 		if err != nil {
 			return nil, fmt.Errorf("collections: dictionary/int64 values read generation=%d part_id=%d column=%q: %w", valueSnapshot.AssetRef.Generation, valueSnapshot.AssetRef.PartID, req.ValueColumn, err)
 		}
+		valueRawIsView := readCache.lastView
 		scratch = valueRaw
-		valueAsset, err := decodeColumnInt64ValuesAsset(valueRaw, valueSnapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, false)
+		_, valuePayload, err := decodeColumnInt64ValuesAssetPayload(valueRaw, valueSnapshot.AssetRef, view.Config, view.CollectionName, req.ValueColumn, false)
 		if err != nil {
 			return nil, err
 		}
-		if len(groupAsset.Codes) != len(valueAsset.Values) || len(valueAsset.Values) != valueSnapshot.Rows {
-			return nil, fmt.Errorf("collections: dictionary/int64 row count mismatch group=%d values=%d manifest=%d", len(groupAsset.Codes), len(valueAsset.Values), valueSnapshot.Rows)
+		if len(groupAsset.Codes) != valuePayload.rowCount || valuePayload.rowCount != valueSnapshot.Rows {
+			return nil, fmt.Errorf("collections: dictionary/int64 row count mismatch group=%d values=%d manifest=%d", len(groupAsset.Codes), valuePayload.rowCount, valueSnapshot.Rows)
+		}
+		var values []int64
+		if valueRawIsView {
+			values, _, err = viewColumnInt64ValuesPayload(valueRaw, valuePayload)
+		} else {
+			values, err = copyColumnInt64ValuesPayload(valueRaw, valuePayload)
+		}
+		if err != nil {
+			return nil, err
 		}
 		groupCodes := make([]uint32, len(groupAsset.Codes))
 		for codeIdx, localCode := range groupAsset.Codes {
@@ -90,7 +111,7 @@ func prepareColumnDictionaryInt64GroupRunner(view columnPhysicalScanSnapshotView
 		}
 		runner.assets = append(runner.assets, columnDictionaryInt64GroupAsset{
 			groupCodes: groupCodes,
-			values:     valueAsset.Values,
+			values:     values,
 		})
 		runner.assetBytes += groupSnapshot.AssetRef.Length + valueSnapshot.AssetRef.Length
 	}
@@ -145,7 +166,7 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 			if err != nil {
 				return ColumnPhysicalQueryResult{}, true, err
 			}
-			groupPayload = columnDictionaryCodesAssetPayload{rowCount: len(decoded.Codes), offset: 0}
+			groupPayload = columnDictionaryCodesAssetPayload{rowCount: len(decoded.Codes)}
 			groupCodes = decoded.Codes
 			localToGlobal, ok = reducer.translateDictionary(decoded.Dictionary)
 		} else {
@@ -167,7 +188,10 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 			if dictCur.err != nil {
 				return ColumnPhysicalQueryResult{}, true, dictCur.err
 			}
-			groupPayload = columnDictionaryCodesAssetPayload{rowCount: rowCount, offset: dictCur.pos}
+			groupPayload, err = columnDictionaryCodesPayloadAfterDictionary(groupRaw, groupSnapshot.AssetRef, &dictCur, rowCount)
+			if err != nil {
+				return ColumnPhysicalQueryResult{}, true, err
+			}
 		}
 		if !ok {
 			return ColumnPhysicalQueryResult{}, false, nil
@@ -184,35 +208,28 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 		if groupPayload.rowCount != valuePayload.rowCount || valuePayload.rowCount != valueSnapshot.Rows {
 			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary/int64 row count mismatch group=%d values=%d manifest=%d", groupPayload.rowCount, valuePayload.rowCount, valueSnapshot.Rows)
 		}
-		valueCur := manifestCursor{raw: valueRaw, pos: valuePayload.offset}
+		values, _, err := viewColumnInt64ValuesPayload(valueRaw, valuePayload)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
 		if groupCodes != nil {
-			for _, localCode := range groupCodes {
-				reducer.reduceValue(localToGlobal[localCode], int64(valueCur.u64()))
+			for i, localCode := range groupCodes {
+				reducer.reduceValue(localToGlobal[localCode], values[i])
 				rows++
 			}
 		} else {
-			groupCur := manifestCursor{raw: groupRaw, pos: groupPayload.offset}
-			for i := 0; i < groupPayload.rowCount; i++ {
-				localCode := groupCur.u32()
+			localCodes, _, err := viewColumnDictionaryCodesPayload(groupRaw, groupPayload)
+			if err != nil {
+				return ColumnPhysicalQueryResult{}, true, err
+			}
+			for i, localCode := range localCodes {
 				localIdx, ok := columnDictionaryCodeIndex(localCode, len(localToGlobal))
 				if !ok {
 					return ColumnPhysicalQueryResult{}, true, fmt.Errorf("collections: dictionary codes asset code[%d]=%d outside cardinality=%d", i, localCode, len(localToGlobal))
 				}
-				reducer.reduceValue(localToGlobal[localIdx], int64(valueCur.u64()))
+				reducer.reduceValue(localToGlobal[localIdx], values[i])
 				rows++
 			}
-			if groupCur.err != nil {
-				return ColumnPhysicalQueryResult{}, true, groupCur.err
-			}
-			if groupCur.pos != len(groupRaw) {
-				return ColumnPhysicalQueryResult{}, true, errors.New("collections: trailing bytes in dictionary codes asset")
-			}
-		}
-		if valueCur.err != nil {
-			return ColumnPhysicalQueryResult{}, true, valueCur.err
-		}
-		if valueCur.pos != len(valueRaw) {
-			return ColumnPhysicalQueryResult{}, true, errors.New("collections: trailing bytes in int64 values asset")
 		}
 		assetBytes += groupSnapshot.AssetRef.Length + valueSnapshot.AssetRef.Length
 		blocks++
@@ -287,11 +304,64 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 	start := time.Now()
 	clear(r.seen)
 	rows := 0
-	for _, asset := range r.assets {
-		for rowIdx, groupCode := range asset.groupCodes {
-			value := asset.values[rowIdx]
-			r.reduceValue(groupCode, value)
-			rows++
+	matched := 0
+	if len(r.predicateAssets) == 0 {
+		for _, asset := range r.assets {
+			rows += len(asset.groupCodes)
+			for rowIdx, groupCode := range asset.groupCodes {
+				value := asset.values[rowIdx]
+				r.reduceValue(groupCode, value)
+			}
+		}
+		matched = rows
+	} else {
+		for assetIdx, asset := range r.assets {
+			predicates := &r.predicateAssets[assetIdx]
+			rows += len(asset.groupCodes)
+			if predicates.rejectsAll {
+				continue
+			}
+			fast, ok := predicates.fastPath(len(asset.groupCodes))
+			if !ok {
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !predicates.matches(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+				continue
+			}
+			switch fast.predicateCount() {
+			case 1:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches1(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+			case 2:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches2(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+			default:
+				for rowIdx, groupCode := range asset.groupCodes {
+					if !fast.matches(rowIdx) {
+						continue
+					}
+					value := asset.values[rowIdx]
+					r.reduceValue(groupCode, value)
+					matched++
+				}
+			}
 		}
 	}
 	r.result = r.result[:0]
@@ -308,17 +378,19 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 	sortColumnPhysicalQueryGroupsByKey(r.result)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = 2
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 2)
 	diag.ScheduledGranules = len(r.assets)
 	diag.DecodedBlocks = len(r.assets)
 	diag.DirectReduceBlocks = len(r.assets)
 	diag.DictionaryCodeHits = len(r.assets)
+	diag.PredicateDictionaryCodeHits = r.predicateCodeHit
 	diag.Int64ValueHits = len(r.assets)
 	diag.RowsScanned = rows
-	diag.PhysicalBytesScanned = r.assetBytes
-	diag.ReduceRows = rows
+	diag.PhysicalBytesScanned = r.assetBytes + r.predicateBytes
+	diag.ReduceRows = matched
 	diag.ResultGroups = len(r.result)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
+	applyColumnPhysicalQueryPredicateDiagnostics(&diag, r.predicateDiagnostics, matched, r.predicateCodeHit)
 	diag.ScanNanos = time.Since(start).Nanoseconds()
 	return ColumnPhysicalQueryResult{Groups: r.result, Diagnostics: diag}
 }

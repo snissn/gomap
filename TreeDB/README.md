@@ -8,7 +8,7 @@ The canonical TreeDB specification now lives under:
 
 - `TreeDB/docs/spec/README.md`
 
-Use that folder for architecture, format, durability, recovery, lifecycle, and verification requirements. The root `docs/TREEDB_*.md` files remain supporting material.
+Use that folder for architecture, format, durability, recovery, lifecycle, and verification requirements. Practical typed-storage quickstarts and benchmark-adjacent guides live under `TreeDB/docs/guides/`. The root `docs/TREEDB_*.md` files remain supporting material.
 
 ## Features
 
@@ -160,6 +160,13 @@ The initial API lives in `TreeDB/collections`:
   expose live/deleted counts, memory and disk bytes, persisted epoch state,
   snapshot dirtiness, candidate counts, selected strategy, exact fallback
   reason, rebuild duration, and recall-at-k.
+
+Native `column_graph` benchmark tiers are documented in
+`docs/guides/vector-search-typed-column.md#vector-search-benchmark-tiers`.
+Use that matrix to distinguish core graph search, existing public response-owned
+`Search`, reusable-buffer no-document `SearchWithBuffer`, parallel callers, and
+explicit document-fetch paths. Report `ops/sec` (`1e9 / ns/op`) with `ns/op`,
+`B/op`, `allocs/op`, and vector/adjacency direct-vs-scratch counters.
 
 Smoke benchmark:
 

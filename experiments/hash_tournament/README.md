@@ -4,9 +4,9 @@ This experiment compares candidate content hash functions for block-sized read
 integrity checks. It includes the current TreeDB-style CRC path:
 
 ```go
-var crc32cTable = crc32.MakeTable(crc32.Castagnoli)
+var crc32Table = crc32.MakeTable(crc32.IEEE)
 
-crc32.Checksum(data, crc32cTable)
+crc32.Checksum(data, crc32Table)
 ```
 
 The benchmark sizes mirror ClickHouse-like compressed block boundaries that are
@@ -33,8 +33,8 @@ go test -run '^$' -bench BenchmarkContentHashTournament -benchtime=2s -count=5
 
 ## Competitors
 
-- `CRC32C_Castagnoli_TreeDB`: Go `hash/crc32` with `crc32.Castagnoli`.
-- `CRC32_IEEE`: Go `hash/crc32.ChecksumIEEE`.
+- `CRC32_IEEE_Table_TreeDB`: `github.com/snissn/go-crc32-asm` with `crc32.IEEE`.
+- `CRC32_IEEE`: `github.com/snissn/go-crc32-asm` `crc32.ChecksumIEEE`.
 - `CRC32_Koopman`: Go `hash/crc32` with `crc32.Koopman`.
 - `CRC64_ECMA`: Go `hash/crc64` with `crc64.ECMA`.
 - `CRC64_ISO`: Go `hash/crc64` with `crc64.ISO`.
@@ -80,7 +80,7 @@ persisted checksum values.
 On the local Apple M3 smoke runs, `FarmHash64` and its seeded 64-bit variants
 are the fastest candidates. The 128-bit farm and `XXH3` variants do not beat
 the 64-bit farm path, and the native 32-bit farm variants do not beat the
-current Go `CRC32C_Castagnoli_TreeDB` path.
+current Go `CRC32_IEEE_Table_TreeDB` path.
 
 Representative 1 MiB expanded-run results:
 
@@ -96,7 +96,7 @@ XXH3_128:             ~19.13 GB/s
 XXH3_64:              ~18.95 GB/s
 XXHash64:             ~16.88 GB/s
 MapHash_ProcessLocal: ~13.90 GB/s
-CRC32C_Castagnoli_TreeDB: ~10.64 GB/s
+CRC32_IEEE_Table_TreeDB: ~10.64 GB/s
 FarmHash32Seeded:     ~7.71 GB/s
 FarmFingerprint32:    ~7.67 GB/s
 FarmHash32:           ~7.38 GB/s
@@ -110,21 +110,21 @@ Practical read from this machine:
 - If the checksum field can move to 64 bits, `FarmHash64` is the strongest
   local candidate to validate on target hardware.
 - Go's standard-library `CRC64_ECMA` and `CRC64_ISO` provide 64-bit CRC-style
-  checksums, but they are much slower than `CRC32C_Castagnoli_TreeDB` and the
+  checksums, but they are much slower than `CRC32_IEEE_Table_TreeDB` and the
   fast 64-bit fingerprint hashes on this machine.
 - If the checksum field must stay `uint32`, benchmark truncating fast 64-bit
   hashes, such as `uint32(farm.Hash64(data))`, before choosing a native 32-bit
-  hash. The native 32-bit farm variants are slower than CRC32C in this run.
+  hash. The native 32-bit farm variants are slower than CRC32_IEEE in this run.
 - `maphash` is not a good persisted checksum default because its seed is
   process-local unless the format explicitly owns and persists seed semantics.
 
 Earlier short-run top-contender pass:
 
 ```text
-64 KiB:  FarmHash64 ~24.3 GB/s, XXH3 ~15.2 GB/s, CRC32C ~7.6 GB/s
-256 KiB: FarmHash64 ~25.8 GB/s, XXH3 ~16.8 GB/s, CRC32C ~9.4 GB/s
-512 KiB: FarmHash64 ~23.9 GB/s, XXH3 ~16.1 GB/s, CRC32C ~9.8 GB/s
-1 MiB:   FarmHash64 ~20.5 GB/s, XXH3 ~15.6 GB/s, CRC32C ~9.3 GB/s
+64 KiB:  FarmHash64 ~24.3 GB/s, XXH3 ~15.2 GB/s, CRC32_IEEE ~7.6 GB/s
+256 KiB: FarmHash64 ~25.8 GB/s, XXH3 ~16.8 GB/s, CRC32_IEEE ~9.4 GB/s
+512 KiB: FarmHash64 ~23.9 GB/s, XXH3 ~16.1 GB/s, CRC32_IEEE ~9.8 GB/s
+1 MiB:   FarmHash64 ~20.5 GB/s, XXH3 ~15.6 GB/s, CRC32_IEEE ~9.3 GB/s
 ```
 
 Treat these numbers as local signal only; rerun on target hardware before using

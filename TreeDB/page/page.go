@@ -3,8 +3,9 @@ package page
 import (
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 var ErrInvalidPageType = errors.New("invalid page type")
@@ -66,14 +67,12 @@ type ValuePtr struct {
 	FileID uint32
 }
 
-// CRC32C Table using Castagnoli polynomial.
-var crcTable = crc32.MakeTable(crc32.Castagnoli)
 var checksumZeroField = [4]byte{}
 var checksumZeroBlock = [1024]byte{}
 
-// Checksum returns the CRC32C checksum of data.
+// Checksum returns the CRC-32/IEEE checksum of data.
 func Checksum(data []byte) uint32 {
-	return crc32.Checksum(data, crcTable)
+	return crc.Checksum(data)
 }
 
 // CalculateChecksum computes the checksum of the page data,
@@ -83,9 +82,9 @@ func CalculateChecksum(data []byte) uint32 {
 		return 0
 	}
 	// CRC over bytes 0-7, then the zeroed checksum field (bytes 8-11), then the rest.
-	sum := crc32.Update(0, crcTable, data[0:8])
-	sum = crc32.Update(sum, crcTable, checksumZeroField[:])
-	sum = crc32.Update(sum, crcTable, data[12:])
+	sum := crc.Update(0, data[0:8])
+	sum = crc.Update(sum, checksumZeroField[:])
+	sum = crc.Update(sum, data[12:])
 	return sum
 }
 
@@ -99,12 +98,12 @@ func CalculateChecksumWithZeroGap(prefix []byte, gapLen int, suffix []byte) uint
 	if gapLen < 0 {
 		panic("page: checksum zero-gap length is negative")
 	}
-	sum := crc32.Update(0, crcTable, prefix[0:8])
-	sum = crc32.Update(sum, crcTable, checksumZeroField[:])
-	sum = crc32.Update(sum, crcTable, prefix[12:])
+	sum := crc.Update(0, prefix[0:8])
+	sum = crc.Update(sum, checksumZeroField[:])
+	sum = crc.Update(sum, prefix[12:])
 	sum = updateChecksumZeroes(sum, gapLen)
 	if len(suffix) > 0 {
-		sum = crc32.Update(sum, crcTable, suffix)
+		sum = crc.Update(sum, suffix)
 	}
 	return sum
 }
@@ -115,13 +114,13 @@ func updateChecksumZeroes(sum uint32, count int) uint32 {
 		if n > len(checksumZeroBlock) {
 			n = len(checksumZeroBlock)
 		}
-		sum = crc32.Update(sum, crcTable, checksumZeroBlock[:n])
+		sum = crc.Update(sum, checksumZeroBlock[:n])
 		count -= n
 	}
 	return sum
 }
 
-// UpdateChecksum computes CRC32C for the page while treating checksum bytes
+// UpdateChecksum computes CRC-32/IEEE for the page while treating checksum bytes
 // 8-11 (data[8:12]) as zero, then writes the computed checksum back into the
 // page header.
 // It mutates data in-place and returns the computed checksum.
@@ -133,7 +132,7 @@ func UpdateChecksum(data []byte) uint32 {
 	data[9] = 0
 	data[10] = 0
 	data[11] = 0
-	sum := crc32.Checksum(data, crcTable)
+	sum := crc.Checksum(data)
 	binary.LittleEndian.PutUint32(data[8:12], sum)
 	return sum
 }

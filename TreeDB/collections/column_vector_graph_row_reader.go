@@ -6,6 +6,7 @@ import (
 	"math"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 type columnVectorGraphPhysicalRowReaderOptions struct {
@@ -40,10 +41,22 @@ var (
 // The reader is not concurrency-safe. Parallel native search uses one reader
 // and one scratch per worker over immutable physical graph assets.
 type columnVectorGraphPhysicalRowReader struct {
-	def     VectorIndexDefinition
-	graph   columnVectorGraphManifestSnapshot
-	catalog *collectionCatalog
-	reader  *columnPhysicalRowReader
+	def                                 VectorIndexDefinition
+	graph                               columnVectorGraphManifestSnapshot
+	catalog                             *collectionCatalog
+	reader                              *columnPhysicalRowReader
+	typedVectorSource                   *columnVectorGraphTypedColumnVectorSource
+	typedVectorFallbackReason           string
+	invNormSource                       *columnVectorGraphInvNormStateSource
+	invNormStateUnavailable             bool
+	invNormStateFallbackReason          typeddecode.Reason
+	rowRefSource                        *columnVectorGraphRowRefStateSource
+	rowRefStateUnavailable              bool
+	rowRefStateFallbackReason           typeddecode.Reason
+	adjacencyLayerSources               *columnVectorGraphAdjacencyDirectSources
+	layer0AdjacencySource               *columnVectorGraphLayer0AdjacencyDirectSource
+	layer0AdjacencySourceUnavailable    bool
+	layer0AdjacencySourceFallbackReason typeddecode.Reason
 }
 
 // columnVectorGraphPhysicalRow aliases caller-owned scratch and cached asset
@@ -97,12 +110,92 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		_ = reader.Close()
 		return nil, fmt.Errorf("collections: column_graph %q manifest row_count=%d physical_row_count=%d: %w", def.Name, want, got, errColumnVectorGraphManifestMismatch)
 	}
-	return &columnVectorGraphPhysicalRowReader{
+	graphReader := &columnVectorGraphPhysicalRowReader{
 		def:     def,
 		graph:   graph,
 		catalog: catalog,
 		reader:  reader,
-	}, nil
+	}
+	if catalog != nil && catalog.meta.Options.ColumnStore != nil {
+		baseCfg := catalog.meta.Options.ColumnStore
+		var baseManifest columnManifestSnapshot
+		var baseRecords []columnManifestRecord
+		var baseManifestLoaded bool
+		loadBaseManifestRecords := func() (columnManifestSnapshot, []columnManifestRecord, error) {
+			if baseManifestLoaded {
+				return baseManifest, baseRecords, nil
+			}
+			rootID := catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name))
+			records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, err
+			}
+			manifest, err := decodeColumnManifestSnapshotForScan(records)
+			if err != nil {
+				return columnManifestSnapshot{}, nil, err
+			}
+			baseManifest = manifest
+			baseRecords = records
+			baseManifestLoaded = true
+			return baseManifest, baseRecords, nil
+		}
+		state := view.VectorIndexState
+		if !view.VectorIndexStateFound {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if sources, _, sourceErr := c.openColumnVectorGraphAdjacencyStateSourcesForReader(catalog.meta.Name, *baseCfg, def, graph, state); sourceErr != nil {
+			_ = graphReader.Close()
+			return nil, sourceErr
+		} else if sources != nil {
+			graphReader.adjacencyLayerSources = sources
+			if len(sources.sources) > 0 {
+				graphReader.layer0AdjacencySource = sources.sources[0]
+			}
+		} else {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing vector-index adjacency state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if _, ok := findColumnVectorGraphInvNormStateAsset(state); ok {
+			source, fallbackReason, sourceErr := c.openColumnVectorGraphInvNormStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state)
+			if sourceErr != nil {
+				_ = graphReader.Close()
+				return nil, sourceErr
+			}
+			graphReader.invNormSource = source
+			graphReader.invNormStateFallbackReason = fallbackReason
+		} else {
+			graphReader.invNormStateUnavailable = true
+		}
+		if columnVectorGraphRowRefStatePresent(state) {
+			_, records, recordsErr := loadBaseManifestRecords()
+			if recordsErr != nil {
+				_ = graphReader.Close()
+				return nil, recordsErr
+			}
+			source, sourceErr := c.openColumnVectorGraphRowRefStateSourceForReader(catalog.meta.Name, *baseCfg, def, graph, state, records)
+			if sourceErr != nil {
+				_ = graphReader.Close()
+				return nil, sourceErr
+			}
+			graphReader.rowRefSource = source
+		} else {
+			graphReader.rowRefStateUnavailable = true
+		}
+		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(*baseCfg, graph.Field, graph.Dimensions); ownerErr != nil {
+			graphReader.typedVectorFallbackReason = ownerErr.Error()
+		} else if typedVectorOwner {
+			manifest, records, recordsErr := loadBaseManifestRecords()
+			if recordsErr != nil {
+				graphReader.typedVectorFallbackReason = recordsErr.Error()
+			} else if source, fallbackReason := c.openColumnVectorGraphTypedColumnVectorSourceForReader(catalog, *baseCfg, manifest, records, graph, graphReader); source != nil {
+				graphReader.typedVectorSource = source
+			} else if fallbackReason != "" {
+				graphReader.typedVectorFallbackReason = fallbackReason
+			}
+		}
+	}
+	return graphReader, nil
 }
 
 func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotView(name string) (VectorIndexDefinition, columnVectorGraphManifestSnapshot, columnPhysicalScanSnapshotView, error) {
@@ -188,7 +281,31 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if err != nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
 	}
-	if !columnVectorGraphManifestMatchesDefinition(catalog.meta.Name, graph, def, *cfg, manifest, records) {
+	baseChecksum, err := columnVectorGraphBaseManifestChecksum(manifest, records, *cfg)
+	if err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q base manifest checksum unavailable: %w: %v", def.Name, errColumnVectorGraphManifestMismatch, err)
+	}
+	stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name)
+	if !ok {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q missing vector-index state record: %w", def.Name, errColumnVectorGraphManifestMismatch)
+	}
+	vectorState, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
+	if err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
+	if columnVectorIndexStateMatchStatusWithBaseChecksum(vectorState, def, *cfg, baseChecksum) != columnVectorIndexStateMatchLoaded || !columnVectorIndexStateMatchesGraph(vectorState, graph) {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q vector-index state does not match graph manifest: %w", def.Name, errColumnVectorGraphManifestMismatch)
+	}
+	// Keep snapshot-view validation cheap: this path is also used by status/open
+	// setup. The adjacency state source binder below performs the single full
+	// typed-list payload validation/read when it acquires offset/value sections.
+	if err := validateColumnVectorIndexStateAssetsForStatus(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, vectorState, graph); err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
+	if err := validateColumnVectorGraphInvNormStateAssetIfPresent(c.db.ColumnAssetRootDir(), catalog.meta.Name, *cfg, def, graph, vectorState); err != nil {
+		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	}
+	if columnVectorGraphManifestMatchStatusWithBaseChecksum(catalog.meta.Name, graph, def, *cfg, baseChecksum) != columnVectorGraphManifestMatchLoaded {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q graph manifest does not match vector index definition: %w", def.Name, errColumnVectorGraphManifestMismatch)
 	}
 	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
@@ -206,11 +323,13 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
 	view := columnPhysicalScanSnapshotView{
-		CollectionName:     catalog.meta.Name,
-		Catalog:            catalog,
-		Config:             graphCfg,
-		ColumnStoreEnabled: true,
-		CommitSeq:          state.CommitSeq,
+		CollectionName:        catalog.meta.Name,
+		Catalog:               catalog,
+		Config:                graphCfg,
+		ColumnStoreEnabled:    true,
+		CommitSeq:             state.CommitSeq,
+		VectorIndexState:      vectorState,
+		VectorIndexStateFound: true,
 		AssetRefs: []columnManifestAssetRefForScan{{
 			Ref:    graph.AssetRef,
 			Reason: ColumnPublishOperationInsert,
@@ -230,10 +349,46 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 }
 
 func (r *columnVectorGraphPhysicalRowReader) Close() error {
-	if r == nil || r.reader == nil {
+	if r == nil {
 		return nil
 	}
-	return r.reader.Close()
+	var closeErr error
+	if r.typedVectorSource != nil {
+		if err := r.typedVectorSource.Close(); err != nil {
+			closeErr = err
+		}
+		r.typedVectorSource = nil
+	}
+	if r.invNormSource != nil {
+		if err := r.invNormSource.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.invNormSource = nil
+	}
+	if r.rowRefSource != nil {
+		if err := r.rowRefSource.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.rowRefSource = nil
+	}
+	if r.adjacencyLayerSources != nil {
+		if err := r.adjacencyLayerSources.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.adjacencyLayerSources = nil
+		r.layer0AdjacencySource = nil
+	} else if r.layer0AdjacencySource != nil {
+		if err := r.layer0AdjacencySource.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+		r.layer0AdjacencySource = nil
+	}
+	if r.reader != nil {
+		if err := r.reader.Close(); closeErr == nil && err != nil {
+			closeErr = err
+		}
+	}
+	return closeErr
 }
 
 func (r *columnVectorGraphPhysicalRowReader) RowCount() int {
@@ -390,9 +545,17 @@ func (r *columnVectorGraphPhysicalRowReader) nativeGraphRowFromBlock(block *colu
 	scratch.Float32Values = scratch.Float32Values[:0]
 	scratch.Uint32Values = scratch.Uint32Values[:0]
 
-	vector, err := r.readNativeGraphVector(&cur, block.version, ordinal, scratch)
-	if err != nil {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+	vector, _, _, typedVectorOK := r.typedVectorForOrdinal(ordinal)
+	if typedVectorOK {
+		if err := r.skipNativeGraphVector(&cur, block.version, ordinal); err != nil {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+		}
+	} else {
+		var err error
+		vector, err = r.readNativeGraphVector(&cur, block.version, ordinal, scratch)
+		if err != nil {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("row[%d]: %w", rowIndex, err)
+		}
 	}
 	invNorm, err := r.readNativeGraphInvNorm(&cur, block.version, ordinal)
 	if err != nil {
@@ -462,6 +625,22 @@ func (r *columnVectorGraphPhysicalRowReader) readNativeGraphVector(cur *manifest
 	return scratch.Float32Values[base:], nil
 }
 
+func (r *columnVectorGraphPhysicalRowReader) skipNativeGraphVector(cur *manifestCursor, version uint16, ordinal int) error {
+	if err := r.readNativeGraphValueHeader(cur, version, ordinal, 0, ColumnStoreValueFloat32Vector); err != nil {
+		return err
+	}
+	n := cur.u64()
+	if cur.err != nil {
+		return cur.err
+	}
+	byteLen, ok := cur.fixedWidthSliceByteLen(n, 4, "float32_vector")
+	if !ok {
+		return cur.err
+	}
+	cur.pos += int(byteLen)
+	return nil
+}
+
 func (r *columnVectorGraphPhysicalRowReader) readNativeGraphInvNorm(cur *manifestCursor, version uint16, ordinal int) (float32, error) {
 	if err := r.readNativeGraphValueHeader(cur, version, ordinal, 1, ColumnStoreValueFloat32); err != nil {
 		return 0, err
@@ -520,10 +699,8 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRow(row columnP
 	if err != nil {
 		return columnVectorGraphPhysicalRow{}, err
 	}
-	for i, neighbor := range graphRow.Adjacency {
-		if err := validateColumnVectorGraphAdjacencyOrdinal(r.def.Name, row.Ordinal, i, neighbor, rowCount); err != nil {
-			return columnVectorGraphPhysicalRow{}, err
-		}
+	if err := validateColumnVectorGraphAdjacency(r.def.Name, row.Ordinal, graphRow.Adjacency, rowCount); err != nil {
+		return columnVectorGraphPhysicalRow{}, err
 	}
 	return graphRow, nil
 }
@@ -544,17 +721,30 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(ro
 	vector := row.Values[columnVectorGraphPhysicalRowValueVector]
 	invNorm := row.Values[columnVectorGraphPhysicalRowValueInvNorm]
 	adjacency := row.Values[columnVectorGraphPhysicalRowValueAdjacency]
-	if vector.Type != ColumnStoreValueFloat32Vector || invNorm.Type != ColumnStoreValueFloat32 || adjacency.Type != ColumnStoreValueAdjacencyList {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types: vector=%q inv_norm=%q adjacency=%q", r.def.Name, row.Ordinal, vector.Type, invNorm.Type, adjacency.Type)
+	if invNorm.Type != ColumnStoreValueFloat32 || adjacency.Type != ColumnStoreValueAdjacencyList {
+		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph value types: inv_norm=%q adjacency=%q", r.def.Name, row.Ordinal, invNorm.Type, adjacency.Type)
 	}
-	if !vector.Present || !invNorm.Present || !adjacency.Present {
+	if !invNorm.Present || !adjacency.Present {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", r.def.Name, row.Ordinal)
 	}
-	if vector.Null || invNorm.Null || adjacency.Null {
+	if invNorm.Null || adjacency.Null {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
 	}
-	if len(vector.Float32Vector) != r.def.Dimensions {
-		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", r.def.Name, row.Ordinal, len(vector.Float32Vector), r.def.Dimensions)
+	vectorValues, _, _, typedVectorOK := r.typedVectorForOrdinal(row.Ordinal)
+	if !typedVectorOK {
+		if vector.Type != ColumnStoreValueFloat32Vector {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d unexpected graph vector type: vector=%q", r.def.Name, row.Ordinal, vector.Type)
+		}
+		if !vector.Present {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d missing graph value", r.def.Name, row.Ordinal)
+		}
+		if vector.Null {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d contains null graph value", r.def.Name, row.Ordinal)
+		}
+		if len(vector.Float32Vector) != r.def.Dimensions {
+			return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d vector dims=%d want %d", r.def.Name, row.Ordinal, len(vector.Float32Vector), r.def.Dimensions)
+		}
+		vectorValues = vector.Float32Vector
 	}
 	if invNorm.Float32 <= 0 || math.IsNaN(float64(invNorm.Float32)) || math.IsInf(float64(invNorm.Float32), 0) {
 		return columnVectorGraphPhysicalRow{}, fmt.Errorf("collections: column_graph %q ordinal=%d invalid inv_norm=%v", r.def.Name, row.Ordinal, invNorm.Float32)
@@ -563,7 +753,7 @@ func (r *columnVectorGraphPhysicalRowReader) graphRowFromPhysicalRowUnchecked(ro
 		Ordinal:   row.Ordinal,
 		RowIndex:  row.RowIndex,
 		ID:        row.ID,
-		Vector:    vector.Float32Vector,
+		Vector:    vectorValues,
 		InvNorm:   invNorm.Float32,
 		Adjacency: adjacency.AdjacencyList,
 	}, nil
@@ -574,4 +764,83 @@ func validateColumnVectorGraphAdjacencyOrdinal(graphName string, ordinal int, ad
 		return fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", graphName, ordinal, adjacencyIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 	}
 	return nil
+}
+
+func validateColumnVectorGraphAdjacency(graphName string, ordinal int, adjacency []uint32, rowCount int) error {
+	maxLayer, err := columnVectorGraphAdjacencyMaxLayer(adjacency)
+	if err != nil {
+		return fmt.Errorf("collections: column_graph %q ordinal=%d malformed adjacency: %w", graphName, ordinal, err)
+	}
+	for layer := 0; layer <= maxLayer; layer++ {
+		neighbors, err := columnVectorGraphAdjacencyLayer(adjacency, layer)
+		if err != nil {
+			return fmt.Errorf("collections: column_graph %q ordinal=%d malformed adjacency layer=%d: %w", graphName, ordinal, layer, err)
+		}
+		for i, neighbor := range neighbors {
+			if err := validateColumnVectorGraphAdjacencyOrdinal(graphName, ordinal, i, neighbor, rowCount); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func columnVectorGraphAdjacencyMaxLayer(adjacency []uint32) (int, error) {
+	if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+		return 0, nil
+	}
+	maxLayer := int(adjacency[1])
+	pos := 2
+	for layer := 0; layer <= maxLayer; layer++ {
+		if pos >= len(adjacency) {
+			return 0, fmt.Errorf("layer=%d missing count", layer)
+		}
+		count := int(adjacency[pos])
+		pos++
+		if count < 0 || count > len(adjacency)-pos {
+			return 0, fmt.Errorf("layer=%d count=%d exceeds remaining=%d", layer, count, len(adjacency)-pos)
+		}
+		pos += count
+	}
+	if pos != len(adjacency) {
+		return 0, fmt.Errorf("trailing adjacency values=%d", len(adjacency)-pos)
+	}
+	return maxLayer, nil
+}
+
+func columnVectorGraphAdjacencyLayer(adjacency []uint32, wantLayer int) ([]uint32, error) {
+	if wantLayer < 0 {
+		return nil, fmt.Errorf("negative layer=%d", wantLayer)
+	}
+	if !columnVectorGraphAdjacencyIsLayered(adjacency) {
+		if wantLayer == 0 {
+			return adjacency, nil
+		}
+		return nil, nil
+	}
+	maxLayer := int(adjacency[1])
+	if wantLayer > maxLayer {
+		return nil, nil
+	}
+	pos := 2
+	for layer := 0; layer <= maxLayer; layer++ {
+		if pos >= len(adjacency) {
+			return nil, fmt.Errorf("layer=%d missing count", layer)
+		}
+		count := int(adjacency[pos])
+		pos++
+		if count < 0 || count > len(adjacency)-pos {
+			return nil, fmt.Errorf("layer=%d count=%d exceeds remaining=%d", layer, count, len(adjacency)-pos)
+		}
+		layerAdjacency := adjacency[pos : pos+count]
+		if layer == wantLayer {
+			return layerAdjacency, nil
+		}
+		pos += count
+	}
+	return nil, nil
+}
+
+func columnVectorGraphAdjacencyIsLayered(adjacency []uint32) bool {
+	return len(adjacency) >= 2 && adjacency[0] == columnVectorGraphLayeredAdjacencyMagic
 }

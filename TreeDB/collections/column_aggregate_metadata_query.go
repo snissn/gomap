@@ -3,6 +3,8 @@ package collections
 import (
 	"fmt"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 type columnAggregateMetadataRunnerEntry struct {
@@ -14,12 +16,17 @@ type columnAggregateMetadataRunnerEntry struct {
 type columnAggregateMetadataRunner struct {
 	kind                     ColumnPhysicalQueryKind
 	assetBytes               int64
+	decodedMetadataBytes     uint64
+	mappedBytes              uint64
+	heapCopyBytes            uint64
 	metadataHits             int
 	rows                     int
 	scheduledGranules        int
 	groupKeys                []string
 	entries                  []columnAggregateMetadataRunnerEntry
-	present                  []bool
+	seenGeneration           []uint32
+	runGeneration            uint32
+	touchedCodes             []int
 	mins                     []int64
 	maxs                     []int64
 	resultGroups             []ColumnPhysicalQueryGroup
@@ -33,13 +40,17 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 	if readCache == nil {
 		return nil, fmt.Errorf("collections: prepared aggregate metadata query requires read cache")
 	}
-	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.Config, req)
+	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.FullConfig, req)
 	if !ok {
 		return nil, fmt.Errorf("%w: aggregate metadata %q does not match physical query shape", ErrColumnQueryPlanUnsupported, req.AggregateMetadataName)
 	}
 	refs := columnPhysicalQueryAggregateMetadataRefs(view.AggregateMetadata, aggregate.Name)
 	if len(refs) == 0 {
 		return nil, nil
+	}
+	mgr := mappedresource.NewManager()
+	if err := readCache.useMappedResourceManager(mgr, mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "column-aggregate-metadata-runner-prepare", Collection: view.CollectionName, Namespace: view.AssetNamespace, Generation: view.Diagnostics.ManifestGeneration, Reason: "prepared column aggregate metadata query"}, "prepared column aggregate metadata query"); err != nil {
+		return nil, err
 	}
 	runner := &columnAggregateMetadataRunner{
 		kind:                     req.Kind,
@@ -55,7 +66,8 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		}
 		rawScratch = raw
 		runner.assetBytes += int64(len(raw))
-		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.Config, view.CollectionName, aggregate.Name)
+		runner.decodedMetadataBytes += uint64(len(raw))
+		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.FullConfig, view.CollectionName, aggregate.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -79,22 +91,65 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		}
 	}
 	groupCount := len(runner.groupKeys)
-	runner.present = make([]bool, groupCount)
+	runner.seenGeneration = make([]uint32, groupCount)
+	runner.touchedCodes = make([]int, 0, groupCount)
 	runner.mins = make([]int64, groupCount)
 	runner.maxs = make([]int64, groupCount)
-	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, groupCount)
+	resultCap := groupCount
+	if req.TopK > 0 && req.TopK < resultCap {
+		resultCap = req.TopK
+	}
+	runner.resultGroups = make([]ColumnPhysicalQueryGroup, 0, resultCap)
+	stats := readCache.mappedResourceStats()
+	runner.mappedBytes = stats.TotalMappedBytes
+	runner.heapCopyBytes = stats.TotalHeapCopyBytes
 	return runner, nil
 }
 
 func (r *columnAggregateMetadataRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) ColumnPhysicalQueryResult {
 	start := time.Now()
-	for i := range r.present {
-		r.present[i] = false
+	reduceStart := start
+	r.reduceEntries()
+	reduceNanos := time.Since(reduceStart).Nanoseconds()
+
+	shapeStart := time.Now()
+	r.resultGroups = r.resultGroups[:0]
+	if req.TopK > 0 {
+		r.appendTopKGroups(req)
+	} else {
+		r.appendAllGroups()
 	}
+	shapeNanos := time.Since(shapeStart).Nanoseconds()
+
+	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
+	diag.WorkerCount = 1
+	diag.ProjectedColumns = 2
+	diag.MetadataHits = r.metadataHits
+	diag.ScheduledGranules = r.scheduledGranules
+	diag.PhysicalBytesScanned = r.assetBytes
+	diag.DecodedMetadataBytes = r.decodedMetadataBytes
+	diag.MappedBytes = r.mappedBytes
+	diag.HeapCopyBytes = r.heapCopyBytes
+	diag.ReduceRows = r.rows
+	diag.ResultGroups = len(r.resultGroups)
+	diag.TopKLimit = req.TopK
+	diag.TopKCandidates = columnPhysicalTopKCandidates(req, r.touchedCodes, r.groupKeys)
+	diag.TopKOrder = string(req.TopKOrder)
+	diag.ColumnAssetReadIntegrity = r.columnAssetReadIntegrity
+	diag.ScanNanos = time.Since(start).Nanoseconds()
+	diag.ReduceNanos = reduceNanos
+	diag.ResultShapeNanos = shapeNanos
+	return ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
+}
+
+func (r *columnAggregateMetadataRunner) reduceEntries() {
+	generation := r.nextGeneration()
+	r.touchedCodes = r.touchedCodes[:0]
 	for _, entry := range r.entries {
 		code := entry.groupCode
-		if !r.present[code] {
-			r.present[code] = true
+		if r.seenGeneration[code] != generation {
+			r.seenGeneration[code] = generation
+			r.touchedCodes = append(r.touchedCodes, code)
 			r.mins[code] = entry.min
 			r.maxs[code] = entry.max
 			continue
@@ -106,32 +161,92 @@ func (r *columnAggregateMetadataRunner) run(view columnPhysicalScanSnapshotView,
 			r.maxs[code] = entry.max
 		}
 	}
-	r.resultGroups = r.resultGroups[:0]
-	for code, key := range r.groupKeys {
-		if !r.present[code] {
-			continue
-		}
-		group := ColumnPhysicalQueryGroup{Key: key}
-		switch r.kind {
-		case ColumnPhysicalQueryGroupMinInt64:
-			group.Int64 = r.mins[code]
-		case ColumnPhysicalQueryGroupMaxInt64:
-			group.Int64 = r.maxs[code]
-		case ColumnPhysicalQueryGroupInt64Span:
-			group.Int64 = r.maxs[code] - r.mins[code]
-		}
-		r.resultGroups = append(r.resultGroups, group)
+}
+
+func (r *columnAggregateMetadataRunner) nextGeneration() uint32 {
+	r.runGeneration++
+	if r.runGeneration == 0 {
+		clear(r.seenGeneration)
+		r.runGeneration = 1
+	}
+	return r.runGeneration
+}
+
+func (r *columnAggregateMetadataRunner) appendAllGroups() {
+	for _, code := range r.touchedCodes {
+		r.resultGroups = append(r.resultGroups, r.groupForCode(code))
 	}
 	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
-	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
-	diag.WorkerCount = 1
-	diag.ProjectedColumns = 2
-	diag.MetadataHits = r.metadataHits
-	diag.ScheduledGranules = r.scheduledGranules
-	diag.PhysicalBytesScanned = r.assetBytes
-	diag.ReduceRows = r.rows
-	diag.ResultGroups = len(r.resultGroups)
-	diag.ColumnAssetReadIntegrity = r.columnAssetReadIntegrity
-	diag.ScanNanos = time.Since(start).Nanoseconds()
-	return ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
+}
+
+func (r *columnAggregateMetadataRunner) appendTopKGroups(req ColumnPhysicalQueryRequest) {
+	for _, code := range r.touchedCodes {
+		key := r.groupKeys[code]
+		if req.SkipEmptyGroupKey && key == "" {
+			continue
+		}
+		insertColumnPhysicalTopKGroup(&r.resultGroups, r.groupForCode(code), req.TopK, req.TopKOrder)
+	}
+}
+
+func (r *columnAggregateMetadataRunner) groupForCode(code int) ColumnPhysicalQueryGroup {
+	group := ColumnPhysicalQueryGroup{Key: r.groupKeys[code]}
+	switch r.kind {
+	case ColumnPhysicalQueryGroupMinInt64:
+		group.Int64 = r.mins[code]
+	case ColumnPhysicalQueryGroupMaxInt64:
+		group.Int64 = r.maxs[code]
+	case ColumnPhysicalQueryGroupInt64Span:
+		group.Int64 = r.maxs[code] - r.mins[code]
+	}
+	return group
+}
+
+func columnPhysicalTopKCandidates(req ColumnPhysicalQueryRequest, touched []int, groupKeys []string) int {
+	if req.TopK <= 0 {
+		return 0
+	}
+	if !req.SkipEmptyGroupKey {
+		return len(touched)
+	}
+	candidates := 0
+	for _, code := range touched {
+		if groupKeys[code] != "" {
+			candidates++
+		}
+	}
+	return candidates
+}
+
+func insertColumnPhysicalTopKGroup(groups *[]ColumnPhysicalQueryGroup, group ColumnPhysicalQueryGroup, limit int, order ColumnPhysicalQueryTopKOrder) {
+	if limit <= 0 {
+		return
+	}
+	out := *groups
+	if len(out) < limit {
+		out = append(out, group)
+		for i := len(out) - 1; i > 0 && columnPhysicalTopKLess(order, out[i], out[i-1]); i-- {
+			out[i], out[i-1] = out[i-1], out[i]
+		}
+		*groups = out
+		return
+	}
+	if !columnPhysicalTopKLess(order, group, out[len(out)-1]) {
+		return
+	}
+	out[len(out)-1] = group
+	for i := len(out) - 1; i > 0 && columnPhysicalTopKLess(order, out[i], out[i-1]); i-- {
+		out[i], out[i-1] = out[i-1], out[i]
+	}
+	*groups = out
+}
+
+func columnPhysicalTopKLess(order ColumnPhysicalQueryTopKOrder, a, b ColumnPhysicalQueryGroup) bool {
+	if a.Int64 != b.Int64 {
+		if order == ColumnPhysicalQueryTopKInt64Desc {
+			return a.Int64 > b.Int64
+		}
+		return a.Int64 < b.Int64
+	}
+	return a.Key < b.Key
 }

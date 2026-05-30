@@ -1869,16 +1869,12 @@ func VacuumIndexOffline(opts Options) error {
 		if err != nil {
 			return err
 		}
-		if requiresCommandWAL {
-			return db.ErrCommandWALUnsupported
-		}
+		opts.CommandWAL = opts.CommandWAL || requiresCommandWAL
 	} else {
 		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
-			if cfg.RequiresCommandWALV1() {
-				return db.ErrCommandWALUnsupported
-			}
+			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyToOptions(&opts)
 		}
 	}

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 )
 
 // ColumnAssetReachabilityOptions controls protect-only reachability planning.
@@ -58,13 +60,14 @@ const (
 type ColumnAssetReachabilitySource string
 
 const (
-	ColumnAssetReachabilitySourceActiveManifest   ColumnAssetReachabilitySource = "active_manifest"
-	ColumnAssetReachabilitySourceRecoveryManifest ColumnAssetReachabilitySource = "recovery_manifest"
-	ColumnAssetReachabilitySourceCandidate        ColumnAssetReachabilitySource = "candidate"
-	ColumnAssetReachabilitySourcePinnedSnapshot   ColumnAssetReachabilitySource = "pinned_snapshot"
-	ColumnAssetReachabilitySourcePendingPublish   ColumnAssetReachabilitySource = "pending_publish"
-	ColumnAssetReachabilitySourcePreparedAsset    ColumnAssetReachabilitySource = "prepared_asset"
-	columnAssetReachabilitySourceUnknown          ColumnAssetReachabilitySource = "unknown"
+	ColumnAssetReachabilitySourceActiveManifest    ColumnAssetReachabilitySource = "active_manifest"
+	ColumnAssetReachabilitySourceRecoveryManifest  ColumnAssetReachabilitySource = "recovery_manifest"
+	ColumnAssetReachabilitySourceCandidate         ColumnAssetReachabilitySource = "candidate"
+	ColumnAssetReachabilitySourcePinnedSnapshot    ColumnAssetReachabilitySource = "pinned_snapshot"
+	ColumnAssetReachabilitySourcePendingPublish    ColumnAssetReachabilitySource = "pending_publish"
+	ColumnAssetReachabilitySourcePreparedAsset     ColumnAssetReachabilitySource = "prepared_asset"
+	ColumnAssetReachabilitySourceMappedResourcePin ColumnAssetReachabilitySource = "mappedresource_pin"
+	columnAssetReachabilitySourceUnknown           ColumnAssetReachabilitySource = "unknown"
 )
 
 type ColumnAssetReachabilityPlan struct {
@@ -77,6 +80,7 @@ type ColumnAssetReachabilityPlan struct {
 	Sources                    ColumnAssetReachabilitySourceStats
 	Refs                       ColumnAssetReachabilityRefStats
 	Segments                   ColumnAssetReachabilitySegmentStats
+	MappedResources            ColumnAssetReachabilityMappedResourceStats
 	RewriteDebtBytes           int64
 	Entries                    []ColumnAssetReachabilityRefEntry
 	SegmentEntries             []ColumnAssetReachabilitySegmentEntry
@@ -96,6 +100,7 @@ type ColumnAssetReachabilitySourceStats struct {
 	PendingRefs          int
 	PreparedRefs         int
 	PinnedRefs           int
+	MappedResourcePins   int
 }
 
 type ColumnAssetReachabilityRefStats struct {
@@ -122,6 +127,22 @@ type ColumnAssetReachabilitySegmentStats struct {
 	BytesReclaimable      int64
 	BytesWholeReclaimable int64
 	BytesUnknown          int64
+}
+
+// ColumnAssetReachabilityMappedResourceStats summarizes active #1736
+// mappedresource handles observed while building a maintenance plan. The byte
+// counters are active process-local handle bytes, not heap allocations by the
+// planner itself.
+type ColumnAssetReachabilityMappedResourceStats struct {
+	ActiveHandles              int
+	ActiveMappedBytes          int64
+	ActiveHeapCopyBytes        int64
+	ActiveDerivedMetadataBytes int64
+	PinnedRefs                 int
+	PinnedBytes                int64
+	UnconvertiblePins          int
+	DeniedResources            uint64
+	FallbackReads              uint64
 }
 
 type ColumnAssetReachabilityRefEntry struct {
@@ -156,6 +177,7 @@ const (
 	columnAssetReachabilitySourcePinnedSnapshotMask
 	columnAssetReachabilitySourcePendingPublishMask
 	columnAssetReachabilitySourcePreparedAssetMask
+	columnAssetReachabilitySourceMappedResourcePinMask
 	columnAssetReachabilitySourceUnknownMask
 )
 
@@ -163,7 +185,8 @@ const columnAssetReachabilityProtectedSourceMask = columnAssetReachabilitySource
 	columnAssetReachabilitySourceRecoveryManifestMask |
 	columnAssetReachabilitySourcePinnedSnapshotMask |
 	columnAssetReachabilitySourcePendingPublishMask |
-	columnAssetReachabilitySourcePreparedAssetMask
+	columnAssetReachabilitySourcePreparedAssetMask |
+	columnAssetReachabilitySourceMappedResourcePinMask
 
 var columnAssetReachabilitySourceBits = [...]struct {
 	source ColumnAssetReachabilitySource
@@ -175,6 +198,7 @@ var columnAssetReachabilitySourceBits = [...]struct {
 	{ColumnAssetReachabilitySourcePinnedSnapshot, columnAssetReachabilitySourcePinnedSnapshotMask},
 	{ColumnAssetReachabilitySourcePendingPublish, columnAssetReachabilitySourcePendingPublishMask},
 	{ColumnAssetReachabilitySourcePreparedAsset, columnAssetReachabilitySourcePreparedAssetMask},
+	{ColumnAssetReachabilitySourceMappedResourcePin, columnAssetReachabilitySourceMappedResourcePinMask},
 	{columnAssetReachabilitySourceUnknown, columnAssetReachabilitySourceUnknownMask},
 }
 
@@ -190,6 +214,7 @@ type columnAssetReachabilityRange struct {
 	start  int64
 	end    int64
 	status ColumnAssetReachabilityStatus
+	kind   ColumnAssetKind
 }
 
 type columnAssetReachabilityRangeSet struct {
@@ -222,6 +247,7 @@ type columnAssetReachabilityInterval struct {
 type columnAssetReachabilitySegment struct {
 	fileID uint32
 	name   string
+	path   string
 	bytes  int64
 }
 
@@ -268,6 +294,19 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 			input.activeRefs++
 		}
 		if input.addRef(assetRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest) {
+			input.recoveryRefs++
+		}
+	}
+	for i, typedPartRef := range view.TypedColumnPartRefs {
+		if i%columnAssetReachabilityContextCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return columnAssetReachabilityPlanIdentity(input), input.refs, err
+			}
+		}
+		if input.addRef(typedPartRef.Ref, ColumnAssetReachabilitySourceActiveManifest) {
+			input.activeRefs++
+		}
+		if input.addRef(typedPartRef.Ref, ColumnAssetReachabilitySourceRecoveryManifest) {
 			input.recoveryRefs++
 		}
 	}
@@ -337,6 +376,14 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addRefs(ctx, opts.PreparedRefs, ColumnAssetReachabilitySourcePreparedAsset); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
+	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
+	input.mappedResources = mappedResourceStats
+	if mappedResourceStats.UnconvertiblePins != 0 {
+		input.pinStateIncomplete = true
+	}
+	if err := input.addRefs(ctx, activePinnedRefs, ColumnAssetReachabilitySourceMappedResourcePin); err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
 	if err := input.addRefs(ctx, opts.PinnedRefs, ColumnAssetReachabilitySourcePinnedSnapshot); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
@@ -355,7 +402,7 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 }
 
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
-	expectedRefs := len(view.AssetRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
+	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
 		rootDir:        view.ColumnAssetRootDir,
 		collection:     view.CollectionName,
@@ -374,22 +421,152 @@ func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapsho
 	return input
 }
 
+func columnAssetReachabilityMappedResourcePins(rootDir, namespace string) ([]ColumnAssetRef, ColumnAssetReachabilityMappedResourceStats) {
+	globalStats := mappedresource.GlobalStats()
+	stats := ColumnAssetReachabilityMappedResourceStats{
+		DeniedResources: sumMappedResourceDenied(globalStats.DeniedByReason),
+		FallbackReads:   globalStats.FallbackReads,
+	}
+	pins := mappedresource.GlobalPinSummary()
+	if len(pins) == 0 {
+		return nil, stats
+	}
+	refs := make([]ColumnAssetRef, 0, len(pins))
+	for _, pin := range pins {
+		if !columnAssetMappedResourcePinMatchesNamespace(pin, namespace) || !columnAssetMappedResourcePinMatchesRoot(pin, rootDir) {
+			continue
+		}
+		stats.ActiveHandles++
+		stats.PinnedBytes = addColumnAssetReachabilityBytes(stats.PinnedBytes, pin.Bytes)
+		switch pin.Source {
+		case mappedresource.SourceMapped:
+			stats.ActiveMappedBytes = addColumnAssetReachabilityBytes(stats.ActiveMappedBytes, pin.Bytes)
+		case mappedresource.SourceHeapCopy:
+			stats.ActiveHeapCopyBytes = addColumnAssetReachabilityBytes(stats.ActiveHeapCopyBytes, pin.Bytes)
+		case mappedresource.SourceDerivedMetadata:
+			stats.ActiveDerivedMetadataBytes = addColumnAssetReachabilityBytes(stats.ActiveDerivedMetadataBytes, pin.Bytes)
+		}
+		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
+		if !ok {
+			stats.UnconvertiblePins++
+			continue
+		}
+		if namespace != "" && ref.Namespace != namespace {
+			stats.UnconvertiblePins++
+			continue
+		}
+		refs = append(refs, ref)
+		stats.PinnedRefs++
+	}
+	return refs, stats
+}
+
+func columnAssetMappedResourcePinMatchesNamespace(pin mappedresource.Pin, namespace string) bool {
+	switch pin.Key.Class {
+	case mappedresource.ClassTypedRowAsset, mappedresource.ClassTypedColumnAsset:
+	default:
+		return false
+	}
+	if namespace == "" {
+		return true
+	}
+	return pin.Key.Namespace == namespace || pin.Scope.Namespace == namespace
+}
+
+func columnAssetMappedResourcePinMatchesRoot(pin mappedresource.Pin, rootDir string) bool {
+	if rootDir == "" {
+		return true
+	}
+	root := columnAssetPathForRootCompare(rootDir)
+	canonicalRoot, canonicalRootOK := columnAssetCanonicalPathForRootCompare(rootDir)
+	if pin.Root != "" {
+		pinRoot := columnAssetPathForRootCompare(pin.Root)
+		if pinRoot == root {
+			return true
+		}
+		if canonicalRootOK {
+			if canonicalPinRoot, ok := columnAssetCanonicalPathForRootCompare(pin.Root); ok && canonicalPinRoot == canonicalRoot {
+				return true
+			}
+		}
+	}
+	if pin.Path == "" {
+		return false
+	}
+	path := columnAssetPathForRootCompare(pin.Path)
+	if columnAssetPathWithinRootForCompare(path, root) {
+		return true
+	}
+	if canonicalRootOK {
+		if canonicalPath, ok := columnAssetCanonicalPathForRootCompare(pin.Path); ok && columnAssetPathWithinRootForCompare(canonicalPath, canonicalRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func columnAssetPathForRootCompare(path string) string {
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return filepath.Clean(path)
+}
+
+func columnAssetCanonicalPathForRootCompare(path string) (string, bool) {
+	path = columnAssetPathForRootCompare(path)
+	if path == "" {
+		return "", false
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", false
+	}
+	return columnAssetPathForRootCompare(canonical), true
+}
+
+func columnAssetPathWithinRootForCompare(path, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
+}
+
+func sumMappedResourceDenied(in map[mappedresource.DenyReason]uint64) uint64 {
+	var total uint64
+	for _, count := range in {
+		total += count
+	}
+	return total
+}
+
 type columnAssetReachabilityInput struct {
-	rootDir        string
-	collection     string
-	namespace      string
-	activeGen      uint64
-	recoveryGen    uint64
-	manifestRecs   int
-	activeRefs     int
-	recoveryRefs   int
-	detailed       bool
-	segmentDetails bool
-	omitSources    bool
-	omitSort       bool
-	refs           map[ColumnAssetRef]columnAssetReachabilitySourceMask
-	unknownSources map[ColumnAssetRef][]ColumnAssetReachabilitySource
-	sourceCounts   ColumnAssetReachabilitySourceStats
+	rootDir            string
+	collection         string
+	namespace          string
+	activeGen          uint64
+	recoveryGen        uint64
+	manifestRecs       int
+	activeRefs         int
+	recoveryRefs       int
+	detailed           bool
+	segmentDetails     bool
+	omitSources        bool
+	omitSort           bool
+	refs               map[ColumnAssetRef]columnAssetReachabilitySourceMask
+	unknownSources     map[ColumnAssetRef][]ColumnAssetReachabilitySource
+	sourceCounts       ColumnAssetReachabilitySourceStats
+	mappedResources    ColumnAssetReachabilityMappedResourceStats
+	pinStateIncomplete bool
 }
 
 func (in *columnAssetReachabilityInput) addRefs(ctx context.Context, refs []ColumnAssetRef, source ColumnAssetReachabilitySource) error {
@@ -419,6 +596,8 @@ func (in *columnAssetReachabilityInput) incrementSourceCount(source ColumnAssetR
 		in.sourceCounts.PreparedRefs++
 	case ColumnAssetReachabilitySourcePinnedSnapshot:
 		in.sourceCounts.PinnedRefs++
+	case ColumnAssetReachabilitySourceMappedResourcePin:
+		in.sourceCounts.MappedResourcePins++
 	}
 }
 
@@ -561,6 +740,7 @@ func buildColumnAssetReachabilityPlan(ctx context.Context, input columnAssetReac
 			start:  ref.Offset,
 			end:    ref.Offset + ref.Length,
 			status: status,
+			kind:   ref.Kind,
 		})
 		rangesByFile[ref.FileID] = set
 	}
@@ -696,13 +876,14 @@ func columnAssetReachabilityPlanIdentity(input columnAssetReachabilityInput) Col
 		Namespace:                  input.namespace,
 		ActiveManifestGeneration:   input.activeGen,
 		RecoveryManifestGeneration: input.recoveryGen,
+		MappedResources:            input.mappedResources,
 	}
 }
 
 func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) ColumnAssetReachabilityPlan {
 	return ColumnAssetReachabilityPlan{
 		ProtectOnly:                true,
-		Complete:                   true,
+		Complete:                   !input.pinStateIncomplete,
 		Collection:                 input.collection,
 		Namespace:                  input.namespace,
 		ActiveManifestGeneration:   input.activeGen,
@@ -716,7 +897,9 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 			PendingRefs:          input.sourceCounts.PendingRefs,
 			PreparedRefs:         input.sourceCounts.PreparedRefs,
 			PinnedRefs:           input.sourceCounts.PinnedRefs,
+			MappedResourcePins:   input.sourceCounts.MappedResourcePins,
 		},
+		MappedResources: input.mappedResources,
 	}
 }
 
@@ -797,6 +980,16 @@ func classifyColumnAssetReachabilitySegment(segment columnAssetReachabilitySegme
 			protected = append(protected, interval)
 		case ColumnAssetReachabilityReclaimable:
 			reclaimable = append(reclaimable, interval)
+		}
+	}
+	padding := deterministicColumnAssetReachabilityPaddingIntervals(segment, ranges)
+	for _, interval := range padding {
+		all = append(all, interval.interval)
+		switch interval.status {
+		case ColumnAssetReachabilityProtected:
+			protected = append(protected, interval.interval)
+		case ColumnAssetReachabilityReclaimable:
+			reclaimable = append(reclaimable, interval.interval)
 		}
 	}
 	allUnion := mergeColumnAssetReachabilityIntervals(all)
@@ -972,7 +1165,8 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 			}
 		}
 		name := info.Name()
-		info, err := os.Lstat(columnAssetReachabilitySegmentPath(segmentDir, name))
+		path := columnAssetReachabilitySegmentPath(segmentDir, name)
+		info, err := os.Lstat(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -982,9 +1176,9 @@ func listColumnAssetReachabilitySegments(ctx context.Context, segmentDir string)
 		fileID, ok := columnAssetReachabilitySegmentFileID(name)
 		appendSegment := func(bytes int64) {
 			if ok {
-				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, bytes: bytes})
+				segments = append(segments, columnAssetReachabilitySegment{fileID: fileID, name: name, path: path, bytes: bytes})
 			} else {
-				segments = append(segments, columnAssetReachabilitySegment{name: name, bytes: bytes})
+				segments = append(segments, columnAssetReachabilitySegment{name: name, path: path, bytes: bytes})
 			}
 		}
 		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
@@ -1021,7 +1215,7 @@ func columnAssetReachabilitySegmentPath(segmentDir, name string) string {
 }
 
 func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace string) bool {
-	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values) &&
+	return (ref.Kind == ColumnAssetKindTCS1PartImage || ref.Kind == ColumnAssetKindTCS1TypedColumnPart || ref.Kind == ColumnAssetKindTCS1AggregateMetadata || ref.Kind == ColumnAssetKindTCS1DictionaryCodes || ref.Kind == ColumnAssetKindTCS1Int64Values) &&
 		ref.Namespace == namespace &&
 		ref.Generation != 0 &&
 		ref.PartID != 0 &&
@@ -1029,6 +1223,91 @@ func columnAssetReachabilityRefCanContributeRange(ref ColumnAssetRef, namespace 
 		ref.Offset >= 0 &&
 		ref.Length > 0 &&
 		ref.Offset <= math.MaxInt64-ref.Length
+}
+
+type columnAssetReachabilityPaddingInterval struct {
+	interval columnAssetReachabilityInterval
+	status   ColumnAssetReachabilityStatus
+}
+
+func deterministicColumnAssetReachabilityPaddingIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) []columnAssetReachabilityPaddingInterval {
+	if len(ranges) < 2 || segment.path == "" {
+		return nil
+	}
+	clipped := make([]columnAssetReachabilityRange, 0, len(ranges))
+	for _, r := range ranges {
+		interval, _, ok := clipColumnAssetReachabilityRange(segment.bytes, r)
+		if !ok {
+			continue
+		}
+		clipped = append(clipped, columnAssetReachabilityRange{start: interval.start, end: interval.end, status: r.status, kind: r.kind})
+	}
+	if len(clipped) < 2 {
+		return nil
+	}
+	slices.SortFunc(clipped, func(a, b columnAssetReachabilityRange) int {
+		return compareColumnAssetReachabilityIntervalBounds(a.start, a.end, b.start, b.end)
+	})
+	out := make([]columnAssetReachabilityPaddingInterval, 0, len(clipped)-1)
+	coveredEnd := clipped[0].end
+	for _, r := range clipped[1:] {
+		if r.start > coveredEnd && columnAssetReachabilityRangeFollowsDeterministicZeroPadding(segment, coveredEnd, r) {
+			out = append(out, columnAssetReachabilityPaddingInterval{
+				interval: columnAssetReachabilityInterval{start: coveredEnd, end: r.start},
+				status:   r.status,
+			})
+		}
+		if r.end > coveredEnd {
+			coveredEnd = r.end
+		}
+	}
+	return out
+}
+
+func columnAssetReachabilityRangeFollowsDeterministicZeroPadding(segment columnAssetReachabilitySegment, previousEnd int64, r columnAssetReachabilityRange) bool {
+	alignment := columnAssetReachabilityRangeDeterministicPaddingAlignment(r.kind)
+	if alignment <= 1 || r.start <= previousEnd || r.start%alignment != 0 {
+		return false
+	}
+	padding := int64(columnAssetSegmentPrefixPadding(previousEnd, alignment))
+	if padding == 0 || r.start-previousEnd != padding {
+		return false
+	}
+	return columnAssetReachabilitySegmentRangeIsZero(segment.path, previousEnd, padding)
+}
+
+func columnAssetReachabilityRangeDeterministicPaddingAlignment(kind ColumnAssetKind) int64 {
+	switch kind {
+	case ColumnAssetKindTCS1DictionaryCodes:
+		return dictionaryCodesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1Int64Values:
+		return int64ValuesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1TypedColumnPart:
+		return typedColumnPartDirectViewAssetAlignment
+	default:
+		return 0
+	}
+}
+
+func columnAssetReachabilitySegmentRangeIsZero(path string, offset, length int64) bool {
+	if path == "" || offset < 0 || length <= 0 || length > int64(typedColumnPartDirectViewAssetAlignment-1) {
+		return false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	buf := make([]byte, int(length))
+	if _, err := file.ReadAt(buf, offset); err != nil {
+		return false
+	}
+	for _, b := range buf {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func clippedColumnAssetReachabilityIntervals(segment columnAssetReachabilitySegment, ranges []columnAssetReachabilityRange) ([]columnAssetReachabilityInterval, int) {
@@ -1062,6 +1341,7 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 		}
 		return covered, plan.outOfBoundsRefs
 	}
+	padding := deterministicColumnAssetReachabilityPaddingIntervals(segment, ranges)
 	slices.SortFunc(ranges, func(a, b columnAssetReachabilityRange) int {
 		return compareColumnAssetReachabilityIntervalBounds(a.start, a.end, b.start, b.end)
 	})
@@ -1093,6 +1373,9 @@ func columnAssetReachabilityRangesCoveredBytes(segment columnAssetReachabilitySe
 	}
 	if haveCur {
 		covered = addColumnAssetReachabilityBytes(covered, cur.end-cur.start)
+	}
+	for _, interval := range padding {
+		covered = addColumnAssetReachabilityBytes(covered, interval.interval.end-interval.interval.start)
 	}
 	return covered, outOfBounds
 }

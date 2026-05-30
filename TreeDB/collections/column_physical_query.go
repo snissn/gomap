@@ -14,14 +14,58 @@ import (
 // shapes supported directly by the column asset scanner.
 type ColumnPhysicalQueryKind string
 
+// ColumnPhysicalQueryTopKOrder selects ordering for optional Top-K int64
+// physical query result shaping.
+type ColumnPhysicalQueryTopKOrder string
+
+const (
+	// ColumnPhysicalQueryTopKInt64Asc keeps the smallest Int64 groups first,
+	// using Key as the deterministic tie-break.
+	ColumnPhysicalQueryTopKInt64Asc ColumnPhysicalQueryTopKOrder = "int64_asc"
+	// ColumnPhysicalQueryTopKInt64Desc keeps the largest Int64 groups first,
+	// using Key as the deterministic tie-break.
+	ColumnPhysicalQueryTopKInt64Desc ColumnPhysicalQueryTopKOrder = "int64_desc"
+)
+
 const (
 	// ColumnPhysicalQueryGroupCount counts rows by a string group column.
-	ColumnPhysicalQueryGroupCount         ColumnPhysicalQueryKind = "group_count"
-	ColumnPhysicalQueryGroupCountDistinct ColumnPhysicalQueryKind = "group_count_distinct"
-	ColumnPhysicalQueryHourCount          ColumnPhysicalQueryKind = "hour_count"
-	ColumnPhysicalQueryGroupMinInt64      ColumnPhysicalQueryKind = "group_min_int64"
-	ColumnPhysicalQueryGroupMaxInt64      ColumnPhysicalQueryKind = "group_max_int64"
-	ColumnPhysicalQueryGroupInt64Span     ColumnPhysicalQueryKind = "group_int64_span"
+	ColumnPhysicalQueryGroupCount            ColumnPhysicalQueryKind = "group_count"
+	ColumnPhysicalQueryGroupCountDistinct    ColumnPhysicalQueryKind = "group_count_distinct"
+	ColumnPhysicalQueryGroupCountAndDistinct ColumnPhysicalQueryKind = "group_count_and_distinct"
+	ColumnPhysicalQueryHourCount             ColumnPhysicalQueryKind = "hour_count"
+	ColumnPhysicalQueryGroupHourCount        ColumnPhysicalQueryKind = "group_hour_count"
+	ColumnPhysicalQueryGroupMinInt64         ColumnPhysicalQueryKind = "group_min_int64"
+	ColumnPhysicalQueryGroupMaxInt64         ColumnPhysicalQueryKind = "group_max_int64"
+	ColumnPhysicalQueryGroupInt64Span        ColumnPhysicalQueryKind = "group_int64_span"
+)
+
+// ColumnPhysicalQueryStorageSource names the physical storage family that
+// satisfied a query/report row. It is diagnostic vocabulary for JSONBench
+// baselines and must not be used as a route selector.
+type ColumnPhysicalQueryStorageSource string
+
+const (
+	ColumnPhysicalQueryStorageSourceRowScan                               ColumnPhysicalQueryStorageSource = "row_scan"
+	ColumnPhysicalQueryStorageSourceTypedRowAsset                         ColumnPhysicalQueryStorageSource = "typed_row_asset"
+	ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset ColumnPhysicalQueryStorageSource = "compatibility_dictionary_code_int64_asset"
+	ColumnPhysicalQueryStorageSourceTypedColumnPartSection                ColumnPhysicalQueryStorageSource = "typed_column_part_section"
+	ColumnPhysicalQueryStorageSourceAggregateMetadata                     ColumnPhysicalQueryStorageSource = "aggregate_metadata"
+	ColumnPhysicalQueryStorageSourceFallback                              ColumnPhysicalQueryStorageSource = "fallback"
+	ColumnPhysicalQueryStorageSourceMixed                                 ColumnPhysicalQueryStorageSource = "mixed"
+)
+
+// ColumnPhysicalQueryFallbackReason explains why a benchmark/report row did not
+// use its most direct physical source. The "none" value is intentionally
+// explicit so baseline tables can carry a value for every row.
+type ColumnPhysicalQueryFallbackReason string
+
+const (
+	ColumnPhysicalQueryFallbackNone                         ColumnPhysicalQueryFallbackReason = "none"
+	ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported ColumnPhysicalQueryFallbackReason = "direct_asset_reduce_unsupported"
+	ColumnPhysicalQueryFallbackAggregateMetadataUnsupported ColumnPhysicalQueryFallbackReason = "aggregate_metadata_unsupported"
+	ColumnPhysicalQueryFallbackMutationVisibilityOverlay    ColumnPhysicalQueryFallbackReason = "mutation_visibility_overlay"
+	ColumnPhysicalQueryFallbackDocumentRootRowScan          ColumnPhysicalQueryFallbackReason = "document_root_row_scan"
+	ColumnPhysicalQueryFallbackMixed                        ColumnPhysicalQueryFallbackReason = "mixed"
 )
 
 const (
@@ -31,57 +75,104 @@ const (
 
 // ColumnPhysicalQueryRequest describes one explicit physical column query. It
 // does not invoke planner routing; M14 owns forced/automatic route selection.
+// Predicates are an AND-list of dictionary string equality/IN filters for the
+// insert-only physical sidecar path; unsupported predicate shapes fail closed.
+// TopK is optional and currently supported by aggregate-metadata int64 reducers
+// only. When TopK is set, TopKOrder chooses value order and Key is the tie-break;
+// SkipEmptyGroupKey omits empty-string group keys before applying the limit.
 type ColumnPhysicalQueryRequest struct {
 	Kind                     ColumnPhysicalQueryKind
 	GroupColumn              string
 	ValueColumn              string
 	DistinctColumn           string
 	AggregateMetadataName    string
+	TopK                     int
+	TopKOrder                ColumnPhysicalQueryTopKOrder
+	SkipEmptyGroupKey        bool
+	Predicates               []ColumnPhysicalQueryPredicate
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
-// ColumnPhysicalQueryGroup is one reduced result row. Count is populated for
-// count-style queries; Int64 is populated for min/max/span-style queries.
+// ColumnPhysicalQueryGroup is one reduced result row. Key is the group key.
+// Count is populated for count-style queries and remains the distinct count for
+// group_count_distinct. Hour is populated by group_hour_count. DistinctCount is
+// populated by group_count_and_distinct; Int64 is populated for min/max/span-style queries.
 type ColumnPhysicalQueryGroup struct {
-	Key   string
-	Count int
-	Int64 int64
+	Key           string
+	Hour          int
+	Count         int
+	DistinctCount int
+	Int64         int64
 }
 
 // ColumnPhysicalQueryDiagnostics reports scan and reduce work for a physical
 // query without counting full-document row materialization.
 type ColumnPhysicalQueryDiagnostics struct {
-	ManifestRoot               uint64
-	ManifestGeneration         uint64
-	RecoveryManifestGeneration uint64
-	AppliedCommandLSN          uint64
-	ManifestRecords            int
-	AssetRefs                  int
-	MutationParts              int
-	DecodedBlocks              int
-	DirectReduceBlocks         int
-	MetadataHits               int
-	DictionaryCodeHits         int
-	Int64ValueHits             int
-	ScheduledGranules          int
-	SkippedGranules            int
-	RowsScanned                int
-	DeletedRows                int
-	ProjectedColumns           int
-	RowMaterializations        int
-	PhysicalBytesScanned       int64
-	ReduceRows                 int
-	VisibilityRows             int
-	ReconstructionRows         int
-	ResultGroups               int
-	WorkerCount                int
-	SegmentFileCacheHits       uint64
-	SegmentFileCacheMisses     uint64
-	ColumnAssetReadIntegrity   string
-	ScanNanos                  int64
-	VisibilityNanos            int64
-	ReduceNanos                int64
-	ReconstructionNanos        int64
+	ManifestRoot                        uint64
+	ManifestRootName                    string
+	ManifestGeneration                  uint64
+	ActiveManifestChecksum              uint64
+	RecoveryManifestGeneration          uint64
+	RecoveryManifestChecksum            uint64
+	AppliedCommandLSN                   uint64
+	ManifestRecords                     int
+	AssetRefs                           int
+	MutationParts                       int
+	DecodedBlocks                       int
+	DirectReduceBlocks                  int
+	TypedColumnPartSections             int
+	TypedColumnPartSectionBytes         uint64
+	MetadataHits                        int
+	MetadataMisses                      int
+	DictionaryCodeHits                  int
+	PredicateDictionaryCodeHits         int
+	Int64ValueHits                      int
+	ScheduledGranules                   int
+	SkippedGranules                     int
+	DecodedGranules                     int
+	RowsScanned                         int
+	RowsMatched                         int
+	DeletedRows                         int
+	ProjectedColumns                    int
+	PredicateCount                      int
+	PredicateColumns                    []string
+	PredicateKinds                      []string
+	PredicateLiterals                   int
+	SortKeyPrefixPlanned                bool
+	SortKeyPrefixColumns                []string
+	SortKeyPrefixLiterals               int
+	SortKeyMarkChecks                   int
+	SortKeyMarkMatches                  int
+	SortKeyMarkSkips                    int
+	SortKeyMarkFallbackReason           string
+	SortedGroupedDistinctReady          bool
+	SortedGroupedDistinctFallbackReason string
+	DecodedPayloadBytes                 uint64
+	FallbackReads                       int
+	RowMaterializations                 int
+	DocumentMaterializations            int
+	PhysicalBytesScanned                int64
+	DecodedMetadataBytes                uint64
+	MappedBytes                         uint64
+	HeapCopyBytes                       uint64
+	ReduceRows                          int
+	TopKLimit                           int
+	TopKCandidates                      int
+	TopKOrder                           string
+	VisibilityRows                      int
+	ReconstructionRows                  int
+	ResultGroups                        int
+	WorkerCount                         int
+	SegmentFileCacheHits                uint64
+	SegmentFileCacheMisses              uint64
+	ColumnAssetReadIntegrity            string
+	StorageSource                       ColumnPhysicalQueryStorageSource
+	FallbackReason                      ColumnPhysicalQueryFallbackReason
+	ScanNanos                           int64
+	VisibilityNanos                     int64
+	ReduceNanos                         int64
+	ResultShapeNanos                    int64
+	ReconstructionNanos                 int64
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -110,17 +201,92 @@ type ColumnPhysicalQueryRunner struct {
 	dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
 	int64Hour    *columnInt64ValueHourCountRunner
 	dictInt64    *columnDictionaryInt64GroupRunner
+	dictHour     *columnDictionaryHourCountRunner
+	typedColumn  *columnTypedColumnPhysicalQueryRunner
 	metadata     *columnAggregateMetadataRunner
 	closed       bool
 }
 
 var errColumnPhysicalScanCancelled = errors.New("collections: physical column scan cancelled")
 
+func validateColumnPhysicalQueryRequest(req ColumnPhysicalQueryRequest) error {
+	if err := validateColumnPhysicalGroupCountAndDistinctRequest(req); err != nil {
+		return err
+	}
+	if err := validateColumnPhysicalGroupHourRequest(req); err != nil {
+		return err
+	}
+	return validateColumnPhysicalTopKRequest(req)
+}
+
+func validateColumnPhysicalGroupHourRequest(req ColumnPhysicalQueryRequest) error {
+	if req.Kind != ColumnPhysicalQueryGroupHourCount {
+		return nil
+	}
+	if req.GroupColumn == "" {
+		return fmt.Errorf("%w: grouped-hour physical query group column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.ValueColumn == "" {
+		return fmt.Errorf("%w: grouped-hour physical query value column is required", ErrColumnQueryPlanUnsupported)
+	}
+	return nil
+}
+
+func validateColumnPhysicalGroupCountAndDistinctRequest(req ColumnPhysicalQueryRequest) error {
+	if req.Kind != ColumnPhysicalQueryGroupCountAndDistinct {
+		return nil
+	}
+	if req.GroupColumn == "" {
+		return fmt.Errorf("%w: physical column query group column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.DistinctColumn == "" {
+		return fmt.Errorf("%w: physical column query distinct column is required", ErrColumnQueryPlanUnsupported)
+	}
+	if req.GroupColumn == req.DistinctColumn {
+		return fmt.Errorf("%w: physical column query group and distinct columns must differ", ErrColumnQueryPlanUnsupported)
+	}
+	return nil
+}
+
+func validateColumnPhysicalTopKRequest(req ColumnPhysicalQueryRequest) error {
+	if req.TopK < 0 {
+		return fmt.Errorf("%w: physical column query top-K limit must be non-negative", ErrColumnQueryPlanUnsupported)
+	}
+	if req.TopK == 0 {
+		if req.TopKOrder != "" {
+			return fmt.Errorf("%w: physical column query top-K order requires a positive limit", ErrColumnQueryPlanUnsupported)
+		}
+		if req.SkipEmptyGroupKey {
+			return fmt.Errorf("%w: physical column query skip-empty group key requires a positive top-K limit", ErrColumnQueryPlanUnsupported)
+		}
+		return nil
+	}
+	if req.AggregateMetadataName == "" {
+		return fmt.Errorf("%w: physical column query top-K requires aggregate metadata", ErrColumnQueryPlanUnsupported)
+	}
+	switch req.Kind {
+	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
+	default:
+		return fmt.Errorf("%w: physical column query top-K requires an int64 aggregate kind", ErrColumnQueryPlanUnsupported)
+	}
+	switch req.TopKOrder {
+	case ColumnPhysicalQueryTopKInt64Asc, ColumnPhysicalQueryTopKInt64Desc:
+		return nil
+	case "":
+		return fmt.Errorf("%w: physical column query top-K order is required", ErrColumnQueryPlanUnsupported)
+	default:
+		return fmt.Errorf("%w: unsupported physical column query top-K order %q", ErrColumnQueryPlanUnsupported, req.TopKOrder)
+	}
+}
+
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
 // the recovery-authoritative manifest. Insert-only manifests use the direct
 // scanner path; mutation-bearing manifests fall back to the M13C visibility
 // overlay before reducing.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if err := validateColumnPhysicalQueryRequest(req); err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
 	mutationParts, err := c.columnPhysicalQueryMutationPartsHint()
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, err
@@ -128,6 +294,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 	if mutationParts > 0 {
 		if req.AggregateMetadataName != "" {
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
+		}
+		if columnPhysicalQueryHasPredicates(req) {
+			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
 		cfg, err := c.columnPhysicalQueryColumnStoreConfig()
 		if err != nil {
@@ -146,9 +315,15 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		if req.AggregateMetadataName != "" {
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
+		if columnPhysicalQueryHasPredicates(req) {
+			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
+		}
 		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 	}
 	if req.AggregateMetadataName != "" {
+		if columnPhysicalQueryHasPredicates(req) {
+			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
+		}
 		return c.runColumnPhysicalQueryAggregateMetadataInSnapshotView(view, req)
 	}
 	return c.runColumnPhysicalQueryInSnapshotView(view, req)
@@ -159,6 +334,9 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 // until Close and fail-closes for mutation-bearing manifests or unsupported
 // query shapes rather than silently changing semantics.
 func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (*ColumnPhysicalQueryRunner, error) {
+	if err := validateColumnPhysicalQueryRequest(req); err != nil {
+		return nil, err
+	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
 	if err != nil {
 		if closeView != nil {
@@ -182,7 +360,24 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	readCache.returnViews = true
 	var metadata *columnAggregateMetadataRunner
 	var exec *columnPhysicalQueryExecutor
-	if req.AggregateMetadataName != "" {
+	typedColumn, typedColumnCandidate, err := prepareColumnTypedColumnPhysicalQueryRunner(view, req, &readCache)
+	if err != nil {
+		_ = readCache.close()
+		return nil, err
+	}
+	if req.AggregateMetadataName != "" && columnPhysicalQueryHasPredicates(req) {
+		_ = readCache.close()
+		return nil, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
+	}
+	if typedColumn == nil && req.Kind == ColumnPhysicalQueryHourCount && columnPhysicalQueryHasPredicates(req) {
+		_ = readCache.close()
+		return nil, fmt.Errorf("%w: hour-count physical predicates require a fused grouped-hour reducer", ErrColumnQueryPlanUnsupported)
+	}
+	if typedColumn != nil {
+		// The typed-column part runner is prepared before compatibility sidecar
+		// runners so JSONBench-style typed-owned fields use the sectioned
+		// tcs1_typed_column_part image as their production substrate.
+	} else if req.AggregateMetadataName != "" {
 		metadata, err = prepareColumnAggregateMetadataRunner(view, req, &readCache)
 		if err != nil {
 			_ = readCache.close()
@@ -192,7 +387,12 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			_ = readCache.close()
 			return nil, fmt.Errorf("%w: prepared aggregate metadata query requires metadata assets", ErrColumnQueryPlanUnsupported)
 		}
-	} else {
+	} else if !columnPhysicalQueryHasPredicates(req) && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct && req.Kind != ColumnPhysicalQueryGroupHourCount {
+		// Fused dictionary reducers intentionally skip the
+		// columnPhysicalQueryHasPredicates/no-predicate direct executor path:
+		// newColumnPhysicalQueryExecutor does not implement these semantics, so
+		// prepared execution must use dictionary sidecar runners unless direct
+		// fused support is added and validated here.
 		exec, err = newColumnPhysicalQueryExecutor(view.Config, req)
 		if err != nil {
 			_ = readCache.close()
@@ -203,25 +403,55 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 			return nil, fmt.Errorf("%w: prepared physical column query requires direct asset reducer", ErrColumnQueryPlanUnsupported)
 		}
 	}
-	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
-	if err != nil {
+	var dictCount *columnDictionaryCodeGroupCountRunner
+	var dictDistinct *columnDictionaryCodeGroupCountDistinctRunner
+	var int64Hour *columnInt64ValueHourCountRunner
+	var dictInt64 *columnDictionaryInt64GroupRunner
+	var dictHour *columnDictionaryHourCountRunner
+	if typedColumnCandidate && typedColumn == nil {
 		_ = readCache.close()
-		return nil, err
+		return nil, fmt.Errorf("%w: typed-column part physical query was selected but no runner was prepared", ErrColumnQueryPlanUnsupported)
 	}
-	dictDistinct, err := prepareColumnDictionaryCodeGroupCountDistinctRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
-	}
-	int64Hour, err := prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
-	}
-	dictInt64, err := prepareColumnDictionaryInt64GroupRunner(view, req, &readCache)
-	if err != nil {
-		_ = readCache.close()
-		return nil, err
+	if typedColumn == nil {
+		dictCount, err = prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		dictDistinct, err = prepareColumnDictionaryCodeGroupCountDistinctRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		if !columnPhysicalQueryHasPredicates(req) {
+			int64Hour, err = prepareColumnInt64ValueHourCountRunner(view, req, &readCache)
+			if err != nil {
+				_ = readCache.close()
+				return nil, err
+			}
+		}
+		dictInt64, err = prepareColumnDictionaryInt64GroupRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		dictHour, err = prepareColumnDictionaryHourCountRunner(view, req, &readCache)
+		if err != nil {
+			_ = readCache.close()
+			return nil, err
+		}
+		if req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && dictDistinct == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: fused count-distinct physical query requires dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
+		if req.Kind == ColumnPhysicalQueryGroupHourCount && dictHour == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: grouped-hour physical query requires dictionary/int64 sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
+		if columnPhysicalQueryHasPredicates(req) && dictCount == nil && dictDistinct == nil && dictInt64 == nil && dictHour == nil {
+			_ = readCache.close()
+			return nil, fmt.Errorf("%w: physical predicates require supported dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
 	}
 	release = false
 	return &ColumnPhysicalQueryRunner{
@@ -235,6 +465,8 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		dictDistinct: dictDistinct,
 		int64Hour:    int64Hour,
 		dictInt64:    dictInt64,
+		dictHour:     dictHour,
+		typedColumn:  typedColumn,
 		metadata:     metadata,
 	}, nil
 }
@@ -265,20 +497,38 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	if r == nil || r.closed {
 		return ColumnPhysicalQueryResult{}, errors.New("collections: prepared physical column query runner is closed")
 	}
+	if r.typedColumn != nil {
+		return r.typedColumn.run(r.view, r.req)
+	}
 	if r.dictCount != nil {
-		return r.dictCount.run(r.view, r.req), nil
+		result := r.dictCount.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.dictDistinct != nil {
-		return r.dictDistinct.run(r.view, r.req), nil
+		result := r.dictDistinct.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.int64Hour != nil {
-		return r.int64Hour.run(r.view, r.req), nil
+		result := r.int64Hour.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.dictInt64 != nil {
-		return r.dictInt64.run(r.view, r.req), nil
+		result := r.dictInt64.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
+	}
+	if r.dictHour != nil {
+		result := r.dictHour.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	if r.metadata != nil {
-		return r.metadata.run(r.view, r.req), nil
+		result := r.metadata.run(r.view, r.req)
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceAggregateMetadata, ColumnPhysicalQueryFallbackNone)
+		return result, nil
 	}
 	r.exec.resetForRun()
 	beforeHits := r.readCache.hits
@@ -291,6 +541,7 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackNone)
 	result.Diagnostics.DirectReduceBlocks = diag.DecodedBlocks
 	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.ScanNanos = scanNanos
@@ -307,7 +558,7 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	if view.MutationParts != 0 {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 	}
-	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.Config, req)
+	aggregate, ok := columnPhysicalQueryAggregateMetadataConfig(view.FullConfig, req)
 	if !ok {
 		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata %q does not match physical query shape", ErrColumnQueryPlanUnsupported, req.AggregateMetadataName)
 	}
@@ -325,6 +576,8 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	var rawScratch []byte
 	start := time.Now()
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
+	diag.StorageSource = ColumnPhysicalQueryStorageSourceAggregateMetadata
+	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = 2
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
@@ -334,12 +587,20 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 		diag.SegmentFileCacheHits = readCache.hits
 		diag.SegmentFileCacheMisses = readCache.misses
 		if err != nil {
+			diag.MetadataMisses++
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: aggregate metadata read %q generation=%d part_id=%d: %w", metadataRef.Name, metadataRef.AssetRef.Generation, metadataRef.AssetRef.PartID, err)
 		}
 		rawScratch = raw
 		diag.PhysicalBytesScanned += int64(len(raw))
-		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.Config, view.CollectionName, aggregate.Name)
+		diag.DecodedMetadataBytes += uint64(len(raw))
+		if readCache.lastView {
+			diag.MappedBytes += uint64(len(raw))
+		} else {
+			diag.HeapCopyBytes += uint64(len(raw))
+		}
+		asset, err := decodeColumnAggregateMetadataAsset(raw, metadataRef.AssetRef, view.FullConfig, view.CollectionName, aggregate.Name)
 		if err != nil {
+			diag.MetadataMisses++
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 		}
 		if asset.GroupColumn != req.GroupColumn || asset.ValueColumn != req.ValueColumn {
@@ -350,10 +611,16 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	}
 	diag.ScanNanos = time.Since(start).Nanoseconds()
 	diag.ReduceRows = acc.rows
-	diag.ResultGroups = acc.groupCount()
+	shapeStart := time.Now()
+	groups := acc.groups(req)
+	diag.ResultShapeNanos = time.Since(shapeStart).Nanoseconds()
+	diag.ResultGroups = len(groups)
+	diag.TopKLimit = req.TopK
+	diag.TopKOrder = string(req.TopKOrder)
+	diag.TopKCandidates = acc.topKCandidates(req)
 	diag.SegmentFileCacheHits = readCache.hits
 	diag.SegmentFileCacheMisses = readCache.misses
-	return ColumnPhysicalQueryResult{Groups: acc.groups(), Diagnostics: diag}, nil
+	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, nil
 }
 
 func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, refModulo, refRemainder int, shouldCancel func() bool) (ColumnPhysicalQueryResult, bool, error) {
@@ -370,6 +637,7 @@ func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysi
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackNone)
 	result.Diagnostics.DirectReduceBlocks = diag.DecodedBlocks
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
@@ -476,6 +744,15 @@ func (c *Collection) scanColumnPhysicalQueryDirectInSnapshotViewWithReadCache(
 // Mutation-bearing manifests stay fail-closed until partitioned visibility
 // reconstruction is available.
 func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryRequest, maxWorkers int) (ColumnPhysicalQueryResult, error) {
+	if err := validateColumnPhysicalQueryRequest(req); err != nil {
+		return ColumnPhysicalQueryResult{}, err
+	}
+	if req.AggregateMetadataName != "" {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel aggregate metadata physical queries are not supported", ErrColumnQueryPlanUnsupported)
+	}
+	if columnPhysicalQueryHasPredicates(req) {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: parallel physical predicates require partitioned dictionary sidecar execution", ErrColumnQueryPlanUnsupported)
+	}
 	view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanNoSidecars())
 	if closeView != nil {
 		defer closeView()
@@ -547,6 +824,10 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	wg.Wait()
 
 	result := ColumnPhysicalQueryResult{}
+	fallbackReason := ColumnPhysicalQueryFallbackNone
+	if !direct {
+		fallbackReason = ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported
+	}
 	var firstErr error
 	for worker := range results {
 		workerResult := results[worker]
@@ -566,6 +847,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	}
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	result.Diagnostics.WorkerCount = workers
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, fallbackReason)
 	if firstErr != nil {
 		result.Diagnostics.ReduceRows = merged.reduceRows
 		return result, firstErr
@@ -591,21 +873,65 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	if req.AggregateMetadataName != "" {
 		return columnManifestScanSidecarFilter{AggregateMetadata: true, AggregateMetadataName: req.AggregateMetadataName}
 	}
+	if !columnPhysicalQueryHasPredicates(req) {
+		switch req.Kind {
+		case ColumnPhysicalQueryGroupCount:
+			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn}
+		case ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct:
+			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, DictionaryColumn2: req.DistinctColumn}
+		case ColumnPhysicalQueryHourCount:
+			return columnManifestScanSidecarFilter{Int64Values: true, Int64Column: req.ValueColumn}
+		case ColumnPhysicalQueryGroupHourCount:
+			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, Int64Values: true, Int64Column: req.ValueColumn}
+		case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
+			return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, Int64Values: true, Int64Column: req.ValueColumn}
+		default:
+			return columnManifestScanNoSidecars()
+		}
+	}
+	filter := columnManifestScanSidecarFilter{DictionaryColumns: make([]string, 0, len(req.Predicates)+2)}
+	addDictionaryColumn := func(name string) {
+		if name == "" {
+			return
+		}
+		filter.DictionaryCodes = true
+		for _, existing := range filter.DictionaryColumns {
+			if existing == name {
+				return
+			}
+		}
+		filter.DictionaryColumns = append(filter.DictionaryColumns, name)
+	}
+	for _, predicate := range req.Predicates {
+		addDictionaryColumn(predicate.Column)
+	}
 	switch req.Kind {
 	case ColumnPhysicalQueryGroupCount:
-		return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn}
-	case ColumnPhysicalQueryGroupCountDistinct:
-		return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, DictionaryColumn2: req.DistinctColumn}
+		addDictionaryColumn(req.GroupColumn)
+	case ColumnPhysicalQueryGroupCountDistinct, ColumnPhysicalQueryGroupCountAndDistinct:
+		addDictionaryColumn(req.GroupColumn)
+		addDictionaryColumn(req.DistinctColumn)
 	case ColumnPhysicalQueryHourCount:
-		return columnManifestScanSidecarFilter{Int64Values: true, Int64Column: req.ValueColumn}
+		filter.Int64Values = true
+		filter.Int64Column = req.ValueColumn
+	case ColumnPhysicalQueryGroupHourCount:
+		addDictionaryColumn(req.GroupColumn)
+		filter.Int64Values = true
+		filter.Int64Column = req.ValueColumn
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
-		return columnManifestScanSidecarFilter{DictionaryCodes: true, DictionaryColumn: req.GroupColumn, Int64Values: true, Int64Column: req.ValueColumn}
+		addDictionaryColumn(req.GroupColumn)
+		filter.Int64Values = true
+		filter.Int64Column = req.ValueColumn
 	default:
 		return columnManifestScanNoSidecars()
 	}
+	return filter
 }
 
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
+		return result, err
+	}
 	if result, ok, err := c.runColumnPhysicalQueryDictionaryCodesInSnapshotView(view, req); ok {
 		return result, err
 	}
@@ -614,6 +940,12 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	}
 	if result, ok, err := c.runColumnPhysicalQueryDictionaryInt64InSnapshotView(view, req); ok {
 		return result, err
+	}
+	if result, ok, err := c.runColumnPhysicalQueryDictionaryHourInSnapshotView(view, req); ok {
+		return result, err
+	}
+	if columnPhysicalQueryHasPredicates(req) {
+		return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require supported dictionary sidecar reducers", ErrColumnQueryPlanUnsupported)
 	}
 	if result, ok, err := c.runColumnPhysicalQueryDirectInSnapshotView(view, req, 0, 0, nil); ok {
 		if err != nil {
@@ -640,6 +972,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(diag),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported)
 	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.ScanNanos = scanNanos
 	result.Diagnostics.ReduceRows = exec.reduceRows
@@ -653,7 +986,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 
 func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
 	if req.AggregateMetadataName != "" || view.MutationParts != 0 ||
-		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct) {
+		(req.Kind != ColumnPhysicalQueryGroupCount && req.Kind != ColumnPhysicalQueryGroupCountDistinct && req.Kind != ColumnPhysicalQueryGroupCountAndDistinct) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
@@ -663,15 +996,19 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 
-	if result, ok, err := runColumnDictionaryCodeGroupCountOneShot(view, req, &readCache); ok {
-		result.Diagnostics.SegmentFileCacheHits = readCache.hits
-		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
-		return result, true, err
-	}
-	if result, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, req, &readCache); ok {
-		result.Diagnostics.SegmentFileCacheHits = readCache.hits
-		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
-		return result, true, err
+	if !columnPhysicalQueryHasPredicates(req) {
+		if result, ok, err := runColumnDictionaryCodeGroupCountOneShot(view, req, &readCache); ok {
+			result.Diagnostics.SegmentFileCacheHits = readCache.hits
+			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+			return result, true, err
+		}
+		if result, ok, err := runColumnDictionaryCodeGroupCountDistinctOneShot(view, req, &readCache); ok {
+			result.Diagnostics.SegmentFileCacheHits = readCache.hits
+			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+			return result, true, err
+		}
 	}
 
 	dictCount, err := prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
@@ -683,6 +1020,9 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 		return ColumnPhysicalQueryResult{}, true, err
 	}
 	if dictCount == nil && dictDistinct == nil {
+		if columnPhysicalQueryHasPredicates(req) {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("%w: physical predicates require dictionary sidecar group reducers", ErrColumnQueryPlanUnsupported)
+		}
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 
@@ -694,7 +1034,10 @@ func (c *Collection) runColumnPhysicalQueryDictionaryCodesInSnapshotView(view co
 	}
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
-	result.Diagnostics.DictionaryCodeHits = result.Diagnostics.DecodedBlocks
+	if !columnPhysicalQueryHasPredicates(req) {
+		result.Diagnostics.DictionaryCodeHits = result.Diagnostics.DecodedBlocks
+	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -702,6 +1045,9 @@ func (c *Collection) runColumnPhysicalQueryInt64ValuesInSnapshotView(view column
 	if req.AggregateMetadataName != "" || view.MutationParts != 0 ||
 		req.Kind != ColumnPhysicalQueryHourCount || req.ValueColumn == "" {
 		return ColumnPhysicalQueryResult{}, false, nil
+	}
+	if columnPhysicalQueryHasPredicates(req) {
+		return ColumnPhysicalQueryResult{}, true, fmt.Errorf("%w: hour-count physical predicates require a fused grouped-hour reducer", ErrColumnQueryPlanUnsupported)
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
@@ -719,6 +1065,7 @@ func (c *Collection) runColumnPhysicalQueryInt64ValuesInSnapshotView(view column
 	}
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -734,15 +1081,61 @@ func (c *Collection) runColumnPhysicalQueryDictionaryInt64InSnapshotView(view co
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 
-	result, ok, err := runColumnDictionaryInt64GroupOneShot(view, req, &readCache)
+	if !columnPhysicalQueryHasPredicates(req) {
+		result, ok, err := runColumnDictionaryInt64GroupOneShot(view, req, &readCache)
+		if err != nil {
+			return ColumnPhysicalQueryResult{}, true, err
+		}
+		if ok {
+			result.Diagnostics.SegmentFileCacheHits = readCache.hits
+			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+			return result, true, nil
+		}
+	}
+
+	runner, err := prepareColumnDictionaryInt64GroupRunner(view, req, &readCache)
 	if err != nil {
 		return ColumnPhysicalQueryResult{}, true, err
 	}
-	if !ok {
+	if runner == nil {
+		if columnPhysicalQueryHasPredicates(req) {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("%w: physical predicates require dictionary/int64 sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
+	result := runner.run(view, req)
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
+	return result, true, nil
+}
+
+func (c *Collection) runColumnPhysicalQueryDictionaryHourInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
+	if req.AggregateMetadataName != "" || view.MutationParts != 0 || req.Kind != ColumnPhysicalQueryGroupHourCount || req.GroupColumn == "" || req.ValueColumn == "" {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	readCache.returnViews = true
+	defer func() { _ = readCache.close() }()
+
+	runner, err := prepareColumnDictionaryHourCountRunner(view, req, &readCache)
+	if err != nil {
+		return ColumnPhysicalQueryResult{}, true, err
+	}
+	if runner == nil {
+		if columnPhysicalQueryHasPredicates(req) {
+			return ColumnPhysicalQueryResult{}, true, fmt.Errorf("%w: grouped-hour physical predicates require dictionary/int64 sidecar reducers", ErrColumnQueryPlanUnsupported)
+		}
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
+	result := runner.run(view, req)
+	result.Diagnostics.SegmentFileCacheHits = readCache.hits
+	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
 
@@ -759,6 +1152,7 @@ func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig,
 	result := ColumnPhysicalQueryResult{
 		Diagnostics: columnPhysicalQueryDiagnosticsFromScan(visible.Diagnostics),
 	}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedRowAsset, ColumnPhysicalQueryFallbackMutationVisibilityOverlay)
 	result.Diagnostics.WorkerCount = 1
 	result.Diagnostics.VisibilityRows = len(visible.Rows)
 	result.Diagnostics.ScanNanos = visibilityNanos
@@ -817,8 +1211,11 @@ func (c *Collection) columnPhysicalQueryMutationPartsHint() (uint64, error) {
 func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) ColumnPhysicalQueryDiagnostics {
 	return ColumnPhysicalQueryDiagnostics{
 		ManifestRoot:               diag.ManifestRoot,
+		ManifestRootName:           diag.ManifestRootName,
 		ManifestGeneration:         diag.ManifestGeneration,
+		ActiveManifestChecksum:     diag.ActiveManifestChecksum,
 		RecoveryManifestGeneration: diag.RecoveryManifestGeneration,
+		RecoveryManifestChecksum:   diag.RecoveryManifestChecksum,
 		AppliedCommandLSN:          diag.AppliedCommandLSN,
 		ManifestRecords:            diag.ManifestRecords,
 		AssetRefs:                  diag.AssetRefs,
@@ -834,23 +1231,53 @@ func columnPhysicalQueryDiagnosticsFromScan(diag columnPhysicalScanDiagnostics) 
 		SegmentFileCacheHits:       diag.SegmentFileCacheHits,
 		SegmentFileCacheMisses:     diag.SegmentFileCacheMisses,
 		ColumnAssetReadIntegrity:   diag.ColumnAssetReadIntegrity,
+		FallbackReason:             ColumnPhysicalQueryFallbackNone,
 	}
+}
+
+func annotateColumnPhysicalQueryResult(result *ColumnPhysicalQueryResult, source ColumnPhysicalQueryStorageSource, fallback ColumnPhysicalQueryFallbackReason) {
+	if result == nil {
+		return
+	}
+	if source != "" {
+		result.Diagnostics.StorageSource = source
+	}
+	if fallback == "" {
+		fallback = ColumnPhysicalQueryFallbackNone
+	}
+	result.Diagnostics.FallbackReason = fallback
 }
 
 func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnostics) ColumnPhysicalQueryDiagnostics {
 	if left.ManifestRoot == 0 {
 		left.ManifestRoot = right.ManifestRoot
+		left.ManifestRootName = right.ManifestRootName
 		left.ManifestGeneration = right.ManifestGeneration
+		left.ActiveManifestChecksum = right.ActiveManifestChecksum
 		left.RecoveryManifestGeneration = right.RecoveryManifestGeneration
+		left.RecoveryManifestChecksum = right.RecoveryManifestChecksum
 		left.AppliedCommandLSN = right.AppliedCommandLSN
 		left.ManifestRecords = right.ManifestRecords
 		left.AssetRefs = right.AssetRefs
 		left.ProjectedColumns = right.ProjectedColumns
 		left.ColumnAssetReadIntegrity = right.ColumnAssetReadIntegrity
+		left.StorageSource = right.StorageSource
+		left.FallbackReason = right.FallbackReason
+	}
+	if left.ManifestRootName == "" {
+		left.ManifestRootName = right.ManifestRootName
+	}
+	if left.ActiveManifestChecksum == 0 {
+		left.ActiveManifestChecksum = right.ActiveManifestChecksum
+	}
+	if left.RecoveryManifestChecksum == 0 {
+		left.RecoveryManifestChecksum = right.RecoveryManifestChecksum
 	}
 	if left.ColumnAssetReadIntegrity == "" {
 		left.ColumnAssetReadIntegrity = right.ColumnAssetReadIntegrity
 	}
+	left.StorageSource = mergeColumnPhysicalQueryStorageSource(left.StorageSource, right.StorageSource)
+	left.FallbackReason = mergeColumnPhysicalQueryFallbackReason(left.FallbackReason, right.FallbackReason)
 	if right.ManifestRecords > left.ManifestRecords {
 		left.ManifestRecords = right.ManifestRecords
 	}
@@ -865,21 +1292,86 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	}
 	left.DecodedBlocks += right.DecodedBlocks
 	left.DirectReduceBlocks += right.DirectReduceBlocks
+	left.TypedColumnPartSections += right.TypedColumnPartSections
+	left.TypedColumnPartSectionBytes += right.TypedColumnPartSectionBytes
 	left.MetadataHits += right.MetadataHits
+	left.MetadataMisses += right.MetadataMisses
 	left.DictionaryCodeHits += right.DictionaryCodeHits
+	left.PredicateDictionaryCodeHits += right.PredicateDictionaryCodeHits
 	left.Int64ValueHits += right.Int64ValueHits
 	left.ScheduledGranules += right.ScheduledGranules
 	left.SkippedGranules += right.SkippedGranules
+	left.DecodedGranules += right.DecodedGranules
 	left.RowsScanned += right.RowsScanned
+	left.RowsMatched += right.RowsMatched
 	left.DeletedRows += right.DeletedRows
+	left.FallbackReads += right.FallbackReads
 	left.RowMaterializations += right.RowMaterializations
+	left.DocumentMaterializations += right.DocumentMaterializations
+	if left.PredicateCount == 0 && right.PredicateCount > 0 {
+		left.PredicateCount = right.PredicateCount
+		left.PredicateColumns = append([]string(nil), right.PredicateColumns...)
+		left.PredicateKinds = append([]string(nil), right.PredicateKinds...)
+		left.PredicateLiterals = right.PredicateLiterals
+	}
+	if !left.SortKeyPrefixPlanned && right.SortKeyPrefixPlanned {
+		left.SortKeyPrefixPlanned = true
+		left.SortKeyPrefixColumns = append([]string(nil), right.SortKeyPrefixColumns...)
+		left.SortKeyPrefixLiterals = right.SortKeyPrefixLiterals
+	}
+	left.SortKeyMarkChecks += right.SortKeyMarkChecks
+	left.SortKeyMarkMatches += right.SortKeyMarkMatches
+	left.SortKeyMarkSkips += right.SortKeyMarkSkips
+	left.SortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortKeyMarkFallbackReason, right.SortKeyMarkFallbackReason)
+	if right.SortedGroupedDistinctReady {
+		left.SortedGroupedDistinctReady = true
+	}
+	left.SortedGroupedDistinctFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortedGroupedDistinctFallbackReason, right.SortedGroupedDistinctFallbackReason)
+	left.DecodedPayloadBytes += right.DecodedPayloadBytes
 	left.PhysicalBytesScanned += right.PhysicalBytesScanned
+	left.DecodedMetadataBytes += right.DecodedMetadataBytes
+	left.MappedBytes += right.MappedBytes
+	left.HeapCopyBytes += right.HeapCopyBytes
 	left.ReduceRows += right.ReduceRows
+	left.TopKCandidates += right.TopKCandidates
+	if right.TopKLimit > left.TopKLimit {
+		left.TopKLimit = right.TopKLimit
+	}
+	if left.TopKOrder == "" {
+		left.TopKOrder = right.TopKOrder
+	}
+	left.ResultShapeNanos += right.ResultShapeNanos
 	left.VisibilityRows += right.VisibilityRows
 	left.ReconstructionRows += right.ReconstructionRows
 	left.SegmentFileCacheHits += right.SegmentFileCacheHits
 	left.SegmentFileCacheMisses += right.SegmentFileCacheMisses
 	return left
+}
+
+func mergeColumnPhysicalQueryStorageSource(left, right ColumnPhysicalQueryStorageSource) ColumnPhysicalQueryStorageSource {
+	if left == "" {
+		return right
+	}
+	if right == "" || right == left {
+		return left
+	}
+	return ColumnPhysicalQueryStorageSourceMixed
+}
+
+func mergeColumnPhysicalQueryFallbackReason(left, right ColumnPhysicalQueryFallbackReason) ColumnPhysicalQueryFallbackReason {
+	if left == "" {
+		if right == "" {
+			return ColumnPhysicalQueryFallbackNone
+		}
+		return right
+	}
+	if right == "" || right == left || right == ColumnPhysicalQueryFallbackNone {
+		return left
+	}
+	if left == ColumnPhysicalQueryFallbackNone {
+		return right
+	}
+	return ColumnPhysicalQueryFallbackMixed
 }
 
 type columnPhysicalQueryExecutor struct {
@@ -910,6 +1402,9 @@ type columnPhysicalQuerySpan struct {
 }
 
 func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) (*columnPhysicalQueryExecutor, error) {
+	if columnPhysicalQueryHasPredicates(req) {
+		return nil, fmt.Errorf("%w: physical predicates require dictionary sidecar execution", ErrColumnQueryPlanUnsupported)
+	}
 	exec := &columnPhysicalQueryExecutor{
 		kind:              req.Kind,
 		readIntegrity:     req.ColumnAssetReadIntegrity,
@@ -1312,6 +1807,8 @@ func scanColumnPhysicalDirectQueryRowValues(cur *manifestCursor, version uint16,
 			if n != uint64(col.VectorDims) {
 				return nil, false, nil, false, 0, false, fmt.Errorf("column[%d] float32_vector length=%d want vector_dims=%d", colIdx, n, col.VectorDims)
 			}
+		case ColumnStoreValueUint32List:
+			cur.skipUint32Slice()
 		case ColumnStoreValueAdjacencyList:
 			cur.skipUint32Slice()
 		default:
@@ -1555,20 +2052,60 @@ func (a *columnPhysicalQueryMetadataAccumulator) groupCount() int {
 	return len(a.int64Values)
 }
 
-func (a *columnPhysicalQueryMetadataAccumulator) groups() []ColumnPhysicalQueryGroup {
-	out := make([]ColumnPhysicalQueryGroup, 0, a.groupCount())
+func (a *columnPhysicalQueryMetadataAccumulator) groups(req ColumnPhysicalQueryRequest) []ColumnPhysicalQueryGroup {
+	capacity := a.groupCount()
+	if req.TopK > 0 && req.TopK < capacity {
+		capacity = req.TopK
+	}
+	out := make([]ColumnPhysicalQueryGroup, 0, capacity)
+	add := func(group ColumnPhysicalQueryGroup) {
+		if req.SkipEmptyGroupKey && group.Key == "" {
+			return
+		}
+		if req.TopK > 0 {
+			insertColumnPhysicalTopKGroup(&out, group, req.TopK, req.TopKOrder)
+			return
+		}
+		out = append(out, group)
+	}
 	switch a.kind {
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
 		for key, value := range a.int64Values {
-			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: value})
+			add(ColumnPhysicalQueryGroup{Key: key, Int64: value})
 		}
 	case ColumnPhysicalQueryGroupInt64Span:
 		for key, span := range a.spans {
-			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+			add(ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	sortColumnPhysicalQueryGroupsByKey(out)
+	if req.TopK == 0 {
+		sortColumnPhysicalQueryGroupsByKey(out)
+	}
 	return out
+}
+
+func (a *columnPhysicalQueryMetadataAccumulator) topKCandidates(req ColumnPhysicalQueryRequest) int {
+	if req.TopK <= 0 {
+		return 0
+	}
+	if !req.SkipEmptyGroupKey {
+		return a.groupCount()
+	}
+	candidates := 0
+	if a.spans != nil {
+		for key := range a.spans {
+			if key != "" {
+				candidates++
+			}
+		}
+		return candidates
+	}
+	for key := range a.int64Values {
+		if key != "" {
+			candidates++
+		}
+	}
+	return candidates
 }
 
 func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecutor) error {

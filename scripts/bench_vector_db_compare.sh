@@ -17,6 +17,7 @@ SEARCH_CONCURRENCY="${SEARCH_CONCURRENCY:-2,4,8,16,32,64,128}"
 M="${M:-16}"
 EF_CONSTRUCTION="${EF_CONSTRUCTION:-128}"
 EF_SEARCH="${EF_SEARCH:-128}"
+TREEDB_COLUMN_GRAPH_EF_SEARCH="${TREEDB_COLUMN_GRAPH_EF_SEARCH:-}"
 MIN_RECALL="${MIN_RECALL:-0.95}"
 NUMPY_PACKAGE="${NUMPY_PACKAGE:-numpy==2.0.2}"
 VECTORLITE_PACKAGE="${VECTORLITE_PACKAGE:-vectorlite-py==0.2.0}"
@@ -67,14 +68,14 @@ validate_backends() {
 	for backend in "${raw[@]}"; do
 		backend="${backend//[[:space:]]/}"
 		case "$backend" in
-			treedb|vectorlite|pgvector|mongodb)
+			treedb|treedb_column_graph|vectorlite|pgvector|mongodb)
 				;;
 			"")
 				echo "empty backend in BACKENDS=$BACKENDS" >&2
 				exit 1
 				;;
 			*)
-				echo "unknown backend: $backend (known: treedb,vectorlite,pgvector,mongodb)" >&2
+				echo "unknown backend: $backend (known: treedb,treedb_column_graph,vectorlite,pgvector,mongodb)" >&2
 				exit 1
 				;;
 		esac
@@ -138,6 +139,9 @@ PY
 
 validate_backends
 validate_backend_configuration
+if [[ -z "$TREEDB_COLUMN_GRAPH_EF_SEARCH" ]]; then
+	TREEDB_COLUMN_GRAPH_EF_SEARCH="$EF_SEARCH"
+fi
 mkdir -p "$RUN_DIR"
 
 cat >"$RUN_DIR/README.md" <<EOF
@@ -154,11 +158,14 @@ cat >"$RUN_DIR/README.md" <<EOF
 - top_k: \`$TOP_K\`
 - concurrency: \`$SEARCH_CONCURRENCY\`
 - M / efConstruction / efSearch: \`$M / $EF_CONSTRUCTION / $EF_SEARCH\`
+- TreeDB column_graph efSearch: \`$TREEDB_COLUMN_GRAPH_EF_SEARCH\`
 - Python packages: \`$NUMPY_PACKAGE\`, \`$VECTORLITE_PACKAGE\`
 
 This run compares persistent database-tier ANN search:
 
 - TreeDB native persisted HNSW through \`cmd/treedb_vector_search_demo\`
+- TreeDB column-store graph search through
+  \`cmd/treedb_vector_search_demo -vector-index-strategy column_graph\`
 - SQLite+Vectorlite HNSW through Python's \`sqlite3\` and the \`vectorlite-py\`
   loadable extension
 - PostgreSQL+pgvector HNSW through a PostgreSQL server
@@ -221,6 +228,29 @@ if contains_backend treedb; then
 		-min-recall "$MIN_RECALL" \
 		-json >"$RUN_DIR/treedb.json"
 	result_args+=(--result "$RUN_DIR/treedb.json")
+fi
+
+if contains_backend treedb_column_graph; then
+	echo "running TreeDB column-store graph benchmark"
+	GOWORK=off go run ./cmd/treedb_vector_search_demo \
+		-matrix=false \
+		-vector-index-strategy column_graph \
+		-dataset-dir "$RUN_DIR/dataset" \
+		-dir "$RUN_DIR/treedb_column_graph" \
+		-keep-dir \
+		-docs "$DOCS" \
+		-dims "$DIMS" \
+		-queries "$QUERIES" \
+		-search-concurrency "$SEARCH_CONCURRENCY" \
+		-validate-queries "$VALIDATE_QUERIES" \
+		-validate-docs 16 \
+		-top-k "$TOP_K" \
+		-m "$M" \
+		-ef-construction "$EF_CONSTRUCTION" \
+		-ef-search "$TREEDB_COLUMN_GRAPH_EF_SEARCH" \
+		-min-recall "$MIN_RECALL" \
+		-json >"$RUN_DIR/treedb_column_graph.json"
+	result_args+=(--result "$RUN_DIR/treedb_column_graph.json")
 fi
 
 if contains_backend vectorlite; then

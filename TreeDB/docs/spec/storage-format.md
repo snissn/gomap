@@ -8,7 +8,9 @@ TreeDB is pre-alpha; format compatibility between versions is not guaranteed.
 That disclaimer does not permit fail-open handling of acknowledged durable
 writes. Once a directory advertises a required storage feature such as
 `command_wal_v1`, unsupported binaries must fail closed instead of serving,
-cleaning, compacting, or rewriting the directory.
+cleaning, compacting, or rewriting the directory. Typed-column image,
+descriptor, manifest, and schema evolution follows the fail-closed policy in
+`typed-column-schema-evolution.md`.
 
 ## 1. Top-Level Storage Objects
 
@@ -21,9 +23,10 @@ A TreeDB deployment uses:
 - value-log segments under `value_vlog/value-l*.log`,
 - optional split outer-leaf value-log segments under `leaf_vlog/value-l*.log`
   when `IndexOuterLeavesInValueLog` is enabled,
-- typed column asset manager segments under
+- typed asset manager segments under
   `column_assets/<namespace>/assets/segments/segment-*.tca` for production
-  column-store physical assets,
+  typed-storage physical assets (`column_assets` remains the compatibility
+  directory name),
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
@@ -52,7 +55,7 @@ All pages begin with a 16-byte header:
 
 ```text
 u64 PageID
-u32 Checksum   // CRC32C over page with checksum bytes zeroed
+u32 Checksum   // CRC-32/IEEE over page with checksum bytes zeroed
 u16 Flags      // low bits: page type; high bits: encoding flags
 u16 Count      // entry count
 ```
@@ -66,7 +69,7 @@ Page types (`Flags` low bits):
 
 ### 2.3 Checksum
 
-- Checksum algorithm: CRC32C (Castagnoli).
+- Checksum algorithm: CRC-32/IEEE.
 - Verification may be cached unless `VerifyOnRead` forces every-read checks.
 
 ## 3. Meta Page Body
@@ -348,7 +351,7 @@ Notes:
 Each value-log record is:
 
 ```text
-u32 CRC32C
+u32 CRC32
 u8  Version         // currently 1
 u8  Flags           // bit0 = grouped record
 u16 Reserved
@@ -419,14 +422,15 @@ Encoding rules:
 - if compact encoding is not smaller than the raw page, TreeDB stores the raw
   page payload instead.
 
-### 7.3 Column Asset Manager and TCPA Physical Assets
+### 7.3 Typed Asset Manager, TCPA Typed-Row Assets, and Typed-Column Parts
 
-Production column-store physical data is stored in typed column asset manager
-segments. These assets are value-log-shaped durable payloads, but they are not
-ordinary row `value_vlog` values and they are not split-leaf `leaf_vlog`
-records. Manifest/control roots can live in B-tree/root metadata; analytical
-column payloads, tombstones, marks, dictionaries, locators, and aggregate
-metadata belong under the isolated column asset manager namespace.
+Production typed-storage physical data is stored in typed asset manager segments
+under the compatibility `column_assets` directory. These assets are
+value-log-shaped durable payloads, but they are not ordinary row `value_vlog`
+values and they are not split-leaf `leaf_vlog` records. Manifest/control roots
+can live in B-tree/root metadata; typed-row payloads, typed-column part payloads,
+and derived accelerator payloads such as marks, dictionaries, locators, and
+aggregate metadata belong under the isolated typed asset manager namespace.
 
 A collection namespace such as `events/column-assets` maps to:
 
@@ -439,13 +443,27 @@ Dir/maindb/column_assets/events/column-assets/
   tmp/
 ```
 
-Segment file names use `segment-%06d.tca`. Durable manifest records store
-typed `ColumnAssetRef` values containing kind, namespace, generation, part id,
-segment file id, offset, length, and checksum. GC/rewrite must enumerate these
+Segment file names use `segment-%06d.tca`. Durable manifest part records
+store typed `ColumnAssetRef` values containing kind, namespace, generation,
+part id, segment file id, offset, length, and checksum. Part record version 3
+and newer carries a `part_role` lifecycle value: `base`, `delta`, or
+`tombstone`; version 1/2 part records omit `part_role`. Part record version 4
+appends a SortKey trailer after `part_role`: `u64 column_count`, then for each
+column a manifest string column name and manifest string direction (currently
+empty/ascending only). Version 1/2/3 part records have no SortKey trailer. Only
+`tcs1_typed_column_part` records may publish a non-empty SortKey; readers and
+rewrite tooling must preserve or skip this trailer by version.
+Current part refs may use `tcs1_part_image` for compatibility typed-row/TCPA
+assets or `tcs1_typed_column_part` for sectioned typed-column payloads,
+including scalar columns plus vector/list/adjacency payload sections described
+below.
+`base` parts are complete insert/base spans, `delta` parts carry update rows
+layered over the older visible set, and `tombstone` parts are typed-row delete
+assets with no matching typed-column payload. GC/rewrite must enumerate these
 refs from manifest/control roots and snapshots; it must not scan row documents
-to discover column assets.
+to discover typed-storage assets.
 
-Current physical part payloads use the `TCPA` envelope:
+Compatibility typed-row physical part payloads use the `TCPA` envelope:
 
 ```text
 u32      Magic = "TCPA"
@@ -472,9 +490,34 @@ values   declared column values when Deleted=false
 ```
 
 Insert/update rows must have `Deleted=false` and exactly one value per declared
-column. Delete/tombstone rows must have `Deleted=true` and zero column values.
-Readers validate namespace, generation, part id, schema hash, declared column
-descriptors, length, and checksum before accepting an asset ref.
+`typed_row_asset` column in the row asset. Delete/tombstone rows must have
+`Deleted=true` and zero column values. For layouts with `typed_column_part`
+owners, a `TCPA` row asset is still published for row IDs/tombstones and any
+row-owned fields; the matching `tcs1_typed_column_part` for the same non-delete
+generation contains authoritative scalar, fixed-dimension `float32_vector`, and
+non-null variable-width `uint32_list` typed-column values keyed by row index.
+Latest-visible readers resolve document identity from the typed-row
+row/tombstone assets first, then read the typed-column part for the winning
+non-deleted generation+row. Readers validate namespace, generation, part id,
+schema hash, declared column descriptors, length, role, operation, and checksum
+before accepting an asset ref.
+
+Typed-column part descriptor column type codes are currently:
+
+| Code | Type string | Notes |
+| ---: | --- | --- |
+| 1 | `int64` | Signed integer scalar and default float bit-pattern carrier. |
+| 2 | `low_cardinality_code` | String dictionary code carrier. |
+| 3 | `bool` | Boolean bitpack/RLE carrier. |
+| 4 | `float32_vector` | Fixed-dimension dense little-endian `float32` rows. |
+| 5 | `adjacency_list` | Legacy/consumer-specific dense or explicit offsets-list adjacency compatibility. |
+| 6 | `float32` | Native raw little-endian IEEE-754 scalar. |
+| 7 | `float64` | Native raw little-endian IEEE-754 scalar. |
+| 8 | `uint32_list` | Generic non-null offsets/value list primitive added by #1985. |
+
+`uint32_list` descriptors must use `raw_uint32_offsets_list` encoding,
+`fixed_width_elements=0`, and uncompressed split offsets/value sections. Readers
+must fail closed on unknown type codes rather than guessing a payload shape.
 
 Version 1 row payloads omitted the `Deleted` flag and represented only live
 insert/update rows:
@@ -487,6 +530,210 @@ values   declared column values
 M12C and later decoders may read version 1 as `Deleted=false` for pre-v2 assets.
 Writers emit version 2.
 
+Dictionary-code derived sidecars referenced by
+`ColumnAssetRef.Kind = tcs1_dictionary_codes` use asset magic `TCDC`. Version 2
+keeps the manifest-style big-endian header, collection/namespace/generation,
+schema, column identity, dictionary strings, cardinality, and row-count fields,
+but the row-code payload is no longer a manifest `uint32` stream. Writers add
+deterministic zero padding after the dictionary strings until the row payload is
+4-byte aligned, then emit exactly `row_count * 4` bytes of little-endian `uint32`
+local dictionary codes. Segment writers also prefix-pad dictionary-code assets so
+`asset_ref.offset + payload_offset` is 4-byte aligned for mmap direct-view
+consumers. Readers fail closed on non-zero payload padding, payload-length or
+row-count mismatch, absolute misalignment, codes outside dictionary cardinality,
+checksum mismatch when requested, or unsupported versions. Version 1
+big-endian/manifest row-code payloads are intentionally rejected by current
+pre-alpha readers; rebuild old DB directories instead of migrating in place.
+
+Dense int64 value derived sidecars referenced by
+`ColumnAssetRef.Kind = tcs1_int64_values` use asset magic `TCI8`. Version 2
+keeps the manifest-style big-endian header, collection/namespace/generation,
+schema, column identity, column index, and row-count fields, then adds
+zero padding until the row-value payload is 8-byte aligned. Writers then emit
+exactly `row_count * 8` bytes of little-endian two's-complement `int64` values.
+Segment writers prefix-pad int64 value assets so `asset_ref.offset +
+payload_offset` is 8-byte aligned for mmap direct-view consumers. Readers fail
+closed on non-zero payload padding, payload-length or row-count mismatch,
+absolute misalignment, checksum mismatch when requested, schema/ref/column
+mismatch, or unsupported versions. Version 1 big-endian/manifest row-value
+payloads are intentionally rejected by current pre-alpha readers; rebuild old DB
+directories instead of migrating in place.
+
+Sectioned typed-column part payloads are `TreeDB/internal/typedcolumn` part
+images referenced by `ColumnAssetRef.Kind = tcs1_typed_column_part`. When a
+collection SortKey is fully owned by `typed_column_part`, uses supported
+ascending non-null bool/int64/string columns, and has at most
+`typedColumnPartSortKeyMaxColumns == 8` columns, the typed-column image
+descriptor SortKey and the v4 manifest part SortKey trailer must match exactly.
+String SortKey columns rely on part-local dictionary codes only when those codes
+are assigned in logical bytewise-ascending order and the dictionary metadata
+certifies that collation. Each typed-column image stores a `sort_key_marks`
+section with one validated mark per granule. Mark prefixes record lower and
+exclusive-upper bounds in the same logical/certified ordered code space as the
+persisted SortKey; readers reject corrupt/stale mark counts, row counts,
+ordinals, prefix widths, and invalid bounds rather than pruning silently. Mixed-
+owner SortKeys fall back to the synthetic `__treedb_primary_id` order and publish
+no typed-column SortKey trailer; typed-column-owned unsupported, nullable,
+descending, or wider-than-8 SortKeys fail closed.
+The durable Issue `#1755` scalar path represents bool, int64, float32,
+double/float64, and
+string fields. Int64 typed-column fields use `delta_varint` by default; a
+non-null scalar `typed_column_part` field that explicitly sets
+`fixed_width_encoding: "little_endian"` uses an uncompressed native raw
+little-endian payload: `raw_int64` for `int64` (`rows * 8` bytes),
+`raw_float32` for `float32` (`rows * 4` IEEE-754 bits), or `raw_float64` for
+`double`/`float64` (`rows * 8` IEEE-754 bits). Native scalar float payloads
+preserve raw bits exactly, including NaN payloads and signed zero. The legacy
+raw-`int64` float bit-pattern carrier remains a compatibility/fallback layout
+when native fixed-width encoding is not selected and must not be treated as a
+native scalar float direct-view payload. Issue `#1756` adds fixed-dimension
+`float32_vector` fields as uncompressed row-major little-endian dense `float32`
+sections whose element count per row is `vector_dims`. Issue `#1783` adds
+fixed-degree `adjacency_list` fields as uncompressed row-major little-endian
+dense `uint32` sections whose element count per row is `adjacency_degree`;
+that dense layout remains fallback/compatibility. Issue #1914 selected the #1901
+variable-list compatibility path as an explicit `ColumnStoreValueAdjacencyList`
+layout extension selected by `adjacency_layout: "uint32_offsets_list"` and the
+internal encoding `raw_uint32_offsets_list`. Issue #1989 quarantines that
+consumer-specific selector; the primary `uint32_list` path uses the reusable
+physical mechanics:
+
+```text
+offsets []uint64  // row_count + 1, little-endian
+values  []uint32  // flattened uint32 values, little-endian
+```
+
+The serialized image stores one canonical column-wide offsets section and one
+column-wide values section per offsets-list column. For multi-block parts, block
+payloads may use block-local offsets internally, but the image writer publishes a
+single global `row_count + 1` offsets array by dropping duplicate block starts and
+adding cumulative value bases; readers reconstruct block-local fallback payloads
+from those global sections. The offsets-list mechanics validate exact offsets
+count, `offsets[0] == 0`, monotonic offsets, final offset equal to the value
+count, exact offsets/value byte lengths, Go `int` range before slicing,
+little-endian identity, and separate section metadata/checksums for offsets
+(8-byte elements) and values (4-byte elements). #1915 adds the safe writer and
+fallback reader into owned Go slices; #1916 adds certified direct-view readers
+for paired offsets/value handles, and #1917 wires that variable adjacency reader
+through typed-column adapters. #1918 recorded durable `column_graph` layer-0
+adjacency sources as `raw_uint32_offsets_list` typed-column assets during
+physical graph rebuilds, and later graph-source work extended manifests to record
+per-layer sources. Those `column_graph` source records are legacy compatibility,
+not the target datastore primitive; current primary adjacency uses `uint32_list`
+vector-index state. #1984 defines `uint32_list` semantics in
+`typed-column-uint32-list-semantics.md`, #1985 adds the generic runtime
+primitive implementation, and #1986/#1988 own vector-index state/search
+consumption.
+
+The `column_graph` manifest keeps the row graph asset ref as the canonical graph
+asset. The legacy all-layer source metadata is an optional compatibility
+manifest trailer with magic `TCGL` and version `1`: it records `layer_count`,
+`source_count`, and then one `TCGA` v1 source record per layer in ascending layer
+order. Each source
+record binds the source schema/column name, value type/encoding, layer number,
+source schema hash, row count, value count, offsets/value/padding byte
+accounting, source `tcs1_typed_column_part` ref, base-manifest identity, graph
+schema hash, and graph-asset identity. `source_count` must equal `layer_count`;
+layer `i` must have `Layer=i`; layer 0 is also exposed through the legacy
+optional layer-0 field for older readers. Empty rows and layers are represented
+by equal adjacent offsets in the per-layer offsets array. Old graph manifests
+without the trailer remain row-asset fallback readable. New graph builds leave
+these `TCGA`/`TCGL` fields empty and publish typed-column `uint32_list`
+vector-index state instead. Do not add new storage features to this
+`TCGA`/`TCGL` compatibility path.
+
+Issue #1986 adds a separate vector-index state control record under
+`\x06vector-index-state/v1/index/<index_name>` with magic `TVIS` and version
+`2` (`1` is still accepted for pre-alpha compatibility). The record stores
+index identity, row count, base manifest identity, expected adjacency layer
+count, and typed-column asset refs by logical type plus physical encoding. Its
+asset roles include adjacency (`uint32_list` over
+`raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
+optional normalized vectors (`float32_vector` over `raw_float32_vector`), and
+future row/document refs. The active manifest checksum includes the control
+record, but the record's base checksum excludes vector-index derived records so
+stale-state checks compare against authoritative collection data. See
+`vector-index-state-manifest.md` for validation and fail-closed rules.
+
+As of the #1895 pre-alpha format update, newly written `typed_column_part` images
+carry a writer-built `layout_contract` section. The contract may mark only raw
+non-null uncompressed `raw_int64`, native `raw_float32`, native `raw_float64`,
+fixed-dimension `raw_float32_vector`, and explicit `raw_uint32_offsets_list`
+typed-column payload sections as `DirectViewCertified`; the adapter-internal
+`__treedb_primary_id` row-locator column is not a declared-value direct-view
+certification target. The contract records section/block offsets, lengths,
+checksums, element size, endian, length multiple, row count, fixed elements per
+row, and null/default exclusion. For `raw_uint32_offsets_list`, the contract
+records global offsets/value section identity and leaves generic per-block
+combined payload offsets empty because the two sections are discontiguous. Image
+padding bytes are deterministic zero bytes
+and are included in serialized-image byte accounting. When a typed-column-part
+asset contains an active direct-view-certified candidate, the column asset segment
+writer/appender also emits deterministic zero prefix padding as needed so the
+absolute storage addresses (`asset_ref.offset + section/block payload offset`)
+satisfy the declared alignment; this segment prefix padding is outside the asset
+payload/checksum but is part of segment file size and appender offset accounting.
+Old or manually constructed typed-column assets without a valid layout contract,
+or refs whose absolute offsets are misaligned, fail closed in certified/prepared
+paths. TreeDB is pre-alpha, so rebuilding old DB directories is preferred over
+on-disk migration scaffolding for this format change.
+
+Nullable scalar typed-column support uses nullable int64 carrier granules for
+bool, int64, float32, double/float64, and low-cardinality string fields. A
+nullable scalar column uses the `nullable_int64` encoding. Each granule payload
+contains a fixed header, the encoded non-null/non-default carrier values, and
+two row-aligned bitmaps:
+
+- the null bitmap marks rows whose JSON path was present with an explicit
+  `null`; these rows have no stored int64 payload value and reconstruct as
+  explicit JSON null;
+- the default/missing bitmap marks rows whose declared path was omitted from the
+  source document; these rows have no stored int64 payload value and reconstruct
+  by omitting that path from the retained-payload document; and
+- rows with neither bit set are present/non-null and consume one encoded carrier
+  payload value in row order (`0/1` bools, int64s, float bit patterns, or string
+  dictionary codes).
+
+Null and default/missing bits are mutually exclusive. Granule metadata stores
+`NullCount` and `DefaultCount`; the two counts must be non-negative and must not
+exceed the row count (`DefaultCount <= Rows-NullCount`). Decoders must fail
+closed on invalid count metadata, truncated or incorrectly-sized bitmaps, rows
+marked both null and default/missing, or stored-value underflow/overflow. Min/max
+metadata, when present, covers only stored present/non-null carrier values; null
+and default/missing rows contribute no value, and all-null/all-missing blocks
+omit min/max. Future native nullable scalar encodings may reuse the same
+explicit-null versus missing bitmap model only after their per-type payload
+format is specified.
+
+Nullable/missing typed-column codecs are allocation-budgeted hot paths and carry
+a positive optimization expectation, not only a no-regression gate. When changing
+encoding, decode, scan, or reconstruction merge loops, implementations should
+actively remove existing avoidable allocations and obvious local overhead in the
+same touched path when the cleanup is bounded, testable, and evidenced. These
+loops must use compact bitmaps/default metadata plus caller-owned scratch and
+must target 0 allocs/op after setup when benchmarking the core typed-column loop
+separately from document materialization. Touched inner loops must be measurably
+no worse, and preferably better, on `B/op` and `allocs/op`. Implementations must
+not add per-row heap wrappers, maps, interface values, closures, or string/byte
+conversions in these loops; if benchmarks or profiles expose allocations in
+touched functions, the PR must fix them or explicitly list why they are out of
+scope with a linked follow-up recommendation. Any remaining allocation requires
+baseline-versus-final `B/op` and `allocs/op` evidence plus allocation profile/top
+evidence before it is accepted or explicitly deferred. Checksum, lifetime,
+schema, null/missing, and fail-closed validation must not be weakened to meet the
+allocation budget.
+
+Production `float32_vector`, `uint32_list`, and `adjacency_list`
+nullable/missing support remains staged and fail-closed. Authoritative
+`uint32_list` typed-column fields are non-null in v1 and reject adjacency-degree
+or adjacency-layout selectors; empty lists are represented by equal adjacent
+offsets. Authoritative dense `adjacency_list` typed-column fields must be
+non-nullable, must declare positive `adjacency_degree`, and must fail closed when
+any source row length, schema descriptor, or asset payload length disagrees with
+that fixed degree. The adjacency offsets-list selector is also non-nullable, must
+not declare `adjacency_degree`, and uses the #1915/#1916 concrete encoding for
+safe publication/reopen/fallback reconstruction and adapter direct reads.
+
 ## 8. Commit-Log Segment Format
 
 Commit-log file is a sequence of segments.
@@ -495,7 +742,7 @@ Segment envelope:
 
 ```text
 u32 LengthField      // high bit = compressed flag, remaining bits = payload length
-u32 CRC32C(payload_stored)
+u32 CRC32(payload_stored)
 bytes PayloadStored[Length]
 ```
 
@@ -708,6 +955,14 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   cache identity invalidation. Manifest generation and recovery LSN are not
   schema-hash inputs.
 
+Issue `#1753` added `TreeDB/internal/typedcolumn` as the transplanted
+`experiments/colgranule` typed-column data plane. Issues `#1754`/`#1755` connect
+it to production collection metadata for opt-in scalar `typed_column_part`
+owners; issue `#1756` adds fixed-dimension `float32_vector` dense sections. The
+transplant and adapter boundaries are documented in `typed-column-transplant.md`
+and `typed-column-adapter.md`; closeout evidence and #1736 COW-maintenance
+handoff facts are recorded in `typed-storage-closeout-1758.md`.
+
 Readers must fail closed for a column-enabled collection when:
 
 - active manifest metadata is missing required recovery-authoritative metadata,
@@ -717,6 +972,17 @@ Readers must fail closed for a column-enabled collection when:
 - the recovery-authoritative applied command LSN is zero while an active manifest
   is present, or
 - a durable-only column collection is opened under a relaxed durability mode.
+
+For typed-column parts specifically, readers and maintenance planners must reject
+unsupported image versions, descriptor versions, manifest identity versions,
+schema-hash drift, field-owner/value-type mismatches, `vector_dims` and
+fixed-width layout mismatches, and kind/generation/part/checksum/range mismatches
+from headers, descriptors, manifest identities, or refs whenever possible. They
+must fail closed before full payload decode or per-row allocation when those
+compact records already prove the format unsupported. Rebuild benchmark and
+experiment directories rather than relying on implicit migrations during the
+pre-alpha period; future migration tooling requirements are owned by
+`typed-column-schema-evolution.md`.
 
 `CollectionInsertBatchByIDV1` payload:
 
@@ -770,9 +1036,13 @@ The collection and index names must be non-empty. The command payload names the
 logical rebuild request only; it does not carry vector graph bytes, physical root
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
 collection vector-index rebuild path for the named index. For explicit
-`column_graph` indexes, that path rebuilds vector, inverse-norm, and adjacency
-data into physical column assets and publishes the graph manifest through the
-normal collection column manifest/root lifecycle. Replay outcomes that are
+`column_graph` indexes, that path rebuilds vector, inverse-norm, and row-asset
+adjacency data into physical column assets, publishes HNSW adjacency as
+`uint32_list` vector-index state, and records vector-index control identity in
+the `TVIS` state record. Old adjacency-source refs are #1989-quarantined
+compatibility. Current graph manifests may still contain row graph refs and
+legacy layer-source trailer refs for compatibility; new derived-state refs belong
+in vector-index state. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a
 physical rebuild, must still publish a no-op command-WAL boundary and advance
 `AppliedCommandLSN`. Corrupt payloads, unsupported payload versions, and

@@ -3,8 +3,8 @@ package template
 import (
 	"encoding/binary"
 	"errors"
-	"hash/crc32"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/zeebo/xxh3"
 )
 
@@ -17,8 +17,6 @@ const (
 var (
 	ErrCorruptTemplateDef = errors.New("template: corrupt template def")
 )
-
-var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
 // EncodeTemplateDef serializes anchors into the TemplateDefBytes format.
 func EncodeTemplateDef(def TemplateDef, cfg Config) ([]byte, error) {
@@ -54,8 +52,8 @@ func EncodeTemplateDef(def TemplateDef, cfg Config) ([]byte, error) {
 			copy(buf[off:], a)
 			off += len(a)
 		}
-		crc := crc32.Checksum(buf[:off], crcTable)
-		binary.LittleEndian.PutUint32(buf[off:], crc)
+		checksum := crc.Checksum(buf[:off])
+		binary.LittleEndian.PutUint32(buf[off:], checksum)
 		off += 4
 		if off != len(buf) {
 			return nil, ErrCorruptTemplateDef
@@ -109,8 +107,8 @@ func EncodeTemplateDef(def TemplateDef, cfg Config) ([]byte, error) {
 	}
 	copy(buf[off:], def.Base)
 	off += len(def.Base)
-	crc := crc32.Checksum(buf[:off], crcTable)
-	binary.LittleEndian.PutUint32(buf[off:], crc)
+	checksum := crc.Checksum(buf[:off])
+	binary.LittleEndian.PutUint32(buf[off:], checksum)
 	off += 4
 	if off != len(buf) {
 		return nil, ErrCorruptTemplateDef
@@ -128,7 +126,7 @@ func DecodeTemplateDef(buf []byte) (TemplateDef, error) {
 	}
 	payloadLen := len(buf) - 4
 	crcWant := binary.LittleEndian.Uint32(buf[payloadLen:])
-	crcGot := crc32.Checksum(buf[:payloadLen], crcTable)
+	crcGot := crc.Checksum(buf[:payloadLen])
 	if crcGot != crcWant {
 		return TemplateDef{}, ErrCorruptTemplateDef
 	}

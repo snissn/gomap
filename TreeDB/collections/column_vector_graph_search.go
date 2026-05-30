@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"math"
 	"sort"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 )
 
 // Keep modest scratch overgrowth to avoid realloc churn when callers vary
@@ -28,31 +31,138 @@ var (
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
+
+	// CandidateRows is an optional pre-composed row-domain filter over graph
+	// ordinals. It is intentionally internal until public metadata predicate
+	// planning is designed; callers that set it should compose predicate and
+	// visibility masks through typedcolumn.ComposeRowSelections first.
+	CandidateRows    typedcolumn.RowSelection
+	HasCandidateRows bool
+}
+
+type columnVectorGraphAdjacencySourceCounterSnapshot struct {
+	AdjacencyBytesRead                   uint64
+	AdjacencyDirectViews                 uint64
+	AdjacencyMmapDirectViews             uint64
+	AdjacencyHeapCopyTypedViews          uint64
+	AdjacencyScratchDecodes              uint64
+	AdjacencyTypedListDirectViews        uint64
+	AdjacencyTypedListMmapDirectViews    uint64
+	AdjacencyTypedListHeapCopyTypedViews uint64
+	AdjacencyTypedListScratchDecodes     uint64
+}
+
+func (c *columnVectorGraphAdjacencySourceCounterSnapshot) addOutcome(adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
+	if c == nil {
+		return
+	}
+	c.AdjacencyBytesRead += uint64(adjacencyLen) * 4
+	switch outcome {
+	case columnVectorGraphLayer0AdjacencySourceOutcomeMmapDirect:
+		c.AdjacencyDirectViews++
+		c.AdjacencyMmapDirectViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView:
+		c.AdjacencyHeapCopyTypedViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect:
+		c.AdjacencyDirectViews++
+		c.AdjacencyMmapDirectViews++
+		c.AdjacencyTypedListDirectViews++
+		c.AdjacencyTypedListMmapDirectViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView:
+		c.AdjacencyHeapCopyTypedViews++
+		c.AdjacencyTypedListHeapCopyTypedViews++
+	case columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode:
+		if adjacencyLen > 0 {
+			c.AdjacencyScratchDecodes++
+			c.AdjacencyTypedListScratchDecodes++
+		}
+	default:
+		if adjacencyLen > 0 {
+			c.AdjacencyScratchDecodes++
+		}
+	}
 }
 
 type columnVectorGraphNativeSearchStats struct {
-	Candidates              uint64
-	Edges                   uint64
-	CandidateFetches        uint64
-	ExpansionFetches        uint64
-	ResultFetches           uint64
-	ScoreBatches            uint64
-	OrdinalsGrouped         uint64
-	BlockViewHits           uint64
-	BlockViewMisses         uint64
-	BlockViewBuilds         uint64
-	AdjacencyExpansions     uint64
-	AdjacencyScratchDecodes uint64
-	AdjacencyDirectViews    uint64
+	CandidateRows                        uint64
+	Candidates                           uint64
+	Edges                                uint64
+	VisitedNodes                         uint64
+	VisitedEdges                         uint64
+	VectorBytesRead                      uint64
+	NormBytesRead                        uint64
+	AdjacencyBytesRead                   uint64
+	CandidateFetches                     uint64
+	ExpansionFetches                     uint64
+	ResultFetches                        uint64
+	ScoreBatches                         uint64
+	OrdinalsGrouped                      uint64
+	BlockViewHits                        uint64
+	BlockViewMisses                      uint64
+	BlockViewBuilds                      uint64
+	AdjacencyExpansions                  uint64
+	AdjacencyScratchDecodes              uint64
+	AdjacencyDirectViews                 uint64
+	AdjacencyMmapDirectViews             uint64
+	AdjacencyHeapCopyTypedViews          uint64
+	AdjacencyTypedListDirectViews        uint64
+	AdjacencyTypedListMmapDirectViews    uint64
+	AdjacencyTypedListHeapCopyTypedViews uint64
+	AdjacencyTypedListScratchDecodes     uint64
+	AdjacencyLegacyFallbacks             uint64
+	AdjacencySourceUnavailable           uint64
+	AdjacencySourceFallbacks             uint64
+	AdjacencyCertificationFailures       uint64
+	AdjacencyValidationFailures          uint64
+	AdjacencyAbsoluteOffsetUnaligned     uint64
+	AdjacencyActualPointerUnaligned      uint64
+	AdjacencyStaleHandles                uint64
+	NormDirectViews                      uint64
+	NormMmapDirectViews                  uint64
+	NormHeapCopyTypedViews               uint64
+	NormScratchDecodes                   uint64
+	NormSourceUnavailable                uint64
+	NormSourceFallbacks                  uint64
+	NormValidationFailures               uint64
+	NormAbsoluteOffsetUnaligned          uint64
+	NormActualPointerUnaligned           uint64
+	NormStaleHandles                     uint64
+	NormMappedBytes                      uint64
+	NormHeapCopyBytes                    uint64
+	NormDecodedBytes                     uint64
+	NormActiveHandles                    int64
+	NormDeniedResources                  uint64
+	VectorDirectViews                    uint64
+	VectorMmapDirectViews                uint64
+	VectorHeapCopyTypedViews             uint64
+	VectorScratchDecodes                 uint64
+	VectorCertificationFailures          uint64
+	VectorAbsoluteOffsetUnaligned        uint64
+	VectorActualPointerUnaligned         uint64
+	VectorStaleHandles                   uint64
+	TypedColumnMappedBytes               uint64
+	TypedColumnHeapCopyBytes             uint64
+	TypedColumnDecodedBytes              uint64
+	TypedColumnActiveHandles             int64
+	TypedColumnDeniedResources           uint64
+	TypedColumnFallbacks                 uint64
+	RowRefVectorSourceState              uint64
+	RowRefVectorSourceLegacyGraphIDs     uint64
+	RowRefStateResultRefs                uint64
+	RowRefStateSourceUnavailable         uint64
+	RowRefStateSourceFallbacks           uint64
+	ResultIDGraphFallbacks               uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
 // scratch. Callers must copy the returned result slice and any retained result
 // IDs before the next search with the same scratch.
 type columnVectorGraphNativeSearchResult struct {
-	Ordinal int
-	ID      []byte
-	Score   float64
+	Ordinal   int
+	ID        []byte
+	RowRef    DocumentRowRef
+	HasRowRef bool
+	Score     float64
 }
 
 type columnVectorGraphSearchCandidate struct {
@@ -75,6 +185,8 @@ type columnVectorGraphNativeSearchScratch struct {
 	idBuffers      [][]byte
 	resultOrder    []int
 	resultOrdinals []int
+	resultRowRefs  []DocumentRowRef
+	resultHasRefs  []bool
 	searchPlan     columnVectorGraphSearchPlan
 }
 
@@ -107,6 +219,8 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.idBuffers = resizeColumnVectorGraphNativeIDBuffersScratch(s.idBuffers, topK)
 	s.resultOrder = resizeColumnVectorGraphNativeIntScratch(s.resultOrder, topK)
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
+	s.resultRowRefs = resizeColumnVectorGraphNativeRowRefScratch(s.resultRowRefs, topK)
+	s.resultHasRefs = resizeColumnVectorGraphNativeBoolScratch(s.resultHasRefs, topK)
 	return nil
 }
 
@@ -161,6 +275,26 @@ func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint
 	return dst[:target]
 }
 
+func resizeColumnVectorGraphNativeRowRefScratch(dst []DocumentRowRef, target int) []DocumentRowRef {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]DocumentRowRef, target)
+	}
+	if len(dst) > 0 {
+		clear(dst)
+	}
+	return dst[:target]
+}
+
+func resizeColumnVectorGraphNativeBoolScratch(dst []bool, target int) []bool {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]bool, target)
+	}
+	if len(dst) > 0 {
+		clear(dst)
+	}
+	return dst[:target]
+}
+
 func resizeColumnVectorGraphNativeIDBuffersScratch(dst [][]byte, target int) [][]byte {
 	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
 		next := make([][]byte, target)
@@ -193,7 +327,7 @@ func columnVectorGraphNativeScratchCapOversized(capacity, target int) bool {
 // reader. It fetches only graph rows: document materialization stays outside
 // this kernel. Returned results and result IDs alias scratch-owned buffers and
 // must be copied before the next SearchCosine call with the same scratch.
-func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts columnVectorGraphNativeSearchOptions, scratch *columnVectorGraphNativeSearchScratch) (results []columnVectorGraphNativeSearchResult, stats columnVectorGraphNativeSearchStats, err error) {
 	if r == nil || r.reader == nil {
 		return nil, columnVectorGraphNativeSearchStats{}, errNilColumnVectorGraphPhysicalRowReader
 	}
@@ -212,6 +346,18 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if topK == 0 || rowCount == 0 {
 		return nil, columnVectorGraphNativeSearchStats{}, nil
 	}
+	candidateRows, hasCandidateRows, err := columnVectorGraphSearchCandidateRows(opts, rowCount)
+	if err != nil {
+		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q candidate rows: %w", r.def.Name, err)
+	}
+	candidateRowCount := rowCount
+	if hasCandidateRows {
+		candidateRowCount = candidateRows.Count()
+	}
+	stats.CandidateRows = uint64(candidateRowCount)
+	if candidateRowCount == 0 {
+		return nil, stats, nil
+	}
 	if scratch == nil {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q: %w", r.def.Name, errColumnVectorGraphNativeSearchScratchRequired)
 	}
@@ -219,8 +365,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q query norm: %w: %w", r.def.Name, errColumnVectorGraphNativeSearchQueryNormInvalid, err)
 	}
-	if topK > rowCount {
-		topK = rowCount
+	if topK > candidateRowCount {
+		topK = candidateRowCount
 	}
 	if efSearch == 0 {
 		efSearch = r.def.EfSearch
@@ -228,8 +374,8 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if efSearch < topK {
 		efSearch = topK
 	}
-	if efSearch > rowCount {
-		efSearch = rowCount
+	if efSearch > candidateRowCount {
+		efSearch = candidateRowCount
 	}
 	degree := r.def.M
 	if degree < 0 {
@@ -239,8 +385,17 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 
-	var stats columnVectorGraphNativeSearchStats
-	plan, err := scratch.prepareSearchPlan(r)
+	var plan *columnVectorGraphSearchPlan
+	defer func() {
+		r.populateTypedColumnVectorSearchStats(&stats)
+		r.populateInvNormStateSearchStats(&stats)
+		r.populateRowRefStateSearchStats(&stats)
+		r.populateLayer0AdjacencySourceSearchStats(&stats)
+		if plan != nil {
+			plan.scoreSource.populateConstructionStats(&stats)
+		}
+	}()
+	plan, err = scratch.prepareSearchPlan(r)
 	if err != nil {
 		return nil, stats, err
 	}
@@ -253,27 +408,40 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	}
 	visitMarks := scratch.visitMarks
 	visitEpoch := scratch.visitEpoch
-	visitMarks[0] = visitEpoch
-	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, 0, topK, scratch, &stats); err != nil {
+	entryOrdinal, ok := columnVectorGraphNextCandidateSeed(0, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
+	if !ok {
+		return scratch.results, stats, nil
+	}
+	maxLayer, err := r.maxAdjacencyLayer(plan, singleBlockView, entryOrdinal, scratch, &stats)
+	if err != nil {
+		return nil, stats, err
+	}
+	for layer := maxLayer; layer > 0; layer-- {
+		entryOrdinal, err = r.greedyNearestAtLayer(plan, singleBlockView, query, queryInvNorm, entryOrdinal, layer, candidateRows, hasCandidateRows, scratch, &stats)
+		if err != nil {
+			return nil, stats, err
+		}
+	}
+	visitMarks[entryOrdinal] = visitEpoch
+	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, topK, scratch, &stats); err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
 	for stats.Candidates < uint64(efSearch) {
 		candidate, ok := scratch.popFrontier()
 		if !ok {
-			for nextSeed < rowCount && scratch.visitMarks[nextSeed] == scratch.visitEpoch {
-				nextSeed++
-			}
-			if nextSeed >= rowCount {
+			seed, ok := columnVectorGraphNextCandidateSeed(nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
+			if !ok {
 				break
 			}
-			visitMarks[nextSeed] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, nextSeed, topK, scratch, &stats); err != nil {
+			nextSeed = seed + 1
+			visitMarks[seed] = visitEpoch
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, &stats); err != nil {
 				return nil, stats, err
 			}
 			continue
 		}
-		adjacency, err := r.expandCandidateAdjacency(plan, singleBlockView, candidate.ordinal, scratch, &stats)
+		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, &stats)
 		if err != nil {
 			return nil, stats, err
 		}
@@ -282,11 +450,16 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				break
 			}
 			stats.Edges++
+			stats.VisitedEdges++
 			if uint64(neighbor) >= uint64(rowCount) {
 				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
 			neighborOrdinal := int(neighbor)
 			if visitMarks[neighborOrdinal] == visitEpoch {
+				continue
+			}
+			if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+				visitMarks[neighborOrdinal] = visitEpoch
 				continue
 			}
 			visitMarks[neighborOrdinal] = visitEpoch
@@ -305,6 +478,103 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	return scratch.results, stats, nil
 }
 
+func columnVectorGraphSearchCandidateRows(opts columnVectorGraphNativeSearchOptions, rowCount int) (typedcolumn.RowSelection, bool, error) {
+	if !opts.HasCandidateRows {
+		return typedcolumn.RowSelection{}, false, nil
+	}
+	if opts.CandidateRows.Rows() != rowCount {
+		return typedcolumn.RowSelection{}, false, fmt.Errorf("selection rows=%d want graph rows=%d", opts.CandidateRows.Rows(), rowCount)
+	}
+	return opts.CandidateRows, true, nil
+}
+
+func composeColumnVectorGraphCandidateRowSelection(rowCount int, predicate *typedcolumn.RowSelection, visibility *typedcolumn.RowSelection, scratch *typedcolumn.RowSelectionScratch) (typedcolumn.RowSelection, bool, error) {
+	if predicate == nil && visibility == nil {
+		selection, err := typedcolumn.NewAllRowSelection(rowCount)
+		return selection, false, err
+	}
+	selection, err := typedcolumn.ComposeRowSelectionsInto(rowCount, typedcolumn.RowSelectionComponents{Predicate: predicate, Visibility: visibility}, scratch)
+	return selection, true, err
+}
+
+func columnVectorGraphCandidateRowAllowed(selection typedcolumn.RowSelection, hasSelection bool, ordinal int) bool {
+	return !hasSelection || selection.Contains(ordinal)
+}
+
+func columnVectorGraphNextCandidateSeed(start int, rowCount int, selection typedcolumn.RowSelection, hasSelection bool, visitMarks []uint64, visitEpoch uint64) (int, bool) {
+	if start < 0 {
+		start = 0
+	}
+	for ordinal := start; ordinal < rowCount; ordinal++ {
+		if len(visitMarks) > ordinal && visitMarks[ordinal] == visitEpoch {
+			continue
+		}
+		if !columnVectorGraphCandidateRowAllowed(selection, hasSelection, ordinal) {
+			continue
+		}
+		return ordinal, true
+	}
+	return 0, false
+}
+
+func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	if layer, _, counters, fallbackReason, ok := r.maxDirectAdjacencyLayerForOrdinal(ordinal); ok {
+		recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
+		return layer, nil
+	} else if fallbackReason != "" {
+		recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
+		recordColumnVectorGraphAdjacencyFallbackReasonStats(stats, fallbackReason)
+		if stats != nil {
+			stats.AdjacencySourceFallbacks++
+		}
+	}
+	adjacency, direct, err := r.rawCandidateAdjacencyWithDirectView(plan, singleBlockView, ordinal, scratch)
+	if err != nil {
+		return 0, err
+	}
+	recordColumnVectorGraphAdjacencySourceStats(stats, len(adjacency), direct)
+	return columnVectorGraphAdjacencyMaxLayer(adjacency)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, entryOrdinal int, layer int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+	best := entryOrdinal
+	bestScore, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, best, scratch, stats)
+	if err != nil {
+		return 0, err
+	}
+	changed := true
+	for changed {
+		changed = false
+		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, best, layer, scratch, stats)
+		if err != nil {
+			return 0, err
+		}
+		for i, neighbor := range adjacency {
+			if stats != nil {
+				stats.Edges++
+				stats.VisitedEdges++
+			}
+			if uint64(neighbor) >= uint64(r.RowCount()) {
+				return 0, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, best, i, neighbor, r.RowCount(), errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+			}
+			neighborOrdinal := int(neighbor)
+			if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+				continue
+			}
+			score, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, scratch, stats)
+			if err != nil {
+				return 0, err
+			}
+			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+				best = neighborOrdinal
+				bestScore = score
+				changed = true
+			}
+		}
+	}
+	return best, nil
+}
+
 func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
 	n := len(scratch.top)
 	scratch.resultOrder = scratch.resultOrder[:n]
@@ -316,6 +586,10 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 	for fetchPos, topIndex := range scratch.resultOrder {
 		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
 	}
+	scratch.resultRowRefs = scratch.resultRowRefs[:n]
+	scratch.resultHasRefs = scratch.resultHasRefs[:n]
+	clear(scratch.resultRowRefs)
+	clear(scratch.resultHasRefs)
 	for resultPos, topIndex := range scratch.resultOrder {
 		ordinal := scratch.resultOrdinals[resultPos]
 		view := singleBlockView
@@ -339,16 +613,25 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 		}
 		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(id)]
 		copy(scratch.idBuffers[topIndex], id)
+		if rowRef, ok := r.rowRefForOrdinal(ordinal); ok {
+			rowRef.DocumentID = scratch.idBuffers[topIndex]
+			scratch.resultRowRefs[topIndex] = rowRef
+			scratch.resultHasRefs[topIndex] = true
+			stats.RowRefStateResultRefs++
+		}
 	}
 	stats.ResultFetches += uint64(n)
+	stats.ResultIDGraphFallbacks += uint64(n)
 	stats.BlockViewHits = plan.hits
 	stats.BlockViewMisses = plan.misses
 	stats.BlockViewBuilds = plan.builds
 	for i, candidate := range scratch.top {
 		scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
-			Ordinal: candidate.ordinal,
-			ID:      scratch.idBuffers[i],
-			Score:   candidate.score,
+			Ordinal:   candidate.ordinal,
+			ID:        scratch.idBuffers[i],
+			RowRef:    scratch.resultRowRefs[i],
+			HasRowRef: scratch.resultHasRefs[i],
+			Score:     candidate.score,
 		})
 	}
 	return nil
@@ -374,32 +657,9 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
-	view := singleBlockView
-	rowIndex := ordinal
-	if view == nil {
-		refView, ref, err := plan.blockViewForOrdinal(ordinal)
-		if err != nil {
-			return err
-		}
-		view = refView
-		rowIndex = ref.rowIndex
-	}
-	stats.ScoreBatches++
-	stats.OrdinalsGrouped++
-	stats.BlockViewHits = plan.hits
-	stats.BlockViewMisses = plan.misses
-	stats.BlockViewBuilds = plan.builds
-	scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
-	vector, vectorScratch := view.vectorUnchecked(rowIndex, scratch.scoreScratch.Float32Values)
-	scratch.scoreScratch.Float32Values = vectorScratch
-	invNorm := view.invNormUnchecked(rowIndex)
-	stats.CandidateFetches++
-	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
+	score, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
 	if err != nil {
 		return err
-	}
-	if math.IsNaN(score) || math.IsInf(score, 0) {
-		return fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", r.def.Name, ordinal)
 	}
 	stats.Candidates++
 	candidate := columnVectorGraphSearchCandidate{
@@ -411,13 +671,286 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 	return nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacency(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]uint32, error) {
+func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if plan != nil && plan.scoreSource.reader != nil {
+		return plan.scoreSource.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
+	}
+	return r.scoreOrdinalLegacy(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
 	view := singleBlockView
 	rowIndex := ordinal
 	if view == nil {
 		refView, ref, err := plan.blockViewForOrdinal(ordinal)
 		if err != nil {
-			return nil, err
+			return 0, err
+		}
+		view = refView
+		rowIndex = ref.rowIndex
+	}
+	if stats != nil {
+		stats.ScoreBatches++
+		stats.OrdinalsGrouped++
+		stats.VisitedNodes++
+		stats.BlockViewHits = plan.hits
+		stats.BlockViewMisses = plan.misses
+		stats.BlockViewBuilds = plan.builds
+	}
+	var vector []float32
+	if typedVector, outcome, fallbackReason, ok := r.typedVectorForOrdinal(ordinal); ok {
+		vector = typedVector
+		recordColumnVectorGraphVectorSourceStats(stats, outcome, fallbackReason)
+	} else {
+		scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
+		var vectorScratch []float32
+		vector, vectorScratch = view.vectorUnchecked(rowIndex, scratch.scoreScratch.Float32Values)
+		scratch.scoreScratch.Float32Values = vectorScratch
+		if stats != nil {
+			stats.VectorScratchDecodes++
+		}
+	}
+	invNorm, normOutcome, normFallbackReason, normOK := r.invNormForOrdinal(ordinal)
+	if normOK {
+		recordColumnVectorGraphInvNormSourceStats(stats, normOutcome, normFallbackReason)
+	} else {
+		if normFallbackReason != "" {
+			recordColumnVectorGraphInvNormFallbackReasonStats(stats, normFallbackReason)
+			if stats != nil {
+				stats.NormSourceFallbacks++
+			}
+		}
+		var err error
+		invNorm, err = view.legacyInvNorm(rowIndex)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if stats != nil {
+		stats.CandidateFetches++
+		stats.VectorBytesRead += uint64(len(vector)) * 4
+		stats.NormBytesRead += 4
+	}
+	score, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, vector, invNorm)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		return 0, fmt.Errorf("collections: column_graph %q candidate ordinal=%d cosine score is not finite", r.def.Name, ordinal)
+	}
+	return score, nil
+}
+
+func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]uint32, error) {
+	if layerAdjacency, outcome, fallbackReason, ok := r.directAdjacencyLayerForOrdinal(ordinal, layer); ok {
+		if stats != nil {
+			stats.ExpansionFetches++
+			stats.AdjacencyExpansions++
+			recordColumnVectorGraphAdjacencySourceOutcomeStats(stats, len(layerAdjacency), outcome)
+			stats.BlockViewHits = plan.hits
+			stats.BlockViewMisses = plan.misses
+			stats.BlockViewBuilds = plan.builds
+		}
+		return layerAdjacency, nil
+	} else if fallbackReason != "" {
+		recordColumnVectorGraphAdjacencyFallbackReasonStats(stats, fallbackReason)
+		if stats != nil {
+			stats.AdjacencySourceFallbacks++
+		}
+	}
+	adjacency, direct, err := r.rawCandidateAdjacencyWithDirectView(plan, singleBlockView, ordinal, scratch)
+	if err != nil {
+		return nil, err
+	}
+	layerAdjacency, err := columnVectorGraphAdjacencyLayer(adjacency, layer)
+	if err != nil {
+		return nil, fmt.Errorf("collections: column_graph %q ordinal=%d malformed adjacency layer=%d: %w", r.def.Name, ordinal, layer, err)
+	}
+	if stats != nil {
+		stats.ExpansionFetches++
+		stats.AdjacencyExpansions++
+		recordColumnVectorGraphAdjacencySourceStats(stats, len(adjacency), direct)
+		stats.BlockViewHits = plan.hits
+		stats.BlockViewMisses = plan.misses
+		stats.BlockViewBuilds = plan.builds
+	}
+	return layerAdjacency, nil
+}
+
+func recordColumnVectorGraphInvNormSourceStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphInvNormStateOutcome, fallbackReason typeddecode.Reason) {
+	if stats == nil {
+		return
+	}
+	switch outcome {
+	case columnVectorGraphInvNormStateOutcomeMmapDirect:
+		stats.NormMmapDirectViews++
+		stats.NormDirectViews++
+	case columnVectorGraphInvNormStateOutcomeHeapCopyTypedView:
+		stats.NormHeapCopyTypedViews++
+	case columnVectorGraphInvNormStateOutcomeScratchDecode:
+		stats.NormScratchDecodes++
+	default:
+		stats.NormScratchDecodes++
+	}
+	recordColumnVectorGraphInvNormFallbackReasonStats(stats, fallbackReason)
+}
+
+func recordColumnVectorGraphInvNormFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
+	if stats == nil || reason == "" || reason == typeddecode.ReasonSupported {
+		return
+	}
+	switch reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonUnaligned:
+		stats.NormAbsoluteOffsetUnaligned++
+	case typeddecode.ReasonActualPointerUnaligned:
+		stats.NormActualPointerUnaligned++
+	case typeddecode.ReasonNilHandle, typeddecode.ReasonStaleHandle:
+		stats.NormStaleHandles++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonValidationFailed:
+		stats.NormValidationFailures++
+	}
+}
+
+func recordColumnVectorGraphVectorSourceStats(stats *columnVectorGraphNativeSearchStats, outcome columnVectorGraphTypedColumnVectorOutcome, fallbackReason typeddecode.Reason) {
+	if stats == nil {
+		return
+	}
+	switch outcome {
+	case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+		stats.VectorMmapDirectViews++
+		stats.VectorDirectViews++
+	case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView:
+		stats.VectorHeapCopyTypedViews++
+	case columnVectorGraphTypedColumnVectorOutcomeScratchDecode:
+		stats.VectorScratchDecodes++
+	default:
+		stats.VectorScratchDecodes++
+	}
+	recordColumnVectorGraphVectorFallbackReasonStats(stats, fallbackReason)
+}
+
+func recordColumnVectorGraphVectorFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
+	if stats == nil || reason == "" || reason == typeddecode.ReasonSupported {
+		return
+	}
+	switch reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonUnaligned:
+		stats.VectorAbsoluteOffsetUnaligned++
+	case typeddecode.ReasonActualPointerUnaligned:
+		stats.VectorActualPointerUnaligned++
+	case typeddecode.ReasonStaleHandle:
+		stats.VectorStaleHandles++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonValidationFailed:
+		stats.VectorCertificationFailures++
+	}
+}
+
+func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, direct bool) {
+	if stats == nil {
+		return
+	}
+	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
+	stats.AdjacencyLegacyFallbacks++
+	if adjacencyLen == 0 {
+		return
+	}
+	if direct {
+		stats.AdjacencyDirectViews++
+		return
+	}
+	stats.AdjacencyScratchDecodes++
+}
+
+func recordColumnVectorGraphAdjacencySourceOutcomeStats(stats *columnVectorGraphNativeSearchStats, adjacencyLen int, outcome columnVectorGraphLayer0AdjacencySourceOutcome) {
+	var counters columnVectorGraphAdjacencySourceCounterSnapshot
+	counters.addOutcome(adjacencyLen, outcome)
+	recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
+}
+
+func recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats *columnVectorGraphNativeSearchStats, counters columnVectorGraphAdjacencySourceCounterSnapshot) {
+	if stats == nil {
+		return
+	}
+	stats.AdjacencyBytesRead += counters.AdjacencyBytesRead
+	stats.AdjacencyDirectViews += counters.AdjacencyDirectViews
+	stats.AdjacencyMmapDirectViews += counters.AdjacencyMmapDirectViews
+	stats.AdjacencyHeapCopyTypedViews += counters.AdjacencyHeapCopyTypedViews
+	stats.AdjacencyScratchDecodes += counters.AdjacencyScratchDecodes
+	stats.AdjacencyTypedListDirectViews += counters.AdjacencyTypedListDirectViews
+	stats.AdjacencyTypedListMmapDirectViews += counters.AdjacencyTypedListMmapDirectViews
+	stats.AdjacencyTypedListHeapCopyTypedViews += counters.AdjacencyTypedListHeapCopyTypedViews
+	stats.AdjacencyTypedListScratchDecodes += counters.AdjacencyTypedListScratchDecodes
+}
+
+func recordColumnVectorGraphAdjacencyFallbackReasonStats(stats *columnVectorGraphNativeSearchStats, reason typeddecode.Reason) {
+	if stats == nil || reason == "" || reason == typeddecode.ReasonSupported {
+		return
+	}
+	switch reason {
+	case typeddecode.ReasonAbsoluteOffsetUnaligned, typeddecode.ReasonUnaligned:
+		stats.AdjacencyAbsoluteOffsetUnaligned++
+	case typeddecode.ReasonActualPointerUnaligned:
+		stats.AdjacencyActualPointerUnaligned++
+	case typeddecode.ReasonNilHandle, typeddecode.ReasonStaleHandle:
+		stats.AdjacencyStaleHandles++
+	case typeddecode.ReasonValidationFailed:
+		stats.AdjacencyValidationFailures++
+	case typeddecode.ReasonNotWriterCertified, typeddecode.ReasonWrongEndian, typeddecode.ReasonLengthMultipleMismatch, typeddecode.ReasonPayloadLengthMismatch, typeddecode.ReasonRowCountMismatch, typeddecode.ReasonDimensionMismatch, typeddecode.ReasonCompressed, typeddecode.ReasonNullableWrapper, typeddecode.ReasonOffsetsCountMismatch, typeddecode.ReasonOffsetsStartMismatch, typeddecode.ReasonOffsetsNonMonotonic, typeddecode.ReasonOffsetsGoIntRange, typeddecode.ReasonValuesLengthMismatch:
+		stats.AdjacencyCertificationFailures++
+	}
+}
+
+func (r *columnVectorGraphPhysicalRowReader) maxDirectAdjacencyLayerForOrdinal(ordinal int) (int, []uint32, columnVectorGraphAdjacencySourceCounterSnapshot, typeddecode.Reason, bool) {
+	if r == nil || r.adjacencyLayerSources == nil || !r.adjacencyLayerSources.allLayers {
+		return 0, nil, columnVectorGraphAdjacencySourceCounterSnapshot{}, "", false
+	}
+	return r.adjacencyLayerSources.MaxLayerForOrdinal(ordinal)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) directAdjacencyLayerForOrdinal(ordinal int, layer int) ([]uint32, columnVectorGraphLayer0AdjacencySourceOutcome, typeddecode.Reason, bool) {
+	if r == nil {
+		return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
+	}
+	if r.adjacencyLayerSources != nil {
+		return r.adjacencyLayerSources.Neighbors(layer, ordinal)
+	}
+	if layer == 0 && r.layer0AdjacencySource != nil {
+		return r.layer0AdjacencySource.Neighbors(ordinal)
+	}
+	return nil, columnVectorGraphLayer0AdjacencySourceOutcomeUnknown, "", false
+}
+
+func (r *columnVectorGraphPhysicalRowReader) layer0AdjacencyForOrdinal(ordinal int) ([]uint32, columnVectorGraphLayer0AdjacencySourceOutcome, typeddecode.Reason, bool) {
+	return r.directAdjacencyLayerForOrdinal(ordinal, 0)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) populateLayer0AdjacencySourceSearchStats(stats *columnVectorGraphNativeSearchStats) {
+	if r == nil || stats == nil || r.adjacencyLayerSources != nil || r.layer0AdjacencySource != nil {
+		return
+	}
+	stats.AdjacencySourceUnavailable = 1
+	if r.layer0AdjacencySourceUnavailable {
+		stats.AdjacencySourceFallbacks = 1
+		return
+	}
+	if r.layer0AdjacencySourceFallbackReason != "" {
+		stats.AdjacencySourceFallbacks = 1
+		recordColumnVectorGraphAdjacencyFallbackReasonStats(stats, r.layer0AdjacencySourceFallbackReason)
+	}
+}
+
+func (r *columnVectorGraphPhysicalRowReader) rawCandidateAdjacency(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch) ([]uint32, error) {
+	adjacency, _, err := r.rawCandidateAdjacencyWithDirectView(plan, singleBlockView, ordinal, scratch)
+	return adjacency, err
+}
+
+func (r *columnVectorGraphPhysicalRowReader) rawCandidateAdjacencyWithDirectView(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch) ([]uint32, bool, error) {
+	view := singleBlockView
+	rowIndex := ordinal
+	if view == nil {
+		refView, ref, err := plan.blockViewForOrdinal(ordinal)
+		if err != nil {
+			return nil, false, err
 		}
 		view = refView
 		rowIndex = ref.rowIndex
@@ -425,20 +958,10 @@ func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacency(plan *colu
 	scratch.expandScratch.Uint32Values = scratch.expandScratch.Uint32Values[:0]
 	adjacency, adjacencyScratch, direct, err := view.adjacency(rowIndex, scratch.expandScratch.Uint32Values)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	scratch.expandScratch.Uint32Values = adjacencyScratch
-	stats.ExpansionFetches++
-	stats.AdjacencyExpansions++
-	if direct {
-		stats.AdjacencyDirectViews++
-	} else {
-		stats.AdjacencyScratchDecodes++
-	}
-	stats.BlockViewHits = plan.hits
-	stats.BlockViewMisses = plan.misses
-	stats.BlockViewBuilds = plan.builds
-	return adjacency, nil
+	return adjacency, direct, nil
 }
 
 func (s *columnVectorGraphNativeSearchScratch) markVisited(ordinal int) bool {

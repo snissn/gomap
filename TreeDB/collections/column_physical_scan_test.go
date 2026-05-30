@@ -151,7 +151,7 @@ func columnManifestPartRecordBytesOffsetForScanTestM1634(t testing.TB, raw []byt
 	_ = cur.u64()         // offset
 	_ = cur.u64()         // length
 	_ = cur.u64()         // checksum
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		_ = cur.u64() // rows
 	}
 	if cur.err != nil {
@@ -744,7 +744,12 @@ func TestColumnPublishRejectsTamperedExistingManifestBeforeCarryM13A(t *testing.
 	tamperedCount := 0
 	for i := range tampered {
 		if bytes.HasPrefix(tampered[i].key, []byte(columnManifestPartRecordPrefix)) {
-			tampered[i].value[len(tampered[i].value)-1] ^= 0x01
+			badRecord := bytes.Clone(tampered[i].value)
+			bytesOffset := columnManifestPartRecordBytesOffsetForScanTestM1634(t, badRecord)
+			publishIDOffset := bytesOffset + 8
+			publishID := binary.BigEndian.Uint64(badRecord[publishIDOffset:])
+			binary.BigEndian.PutUint64(badRecord[publishIDOffset:], publishID+1)
+			tampered[i].value = badRecord
 			tamperedCount++
 			break
 		}
@@ -879,7 +884,7 @@ func TestColumnManifestSnapshotSidecarFilterStillValidatesSkippedRecordsM1634(t 
 	}
 	defer func() { _ = snap.Close() }()
 
-	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+	_, _, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
 		snap,
 		rootID,
 		*cfg,
@@ -972,7 +977,7 @@ func TestColumnManifestScanRejectsHugeExpectedPartsWithoutPreallocM1634(t *testi
 	if err == nil || !strings.Contains(err.Error(), "invalid column manifest part count=1 want 18446744073709551615") {
 		t.Fatalf("loadColumnManifestPlannerCapabilitiesForScan err=%v want huge part-count mismatch", err)
 	}
-	_, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
+	_, _, _, _, _, _, err = loadColumnManifestSnapshotViewForScanFromRootWithSidecars(
 		snap,
 		rootID,
 		*cfg,

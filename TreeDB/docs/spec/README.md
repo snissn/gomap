@@ -55,6 +55,19 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Document Map
 
+### Practical guides (non-normative)
+
+- `TreeDB/docs/guides/README.md`
+  - index for typed-storage quickstarts, performance profiling, and vector typed-column guidance.
+- `TreeDB/docs/guides/collections-quickstart.md`
+  - runnable hybrid collection smoke plus document-only, typed-row, typed-column, and hybrid layout examples.
+- `TreeDB/docs/guides/typed-storage-performance.md`
+  - storage-mode decision guide, aggregate benchmark/profile commands, counter interpretation, troubleshooting, and playbooks.
+- `TreeDB/docs/guides/vector-search-typed-column.md`
+  - dense vector typed-column placement, column graph demo/benchmarks, search-vs-fetch timing boundaries, and caveats.
+
+### Canonical specs
+
 - `TreeDB/docs/spec/architecture.md`
   - system model, components, directory layout, side stores, lock model.
 - `TreeDB/docs/spec/contracts.md`
@@ -150,9 +163,71 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     fixtures, canonical validation, digest stability, benchmarks, and deferred
     Raft apply work.
 - `TreeDB/docs/spec/column-graph-native-reconstruction-inventory.md`
-  - issue #1646 V0 inventory for rebuilding column-store-native vector graph
-    search on generic column-store reader/cache APIs without carrying forward
-    decoded full-graph behavior as the product path.
+  - issue #1646 V0 inventory for rebuilding legacy native vector graph search
+    on typed-storage reader/cache APIs without carrying forward decoded
+    full-graph behavior as the product path.
+- `TreeDB/docs/spec/typed-storage-naming.md`
+  - issue #1750 PR 0 naming scaffold establishing `typed storage` as the
+    umbrella for typed-row and typed-column physical storage, with legacy
+    compatibility-name inventory and derived-accelerator classifications.
+- `TreeDB/docs/spec/typed-column-transplant.md`
+  - issue #1753 implementation note for the non-authoritative
+    `TreeDB/internal/typedcolumn` data-plane transplant from
+    `experiments/colgranule`.
+- `TreeDB/docs/spec/typed-column-adapter.md`
+  - issues #1754/#1755/#1756 implementation note for the adapter from TreeDB
+    typed-storage field metadata and #1736 mapped resources to the transplanted
+    typed-column data plane, including opt-in durable scalar and fixed-dimension
+    vector publication and reconstruction.
+- `TreeDB/docs/spec/typed-storage-closeout-1758.md`
+  - issue #1758 closeout evidence for the typed-storage stack through #1757/#1781,
+    including child-ticket status, benchmark/test evidence, naming audit
+    classification, and the #1736 COW-maintenance handoff facts.
+- `TreeDB/docs/spec/typed-asset-maintenance-1788.md`
+  - issue #1788 implementation contract for typed-row plus typed-column COW
+    reachability, active mappedresource pin protection, GC, and rewrite.
+- `TreeDB/docs/spec/typed-column-schema-evolution.md`
+  - issue #1789 pre-alpha policy for typed-column image/descriptor/manifest
+    schema evolution, fail-closed mismatch handling, rebuild-vs-migrate
+    decisions, future migration tooling requirements, and allocation/performance
+    evidence for format changes.
+- `TreeDB/docs/spec/typed-column-layout-capabilities.md`
+  - issue #1838 layout/codec capability contract keyed by logical type,
+    physical typedcolumn type, encoding, compression, and wrappers; documents
+    optional raw int64, validation boundaries, direct-view eligibility metadata,
+    and unsupported/fallback reason codes.
+- `TreeDB/docs/spec/typed-column-direct-view-alignment.md`
+  - issue #1893 aligned fixed-width direct-view safety contract, all-type/storage
+    owner classification, absolute-offset alignment rule, fallback/deferred
+    policy, counter vocabulary, and benchmark harness expectations for #1886.
+- `TreeDB/docs/spec/typed-column-direct-view-closeout-1899.md`
+  - issue #1899 final #1886 closeout matrix and evidence structure for
+    typed-column fixed-width scalar/vector direct-view coverage, with physical
+    row assets deferred to #1897 and adjacency direct views deferred to #1901.
+- `TreeDB/docs/spec/typed-column-production-jsonbench-plan.md`
+  - planning note for promoting `experiments/colgranule` sort order, granule
+    metadata, codecs/compression, q1-q5 kernels, q2 real-predicate grouped
+    distinct execution, aggregate metadata, multipart visibility, lifecycle
+    accounting, and JSONBench reporting into production `TreeDB/collections`,
+    with direct query performance as the first-class target.
+- `TreeDB/docs/spec/typed-column-uint32-list-adjacency-quarantine.md`
+  - issue #1989 quarantine/removal contract for using vector-index state
+    `uint32_list` adjacency on the primary path while isolating legacy
+    graph-specific adjacency-source storage.
+- `TreeDB/docs/spec/typed-column-list-adjacency-benchmark-1990.md`
+  - issue #1990 benchmark/profile closeout proving corrected vector-index state
+    `uint32_list` / `raw_uint32_offsets_list` adjacency preserves or improves
+    integrated search while removing legacy adjacency-source scratch decodes.
+- `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`
+  - issue #1984 first-class `uint32_list` semantic contract, including
+    `uint32[]` / conceptual `Array(UInt32)` aliases, `raw_uint32_offsets_list`
+    as the physical encoding, `rows+1` sentinel offsets, validation invariants,
+    length-only offset-substream behavior, v1 deferrals, and legacy
+    `adjacency_list` classification.
+- `TreeDB/docs/spec/vector-index-state-manifest.md`
+  - issue #1986 v1 vector-index state control-record contract: record home,
+    index/base identity, typed-column asset refs by logical type plus physical
+    encoding, fail-closed validation, and legacy graph-record fallback policy.
 
 ## Canonical Ownership
 
@@ -165,7 +240,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Current recovery algorithm | `recovery.md` | `storage-format.md`, `verification.md`. |
 | Durable bytes and file names | `storage-format.md` | `recovery.md`, `architecture.md`, `backup-restore.md`. |
 | Value-log and split leaf-log lifecycle | `value-log-lifecycle.md` | `storage-format.md`, `user-command-wal.md`, `collection-wal-durability-plan.md` for historical external-ref context. |
-| Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future column-store docs. |
+| Command-WAL external refs and side files | `user-command-wal.md` | `value-log-lifecycle.md`, future typed-storage docs. |
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
@@ -175,9 +250,25 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 TreeDB-wide storage terms (`value log`, `leaf log`, `commit log`,
 `ValuePtr`) are owned by `storage-format.md` and `value-log-lifecycle.md`.
-User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`,
-`WAL-supported`, `WAL-rejected`, `WAL-off-only`) are owned by
-`user-command-wal.md`. Deprecated collection root-delta WAL terms
+Typed physical storage vocabulary (`typed storage`, `typed-row storage`,
+`typed-column storage`, `typed_row_asset`, `typed_column_part`,
+`retained_document`, `document_payload`, and `derived_accelerator`) is owned by
+`typed-storage-naming.md`; the #1753 typed-column transplant scope is recorded
+in `typed-column-transplant.md`, the #1754/#1755 adapter/publication seam is
+recorded in `typed-column-adapter.md`, the #1758 closeout evidence/handoff is
+recorded in `typed-storage-closeout-1758.md`, and current typed-row plus
+typed-column maintenance behavior is recorded in
+`typed-asset-maintenance-1788.md`, typed-column schema/version evolution
+policy is owned by `typed-column-schema-evolution.md`, #1886 direct-view
+closeout evidence is owned by `typed-column-direct-view-closeout-1899.md`, and
+`uint32_list` adjacency quarantine/audit ownership is recorded in
+`typed-column-uint32-list-adjacency-quarantine.md`; first-class
+`uint32_list` logical semantics are owned by
+`typed-column-uint32-list-semantics.md` until #1985 lands runtime primitive
+support. Vector-index derived-state control records and typed-column asset ref
+identity are owned by `vector-index-state-manifest.md`.
+User-command WAL lifecycle terms (`CommandEnvelope`, `LSN`, `AppliedLSN`, `WAL-supported`,
+`WAL-rejected`, `WAL-off-only`) are owned by `user-command-wal.md`. Deprecated collection root-delta WAL terms
 (`CollectionSeq`, `WALLSN`, `root group`, `applied watermark`) remain defined in
 `collection-wal-durability-plan.md` for historical design context only.
 
@@ -191,7 +282,10 @@ blocking questions live:
 - Native-wire protocol questions: `native-wire-protocol.md`.
 - Raft sequencing and local recoverability questions:
   `native-query-raft-roadmap.md`.
-- Column-store persistence questions:
+- Typed-storage persistence and historical roadmap questions:
+  `typed-storage-naming.md`, `typed-column-transplant.md`,
+  `typed-column-adapter.md`, `typed-storage-closeout-1758.md`,
+  `typed-asset-maintenance-1788.md`, `typed-column-schema-evolution.md`, and
   `GOMAP_TREEDB_COLUMN_STORE_RFC.md`.
 
 A blocking implementation question must be listed in this index and in its
@@ -209,6 +303,7 @@ Docs lint treats this list as a manifest:
 - `TreeDB/docs/spec/write-path-and-durability.md`
 - `TreeDB/docs/spec/recovery.md`
 - `TreeDB/docs/spec/verification.md`
+- `TreeDB/docs/spec/typed-column-schema-evolution.md`
 
 ## Relationship to Existing Docs
 

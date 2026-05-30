@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -34,12 +35,27 @@ const (
 	ColumnPublishOperationDelete ColumnPublishOperation = "delete"
 )
 
+type ColumnManifestPartRole string
+
+const (
+	// ColumnManifestPartRoleBase identifies a complete base part in the typed-storage lineage.
+	ColumnManifestPartRoleBase ColumnManifestPartRole = "base"
+	// ColumnManifestPartRoleDelta identifies a mutation/append delta part layered over older bases/deltas.
+	ColumnManifestPartRoleDelta ColumnManifestPartRole = "delta"
+	// ColumnManifestPartRoleTombstone identifies a typed-row tombstone part with no typed-column payload.
+	ColumnManifestPartRoleTombstone ColumnManifestPartRole = "tombstone"
+)
+
 // ColumnAssetKind identifies the storage format behind a column asset ref.
 type ColumnAssetKind string
 
 const (
-	// ColumnAssetKindTCS1PartImage references an immutable TCS1 part image.
+	// ColumnAssetKindTCS1PartImage references an immutable typed-row TCS1/TCPA
+	// part image retained for compatibility.
 	ColumnAssetKindTCS1PartImage ColumnAssetKind = "tcs1_part_image"
+	// ColumnAssetKindTCS1TypedColumnPart references an immutable sectioned
+	// typed-column TCS1 part image.
+	ColumnAssetKindTCS1TypedColumnPart ColumnAssetKind = "tcs1_typed_column_part"
 	// ColumnAssetKindTCS1AggregateMetadata references grouped aggregate metadata
 	// stored as a typed column asset beside physical part images.
 	ColumnAssetKindTCS1AggregateMetadata ColumnAssetKind = "tcs1_aggregate_metadata"
@@ -73,6 +89,8 @@ type ColumnPreparedAsset struct {
 	PublishID    uint64
 	GenerationID uint64
 	Reason       string
+	PartRole     ColumnManifestPartRole
+	SortKey      string
 }
 
 // ColumnPublishPlanInput contains the normalized collection state and stage
@@ -857,7 +875,7 @@ func validateColumnPublishClosureMatchesPrepared(prepared ColumnPublishPreparedA
 	}
 	matchesOrder := true
 	for i := range prepared.Assets {
-		if closure.PreparedAssets[i] != prepared.Assets[i] {
+		if !columnPreparedAssetsEqual(closure.PreparedAssets[i], prepared.Assets[i]) {
 			matchesOrder = false
 			break
 		}
@@ -886,6 +904,12 @@ type columnPreparedAssetMatchKey struct {
 	Bytes        int64
 	PublishID    uint64
 	GenerationID uint64
+	PartRole     ColumnManifestPartRole
+	SortKey      string
+}
+
+func columnPreparedAssetsEqual(left, right ColumnPreparedAsset) bool {
+	return left == right
 }
 
 func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAssetMatchKey {
@@ -895,7 +919,35 @@ func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAsse
 		Bytes:        asset.Bytes,
 		PublishID:    asset.PublishID,
 		GenerationID: asset.GenerationID,
+		PartRole:     asset.PartRole,
+		SortKey:      asset.SortKey,
 	}
+}
+
+func columnSortKeyMatchString(sortKeys []ColumnSortKey) string {
+	if len(sortKeys) == 0 {
+		return ""
+	}
+	var out string
+	for _, sortKey := range sortKeys {
+		out += sortKey.Column + "\x00" + string(sortKey.Direction) + "\x00"
+	}
+	return out
+}
+
+func columnSortKeysFromMatchString(raw string) ([]ColumnSortKey, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, "\x00")
+	if len(parts) < 3 || parts[len(parts)-1] != "" || (len(parts)-1)%2 != 0 {
+		return nil, fmt.Errorf("collections: malformed column sort key metadata")
+	}
+	out := make([]ColumnSortKey, 0, (len(parts)-1)/2)
+	for i := 0; i < len(parts)-1; i += 2 {
+		out = append(out, ColumnSortKey{Column: parts[i], Direction: ColumnSortDirection(parts[i+1])})
+	}
+	return out, nil
 }
 
 func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
@@ -911,12 +963,83 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if asset.Bytes != asset.Ref.Length {
 		return fmt.Errorf("collections: column prepared asset bytes=%d does not match ref length=%d", asset.Bytes, asset.Ref.Length)
 	}
+	if err := validateColumnManifestPartRoleForAsset(asset.PartRole, asset.Ref.Kind, asset.Reason); err != nil {
+		return err
+	}
+	if asset.SortKey != "" && asset.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
+		return fmt.Errorf("collections: column prepared asset sort key is only valid for %s refs, got %s", ColumnAssetKindTCS1TypedColumnPart, asset.Ref.Kind)
+	}
+	sortKeys, err := columnSortKeysFromMatchString(asset.SortKey)
+	if err != nil {
+		return err
+	}
+	if uint64(len(sortKeys)) > columnManifestSortKeyMaxColumns {
+		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), columnManifestSortKeyMaxColumns)
+	}
+	if asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKeys) > typedColumnPartSortKeyMaxColumns {
+		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), typedColumnPartSortKeyMaxColumns)
+	}
+	seenSortKeyColumns := make(map[string]struct{}, len(sortKeys))
+	for _, sortKey := range sortKeys {
+		if sortKey.Column == "" {
+			return errors.New("collections: column prepared asset sort key column is required")
+		}
+		if _, exists := seenSortKeyColumns[sortKey.Column]; exists {
+			return fmt.Errorf("collections: column prepared asset duplicate sort key column %q", sortKey.Column)
+		}
+		seenSortKeyColumns[sortKey.Column] = struct{}{}
+		if sortKey.Direction != ColumnSortAscending {
+			return fmt.Errorf("collections: column prepared asset sort key column %q direction %q is unsupported", sortKey.Column, sortKey.Direction)
+		}
+	}
+	return nil
+}
+
+func validateColumnManifestPartRoleForAsset(role ColumnManifestPartRole, kind ColumnAssetKind, reason string) error {
+	switch kind {
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart:
+		operation, ok := columnPhysicalScanOperationFromBytes([]byte(reason))
+		if !ok {
+			return fmt.Errorf("collections: unsupported column manifest part reason %q", reason)
+		}
+		if role == "" {
+			return nil
+		}
+		switch role {
+		case ColumnManifestPartRoleBase, ColumnManifestPartRoleDelta, ColumnManifestPartRoleTombstone:
+		default:
+			return fmt.Errorf("collections: unsupported column manifest part role %q", role)
+		}
+		if role == ColumnManifestPartRoleTombstone && kind != ColumnAssetKindTCS1PartImage {
+			return fmt.Errorf("collections: column manifest tombstone role requires %s ref, got %s", ColumnAssetKindTCS1PartImage, kind)
+		}
+		want := inferColumnManifestPartRole(kind, string(operation))
+		if role != want {
+			return fmt.Errorf("collections: column manifest part role=%q does not match operation=%q want role=%q", role, operation, want)
+		}
+		if role == ColumnManifestPartRoleTombstone && reason != string(ColumnPublishOperationDelete) {
+			return fmt.Errorf("collections: column manifest tombstone role requires delete reason, got %q", reason)
+		}
+		if kind == ColumnAssetKindTCS1TypedColumnPart && role == ColumnManifestPartRoleTombstone {
+			return fmt.Errorf("collections: typed-column part cannot have tombstone role")
+		}
+	default:
+		if role == "" {
+			return nil
+		}
+		switch role {
+		case ColumnManifestPartRoleBase, ColumnManifestPartRoleDelta, ColumnManifestPartRoleTombstone:
+		default:
+			return fmt.Errorf("collections: unsupported column manifest part role %q", role)
+		}
+		return fmt.Errorf("collections: column manifest part role=%q is not allowed for asset kind %s", role, kind)
+	}
 	return nil
 }
 
 func validateColumnAssetRefForPlan(ref ColumnAssetRef) error {
 	switch ref.Kind {
-	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
+	case ColumnAssetKindTCS1PartImage, ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
 	default:
 		if ref.Kind == "" {
 			return errors.New("collections: column asset ref kind is required")

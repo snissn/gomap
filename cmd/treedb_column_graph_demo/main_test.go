@@ -29,11 +29,14 @@ func TestColumnGraphDemoRunsCloseReopenNativeReaderPath(t *testing.T) {
 		"TreeDB column_graph native-reader demo",
 		"rebuild status=column_graph_loaded loaded=true",
 		"search path=column_graph_native_reader status=column_graph_loaded loaded=true",
-		"stats candidates=",
+		"stats candidate_rows=",
+		"visited_nodes=",
+		"vector_B=",
+		"adjacency_B=",
 		"row_fetches=",
 		"decoded_blocks=",
 		"max_resident_B=",
-		"result[0] id=doc-000000 ordinal=0",
+		"result[0] id=doc-000000 ",
 	}
 	for _, needle := range required {
 		if !strings.Contains(out, needle) {

@@ -277,6 +277,23 @@ GOWORK=off go test ./experiments/colgranule -run '^$' \
   -benchmem -count=5
 ```
 
+To compare the historical in-memory colgranule JSONBench kernels with the
+current durable TreeDB collection column-store physical query path, run:
+
+```sh
+GOWORK=off go test ./experiments/colgranule -run '^$' \
+  -bench '^BenchmarkJSONBenchColumnStoreCompare$' \
+  -benchmem -benchtime=3x -count=1
+```
+
+`BenchmarkJSONBenchColumnStoreCompare` uses a synthetic, filter-degenerate
+JSONBench fixture where every row is `kind=commit`, `operation=create`, and
+`collection=app.bsky.feed.post`. This keeps the current TreeDB physical query
+API comparable to the older JSONBench Q1/Q2/Q3-hour/Q4/Q5 kernels even though
+TreeDB does not yet expose the experiment's separate filter-column predicates in
+this query surface. Override row count with `TREEDB_JSONBENCH_COMPARE_ROWS=8192`
+for a smoke run.
+
 The current M5 compaction gate measures both full compaction and phase
 breakdowns for visible scanning, part rebuild, image serialization, asset
 publish, and manifest save:
@@ -300,7 +317,13 @@ GOWORK=off go test ./experiments/colgranule -run '^$' \
 The known q4 caveat is sort order, not row materialization: M2's single-part
 baseline can early-stop on a globally time-ordered part, while the correct M4
 multipart path currently scans visible rows. A future k-way sort-key/mark merge
-across parts is needed before multipart q4 can early-stop safely.
+across parts is needed before multipart q4 can early-stop safely. The TreeDB
+comparison also includes `q3_group_hour_count`, a production physical reducer
+shape for dictionary predicates plus `collection/hour(time_us)` grouping, and
+explicit aggregate-metadata Top-K q4/q5 variants that report `topk_limit/op`,
+`topk_candidates/op`, and `result_shape_ns/op`; metadata paths use logical
+rows/sec with `rows_scanned/op=0` and should not be confused with full data-row
+scans or pruning metadata.
 
 ## M1D Gates Before Value-Log-Backed M2
 

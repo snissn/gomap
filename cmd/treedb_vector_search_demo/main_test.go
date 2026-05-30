@@ -12,6 +12,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
@@ -88,6 +90,19 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	}
 }
 
+func TestDemoCommandWALFormatConfigPreservesProfileKnobs(t *testing.T) {
+	cfg := demoCommandWALFormatConfig(demoBackendOptions(config{}, t.TempDir()))
+	if len(cfg.RequiredFeatures) != 1 || cfg.RequiredFeatures[0] != "command_wal_v1" {
+		t.Fatalf("required features=%v, want command_wal_v1", cfg.RequiredFeatures)
+	}
+	if !cfg.IndexOuterLeavesInValueLog || !cfg.LeafPrefixCompression || !cfg.IndexColumnarLeaves || !cfg.IndexPackedValuePtr || cfg.IndexInternalBaseDelta {
+		t.Fatalf("index format config lost bench profile knobs: %+v", cfg)
+	}
+	if cfg.ValueLogCompression != "auto" || cfg.ValueLogBlockCodec != "snappy" || cfg.ValueLogAutoPolicy != "balanced" {
+		t.Fatalf("value-log format config lost bench profile knobs: %+v", cfg)
+	}
+}
+
 func TestExecuteConsumesDatasetDir(t *testing.T) {
 	datasetDir := writeDemoDataset(t, 64, 8, 4, 3)
 	res, err := execute(context.Background(), config{
@@ -121,6 +136,79 @@ func TestExecuteConsumesDatasetDir(t *testing.T) {
 	}
 	if res.Search.Queries != 4 {
 		t.Fatalf("search queries=%d want 4", res.Search.Queries)
+	}
+}
+
+func TestExecuteColumnGraphSearchPath(t *testing.T) {
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		keepDir:               true,
+		docs:                  64,
+		dimensions:            8,
+		queries:               4,
+		searchConcurrency:     []int{2},
+		validateQueries:       2,
+		validateDocs:          2,
+		topK:                  3,
+		batchSize:             16,
+		m:                     4,
+		efConstruction:        32,
+		efSearch:              32,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.5,
+		disableExactFallback:  true,
+		vectorIndexStrategy:   collections.VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		t.Fatalf("execute column_graph: %v", err)
+	}
+	if res.Backend != "treedb_column_graph" {
+		t.Fatalf("backend=%q want treedb_column_graph", res.Backend)
+	}
+	if res.VectorIndexStrategy != collections.VectorIndexStrategyColumnGraph {
+		t.Fatalf("strategy=%q want column_graph", res.VectorIndexStrategy)
+	}
+	if res.VectorIndexSearchPath != collections.VectorIndexSearchPathColumnGraphNativeReader {
+		t.Fatalf("search path=%q want %q", res.VectorIndexSearchPath, collections.VectorIndexSearchPathColumnGraphNativeReader)
+	}
+	if res.Validation.Recall < res.Validation.MinRecall {
+		t.Fatalf("recall=%f below min=%f", res.Validation.Recall, res.Validation.MinRecall)
+	}
+	if res.Search.Queries != 4 || res.Search.ExactFallbacks != 0 {
+		t.Fatalf("unexpected column_graph search result: %+v", res.Search)
+	}
+}
+
+func TestExecuteColumnGraphRecallBenchmarkShape(t *testing.T) {
+	res, err := execute(context.Background(), config{
+		dir:                   t.TempDir(),
+		keepDir:               true,
+		docs:                  1000,
+		dimensions:            64,
+		queries:               4,
+		searchConcurrency:     []int{2},
+		validateQueries:       32,
+		validateDocs:          2,
+		topK:                  10,
+		batchSize:             128,
+		m:                     16,
+		efConstruction:        128,
+		efSearch:              128,
+		valuePointerThreshold: defaultValuePointerThreshold,
+		leafGenerationTarget:  defaultLeafGenerationTarget,
+		minRecall:             0.95,
+		disableExactFallback:  true,
+		vectorIndexStrategy:   collections.VectorIndexStrategyColumnGraph,
+	})
+	if err != nil {
+		t.Fatalf("execute column_graph benchmark shape: %v", err)
+	}
+	if res.Validation.Recall < 0.95 {
+		t.Fatalf("recall=%f want >=0.95", res.Validation.Recall)
+	}
+	if res.Search.AvgCandidates != 128 {
+		t.Fatalf("avg candidates=%f want ef_search=128", res.Search.AvgCandidates)
 	}
 }
 
@@ -182,6 +270,9 @@ func TestRunJSONOutput(t *testing.T) {
 	}
 	if res.Profile != "bench" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
+	}
+	if res.VectorIndexSearchPath != nativeRuntimeSnapshotPath {
+		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, nativeRuntimeSnapshotPath)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -708,6 +799,9 @@ func TestRunTextOutput(t *testing.T) {
 	for _, want := range []string{
 		"TreeDB vector search demo",
 		"profile=bench",
+		"backend=treedb",
+		"vector_index_strategy=native_runtime",
+		"vector_index_search_path=native_runtime_snapshot",
 		"value_pointer_threshold=1024",
 		"leaf_generation_segment_target=4194304",
 		"Storage",

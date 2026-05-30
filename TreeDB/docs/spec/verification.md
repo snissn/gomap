@@ -781,6 +781,27 @@ Coverage:
   - `BenchmarkCollectionOverheadPlanIndexedTemplateV1`
   - `BenchmarkCollectionOverheadIndexStateTemplateV1Extraction`
 
+## 12.5 Typed-Column Schema Evolution and Migration Policy
+
+Invariant:
+- During pre-alpha, typed-column image, descriptor, manifest, and schema changes
+  may reject existing DB directories rather than migrate them.
+- Unsupported typed-column versions and schema/layout mismatches fail closed from
+  headers, descriptors, manifest identities, or refs where possible before full
+  payload decode or per-row allocation.
+- Hot typed-column format/schema changes report baseline-versus-final `B/op` and
+  `allocs/op` evidence or explicitly document a benchmarked fallback.
+
+Coverage:
+- Policy owner: `TreeDB/docs/spec/typed-column-schema-evolution.md`.
+- Existing fail-closed coverage is distributed across typed-column adapter,
+  publication, vector dense-section, int64 scan, and typed-asset maintenance
+  tests in `TreeDB/collections` and `TreeDB/internal/typedcolumn`.
+- Future format-version or schema-semantic changes must add targeted negative
+  tests for unsupported image/descriptor versions, schema-hash mismatch,
+  owner/value-type/vector-dim/fixed-width metadata mismatch, and manifest
+  identity/ref mismatch in the package that owns the changed decoder.
+
 ## 13. Native Wire Protocol
 
 Invariant:

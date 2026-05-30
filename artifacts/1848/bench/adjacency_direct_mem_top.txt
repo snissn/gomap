@@ -1,0 +1,49 @@
+File: collections.test
+Type: alloc_space
+Time: 2026-05-25 19:27:04 HST
+Showing nodes accounting for 43407.91kB, 100% of 43407.91kB total
+      flat  flat%   sum%        cum   cum%
+16519.41kB 38.06% 38.06% 38977.30kB 89.79%  github.com/snissn/gomap/TreeDB/collections.BenchmarkTypedColumnAdjacencyDenseDirectViewScan
+ 7939.62kB 18.29% 56.35% 12196.13kB 28.10%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).build
+ 2429.92kB  5.60% 61.94% 10261.76kB 23.64%  github.com/snissn/gomap/TreeDB/collections.buildTypedColumnAdapterPart
+ 2429.92kB  5.60% 67.54%  2429.92kB  5.60%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).addColumnDataSections
+ 2429.92kB  5.60% 73.14%  2429.92kB  5.60%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.ensureUint32Len (inline)
+ 2162.04kB  4.98% 78.12%  7831.84kB 18.04%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).Build
+ 1619.94kB  3.73% 81.85%  5669.80kB 13.06%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).buildColumn
+ 1619.94kB  3.73% 85.59%  1619.94kB  3.73%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.encodeUint32DensePayload
+    1539kB  3.55% 89.13%     1539kB  3.55%  runtime.allocm
+ 1310.59kB  3.02% 92.15%  1826.60kB  4.21%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*columnPartImageBuilder).addRowLocatorsSection
+ 1184.27kB  2.73% 94.88%  1184.27kB  2.73%  runtime/pprof.StartCPUProfile
+  650.62kB  1.50% 96.38%  1195.29kB  2.75%  compress/flate.(*compressor).init
+  544.67kB  1.25% 97.63%   544.67kB  1.25%  compress/flate.newDeflateFast (inline)
+  516.01kB  1.19% 98.82%   516.01kB  1.19%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.validateDecodedRowLocators
+  512.05kB  1.18%   100%   512.05kB  1.18%  runtime.(*scavengerState).init
+         0     0%   100%  1195.29kB  2.75%  compress/flate.NewWriter (inline)
+         0     0%   100%  1195.29kB  2.75%  compress/gzip.(*Writer).Write
+         0     0%   100% 12196.13kB 28.10%  github.com/snissn/gomap/TreeDB/collections.(*typedColumnAdapterPart).buildImage
+         0     0%   100%  4049.86kB  9.33%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).buildColumnBlockGranule
+         0     0%   100%  2429.92kB  5.60%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*ColumnPartBuilder).gatherUint32Dense
+         0     0%   100%  1619.94kB  3.73%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.(*GranuleBuilder).BuildUint32Dense
+         0     0%   100%  7831.84kB 18.04%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BuildColumnPart
+         0     0%   100% 12196.13kB 28.10%  github.com/snissn/gomap/TreeDB/internal/typedcolumn.BuildColumnPartImage
+         0     0%   100%  1184.27kB  2.73%  main.main
+         0     0%   100%   512.05kB  1.18%  runtime.bgscavenge
+         0     0%   100%  1184.27kB  2.73%  runtime.main
+         0     0%   100%      513kB  1.18%  runtime.mcall
+         0     0%   100%     1026kB  2.36%  runtime.mstart
+         0     0%   100%     1026kB  2.36%  runtime.mstart0
+         0     0%   100%     1026kB  2.36%  runtime.mstart1
+         0     0%   100%     1539kB  3.55%  runtime.newm
+         0     0%   100%      513kB  1.18%  runtime.park_m
+         0     0%   100%     1539kB  3.55%  runtime.resetspinning
+         0     0%   100%     1539kB  3.55%  runtime.schedule
+         0     0%   100%     1539kB  3.55%  runtime.startm
+         0     0%   100%     1539kB  3.55%  runtime.wakep
+         0     0%   100%  1195.29kB  2.75%  runtime/pprof.(*profileBuilder).build
+         0     0%   100%  1195.29kB  2.75%  runtime/pprof.profileWriter
+         0     0%   100% 28265.70kB 65.12%  testing.(*B).launch
+         0     0%   100% 10711.61kB 24.68%  testing.(*B).run1.func1
+         0     0%   100% 38977.30kB 89.79%  testing.(*B).runN
+         0     0%   100%  1184.27kB  2.73%  testing.(*M).Run
+         0     0%   100%  1184.27kB  2.73%  testing.(*M).before
+         0     0%   100%  1184.27kB  2.73%  testing/internal/testdeps.TestDeps.StartCPUProfile

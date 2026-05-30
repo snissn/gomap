@@ -13,24 +13,29 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
-	columnAssetManagerAssetsDirName     = "assets"
-	columnAssetManagerSegmentsDirName   = "segments"
-	columnAssetManagerIndexesDirName    = "indexes"
-	columnAssetManagerPreparedDirName   = "prepared"
-	columnAssetManagerQuarantineDirName = "quarantine"
-	columnAssetManagerTempDirName       = "tmp"
-	columnAssetSegmentFilePrefix        = "segment-"
-	columnAssetSegmentFileSuffix        = ".tca"
-	columnAssetM12ASegmentFileID        = uint32(1)
+	columnAssetManagerAssetsDirName        = "assets"
+	columnAssetManagerSegmentsDirName      = "segments"
+	columnAssetManagerIndexesDirName       = "indexes"
+	columnAssetManagerPreparedDirName      = "prepared"
+	columnAssetManagerQuarantineDirName    = "quarantine"
+	columnAssetManagerTempDirName          = "tmp"
+	columnAssetSegmentFilePrefix           = "segment-"
+	columnAssetSegmentFileSuffix           = ".tca"
+	columnAssetM12ASegmentFileID           = uint32(1)
+	columnAssetDirectViewSegmentFileIDBase = uint32(1 << 20)
 )
 
 const columnAssetSegmentWriteLockStripes = 64
 const columnPhysicalAssetReadScratchPoolMaxRetainBytes = 16 << 20
 const columnAssetVerifiedChecksumCacheSlots = 4096
+const typedColumnPartDirectViewAssetAlignment = 8
+const dictionaryCodesDirectViewAssetAlignment = columnDictionaryCodesPayloadAlignment
+const int64ValuesDirectViewAssetAlignment = columnInt64ValuesPayloadAlignment
 
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
@@ -274,6 +279,50 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1PartImage, generation, partID)
 }
 
+func writeTypedColumnPartAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
+		fileID, err := directViewTypedColumnSegmentFileID(generation)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, fileID)
+	}
+	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID)
+}
+
+func columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg ColumnStoreConfig) bool {
+	for _, column := range cfg.Columns {
+		if !columnStoreColumnIsTypedColumnPart(column) || column.Nullable {
+			continue
+		}
+		switch column.ValueType {
+		case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble:
+			if column.FixedWidthEncoding == ColumnFixedWidthEncodingLittleEndian {
+				return true
+			}
+		case ColumnStoreValueFloat32Vector:
+			if column.VectorDims > 0 {
+				return true
+			}
+		case ColumnStoreValueUint32List:
+			return true
+		case ColumnStoreValueAdjacencyList:
+			if column.AdjacencyLayout == ColumnAdjacencyListLayoutUint32OffsetsList {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func directViewTypedColumnSegmentFileID(generation uint64) (uint32, error) {
+	base := uint64(columnAssetDirectViewSegmentFileIDBase)
+	if generation == 0 || generation > uint64(^uint32(0))-base {
+		return 0, fmt.Errorf("collections: typed-column direct-view generation=%d cannot form segment file id", generation)
+	}
+	return uint32(base + generation), nil
+}
+
 func writeColumnAggregateMetadataAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1AggregateMetadata, generation, partID)
 }
@@ -351,6 +400,18 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
+	alignment := columnAssetSegmentPayloadAlignment(kind, cfg)
+	padding := columnAssetSegmentPrefixPadding(offset, alignment)
+	if padding > 0 {
+		written, err := writeColumnAssetSegmentZeroPadding(file, padding)
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		if written != padding {
+			return ColumnAssetRef{}, io.ErrShortWrite
+		}
+		offset += int64(padding)
+	}
 	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
 		return ColumnAssetRef{}, err
@@ -379,6 +440,9 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	}
 	maxFileID := uint32(0)
 	for _, segment := range segments {
+		if segment.fileID >= columnAssetDirectViewSegmentFileIDBase {
+			continue
+		}
 		if segment.fileID > maxFileID {
 			maxFileID = segment.fileID
 		}
@@ -386,8 +450,8 @@ func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32
 	if maxFileID < columnAssetM12ASegmentFileID {
 		maxFileID = columnAssetM12ASegmentFileID
 	}
-	if maxFileID == ^uint32(0) {
-		return 0, errors.New("collections: column asset segment file_id exhausted")
+	if maxFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
+		return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 	}
 	return maxFileID + 1, nil
 }
@@ -437,8 +501,9 @@ func newNextColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreCo
 
 func nextColumnAssetSegmentFileIDCached(namespace columnAssetManagerNamespace, cleanSegmentDir string, cache *columnAssetSegmentAllocationCache) (uint32, error) {
 	if cache != nil && cache.valid && cache.segmentDir == cleanSegmentDir {
-		if cache.nextFileID == 0 {
-			return 0, errors.New("collections: column asset segment file_id exhausted")
+		if cache.nextFileID == 0 || cache.nextFileID >= columnAssetDirectViewSegmentFileIDBase {
+			cache.nextFileID = 0
+			return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
 		}
 		return cache.nextFileID, nil
 	}
@@ -468,7 +533,7 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 	}
 	cache.segmentDir = cleanSegmentDir
 	cache.valid = true
-	if allocatedFileID == ^uint32(0) {
+	if allocatedFileID >= columnAssetDirectViewSegmentFileIDBase-1 {
 		cache.nextFileID = 0
 		return
 	}
@@ -544,6 +609,14 @@ func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, 
 }
 
 func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
+	alignment := int64(0)
+	if a != nil {
+		alignment = columnAssetSegmentPayloadAlignment(kind, a.cfg)
+	}
+	return a.appendKindWithAlignment(payload, kind, generation, partID, alignment)
+}
+
+func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []byte, kind ColumnAssetKind, generation, partID uint64, alignment int64) (ColumnAssetRef, error) {
 	if a == nil || a.file == nil {
 		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
 	}
@@ -555,6 +628,19 @@ func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind Col
 	}
 	if generation == 0 || partID == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset append requires generation and part_id")
+	}
+	padding := columnAssetSegmentPrefixPadding(a.offset, alignment)
+	if padding > 0 {
+		written, err := writeColumnAssetSegmentZeroPadding(a.file, padding)
+		a.offset += int64(written)
+		if err != nil {
+			a.failed = true
+			return ColumnAssetRef{}, err
+		}
+		if written != padding {
+			a.failed = true
+			return ColumnAssetRef{}, io.ErrShortWrite
+		}
 	}
 	ref := ColumnAssetRef{
 		Kind:       kind,
@@ -573,6 +659,56 @@ func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind Col
 		return ColumnAssetRef{}, err
 	}
 	return ref, nil
+}
+
+func columnAssetSegmentPayloadAlignment(kind ColumnAssetKind, cfg ColumnStoreConfig) int64 {
+	switch kind {
+	case ColumnAssetKindTCS1DictionaryCodes:
+		return dictionaryCodesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1Int64Values:
+		return int64ValuesDirectViewAssetAlignment
+	case ColumnAssetKindTCS1TypedColumnPart:
+		if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
+			return typedColumnPartDirectViewAssetAlignment
+		}
+	}
+	return 0
+}
+
+func columnAssetSegmentPrefixPadding(offset int64, alignment int64) int {
+	if alignment <= 1 {
+		return 0
+	}
+	rem := offset % alignment
+	if rem == 0 {
+		return 0
+	}
+	return int(alignment - rem)
+}
+
+func writeColumnAssetSegmentZeroPadding(w io.Writer, length int) (int, error) {
+	if length <= 0 {
+		return 0, nil
+	}
+	var zeros [typedColumnPartDirectViewAssetAlignment]byte
+	written := 0
+	for written < length {
+		chunk := length - written
+		if chunk > len(zeros) {
+			chunk = len(zeros)
+		}
+		n, err := w.Write(zeros[:chunk])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return written, err
+		}
+		if n == 0 {
+			return written, io.ErrShortWrite
+		}
+	}
+	return written, nil
 }
 
 func writeColumnAssetSegmentPayload(w io.Writer, payload []byte) (int, error) {
@@ -827,19 +963,34 @@ func columnAssetVerifiedChecksumCacheHashUint64(h uint64, v uint64) uint64 {
 }
 
 type columnPhysicalAssetReadCache struct {
-	namespace      string
-	rootDir        string
-	segmentDir     string
-	readIntegrity  ColumnAssetReadIntegrity
-	verifyChecksum bool
-	fileID         uint32
-	file           *columnPhysicalAssetSegmentReader
-	files          map[uint32]*columnPhysicalAssetSegmentReader
-	scratch        []byte
-	returnViews    bool
-	lastView       bool
-	hits           uint64
-	misses         uint64
+	namespace           string
+	rootDir             string
+	segmentDir          string
+	readIntegrity       ColumnAssetReadIntegrity
+	verifyChecksum      bool
+	fileID              uint32
+	file                *columnPhysicalAssetSegmentReader
+	files               map[uint32]*columnPhysicalAssetSegmentReader
+	scratch             []byte
+	returnViews         bool
+	forceReadAtFallback bool
+	lastView            bool
+	hits                uint64
+	misses              uint64
+	mmapHits            uint64
+	readAtFallbacks     uint64
+	fileOpens           uint64
+	fileCloses          uint64
+	// trustCachedVerifyFileIdentity lets explicit prepared lifetimes reuse the
+	// identity captured when the segment reader was opened. Default read caches
+	// keep refreshing identity so existing fail-closed tests and non-prepared
+	// readers retain their stricter cached-verify behavior.
+	trustCachedVerifyFileIdentity bool
+
+	resourceManager *mappedresource.Manager
+	resourceScope   mappedresource.Scope
+	resourceReason  string
+	resourceHandles []*mappedresource.Handle
 }
 
 type columnPhysicalAssetSegmentReader struct {
@@ -873,15 +1024,122 @@ func newColumnPhysicalAssetReadCacheWithIntegrity(rootDir string, namespace stri
 	}, nil
 }
 
+func (c *columnPhysicalAssetReadCache) useMappedResourceManager(manager *mappedresource.Manager, scope mappedresource.Scope, reason string) error {
+	if c == nil {
+		return errors.New("collections: nil column physical asset read cache")
+	}
+	if manager != nil {
+		if scope.Namespace == "" {
+			scope.Namespace = c.namespace
+		}
+		if err := scope.Validate(); err != nil {
+			return err
+		}
+	}
+	c.resourceManager = manager
+	c.resourceScope = scope
+	c.resourceReason = reason
+	return nil
+}
+
+type columnPhysicalAssetReadCacheLifecycleStats struct {
+	MmapHits        uint64
+	ReadAtFallbacks uint64
+	FileOpens       uint64
+	FileCloses      uint64
+	ActiveHandles   int64
+}
+
+func (c *columnPhysicalAssetReadCache) lifecycleStats() columnPhysicalAssetReadCacheLifecycleStats {
+	if c == nil {
+		return columnPhysicalAssetReadCacheLifecycleStats{}
+	}
+	stats := columnPhysicalAssetReadCacheLifecycleStats{
+		MmapHits:        c.mmapHits,
+		ReadAtFallbacks: c.readAtFallbacks,
+		FileOpens:       c.fileOpens,
+		FileCloses:      c.fileCloses,
+	}
+	if c.resourceManager != nil {
+		stats.ActiveHandles = c.resourceManager.Stats().ActiveHandles
+	}
+	return stats
+}
+
+func (c *columnPhysicalAssetReadCache) mappedResourceStats() mappedresource.Stats {
+	if c == nil || c.resourceManager == nil {
+		return mappedresource.Stats{}
+	}
+	return c.resourceManager.Stats()
+}
+
+func (c *columnPhysicalAssetReadCache) mappedResourcePins() []mappedresource.Pin {
+	if c == nil || c.resourceManager == nil {
+		return nil
+	}
+	return c.resourceManager.PinSummary()
+}
+
+func (c *columnPhysicalAssetReadCache) mappedResourcePinnedRefs() []ColumnAssetRef {
+	if c == nil {
+		return nil
+	}
+	return columnAssetRefsForMappedResourcePins(c.mappedResourcePins(), c.namespace)
+}
+
+func (c *columnPhysicalAssetReadCache) releaseResourceHandles() error {
+	if c == nil || len(c.resourceHandles) == 0 {
+		return nil
+	}
+	var releaseErr error
+	for _, handle := range c.resourceHandles {
+		if err := handle.Release(); err != nil && releaseErr == nil {
+			releaseErr = err
+		}
+	}
+	clear(c.resourceHandles)
+	c.resourceHandles = c.resourceHandles[:0]
+	return releaseErr
+}
+
+func (c *columnPhysicalAssetReadCache) releaseResourceHandlesBySource(source mappedresource.Source) error {
+	if c == nil || len(c.resourceHandles) == 0 {
+		return nil
+	}
+	var releaseErr error
+	kept := c.resourceHandles[:0]
+	for _, handle := range c.resourceHandles {
+		if handle == nil {
+			continue
+		}
+		if handle.Source() == source {
+			if err := handle.Release(); err != nil && releaseErr == nil {
+				releaseErr = err
+			}
+			continue
+		}
+		kept = append(kept, handle)
+	}
+	clear(c.resourceHandles[len(kept):])
+	c.resourceHandles = kept
+	return releaseErr
+}
+
 func (c *columnPhysicalAssetReadCache) close() error {
 	var closeErr error
+	if err := c.releaseResourceHandles(); err != nil {
+		closeErr = err
+	}
 	if c.scratch != nil {
 		putColumnPhysicalAssetReadScratch(c.scratch)
 		c.scratch = nil
 	}
 	if c.file != nil {
+		hadFile := c.file.file != nil
 		if err := c.file.close(); err != nil && closeErr == nil {
 			closeErr = err
+		} else if err == nil && hadFile {
+			c.fileCloses++
 		}
 		c.file = nil
 	}
@@ -889,8 +1147,11 @@ func (c *columnPhysicalAssetReadCache) close() error {
 		if reader == nil {
 			continue
 		}
+		hadFile := reader.file != nil
 		if err := reader.close(); err != nil && closeErr == nil {
 			closeErr = err
+		} else if err == nil && hadFile {
+			c.fileCloses++
 		}
 		delete(c.files, fileID)
 	}
@@ -919,9 +1180,14 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 				return nil, err
 			}
+			if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceMapped, ""); err != nil {
+				return nil, err
+			}
+			c.mmapHits++
 			c.lastView = true
 			return raw, nil
 		}
+		c.readAtFallbacks++
 	}
 	if ref.Length >= 0 && ref.Length <= int64(maxCollectionInt) && cap(dst) < int(ref.Length) {
 		if cap(c.scratch) < int(ref.Length) {
@@ -939,7 +1205,112 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
 		return nil, err
 	}
+	var fallback mappedresource.FallbackReason
+	if c.returnViews {
+		fallback = mappedresource.FallbackReadAt
+	}
+	if _, err := c.trackResourceRead(ref, raw, mappedresource.SourceHeapCopy, fallback); err != nil {
+		return nil, err
+	}
 	return raw, nil
+}
+
+func (c *columnPhysicalAssetReadCache) validateFullRef(ref ColumnAssetRef) (int, error) {
+	if c == nil {
+		return 0, errors.New("collections: nil column physical asset read cache")
+	}
+	if ref.Namespace != c.namespace {
+		return 0, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
+	}
+	reader, err := c.fileForRef(ref)
+	if err != nil {
+		return 0, err
+	}
+	if c.returnViews {
+		if raw, ok, err := reader.readView(ref); err != nil {
+			return 0, err
+		} else if ok {
+			if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+				return 0, err
+			}
+			return len(raw), nil
+		}
+	}
+	raw, err := readColumnPhysicalAssetFromFileWithChecksum(reader.file, ref, nil, false)
+	if err != nil {
+		return 0, err
+	}
+	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+		return 0, err
+	}
+	return len(raw), nil
+}
+
+func (c *columnPhysicalAssetReadCache) readRange(ref ColumnAssetRef, relativeOffset int64, length int64) ([]byte, error) {
+	raw, _, err := c.readRangeHandle(ref, relativeOffset, length)
+	return raw, err
+}
+
+func (c *columnPhysicalAssetReadCache) readRangeHandle(ref ColumnAssetRef, relativeOffset int64, length int64) ([]byte, *mappedresource.Handle, error) {
+	if c == nil {
+		return nil, nil, errors.New("collections: nil column physical asset read cache")
+	}
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return nil, nil, err
+	}
+	if ref.Namespace != c.namespace {
+		return nil, nil, fmt.Errorf("collections: column physical asset ref namespace=%q want %q", ref.Namespace, c.namespace)
+	}
+	if relativeOffset < 0 || length <= 0 {
+		return nil, nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d is invalid", relativeOffset, length)
+	}
+	end := relativeOffset + length
+	if end < relativeOffset || end > ref.Length {
+		return nil, nil, fmt.Errorf("collections: column physical asset range offset=%d length=%d outside ref length=%d", relativeOffset, length, ref.Length)
+	}
+	if ref.Offset > int64(^uint64(0)>>1)-relativeOffset {
+		return nil, nil, fmt.Errorf("collections: column physical asset range base offset=%d relative=%d overflows", ref.Offset, relativeOffset)
+	}
+	rangeRef := ref
+	rangeRef.Offset = ref.Offset + relativeOffset
+	rangeRef.Length = length
+	reader, err := c.fileForRef(ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	if c.lastView {
+		c.lastView = false
+	}
+	if c.returnViews {
+		if raw, ok, err := reader.readView(rangeRef); err != nil {
+			return nil, nil, err
+		} else if ok {
+			handle, err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceMapped, "")
+			if err != nil {
+				return nil, nil, err
+			}
+			c.mmapHits++
+			c.lastView = true
+			return raw, handle, nil
+		}
+		c.readAtFallbacks++
+	}
+	if length > int64(maxCollectionInt) {
+		return nil, nil, fmt.Errorf("collections: column physical asset range length=%d overflows int", length)
+	}
+	raw, err := readColumnPhysicalAssetFromFileWithChecksum(reader.file, rangeRef, make([]byte, int(length)), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	var fallback mappedresource.FallbackReason
+	if c.returnViews {
+		fallback = mappedresource.FallbackReadAt
+	}
+	handle, err := c.trackResourceRead(rangeRef, raw, mappedresource.SourceHeapCopy, fallback)
+	if err != nil {
+		return nil, nil, err
+	}
+	return raw, handle, nil
 }
 
 func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) error {
@@ -949,12 +1320,141 @@ func (c *columnPhysicalAssetReadCache) verifyReadChecksum(raw []byte, ref Column
 	var fileIdentity columnAssetVerifiedChecksumFileIdentity
 	if reader != nil {
 		fileIdentity = reader.identity
-		if c.readIntegrity == ColumnAssetReadIntegrityCachedVerify {
+		if c.readIntegrity == ColumnAssetReadIntegrityCachedVerify && !c.trustCachedVerifyFileIdentity {
 			fileIdentity = columnAssetVerifiedChecksumFileIdentityFromFile(reader.file)
 			reader.identity = fileIdentity
 		}
 	}
 	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, fileIdentity)
+}
+
+func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw []byte, source mappedresource.Source, fallback mappedresource.FallbackReason) (*mappedresource.Handle, error) {
+	if c == nil || c.resourceManager == nil {
+		return nil, nil
+	}
+	key := mappedResourceKeyForColumnAssetRef(ref)
+	if key.Length != int64(len(raw)) {
+		return nil, fmt.Errorf("collections: column asset mapped-resource key length=%d raw bytes=%d", key.Length, len(raw))
+	}
+	scope := c.resourceScope
+	if scope.Kind == "" {
+		scope = mappedresource.Scope{Kind: mappedresource.ScopeTypedRowReader, ID: "column-physical-asset-read-cache", Namespace: c.namespace}
+	}
+	if scope.Namespace == "" {
+		scope.Namespace = c.namespace
+	}
+	reason := c.resourceReason
+	if reason == "" {
+		reason = "column_physical_asset_read"
+	}
+	if source == mappedresource.SourceMapped {
+		for _, handle := range c.resourceHandles {
+			if handle != nil && !handle.Released() && handle.Source() == source && handle.Key().Equal(key) {
+				return handle, nil
+			}
+		}
+	}
+	handleBytes := raw
+	if source == mappedresource.SourceHeapCopy {
+		// Heap-copy reads use the cache scratch path, so their implicit lifetime
+		// ends when the next heap read may reuse scratch. Keep at most the current
+		// heap handle active. Mapped view handles remain pinned until cache close,
+		// with duplicate keys deduplicated above.
+		if err := c.releaseResourceHandlesBySource(mappedresource.SourceHeapCopy); err != nil {
+			return nil, err
+		}
+		if len(raw) != 0 {
+			// AcquireBytes requires immutable bytes for the handle lifetime. Syscall
+			// reads may return c.scratch, which is reused on later reads, so the
+			// accounting/pin handle owns a stable copy while it is active. The caller
+			// still receives the original raw bytes.
+			handleBytes = append([]byte(nil), raw...)
+		}
+	}
+	handle, err := c.resourceManager.AcquireBytes(key, scope, source, handleBytes, mappedresource.AcquireOptions{
+		Reason:         reason,
+		ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity),
+		FallbackReason: fallback,
+		ResourceRoot:   c.rootDir,
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.resourceHandles = append(c.resourceHandles, handle)
+	return handle, nil
+}
+
+func mappedResourceKeyForColumnAssetRef(ref ColumnAssetRef) mappedresource.Key {
+	class := mappedresource.ClassTypedRowAsset
+	switch ref.Kind {
+	case ColumnAssetKindTCS1TypedColumnPart, ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1DictionaryCodes, ColumnAssetKindTCS1Int64Values:
+		class = mappedresource.ClassTypedColumnAsset
+	}
+	return mappedresource.Key{
+		Class:      class,
+		Namespace:  ref.Namespace,
+		Kind:       string(ref.Kind),
+		Generation: ref.Generation,
+		PartID:     ref.PartID,
+		FileID:     ref.FileID,
+		Offset:     ref.Offset,
+		Length:     ref.Length,
+		Checksum:   uint64(ref.Checksum),
+	}
+}
+
+func columnAssetRefsForMappedResourcePins(pins []mappedresource.Pin, namespace string) []ColumnAssetRef {
+	if len(pins) == 0 {
+		return nil
+	}
+	refs := make([]ColumnAssetRef, 0, len(pins))
+	for _, pin := range pins {
+		ref, ok := columnAssetRefForMappedResourceKey(pin.Key)
+		if !ok {
+			continue
+		}
+		if namespace != "" && ref.Namespace != namespace {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+func columnAssetRefForMappedResourceKey(key mappedresource.Key) (ColumnAssetRef, bool) {
+	switch key.Class {
+	case mappedresource.ClassTypedRowAsset, mappedresource.ClassTypedColumnAsset:
+	default:
+		return ColumnAssetRef{}, false
+	}
+	if key.Checksum != uint64(uint32(key.Checksum)) {
+		return ColumnAssetRef{}, false
+	}
+	ref := ColumnAssetRef{
+		Kind:       ColumnAssetKind(key.Kind),
+		Namespace:  key.Namespace,
+		Generation: key.Generation,
+		PartID:     key.PartID,
+		FileID:     key.FileID,
+		Offset:     key.Offset,
+		Length:     key.Length,
+		Checksum:   uint32(key.Checksum),
+	}
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
+		return ColumnAssetRef{}, false
+	}
+	return ref, true
+}
+
+func mappedResourceValidationModeForColumnAssetIntegrity(integrity ColumnAssetReadIntegrity) mappedresource.ValidationMode {
+	switch integrity {
+	case ColumnAssetReadIntegrityCachedVerify:
+		return mappedresource.ValidationCachedVerify
+	case ColumnAssetReadIntegritySkipChecksums:
+		return mappedresource.ValidationSkipChecksum
+	default:
+		return mappedresource.ValidationVerify
+	}
 }
 
 func getColumnPhysicalAssetReadScratch(minLen int) []byte {
@@ -982,24 +1482,34 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPh
 	}
 	if c.file != nil && c.fileID == ref.FileID {
 		c.hits++
+		if c.resourceManager != nil {
+			c.resourceManager.RecordHit()
+		}
 		return c.file, nil
 	}
 	if c.files != nil {
 		if reader := c.files[ref.FileID]; reader != nil {
 			c.hits++
+			if c.resourceManager != nil {
+				c.resourceManager.RecordHit()
+			}
 			return reader, nil
 		}
 	}
 	c.misses++
+	if c.resourceManager != nil {
+		c.resourceManager.RecordMiss()
+	}
 	file, err := os.Open(filepath.Join(c.segmentDir, columnAssetSegmentFileName(ref.FileID)))
 	if err != nil {
 		return nil, err
 	}
+	c.fileOpens++
 	reader := &columnPhysicalAssetSegmentReader{
 		file:     file,
 		identity: columnAssetVerifiedChecksumFileIdentityFromFile(file),
 	}
-	if c.returnViews {
+	if c.returnViews && !c.forceReadAtFallback {
 		if mapped, err := mmapColumnPhysicalAssetFile(file); err == nil {
 			reader.mmap = mapped
 		}

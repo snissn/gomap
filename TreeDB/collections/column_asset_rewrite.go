@@ -127,13 +127,14 @@ func (c *Collection) columnAssetRewrite(ctx context.Context, opts columnAssetRew
 		if opts.DryRun {
 			return stats, nil
 		}
-		return stats, fmt.Errorf("%w: collection=%q namespace=%q unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d",
+		return stats, fmt.Errorf("%w: collection=%q namespace=%q unknown_segments=%d missing_segments=%d out_of_bounds_refs=%d unconvertible_pins=%d",
 			ErrColumnAssetReachabilityIncomplete,
 			plan.Collection,
 			plan.Namespace,
 			plan.Segments.Unknown,
 			plan.Segments.Missing,
 			plan.Segments.OutOfBoundsRefs,
+			plan.MappedResources.UnconvertiblePins,
 		)
 	}
 
@@ -399,7 +400,11 @@ func (c *Collection) copyColumnAssetRewriteRefs(ctx context.Context, cfg ColumnS
 			return columnAssetRewriteCopyResult{}, fmt.Errorf("collections: column asset rewrite read generation=%d part_id=%d: %w", oldRef.Generation, oldRef.PartID, err)
 		}
 		rawScratch = raw
-		newRef, err := appender.appendKind(raw, oldRef.Kind, oldRef.Generation, oldRef.PartID)
+		alignment := columnAssetSegmentPayloadAlignment(oldRef.Kind, cfg)
+		if oldRef.Kind == ColumnAssetKindTCS1TypedColumnPart && oldRef.Offset%int64(typedColumnPartDirectViewAssetAlignment) == 0 {
+			alignment = typedColumnPartDirectViewAssetAlignment
+		}
+		newRef, err := appender.appendKindWithAlignment(raw, oldRef.Kind, oldRef.Generation, oldRef.PartID, alignment)
 		if err != nil {
 			return columnAssetRewriteCopyResult{}, err
 		}
@@ -444,8 +449,8 @@ func cleanupColumnAssetRewriteCopiedSegment(rootDir string, remap columnAssetRew
 
 func validateColumnAssetRewriteRefKinds(refs []ColumnAssetRef) error {
 	for idx, ref := range refs {
-		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values {
-			return fmt.Errorf("collections: column asset rewrite supports only physical part, aggregate metadata, dictionary code, or int64 value refs: ref %d kind %q", idx, ref.Kind)
+		if ref.Kind != ColumnAssetKindTCS1PartImage && ref.Kind != ColumnAssetKindTCS1TypedColumnPart && ref.Kind != ColumnAssetKindTCS1AggregateMetadata && ref.Kind != ColumnAssetKindTCS1DictionaryCodes && ref.Kind != ColumnAssetKindTCS1Int64Values {
+			return fmt.Errorf("collections: column asset rewrite supports only physical part, typed-column part, aggregate metadata, dictionary code, or int64 value refs: ref %d kind %q", idx, ref.Kind)
 		}
 	}
 	return nil
@@ -475,30 +480,106 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 			patched[i] = record
 		}
 		if bytes.HasPrefix(record.key, columnManifestVectorGraphRecordPrefixBytes) {
-			oldRef, offsets, err := columnVectorGraphManifestAssetRefForPatch(record.value, expectedNamespace)
+			graph, err := decodeColumnVectorGraphManifestRecord(record.value)
 			if err != nil {
 				return nil, 0, err
 			}
-			newRef, ok := byOldRef[oldRef]
-			if !ok {
-				continue
-			}
-			if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
-				return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph ref %+v to %+v", oldRef, newRef)
-			}
-			if err := validateColumnAssetRefForPlan(newRef); err != nil {
+			if _, err := columnVectorGraphManifestAssetRefsForScan(graph, graph.BaseManifestGeneration, expectedNamespace); err != nil {
 				return nil, 0, err
 			}
-			value := record.value
-			if !inPlace {
-				value = bytes.Clone(record.value)
+			changed := false
+			if newRef, ok := byOldRef[graph.AssetRef]; ok {
+				if !columnAssetRewriteSameLogicalRef(graph.AssetRef, newRef) {
+					return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph ref %+v to %+v", graph.AssetRef, newRef)
+				}
+				if err := validateColumnAssetRefForPlan(newRef); err != nil {
+					return nil, 0, err
+				}
+				graph.AssetRef = newRef
+				graph.AssetBytes = newRef.Length
+				patchColumnVectorGraphAdjacencySourceGraphIdentity(&graph.Layer0AdjacencySource, newRef)
+				for idx := range graph.AdjacencyLayerSources {
+					patchColumnVectorGraphAdjacencySourceGraphIdentity(&graph.AdjacencyLayerSources[idx], newRef)
+				}
+				changed = true
+				count++
 			}
-			binary.BigEndian.PutUint64(value[offsets.fileID:], uint64(newRef.FileID))
-			binary.BigEndian.PutUint64(value[offsets.offset:], uint64(newRef.Offset))
-			binary.BigEndian.PutUint64(value[offsets.length:], uint64(newRef.Length))
-			binary.BigEndian.PutUint64(value[offsets.checksum:], uint64(newRef.Checksum))
-			patched[i].value = value
-			count++
+			if len(graph.AdjacencyLayerSources) > 0 {
+				for idx := range graph.AdjacencyLayerSources {
+					sourceRef := graph.AdjacencyLayerSources[idx].Ref
+					if newRef, ok := byOldRef[sourceRef]; ok {
+						if !columnAssetRewriteSameLogicalRef(sourceRef, newRef) {
+							return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph adjacency layer %d source ref %+v to %+v", graph.AdjacencyLayerSources[idx].Layer, sourceRef, newRef)
+						}
+						if err := validateColumnAssetRefForPlan(newRef); err != nil {
+							return nil, 0, err
+						}
+						graph.AdjacencyLayerSources[idx].Ref = newRef
+						graph.AdjacencyLayerSources[idx].AssetBytes = newRef.Length
+						changed = true
+						count++
+					}
+				}
+				if len(graph.AdjacencyLayerSources) > 0 {
+					graph.Layer0AdjacencySource = graph.AdjacencyLayerSources[0]
+				}
+			} else if graph.Layer0AdjacencySource.Present {
+				sourceRef := graph.Layer0AdjacencySource.Ref
+				if newRef, ok := byOldRef[sourceRef]; ok {
+					if !columnAssetRewriteSameLogicalRef(sourceRef, newRef) {
+						return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector graph layer-0 adjacency source ref %+v to %+v", sourceRef, newRef)
+					}
+					if err := validateColumnAssetRefForPlan(newRef); err != nil {
+						return nil, 0, err
+					}
+					graph.Layer0AdjacencySource.Ref = newRef
+					graph.Layer0AdjacencySource.AssetBytes = newRef.Length
+					changed = true
+					count++
+				}
+			}
+			if changed {
+				value, err := encodeColumnVectorGraphManifestRecord(graph)
+				if err != nil {
+					return nil, 0, err
+				}
+				patched[i].value = value
+			}
+			continue
+		}
+		if bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes) {
+			state, err := decodeColumnVectorIndexStateRecord(record.value)
+			if err != nil {
+				return nil, 0, err
+			}
+			if _, err := columnVectorIndexStateManifestAssetRefsForScan(state, state.BaseManifestGeneration, expectedNamespace); err != nil {
+				return nil, 0, err
+			}
+			changed := false
+			for idx := range state.Assets {
+				oldRef := state.Assets[idx].Ref
+				newRef, ok := byOldRef[oldRef]
+				if !ok {
+					continue
+				}
+				if !columnAssetRewriteSameLogicalRef(oldRef, newRef) {
+					return nil, 0, fmt.Errorf("collections: column asset rewrite cannot remap non-equivalent vector-index state role=%q id=%q ref %+v to %+v", state.Assets[idx].Role, state.Assets[idx].AssetID, oldRef, newRef)
+				}
+				if err := validateColumnAssetRefForPlan(newRef); err != nil {
+					return nil, 0, err
+				}
+				state.Assets[idx].Ref = newRef
+				state.Assets[idx].AssetBytes = newRef.Length
+				changed = true
+				count++
+			}
+			if changed {
+				value, err := encodeColumnVectorIndexStateRecord(state)
+				if err != nil {
+					return nil, 0, err
+				}
+				patched[i].value = value
+			}
 			continue
 		}
 		isPart := bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes)
@@ -560,6 +641,18 @@ func patchColumnAssetRewriteManifestRecordsWithMode(records []columnManifestReco
 	return patched, count, nil
 }
 
+func patchColumnVectorGraphAdjacencySourceGraphIdentity(source *columnVectorGraphLayer0AdjacencySourceSnapshot, graphRef ColumnAssetRef) {
+	if source == nil || !source.Present {
+		return
+	}
+	source.GraphAssetGeneration = graphRef.Generation
+	source.GraphAssetPartID = graphRef.PartID
+	source.GraphAssetFileID = graphRef.FileID
+	source.GraphAssetOffset = graphRef.Offset
+	source.GraphAssetLength = graphRef.Length
+	source.GraphAssetChecksum = graphRef.Checksum
+}
+
 type columnAssetRewriteManifestPartPatchOffsets struct {
 	fileID   int
 	offset   int
@@ -573,7 +666,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
 	version := cur.u16()
-	if version != columnManifestRecordVersion && version != columnManifestRecordVersionV1 {
+	if !isSupportedColumnManifestRecordVersion(version) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part version=%d", version)
 	}
 	kindBytes := cur.stringBytes()
@@ -589,13 +682,21 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 	offsets.checksum = cur.pos
 	checksum64 := cur.u64()
 	rows64 := uint64(0)
-	if version >= columnManifestRecordVersion {
+	if version >= columnManifestRecordVersionV2 {
 		rows64 = cur.u64()
 	}
 	bytes64 := cur.u64()
 	_ = cur.u64() // publish_id; rewrite preserves the original field bytes.
 	_ = cur.u64() // generation_id; rewrite preserves the original field bytes.
-	_ = cur.stringBytes()
+	reason := cur.stringBytes()
+	role := ColumnManifestPartRole("")
+	if version >= columnManifestRecordVersionV3 {
+		role = ColumnManifestPartRole(string(cur.stringBytes()))
+	}
+	var sortKey []ColumnSortKey
+	if version >= columnManifestRecordVersionV4 {
+		sortKey = readColumnManifestSortKey(&cur)
+	}
 	if err := cur.err; err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
 	}
@@ -603,8 +704,14 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: trailing bytes in column manifest part record")
 	}
 	kind := ColumnAssetKind(string(kindBytes))
-	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes && kind != ColumnAssetKindTCS1Int64Values {
+	if kind != ColumnAssetKindTCS1PartImage && kind != ColumnAssetKindTCS1TypedColumnPart && kind != ColumnAssetKindTCS1AggregateMetadata && kind != ColumnAssetKindTCS1DictionaryCodes && kind != ColumnAssetKindTCS1Int64Values {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: unsupported column manifest part asset kind %q", string(kindBytes))
+	}
+	if role == "" {
+		if version >= columnManifestRecordVersionV3 && (kind == ColumnAssetKindTCS1PartImage || kind == ColumnAssetKindTCS1TypedColumnPart) {
+			return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, errors.New("collections: column manifest part role is required for v3 typed-storage part record")
+		}
+		role = inferColumnManifestPartRole(kind, string(reason))
 	}
 	if !columnPhysicalBytesEqualString(namespaceBytes, expectedNamespace) {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, fmt.Errorf("collections: column manifest part namespace=%q want %q", string(namespaceBytes), expectedNamespace)
@@ -631,7 +738,7 @@ func columnAssetRewriteManifestPartRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64)}); err != nil {
+	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), Reason: string(reason), PartRole: role, SortKey: columnSortKeyMatchString(sortKey)}); err != nil {
 		return ColumnAssetRef{}, columnAssetRewriteManifestPartPatchOffsets{}, err
 	}
 	return ref, offsets, nil
@@ -649,7 +756,7 @@ func columnVectorGraphManifestAssetRefForPatch(raw []byte, expectedNamespace str
 	if magic := cur.u32(); magic != columnManifestVectorGraphMagic {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: bad column vector graph manifest magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnManifestRecordVersion {
+	if version := cur.u16(); !isSupportedColumnVectorGraphManifestRecordVersion(version) {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: unsupported column vector graph manifest version=%d", version)
 	}
 	_ = cur.stringBytes() // index_name
@@ -715,8 +822,11 @@ func columnVectorGraphManifestAssetRefForPatch(raw []byte, expectedNamespace str
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	if err := validateColumnPreparedAssetForPlan(ColumnPreparedAsset{Ref: ref, Rows: int(rowCount64), Bytes: int64(assetBytes64)}); err != nil {
+	if err := validateColumnAssetRefForPlan(ref); err != nil {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, err
+	}
+	if assetBytes64 == 0 {
+		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, errors.New("collections: column vector graph manifest asset bytes=0 must be positive")
 	}
 	if ref.Length != int64(assetBytes64) {
 		return ColumnAssetRef{}, columnVectorGraphManifestRefPatchOffsets{}, fmt.Errorf("collections: column vector graph manifest asset bytes=%d does not match ref length=%d", assetBytes64, ref.Length)

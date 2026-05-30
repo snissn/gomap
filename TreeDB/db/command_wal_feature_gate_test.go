@@ -264,16 +264,10 @@ func TestCommandWALRequiredFeatureEnablesBackendCommandWAL(t *testing.T) {
 	}
 }
 
-func TestCommandWALRequiredFeatureFailsClosedForOfflineMaintenance(t *testing.T) {
+func TestCommandWALRequiredFeatureRejectsOfflineValueLogRewrite(t *testing.T) {
 	dir := t.TempDir()
 	if err := SaveFormatConfig(dir, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}}); err != nil {
 		t.Fatalf("SaveFormatConfig: %v", err)
-	}
-	if err := VacuumIndexOffline(Options{Dir: dir}); !errors.Is(err, ErrCommandWALUnsupported) {
-		t.Fatalf("VacuumIndexOffline error=%v, want ErrCommandWALUnsupported", err)
-	}
-	if err := VacuumIndexOffline(Options{Dir: dir, IgnoreFormatConfig: true}); !errors.Is(err, ErrCommandWALUnsupported) {
-		t.Fatalf("VacuumIndexOffline IgnoreFormatConfig error=%v, want ErrCommandWALUnsupported", err)
 	}
 	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); !errors.Is(err, ErrCommandWALUnsupported) {
 		t.Fatalf("ValueLogRewriteOffline error=%v, want ErrCommandWALUnsupported", err)

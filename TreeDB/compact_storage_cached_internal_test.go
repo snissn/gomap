@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"hash/crc32"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,6 +12,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -363,7 +363,7 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 	for i := 0; i < rows; i++ {
 		key := cachedRewriteReclaimKey(i)
 		value := cachedRewriteReclaimValue(i)
-		expected[string(key)] = expectedValue{size: len(value), sum: crc32.ChecksumIEEE(value)}
+		expected[string(key)] = expectedValue{size: len(value), sum: crc.Checksum(value)}
 		if err := batch.Set(key, value); err != nil {
 			t.Fatalf("batch set %d: %v", i, err)
 		}
@@ -448,9 +448,9 @@ func TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters(t *testing
 			_ = reopened.Close()
 			t.Fatalf("get %x after CompactStorage: %v", []byte(key), err)
 		}
-		if len(got) != want.size || crc32.ChecksumIEEE(got) != want.sum {
+		if len(got) != want.size || crc.Checksum(got) != want.sum {
 			_ = reopened.Close()
-			t.Fatalf("value mismatch for %x: got len=%d crc=%08x want len=%d crc=%08x", []byte(key), len(got), crc32.ChecksumIEEE(got), want.size, want.sum)
+			t.Fatalf("value mismatch for %x: got len=%d crc=%08x want len=%d crc=%08x", []byte(key), len(got), crc.Checksum(got), want.size, want.sum)
 		}
 	}
 	if err := reopened.Close(); err != nil {

@@ -20,6 +20,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and journal replay details.
 - **[Profiles](TREEDB_PROFILES.md)**: High-level command-WAL, legacy-WAL, no-WAL, and benchmark option presets.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
+- **[Typed-Storage Guides](../TreeDB/docs/guides/README.md)**: Collection layout quickstarts, typed-storage benchmark/profile guide, and vector typed-column guidance.
 
 ## ⚡ HashDB
 

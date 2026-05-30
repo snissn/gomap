@@ -34,7 +34,7 @@ const (
 	MaxCompressedDecodedBytes             = 64 * MiB
 	DefaultRecoveryHeapBudgetBytes        = 128 * MiB
 	CollectionUIDBytes                    = 16
-	CRC32CBytes                           = 4
+	CRC32IEEEBytes                        = 4
 )
 
 func ValidateEncodedTransactionSize(n uint64) error {

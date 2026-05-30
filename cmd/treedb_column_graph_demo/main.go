@@ -177,9 +177,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fmt.Fprintf(stdout, "db_dir=%s rows=%d dims=%d degree=%d top_k=%d ef_search=%d\n", cfg.Dir, len(rows), dims, cfg.Degree, cfg.TopK, cfg.EfSearch)
 	fmt.Fprintf(stdout, "rebuild status=%s loaded=%t reason=%s\n", status.State, status.Loaded, status.Reason)
 	fmt.Fprintf(stdout, "search path=%s status=%s loaded=%t results=%d include_docs=%t\n", got.Path, got.Status.State, got.Status.Loaded, len(got.Results), cfg.IncludeDocs)
-	fmt.Fprintf(stdout, "stats candidates=%d edges=%d row_fetches=%d cache_hits=%d cache_misses=%d decoded_blocks=%d granules_touched=%d physical_B=%d max_resident_B=%d docs_fetched=%d\n",
+	fmt.Fprintf(stdout, "stats candidate_rows=%d candidates=%d edges=%d visited_nodes=%d visited_edges=%d vector_B=%d adjacency_B=%d row_fetches=%d cache_hits=%d cache_misses=%d decoded_blocks=%d granules_touched=%d physical_B=%d max_resident_B=%d docs_fetched=%d\n",
+		got.Stats.CandidateRows,
 		got.Stats.Candidates,
 		got.Stats.Edges,
+		got.Stats.VisitedNodes,
+		got.Stats.VisitedEdges,
+		got.Stats.VectorBytesRead,
+		got.Stats.AdjacencyBytesRead,
 		got.Stats.RowFetches,
 		got.Stats.CacheHits,
 		got.Stats.CacheMisses,

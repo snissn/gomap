@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -1615,7 +1615,7 @@ func TestNextRewriteRIDStartFromSet_ErrorsOnCorruptMidFileRecord(t *testing.T) {
 	binary.LittleEndian.PutUint64(rawRecord[ridStart:ridEnd], 20)
 	binary.LittleEndian.PutUint32(rawRecord[bodyLenStart:bodyLenEnd], 1)
 	rawRecord[valuelog.HeaderSize] = 0xff
-	binary.LittleEndian.PutUint32(rawRecord[crcStart:versionOff], crc32.ChecksumIEEE(rawRecord[versionOff:]))
+	binary.LittleEndian.PutUint32(rawRecord[crcStart:versionOff], crc.Checksum(rawRecord[versionOff:]))
 	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-versionOff)); err != nil {
 		t.Fatalf("AppendRawRecord(corrupt grouped): %v", err)
 	}
@@ -3105,7 +3105,7 @@ func TestScanValueLogSegmentPreferredDictID_SkipsNonGroupedRecords(t *testing.T)
 	binary.LittleEndian.PutUint64(rawRecord[8:16], 1)
 	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(len(rawPayload)))
 	copy(rawRecord[valuelog.HeaderSize:], rawPayload)
-	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
+	binary.LittleEndian.PutUint32(rawRecord[0:4], crc.Checksum(rawRecord[4:]))
 	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
 		t.Fatalf("AppendRawRecord: %v", err)
 	}
@@ -3152,7 +3152,7 @@ func TestScanValueLogSegmentPreferredDictID_IgnoresInvalidRecordVersion(t *testi
 	binary.LittleEndian.PutUint64(rawRecord[8:16], 1)
 	binary.LittleEndian.PutUint32(rawRecord[16:20], uint32(len(payload)))
 	copy(rawRecord[valuelog.HeaderSize:], payload)
-	binary.LittleEndian.PutUint32(rawRecord[0:4], crc32.ChecksumIEEE(rawRecord[4:]))
+	binary.LittleEndian.PutUint32(rawRecord[0:4], crc.Checksum(rawRecord[4:]))
 	if _, err := w.AppendRawRecord(rawRecord, uint32(len(rawRecord)-4)); err != nil {
 		t.Fatalf("AppendRawRecord: %v", err)
 	}

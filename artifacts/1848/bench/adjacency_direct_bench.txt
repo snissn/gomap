@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/snissn/gomap/TreeDB/collections
+cpu: Apple M3
+BenchmarkTypedColumnAdjacencyDenseDirectViewScan-8   	   32833	     38826 ns/op	13503.59 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/collections	2.210s

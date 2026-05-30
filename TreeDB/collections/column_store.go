@@ -24,6 +24,11 @@ const (
 	columnManifestIdentityReservedSize          = 4
 	columnManifestIdentityRecordSize            = columnManifestIdentityReservedOffset + columnManifestIdentityReservedSize
 	columnManifestIdentityRecordKey             = "\x00column-manifest/identity"
+
+	// typedcolumn currently encodes sort-key marks with a fixed eight-column cap.
+	// Keep typed-column-owned publication validation aligned with that engine cap
+	// until the internal mark format grows.
+	typedColumnPartSortKeyMaxColumns = 8
 )
 
 func newColumnManifestIdentityRecordKey() []byte {
@@ -57,6 +62,10 @@ const (
 	ColumnStoreValueDouble        ColumnStoreValueType = "double"
 	ColumnStoreValueString        ColumnStoreValueType = "string"
 	ColumnStoreValueFloat32Vector ColumnStoreValueType = "float32_vector"
+	ColumnStoreValueUint32List    ColumnStoreValueType = "uint32_list"
+	// AdjacencyList is the current compatibility name for graph adjacency data.
+	// It must not become the target variable-list datastore primitive; #1984/#1985
+	// own the generic uint32_list logical type and raw_uint32_offsets_list encoding.
 	ColumnStoreValueAdjacencyList ColumnStoreValueType = "adjacency_list"
 )
 
@@ -67,6 +76,16 @@ const (
 	// fixed-width element bytes inside the physical part image.
 	ColumnFixedWidthEncodingDefault      ColumnFixedWidthEncoding = ""
 	ColumnFixedWidthEncodingLittleEndian ColumnFixedWidthEncoding = "little_endian"
+)
+
+type ColumnAdjacencyListLayout string
+
+const (
+	// Empty preserves the existing fixed-degree dense adjacency layout selected
+	// by adjacency_degree. The #1901 v1 variable-list primitive must be selected
+	// explicitly and must not be inferred from a missing degree.
+	ColumnAdjacencyListLayoutFixedDense        ColumnAdjacencyListLayout = ""
+	ColumnAdjacencyListLayoutUint32OffsetsList ColumnAdjacencyListLayout = "uint32_offsets_list"
 )
 
 type ColumnSortDirection string
@@ -137,9 +156,10 @@ const (
 	ColumnAssetReadIntegrityVerify ColumnAssetReadIntegrity = "verify"
 	// ColumnAssetReadIntegrityCachedVerify verifies each immutable typed asset
 	// ref on first process read, then skips repeated hot-read CRC work for the
-	// same ref. It is a benchmark-relaxed mode: post-verification file
-	// corruption can be missed until the cache entry is evicted or the process
-	// restarts.
+	// same ref. Explicit prepared read sessions may also reuse the file identity
+	// captured when the segment reader was opened. It is a benchmark-relaxed mode:
+	// post-verification file corruption can be missed until the cache entry is
+	// evicted, the prepared session is closed, or the process restarts.
 	ColumnAssetReadIntegrityCachedVerify ColumnAssetReadIntegrity = "cached_verify"
 	// ColumnAssetReadIntegritySkipChecksums is an unsafe relaxed hot-read mode
 	// for benchmark/performance attribution. It skips per-read payload checksum
@@ -168,13 +188,24 @@ type ColumnStoreConfig struct {
 }
 
 type ColumnStoreColumn struct {
-	Name               string                   `json:"name"`
-	Path               string                   `json:"path"`
-	ValueType          ColumnStoreValueType     `json:"value_type"`
-	Nullable           bool                     `json:"nullable,omitempty"`
-	Dictionary         bool                     `json:"dictionary,omitempty"`
-	VectorDims         int                      `json:"vector_dims,omitempty"`
-	FixedWidthEncoding ColumnFixedWidthEncoding `json:"fixed_width_encoding,omitempty"`
+	Name      string               `json:"name"`
+	Path      string               `json:"path"`
+	ValueType ColumnStoreValueType `json:"value_type"`
+	// Owner is typed-storage metadata. The zero value preserves compatibility and
+	// resolves to typed_row_asset; typed_column_part is opt-in/experimental.
+	Owner      TypedStorageFieldOwner `json:"owner,omitempty"`
+	Nullable   bool                   `json:"nullable,omitempty"`
+	Dictionary bool                   `json:"dictionary,omitempty"`
+	VectorDims int                    `json:"vector_dims,omitempty"`
+	// AdjacencyDegree is the fixed number of uint32 neighbors per row for the
+	// legacy/fallback dense adjacency_list typed_column_part layout.
+	AdjacencyDegree int `json:"adjacency_degree,omitempty"`
+	// AdjacencyLayout selects the explicit adjacency_list physical layout. Empty
+	// means fixed dense compatibility; uint32_offsets_list is the current
+	// quarantined compatibility selector for adapter writer/fallback/direct reads,
+	// not the generic uint32_list API.
+	AdjacencyLayout    ColumnAdjacencyListLayout `json:"adjacency_layout,omitempty"`
+	FixedWidthEncoding ColumnFixedWidthEncoding  `json:"fixed_width_encoding,omitempty"`
 }
 
 type ColumnSortKey struct {
@@ -219,9 +250,12 @@ type ColumnStoreCacheIdentity struct {
 	CatalogSystemRoot                      uint64
 	CatalogCommitSeq                       uint64
 	ManifestGeneration                     uint64
+	ManifestChecksum                       uint64
 	RecoveryAuthoritativeGeneration        uint64
+	RecoveryAuthoritativeChecksum          uint64
 	RecoveryAuthoritativeAppliedCommandLSN uint64
 	ManifestRoot                           uint64
+	ManifestRootName                       string
 }
 
 type ColumnCacheEntryKind string
@@ -280,21 +314,31 @@ func columnStoreCacheIdentity(catalog *collectionCatalog, systemRoot, commitSeq 
 		return ColumnStoreCacheIdentity{}, false
 	}
 	cfg := catalog.meta.Options.ColumnStore
+	manifestRootName := catalog.columnManifestRootName
+	if manifestRootName == "" && cfg.ManifestRoot != nil {
+		manifestRootName = cfg.ManifestRoot.Name
+	}
+	if manifestRootName == "" {
+		manifestRootName = collectionColumnManifestRootName(catalog.meta.Name)
+	}
 	id := ColumnStoreCacheIdentity{
 		Collection:        catalog.meta.Name,
 		SchemaHash:        cfg.SchemaHash,
 		CatalogSystemRoot: systemRoot,
 		CatalogCommitSeq:  commitSeq,
-		ManifestRoot:      catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)),
+		ManifestRoot:      catalog.rootID(manifestRootName),
+		ManifestRootName:  manifestRootName,
 	}
 	if id.SchemaHash == 0 {
 		id.SchemaHash = hashColumnStoreSchema(cfg)
 	}
 	if cfg.ActiveManifest != nil {
 		id.ManifestGeneration = cfg.ActiveManifest.Generation
+		id.ManifestChecksum = cfg.ActiveManifest.Checksum
 	}
 	if cfg.RecoveryAuthoritativeManifest != nil {
 		id.RecoveryAuthoritativeGeneration = cfg.RecoveryAuthoritativeManifest.Generation
+		id.RecoveryAuthoritativeChecksum = cfg.RecoveryAuthoritativeManifest.Checksum
 		id.RecoveryAuthoritativeAppliedCommandLSN = cfg.RecoveryAuthoritativeAppliedCommandLSN
 	}
 	return id, true
@@ -426,12 +470,34 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q value_type: %w", col.Name, err)
 		}
+		owner, err := columnStoreColumnOwner(col)
+		if err != nil {
+			return fmt.Errorf("collections: invalid column %q owner: %w", col.Name, err)
+		}
+		if owner != TypedStorageOwnerRowAsset && owner != TypedStorageOwnerColumnPart {
+			return fmt.Errorf("collections: invalid column %q owner: %s is not a typed asset owner", col.Name, owner)
+		}
 		fixedWidthEncoding, err := normalizeColumnFixedWidthEncoding(col.FixedWidthEncoding)
 		if err != nil {
 			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: %w", col.Name, err)
 		}
+		adjacencyLayout, err := normalizeColumnAdjacencyListLayout(col.AdjacencyLayout)
+		if err != nil {
+			return fmt.Errorf("collections: invalid column %q adjacency_layout: %w", col.Name, err)
+		}
+		if adjacencyLayout != ColumnAdjacencyListLayoutFixedDense && valueType != ColumnStoreValueAdjacencyList {
+			return fmt.Errorf("collections: invalid column %q adjacency_layout: only adjacency_list columns may set adjacency_layout", col.Name)
+		}
 		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && !columnStoreValueTypeSupportsFixedWidthEncoding(valueType) {
 			return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
+		}
+		if fixedWidthEncoding != ColumnFixedWidthEncodingDefault && columnStoreValueTypeHasScalarFixedWidthPayload(valueType) {
+			if owner != TypedStorageOwnerColumnPart {
+				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: %s raw fixed-width encoding requires owner %q", col.Name, valueType, TypedStorageOwnerColumnPart)
+			}
+			if col.Nullable {
+				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: nullable %s raw fixed-width encoding is unsupported", col.Name, valueType)
+			}
 		}
 		if valueType == ColumnStoreValueFloat32Vector {
 			if col.VectorDims <= 0 {
@@ -439,6 +505,52 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			}
 		} else if col.VectorDims != 0 {
 			return fmt.Errorf("collections: invalid column %q vector_dims: only float32_vector columns may set vector_dims", col.Name)
+		}
+		if valueType == ColumnStoreValueUint32List {
+			if col.Nullable {
+				return fmt.Errorf("collections: invalid column %q nullable uint32_list is unsupported", col.Name)
+			}
+			if col.AdjacencyDegree != 0 {
+				return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list columns may set adjacency_degree", col.Name)
+			}
+			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
+			}
+		}
+		if valueType == ColumnStoreValueAdjacencyList {
+			if col.AdjacencyDegree < 0 {
+				return fmt.Errorf("collections: invalid column %q adjacency_degree: must be non-negative", col.Name)
+			}
+			switch adjacencyLayout {
+			case ColumnAdjacencyListLayoutFixedDense:
+				if owner != TypedStorageOwnerColumnPart {
+					if col.AdjacencyDegree != 0 {
+						return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list typed_column_part columns may set adjacency_degree", col.Name)
+					}
+				} else {
+					if col.Nullable {
+						return fmt.Errorf("collections: invalid column %q nullable adjacency_list typed_column_part is unsupported", col.Name)
+					}
+					if col.AdjacencyDegree <= 0 {
+						return fmt.Errorf("collections: invalid column %q adjacency_degree: must be positive for adjacency_list typed_column_part", col.Name)
+					}
+				}
+			case ColumnAdjacencyListLayoutUint32OffsetsList:
+				if owner != TypedStorageOwnerColumnPart {
+					return fmt.Errorf("collections: invalid column %q adjacency_layout: uint32_offsets_list requires owner %q", col.Name, TypedStorageOwnerColumnPart)
+				}
+				if col.Nullable {
+					return fmt.Errorf("collections: invalid column %q nullable adjacency_list typed_column_part is unsupported", col.Name)
+				}
+				if col.AdjacencyDegree != 0 {
+					return fmt.Errorf("collections: invalid column %q adjacency_degree: must be zero for adjacency_layout %q", col.Name, adjacencyLayout)
+				}
+				if fixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+					return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for adjacency_layout %q", col.Name, adjacencyLayout)
+				}
+			}
+		} else if col.AdjacencyDegree != 0 {
+			return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list columns may set adjacency_degree", col.Name)
 		}
 		if col.Dictionary && valueType != ColumnStoreValueString {
 			return fmt.Errorf("collections: invalid column %q dictionary: unsupported for value_type %q", col.Name, valueType)
@@ -453,10 +565,24 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		columnTypes[col.Name] = valueType
 		columnPaths[col.Path] = struct{}{}
 	}
+	columnByName := make(map[string]ColumnStoreColumn, len(cfg.Columns))
+	for _, col := range cfg.Columns {
+		columnByName[col.Name] = col
+	}
+	if uint64(len(cfg.SortKey)) > columnManifestSortKeyMaxColumns {
+		return fmt.Errorf("collections: sort key columns=%d exceeds cap %d", len(cfg.SortKey), columnManifestSortKeyMaxColumns)
+	}
+	sortKeyColumns := make(map[string]struct{}, len(cfg.SortKey))
+	allSortKeyColumnsTypedPart := len(cfg.SortKey) != 0
 	for _, sortKey := range cfg.SortKey {
-		if _, ok := columnNames[sortKey.Column]; !ok {
+		col, ok := columnByName[sortKey.Column]
+		if !ok {
 			return fmt.Errorf("collections: sort key references unknown column %q", sortKey.Column)
 		}
+		if _, exists := sortKeyColumns[sortKey.Column]; exists {
+			return fmt.Errorf("collections: duplicate sort key column %q", sortKey.Column)
+		}
+		sortKeyColumns[sortKey.Column] = struct{}{}
 		if !columnStoreValueTypeSupportsSort(columnTypes[sortKey.Column]) {
 			return fmt.Errorf("collections: sort key column %q value_type %q is not orderable", sortKey.Column, columnTypes[sortKey.Column])
 		}
@@ -464,6 +590,26 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		case ColumnSortAscending, ColumnSortDescending:
 		default:
 			return fmt.Errorf("collections: unsupported sort direction %q", sortKey.Direction)
+		}
+		if !columnStoreColumnIsTypedColumnPart(col) {
+			allSortKeyColumnsTypedPart = false
+		}
+	}
+	if allSortKeyColumnsTypedPart {
+		if len(cfg.SortKey) > typedColumnPartSortKeyMaxColumns {
+			return fmt.Errorf("collections: typed_column_part sort key columns=%d exceeds cap %d", len(cfg.SortKey), typedColumnPartSortKeyMaxColumns)
+		}
+		for _, sortKey := range cfg.SortKey {
+			col := columnByName[sortKey.Column]
+			if sortKey.Direction == ColumnSortDescending {
+				return fmt.Errorf("collections: descending typed_column_part sort key column %q is not supported yet", sortKey.Column)
+			}
+			if col.Nullable {
+				return fmt.Errorf("collections: typed_column_part sort key column %q is nullable; null/default ordering is not defined", sortKey.Column)
+			}
+			if !columnStoreValueTypeSupportsTypedColumnPartSort(col.ValueType) {
+				return fmt.Errorf("collections: typed_column_part sort key column %q value_type %q is not supported yet", sortKey.Column, col.ValueType)
+			}
 		}
 	}
 	aggregateNames := make(map[string]struct{}, len(cfg.AggregateMetadata))
@@ -571,7 +717,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 
 func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreValueType, error) {
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueAdjacencyList:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")
@@ -589,6 +735,15 @@ func normalizeColumnFixedWidthEncoding(encoding ColumnFixedWidthEncoding) (Colum
 	}
 }
 
+func normalizeColumnAdjacencyListLayout(layout ColumnAdjacencyListLayout) (ColumnAdjacencyListLayout, error) {
+	switch layout {
+	case ColumnAdjacencyListLayoutFixedDense, ColumnAdjacencyListLayoutUint32OffsetsList:
+		return layout, nil
+	default:
+		return "", fmt.Errorf("unsupported adjacency_layout %q", layout)
+	}
+}
+
 func columnFixedWidthEncodingIsLittleEndian(encoding ColumnFixedWidthEncoding) (bool, error) {
 	normalized, err := normalizeColumnFixedWidthEncoding(encoding)
 	if err != nil {
@@ -597,9 +752,38 @@ func columnFixedWidthEncodingIsLittleEndian(encoding ColumnFixedWidthEncoding) (
 	return normalized == ColumnFixedWidthEncodingLittleEndian, nil
 }
 
+func columnStoreColumnOwner(col ColumnStoreColumn) (TypedStorageFieldOwner, error) {
+	return normalizeTypedStorageFieldOwner(col.Owner)
+}
+
+func columnStoreColumnOwnerOrRowAsset(col ColumnStoreColumn) TypedStorageFieldOwner {
+	owner, err := columnStoreColumnOwner(col)
+	if err != nil || owner == "" {
+		return TypedStorageOwnerRowAsset
+	}
+	return owner
+}
+
+func columnStoreColumnIsTypedColumnPart(col ColumnStoreColumn) bool {
+	return columnStoreColumnOwnerOrRowAsset(col) == TypedStorageOwnerColumnPart
+}
+
+func columnStoreColumnIsTypedRowAsset(col ColumnStoreColumn) bool {
+	return columnStoreColumnOwnerOrRowAsset(col) == TypedStorageOwnerRowAsset
+}
+
 func columnStoreValueTypeSupportsFixedWidthEncoding(valueType ColumnStoreValueType) bool {
 	switch valueType {
-	case ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+	case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueFloat32Vector, ColumnStoreValueAdjacencyList:
+		return true
+	default:
+		return false
+	}
+}
+
+func columnStoreValueTypeHasScalarFixedWidthPayload(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble:
 		return true
 	default:
 		return false
@@ -613,6 +797,15 @@ func columnStoreValueTypeSupportsDictionary(valueType ColumnStoreValueType) bool
 func columnStoreValueTypeSupportsSort(valueType ColumnStoreValueType) bool {
 	switch valueType {
 	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString:
+		return true
+	default:
+		return false
+	}
+}
+
+func columnStoreValueTypeSupportsTypedColumnPartSort(valueType ColumnStoreValueType) bool {
+	switch valueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
 		return true
 	default:
 		return false
@@ -640,7 +833,7 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 		if !ok {
 			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 		}
-		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueAdjacencyList {
+		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueAdjacencyList {
 			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
 		}
 		if aggregate.GroupColumn == "" {
@@ -669,7 +862,7 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 		if !ok {
 			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 		}
-		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueAdjacencyList {
+		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueAdjacencyList {
 			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
 		}
 	}
@@ -821,6 +1014,13 @@ func columnStoreConfigEmpty(cfg ColumnStoreConfig) bool {
 		cfg.SchemaHash == 0
 }
 
+func cloneColumnSortKeys(sortKeys []ColumnSortKey) []ColumnSortKey {
+	if len(sortKeys) == 0 {
+		return nil
+	}
+	return append([]ColumnSortKey(nil), sortKeys...)
+}
+
 func (cfg ColumnStoreConfig) copy() ColumnStoreConfig {
 	out := cfg
 	out.Columns = append([]ColumnStoreColumn(nil), cfg.Columns...)
@@ -960,7 +1160,12 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, col.Name)
 		writeHashString(&d, col.Path)
 		writeHashString(&d, string(col.ValueType))
+		writeHashString(&d, string(columnStoreColumnOwnerOrRowAsset(col)))
 		writeHashUint64(&d, uint64(col.VectorDims))
+		writeHashUint64(&d, uint64(col.AdjacencyDegree))
+		if col.AdjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
+			writeHashString(&d, string(col.AdjacencyLayout))
+		}
 		writeHashBool(&d, col.Nullable)
 		writeHashBool(&d, col.Dictionary)
 		if col.FixedWidthEncoding != ColumnFixedWidthEncodingDefault {

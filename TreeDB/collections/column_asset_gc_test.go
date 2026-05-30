@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -471,6 +472,73 @@ func TestColumnAssetGCProtectsPinnedCandidateM15B(t *testing.T) {
 	}
 	if _, err := os.Stat(candidatePath); err != nil {
 		t.Fatalf("pinned candidate segment was removed: %v", err)
+	}
+}
+
+func TestColumnAssetGCAutomaticMappedResourcePinBlocksDelete1788(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	col := openColumnStoreCollectionM10B(t, d)
+
+	if _, err := col.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetGCCandidateSegmentM15B(t, d.ColumnAssetRootDir(), col, 93, []byte("auto-pinned-candidate-segment"))
+	candidatePath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), candidate)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	mgr := mappedresource.NewManager()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(d.ColumnAssetRootDir(), candidate.Namespace, ColumnAssetReadIntegrityVerify)
+	if err != nil {
+		t.Fatalf("new read cache: %v", err)
+	}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeSnapshot, ID: "auto-gc-pin-1788", Namespace: candidate.Namespace, Collection: "events", Generation: candidate.Generation, Reason: "gc auto pin test"}
+	if err := readCache.useMappedResourceManager(mgr, scope, "gc-auto-pin"); err != nil {
+		_ = readCache.close()
+		t.Fatalf("useMappedResourceManager: %v", err)
+	}
+	if raw, err := readCache.read(candidate, nil); err != nil || string(raw) != "auto-pinned-candidate-segment" {
+		_ = readCache.close()
+		t.Fatalf("read pinned candidate raw=%q err=%v", raw, err)
+	}
+
+	pinnedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		_ = readCache.close()
+		t.Fatalf("ColumnAssetGC while mappedresource pin active: %v", err)
+	}
+	if pinnedStats.SegmentsEligible != 0 || pinnedStats.SegmentsDeleted != 0 || pinnedStats.Plan.Refs.Reclaimable != 0 {
+		_ = readCache.close()
+		t.Fatalf("pinned GC stats=%+v refs=%+v want automatic active pin retained", pinnedStats, pinnedStats.Plan.Refs)
+	}
+	if pinnedStats.Plan.MappedResources.ActiveHandles == 0 || pinnedStats.Plan.MappedResources.PinnedRefs == 0 || pinnedStats.Plan.MappedResources.PinnedBytes < candidate.Length || pinnedStats.Plan.MappedResources.ActiveHeapCopyBytes < candidate.Length || pinnedStats.Plan.Sources.MappedResourcePins == 0 {
+		_ = readCache.close()
+		t.Fatalf("mappedresource stats=%+v sources=%+v want active pinned candidate bytes", pinnedStats.Plan.MappedResources, pinnedStats.Plan.Sources)
+	}
+	if _, err := os.Stat(candidatePath); err != nil {
+		_ = readCache.close()
+		t.Fatalf("candidate segment removed while pinned: %v", err)
+	}
+	if err := readCache.close(); err != nil {
+		t.Fatalf("close read cache: %v", err)
+	}
+
+	drainedStats, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("ColumnAssetGC after pin release: %v", err)
+	}
+	if drainedStats.SegmentsDeleted != 1 || drainedStats.BytesDeleted != candidate.Length {
+		t.Fatalf("drained GC stats=%+v want candidate deleted", drainedStats)
+	}
+	if _, err := os.Stat(candidatePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("candidate still exists after pin release or unexpected stat error: %v", err)
 	}
 }
 

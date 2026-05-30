@@ -29,6 +29,7 @@ func markdownDocs(t *testing.T) []string {
 		filepath.Join(treeRoot, "AGENTS.md"),
 		filepath.Join(treeRoot, "AUDIT_TRACKING.md"),
 		filepath.Join(treeRoot, "docs", "spec"),
+		filepath.Join(treeRoot, "docs", "guides"),
 		filepath.Join(repoRoot, "docs"),
 	}
 
@@ -83,6 +84,11 @@ func TestDocs_NoTreeDBSlabTerminology(t *testing.T) {
 		t.Fatalf("glob spec docs: %v", err)
 	}
 	paths = append(paths, specPaths...)
+	guidePaths, err := filepath.Glob(filepath.Join(treeRoot, "docs", "guides", "*.md"))
+	if err != nil {
+		t.Fatalf("glob guide docs: %v", err)
+	}
+	paths = append(paths, guidePaths...)
 	allowedLegacyFields := regexp.MustCompile(`\b(activeslabid|activeslabtail)\b`)
 
 	for _, p := range paths {
@@ -119,6 +125,78 @@ func TestDocs_CanonicalStoragePaths(t *testing.T) {
 			if mentionsValueLog && (strings.Contains(lower, "dir/maindb/wal") || strings.Contains(lower, "options.dir/maindb/wal") || strings.Contains(lower, "maindb/wal/")) {
 				t.Fatalf("%s:%d places value-log data under wal; canonical value-log path is maindb/value_vlog/", p, i+1)
 			}
+		}
+	}
+}
+
+func TestTypedStorageStorageFormatDocsMentionCompatibilityDirectory(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read storage-format doc: %v", err)
+	}
+	doc := string(data)
+	pathNeedle := "`column_assets/<namespace>/assets/segments/segment-*.tca`"
+	if !strings.Contains(doc, pathNeedle) {
+		t.Fatalf("storage-format doc missing exact typed asset manager path %q", pathNeedle)
+	}
+
+	normalizedDoc := strings.Join(strings.Fields(doc), " ")
+	for _, want := range []string{
+		"- typed asset manager segments under `column_assets/<namespace>/assets/segments/segment-*.tca` for production typed-storage physical assets",
+		"`column_assets` remains the compatibility directory name",
+		"Production typed-storage physical data is stored in typed asset manager segments under the compatibility `column_assets` directory",
+		"typed-row payloads, typed-column part payloads, and derived accelerator payloads",
+	} {
+		if !strings.Contains(normalizedDoc, want) {
+			t.Fatalf("storage-format doc missing typed-storage compatibility wording %q", want)
+		}
+	}
+}
+
+func TestDocs_NullableTypedColumnSemantics(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	storagePath := filepath.Join(treeRoot, "docs", "spec", "storage-format.md")
+	storageData, err := os.ReadFile(storagePath)
+	if err != nil {
+		t.Fatalf("read storage-format doc: %v", err)
+	}
+	storageDoc := strings.Join(strings.Fields(string(storageData)), " ")
+	for _, want := range []string{
+		"Nullable scalar typed-column support uses nullable int64 carrier granules for bool, int64, float32, double/float64, and low-cardinality string fields",
+		"nullable scalar column uses the `nullable_int64` encoding",
+		"the null bitmap marks rows whose JSON path was present with an explicit `null`",
+		"the default/missing bitmap marks rows whose declared path was omitted",
+		"metadata, when present, covers only stored present/non-null carrier values",
+		"positive optimization expectation, not only a no-regression gate",
+		"actively remove existing avoidable allocations and obvious local overhead in the same touched path",
+		"target 0 allocs/op after setup when benchmarking the core typed-column loop separately from document materialization",
+		"Touched inner loops must be measurably no worse, and preferably better, on `B/op` and `allocs/op`",
+		"Checksum, lifetime, schema, null/missing, and fail-closed validation must not be weakened",
+		"Production `float32_vector`, `uint32_list`, and `adjacency_list` nullable/missing support remains staged and fail-closed",
+	} {
+		if !strings.Contains(storageDoc, want) {
+			t.Fatalf("storage-format doc missing nullable typed-column wording %q", want)
+		}
+	}
+
+	adapterPath := filepath.Join(treeRoot, "docs", "spec", "typed-column-adapter.md")
+	adapterData, err := os.ReadFile(adapterPath)
+	if err != nil {
+		t.Fatalf("read typed-column adapter doc: %v", err)
+	}
+	adapterDoc := strings.Join(strings.Fields(string(adapterData)), " ")
+	for _, want := range []string{
+		"Nullable scalar adapter support uses `nullable_int64` as the carrier encoding for bool, int64, float32, double, and low-cardinality string fields",
+		"present/non-null rows write the declared path and value, explicit-null rows write the declared path with JSON null, and missing/default rows leave the declared path absent",
+		"the scan fails closed with `ErrColumnQueryPlanUnsupported`; it must not fall back to full-document reconstruction/materialization",
+		"Direct typed-column predicate paths must preserve hot-path allocation discipline and should actively remove existing avoidable allocations",
+		"Touched inner loops must be measurably no worse, and preferably better, on `B/op` and `allocs/op`",
+		"baseline-versus-final `B/op`/`allocs/op` evidence and an allocation profile/top",
+	} {
+		if !strings.Contains(adapterDoc, want) {
+			t.Fatalf("typed-column adapter doc missing nullable query/reconstruction wording %q", want)
 		}
 	}
 }

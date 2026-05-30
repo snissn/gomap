@@ -113,3 +113,14 @@ Profile + analyze (recommended):
 See:
 - `cmd/unified_bench/README.md`
 - `cmd/benchprof/README.md`
+
+## TreeDB Collection Demos
+
+For collection quickstarts, persona/use-case guidance, and vector/RAG smoke
+commands, see `docs/TREEDB_COLLECTION_QUICKSTART.md`.
+
+Fast vector/RAG smoke:
+
+```sh
+go run ./cmd/treedb_vector_demo -rows 1000 -dims 128 -vectors typed-column -metadata typed-row -queries 10
+```
