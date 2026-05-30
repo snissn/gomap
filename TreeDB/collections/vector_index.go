@@ -566,6 +566,9 @@ func (c *Collection) ensureDeclaredNativeVectorIndexesLoaded() (map[string]struc
 	if c.db == nil {
 		return nil, errCollectionDBNil
 	}
+	if len(c.meta.VectorIndexes) == 0 && len(c.registeredVectorIndexes()) == 0 {
+		return nil, nil
+	}
 	if c.declaredNativeVectorIndexesLoadedForCurrentCatalog() {
 		return nil, nil
 	}
