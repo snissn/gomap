@@ -939,9 +939,9 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		return status, nil
 	}
 	// Certified adjacency sources are optional accelerators. Keep loaded-status
-	// gating tied to the canonical row-asset graph; search opens and validates
-	// sources independently and falls back to row assets when they are absent,
-	// corrupt, stale, incomplete, or non-certified.
+	// gating tied to the base graph asset; search opens and validates sources
+	// independently and falls back to row assets when they are absent, corrupt,
+	// stale, incomplete, or non-certified.
 	bytesDisk := columnVectorGraphStorageBytesWithState(graph, *loadedState)
 	status.State = VectorIndexStateColumnGraphLoaded
 	status.Loaded = true
@@ -1006,9 +1006,10 @@ func columnVectorGraphManifestMatchStatusWithBaseChecksum(collection string, gra
 	if graph.BaseManifestChecksum != baseChecksum {
 		return columnVectorGraphManifestMatchMismatch
 	}
-	// Layer-0 adjacency-source metadata is intentionally not part of the loaded
-	// graph match. A bad optional source disables only the direct adjacency fast
-	// path; the row-asset graph remains the canonical searchable index.
+	// Legacy graph-specific adjacency-source metadata is intentionally not part of
+	// the cheap loaded-status match. Healthy search state is validated through the
+	// vector-index state manifest; corrupt legacy source metadata must not make the
+	// row-asset compatibility record look like the target architecture.
 	return columnVectorGraphManifestMatchLoaded
 }
 

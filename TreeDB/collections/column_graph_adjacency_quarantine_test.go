@@ -137,7 +137,7 @@ func TestColumnGraphAdjacencySourceDocsPointToQuarantine(t *testing.T) {
 		"TreeDB/docs/spec/storage-format.md": {
 			"Issue #1989 quarantines that\nconsumer-specific selector",
 			"New graph builds leave\nthese `TCGA`/`TCGL` fields empty",
-			"Old adjacency-source refs are #1989-quarantined\ncompatibility",
+			"Old adjacency-source refs are\n`#1989-quarantined` compatibility",
 		},
 		"TreeDB/docs/guides/vector-search-typed-column.md": {
 			"typed-column `uint32_list` assets owned by vector-index state",
