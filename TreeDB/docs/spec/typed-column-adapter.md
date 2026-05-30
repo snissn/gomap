@@ -77,8 +77,10 @@ one column-wide values section containing the exact concatenation of row bytes.
 Validation requires monotonic host-int-bounded offsets and a final offset equal
 to the values byte length. Owned fallback reads copy offsets and values; certified
 direct views expose offsets and byte values tied to mapped-resource lifetimes.
-No UTF-8, collation, dictionary order, lexical range, or scalar string operation
-is implied by this primitive.
+JSON ingestion represents a `bytes` value as an array of integer byte values in
+`[0,255]`; string/base64/text forms are intentionally not accepted by this
+primitive. No UTF-8, collation, dictionary order, lexical range, or scalar string
+operation is implied by this primitive.
 
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit

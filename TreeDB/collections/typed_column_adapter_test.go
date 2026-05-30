@@ -401,6 +401,21 @@ func TestTypedColumnAdapterRoundTripUint32List1985(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterRoundTripBytes2010(t *testing.T) {
+	want := [][]byte{{}, {0x00, 'A', 0xff}, {0xfe, 0x80}}
+	values := make([]columnDeclaredValue, len(want))
+	for i, v := range want {
+		values[i] = columnDeclaredValue{Type: ColumnStoreValueBytes, Present: true, Bytes: v}
+	}
+	field := typedColumnAdapterField("opaque", ColumnStoreValueBytes)
+	got := typedColumnAdapterRoundTrip(t, field, values)
+	for i := range want {
+		if !bytes.Equal(got[i].Bytes, want[i]) {
+			t.Fatalf("bytes[%d]=%v want %v all=%+v", i, got[i].Bytes, want[i], got)
+		}
+	}
+}
+
 func TestTypedColumnAdapterRoundTripAdjacencyList(t *testing.T) {
 	want := [][]uint32{{1, 2, 3}, {4, 5, 6}}
 	values := make([]columnDeclaredValue, len(want))
