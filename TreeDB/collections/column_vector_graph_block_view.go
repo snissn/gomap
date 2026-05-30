@@ -41,6 +41,7 @@ type columnVectorGraphSearchPlan struct {
 	ordinalRefsReady   bool
 	singleOrdinalRange bool
 	scoreSource        columnVectorGraphSearchSource
+	scoreBatchMode     columnVectorGraphScoreBatchMode
 	hits               uint64
 	misses             uint64
 	builds             uint64

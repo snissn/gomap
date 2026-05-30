@@ -26,6 +26,7 @@ type columnVectorGraphNativeSearchBenchShapeV3 struct {
 	queryOrdinal        int
 	directPhysicalAsset bool
 	typedColumnVector   bool
+	scoreBatchMode      columnVectorGraphScoreBatchMode
 }
 
 func TestColumnVectorGraphAdjacencySourceStatsSkipEmptyNoopV3(t *testing.T) {
@@ -816,6 +817,24 @@ func BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnProduction8192V3(b *
 	benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
 }
 
+func BenchmarkColumnVectorGraphNativeSearchCosineIndexedScoring1969(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		mode columnVectorGraphScoreBatchMode
+	}{
+		{name: "scalar", mode: columnVectorGraphScoreBatchModeScalar},
+		{name: "indexed", mode: columnVectorGraphScoreBatchModeIndexed},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			shape := columnVectorGraphNativeSearchSmallBenchShapeV3()
+			shape.typedColumnVector = true
+			shape.scoreBatchMode = tc.mode
+			benchmarkColumnVectorGraphNativeSearchCosineV3(b, shape)
+		})
+	}
+}
+
 func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVectorGraphNativeSearchBenchShapeV3) {
 	b.Helper()
 	closeFn, col, def, query := openColumnVectorGraphNativeSearchBenchFixtureV3(b, shape)
@@ -826,7 +845,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 	}
 	defer reader.Close()
 	var scratch columnVectorGraphNativeSearchScratch
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch}
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: shape.scoreBatchMode}
 	if _, _, err := reader.SearchCosine(query, opts, &scratch); err != nil {
 		b.Fatalf("warm SearchCosine: %v", err)
 	}
@@ -856,6 +875,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.ResultFetches += stats.ResultFetches
 		searchStats.ScoreBatches += stats.ScoreBatches
 		searchStats.OrdinalsGrouped += stats.OrdinalsGrouped
+		searchStats.ScoreBatchCalls += stats.ScoreBatchCalls
+		searchStats.ScoreBatchCandidates += stats.ScoreBatchCandidates
+		if stats.ScoreBatchMaxTileSize > searchStats.ScoreBatchMaxTileSize {
+			searchStats.ScoreBatchMaxTileSize = stats.ScoreBatchMaxTileSize
+		}
+		searchStats.ScoreBatchOptimizedCalls += stats.ScoreBatchOptimizedCalls
+		searchStats.ScoreBatchScalarFallbackCalls += stats.ScoreBatchScalarFallbackCalls
 		searchStats.BlockViewHits += stats.BlockViewHits
 		searchStats.BlockViewMisses += stats.BlockViewMisses
 		searchStats.BlockViewBuilds += stats.BlockViewBuilds
@@ -960,7 +986,7 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	previousGOMAXPROCS := runtime.GOMAXPROCS(workers)
 	defer runtime.GOMAXPROCS(previousGOMAXPROCS)
 	benchWorkers := make([]*searchWorker, workers)
-	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch}
+	opts := columnVectorGraphNativeSearchOptions{TopK: shape.topK, EfSearch: shape.efSearch, ScoreBatchMode: shape.scoreBatchMode}
 	for i := range benchWorkers {
 		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
 		if err != nil {
@@ -999,6 +1025,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalResultFetches atomic.Uint64
 	var totalScoreBatches atomic.Uint64
 	var totalOrdinalsGrouped atomic.Uint64
+	var totalScoreBatchCalls atomic.Uint64
+	var totalScoreBatchCandidates atomic.Uint64
+	var totalScoreBatchMaxTileSize atomic.Uint64
+	var totalScoreBatchOptimizedCalls atomic.Uint64
+	var totalScoreBatchScalarFallbackCalls atomic.Uint64
 	var totalBlockViewHits atomic.Uint64
 	var totalBlockViewMisses atomic.Uint64
 	var totalBlockViewBuilds atomic.Uint64
@@ -1090,6 +1121,13 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.ResultFetches += stats.ResultFetches
 			localStats.ScoreBatches += stats.ScoreBatches
 			localStats.OrdinalsGrouped += stats.OrdinalsGrouped
+			localStats.ScoreBatchCalls += stats.ScoreBatchCalls
+			localStats.ScoreBatchCandidates += stats.ScoreBatchCandidates
+			if stats.ScoreBatchMaxTileSize > localStats.ScoreBatchMaxTileSize {
+				localStats.ScoreBatchMaxTileSize = stats.ScoreBatchMaxTileSize
+			}
+			localStats.ScoreBatchOptimizedCalls += stats.ScoreBatchOptimizedCalls
+			localStats.ScoreBatchScalarFallbackCalls += stats.ScoreBatchScalarFallbackCalls
 			localStats.BlockViewHits += stats.BlockViewHits
 			localStats.BlockViewMisses += stats.BlockViewMisses
 			localStats.BlockViewBuilds += stats.BlockViewBuilds
@@ -1154,6 +1192,16 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalResultFetches.Add(localStats.ResultFetches)
 		totalScoreBatches.Add(localStats.ScoreBatches)
 		totalOrdinalsGrouped.Add(localStats.OrdinalsGrouped)
+		totalScoreBatchCalls.Add(localStats.ScoreBatchCalls)
+		totalScoreBatchCandidates.Add(localStats.ScoreBatchCandidates)
+		for {
+			current := totalScoreBatchMaxTileSize.Load()
+			if localStats.ScoreBatchMaxTileSize <= current || totalScoreBatchMaxTileSize.CompareAndSwap(current, localStats.ScoreBatchMaxTileSize) {
+				break
+			}
+		}
+		totalScoreBatchOptimizedCalls.Add(localStats.ScoreBatchOptimizedCalls)
+		totalScoreBatchScalarFallbackCalls.Add(localStats.ScoreBatchScalarFallbackCalls)
 		totalBlockViewHits.Add(localStats.BlockViewHits)
 		totalBlockViewMisses.Add(localStats.BlockViewMisses)
 		totalBlockViewBuilds.Add(localStats.BlockViewBuilds)
@@ -1229,6 +1277,11 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		ResultFetches:                        totalResultFetches.Load(),
 		ScoreBatches:                         totalScoreBatches.Load(),
 		OrdinalsGrouped:                      totalOrdinalsGrouped.Load(),
+		ScoreBatchCalls:                      totalScoreBatchCalls.Load(),
+		ScoreBatchCandidates:                 totalScoreBatchCandidates.Load(),
+		ScoreBatchMaxTileSize:                totalScoreBatchMaxTileSize.Load(),
+		ScoreBatchOptimizedCalls:             totalScoreBatchOptimizedCalls.Load(),
+		ScoreBatchScalarFallbackCalls:        totalScoreBatchScalarFallbackCalls.Load(),
 		BlockViewHits:                        totalBlockViewHits.Load(),
 		BlockViewMisses:                      totalBlockViewMisses.Load(),
 		BlockViewBuilds:                      totalBlockViewBuilds.Load(),
@@ -1290,6 +1343,13 @@ func reportColumnGraphNativeSearchBenchShapeMetricsV3(b *testing.B, shape column
 	b.ReportMetric(float64(shape.efSearch), "ef_search")
 	if shape.typedColumnVector {
 		b.ReportMetric(1, "typed_column_vector")
+	}
+	if shape.scoreBatchMode != columnVectorGraphScoreBatchModeDefault {
+		if shape.scoreBatchMode.indexedEnabled() {
+			b.ReportMetric(1, "score_batch_mode_indexed")
+		} else {
+			b.ReportMetric(1, "score_batch_mode_scalar")
+		}
 	}
 }
 
@@ -1522,6 +1582,14 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.CandidateFetches)/float64(n), "candidate_fetches/search")
 	b.ReportMetric(float64(searchStats.ScoreBatches)/float64(n), "score_batches/search")
 	b.ReportMetric(float64(searchStats.OrdinalsGrouped)/float64(n), "ordinals_grouped/search")
+	b.ReportMetric(float64(searchStats.ScoreBatchCalls)/float64(n), "score_batch_calls/search")
+	b.ReportMetric(float64(searchStats.ScoreBatchCandidates)/float64(n), "score_batch_candidates/search")
+	b.ReportMetric(float64(searchStats.ScoreBatchMaxTileSize), "score_batch_max_tile_size")
+	b.ReportMetric(float64(searchStats.ScoreBatchOptimizedCalls)/float64(n), "score_batch_optimized/search")
+	b.ReportMetric(float64(searchStats.ScoreBatchScalarFallbackCalls)/float64(n), "score_batch_fallback/search")
+	if searchStats.ScoreBatchCalls > 0 {
+		b.ReportMetric(float64(searchStats.ScoreBatchCandidates)/float64(searchStats.ScoreBatchCalls), "score_batch_avg_tile_size")
+	}
 	b.ReportMetric(float64(searchStats.BlockViewHits)/float64(n), "block_view_hits/search")
 	b.ReportMetric(float64(searchStats.BlockViewMisses)/float64(n), "block_view_misses/search")
 	b.ReportMetric(float64(searchStats.BlockViewBuilds)/float64(n), "block_view_builds/search")

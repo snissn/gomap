@@ -2041,6 +2041,14 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 		b.ReportMetric(float64(stats.Edges)/float64(stats.Candidates), "edges/node")
 	}
 	b.ReportMetric(float64(stats.CandidateFetches), "candidate_fetches/search")
+	b.ReportMetric(float64(stats.ScoreBatchCalls), "score_batch_calls/search")
+	b.ReportMetric(float64(stats.ScoreBatchCandidates), "score_batch_candidates/search")
+	b.ReportMetric(float64(stats.ScoreBatchMaxTileSize), "score_batch_max_tile_size")
+	b.ReportMetric(float64(stats.ScoreBatchOptimizedCalls), "score_batch_optimized/search")
+	b.ReportMetric(float64(stats.ScoreBatchScalarFallbackCalls), "score_batch_fallback/search")
+	if stats.ScoreBatchCalls > 0 {
+		b.ReportMetric(float64(stats.ScoreBatchCandidates)/float64(stats.ScoreBatchCalls), "score_batch_avg_tile_size")
+	}
 	b.ReportMetric(float64(stats.ExpansionFetches), "expansion_fetches/search")
 	b.ReportMetric(float64(stats.ResultFetches), "result_fetches/search")
 	b.ReportMetric(float64(stats.VectorDirectViews), "vector_direct_views/search")

@@ -28,9 +28,46 @@ var (
 	errColumnVectorGraphNativeSearchCandidateDimensionMismatch = errors.New("collections: column_graph native search candidate dimension mismatch")
 )
 
+type columnVectorGraphScoreBatchMode uint8
+
+const (
+	columnVectorGraphScoreBatchModeDefault columnVectorGraphScoreBatchMode = iota
+	columnVectorGraphScoreBatchModeScalar
+	columnVectorGraphScoreBatchModeIndexed
+)
+
+var columnVectorGraphIndexedScoringDefaultEnabled = false
+
+func (m columnVectorGraphScoreBatchMode) indexedEnabled() bool {
+	switch m {
+	case columnVectorGraphScoreBatchModeIndexed:
+		return true
+	case columnVectorGraphScoreBatchModeDefault:
+		return columnVectorGraphIndexedScoringDefaultEnabled
+	default:
+		return false
+	}
+}
+
+func (m columnVectorGraphScoreBatchMode) String() string {
+	switch m {
+	case columnVectorGraphScoreBatchModeIndexed:
+		return "indexed"
+	case columnVectorGraphScoreBatchModeScalar:
+		return "scalar"
+	default:
+		if columnVectorGraphIndexedScoringDefaultEnabled {
+			return "default_indexed"
+		}
+		return "default_scalar"
+	}
+}
+
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
+
+	ScoreBatchMode columnVectorGraphScoreBatchMode
 
 	// CandidateRows is an optional pre-composed row-domain filter over graph
 	// ordinals. It is intentionally internal until public metadata predicate
@@ -97,6 +134,11 @@ type columnVectorGraphNativeSearchStats struct {
 	ResultFetches                        uint64
 	ScoreBatches                         uint64
 	OrdinalsGrouped                      uint64
+	ScoreBatchCalls                      uint64
+	ScoreBatchCandidates                 uint64
+	ScoreBatchMaxTileSize                uint64
+	ScoreBatchOptimizedCalls             uint64
+	ScoreBatchScalarFallbackCalls        uint64
 	BlockViewHits                        uint64
 	BlockViewMisses                      uint64
 	BlockViewBuilds                      uint64
@@ -174,20 +216,24 @@ type columnVectorGraphSearchCandidate struct {
 // It is not concurrency-safe. Parallel searches over immutable graph assets are
 // valid with one reader and one scratch per worker.
 type columnVectorGraphNativeSearchScratch struct {
-	scoreScratch   columnPhysicalRowReaderScratch
-	expandScratch  columnPhysicalRowReaderScratch
-	resultScratch  columnPhysicalRowReaderScratch
-	visitMarks     []uint64
-	visitEpoch     uint64
-	frontier       []columnVectorGraphSearchCandidate
-	top            []columnVectorGraphSearchCandidate
-	results        []columnVectorGraphNativeSearchResult
-	idBuffers      [][]byte
-	resultOrder    []int
-	resultOrdinals []int
-	resultRowRefs  []DocumentRowRef
-	resultHasRefs  []bool
-	searchPlan     columnVectorGraphSearchPlan
+	scoreScratch      columnPhysicalRowReaderScratch
+	expandScratch     columnPhysicalRowReaderScratch
+	resultScratch     columnPhysicalRowReaderScratch
+	visitMarks        []uint64
+	visitEpoch        uint64
+	frontier          []columnVectorGraphSearchCandidate
+	top               []columnVectorGraphSearchCandidate
+	results           []columnVectorGraphNativeSearchResult
+	idBuffers         [][]byte
+	resultOrder       []int
+	resultOrdinals    []int
+	resultRowRefs     []DocumentRowRef
+	resultHasRefs     []bool
+	scoreTileOrdinals []int
+	scoreTileScores   []float64
+	scoreTileRowIDs   []uint32
+	scoreTileDots     []float32
+	searchPlan        columnVectorGraphSearchPlan
 }
 
 func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, degree, topK, efSearch int) error {
@@ -221,6 +267,10 @@ func (s *columnVectorGraphNativeSearchScratch) prepare(rowCount, dimensions, deg
 	s.resultOrdinals = resizeColumnVectorGraphNativeIntScratch(s.resultOrdinals, topK)
 	s.resultRowRefs = resizeColumnVectorGraphNativeRowRefScratch(s.resultRowRefs, topK)
 	s.resultHasRefs = resizeColumnVectorGraphNativeBoolScratch(s.resultHasRefs, topK)
+	s.scoreTileOrdinals = resizeColumnVectorGraphNativeIntScratch(s.scoreTileOrdinals, degree)
+	s.scoreTileScores = resizeColumnVectorGraphNativeFloat64Scratch(s.scoreTileScores, degree)
+	s.scoreTileRowIDs = resizeColumnVectorGraphNativeUint32Scratch(s.scoreTileRowIDs, degree)
+	s.scoreTileDots = resizeColumnVectorGraphNativeFloat32Scratch(s.scoreTileDots, degree)
 	return nil
 }
 
@@ -273,6 +323,55 @@ func resizeColumnVectorGraphNativeUint64Scratch(dst []uint64, target int) []uint
 		return make([]uint64, target)
 	}
 	return dst[:target]
+}
+
+func resizeColumnVectorGraphNativeUint32Scratch(dst []uint32, target int) []uint32 {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]uint32, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeFloat32Scratch(dst []float32, target int) []float32 {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]float32, 0, target)
+	}
+	return dst[:0]
+}
+
+func resizeColumnVectorGraphNativeFloat64Scratch(dst []float64, target int) []float64 {
+	if cap(dst) < target || columnVectorGraphNativeScratchCapOversized(cap(dst), target) {
+		return make([]float64, 0, target)
+	}
+	return dst[:0]
+}
+
+func ensureColumnVectorGraphNativeIntScratch(dst []int, target int) []int {
+	if cap(dst) < target {
+		return make([]int, 0, target)
+	}
+	return dst[:0]
+}
+
+func ensureColumnVectorGraphNativeUint32Scratch(dst []uint32, target int) []uint32 {
+	if cap(dst) < target {
+		return make([]uint32, 0, target)
+	}
+	return dst[:0]
+}
+
+func ensureColumnVectorGraphNativeFloat32Scratch(dst []float32, target int) []float32 {
+	if cap(dst) < target {
+		return make([]float32, 0, target)
+	}
+	return dst[:0]
+}
+
+func ensureColumnVectorGraphNativeFloat64Scratch(dst []float64, target int) []float64 {
+	if cap(dst) < target {
+		return make([]float64, 0, target)
+	}
+	return dst[:0]
 }
 
 func resizeColumnVectorGraphNativeRowRefScratch(dst []DocumentRowRef, target int) []DocumentRowRef {
@@ -399,6 +498,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if err != nil {
 		return nil, stats, err
 	}
+	plan.scoreBatchMode = opts.ScoreBatchMode
 	var singleBlockView *columnVectorGraphBlockView
 	if plan.physicalReader != nil && len(plan.physicalReader.ranges) == 1 {
 		singleBlockView, err = plan.blockViewForAssetOrdinal(0)
@@ -444,6 +544,47 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, &stats)
 		if err != nil {
 			return nil, stats, err
+		}
+		if plan.scoreBatchMode.indexedEnabled() {
+			for i := 0; i < len(adjacency) && stats.Candidates < uint64(efSearch); {
+				remaining := int(uint64(efSearch) - stats.Candidates)
+				if remaining <= 0 {
+					break
+				}
+				tileCap := len(adjacency) - i
+				if tileCap > remaining {
+					tileCap = remaining
+				}
+				scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, tileCap)
+				tile := scratch.scoreTileOrdinals[:0]
+				for i < len(adjacency) && len(tile) < remaining {
+					neighborIndex := i
+					neighbor := adjacency[i]
+					i++
+					stats.Edges++
+					stats.VisitedEdges++
+					if uint64(neighbor) >= uint64(rowCount) {
+						return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+					}
+					neighborOrdinal := int(neighbor)
+					if visitMarks[neighborOrdinal] == visitEpoch {
+						continue
+					}
+					if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+						visitMarks[neighborOrdinal] = visitEpoch
+						continue
+					}
+					visitMarks[neighborOrdinal] = visitEpoch
+					tile = append(tile, neighborOrdinal)
+				}
+				if len(tile) == 0 {
+					continue
+				}
+				if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, &stats); err != nil {
+					return nil, stats, err
+				}
+			}
+			continue
 		}
 		for i, neighbor := range adjacency {
 			if stats.Candidates >= uint64(efSearch) {
@@ -548,6 +689,41 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, best, layer, scratch, stats)
 		if err != nil {
 			return 0, err
+		}
+		if plan.scoreBatchMode.indexedEnabled() {
+			scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
+			tile := scratch.scoreTileOrdinals[:0]
+			for i, neighbor := range adjacency {
+				if stats != nil {
+					stats.Edges++
+					stats.VisitedEdges++
+				}
+				if uint64(neighbor) >= uint64(r.RowCount()) {
+					return 0, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, best, i, neighbor, r.RowCount(), errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
+				}
+				neighborOrdinal := int(neighbor)
+				if !columnVectorGraphCandidateRowAllowed(candidateRows, hasCandidateRows, neighborOrdinal) {
+					continue
+				}
+				tile = append(tile, neighborOrdinal)
+			}
+			if len(tile) == 0 {
+				continue
+			}
+			scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(tile))
+			scores, err := plan.scoreSource.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, tile, scratch.scoreTileScores, scratch, stats)
+			if err != nil {
+				return 0, err
+			}
+			for i, neighborOrdinal := range tile {
+				score := scores[i]
+				if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+					best = neighborOrdinal
+					bestScore = score
+					changed = true
+				}
+			}
+			continue
 		}
 		for i, neighbor := range adjacency {
 			if stats != nil {
@@ -671,6 +847,24 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 	return nil
 }
 
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if len(ordinals) == 0 {
+		return nil
+	}
+	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(ordinals))
+	scores, err := plan.scoreSource.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, ordinals, scratch.scoreTileScores, scratch, stats)
+	if err != nil {
+		return err
+	}
+	for i, ordinal := range ordinals {
+		stats.Candidates++
+		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
+		scratch.insertTop(topK, candidate)
+		scratch.pushFrontier(candidate)
+	}
+	return nil
+}
+
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
 	if plan != nil && plan.scoreSource.reader != nil {
 		return plan.scoreSource.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
@@ -690,8 +884,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 		rowIndex = ref.rowIndex
 	}
 	if stats != nil {
-		stats.ScoreBatches++
-		stats.OrdinalsGrouped++
+		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
 		stats.VisitedNodes++
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
@@ -1046,6 +1239,25 @@ func columnVectorGraphSearchCandidateBetter(left, right columnVectorGraphSearchC
 	return left.score > right.score
 }
 
+func recordColumnVectorGraphScoreBatchStats(stats *columnVectorGraphNativeSearchStats, tileSize int, optimized bool, scalarFallback bool) {
+	if stats == nil || tileSize <= 0 {
+		return
+	}
+	stats.ScoreBatches++
+	stats.OrdinalsGrouped += uint64(tileSize)
+	stats.ScoreBatchCalls++
+	stats.ScoreBatchCandidates += uint64(tileSize)
+	if uint64(tileSize) > stats.ScoreBatchMaxTileSize {
+		stats.ScoreBatchMaxTileSize = uint64(tileSize)
+	}
+	if optimized {
+		stats.ScoreBatchOptimizedCalls++
+	}
+	if scalarFallback {
+		stats.ScoreBatchScalarFallbackCalls++
+	}
+}
+
 func columnVectorGraphNativeCosineScore(query []float32, queryInvNorm float32, row columnVectorGraphPhysicalRow) (float64, error) {
 	return columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, row.Ordinal, row.Vector, row.InvNorm)
 }
@@ -1055,11 +1267,21 @@ func columnVectorGraphNativeCosineScoreVector(query []float32, queryInvNorm floa
 		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, len(vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
 	dot := float64(vectorDotProductFloat32(query, vector))
-	if !math.IsInf(dot, 0) && !math.IsNaN(dot) {
-		return dot * float64(queryInvNorm) * float64(invNorm), nil
+	return columnVectorGraphNativeCosineScoreDot(query, queryInvNorm, ordinal, dot, vector, invNorm)
+}
+
+func columnVectorGraphNativeCosineScoreDot(query []float32, queryInvNorm float32, ordinal int, dot float64, vector []float32, invNorm float32) (float64, error) {
+	if len(vector) != len(query) {
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d vector dims=%d want %d: %w", ordinal, len(vector), len(query), errColumnVectorGraphNativeSearchCandidateDimensionMismatch)
 	}
-	dot = columnVectorGraphNativeDotProductFloat64(query, vector)
-	return dot * float64(queryInvNorm) * float64(invNorm), nil
+	if math.IsInf(dot, 0) || math.IsNaN(dot) {
+		dot = columnVectorGraphNativeDotProductFloat64(query, vector)
+	}
+	score := dot * float64(queryInvNorm) * float64(invNorm)
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		return 0, fmt.Errorf("collections: column_graph candidate ordinal=%d cosine score is not finite", ordinal)
+	}
+	return score, nil
 }
 
 func columnVectorGraphNativeDotProductFloat64(left, right []float32) float64 {
