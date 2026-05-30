@@ -1038,7 +1038,7 @@ collection vector-index rebuild path for the named index. For explicit
 compatibility/opaque result IDs, publishes inverse norms, HNSW adjacency, and
 base row references as vector-index state assets, and records vector-index
 control identity in the `TVIS` state record. Old adjacency-source refs are
-#1989-quarantined compatibility. Current graph manifests may still contain row
+`#1989-quarantined` compatibility. Current graph manifests may still contain row
 graph refs and legacy layer-source trailer refs for compatibility; new
 derived-state refs belong in vector-index state. Replay outcomes that are
 defined no-ops, such as a strategy/config drift status that no longer requires a

@@ -155,9 +155,9 @@ func TestDocs_VectorIndexStateWordingDoesNotRecanonicalizeGraphRows(t *testing.T
 			if err != nil {
 				return err
 			}
-			text := string(data)
+			text := strings.ToLower(string(data))
 			for _, phrase := range stalePhrases {
-				if strings.Contains(text, phrase) {
+				if strings.Contains(text, strings.ToLower(phrase)) {
 					t.Fatalf("%s still contains stale vector-index wording %q", path, phrase)
 				}
 			}
