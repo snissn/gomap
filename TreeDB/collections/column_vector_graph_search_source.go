@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
+	"github.com/snissn/gomap/TreeDB/internal/vectorops"
 )
 
 type columnVectorGraphSearchVectorSourceKind uint8
@@ -166,8 +167,7 @@ func (s *columnVectorGraphSearchSource) scoreOrdinal(plan *columnVectorGraphSear
 		rowIndex = ref.rowIndex
 	}
 	if stats != nil {
-		stats.ScoreBatches++
-		stats.OrdinalsGrouped++
+		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
 		stats.VisitedNodes++
 		stats.BlockViewHits = plan.hits
 		stats.BlockViewMisses = plan.misses
@@ -211,6 +211,140 @@ func (s *columnVectorGraphSearchSource) scoreOrdinalsScalar(plan *columnVectorGr
 		dst[i] = score
 	}
 	return dst, nil
+}
+
+func (s *columnVectorGraphSearchSource) scoreOrdinals(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if len(ordinals) <= 1 || plan == nil || !plan.scoreBatchMode.indexedEnabled() || scratch == nil {
+		return s.scoreOrdinalsScalar(plan, singleBlockView, query, queryInvNorm, ordinals, dst, scratch, stats)
+	}
+	if got, ok, err := s.scoreOrdinalsIndexed(plan, query, queryInvNorm, ordinals, dst, scratch, stats); ok || err != nil {
+		return got, err
+	}
+	return s.scoreOrdinalsScalar(plan, singleBlockView, query, queryInvNorm, ordinals, dst, scratch, stats)
+}
+
+func (s *columnVectorGraphSearchSource) scoreOrdinalsIndexed(plan *columnVectorGraphSearchPlan, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, bool, error) {
+	if s == nil || s.reader == nil || s.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn || s.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal || s.dims <= 0 || len(query) != s.dims || len(ordinals) == 0 || scratch == nil {
+		return dst, false, nil
+	}
+	if s.invNormSource != nil && (s.invNormSource.closed || (s.invNormSource.handle != nil && s.invNormSource.handle.Released())) {
+		return dst, false, nil
+	}
+	if cap(dst) < len(ordinals) {
+		dst = make([]float64, len(ordinals))
+	} else {
+		dst = dst[:len(ordinals)]
+	}
+	maxRun := 0
+	for i := 0; i < len(ordinals); {
+		loc, ok := s.indexedVectorLocationForOrdinal(ordinals[i])
+		if !ok || ordinals[i] < 0 || ordinals[i] >= len(s.invNormByOrdinal) || uint64(loc.rowIndex) > uint64(^uint32(0)) {
+			return dst, false, nil
+		}
+		part := loc.part
+		j := i + 1
+		for j < len(ordinals) {
+			nextLoc, ok := s.indexedVectorLocationForOrdinal(ordinals[j])
+			if !ok || nextLoc.part != part || ordinals[j] < 0 || ordinals[j] >= len(s.invNormByOrdinal) || uint64(nextLoc.rowIndex) > uint64(^uint32(0)) {
+				break
+			}
+			j++
+		}
+		if runLen := j - i; runLen > maxRun {
+			maxRun = runLen
+		}
+		i = j
+	}
+	if maxRun == 0 {
+		return dst, false, nil
+	}
+	scratch.scoreTileRowIDs = ensureColumnVectorGraphNativeUint32Scratch(scratch.scoreTileRowIDs, maxRun)
+	scratch.scoreTileDots = ensureColumnVectorGraphNativeFloat32Scratch(scratch.scoreTileDots, maxRun)
+	var optimizedCalls uint64
+	var scalarFallbackCalls uint64
+	for runStart := 0; runStart < len(ordinals); {
+		loc, _ := s.indexedVectorLocationForOrdinal(ordinals[runStart])
+		part := loc.part
+		runEnd := runStart + 1
+		for runEnd < len(ordinals) {
+			nextLoc, _ := s.indexedVectorLocationForOrdinal(ordinals[runEnd])
+			if nextLoc.part != part {
+				break
+			}
+			runEnd++
+		}
+		runLen := runEnd - runStart
+		rowIDs := scratch.scoreTileRowIDs[:runLen]
+		for i, ordinal := range ordinals[runStart:runEnd] {
+			loc := s.typedVectorLocations[ordinal]
+			rowIDs[i] = uint32(loc.rowIndex)
+		}
+		dots := scratch.scoreTileDots[:runLen]
+		status := vectorops.DotFloat32Indexed(dots, part.values, query, rowIDs, s.dims)
+		if status.Invalid || status.Rows != runLen {
+			return dst, false, nil
+		}
+		if status.Optimized {
+			optimizedCalls++
+		} else {
+			scalarFallbackCalls++
+		}
+		for i, ordinal := range ordinals[runStart:runEnd] {
+			loc := s.typedVectorLocations[ordinal]
+			score, err := columnVectorGraphNativeCosineScoreDot(query, queryInvNorm, ordinal, float64(dots[i]), part.values[loc.rowIndex*s.dims:loc.rowIndex*s.dims+s.dims], s.invNormByOrdinal[ordinal])
+			if err != nil {
+				return dst, true, err
+			}
+			dst[runStart+i] = score
+		}
+		runStart = runEnd
+	}
+	if stats != nil {
+		for runStart := 0; runStart < len(ordinals); {
+			loc := s.typedVectorLocations[ordinals[runStart]]
+			part := loc.part
+			runEnd := runStart + 1
+			for runEnd < len(ordinals) && s.typedVectorLocations[ordinals[runEnd]].part == part {
+				runEnd++
+			}
+			recordColumnVectorGraphScoreBatchStats(stats, runEnd-runStart, false, false)
+			runStart = runEnd
+		}
+		stats.ScoreBatchOptimizedCalls += optimizedCalls
+		stats.ScoreBatchScalarFallbackCalls += scalarFallbackCalls
+		stats.VisitedNodes += uint64(len(ordinals))
+		stats.CandidateFetches += uint64(len(ordinals))
+		stats.VectorBytesRead += uint64(len(ordinals) * s.dims * 4)
+		stats.NormBytesRead += uint64(len(ordinals) * 4)
+		stats.BlockViewHits = plan.hits
+		stats.BlockViewMisses = plan.misses
+		stats.BlockViewBuilds = plan.builds
+		for _, ordinal := range ordinals {
+			loc := s.typedVectorLocations[ordinal]
+			recordColumnVectorGraphVectorSourceStats(stats, loc.part.outcome, loc.part.fallbackReason)
+			recordColumnVectorGraphInvNormSourceStats(stats, s.invNormOutcome, s.invNormFallback)
+		}
+	}
+	return dst, true, nil
+}
+
+func (s *columnVectorGraphSearchSource) indexedVectorLocationForOrdinal(ordinal int) (columnVectorGraphTypedColumnVectorLocation, bool) {
+	if s == nil || ordinal < 0 || ordinal >= len(s.typedVectorLocations) || s.dims <= 0 {
+		return columnVectorGraphTypedColumnVectorLocation{}, false
+	}
+	loc := s.typedVectorLocations[ordinal]
+	if loc.part == nil || loc.rowIndex < 0 || loc.rowIndex >= loc.part.rows {
+		return columnVectorGraphTypedColumnVectorLocation{}, false
+	}
+	if loc.part.handle != nil && loc.part.handle.Released() {
+		return columnVectorGraphTypedColumnVectorLocation{}, false
+	}
+	start := loc.rowIndex * s.dims
+	end := start + s.dims
+	if start < 0 || end < start || end > len(loc.part.values) {
+		return columnVectorGraphTypedColumnVectorLocation{}, false
+	}
+	return loc, true
 }
 
 func (s *columnVectorGraphSearchSource) typedVectorForOrdinal(ordinal int) ([]float32, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, bool) {
