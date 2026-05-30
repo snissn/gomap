@@ -49,6 +49,9 @@ type VectorIndexSearcherSearchOptions struct {
 	// DocumentFetchOptions controls optional projected final-fetch materialization.
 	// It is used only when IncludeDocuments is true; the zero value returns full documents.
 	DocumentFetchOptions DocumentFetchOptions
+	// scoreBatchMode is an internal test/benchmark hook for exact-order indexed
+	// HNSW scoring. The public zero value follows the default scalar gate.
+	scoreBatchMode columnVectorGraphScoreBatchMode
 }
 
 // VectorIndexSearchResult is one public vector-index search hit.
@@ -87,6 +90,16 @@ type VectorIndexSearchStats struct {
 	AdjacencyBytesRead uint64 `json:"adjacency_bytes_read,omitempty"`
 	// CandidateFetches is the per-search count of vector row fetches for scored candidates.
 	CandidateFetches uint64 `json:"candidate_fetches,omitempty"`
+	// ScoreBatchCalls counts logical score calls: singleton scalar calls and indexed tile calls.
+	ScoreBatchCalls uint64 `json:"score_batch_calls,omitempty"`
+	// ScoreBatchCandidates counts candidate scores produced by score calls.
+	ScoreBatchCandidates uint64 `json:"score_batch_candidates,omitempty"`
+	// ScoreBatchMaxTileSize reports the largest score tile size observed by this search.
+	ScoreBatchMaxTileSize uint64 `json:"score_batch_max_tile_size,omitempty"`
+	// ScoreBatchOptimizedCalls counts score calls reported as optimized by the vectorops backend.
+	ScoreBatchOptimizedCalls uint64 `json:"score_batch_optimized,omitempty"`
+	// ScoreBatchScalarFallbackCalls counts score calls completed through scalar/fallback execution.
+	ScoreBatchScalarFallbackCalls uint64 `json:"score_batch_fallback,omitempty"`
 	// ExpansionFetches is the per-search count of adjacency row fetches for expanded nodes.
 	ExpansionFetches uint64 `json:"expansion_fetches,omitempty"`
 	// ResultFetches is the per-search count of vector row fetches for final results.
@@ -386,6 +399,7 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		EfSearch:             opts.EfSearch,
 		IncludeDocuments:     opts.IncludeDocuments,
 		DocumentFetchOptions: opts.DocumentFetchOptions,
+		scoreBatchMode:       opts.scoreBatchMode,
 	})
 	documentView := searcher.documentView
 	if closeErr := searcher.Close(); err == nil && closeErr != nil {
@@ -554,8 +568,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-		TopK:     opts.TopK,
-		EfSearch: opts.EfSearch,
+		TopK:           opts.TopK,
+		EfSearch:       opts.EfSearch,
+		ScoreBatchMode: opts.scoreBatchMode,
 	}, &s.scratch)
 	readerStatsAfter := s.reader.Stats()
 	s.readerLast = readerStatsAfter
@@ -698,8 +713,9 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
-		TopK:     opts.TopK,
-		EfSearch: opts.EfSearch,
+		TopK:           opts.TopK,
+		EfSearch:       opts.EfSearch,
+		ScoreBatchMode: opts.scoreBatchMode,
 	}, &s.scratch)
 	readerStatsAfter := s.reader.Stats()
 	s.readerLast = readerStatsAfter
@@ -872,6 +888,11 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		NormBytesRead:                        searchStats.NormBytesRead,
 		AdjacencyBytesRead:                   searchStats.AdjacencyBytesRead,
 		CandidateFetches:                     searchStats.CandidateFetches,
+		ScoreBatchCalls:                      searchStats.ScoreBatchCalls,
+		ScoreBatchCandidates:                 searchStats.ScoreBatchCandidates,
+		ScoreBatchMaxTileSize:                searchStats.ScoreBatchMaxTileSize,
+		ScoreBatchOptimizedCalls:             searchStats.ScoreBatchOptimizedCalls,
+		ScoreBatchScalarFallbackCalls:        searchStats.ScoreBatchScalarFallbackCalls,
 		ExpansionFetches:                     searchStats.ExpansionFetches,
 		ResultFetches:                        searchStats.ResultFetches,
 		RowFetches:                           readerStats.RowFetches,
