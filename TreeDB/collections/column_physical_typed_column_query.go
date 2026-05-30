@@ -21,6 +21,7 @@ type columnTypedColumnPhysicalQueryPlan struct {
 	SortKey              []ColumnSortKey
 	SortKeyPrefix        columnTypedColumnSortKeyPrefixPlan
 	DenseGroupCount      bool
+	DenseGroupHourCount  bool
 	DenseInt64Span       bool
 }
 
@@ -34,6 +35,14 @@ type columnTypedColumnDensePredicatePart struct {
 	Codes      []uint32
 	Allowed    []uint64
 	RejectsAll bool
+}
+
+type columnTypedColumnDenseGroupHourCountPart struct {
+	Cardinality      int
+	DictionaryByCode map[int64]string
+	GroupCodes       []uint32
+	Values           []int64
+	Predicates       []columnTypedColumnDensePredicatePart
 }
 
 type columnTypedColumnDenseInt64SpanPart struct {
@@ -63,6 +72,7 @@ type columnTypedColumnPhysicalQueryPart struct {
 	SortKeyMarkSkips          int
 	SortKeyMarkFallbackReason string
 	DenseGroupCount           *columnTypedColumnDenseGroupCountPart
+	DenseGroupHourCount       *columnTypedColumnDenseGroupHourCountPart
 	DenseInt64Span            *columnTypedColumnDenseInt64SpanPart
 }
 
@@ -85,6 +95,8 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	segmentFileCacheMisses    uint64
 	denseGroupCounts          map[string]int
 	denseLocalCounts          []int
+	denseGroupHourCounts      map[string][24]int
+	denseLocalHourCounts      []int
 	denseSpanValues           map[string]columnPhysicalQuerySpan
 	denseLocalSpans           []columnPhysicalQuerySpan
 	denseLocalSpanSeen        []bool
@@ -176,6 +188,8 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		switch {
 		case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
 			part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
+			part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
 			part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		default:
@@ -292,6 +306,7 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 	}
 	plan.SortKeyPrefix = planColumnTypedColumnSortKeyPrefix(cfg, sortKey, req)
 	plan.DenseGroupCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
+	plan.DenseGroupHourCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req)
 	plan.DenseInt64Span = columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
 	plan.Fields = fields
 	plan.Selected = selected
@@ -546,6 +561,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	if columnTypedColumnPhysicalQueryUseDenseGroupCount(r.plan, req) {
 		return r.runDenseGroupCount(view, req)
 	}
+	if columnTypedColumnPhysicalQueryUseDenseGroupHourCount(r.plan, req) {
+		return r.runDenseGroupHourCount(view, req)
+	}
 	if columnTypedColumnPhysicalQueryUseDenseInt64Span(r.plan, req) {
 		return r.runDenseInt64Span(view, req)
 	}
@@ -600,6 +618,14 @@ func columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req ColumnPhysical
 
 func columnTypedColumnPhysicalQueryUseDenseGroupCount(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
 	return plan.DenseGroupCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
+}
+
+func columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req ColumnPhysicalQueryRequest) bool {
+	return req.Kind == ColumnPhysicalQueryGroupHourCount && req.GroupColumn != "" && req.ValueColumn != "" && req.AggregateMetadataName == "" && req.DistinctColumn == ""
+}
+
+func columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
+	return plan.DenseGroupHourCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupHourCount(req)
 }
 
 func columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req ColumnPhysicalQueryRequest) bool {
@@ -670,6 +696,103 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCount(view columnPhy
 	diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
 	diag.DenseGroupCountUsed = true
 	diag.ResultGroups = len(r.resultGroups)
+	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupHourCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.denseGroupHourCounts == nil {
+		r.denseGroupHourCounts = make(map[string][24]int, 16)
+	} else {
+		clear(r.denseGroupHourCounts)
+	}
+	rowsScanned := 0
+	matchedRows := 0
+	reduceRows := 0
+	for partIdx := range r.parts {
+		dense := r.parts[partIdx].DenseGroupHourCount
+		if dense == nil {
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour missing prepared part %d", partIdx)
+		}
+		if len(dense.GroupCodes) != len(dense.Values) {
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d group/value rows=%d/%d", partIdx, len(dense.GroupCodes), len(dense.Values))
+		}
+		needLocal := dense.Cardinality * 24
+		if cap(r.denseLocalHourCounts) < needLocal {
+			r.denseLocalHourCounts = make([]int, needLocal)
+		} else {
+			r.denseLocalHourCounts = r.denseLocalHourCounts[:needLocal]
+			clear(r.denseLocalHourCounts)
+		}
+		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+			rowsScanned += len(dense.GroupCodes)
+			continue
+		}
+		for rowIdx, code := range dense.GroupCodes {
+			rowsScanned++
+			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+				continue
+			}
+			if len(dense.Predicates) != 0 {
+				matchedRows++
+			}
+			reduceRows++
+			localIdx, ok := columnDictionaryCodeIndex(code, dense.Cardinality)
+			if !ok {
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupHourCountUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d code[%d]=%d outside cardinality=%d", partIdx, rowIdx, code, dense.Cardinality)
+			}
+			hour := columnPhysicalQueryUTCHour(dense.Values[rowIdx])
+			r.denseLocalHourCounts[localIdx*24+hour]++
+		}
+		for localCode := 0; localCode < dense.Cardinality; localCode++ {
+			key := ""
+			var byHour [24]int
+			seen := false
+			base := localCode * 24
+			for hour := 0; hour < 24; hour++ {
+				count := r.denseLocalHourCounts[base+hour]
+				if count == 0 {
+					continue
+				}
+				if !seen {
+					var ok bool
+					key, ok = dense.DictionaryByCode[int64(localCode)]
+					if !ok {
+						diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+						diag.DenseGroupHourCountUsed = true
+						return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d dictionary missing local code %d", partIdx, localCode)
+					}
+					byHour = r.denseGroupHourCounts[key]
+					seen = true
+				}
+				byHour[hour] += count
+			}
+			if seen {
+				r.denseGroupHourCounts[key] = byHour
+			}
+		}
+	}
+	r.resultGroups = r.resultGroups[:0]
+	for key, byHour := range r.denseGroupHourCounts {
+		for hour, count := range byHour {
+			if count == 0 {
+				continue
+			}
+			r.resultGroups = append(r.resultGroups, ColumnPhysicalQueryGroup{Key: key, Hour: hour, Count: count})
+		}
+	}
+	sortColumnPhysicalQueryGroupsByKeyHour(r.resultGroups)
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+	diag.DenseGroupHourCountUsed = true
 	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	r.resultGroups = result.Groups
