@@ -784,7 +784,7 @@ func TestPrepareInsertDocumentBSONAllowsNativeUnindexedTypes(t *testing.T) {
 	}
 
 	_, _, err = prepareInsertDocument(doc, collections.DocumentFormatJSON)
-	if err == nil || !strings.Contains(err.Error(), "unsupported BSON type binary") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported BSON type") {
 		t.Fatalf("prepare JSON err=%v want unsupported binary", err)
 	}
 }

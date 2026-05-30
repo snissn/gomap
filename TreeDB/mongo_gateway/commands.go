@@ -1170,7 +1170,7 @@ func mongoSetUpdateFields(updateDoc wire.Document) (map[string]struct{}, []colle
 	if !ok {
 		return nil, nil, false
 	}
-	sets, order, err := parseSetDocument(setDoc)
+	sets, order, err := parseSetDocument(setDoc, collections.DocumentFormatBSON)
 	if err != nil {
 		return nil, nil, false
 	}
@@ -2664,7 +2664,7 @@ func prepareInsertDocument(doc wire.Document, format collections.DocumentFormat)
 	if format == collections.DocumentFormatBSON {
 		return key, raw, nil
 	}
-	if err := validateSupportedDocument(raw); err != nil {
+	if err := validateSupportedDocument(raw, format); err != nil {
 		return nil, nil, err
 	}
 	stored, err := bson.MarshalExtJSON(raw, true, false)
@@ -2772,7 +2772,7 @@ func applySetUpdate(doc wire.Document, update wire.Document) (wire.Document, boo
 	if !ok {
 		return nil, false, errors.New("Mongo gateway $set value must be a document")
 	}
-	sets, setOrder, err := parseSetDocument(setDoc)
+	sets, setOrder, err := parseSetDocument(setDoc, collections.DocumentFormatBSON)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3327,7 +3327,7 @@ func dropIndexNames(command wire.Document) ([]string, bool, error) {
 	return names, false, nil
 }
 
-func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) {
+func parseSetDocument(doc bson.Raw, format collections.DocumentFormat) (map[string]bson.RawValue, []string, error) {
 	elements, err := doc.Elements()
 	if err != nil {
 		return nil, nil, err
@@ -3344,7 +3344,7 @@ func parseSetDocument(doc bson.Raw) (map[string]bson.RawValue, []string, error) 
 			return nil, nil, err
 		}
 		value := elem.Value()
-		if err := validateSupportedValue(key, value); err != nil {
+		if err := validateSupportedValue(key, value, format); err != nil {
 			return nil, nil, err
 		}
 		if _, ok := seen[key]; !ok {
@@ -3421,11 +3421,11 @@ func encodePrimaryKey(value bson.RawValue) ([]byte, error) {
 	return EncodePrimaryKey(value)
 }
 
-func validateSupportedDocument(doc bson.Raw) error {
-	return validateSupportedDocumentAt("", doc)
+func validateSupportedDocument(doc bson.Raw, format collections.DocumentFormat) error {
+	return validateSupportedDocumentAt("", doc, format)
 }
 
-func validateSupportedDocumentAt(prefix string, doc bson.Raw) error {
+func validateSupportedDocumentAt(prefix string, doc bson.Raw, format collections.DocumentFormat) error {
 	elements, err := doc.Elements()
 	if err != nil {
 		return err
@@ -3439,23 +3439,28 @@ func validateSupportedDocumentAt(prefix string, doc bson.Raw) error {
 		if prefix != "" {
 			path = prefix + "." + key
 		}
-		if err := validateSupportedValue(path, elem.Value()); err != nil {
+		if err := validateSupportedValue(path, elem.Value(), format); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateSupportedValue(path string, value bson.RawValue) error {
+func validateSupportedValue(path string, value bson.RawValue, format collections.DocumentFormat) error {
 	switch value.Type {
 	case bson.TypeDouble, bson.TypeString, bson.TypeObjectID, bson.TypeBoolean, bson.TypeNull, bson.TypeInt32, bson.TypeInt64:
 		return value.Validate()
+	case bson.TypeBinary:
+		if format == collections.DocumentFormatBSON {
+			return value.Validate()
+		}
+		return fmt.Errorf("Mongo document field %q uses unsupported BSON type %s", path, value.Type)
 	case bson.TypeEmbeddedDocument:
 		doc, ok := value.DocumentOK()
 		if !ok {
 			return fmt.Errorf("Mongo document field %q is not a valid embedded document", path)
 		}
-		return validateSupportedDocumentAt(path, doc)
+		return validateSupportedDocumentAt(path, doc, format)
 	case bson.TypeArray:
 		array, ok := value.ArrayOK()
 		if !ok {
@@ -3466,7 +3471,7 @@ func validateSupportedValue(path string, value bson.RawValue) error {
 			return err
 		}
 		for i, item := range values {
-			if err := validateSupportedValue(fmt.Sprintf("%s.%d", path, i), item); err != nil {
+			if err := validateSupportedValue(fmt.Sprintf("%s.%d", path, i), item, format); err != nil {
 				return err
 			}
 		}
