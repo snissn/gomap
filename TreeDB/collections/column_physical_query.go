@@ -148,6 +148,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	SortedGroupedDistinctReady          bool
 	SortedGroupedDistinctUsed           bool
 	SortedGroupedDistinctFallbackReason string
+	DenseGroupCountUsed                 bool
 	DecodedPayloadBytes                 uint64
 	FallbackReads                       int
 	RowMaterializations                 int
@@ -1331,6 +1332,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 		left.SortedGroupedDistinctUsed = true
 	}
 	left.SortedGroupedDistinctFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortedGroupedDistinctFallbackReason, right.SortedGroupedDistinctFallbackReason)
+	left.DenseGroupCountUsed = left.DenseGroupCountUsed || right.DenseGroupCountUsed
 	left.DecodedPayloadBytes += right.DecodedPayloadBytes
 	left.PhysicalBytesScanned += right.PhysicalBytesScanned
 	left.DecodedMetadataBytes += right.DecodedMetadataBytes

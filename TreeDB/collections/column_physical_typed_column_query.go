@@ -20,6 +20,13 @@ type columnTypedColumnPhysicalQueryPlan struct {
 	PredicateSpecs       []columnPhysicalQueryPredicateSpec
 	SortKey              []ColumnSortKey
 	SortKeyPrefix        columnTypedColumnSortKeyPrefixPlan
+	DenseGroupCount      bool
+}
+
+type columnTypedColumnDenseGroupCountPart struct {
+	Cardinality      int
+	DictionaryByCode map[int64]string
+	Codes            []uint32
 }
 
 type columnTypedColumnPhysicalQueryPart struct {
@@ -40,6 +47,7 @@ type columnTypedColumnPhysicalQueryPart struct {
 	SortKeyMarkMatches        int
 	SortKeyMarkSkips          int
 	SortKeyMarkFallbackReason string
+	DenseGroupCount           *columnTypedColumnDenseGroupCountPart
 }
 
 type columnTypedColumnPhysicalQueryRunner struct {
@@ -59,6 +67,8 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	sortKeyMarkFallbackReason string
 	segmentFileCacheHits      uint64
 	segmentFileCacheMisses    uint64
+	denseGroupCounts          map[string]int
+	denseLocalCounts          []int
 	resultGroups              []ColumnPhysicalQueryGroup
 }
 
@@ -143,7 +153,12 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 			return nil, true, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		rawScratch = raw
-		part, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		var part columnTypedColumnPhysicalQueryPart
+		if columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) {
+			part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		} else {
+			part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		}
 		if err != nil {
 			return nil, true, fmt.Errorf("collections: typed-column part physical query decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
@@ -254,6 +269,7 @@ func planColumnTypedColumnPhysicalQuery(cfg ColumnStoreConfig, req ColumnPhysica
 		return columnTypedColumnPhysicalQueryPlan{}, true, err
 	}
 	plan.SortKeyPrefix = planColumnTypedColumnSortKeyPrefix(cfg, sortKey, req)
+	plan.DenseGroupCount = columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
 	plan.Fields = fields
 	plan.Selected = selected
 	plan.PredicateSpecs = predicateSpecs
@@ -504,6 +520,9 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if columnTypedColumnPhysicalQueryUseDenseGroupCount(r.plan, req) {
+		return r.runDenseGroupCount(view, req)
+	}
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(r.plan, req) {
 		result, err := r.runSortedGroupedDistinct(view, req)
 		if err == nil {
@@ -544,6 +563,80 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	r.resultGroups = groups
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())
 	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req ColumnPhysicalQueryRequest) bool {
+	return req.Kind == ColumnPhysicalQueryGroupCount && req.GroupColumn != "" && !columnPhysicalQueryHasPredicates(req) && req.AggregateMetadataName == "" && req.ValueColumn == "" && req.DistinctColumn == ""
+}
+
+func columnTypedColumnPhysicalQueryUseDenseGroupCount(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
+	return plan.DenseGroupCount && columnTypedColumnPhysicalQueryShapeCanUseDenseGroupCount(req)
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.denseGroupCounts == nil {
+		r.denseGroupCounts = make(map[string]int, 16)
+	} else {
+		clear(r.denseGroupCounts)
+	}
+	rowsScanned := 0
+	for partIdx := range r.parts {
+		dense := r.parts[partIdx].DenseGroupCount
+		if dense == nil {
+			diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count missing prepared part %d", partIdx)
+		}
+		if dense.Cardinality == 0 && len(dense.Codes) != 0 {
+			diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d has empty dictionary", partIdx)
+		}
+		if cap(r.denseLocalCounts) < dense.Cardinality {
+			r.denseLocalCounts = make([]int, dense.Cardinality)
+		} else {
+			r.denseLocalCounts = r.denseLocalCounts[:dense.Cardinality]
+			clear(r.denseLocalCounts)
+		}
+		for rowIdx, code := range dense.Codes {
+			localIdx, ok := columnDictionaryCodeIndex(code, len(r.denseLocalCounts))
+			if !ok {
+				diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d code[%d]=%d outside cardinality=%d", partIdx, rowIdx, code, len(r.denseLocalCounts))
+			}
+			r.denseLocalCounts[localIdx]++
+		}
+		rowsScanned += len(dense.Codes)
+		for localCode, count := range r.denseLocalCounts {
+			if count == 0 {
+				continue
+			}
+			key, ok := dense.DictionaryByCode[int64(localCode)]
+			if !ok {
+				diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d dictionary missing local code %d", partIdx, localCode)
+			}
+			r.denseGroupCounts[key] += count
+		}
+	}
+	r.resultGroups = r.resultGroups[:0]
+	for key, count := range r.denseGroupCounts {
+		if count == 0 {
+			continue
+		}
+		r.resultGroups = append(r.resultGroups, ColumnPhysicalQueryGroup{Key: key, Count: count})
+	}
+	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
+	diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
+	diag.DenseGroupCountUsed = true
+	diag.ResultGroups = len(r.resultGroups)
+	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	r.resultGroups = result.Groups
 	return result, nil
