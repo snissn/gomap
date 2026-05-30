@@ -31,6 +31,7 @@ func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 		ColumnStoreValueString:        typedColumnAdapterRepresented,
 		ColumnStoreValueFloat32Vector: typedColumnAdapterRepresented,
 		ColumnStoreValueUint32List:    typedColumnAdapterRepresented,
+		ColumnStoreValueBytes:         typedColumnAdapterRepresented,
 		ColumnStoreValueAdjacencyList: typedColumnAdapterRepresented,
 	}
 	got := make(map[ColumnStoreValueType]typedColumnAdapterTypeStatus)
@@ -408,7 +409,30 @@ func TestTypedColumnAdapterRoundTripBytes2010(t *testing.T) {
 		values[i] = columnDeclaredValue{Type: ColumnStoreValueBytes, Present: true, Bytes: v}
 	}
 	field := typedColumnAdapterField("opaque", ColumnStoreValueBytes)
-	got := typedColumnAdapterRoundTrip(t, field, values)
+	part := typedColumnAdapterBuildPart(t, field, values)
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	cert, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		t.Fatalf("CertifyColumnPartLayoutContractFromImage: %v", err)
+	}
+	certColumn, ok := cert.Column("opaque")
+	if !ok {
+		t.Fatal("missing bytes certification")
+	}
+	if certColumn.LogicalType != string(columnsemantics.LogicalBytes) || certColumn.Type != typedcolumn.ColumnTypeBytes || certColumn.Encoding != typedcolumn.EncodingRawBytesOffsets || !certColumn.DirectViewCertified {
+		t.Fatalf("bytes certification=%+v want logical bytes/raw_bytes_offsets direct-view", certColumn)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	got, err := parsed.scanColumnValues(field.Name)
+	if err != nil {
+		t.Fatalf("scanColumnValues(%s): %v", field.Name, err)
+	}
 	for i := range want {
 		if !bytes.Equal(got[i].Bytes, want[i]) {
 			t.Fatalf("bytes[%d]=%v want %v all=%+v", i, got[i].Bytes, want[i], got)

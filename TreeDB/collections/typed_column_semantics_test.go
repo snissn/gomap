@@ -17,6 +17,7 @@ func TestTypedColumnSemanticAdapterCoversCurrentColumnStoreValueTypes(t *testing
 		semanticField("ratio", ColumnStoreValueDouble),
 		semanticField("kind", ColumnStoreValueString),
 		semanticVectorField("embedding"),
+		semanticField("opaque", ColumnStoreValueBytes),
 		semanticAdjacencyField("neighbors"),
 	}
 	for _, field := range fields {

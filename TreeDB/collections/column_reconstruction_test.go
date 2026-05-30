@@ -141,6 +141,27 @@ func TestColumnDocumentReconstructionArenaEmptyRetainedSmallNullProjectedOutputs
 	}
 }
 
+func TestColumnDocumentReconstructionBytesAsIntegerArray2010(t *testing.T) {
+	cfg := ColumnStoreConfig{Columns: []ColumnStoreColumn{
+		{Name: "opaque", Path: "opaque", ValueType: ColumnStoreValueBytes, Owner: TypedStorageOwnerColumnPart},
+		{Name: "empty", Path: "empty", ValueType: ColumnStoreValueBytes, Owner: TypedStorageOwnerColumnPart},
+	}}
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueBytes, Present: true, Bytes: []byte{0, 'A', 255}},
+		{Type: ColumnStoreValueBytes, Present: true},
+	}
+
+	_, doc, err := reconstructColumnDocumentFromVisibleRowValuesProjectedInto(nil, cfg, []byte(`{"payload":"kept"}`), columnPhysicalVisibleRow{}, values, nil, nil)
+	if err != nil {
+		t.Fatalf("reconstruct bytes: %v", err)
+	}
+	assertJSONMapEqual1875(t, doc, map[string]any{
+		"opaque":  []any{float64(0), float64(65), float64(255)},
+		"empty":   []any{},
+		"payload": "kept",
+	})
+}
+
 func columnReconstructionArenaTestConfig1888() ColumnStoreConfig {
 	return ColumnStoreConfig{Columns: []ColumnStoreColumn{
 		{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
