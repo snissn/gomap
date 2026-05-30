@@ -15,29 +15,22 @@ This closeout captures integrated search-native benchmark evidence on the curren
   - row refs: TVIS `int64` / `raw_int64`
   - vectors: typed-column `float32_vector`
 
-## Commits and artifact set
+## Commits and embedded evidence
 
 - Baseline commit: `c92f50d77b015087be1873b5210efc1e83eb9897`
 - Candidate commit: `bb76ecc93555a6a8f94de55e9a36ac7d0227a342`
-- Worktree branch: `snissn/1970-manager`
-- Hardware/env capture: `artifacts/1970/hardware_env.txt`
-- Benchmark-name verification: `artifacts/1970/benchmark_name_check.txt`
+- Worktree branch used for capture: `snissn/1970-manager`
+- Capture timestamp: `2026-05-30T22:42:50Z`
+- Hardware/env: Apple M3, 8 cores, 16 GiB RAM, macOS 26.2, Go `1.25.5` darwin/arm64
 
-Main outputs:
-
-- `artifacts/1970/bench_baseline_c92f50d77.txt`
-- `artifacts/1970/bench_candidate_bb76ecc.txt`
-- `artifacts/1970/benchstat_baseline_vs_candidate.txt`
-- `artifacts/1970/benchmark_runtime_summary.md`
-- `artifacts/1970/counter_extract.md`
-- `artifacts/1970/cpu_core_typed_candidate_top.txt`
-- `artifacts/1970/mem_core_typed_candidate_top.txt`
-- `artifacts/1970/cpu_public_docs_candidate_top.txt`
-- `artifacts/1970/mem_public_docs_candidate_top.txt`
+The raw bench logs and pprof files were manager-local capture artifacts and are
+not a committed dependency of this closeout. The decision-critical runtime,
+allocation, storage, and counter results are embedded below so the PR carries the
+evidence needed for review.
 
 ## Focused matrix and runtime summary
 
-Median runtime summary from `artifacts/1970/benchmark_runtime_summary.md`:
+Median runtime summary:
 
 | Benchmark | baseline ns/op | candidate ns/op | delta |
 | --- | ---: | ---: | ---: |
@@ -57,7 +50,7 @@ Allocation and storage notes:
 
 ## Counter highlights
 
-From `artifacts/1970/counter_extract.md` and candidate benchmark rows:
+From the candidate benchmark rows:
 
 - Adjacency typed-list direct path remained active:
   - `adjacency_typed_list_mmap_direct/search` non-zero on search benches.
