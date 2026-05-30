@@ -685,15 +685,16 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64Span(view columnPhys
 	}
 	rowsScanned := 0
 	matchedRows := 0
+	reduceRows := 0
 	for partIdx := range r.parts {
 		dense := r.parts[partIdx].DenseInt64Span
 		if dense == nil {
-			diag := r.diagnostics(view, req, rowsScanned, matchedRows, matchedRows, time.Since(start).Nanoseconds())
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 			diag.DenseInt64SpanUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span missing prepared part %d", partIdx)
 		}
 		if len(dense.GroupCodes) != len(dense.Values) {
-			diag := r.diagnostics(view, req, rowsScanned, matchedRows, matchedRows, time.Since(start).Nanoseconds())
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 			diag.DenseInt64SpanUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d group/value rows=%d/%d", partIdx, len(dense.GroupCodes), len(dense.Values))
 		}
@@ -715,10 +716,13 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64Span(view columnPhys
 			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
-			matchedRows++
+			if len(dense.Predicates) != 0 {
+				matchedRows++
+			}
+			reduceRows++
 			localIdx, ok := columnDictionaryCodeIndex(code, len(r.denseLocalSpans))
 			if !ok {
-				diag := r.diagnostics(view, req, rowsScanned, matchedRows, matchedRows, time.Since(start).Nanoseconds())
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 				diag.DenseInt64SpanUsed = true
 				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d code[%d]=%d outside cardinality=%d", partIdx, rowIdx, code, len(r.denseLocalSpans))
 			}
@@ -743,7 +747,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64Span(view columnPhys
 			}
 			key, ok := dense.DictionaryByCode[int64(localCode)]
 			if !ok {
-				diag := r.diagnostics(view, req, rowsScanned, matchedRows, matchedRows, time.Since(start).Nanoseconds())
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 				diag.DenseInt64SpanUsed = true
 				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d dictionary missing local code %d", partIdx, localCode)
 			}
@@ -769,7 +773,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64Span(view columnPhys
 	if req.TopK == 0 {
 		sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
 	}
-	diag := r.diagnostics(view, req, rowsScanned, matchedRows, matchedRows, time.Since(start).Nanoseconds())
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 	diag.DenseInt64SpanUsed = true
 	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)

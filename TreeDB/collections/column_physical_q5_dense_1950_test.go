@@ -48,6 +48,18 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 		}
 		assertColumnPhysicalQ5DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, len(events), matchedRows)
 	}
+
+	noPredicateReq := req
+	noPredicateReq.Predicates = nil
+	noPredicateReq.TopK = 0
+	noPredicateReq.TopKOrder = ""
+	noPredicate, err := col.RunColumnPhysicalQuery(noPredicateReq)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q5 dense no predicates): %v", err)
+	}
+	if !noPredicate.Diagnostics.DenseInt64SpanUsed || noPredicate.Diagnostics.RowsScanned != len(events) || noPredicate.Diagnostics.RowsMatched != 0 || noPredicate.Diagnostics.ReduceRows != len(events) {
+		t.Fatalf("no-predicate diagnostics=%+v want dense span with RowsMatched=0 and ReduceRows=%d", noPredicate.Diagnostics, len(events))
+	}
 }
 
 func BenchmarkColumnPhysicalQ5DenseTypedColumn1950(b *testing.B) {
