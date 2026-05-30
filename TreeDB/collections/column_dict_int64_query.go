@@ -237,7 +237,7 @@ func runColumnDictionaryInt64GroupOneShot(view columnPhysicalScanSnapshotView, r
 	if blocks == 0 {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	groups := reducer.groups()
+	groups := reducer.groups(req)
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = 2
@@ -375,7 +375,9 @@ func (r *columnDictionaryInt64GroupRunner) run(view columnPhysicalScanSnapshotVi
 		}
 		r.result = append(r.result, ColumnPhysicalQueryGroup{Key: key, Int64: value})
 	}
-	sortColumnPhysicalQueryGroupsByKey(r.result)
+	if req.TopK == 0 {
+		sortColumnPhysicalQueryGroupsByKey(r.result)
+	}
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
 	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 2)
@@ -575,7 +577,7 @@ func (r *columnDictionaryInt64GroupOneShotReducer) reduceValue(code uint32, valu
 	}
 }
 
-func (r *columnDictionaryInt64GroupOneShotReducer) groups() []ColumnPhysicalQueryGroup {
+func (r *columnDictionaryInt64GroupOneShotReducer) groups(req ColumnPhysicalQueryRequest) []ColumnPhysicalQueryGroup {
 	r.result = r.result[:0]
 	for code, key := range r.groupDict {
 		word := code / 64
@@ -589,6 +591,8 @@ func (r *columnDictionaryInt64GroupOneShotReducer) groups() []ColumnPhysicalQuer
 		}
 		r.result = append(r.result, ColumnPhysicalQueryGroup{Key: key, Int64: value})
 	}
-	sortColumnPhysicalQueryGroupsByKey(r.result)
+	if req.TopK == 0 {
+		sortColumnPhysicalQueryGroupsByKey(r.result)
+	}
 	return r.result
 }

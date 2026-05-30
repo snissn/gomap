@@ -1381,6 +1381,7 @@ func mergeColumnPhysicalQueryFallbackReason(left, right ColumnPhysicalQueryFallb
 type columnPhysicalQueryExecutor struct {
 	kind              ColumnPhysicalQueryKind
 	readIntegrity     ColumnAssetReadIntegrity
+	topK              int
 	projected         []string
 	groupIdx          int
 	valueIdx          int
@@ -1412,6 +1413,7 @@ func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQue
 	exec := &columnPhysicalQueryExecutor{
 		kind:              req.Kind,
 		readIntegrity:     req.ColumnAssetReadIntegrity,
+		topK:              req.TopK,
 		groupIdx:          -1,
 		valueIdx:          -1,
 		distinctIdx:       -1,
@@ -1977,7 +1979,9 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 			e.resultGroups = append(e.resultGroups, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	sortColumnPhysicalQueryGroupsByKey(e.resultGroups)
+	if e.topK == 0 {
+		sortColumnPhysicalQueryGroupsByKey(e.resultGroups)
+	}
 	return e.resultGroups
 }
 

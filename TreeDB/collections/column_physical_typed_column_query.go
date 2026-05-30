@@ -986,10 +986,12 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) groups(req ColumnPhysicalQue
 			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	if a.kind == ColumnPhysicalQueryGroupHourCount {
-		sortColumnPhysicalQueryGroupsByKeyHour(out)
-	} else {
-		sortColumnPhysicalQueryGroupsByKey(out)
+	if req.TopK == 0 {
+		if a.kind == ColumnPhysicalQueryGroupHourCount {
+			sortColumnPhysicalQueryGroupsByKeyHour(out)
+		} else {
+			sortColumnPhysicalQueryGroupsByKey(out)
+		}
 	}
 	return out
 }

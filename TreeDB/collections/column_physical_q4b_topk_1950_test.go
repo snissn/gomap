@@ -16,6 +16,7 @@ func TestTypedColumnQ4BTopKMarkPrunedParity1950(t *testing.T) {
 
 	req := typedColumnQ4BTopKRequest1950()
 	want := typedColumnQ4BTopKReferenceGroups1950(scanned, req.TopK)
+	wantCandidates := typedColumnQ4BTopKReferenceCandidateCount1950(scanned)
 	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q4b", scanned)
 
 	direct, err := col.RunColumnPhysicalQuery(req)
@@ -23,7 +24,7 @@ func TestTypedColumnQ4BTopKMarkPrunedParity1950(t *testing.T) {
 		t.Fatalf("RunColumnPhysicalQuery(q4b topK): %v", err)
 	}
 	assertTypedColumnQ4BTopKGroups1950(t, "direct", direct.Groups, want)
-	assertTypedColumnQ4BTopKDiagnostics1950(t, "direct", direct.Diagnostics, len(events), matchedRows, req.TopK, len(want), 64)
+	assertTypedColumnQ4BTopKDiagnostics1950(t, "direct", direct.Diagnostics, len(events), matchedRows, req.TopK, len(want), wantCandidates)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -35,7 +36,7 @@ func TestTypedColumnQ4BTopKMarkPrunedParity1950(t *testing.T) {
 		t.Fatalf("prepared q4b topK: %v", err)
 	}
 	assertTypedColumnQ4BTopKGroups1950(t, "prepared", prepared.Groups, want)
-	assertTypedColumnQ4BTopKDiagnostics1950(t, "prepared", prepared.Diagnostics, len(events), matchedRows, req.TopK, len(want), 64)
+	assertTypedColumnQ4BTopKDiagnostics1950(t, "prepared", prepared.Diagnostics, len(events), matchedRows, req.TopK, len(want), wantCandidates)
 }
 
 func TestColumnPhysicalNonMetadataTopKShaping1950(t *testing.T) {
@@ -150,14 +151,27 @@ func BenchmarkTypedColumnQ4BTopK1950(b *testing.B) {
 
 func typedColumnQ4BTopKTieBreakEvents1950() []columnPhysicalJSONBenchParityEventP0 {
 	events := typedColumnSortKeyPruningEvents1949()
-	for i := range events {
-		if events[i].ID == "post-1" {
-			// Force an equal min(time_us) across two groups so the top-K assertion
-			// exercises deterministic Key tie-break parity with the row-scan reference.
-			events[i].TimeUS = 2_000_000
+	firstIdx := -1
+	secondIdx := -1
+	for i, event := range events {
+		if !columnPhysicalJSONBenchReferenceMatchP0("q4b", event) {
+			continue
+		}
+		if firstIdx < 0 {
+			firstIdx = i
+			continue
+		}
+		if event.Did != events[firstIdx].Did {
+			secondIdx = i
 			break
 		}
 	}
+	if firstIdx < 0 || secondIdx < 0 {
+		panic("typedColumnQ4BTopKTieBreakEvents1950: fixture needs at least two q4b groups")
+	}
+	// Force an equal min(time_us) across two groups so the top-K assertion
+	// exercises deterministic Key tie-break parity with the row-scan reference.
+	events[secondIdx].TimeUS = events[firstIdx].TimeUS
 	return events
 }
 
@@ -181,15 +195,7 @@ func typedColumnQ4BTopKClickHouseSortKey1950() []ColumnSortKey {
 }
 
 func typedColumnQ4BTopKReferenceGroups1950(events []columnPhysicalJSONBenchParityEventP0, topK int) []ColumnPhysicalQueryGroup {
-	mins := make(map[string]int64)
-	for _, event := range events {
-		if !columnPhysicalJSONBenchReferenceMatchP0("q4b", event) {
-			continue
-		}
-		if cur, ok := mins[event.Did]; !ok || event.TimeUS < cur {
-			mins[event.Did] = event.TimeUS
-		}
-	}
+	mins := typedColumnQ4BTopKReferenceMins1950(events)
 	groups := make([]ColumnPhysicalQueryGroup, 0, len(mins))
 	for key, value := range mins {
 		groups = append(groups, ColumnPhysicalQueryGroup{Key: key, Int64: value})
@@ -204,6 +210,23 @@ func typedColumnQ4BTopKReferenceGroups1950(events []columnPhysicalJSONBenchParit
 		groups = groups[:topK]
 	}
 	return groups
+}
+
+func typedColumnQ4BTopKReferenceCandidateCount1950(events []columnPhysicalJSONBenchParityEventP0) int {
+	return len(typedColumnQ4BTopKReferenceMins1950(events))
+}
+
+func typedColumnQ4BTopKReferenceMins1950(events []columnPhysicalJSONBenchParityEventP0) map[string]int64 {
+	mins := make(map[string]int64)
+	for _, event := range events {
+		if !columnPhysicalJSONBenchReferenceMatchP0("q4b", event) {
+			continue
+		}
+		if cur, ok := mins[event.Did]; !ok || event.TimeUS < cur {
+			mins[event.Did] = event.TimeUS
+		}
+	}
+	return mins
 }
 
 func assertTypedColumnQ4BTopKGroups1950(tb testing.TB, label string, got, want []ColumnPhysicalQueryGroup) {
