@@ -505,7 +505,12 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 
 func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(r.plan, req) {
-		return r.runSortedGroupedDistinct(view, req)
+		result, err := r.runSortedGroupedDistinct(view, req)
+		if err == nil {
+			finalizeColumnPhysicalQueryResultGroups(req, &result)
+			r.resultGroups = result.Groups
+		}
+		return result, err
 	}
 
 	start := time.Now()
