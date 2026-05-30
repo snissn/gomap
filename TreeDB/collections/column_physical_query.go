@@ -146,6 +146,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	SortKeyMarkSkips                    int
 	SortKeyMarkFallbackReason           string
 	SortedGroupedDistinctReady          bool
+	SortedGroupedDistinctUsed           bool
 	SortedGroupedDistinctFallbackReason string
 	DecodedPayloadBytes                 uint64
 	FallbackReads                       int
@@ -1325,6 +1326,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.SortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortKeyMarkFallbackReason, right.SortKeyMarkFallbackReason)
 	if right.SortedGroupedDistinctReady {
 		left.SortedGroupedDistinctReady = true
+	}
+	if right.SortedGroupedDistinctUsed {
+		left.SortedGroupedDistinctUsed = true
 	}
 	left.SortedGroupedDistinctFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortedGroupedDistinctFallbackReason, right.SortedGroupedDistinctFallbackReason)
 	left.DecodedPayloadBytes += right.DecodedPayloadBytes

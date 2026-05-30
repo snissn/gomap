@@ -219,8 +219,8 @@ func TestTypedColumnSortKeyQ2StreamingReadinessDiagnostics1949(t *testing.T) {
 	if !result.Diagnostics.SortKeyPrefixPlanned || result.Diagnostics.SortKeyPrefixLiterals != 2 || !equalStrings1949(result.Diagnostics.SortKeyPrefixColumns, []string{"kind", "operation"}) {
 		t.Fatalf("q2 prefix diagnostics=%+v want kind/operation prefix plan", result.Diagnostics)
 	}
-	if !result.Diagnostics.SortedGroupedDistinctReady || result.Diagnostics.SortedGroupedDistinctFallbackReason != columnSortedGroupedDistinctFallbackNone {
-		t.Fatalf("q2 grouped-distinct readiness diagnostics=%+v want ready for #1950 streaming consumer", result.Diagnostics)
+	if !result.Diagnostics.SortedGroupedDistinctReady || !result.Diagnostics.SortedGroupedDistinctUsed || result.Diagnostics.SortedGroupedDistinctFallbackReason != columnSortedGroupedDistinctFallbackNone {
+		t.Fatalf("q2 grouped-distinct diagnostics=%+v want #1950 streaming consumer used", result.Diagnostics)
 	}
 	if result.Diagnostics.SortKeyMarkChecks == 0 || result.Diagnostics.RowsScanned != len(events) {
 		t.Fatalf("q2 diagnostics=%+v want checked sorted-prefix marks and exact grouped distinct full execution", result.Diagnostics)
