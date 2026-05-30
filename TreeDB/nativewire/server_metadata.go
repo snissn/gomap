@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -25,14 +26,23 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err != nil {
 		return nil, err
 	}
+	// Enforce required storage policy
+	meta.Options.DataRootStoragePolicy = collections.RootStorageFast
+	meta.Options.IndexStateStoragePolicy = collections.RootStorageFast
+
 	meta, err = normalizeClientCollectionMeta(meta)
 	if err != nil {
 		return nil, err
 	}
+
+	logDebug("handleCreateCollection: creating collection with dataPolicy=%s indexPolicy=%s", meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy)
+
 	created, err := s.collections.CreateCollection(&meta)
 	if err != nil {
+		logDebug("handleCreateCollection: CreateCollection failed: %v", err)
 		return nil, metadataWrap(err)
 	}
+	logDebug("handleCreateCollection: CreateCollection success")
 	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*created)}}), nil
 }
 
