@@ -505,7 +505,12 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 
 func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(r.plan, req) {
-		return r.runSortedGroupedDistinct(view, req)
+		result, err := r.runSortedGroupedDistinct(view, req)
+		if err == nil {
+			finalizeColumnPhysicalQueryResultGroups(req, &result)
+			r.resultGroups = result.Groups
+		}
+		return result, err
 	}
 
 	start := time.Now()
@@ -538,8 +543,10 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	groups := acc.groups(req, r.resultGroups)
 	r.resultGroups = groups
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())
-	diag.ResultGroups = len(groups)
-	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, nil
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
 }
 
 func columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
@@ -984,10 +991,12 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) groups(req ColumnPhysicalQue
 			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
 		}
 	}
-	if a.kind == ColumnPhysicalQueryGroupHourCount {
-		sortColumnPhysicalQueryGroupsByKeyHour(out)
-	} else {
-		sortColumnPhysicalQueryGroupsByKey(out)
+	if req.TopK == 0 {
+		if a.kind == ColumnPhysicalQueryGroupHourCount {
+			sortColumnPhysicalQueryGroupsByKeyHour(out)
+		} else {
+			sortColumnPhysicalQueryGroupsByKey(out)
+		}
 	}
 	return out
 }
