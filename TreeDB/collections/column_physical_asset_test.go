@@ -122,7 +122,7 @@ func TestColumnPhysicalAssetExtractsTypedColumnBytesFromJSON2010(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BytesColumn.Row(1): %v", err)
 	}
-	if !bytes.Equal(got0, []byte{0x00, 'A', 0xff}) || !bytes.Equal(got1, nil) {
+	if !bytes.Equal(got0, []byte{0x00, 'A', 0xff}) || len(got1) != 0 {
 		t.Fatalf("decoded typed-column bytes rows=%v/%v", got0, got1)
 	}
 	if _, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{ID: []byte("bad"), Document: []byte(`{"opaque":"not bytes"}`)}}); err == nil || !strings.Contains(err.Error(), "expected bytes array") {
