@@ -151,27 +151,37 @@ func BenchmarkTypedColumnQ4BTopK1950(b *testing.B) {
 
 func typedColumnQ4BTopKTieBreakEvents1950() []columnPhysicalJSONBenchParityEventP0 {
 	events := typedColumnSortKeyPruningEvents1949()
-	firstIdx := -1
-	secondIdx := -1
+	type didMin struct {
+		did  string
+		time int64
+		idx  int
+	}
+	minByDID := make(map[string]didMin)
 	for i, event := range events {
 		if !columnPhysicalJSONBenchReferenceMatchP0("q4b", event) {
 			continue
 		}
-		if firstIdx < 0 {
-			firstIdx = i
-			continue
-		}
-		if event.Did != events[firstIdx].Did {
-			secondIdx = i
-			break
+		cur, ok := minByDID[event.Did]
+		if !ok || event.TimeUS < cur.time {
+			minByDID[event.Did] = didMin{did: event.Did, time: event.TimeUS, idx: i}
 		}
 	}
-	if firstIdx < 0 || secondIdx < 0 {
+	mins := make([]didMin, 0, len(minByDID))
+	for _, min := range minByDID {
+		mins = append(mins, min)
+	}
+	if len(mins) < 2 {
 		panic("typedColumnQ4BTopKTieBreakEvents1950: fixture needs at least two q4b groups")
 	}
+	sort.Slice(mins, func(i, j int) bool {
+		if mins[i].time != mins[j].time {
+			return mins[i].time < mins[j].time
+		}
+		return mins[i].did < mins[j].did
+	})
 	// Force an equal min(time_us) across two groups so the top-K assertion
 	// exercises deterministic Key tie-break parity with the row-scan reference.
-	events[secondIdx].TimeUS = events[firstIdx].TimeUS
+	events[mins[1].idx].TimeUS = mins[0].time
 	return events
 }
 
