@@ -550,10 +550,13 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
-			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, fixedWidthElements, j, blockDesc); err != nil {
+			if err := validateDecodedColumnBlockGranuleMetadata(name, j, granule); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
-			if err := validateDecodedColumnBlockGranuleMetadata(name, j, granule); err != nil {
+			if columnType == ColumnTypeBytes && blockDesc.Encoding == EncodingRawBytesOffsets && (granule.NullCount != 0 || granule.DefaultCount != 0) {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: descriptor column %s block %d bytes null/default count=%d/%d want 0/0", name, j, granule.NullCount, granule.DefaultCount)
+			}
+			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, fixedWidthElements, j, blockDesc); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
 			if blockDesc.FirstRow != expectedFirstRow {

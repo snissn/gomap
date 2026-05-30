@@ -207,6 +207,8 @@ The matrix covers every current `typedcolumn.ColumnType`:
 - `low_cardinality_code`
 - `bool`
 - `float32_vector`
+- `uint32_list`
+- `bytes`
 - `adjacency_list`
 
 and every current `typedcolumn.Encoding`:
@@ -222,6 +224,7 @@ and every current `typedcolumn.Encoding`:
 - `raw_float64`
 - `raw_uint32_dense`
 - `raw_uint32_offsets_list`
+- `raw_bytes_offsets`
 
 ## Future scalar numeric-width admission rules
 

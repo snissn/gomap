@@ -2,6 +2,7 @@ package typedcolumn
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,90 @@ func TestRawBytesOffsetsGranuleAndSectionValidation(t *testing.T) {
 	if err := ValidateRawBytesOffsetsSections(offsetsSection, badValues, offsetsRaw, valuesRaw, 3); err == nil || !strings.Contains(err.Error(), "section lengths") {
 		t.Fatalf("bad section length err=%v want length failure", err)
 	}
+}
+
+func TestRawBytesOffsetsColumnPartFromImageRejectsNullCount(t *testing.T) {
+	t.Parallel()
+	part, err := BuildColumnPart(92010, Options{
+		SchemaVersion: 1,
+		SchemaMode:    ColumnSchemaFixed,
+		Columns: []ColumnDefinition{
+			{Name: "id", Type: ColumnTypeInt64, Encoding: EncodingRawInt64, Compression: CompressionNone},
+			{Name: "opaque", Type: ColumnTypeBytes, Encoding: EncodingRawBytesOffsets, Compression: CompressionNone},
+		},
+		LogicalPrimaryKey: LogicalPrimaryKey{Columns: []string{"id"}},
+		SortKey:           SortKey{Columns: []SortKeyColumn{{Column: "id"}}},
+		PartPolicy:        ColumnPartPolicy{RowsPerGranule: 2},
+		Compression:       ColumnCompressionPolicy{Default: CompressionNone},
+	}, Batch{
+		Rows:    2,
+		Columns: map[string][]int64{"id": {1, 2}},
+		BytesColumns: map[string]RawBytesOffsets{
+			"opaque": {Rows: 2, Offsets: []uint64{0, 3, 3}, Values: []byte{'a', 0x00, 0xff}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildColumnPart: %v", err)
+	}
+	image, err := BuildColumnPartImage(part, ColumnPartImageOptions{})
+	if err != nil {
+		t.Fatalf("BuildColumnPartImage: %v", err)
+	}
+	corrupt := cloneColumnPartImageBytes(image)
+	nullCountOffset := mustRawBytesOffsetsDescriptorBlockNullCountOffset(t, corrupt, "opaque")
+	binary.LittleEndian.PutUint64(corrupt.Bytes[nullCountOffset:nullCountOffset+8], 1)
+	parsed, err := ParseColumnPartImage(corrupt.Bytes)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	_, err = ColumnPartFromImage(parsed)
+	if err == nil || !strings.Contains(err.Error(), "bytes null/default count=1/0 want 0/0") {
+		t.Fatalf("ColumnPartFromImage bytes null count err=%v", err)
+	}
+}
+
+func mustRawBytesOffsetsDescriptorBlockNullCountOffset(t *testing.T, image ColumnPartImage, column string) int {
+	t.Helper()
+	section := mustValidationSection(t, image, ColumnPartImageSectionDescriptor)
+	dec := columnPartImageDecoder{data: image.sectionBytes(section)}
+	mustValidationSkipU16(t, &dec)
+	mustValidationSkipU64(t, &dec)
+	mustValidationReadU32(t, &dec)
+	mustValidationSkipI64(t, &dec)
+	mustValidationSkipI64(t, &dec)
+	if _, err := dec.stringSlice(); err != nil {
+		t.Fatalf("decode logical primary key: %v", err)
+	}
+	granuleCount := mustValidationReadU32(t, &dec)
+	granuleBytes := int(granuleCount) * 64
+	if err := dec.require(granuleBytes); err != nil {
+		t.Fatalf("skip descriptor granules: %v", err)
+	}
+	dec.offset += granuleBytes
+	columnCount := mustValidationReadU32(t, &dec)
+	for i := 0; i < int(columnCount); i++ {
+		name, err := dec.str()
+		if err != nil {
+			t.Fatalf("decode descriptor column name: %v", err)
+		}
+		mustValidationSkipU16(t, &dec)
+		mustValidationReadU32(t, &dec)
+		mustValidationReadU32(t, &dec)
+		blockCount := mustValidationReadU32(t, &dec)
+		if name == column {
+			if blockCount == 0 {
+				t.Fatalf("descriptor column %q has no blocks", column)
+			}
+			return section.Offset + dec.offset + 60
+		}
+		blockBytes := int(blockCount) * 94
+		if err := dec.require(blockBytes); err != nil {
+			t.Fatalf("skip descriptor column %q blocks: %v", name, err)
+		}
+		dec.offset += blockBytes
+	}
+	t.Fatalf("descriptor column %q not found", column)
+	return 0
 }
 
 func mustRawBytesOffsets(t *testing.T, offsets []uint64) []byte {

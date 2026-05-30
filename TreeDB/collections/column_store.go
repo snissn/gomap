@@ -522,6 +522,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 			if col.Nullable {
 				return fmt.Errorf("collections: invalid column %q nullable bytes is unsupported", col.Name)
 			}
+			if owner != TypedStorageOwnerColumnPart {
+				return fmt.Errorf("collections: invalid column %q bytes requires owner %q", col.Name, TypedStorageOwnerColumnPart)
+			}
 			if col.AdjacencyDegree != 0 {
 				return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list columns may set adjacency_degree", col.Name)
 			}
