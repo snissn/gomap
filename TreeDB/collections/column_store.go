@@ -63,6 +63,7 @@ const (
 	ColumnStoreValueString        ColumnStoreValueType = "string"
 	ColumnStoreValueFloat32Vector ColumnStoreValueType = "float32_vector"
 	ColumnStoreValueUint32List    ColumnStoreValueType = "uint32_list"
+	ColumnStoreValueBytes         ColumnStoreValueType = "bytes"
 	// AdjacencyList is the current compatibility name for graph adjacency data.
 	// It must not become the target variable-list datastore primitive; #1984/#1985
 	// own the generic uint32_list logical type and raw_uint32_offsets_list encoding.
@@ -517,6 +518,20 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
 			}
 		}
+		if valueType == ColumnStoreValueBytes {
+			if col.Nullable {
+				return fmt.Errorf("collections: invalid column %q nullable bytes is unsupported", col.Name)
+			}
+			if col.AdjacencyDegree != 0 {
+				return fmt.Errorf("collections: invalid column %q adjacency_degree: only adjacency_list columns may set adjacency_degree", col.Name)
+			}
+			if adjacencyLayout != ColumnAdjacencyListLayoutFixedDense {
+				return fmt.Errorf("collections: invalid column %q adjacency_layout: only adjacency_list columns may set adjacency_layout", col.Name)
+			}
+			if fixedWidthEncoding != ColumnFixedWidthEncodingDefault {
+				return fmt.Errorf("collections: invalid column %q fixed_width_encoding: unsupported for value_type %q", col.Name, valueType)
+			}
+		}
 		if valueType == ColumnStoreValueAdjacencyList {
 			if col.AdjacencyDegree < 0 {
 				return fmt.Errorf("collections: invalid column %q adjacency_degree: must be non-negative", col.Name)
@@ -717,7 +732,7 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 
 func normalizeColumnStoreValueType(valueType ColumnStoreValueType) (ColumnStoreValueType, error) {
 	switch valueType {
-	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueAdjacencyList:
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueFloat32, ColumnStoreValueDouble, ColumnStoreValueString, ColumnStoreValueFloat32Vector, ColumnStoreValueUint32List, ColumnStoreValueBytes, ColumnStoreValueAdjacencyList:
 		return valueType, nil
 	case "":
 		return "", errors.New("value_type is required")
@@ -833,7 +848,7 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 		if !ok {
 			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 		}
-		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueAdjacencyList {
+		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueBytes || valueType == ColumnStoreValueAdjacencyList {
 			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
 		}
 		if aggregate.GroupColumn == "" {
@@ -862,7 +877,7 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 		if !ok {
 			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
 		}
-		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueAdjacencyList {
+		if valueType == ColumnStoreValueFloat32Vector || valueType == ColumnStoreValueUint32List || valueType == ColumnStoreValueBytes || valueType == ColumnStoreValueAdjacencyList {
 			return fmt.Errorf("collections: aggregate metadata %q kind %q does not support value_type %q", aggregate.Name, aggregate.Kind, valueType)
 		}
 	}

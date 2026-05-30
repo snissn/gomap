@@ -7,8 +7,7 @@ scan/reducer code and must not call generic semantic interfaces per row.
 The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 
 - collection logical value type (`bool`, `int64`, `float32`, `double`, `string`,
-  `float32_vector`, `adjacency_list`; #1984 defines target `uint32_list`
-  semantics for #1985 runtime admission);
+  `float32_vector`, `uint32_list`, `bytes`, and `adjacency_list`);
 - `typedcolumn.ColumnType` physical carrier;
 - `typedcolumn.Encoding` layout/codec;
 - operation capability status: `supported`, `unsupported`, or `fallback` with a
@@ -24,6 +23,8 @@ The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 | `double` | default `int64` carrier; native `float64` when `fixed_width_encoding: "little_endian"` is selected | compatibility `raw_int64` carrying `math.Float64bits`; native `raw_float64` little-endian IEEE-754 bits | same raw-bit restriction as `float32`; native `raw_float64` is a bit-preserving direct scalar payload candidate without enabling numeric float fast paths yet. |
 | `string` | `low_cardinality_code` | `low_cardinality_uint32` plus dictionary metadata | dictionary equality/in-list/group-by are supported. Lexical range/prefix/pruning are unsupported unless dictionary order and collation identity are explicitly proven (`dictionary_order_unproven`, `dictionary_collation_unproven`). |
 | `float32_vector` | `float32_vector` | `raw_float32_vector` | count rows/non-null plus vector direct-payload, similarity, dot-product, and vector-metric capabilities are explicit prepare-time entries for specialized vector kernels. Scalar equality/range/sum/min/max/stats/pruning shortcuts are rejected (`vector_scalar_operation_unsupported`). |
+| `uint32_list` | `uint32_list` | `raw_uint32_offsets_list` | count rows/non-null plus generic list length/payload direct-view capabilities are primitive shape semantics only. The primitive does not imply HNSW adjacency, graph ordinals, or scalar numeric range/aggregate semantics; scalar range/sum/min/max/stats/pruning shortcuts are rejected (`uint32_list_scalar_operation_unsupported`). |
+| `bytes` | `bytes` | `raw_bytes_offsets` | count rows/non-null plus opaque byte-payload direct-view capabilities are primitive shape semantics only. Bytes are not strings: no UTF-8, collation, dictionary, lexical range, scalar compare, or text predicate semantics are implied; scalar operations are rejected (`bytes_scalar_operation_unsupported`). |
 | `adjacency_list` | `adjacency_list` | legacy `raw_uint32_dense`; legacy `raw_uint32_offsets_list` compatibility path | count rows/non-null plus adjacency graph traversal and adjacency-metric semantics are graph-specific entries. Direct payload views are compatibility/fallback-only on this logical type. The offsets-list path is an explicit `ColumnStoreValueAdjacencyList` variable-list selector (`adjacency_layout: "uint32_offsets_list"`) plus internal encoding with `uint64` offsets and `uint32` values, not fixed padded rows. #1989 quarantines that graph-specific logical integration; first-class `uint32_list` semantics keep primitive shape validation separate from graph ordinal/layer/search validation. Scalar range/sum/min/max/stats/pruning shortcuts are rejected (`adjacency_scalar_operation_unsupported`). |
 
 ## First-class `uint32_list` semantic contract (#1984)
@@ -52,6 +53,22 @@ values substream is validated. HNSW adjacency is a consumer above this primitive
 neighbor ordinal bounds, graph layers, deleted rows, and traversal semantics are
 not primitive `uint32_list` checks. `adjacency_list` remains legacy and
 consumer-specific compatibility until downstream issues replace or isolate it.
+
+## First-class `bytes` semantic contract (#2010)
+
+`bytes` is the generic opaque binary primitive. It exists for exact byte payloads
+and deliberately does not reuse `string`/dictionary/text semantics. The v1
+primitive is non-null and one-dimensional: every row has exactly one byte slice,
+empty byte slices are valid, and null/default/nested byte-list variants are
+unsupported until explicitly designed.
+
+The physical encoding is `raw_bytes_offsets`: `offsets []uint64` little-endian
+with length `rows+1`, `offsets[0] == 0`, and a `values []byte` substream holding
+the exact concatenation of row payloads. Row `i` spans
+`values[offsets[i]:offsets[i+1]]`. Validation requires exact offsets byte
+length, monotonic host-int-bounded offsets, and final offset equal to the values
+byte length. The values substream is opaque and may contain NUL bytes,
+non-UTF-8 sequences, and any other byte values without normalization.
 
 ## Scalar float fail-closed policy
 

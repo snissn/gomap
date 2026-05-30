@@ -130,6 +130,23 @@ func typedColumnDirectViewClassificationForAdjacencyLayout(valueType ColumnStore
 		base.Reason = "typed-column uint32_list raw_uint32_offsets_list uses certified uint64 offsets plus uint32 values direct views with fail-closed fallback diagnostics"
 		return base
 	}
+	if valueType == ColumnStoreValueBytes {
+		if consumer != typedColumnDirectViewConsumerTypedColumnPartGeneric {
+			base.Reason = "bytes direct-view classification only supports the generic typed-column consumer"
+			return base
+		}
+		base.Support = typedColumnDirectViewActiveLittleEndianCandidate
+		base.PayloadEndian = "little"
+		base.ElementSize = 1
+		base.Alignment = 1
+		base.RequiresElementsPerRow = false
+		base.OffsetsElementSize = 8
+		base.OffsetsAlignment = 8
+		base.ValuesElementSize = 1
+		base.ValuesAlignment = 1
+		base.Reason = "typed-column bytes raw_bytes_offsets uses certified uint64 offsets plus exact opaque byte values direct views with fail-closed fallback diagnostics"
+		return base
+	}
 	if valueType == ColumnStoreValueAdjacencyList {
 		if adjacencyLayout == typedColumnDirectViewAdjacencyLayoutNone {
 			adjacencyLayout = typedColumnDirectViewAdjacencyLayoutRawUint32Dense
@@ -223,6 +240,7 @@ func typedColumnDirectViewAllTypeInventory() []ColumnStoreValueType {
 		ColumnStoreValueString,
 		ColumnStoreValueFloat32Vector,
 		ColumnStoreValueUint32List,
+		ColumnStoreValueBytes,
 		ColumnStoreValueAdjacencyList,
 	}
 }

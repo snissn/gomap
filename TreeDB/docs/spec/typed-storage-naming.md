@@ -49,6 +49,7 @@ drift from the runtime vocabulary strings.
 | `ColumnStoreValueString` | `string` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueFloat32Vector` | `float32_vector` | Legacy public declared-type compatibility name. |
 | `ColumnStoreValueUint32List` | `uint32_list` | Generic integer-list declared-type compatibility name. |
+| `ColumnStoreValueBytes` | `bytes` | Generic opaque byte-payload declared-type compatibility name. |
 | `ColumnStoreValueAdjacencyList` | `adjacency_list` | Legacy public declared-type compatibility name. |
 
 ## `uint32_list` Compatibility Naming Strategy (#1984)
@@ -69,6 +70,15 @@ PR.
 name. It must not be reused as the generic `uint32_list` primitive, and
 `adjacency_list` must remain classified as consumer-specific/legacy rather than a
 first-class datastore list type.
+
+## `bytes` Compatibility Naming Strategy (#2010)
+
+The first-class generic opaque binary logical type is `bytes`; its v1 physical
+encoding is `raw_bytes_offsets`: explicit sentinel offsets (`rows+1`,
+`offsets[0] == 0`) plus exact concatenated byte payloads. The preferred public
+compatibility symbol is `ColumnStoreValueBytes` with documented string `bytes`.
+The name is intentionally consumer-neutral and must not be specialized to vector
+search result IDs, graph row IDs, or text/string semantics.
 
 ## PR 1 Layout Resolver Contract
 

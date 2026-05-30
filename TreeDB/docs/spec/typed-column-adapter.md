@@ -42,6 +42,7 @@ time.
 | `string` | represented | Low-cardinality uint32 codes plus typed-column dictionary section metadata; code order must not imply lexical range/prefix unless dictionary order and collation proof are supplied. |
 | `float32_vector` | represented | Fixed-dimension row-major dense little-endian `float32` sections with `vector_dims` as elements per row; active typed-column direct-view candidate after certification/read-time checks. |
 | `uint32_list` | represented | Generic non-null variable-width integer-list sections using `raw_uint32_offsets_list`: a `uint64` sentinel offsets substream (`rows+1`) plus flattened little-endian `uint32` values. Writer, owned fallback reader, and certified direct-view reader are generic and do not require adjacency semantics. |
+| `bytes` | represented | Generic non-null opaque byte payload sections using `raw_bytes_offsets`: a `uint64` sentinel offsets substream (`rows+1`) plus exact concatenated byte values. Empty byte slices, NUL bytes, and non-UTF-8 bytes are preserved exactly; the primitive is not text/dictionary/string semantics. |
 | `adjacency_list` | represented for dense compatibility; legacy offsets-list compatibility reader | Empty `adjacency_layout` keeps fixed-degree row-major dense little-endian `uint32` sections with `adjacency_degree` as elements per row. `adjacency_layout: "uint32_offsets_list"` selects the #1915/#1916/#1901 variable-list compatibility path (`uint64` offsets plus `uint32` values) on the same value type for safe writer/fallback-reader publication and certified direct views. #1989 quarantines graph-specific storage integration; primary list storage is generic `uint32_list`. |
 
 ## `uint32_list` adapter naming boundary (#1984)
@@ -61,6 +62,23 @@ values section and fail closed on missing, corrupt, mismatched, compressed,
 nullable, or nested list assets. The current `ColumnStoreValueAdjacencyList` and
 `adjacency_layout` selector remain legacy/consumer-specific compatibility, not
 the generic primitive.
+
+## `bytes` adapter naming boundary (#2010)
+
+`bytes` is a generic typed-column primitive for opaque binary payloads. It is
+consumer-neutral storage machinery and is not named after document IDs, graph row
+IDs, or any vector-index state consumer. The v1 shape is non-null: every row has
+one byte slice, and empty slices are represented by equal adjacent offsets.
+Nullable/default/nested byte-list variants are out of scope and must fail closed.
+
+The physical encoding is `raw_bytes_offsets`: one column-wide little-endian
+`uint64` offsets section with length `row_count + 1` and `offsets[0] == 0`, plus
+one column-wide values section containing the exact concatenation of row bytes.
+Validation requires monotonic host-int-bounded offsets and a final offset equal
+to the values byte length. Owned fallback reads copy offsets and values; certified
+direct views expose offsets and byte values tied to mapped-resource lifetimes.
+No UTF-8, collation, dictionary order, lexical range, or scalar string operation
+is implied by this primitive.
 
 Nullable scalar adapter support uses `nullable_int64` as the carrier encoding
 for bool, int64, float32, double, and low-cardinality string fields: explicit

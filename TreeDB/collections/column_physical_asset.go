@@ -46,6 +46,7 @@ type columnDeclaredValue struct {
 	Float32Vector []float32
 	Uint32List    []uint32
 	AdjacencyList []uint32
+	Bytes         []byte
 	// StringBytes is used by physical scan/query hot paths as an asset-buffer
 	// view valid only for the current scan callback / pinned prepared runner
 	// view. Copy before retaining beyond that lifetime. String remains the

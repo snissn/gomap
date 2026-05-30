@@ -25,6 +25,7 @@ const (
 	ColumnTypeFloat64            ColumnType = "float64"
 	ColumnTypeFloat32Vector      ColumnType = "float32_vector"
 	ColumnTypeUint32List         ColumnType = "uint32_list"
+	ColumnTypeBytes              ColumnType = "bytes"
 	ColumnTypeAdjacencyList      ColumnType = "adjacency_list"
 )
 
@@ -101,6 +102,7 @@ type Batch struct {
 	Float32Vectors     map[string][]float32
 	Uint32Vectors      map[string][]uint32
 	Uint32OffsetsLists map[string]RawUint32OffsetsList
+	BytesColumns       map[string]RawBytesOffsets
 }
 
 type ColumnPart struct {
@@ -186,6 +188,8 @@ type ColumnPartBuilder struct {
 	float64s  []float64
 	u32dense  []uint32
 	u32offset []uint64
+	bytesData []byte
+	bytesOff  []uint64
 	builder   *GranuleBuilder
 }
 
@@ -858,6 +862,19 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 		if def.Compression != CompressionNone {
 			return ColumnDefinition{}, fmt.Errorf("typedcolumn: uint32_list column %s requires uncompressed offsets-list sections", def.Name)
 		}
+	case ColumnTypeBytes:
+		if def.Encoding == 0 {
+			def.Encoding = EncodingRawBytesOffsets
+		}
+		if def.Encoding != EncodingRawBytesOffsets {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported bytes encoding %s for %s", def.Encoding, def.Name)
+		}
+		if def.FixedWidthElements != 0 {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: bytes column %s requires fixed-width elements=0", def.Name)
+		}
+		if def.Compression != CompressionNone {
+			return ColumnDefinition{}, fmt.Errorf("typedcolumn: bytes column %s requires uncompressed offsets sections", def.Name)
+		}
 	case ColumnTypeAdjacencyList:
 		if def.Encoding == 0 {
 			def.Encoding = EncodingRawUint32Dense
@@ -883,7 +900,7 @@ func normalizeColumnDefinition(def ColumnDefinition, defaultCompression Compress
 	default:
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: unsupported column type %s for %s", def.Type, def.Name)
 	}
-	if def.Type != ColumnTypeFloat32Vector && def.Type != ColumnTypeAdjacencyList && def.Type != ColumnTypeUint32List && def.FixedWidthElements != 0 {
+	if def.Type != ColumnTypeFloat32Vector && def.Type != ColumnTypeAdjacencyList && def.Type != ColumnTypeUint32List && def.Type != ColumnTypeBytes && def.FixedWidthElements != 0 {
 		return ColumnDefinition{}, fmt.Errorf("typedcolumn: scalar column %s has fixed-width elements=%d", def.Name, def.FixedWidthElements)
 	}
 	return def, nil
@@ -951,6 +968,21 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 				return 0, fmt.Errorf("typedcolumn: column %s: %w", def.Name, err)
 			}
 			columnRows := list.Rows
+			if rows == 0 {
+				rows = columnRows
+			}
+			if columnRows != rows {
+				return 0, fmt.Errorf("typedcolumn: column %s rows=%d want=%d", def.Name, columnRows, rows)
+			}
+		case ColumnTypeBytes:
+			bytesColumn, ok := batch.BytesColumns[def.Name]
+			if !ok {
+				return 0, fmt.Errorf("typedcolumn: missing bytes offsets column %s", def.Name)
+			}
+			if err := ValidateRawBytesOffsetsShape(bytesColumn.Rows, bytesColumn.Offsets, uint64(len(bytesColumn.Values))); err != nil {
+				return 0, fmt.Errorf("typedcolumn: column %s: %w", def.Name, err)
+			}
+			columnRows := bytesColumn.Rows
 			if rows == 0 {
 				rows = columnRows
 			}
@@ -1072,6 +1104,11 @@ func validateBatch(batch Batch, defs []ColumnDefinition) (int, error) {
 			return 0, fmt.Errorf("typedcolumn: undeclared uint32 offsets-list column %s", name)
 		}
 	}
+	for name := range batch.BytesColumns {
+		if _, ok := declared[name]; !ok {
+			return 0, fmt.Errorf("typedcolumn: undeclared bytes offsets column %s", name)
+		}
+	}
 	if rows <= 0 {
 		if rows == 0 && batchAllowsZeroRowsForOffsetsList(batch, defs) {
 			return 0, nil
@@ -1091,6 +1128,15 @@ func batchAllowsZeroRowsForOffsetsList(batch Batch, defs []ColumnDefinition) boo
 			}
 			list, ok := batch.Uint32OffsetsLists[def.Name]
 			if !ok || list.Rows != 0 || len(list.Offsets) != 1 || len(list.Values) != 0 || list.Offsets[0] != 0 {
+				return false
+			}
+			hasOffsetsList = true
+		case ColumnTypeBytes:
+			if def.Encoding != EncodingRawBytesOffsets {
+				return false
+			}
+			bytesColumn, ok := batch.BytesColumns[def.Name]
+			if !ok || bytesColumn.Rows != 0 || len(bytesColumn.Offsets) != 1 || len(bytesColumn.Values) != 0 || bytesColumn.Offsets[0] != 0 {
 				return false
 			}
 			hasOffsetsList = true
@@ -1258,6 +1304,12 @@ func (b *ColumnPartBuilder) buildColumnBlockGranule(batch Batch, def ColumnDefin
 			return EncodedGranule{}, err
 		}
 		return b.builder.BuildUint32OffsetsList(list.Rows, list.Offsets, list.Values)
+	case ColumnTypeBytes:
+		bytesColumn, err := b.gatherBytesOffsets(batch.BytesColumns[def.Name], start, end)
+		if err != nil {
+			return EncodedGranule{}, err
+		}
+		return b.builder.BuildBytes(bytesColumn.Rows, bytesColumn.Offsets, bytesColumn.Values)
 	case ColumnTypeAdjacencyList:
 		if def.Encoding == EncodingRawUint32OffsetsList {
 			list, err := b.gatherUint32OffsetsList(batch.Uint32OffsetsLists[def.Name], start, end)
