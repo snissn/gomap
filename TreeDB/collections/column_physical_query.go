@@ -77,9 +77,9 @@ const (
 // does not invoke planner routing; M14 owns forced/automatic route selection.
 // Predicates are an AND-list of dictionary string equality/IN filters for the
 // insert-only physical sidecar path; unsupported predicate shapes fail closed.
-// TopK is optional and currently supported by aggregate-metadata int64 reducers
-// only. When TopK is set, TopKOrder chooses value order and Key is the tie-break;
-// SkipEmptyGroupKey omits empty-string group keys before applying the limit.
+// TopK is optional for int64 aggregate reducers. When TopK is set,
+// TopKOrder chooses value order and Key is the tie-break; SkipEmptyGroupKey
+// omits empty-string group keys before applying the limit.
 type ColumnPhysicalQueryRequest struct {
 	Kind                     ColumnPhysicalQueryKind
 	GroupColumn              string
@@ -261,9 +261,6 @@ func validateColumnPhysicalTopKRequest(req ColumnPhysicalQueryRequest) error {
 			return fmt.Errorf("%w: physical column query skip-empty group key requires a positive top-K limit", ErrColumnQueryPlanUnsupported)
 		}
 		return nil
-	}
-	if req.AggregateMetadataName == "" {
-		return fmt.Errorf("%w: physical column query top-K requires aggregate metadata", ErrColumnQueryPlanUnsupported)
 	}
 	switch req.Kind {
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
@@ -518,6 +515,7 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 	}
 	if r.dictInt64 != nil {
 		result := r.dictInt64.run(r.view, r.req)
+		finalizeColumnPhysicalQueryResultGroups(r.req, &result)
 		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 		return result, nil
 	}
@@ -551,7 +549,7 @@ func (r *ColumnPhysicalQueryRunner) Run() (ColumnPhysicalQueryResult, error) {
 		return result, err
 	}
 	result.Groups = r.exec.groups()
-	result.Diagnostics.ResultGroups = len(result.Groups)
+	finalizeColumnPhysicalQueryResultGroups(r.req, &result)
 	return result, nil
 }
 
@@ -646,7 +644,7 @@ func (c *Collection) runColumnPhysicalQueryDirectInSnapshotView(view columnPhysi
 		return result, true, err
 	}
 	result.Groups = exec.groups()
-	result.Diagnostics.ResultGroups = len(result.Groups)
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	return result, true, nil
 }
 
@@ -855,7 +853,7 @@ func (c *Collection) RunColumnPhysicalQueryParallel(req ColumnPhysicalQueryReque
 	}
 	result.Groups = merged.groups()
 	result.Diagnostics.ReduceRows = merged.reduceRows
-	result.Diagnostics.ResultGroups = len(result.Groups)
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	return result, nil
 }
 
@@ -981,7 +979,7 @@ func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalSca
 		return result, err
 	}
 	result.Groups = exec.groups()
-	result.Diagnostics.ResultGroups = len(result.Groups)
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	return result, nil
 }
 
@@ -1090,6 +1088,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryInt64InSnapshotView(view co
 		if ok {
 			result.Diagnostics.SegmentFileCacheHits = readCache.hits
 			result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+			finalizeColumnPhysicalQueryResultGroups(req, &result)
 			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 			return result, true, nil
 		}
@@ -1108,6 +1107,7 @@ func (c *Collection) runColumnPhysicalQueryDictionaryInt64InSnapshotView(view co
 	result := runner.run(view, req)
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, ColumnPhysicalQueryFallbackNone)
 	return result, true, nil
 }
@@ -1173,7 +1173,7 @@ func (c *Collection) runColumnPhysicalQueryWithVisibility(cfg ColumnStoreConfig,
 	result.Diagnostics.ReduceNanos = time.Since(reduceStart).Nanoseconds()
 	result.Groups = exec.groups()
 	result.Diagnostics.ReduceRows = exec.reduceRows
-	result.Diagnostics.ResultGroups = len(result.Groups)
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	return result, nil
 }
 
@@ -1979,6 +1979,53 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 	}
 	sortColumnPhysicalQueryGroupsByKey(e.resultGroups)
 	return e.resultGroups
+}
+
+func finalizeColumnPhysicalQueryResultGroups(req ColumnPhysicalQueryRequest, result *ColumnPhysicalQueryResult) {
+	if result == nil {
+		return
+	}
+	if req.TopK > 0 {
+		shapeStart := time.Now()
+		candidates := columnPhysicalQueryTopKCandidateGroups(req, result.Groups)
+		result.Groups = applyColumnPhysicalQueryTopKGroups(req, result.Groups)
+		result.Diagnostics.ResultShapeNanos += time.Since(shapeStart).Nanoseconds()
+		result.Diagnostics.TopKLimit = req.TopK
+		result.Diagnostics.TopKOrder = string(req.TopKOrder)
+		result.Diagnostics.TopKCandidates = candidates
+	}
+	result.Diagnostics.ResultGroups = len(result.Groups)
+}
+
+func columnPhysicalQueryTopKCandidateGroups(req ColumnPhysicalQueryRequest, groups []ColumnPhysicalQueryGroup) int {
+	if req.TopK <= 0 {
+		return 0
+	}
+	if !req.SkipEmptyGroupKey {
+		return len(groups)
+	}
+	candidates := 0
+	for _, group := range groups {
+		if group.Key != "" {
+			candidates++
+		}
+	}
+	return candidates
+}
+
+func applyColumnPhysicalQueryTopKGroups(req ColumnPhysicalQueryRequest, groups []ColumnPhysicalQueryGroup) []ColumnPhysicalQueryGroup {
+	if req.TopK <= 0 {
+		return groups
+	}
+	out := groups[:0]
+	for idx := 0; idx < len(groups); idx++ {
+		group := groups[idx]
+		if req.SkipEmptyGroupKey && group.Key == "" {
+			continue
+		}
+		insertColumnPhysicalTopKGroup(&out, group, req.TopK, req.TopKOrder)
+	}
+	return out
 }
 
 func sortColumnPhysicalQueryGroupsByKey(groups []ColumnPhysicalQueryGroup) {

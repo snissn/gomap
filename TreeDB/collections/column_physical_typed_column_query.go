@@ -538,8 +538,10 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	groups := acc.groups(req, r.resultGroups)
 	r.resultGroups = groups
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())
-	diag.ResultGroups = len(groups)
-	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, nil
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
 }
 
 func columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {

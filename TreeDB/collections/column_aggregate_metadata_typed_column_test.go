@@ -272,7 +272,6 @@ func TestAggregateMetadataTopKValidation1871(t *testing.T) {
 		want string
 	}{
 		{name: "negative", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: -1}, want: "non-negative"},
-		{name: "missing metadata", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", TopK: 3, TopKOrder: ColumnPhysicalQueryTopKInt64Asc}, want: "requires aggregate metadata"},
 		{name: "missing order", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3}, want: "order is required"},
 		{name: "order without limit", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopKOrder: ColumnPhysicalQueryTopKInt64Asc}, want: "requires a positive limit"},
 		{name: "unsupported kind", req: ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did", ValueColumn: "time_us", AggregateMetadataName: "min_time_us", TopK: 3, TopKOrder: ColumnPhysicalQueryTopKInt64Asc}, want: "requires an int64 aggregate kind"},
