@@ -897,7 +897,7 @@ func TestCollectionFastJSONMaintenanceVacuumUsesValueLogLeaves(t *testing.T) {
 		Name: "bluesky",
 		Options: CollectionOptions{
 			DocumentFormat:        DocumentFormatJSON,
-			DataRootStoragePolicy: RootStorageFast,
+			DataRootStoragePolicy: RootStorageCompressed,
 		},
 	}); err != nil {
 		t.Fatalf("create collection: %v", err)

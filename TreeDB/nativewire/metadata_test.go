@@ -62,7 +62,7 @@ func TestMetadataCommandsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	if meta.Name != "users" || meta.Options.DataRootStoragePolicy != collections.RootStorageCompressed {
+	if meta.Name != "users" || meta.Options.DataRootStoragePolicy != collections.RootStorageFast {
 		t.Fatalf("created meta=%+v", meta)
 	}
 
