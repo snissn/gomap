@@ -504,6 +504,10 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(r.plan, req) {
+		return r.runSortedGroupedDistinct(view, req)
+	}
+
 	start := time.Now()
 	acc := newColumnTypedColumnPhysicalQueryAccumulator(req.Kind)
 	rowsScanned := 0
@@ -538,6 +542,252 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, nil
 }
 
+func columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
+	return req.Kind == ColumnPhysicalQueryGroupCountAndDistinct && plan.SortKeyPrefix.SortedGroupedDistinctReady
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runSortedGroupedDistinct(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	iterators := make([]*columnTypedColumnSortedGroupedDistinctIterator, 0, len(r.parts))
+	heap := columnTypedColumnSortedGroupedDistinctHeap{}
+	for partIdx := range r.parts {
+		iterator, err := newColumnTypedColumnSortedGroupedDistinctIterator(&r.parts[partIdx], r.plan, req, partIdx)
+		if err != nil {
+			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
+			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, 0, time.Since(start).Nanoseconds())}, err
+		}
+		iterators = append(iterators, iterator)
+		iteratorIdx := len(iterators) - 1
+		if err := iterator.advance(); err != nil {
+			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
+			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, 0, time.Since(start).Nanoseconds())}, err
+		}
+		if !iterator.done {
+			heap.push(iteratorIdx, iterators)
+		}
+	}
+
+	groups := r.resultGroups[:0]
+	firstGroup := true
+	currentGroup := ""
+	currentDistinct := ""
+	groupRows := 0
+	distinctRows := 0
+	reduceRows := 0
+	emitGroup := func() {
+		if firstGroup {
+			return
+		}
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: currentGroup, Count: groupRows, DistinctCount: distinctRows})
+	}
+	for heap.len() != 0 {
+		iteratorIdx := heap.pop(iterators)
+		iterator := iterators[iteratorIdx]
+		group := iterator.currentGroup
+		distinct := iterator.currentDistinct
+		if firstGroup {
+			firstGroup = false
+			currentGroup = group
+			currentDistinct = distinct
+			groupRows = 1
+			distinctRows = 1
+		} else if group != currentGroup {
+			emitGroup()
+			currentGroup = group
+			currentDistinct = distinct
+			groupRows = 1
+			distinctRows = 1
+		} else {
+			groupRows++
+			if distinct != currentDistinct {
+				currentDistinct = distinct
+				distinctRows++
+			}
+		}
+		reduceRows++
+		if err := iterator.advance(); err != nil {
+			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.SortedGroupedDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		if !iterator.done {
+			heap.push(iteratorIdx, iterators)
+		}
+	}
+	emitGroup()
+	r.resultGroups = groups
+	rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+	diag.SortedGroupedDistinctUsed = true
+	diag.ResultGroups = len(groups)
+	return ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}, nil
+}
+
+type columnTypedColumnSortedGroupedDistinctIterator struct {
+	partIndex        int
+	row              int
+	rows             int
+	groupValues      []columnDeclaredValue
+	distinctValues   []columnDeclaredValue
+	predicateSpecs   []columnPhysicalQueryPredicateSpec
+	predicateColumns [][]columnDeclaredValue
+	currentGroup     string
+	currentDistinct  string
+	done             bool
+	rowsScanned      int
+	matchedRows      int
+}
+
+func newColumnTypedColumnSortedGroupedDistinctIterator(part *columnTypedColumnPhysicalQueryPart, plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, partIndex int) (*columnTypedColumnSortedGroupedDistinctIterator, error) {
+	partRows := len(part.RowIndexes)
+	if part.RowIndexes == nil {
+		partRows = part.Rows
+	}
+	groupValues, err := typedColumnPhysicalQueryStringColumnValues(part.Values, req.GroupColumn, partRows)
+	if err != nil {
+		return nil, err
+	}
+	distinctValues, err := typedColumnPhysicalQueryStringColumnValues(part.Values, req.DistinctColumn, partRows)
+	if err != nil {
+		return nil, err
+	}
+	predicateColumns := make([][]columnDeclaredValue, len(plan.PredicateSpecs))
+	for idx, spec := range plan.PredicateSpecs {
+		values, err := typedColumnPhysicalQueryStringColumnValues(part.Values, spec.column, partRows)
+		if err != nil {
+			return nil, err
+		}
+		predicateColumns[idx] = values
+	}
+	return &columnTypedColumnSortedGroupedDistinctIterator{
+		partIndex:        partIndex,
+		rows:             partRows,
+		groupValues:      groupValues,
+		distinctValues:   distinctValues,
+		predicateSpecs:   plan.PredicateSpecs,
+		predicateColumns: predicateColumns,
+	}, nil
+}
+
+func (it *columnTypedColumnSortedGroupedDistinctIterator) advance() error {
+	// These slices come from typed-column adapter decoding, which materializes
+	// owned String values (not physical-row StringBytes views). Keep the hot loop
+	// on direct string header comparisons and avoid per-row map lookups or string
+	// conversions; decode/shape validation already happened before the runner was
+	// built.
+	for it.row < it.rows {
+		rowIdx := it.row
+		it.row++
+		it.rowsScanned++
+		matched := true
+		for idx, spec := range it.predicateSpecs {
+			if !typedColumnPhysicalQueryPredicateStringMatches(it.predicateColumns[idx][rowIdx].String, spec) {
+				matched = false
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		if len(it.predicateSpecs) != 0 {
+			it.matchedRows++
+		}
+		it.currentGroup = it.groupValues[rowIdx].String
+		it.currentDistinct = it.distinctValues[rowIdx].String
+		return nil
+	}
+	it.done = true
+	it.currentGroup = ""
+	it.currentDistinct = ""
+	return nil
+}
+
+type columnTypedColumnSortedGroupedDistinctHeap struct {
+	items []int
+}
+
+func (h *columnTypedColumnSortedGroupedDistinctHeap) len() int { return len(h.items) }
+
+func (h *columnTypedColumnSortedGroupedDistinctHeap) push(iteratorIdx int, iterators []*columnTypedColumnSortedGroupedDistinctIterator) {
+	h.items = append(h.items, iteratorIdx)
+	for idx := len(h.items) - 1; idx > 0; {
+		parent := (idx - 1) / 2
+		if !columnTypedColumnSortedGroupedDistinctIteratorLess(iterators[h.items[idx]], iterators[h.items[parent]]) {
+			break
+		}
+		h.items[idx], h.items[parent] = h.items[parent], h.items[idx]
+		idx = parent
+	}
+}
+
+func (h *columnTypedColumnSortedGroupedDistinctHeap) pop(iterators []*columnTypedColumnSortedGroupedDistinctIterator) int {
+	out := h.items[0]
+	last := h.items[len(h.items)-1]
+	h.items = h.items[:len(h.items)-1]
+	if len(h.items) == 0 {
+		return out
+	}
+	h.items[0] = last
+	for idx := 0; ; {
+		left := idx*2 + 1
+		if left >= len(h.items) {
+			break
+		}
+		smallest := left
+		right := left + 1
+		if right < len(h.items) && columnTypedColumnSortedGroupedDistinctIteratorLess(iterators[h.items[right]], iterators[h.items[left]]) {
+			smallest = right
+		}
+		if !columnTypedColumnSortedGroupedDistinctIteratorLess(iterators[h.items[smallest]], iterators[h.items[idx]]) {
+			break
+		}
+		h.items[idx], h.items[smallest] = h.items[smallest], h.items[idx]
+		idx = smallest
+	}
+	return out
+}
+
+func columnTypedColumnSortedGroupedDistinctIteratorLess(left, right *columnTypedColumnSortedGroupedDistinctIterator) bool {
+	if left.currentGroup != right.currentGroup {
+		return left.currentGroup < right.currentGroup
+	}
+	if left.currentDistinct != right.currentDistinct {
+		return left.currentDistinct < right.currentDistinct
+	}
+	return left.partIndex < right.partIndex
+}
+
+func columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators []*columnTypedColumnSortedGroupedDistinctIterator) (int, int) {
+	rowsScanned := 0
+	matchedRows := 0
+	for _, iterator := range iterators {
+		rowsScanned += iterator.rowsScanned
+		matchedRows += iterator.matchedRows
+	}
+	return rowsScanned, matchedRows
+}
+
+func typedColumnPhysicalQueryStringColumnValues(values map[string][]columnDeclaredValue, column string, wantRows int) ([]columnDeclaredValue, error) {
+	columnValues, ok := values[column]
+	if !ok {
+		return nil, fmt.Errorf("collections: typed-column part physical query missing string column %q", column)
+	}
+	if len(columnValues) != wantRows {
+		return nil, fmt.Errorf("collections: typed-column part physical query column %q rows=%d want %d", column, len(columnValues), wantRows)
+	}
+	return columnValues, nil
+}
+
+func typedColumnPhysicalQueryPredicateStringMatches(value string, spec columnPhysicalQueryPredicateSpec) bool {
+	for _, target := range spec.values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *columnTypedColumnPhysicalQueryRunner) diagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, rowsScanned, matchedRows, reduceRows int, scanNanos int64) ColumnPhysicalQueryDiagnostics {
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
@@ -568,6 +818,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) diagnostics(view columnPhysicalSc
 	diag.SortKeyMarkSkips = r.sortKeyMarkSkips
 	diag.SortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(r.plan.SortKeyPrefix.FallbackReason, r.sortKeyMarkFallbackReason)
 	diag.SortedGroupedDistinctReady = r.plan.SortKeyPrefix.SortedGroupedDistinctReady
+	diag.SortedGroupedDistinctUsed = false
 	diag.SortedGroupedDistinctFallbackReason = r.plan.SortKeyPrefix.SortedGroupedDistinctFallbackReason
 	applyColumnPhysicalQueryPredicateDiagnostics(&diag, r.plan.PredicateDiagnostics, matchedRows, 0)
 	diag.ScanNanos = scanNanos
