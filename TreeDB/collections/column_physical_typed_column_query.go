@@ -554,13 +554,17 @@ func (r *columnTypedColumnPhysicalQueryRunner) runSortedGroupedDistinct(view col
 		iterator, err := newColumnTypedColumnSortedGroupedDistinctIterator(&r.parts[partIdx], r.plan, req, partIdx)
 		if err != nil {
 			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
-			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, 0, time.Since(start).Nanoseconds())}, err
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, 0, time.Since(start).Nanoseconds())
+			diag.SortedGroupedDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 		}
 		iterators = append(iterators, iterator)
 		iteratorIdx := len(iterators) - 1
 		if err := iterator.advance(); err != nil {
 			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
-			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, 0, time.Since(start).Nanoseconds())}, err
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, 0, time.Since(start).Nanoseconds())
+			diag.SortedGroupedDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 		}
 		if !iterator.done {
 			heap.push(iteratorIdx, iterators)
