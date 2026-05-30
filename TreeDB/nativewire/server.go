@@ -3,8 +3,11 @@ package nativewire
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -14,6 +17,23 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
+
+var debugLogger *log.Logger
+
+func init() {
+	f, err := os.OpenFile("/tmp/native_server_debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "DEBUG: Failed to open log file: %v\n", err)
+	} else {
+		debugLogger = log.New(f, "DEBUG: ", log.LstdFlags)
+	}
+}
+
+func logDebug(format string, v ...interface{}) {
+	if debugLogger != nil {
+		debugLogger.Printf(format, v...)
+	}
+}
 
 const (
 	defaultMaxInFlight                   = 1024
@@ -338,6 +358,7 @@ func (s *Server) Close() error {
 
 // ServeConn serves native-wire frames on conn until shutdown, goaway, or error.
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
+	fmt.Printf("DEBUG: New connection\n")
 	if s == nil || conn == nil {
 		return ErrServerClosed
 	}
@@ -352,6 +373,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 }
 
 func (s *Server) serveRegisteredConn(ctx context.Context, conn net.Conn) error {
+	fmt.Printf("DEBUG: serveRegisteredConn\n")
 	defer s.unregisterConn(conn)
 	defer conn.Close()
 
@@ -533,6 +555,7 @@ func (s *Server) handleFrame(ctx context.Context, w io.Writer, state *connState,
 }
 
 func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connState, header iwire.Header, body []byte) error {
+	logDebug("handleRequest: bodyLen=%d", len(body))
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -730,6 +753,8 @@ func appendGoawayBody(dst []byte, lastAcceptedRequestID uint64) ([]byte, error) 
 
 func (s *Server) writeError(w io.Writer, request iwire.Header, err error) error {
 	code := errorCodeFor(err)
+	logDebug("writeError: code=%d err=%v", code, err)
+	fmt.Printf("DEBUG: Error: %v\n", err)
 	if code == 0 {
 		code = iwire.ErrInternal
 	}
