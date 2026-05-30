@@ -884,6 +884,230 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	}, nil
 }
 
+// decodeTypedColumnPhysicalQueryDenseInt64SpanPart prepares the q5 typed-column
+// section fast path from the adapter seam so production query routing does not
+// import the typedcolumn data plane directly.
+func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	summary := typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: typedColumnPhysicalQueryImageSectionBytes(image), SortKey: columnSortKeysFromTypedColumnSortKeys(adapterPart.Part.Descriptor.SortKey)}
+	if summary.PartID != typedRef.Ref.PartID || summary.Rows != typedRef.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d manifest_rows=%d", summary.PartID, typedRef.Ref.PartID, summary.Rows, typedRef.Rows)
+	}
+	if physical.Rows != 0 && summary.Rows != physical.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part rows=%d do not match physical rows=%d", summary.Rows, physical.Rows)
+	}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(plan.SortKey, typedRef.SortKey, summary.SortKey); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+
+	groupColumn, groupPartColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, "int64-span group")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	valueColumn, ok, err := typedColumnInt64PredicateAdapterColumn(plan.Fields, plan.ValueColumn)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if !ok {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column int64-span value column %q is not owned by typed_column_part", plan.ValueColumn)
+	}
+	for _, candidate := range adapterPart.Columns {
+		if candidate.Definition.Name == valueColumn.Definition.Name {
+			valueColumn = candidate
+			break
+		}
+	}
+	if valueColumn.Field.Nullable || valueColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column int64-span value column %q is not a non-null int64", ErrColumnQueryPlanUnsupported, plan.ValueColumn)
+	}
+	valuePartColumn, ok := adapterPart.Part.Columns[valueColumn.Definition.Name]
+	if !ok {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column int64-span missing value column %q", valueColumn.Definition.Name)
+	}
+	if valuePartColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column int64-span value column %q type=%s", ErrColumnQueryPlanUnsupported, plan.ValueColumn, valuePartColumn.Definition.Type)
+	}
+
+	groupCodes, groupDecodedBytes, groupBlocks, err := decodeTypedColumnDenseUint32Codes(groupPartColumn, cardinality, summary.Rows, "int64-span group")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	values, valueDecodedBytes, valueBlocks, err := decodeTypedColumnDenseInt64Values(valuePartColumn, summary.Rows, "int64-span value")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if len(groupCodes) != len(values) {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column int64-span group/value rows=%d/%d", len(groupCodes), len(values))
+	}
+
+	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
+	predicateDecodedBytes := uint64(0)
+	predicateBlocks := 0
+	for _, spec := range plan.PredicateSpecs {
+		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates = append(predicates, predicate)
+		predicateDecodedBytes += decodedBytes
+		predicateBlocks += blocks
+	}
+
+	decodedBlocks := groupBlocks + valueBlocks + predicateBlocks
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                 typedRef,
+		PhysicalRef:         physical,
+		Rows:                summary.Rows,
+		Bytes:               int64(len(raw)),
+		Sections:            summary.Sections,
+		SectionBytes:        summary.SectionBytes,
+		GranulesConsidered:  decodedBlocks,
+		GranulesDecoded:     decodedBlocks,
+		DecodedBlocks:       decodedBlocks,
+		DecodedPayloadBytes: groupDecodedBytes + valueDecodedBytes + predicateDecodedBytes,
+		DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
+			Cardinality:      cardinality,
+			DictionaryByCode: groupColumn.ReverseDictionary,
+			GroupCodes:       groupCodes,
+			Values:           values,
+			Predicates:       predicates,
+		},
+	}, nil
+}
+
+func typedColumnDenseStringCodeColumn(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, column, role string) (typedColumnAdapterColumn, typedcolumn.ColumnPartColumn, int, error) {
+	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, column)
+	if err != nil {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, err
+	}
+	if !ok {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s column %q is not owned by typed_column_part", role, column)
+	}
+	for _, candidate := range adapterPart.Columns {
+		if candidate.Definition.Name == adapterColumn.Definition.Name {
+			adapterColumn = candidate
+			break
+		}
+	}
+	if adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("%w: dense typed-column %s column %q is not a non-null low-cardinality string", ErrColumnQueryPlanUnsupported, role, column)
+	}
+	partColumn, ok := adapterPart.Part.Columns[adapterColumn.Definition.Name]
+	if !ok {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s missing column %q", role, adapterColumn.Definition.Name)
+	}
+	if partColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || partColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || partColumn.Definition.Cardinality == 0 {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("%w: dense typed-column %s column %q type=%s encoding=%s cardinality=%d", ErrColumnQueryPlanUnsupported, role, column, partColumn.Definition.Type, partColumn.Definition.Encoding, partColumn.Definition.Cardinality)
+	}
+	if uint64(int(partColumn.Definition.Cardinality)) != uint64(partColumn.Definition.Cardinality) {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s cardinality=%d exceeds host int", role, partColumn.Definition.Cardinality)
+	}
+	cardinality := int(partColumn.Definition.Cardinality)
+	if len(adapterColumn.ReverseDictionary) != cardinality {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary cardinality=%d want %d for column %q", role, len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
+	}
+	for code := 0; code < cardinality; code++ {
+		if _, ok := adapterColumn.ReverseDictionary[int64(code)]; !ok {
+			return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary missing local code %d for column %q", role, code, adapterColumn.Definition.Name)
+		}
+	}
+	return adapterColumn, partColumn, cardinality, nil
+}
+
+func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, spec columnPhysicalQueryPredicateSpec, rows int) (columnTypedColumnDensePredicatePart, uint64, int, error) {
+	adapterColumn, partColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, fields, spec.column, "predicate")
+	if err != nil {
+		return columnTypedColumnDensePredicatePart{}, 0, 0, err
+	}
+	allowed := make([]uint64, (cardinality+63)/64)
+	matchedLiterals := 0
+	for _, value := range spec.values {
+		code, ok := adapterColumn.Dictionary[value]
+		if !ok {
+			continue
+		}
+		if code < 0 || uint64(code) >= uint64(cardinality) {
+			return columnTypedColumnDensePredicatePart{}, 0, 0, fmt.Errorf("collections: dense typed-column predicate dictionary code %d outside cardinality %d for column %q", code, cardinality, adapterColumn.Definition.Name)
+		}
+		idx := int(code)
+		allowed[idx/64] |= uint64(1) << uint(idx%64)
+		matchedLiterals++
+	}
+	if matchedLiterals == 0 {
+		return columnTypedColumnDensePredicatePart{RejectsAll: true}, 0, 0, nil
+	}
+	codes, decodedBytes, blocks, err := decodeTypedColumnDenseUint32Codes(partColumn, cardinality, rows, "predicate")
+	if err != nil {
+		return columnTypedColumnDensePredicatePart{}, 0, 0, err
+	}
+	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed}, decodedBytes, blocks, nil
+}
+
+func decodeTypedColumnDenseUint32Codes(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string) ([]uint32, uint64, int, error) {
+	codes := make([]uint32, 0, rows)
+	var scratch []uint32
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	for blockIdx, block := range partColumn.Blocks {
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		decoded, err := reader.DecodeUint32CodesInto(scratch[:0], g)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if len(decoded) != block.Descriptor.RowCount {
+			return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want %d", role, len(decoded), block.Descriptor.RowCount)
+		}
+		for i, code := range decoded {
+			if uint64(code) >= uint64(cardinality) {
+				return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s code[%d]=%d outside cardinality=%d", role, i, code, cardinality)
+			}
+		}
+		codes = append(codes, decoded...)
+		scratch = decoded
+		decodedBytes += uint64(g.RawBytes)
+	}
+	if len(codes) != rows {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want part rows=%d", role, len(codes), rows)
+	}
+	return codes, decodedBytes, len(partColumn.Blocks), nil
+}
+
+func decodeTypedColumnDenseInt64Values(partColumn typedcolumn.ColumnPartColumn, rows int, role string) ([]int64, uint64, int, error) {
+	values := make([]int64, 0, rows)
+	var scratch []int64
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	for _, block := range partColumn.Blocks {
+		g := block.Granule
+		decoded, err := reader.DecodeInt64Into(scratch[:0], g)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if len(decoded) != block.Descriptor.RowCount {
+			return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want %d", role, len(decoded), block.Descriptor.RowCount)
+		}
+		values = append(values, decoded...)
+		scratch = decoded
+		decodedBytes += uint64(g.RawBytes)
+	}
+	if len(values) != rows {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want part rows=%d", role, len(values), rows)
+	}
+	return values, decodedBytes, len(partColumn.Blocks), nil
+}
+
 func typedColumnPhysicalQueryImageSectionBytes(image typedcolumn.ColumnPartImage) uint64 {
 	var out uint64
 	for _, section := range image.Sections {
