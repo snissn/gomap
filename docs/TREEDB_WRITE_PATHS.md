@@ -17,8 +17,8 @@ For the canonical TreeDB spec, see:
 This supporting document does not own the durability matrix. Use
 `TreeDB/docs/spec/write-path-and-durability.md` for the canonical three-mode
 matrix and `TreeDB/docs/spec/collections-write-domain.md` for current
-collection flush-boundary behavior. The target collection WAL overlay is in
-`TreeDB/docs/spec/collection-wal-durability-plan.md`.
+collection flush-boundary behavior. The target collection/Mongo durability path
+is the user-command WAL in `TreeDB/docs/spec/user-command-wal.md`.
 
 Legacy modes (value-log off / backend-only) have been removed.
 
@@ -27,15 +27,18 @@ Legacy modes (value-log off / backend-only) have been removed.
 Use profiles rather than raw flags when possible:
 
 ```go
-opts := treedb.OptionsFor(treedb.ProfileDurable, "./db") // WAL on
-opts := treedb.OptionsFor(treedb.ProfileFast, "./db") // WAL off (unsafe)
-opts := treedb.OptionsFor(treedb.ProfileWALOnFast, "./db") // WAL on (relaxed durability)
+opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./db") // command WAL + durable sync
+opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, "./db") // command WAL + relaxed sync
+opts := treedb.OptionsFor(treedb.ProfileLegacyWALDurable, "./db") // legacy/raw WAL + durable sync
+opts := treedb.OptionsFor(treedb.ProfileNoWALFast, "./db") // WAL off (unsafe)
 ```
 
 Equivalent option-level knobs:
 
-- **WAL on (default)**: `Durability = DurabilityDurable`.
-- **WAL on (relaxed)**: `Durability = DurabilityWALOnRelaxed`.
+- **Command WAL + durable sync**: `CommandWAL = true`, `Durability = DurabilityDurable`.
+- **Command WAL + relaxed sync**: `CommandWAL = true`, `Durability = DurabilityWALOnRelaxed`.
+- **Legacy/raw WAL + durable sync**: `CommandWAL = false`, `Durability = DurabilityDurable`.
+- **Legacy/raw WAL + relaxed sync**: `CommandWAL = false`, `Durability = DurabilityWALOnRelaxed`.
 - **WAL off (unsafe)**: `Durability = DurabilityWALOffRelaxed`.
 
 ## Migration (old → new)

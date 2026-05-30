@@ -463,7 +463,7 @@ func run(parent context.Context, args []string) error {
 
 func parseConfig(args []string) (config, error) {
 	cfg := config{
-		TreeDBProfile:               treedb.ProfileWALOnFast,
+		TreeDBProfile:               treedb.ProfileLegacyWALRelaxedFast,
 		TreeDBDocumentFormat:        collections.DocumentFormatTemplateV1,
 		TreeDBDataRootStorage:       collections.RootStorageCompressed,
 		TreeDBIndexStateRootStorage: collections.RootStorageCompressed,
@@ -523,7 +523,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 2, "secondary indexes to create: 0, 1=email, 2=email+city, 3=email+city+active")
 	fs.StringVar(&cfg.ClientMode, "client-mode", cfg.ClientMode, "benchmark client path: driver, driver-find-raw, driver-command, driver-command-raw, driver-unack, direct, raw-wire, raw-wire-tcp, raw-wire-tcp-pipeline, native-wire-inproc, or native-wire-tcp; direct/raw/native-wire modes are TreeDB-only")
 	fs.IntVar(&cfg.RawWireTCPPipelineDepth, "raw-wire-tcp-pipeline-depth", cfg.RawWireTCPPipelineDepth, "number of raw-wire TCP find requests to pipeline on one connection when -client-mode raw-wire-tcp-pipeline")
-	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: fast, wal_on_fast, durable, or bench")
+	fs.StringVar(&treeDBProfile, "treedb-profile", treeDBProfile, "TreeDB profile for -target treedb: "+treedb.ProfileFlagHelp)
 	fs.BoolVar(&cfg.TreeDBCommandWAL, "treedb-command-wal", false, "enable TreeDB command-WAL mode for -target treedb")
 	fs.StringVar(&treeDBDocumentFormat, "treedb-document-format", treeDBDocumentFormat, "TreeDB collection document format for -target treedb: json, template-v1/collections-v1, or bson")
 	fs.StringVar(&treeDBDataRootStorage, "treedb-data-root-storage", treeDBDataRootStorage, "TreeDB collection data root storage for -target treedb: default, fast, or compressed")
@@ -724,6 +724,9 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBProfile = profile
+	if cfg.Target == "treedb" && treedb.OptionsFor(cfg.TreeDBProfile, "").CommandWAL {
+		cfg.TreeDBCommandWAL = true
+	}
 	if err := validateTreeDBCommandWALProfile(cfg.TreeDBCommandWAL, cfg.TreeDBProfile); err != nil {
 		return config{}, err
 	}
@@ -765,18 +768,11 @@ func parseConfig(args []string) (config, error) {
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case string(treedb.ProfileFast):
-		return treedb.ProfileFast, nil
-	case "", string(treedb.ProfileWALOnFast):
-		return treedb.ProfileWALOnFast, nil
-	case string(treedb.ProfileDurable):
-		return treedb.ProfileDurable, nil
-	case string(treedb.ProfileBench):
-		return treedb.ProfileBench, nil
-	default:
+	profile, ok := treedb.ParseProfile(raw, treedb.ProfileLegacyWALRelaxedFast)
+	if !ok {
 		return "", fmt.Errorf("unknown treedb-profile %q", raw)
 	}
+	return profile, nil
 }
 
 func validateTreeDBCommandWALProfile(commandWAL bool, profile treedb.Profile) error {
@@ -785,7 +781,7 @@ func validateTreeDBCommandWALProfile(commandWAL bool, profile treedb.Profile) er
 	}
 	opts := treedb.OptionsFor(profile, "")
 	if opts.Durability == backenddb.DurabilityWALOffRelaxed {
-		return fmt.Errorf("treedb-command-wal requires a WAL-on treedb-profile; got %q (use %q or %q)", profile, treedb.ProfileWALOnFast, treedb.ProfileDurable)
+		return fmt.Errorf("treedb-command-wal requires a WAL-on treedb-profile; got %q (use %q or %q)", profile, treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable)
 	}
 	return nil
 }
@@ -1065,7 +1061,7 @@ func treeDBBenchmarkOptions(cfg config, dir string) (treedb.Options, error) {
 		return treedb.Options{}, err
 	}
 	opts := treedb.OptionsFor(cfg.TreeDBProfile, dir)
-	opts.CommandWAL = cfg.TreeDBCommandWAL
+	opts.CommandWAL = opts.CommandWAL || cfg.TreeDBCommandWAL
 	opts.IndexOuterLeavesInValueLog = true
 	opts.IndexInternalBaseDelta = false
 	return opts, nil

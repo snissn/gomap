@@ -20,6 +20,9 @@ func TestParseProfileUsesStandardNames(t *testing.T) {
 		{raw: "fast", fallback: treedb.ProfileDurable, want: treedb.ProfileFast},
 		{raw: "walonfast", fallback: treedb.ProfileDurable, want: treedb.ProfileWALOnFast},
 		{raw: "durable", fallback: treedb.ProfileFast, want: treedb.ProfileDurable},
+		{raw: "command-wal-durable", fallback: treedb.ProfileFast, want: treedb.ProfileCommandWALDurable},
+		{raw: "legacy_wal_relaxed_fast", fallback: treedb.ProfileFast, want: treedb.ProfileLegacyWALRelaxedFast},
+		{raw: "no_wal_fast", fallback: treedb.ProfileDurable, want: treedb.ProfileNoWALFast},
 		{raw: "bench", fallback: treedb.ProfileFast, want: treedb.ProfileBench},
 		{raw: "unknown", fallback: treedb.ProfileFast, want: treedb.ProfileFast},
 	}

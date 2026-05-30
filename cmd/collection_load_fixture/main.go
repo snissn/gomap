@@ -326,7 +326,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 		DocumentFormat:             collections.DocumentFormatTemplateV1,
 		IndexCount:                 2,
 		BufferedIndexedWrites:      true,
-		Profile:                    treedb.ProfileFast,
+		Profile:                    treedb.ProfileNoWALFast,
 		DataOuterLeavesInValueLog:  true,
 		IndexOuterLeavesInValueLog: true,
 		KeepRecent:                 1,
@@ -363,7 +363,7 @@ func parseConfig(args []string, output io.Writer) (config, error) {
 	fs.BoolVar(&cfg.BufferedIndexedAsyncFlush, "buffered-indexed-async-flush", false, "force-enable background indexed threshold publish; indexed schemas already enable this by default")
 	fs.BoolVar(&cfg.DisableBufferedIndexedAsyncFlush, "disable-buffered-indexed-async-flush", false, "disable background indexed threshold publish for foreground-publish baseline comparisons")
 	fs.IntVar(&cfg.BufferedIndexedAsyncFlushMaxQueuedUnits, "buffered-indexed-async-flush-max-queued-units", 0, "max immutable indexed flush units queued for background publish; 0 uses the collection default when async flush is enabled")
-	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: fast, wal_on_fast, durable, or bench")
+	fs.StringVar(&profile, "profile", string(cfg.Profile), "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.BoolVar(&cfg.DataOuterLeavesInValueLog, "data-outer-leaves-in-vlog", cfg.DataOuterLeavesInValueLog, "store collection primary/index-state outer leaves through the value log")
 	fs.BoolVar(&cfg.IndexOuterLeavesInValueLog, "index-outer-leaves-in-vlog", cfg.IndexOuterLeavesInValueLog, "store secondary-index outer leaves through the value log")
 	fs.Int64Var(&cfg.ChunkSize, "chunk-size", 0, "override TreeDB pager chunk size in bytes")
@@ -528,15 +528,14 @@ func parseDocumentFormat(raw string) (collections.DocumentFormat, error) {
 
 func parseProfile(raw string) (treedb.Profile, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "fast", "production_fast", "backend_direct_fast", "backend_direct", "cached":
-		return treedb.ProfileFast, nil
-	case "wal_on_fast", "production_wal_on_fast", "backend_direct_wal_on_fast":
-		return treedb.ProfileWALOnFast, nil
-	case "durable":
-		return treedb.ProfileDurable, nil
-	case "bench":
-		return treedb.ProfileBench, nil
+	case "production_fast", "backend_direct_fast", "backend_direct", "cached":
+		return treedb.ProfileNoWALFast, nil
+	case "production_wal_on_fast", "backend_direct_wal_on_fast":
+		return treedb.ProfileLegacyWALRelaxedFast, nil
 	default:
+		if profile, ok := treedb.ParseProfile(raw, treedb.ProfileNoWALFast); ok {
+			return profile, nil
+		}
 		return "", fmt.Errorf("unsupported -profile %q", raw)
 	}
 }

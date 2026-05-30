@@ -280,7 +280,7 @@ func parseConfig(args []string) (config, error) {
 		ReadWorkers:            2,
 		FormatsCSV:             "template-v1,bson,json",
 		IndexesCSV:             "0,1,2",
-		Profile:                "fast",
+		Profile:                string(treedb.ProfileNoWALFast),
 		LeafSegmentTargetBytes: 32 << 10,
 		CacheBudgetBytes:       32 << 10,
 		RetiredMmapBudgetBytes: 32 << 10,
@@ -295,7 +295,7 @@ func parseConfig(args []string) (config, error) {
 	fs.IntVar(&cfg.ReadWorkers, "read-workers", cfg.ReadWorkers, "raw TreeDB parallel read workers")
 	fs.StringVar(&cfg.FormatsCSV, "formats", cfg.FormatsCSV, "collection formats CSV: template-v1,bson,json")
 	fs.StringVar(&cfg.IndexesCSV, "indexes", cfg.IndexesCSV, "collection index counts CSV")
-	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "TreeDB profile")
+	fs.StringVar(&cfg.Profile, "profile", cfg.Profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.Int64Var(&cfg.LeafSegmentTargetBytes, "leaf-segment-target-bytes", cfg.LeafSegmentTargetBytes, "small leaf_vlog segment target used to force churn")
 	fs.Int64Var(&cfg.CacheBudgetBytes, "cache-budget-bytes", cfg.CacheBudgetBytes, "reported current-leaf/page cache budget for pressure validation")
 	fs.Int64Var(&cfg.RetiredMmapBudgetBytes, "retired-mmap-budget-bytes", cfg.RetiredMmapBudgetBytes, "reported retired mmap budget for pressure validation")
@@ -1093,15 +1093,14 @@ func runRawWorker(cfg config) error {
 
 func parseProfile(raw string) (treedb.Profile, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "fast", "production_fast":
-		return treedb.ProfileFast, nil
-	case "wal_on_fast", "production_wal_on_fast":
-		return treedb.ProfileWALOnFast, nil
-	case "durable":
-		return treedb.ProfileDurable, nil
-	case "bench":
-		return treedb.ProfileBench, nil
+	case "production_fast":
+		return treedb.ProfileNoWALFast, nil
+	case "production_wal_on_fast":
+		return treedb.ProfileLegacyWALRelaxedFast, nil
 	default:
+		if profile, ok := treedb.ParseProfile(raw, treedb.ProfileNoWALFast); ok {
+			return profile, nil
+		}
 		return "", fmt.Errorf("unsupported profile %q", raw)
 	}
 }

@@ -114,7 +114,7 @@ when the official driver pool is involved.
 The TreeDB benchmark target defaults are intended to match the optimized
 collection benchmark profile:
 
-- `-treedb-profile wal_on_fast`
+- `-treedb-profile legacy_wal_relaxed_fast`
 - `-treedb-document-format template-v1`
 - `-treedb-data-root-storage compressed`
 - `-treedb-index-state-root-storage compressed`
@@ -474,8 +474,9 @@ recorded checkout event.
 Use `-timeout 0` to run without an overall benchmark deadline.
 
 The package test `TestTreeDBProfileSmokeFastAndWALOnFast` runs a small write-only
-TreeDB gateway smoke against both `fast` and `wal_on_fast` to catch large
-profile regressions without making the smoke a replacement for the full matrix.
+TreeDB gateway smoke against both the no-WAL fast and legacy WAL relaxed-fast
+profiles to catch large profile regressions without making the smoke a
+replacement for the full matrix.
 
 ## Phase Pprof Artifacts
 
@@ -558,9 +559,9 @@ scripts/mongo_gateway_scaling_bench.sh \
   --concurrent-reads 80000
 ```
 
-The default sweep is TreeDB-only, using `wal_on_fast`, native BSON collection
-storage, `driver-command-raw`, prebuilt BSON documents, and no final maintenance
-so the measured phases focus on concurrency. Add
+The default sweep is TreeDB-only, using the legacy WAL relaxed-fast profile,
+native BSON collection storage, `driver-command-raw`, prebuilt BSON documents,
+and no final maintenance so the measured phases focus on concurrency. Add
 `--include-mongo --mongo-uri mongodb://127.0.0.1:27017` to run matching cells
 against an existing MongoDB server. The bundle contains `report.md`,
 `summary.tsv`, `matrix.tsv`, raw JSON, and a README that records the kept

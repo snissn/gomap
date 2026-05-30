@@ -322,19 +322,11 @@ func (s *StandaloneServer) Close() error {
 }
 
 func normalizeStandaloneProfile(profile treedb.Profile) (treedb.Profile, error) {
-	normalized := treedb.Profile(strings.ToLower(strings.TrimSpace(string(profile))))
-	switch normalized {
-	case "", treedb.ProfileDurable:
-		return treedb.ProfileDurable, nil
-	case treedb.ProfileFast:
-		return treedb.ProfileFast, nil
-	case treedb.ProfileWALOnFast:
-		return treedb.ProfileWALOnFast, nil
-	case treedb.ProfileBench:
-		return treedb.ProfileBench, nil
-	default:
+	normalized, ok := treedb.ParseProfile(string(profile), treedb.ProfileLegacyWALDurable)
+	if !ok {
 		return "", fmt.Errorf("mongo gateway standalone: unsupported TreeDB profile %q", profile)
 	}
+	return normalized, nil
 }
 
 func normalizeStandaloneDocumentFormat(format collections.DocumentFormat) (collections.DocumentFormat, error) {

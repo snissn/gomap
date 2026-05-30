@@ -126,6 +126,101 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 }
 
+func TestParseProfile_ExplicitNamesAndAliases(t *testing.T) {
+	tests := []struct {
+		raw      string
+		fallback Profile
+		want     Profile
+		wantOK   bool
+	}{
+		{raw: "", fallback: ProfileCommandWALDurable, want: ProfileCommandWALDurable, wantOK: true},
+		{raw: " COMMAND-WAL-DURABLE ", want: ProfileCommandWALDurable, wantOK: true},
+		{raw: "command_wal_relaxed", want: ProfileCommandWALRelaxed, wantOK: true},
+		{raw: "legacy_wal_durable", want: ProfileLegacyWALDurable, wantOK: true},
+		{raw: "legacy-wal-relaxed-fast", want: ProfileLegacyWALRelaxedFast, wantOK: true},
+		{raw: "no_wal_fast", want: ProfileNoWALFast, wantOK: true},
+		{raw: "durable", want: ProfileDurable, wantOK: true},
+		{raw: "walonfast", want: ProfileWALOnFast, wantOK: true},
+		{raw: "raw", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, ok := ParseProfile(tt.raw, tt.fallback)
+			if ok != tt.wantOK {
+				t.Fatalf("ok=%v want %v", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("profile=%q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyProfile_CommandWALDurableSetsCommandWALAndFastDurablePolicy(t *testing.T) {
+	var opts Options
+	ApplyProfile(&opts, ProfileCommandWALDurable)
+
+	if !opts.CommandWAL {
+		t.Fatal("expected CommandWAL=true for command_wal_durable profile")
+	}
+	if opts.Durability != DurabilityDurable {
+		t.Fatalf("expected DurabilityDurable for command_wal_durable profile, got %v", opts.Durability)
+	}
+	if opts.ValueLog.ReadIntegrity != IntegrityVerify {
+		t.Fatalf("expected IntegrityVerify for command_wal_durable profile, got %v", opts.ValueLog.ReadIntegrity)
+	}
+	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
+		t.Fatalf("expected command_wal_durable to keep the fast collection/index layout bundle: %+v", opts)
+	}
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_durable profile")
+	}
+}
+
+func TestApplyProfile_CommandWALRelaxedSetsCommandWALAndRelaxedPolicy(t *testing.T) {
+	var opts Options
+	ApplyProfile(&opts, ProfileCommandWALRelaxed)
+
+	if !opts.CommandWAL {
+		t.Fatal("expected CommandWAL=true for command_wal_relaxed profile")
+	}
+	if opts.Durability != DurabilityWALOnRelaxed {
+		t.Fatalf("expected DurabilityWALOnRelaxed for command_wal_relaxed profile, got %v", opts.Durability)
+	}
+	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
+		t.Fatalf("expected IntegritySkipChecksums for command_wal_relaxed profile, got %v", opts.ValueLog.ReadIntegrity)
+	}
+	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
+		t.Fatalf("expected command_wal_relaxed to keep the fast collection/index layout bundle: %+v", opts)
+	}
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_relaxed profile")
+	}
+}
+
+func TestApplyProfile_ExplicitLegacyNamesPreserveLegacySemantics(t *testing.T) {
+	tests := []struct {
+		profile        Profile
+		wantDurability DurabilityMode
+	}{
+		{profile: ProfileLegacyWALDurable, wantDurability: DurabilityDurable},
+		{profile: ProfileLegacyWALRelaxedFast, wantDurability: DurabilityWALOnRelaxed},
+		{profile: ProfileNoWALFast, wantDurability: DurabilityWALOffRelaxed},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.profile), func(t *testing.T) {
+			var opts Options
+			ApplyProfile(&opts, tt.profile)
+			if opts.CommandWAL {
+				t.Fatalf("CommandWAL=true for legacy/no-WAL profile %q", tt.profile)
+			}
+			if opts.Durability != tt.wantDurability {
+				t.Fatalf("Durability=%v want %v", opts.Durability, tt.wantDurability)
+			}
+		})
+	}
+}
+
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileBench)
@@ -213,7 +308,7 @@ func TestApplyProfile_DoesNotOverrideNonZeroNumericFields(t *testing.T) {
 }
 
 func TestApplyProfile_PreservesNegativeDictHoldProbeValues(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+	for _, profile := range []Profile{ProfileFast, ProfileNoWALFast, ProfileWALOnFast, ProfileLegacyWALRelaxedFast, ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := Options{
 				ValueLog: ValueLogOptions{
@@ -234,7 +329,7 @@ func TestApplyProfile_PreservesNegativeDictHoldProbeValues(t *testing.T) {
 }
 
 func TestApplyProfile_PreservesExplicitVLogCompressionOverrides(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+	for _, profile := range []Profile{ProfileFast, ProfileNoWALFast, ProfileWALOnFast, ProfileLegacyWALRelaxedFast, ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := Options{
 				ValueLog: ValueLogOptions{

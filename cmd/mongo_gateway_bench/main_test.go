@@ -1079,8 +1079,8 @@ func TestParseConfigTreeDBCorrectnessDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse defaults: %v", err)
 	}
-	if cfg.TreeDBProfile != treedb.ProfileWALOnFast {
-		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileWALOnFast)
+	if cfg.TreeDBProfile != treedb.ProfileLegacyWALRelaxedFast {
+		t.Fatalf("TreeDBProfile=%q want %q", cfg.TreeDBProfile, treedb.ProfileLegacyWALRelaxedFast)
 	}
 	if cfg.TreeDBCommandWAL {
 		t.Fatal("TreeDBCommandWAL=true want false by default")
@@ -1228,7 +1228,14 @@ func TestParseConfigAcceptsTreeDBCommandWAL(t *testing.T) {
 	if _, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(treedb.ProfileDurable)}); err != nil {
 		t.Fatalf("parse durable command WAL config: %v", err)
 	}
-	for _, profile := range []treedb.Profile{treedb.ProfileFast, treedb.ProfileBench} {
+	cfg, err = parseConfig([]string{"-target", "treedb", "-treedb-profile", string(treedb.ProfileCommandWALDurable)})
+	if err != nil {
+		t.Fatalf("parse command WAL profile config: %v", err)
+	}
+	if !cfg.TreeDBCommandWAL {
+		t.Fatal("TreeDBCommandWAL=false for command_wal_durable profile")
+	}
+	for _, profile := range []treedb.Profile{treedb.ProfileFast, treedb.ProfileNoWALFast, treedb.ProfileBench} {
 		_, err := parseConfig([]string{"-target", "treedb", "-treedb-command-wal", "-treedb-profile", string(profile)})
 		if err == nil || !strings.Contains(err.Error(), "treedb-command-wal requires a WAL-on treedb-profile") {
 			t.Fatalf("parse command WAL profile %q error=%v, want WAL-on profile error", profile, err)
@@ -2128,7 +2135,7 @@ func TestWriteResultSupportsGenericWriter(t *testing.T) {
 		ConcurrentRangeReaders:     4,
 		ConcurrentRangeReaderSweep: []int{1, 4},
 		ConcurrentRangeReads:       8,
-		TreeDBProfile:              "wal-on-fast",
+		TreeDBProfile:              string(treedb.ProfileLegacyWALRelaxedFast),
 		TreeDBReadState:            treeDBReadStateUnsettled,
 		Phases: []phaseResult{{
 			Name:           "load_insert_many",
@@ -2531,7 +2538,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		Database:                               "bench",
 		Collection:                             "docs",
 		Documents:                              1,
-		TreeDBProfile:                          "wal_on_fast",
+		TreeDBProfile:                          string(treedb.ProfileLegacyWALRelaxedFast),
 		TreeDBCommandWAL:                       true,
 		TreeDBDocumentFormat:                   "bson",
 		TreeDBDataRootStorage:                  "compressed",
