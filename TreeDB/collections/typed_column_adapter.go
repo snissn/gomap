@@ -894,7 +894,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	for idx := range plan.PredicateSpecs {
 		spec := plan.PredicateSpecs[idx]
 		if spec.column == plan.GroupColumn {
-			groupPredicate = &spec
+			groupPredicate = &plan.PredicateSpecs[idx]
 			continue
 		}
 		spanPlan.PredicateSpecs = append(spanPlan.PredicateSpecs, spec)

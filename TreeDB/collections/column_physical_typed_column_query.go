@@ -719,6 +719,11 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupHourCount(view colum
 			diag.DenseGroupHourCountUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour missing prepared part %d", partIdx)
 		}
+		if dense.Cardinality == 0 && len(dense.GroupCodes) != 0 {
+			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d has empty dictionary", partIdx)
+		}
 		if len(dense.GroupCodes) != len(dense.Values) {
 			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 			diag.DenseGroupHourCountUsed = true
