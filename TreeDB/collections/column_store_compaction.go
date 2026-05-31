@@ -393,10 +393,6 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 			target = &cleanupTarget{path: assetPath, truncateTo: ref.Offset, maxEnd: ref.Offset + ref.Length}
 			targets[assetPath] = target
 		}
-		if ref.FileID >= columnAssetDirectViewSegmentFileIDBase {
-			target.remove = true
-			continue
-		}
 		if ref.Offset < target.truncateTo {
 			target.truncateTo = ref.Offset
 		}
