@@ -175,6 +175,8 @@ type VectorIndexSearchOptions struct {
 	DocumentFetchOptions DocumentFetchOptions
 	// MaxDecodedBlocks bounds the physical column row reader cache for column_graph search.
 	MaxDecodedBlocks int
+	// scoreBatchMode is an internal exact-order indexed-scoring test/benchmark hook.
+	scoreBatchMode columnVectorGraphScoreBatchMode
 }
 
 // VectorIndexTrace reports how one vector-index search was executed.
