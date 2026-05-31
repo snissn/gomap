@@ -103,8 +103,25 @@ func TestColumnVectorGraphDocumentIDStateMissingFallsBack2013(t *testing.T) {
 	if len(got.Results) != 2 {
 		t.Fatalf("results=%d want 2", len(got.Results))
 	}
+	assertSearchResultIDsMatchGraphRows2013(t, got.Results, rows)
 	if got.Stats.ResultIDTypedBytesState != 0 || got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) || got.Stats.ResultIDStateValidationFailures != 0 {
 		t.Fatalf("stats=%+v want missing document-id state graph fallback", got.Stats)
+	}
+}
+
+func assertSearchResultIDsMatchGraphRows2013(t *testing.T, results []VectorIndexSearchResult, rows []columnVectorGraphAssetRow) {
+	t.Helper()
+	for resultIdx, result := range results {
+		matched := false
+		for _, row := range rows {
+			if bytes.Equal(result.ID, row.ID) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Fatalf("result[%d] id=%v does not match exact graph row IDs %v", resultIdx, result.ID, rows)
+		}
 	}
 }
 
