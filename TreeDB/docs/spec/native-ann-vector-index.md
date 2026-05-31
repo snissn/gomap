@@ -2,6 +2,11 @@
 
 Status: draft proposal, non-normative.
 
+For the current `column_graph` typed-column graph-search prepared runtime-view
+policy and type admission gate, see
+`typed-column-graph-search-prepared-views.md`. This draft target architecture
+must not override that current-format admission contract.
+
 This document specifies a target architecture for making the TreeDB collection
 ANN graph a native persisted secondary index. It replaces the current
 process-local vector graph plus optional sidecar snapshot model with a

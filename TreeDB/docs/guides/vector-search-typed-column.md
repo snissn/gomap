@@ -205,8 +205,12 @@ Report both `ns/op` and `ops/sec`; compute `ops/sec` as `1e9 / ns/op` from the
 Go benchmark output. For parallel benchmarks, this is the aggregate operation
 rate implied by Go's parallel `ns/op` measurement. Always include `B/op`,
 `allocs/op`, and the direct/fallback counters
-(`adjacency_mmap_direct/search`, `adjacency_scratch_decodes/search`,
-`vector_mmap_direct/search`, and `vector_scratch_decodes/search`).
+(`adjacency_typed_list_mmap_direct/search`,
+`adjacency_typed_list_scratch_decodes/search`, `norm_mmap_direct/search`,
+`norm_scratch_decodes/search`, `vector_mmap_direct/search`, and
+`vector_scratch_decodes/search`). Legacy aliases such as
+`adjacency_mmap_direct/search` remain compatibility telemetry, not the primary
+healthy-path adjacency proof.
 
 | Tier alias | Canonical benchmark | Boundary |
 | --- | --- | --- |
@@ -283,7 +287,7 @@ counters.
 | SIMD/vectorized dense-section kernels are follow-up optimization work. | [#1790](https://github.com/snissn/gomap/issues/1790) |
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
-| Graph-search prepared-view admission is tiered by generic typed-column optimized-consumer capability. | See [typed-column optimized-consumer capabilities](../spec/typed-column-optimized-consumer-capabilities.md); #2044 enforces graph-search admission and #2046 owns reusable direct-view certifiers. |
+| Graph-search prepared-view admission is tiered by generic typed-column optimized-consumer capability. | See [typed-column optimized-consumer capabilities](../spec/typed-column-optimized-consumer-capabilities.md) and [prepared graph-search runtime views](../spec/typed-column-graph-search-prepared-views.md); #2044 enforces graph-search admission and #2046 owns reusable direct-view certifiers. |
 
 ## Best practices
 
@@ -299,9 +303,11 @@ counters.
   source. Graph row ID bytes are compatibility fallback only and should be
   counted when used.
 - Treat healthy current-format graph-search state as requiring the `mmap_direct`
-  optimized-consumer tier from the typed-column capability matrix unless #2044
-  explicitly admits a weaker tier with benchmark, allocation, and memory
-  evidence.
+  optimized-consumer tier from the typed-column capability matrix and the
+  role-specific prepared runtime views in
+  [`typed-column-graph-search-prepared-views.md`](../spec/typed-column-graph-search-prepared-views.md)
+  unless #2044 explicitly admits a weaker tier with benchmark, allocation, and
+  memory evidence.
 - Prefer reusable searchers for serving throughput; use one-shot APIs when you
   intentionally want setup/open included.
 - Run checkpoint/reopen demos when proving durable manifest/root discovery.

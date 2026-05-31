@@ -3,9 +3,11 @@
 Status: pre-alpha typed-column contract for optimized consumers. TreeDB typed-column
 on-disk formats, reader APIs, counters, and graph-search prepared views may still
 change. This document classifies the current logical/physical typed-column pairs
-by their highest committed optimized-consumer tier; it does not implement the
-prepared graph-search views (#2036), graph-search admission enforcement (#2044),
-or reusable direct-view certifier APIs (#2046).
+by their highest committed optimized-consumer tier. The role-specific prepared
+graph-search view policy lives in
+`typed-column-graph-search-prepared-views.md`; this document does not implement
+those views (#2036), graph-search admission enforcement (#2044), or reusable
+direct-view certifier APIs (#2046).
 
 The matrix complements the semantic capability matrix in
 `typed-column-semantics.md`, the physical layout/codec contract in
@@ -66,8 +68,10 @@ pointers must not be described as transient or WAL-like storage.
 ## Current Graph-Search Typed-Column Admission Baseline
 
 The parent #2035 prepared-view work treats the following roles as the current
-format. #2044 owns enforcement, but descendants should use this table as the
-stable generic typed-column contract.
+format. #2044 owns enforcement, and
+`typed-column-graph-search-prepared-views.md` owns the role-specific runtime
+shape, hot-loop boundary, fallback, and future admission policy; descendants
+should use this table as the stable generic typed-column contract.
 
 | Graph-search state | Logical/encoding | Required tier for healthy path | Prepared runtime shape | Timing boundary and counters |
 | --- | --- | --- | --- | --- |

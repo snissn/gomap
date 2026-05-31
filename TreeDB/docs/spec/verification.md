@@ -818,6 +818,27 @@ Coverage:
   new logical type, physical type, or encoding is added without matrix coverage,
   or when graph-search-relevant rows lose #2044/#2046 links.
 
+## 12.7 Prepared Typed-Column Graph-Search Runtime Views
+
+Invariant:
+- Every current graph-search state role has a documented canonical persisted
+  typed-column format, owner/state role, certification boundary, prepared runtime
+  shape, hot-loop boundary, fallback/fail-closed rule, graph-row fallback
+  prohibition, counters, tests, and benchmark evidence plan.
+- Future typed-column graph-search dependencies cannot enter the healthy
+  current-format path until their optimized runtime state is documented and
+  admitted, #2044 enforcement fails closed, counters/tests exist, and #2037-style
+  benchmarks prove no unaccepted material regression.
+
+Coverage:
+- Policy owner: `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`.
+- Docs lint: `TreeDB/docs/graph_search_prepared_views_test.go` verifies the
+  current base-vector, adjacency, inverse-norm, row-ref, and document-ID rows,
+  the future type admission gate, graph-row fallback prohibition, and owner-doc
+  links.
+- Runtime enforcement remains owned by #2044; reusable certifier implementation
+  remains owned by #2046; benchmark matrix evidence remains owned by #2037.
+
 ## 13. Native Wire Protocol
 
 Invariant:
