@@ -883,13 +883,25 @@ Invariant:
 - Supported rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, graph rows,
   candidates/search, edges/search, result/document counters, and direct/fallback
   typed-column source counters.
+- The #2091 topology-parity benchmark must keep vectors, synthetic adjacency,
+  query ordinal/order, `topK`, `efSearch`, filters, and timing boundary identical
+  across the legacy graph-row/direct compatibility reader and the no-physical-row
+  current prepared typed-column reader; parity tests must assert equal
+  search-work counters and equivalent results before the benchmark evidence is
+  used for #2035 promotion decisions.
 
 Coverage:
 - Policy owner: `TreeDB/docs/spec/typed-column-graph-search-benchmark-matrix.md`.
-- Code/test owner: `TreeDB/collections/vector_graph_search_truth_matrix_2037_test.go`.
-  `TestVectorGraphSearchTruthMatrixRows2037` freezes row labels and supported-row
-  semantics; `TestVectorGraphSearchTruthMatrixMetricContract2037` freezes the
-  required report-counter vocabulary.
+- Code/test owners:
+  - `TreeDB/collections/vector_graph_search_truth_matrix_2037_test.go`:
+    `TestVectorGraphSearchTruthMatrixRows2037` freezes row labels and supported-row
+    semantics; `TestVectorGraphSearchTruthMatrixMetricContract2037` freezes the
+    required report-counter vocabulary.
+  - `TreeDB/collections/column_vector_graph_topology_parity_2091_test.go`:
+    `TestColumnVectorGraphSearchTopologyParity2091` freezes the #2091
+    topology/search-work/result parity gate, and
+    `BenchmarkColumnVectorGraphSearchTopologyParity2091` emits the equal-work
+    graph-only and result-ID rows.
 
 ## 13. Native Wire Protocol
 

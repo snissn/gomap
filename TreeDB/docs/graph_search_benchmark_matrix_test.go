@@ -51,6 +51,13 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"not a full wall-time promotion",
 		"#1980 remains an evidence-backed follow-up",
 		"#1977 remains deferred",
+		"BenchmarkColumnVectorGraphSearchTopologyParity2091",
+		"TestColumnVectorGraphSearchTopologyParity2091",
+		"topology-parity search benchmark",
+		"legacy_graph_row_direct",
+		"current_prepared_typed_column",
+		"both paths visit exactly 612 edges/search",
+		"not yet throughput-superior",
 	}
 	for _, needle := range required {
 		if !strings.Contains(text, needle) {

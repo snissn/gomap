@@ -291,6 +291,74 @@ Follow-ups:
   normalized vector payloads would offset their extra storage/rebuild cost or
   preserve scoring/tie behavior by default.
 
+## #2091 topology-parity search benchmark
+
+`BenchmarkColumnVectorGraphSearchTopologyParity2091` is the end-to-end
+`SearchCosine` follow-up to the #2043 adjacency-access microbenchmark. It uses
+one deterministic production fixture (`rows=8192`, `dims=128`, degree 16,
+`topK=10`, `efSearch=128`, `query_ordinal=4096`) and publishes the same vectors,
+document IDs, and synthetic ring adjacency payloads into two readers:
+
+- `legacy_graph_row_direct`: a legacy compatibility physical graph-row asset plus
+  vector-index state. This row matches the #2037 legacy/direct graph-only control
+  topology: graph rows are present, vector/result-ID compatibility fallback is
+  counted, and adjacency is served from the direct prepared-CSR state published
+  beside the compatibility asset.
+- `current_prepared_typed_column`: a current-format graph manifest with no
+  physical graph-row asset. Base typed-column vectors, inverse norms, adjacency,
+  row refs, and document IDs are prepared from the same rows; healthy searches
+  must report `graph_rows=0`, `prepared_graph_search_views/search=1`, and zero
+  graph-row/source fallbacks.
+
+`TestColumnVectorGraphSearchTopologyParity2091` is the parity gate. It decodes
+legacy graph-row adjacency and prepared current CSR adjacency for every fixture
+ordinal, checks prepared vectors and document IDs against the source rows, runs
+both graph-only and result-ID searches, and asserts equivalent results plus equal
+search-work counters (`candidate_rows/search`, `candidates/search`,
+`edges/search`, `visited_edges/search`, `visited_nodes/search`, score-batch
+candidate counts, fetch counts, and adjacency prepared-CSR counters).
+
+Run context:
+
+- Code benchmarked: local #2091 worktree on top of `ccdc2e5fa5a8eed44687190c91c2b2b8477ee4ca`
+  (latest `origin/main` after #2043; benchmark harness changes only).
+- Command: `GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections -run '^$' -bench '^BenchmarkColumnVectorGraphSearchTopologyParity2091$' -benchmem -benchtime=500ms -count=5`.
+- Hardware/context: macOS 26.2, Apple M3, 8 logical CPUs, 16 GiB memory,
+  `go version go1.25.5 darwin/arm64`.
+- Local artifact directory: `/tmp/gomap_2091_topology_parity_20260531_125522/`
+  with `topology_parity_2091_bench.txt`.
+
+Median rows from the five-count run:
+
+| Boundary | Mode | ns/op | ops/sec | B/op | allocs/op | Work/parity counters | Source/fallback counters |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| `graph_only` | `legacy_graph_row_direct` | 8.006 µs | 124,908 | 0 | 0 | `candidates=128`, `visited_nodes=128`, `edges=612`, `visited_edges=612`, `adjacency_expansions=39` | `graph_rows=8192`, `prepared_graph_search_views=0`, `graph_row_fallbacks=128`, `vector_scratch_decodes=128`, `adjacency_prepared_csr_mmap_direct=40`, `adjacency_legacy_fallbacks=0` |
+| `graph_only` | `current_prepared_typed_column` | 8.626 µs | 115,925 | 0 | 0 | `candidates=128`, `visited_nodes=128`, `edges=612`, `visited_edges=612`, `adjacency_expansions=39` | `graph_rows=0`, `prepared_graph_search_views=1`, `graph_row_fallbacks=0`, `prepared_score_calls=128`, `vector_prepared_direct=128`, `norm_prepared_direct=128`, `adjacency_prepared_csr_mmap_direct=40` |
+| `result_id` | `legacy_graph_row_direct` | 8.208 µs | 121,830 | 0 | 0 | `candidates=128`, `visited_nodes=128`, `edges=612`, `visited_edges=612`, `result_fetches=10` | `graph_rows=8192`, `graph_row_fallbacks=138`, `result_id_graph_fallbacks=10`, `vector_scratch_decodes=128`, `adjacency_prepared_csr_mmap_direct=40` |
+| `result_id` | `current_prepared_typed_column` | 9.548 µs | 104,738 | 0 | 0 | `candidates=128`, `visited_nodes=128`, `edges=612`, `visited_edges=612`, `result_fetches=10` | `graph_rows=0`, `prepared_graph_search_views=1`, `graph_row_fallbacks=0`, `result_id_prepared_bytes_views=1`, `result_id_typed_bytes_state=10`, `row_ref_state_result_refs=10` |
+
+All four rows report `candidate_rows/search=8192`, `candidate_fetches/search=128`,
+`score_batch_calls/search=128`, `score_batch_candidates/search=128`,
+`adjacency_B/search=2560`, `vector_B/search=65536`, `norm_B/search=512`, and zero
+`adjacency_source_fallbacks/search`. The current prepared rows additionally
+report zero `typed_column_vector_fallbacks/search`, zero
+`row_ref_vector_source_legacy_graph_ids/search`, zero
+`row_ref_state_source_fallbacks/search`, and zero `result_id_graph_fallbacks/search`.
+
+Interpretation for #2035: the topology mismatch is now removed for this fixture;
+both paths visit exactly 612 edges/search and return equivalent results. Under
+this full-diagnostics parity run, the prepared typed-column path is close but is
+not yet throughput-superior: it is about 7.7% slower at the graph-only boundary
+and about 16% slower at the result-ID boundary. This is a materially different
+finding from the #2043 truth-matrix rows with 612 versus 3340 edges/search: the
+large wall-time gap was mostly fixture topology/search work, while the remaining
+smaller gap is inside the equal-work search loop and result-ID side channel. Do
+not promote #2035 on this evidence alone. The next promotion work should use
+issue #1979 to explain batchability, source-counter overhead, and
+visited-edge/control flow under parity before assigning any remaining optimized
+implementation to #1980 frontier/top-k or #1977 normalized-vector
+storage/scoring.
+
 ## Interpretation rules
 
 - `combined_prepared_typed_column` rows are #2045 prepared-routing evidence;
