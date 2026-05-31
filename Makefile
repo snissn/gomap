@@ -129,6 +129,10 @@ build-treedb:
 	cd $(TREEDB_DIR) && go build -o ../$(BIN_DIR)/treemap ./cmd/treemap
 
 
+build-native-server:
+	mkdir -p $(BIN_DIR)
+	go build -o $(BIN_DIR)/treedb-native-server ./cmd/treedb-native-server/main.go
+
 build-mongo-gateway:
 	mkdir -p $(BIN_DIR)
 	$(MONGO_GATEWAY_GO_ENV) go build -o $(BIN_DIR)/treedb-mongo-gateway ./$(MONGO_GATEWAY_SERVER)

@@ -273,10 +273,7 @@ func backendCollectionDataRootStoragePolicy(db *backenddb.DB, policy RootStorage
 	if err != nil {
 		return base, err
 	}
-	if base == backenddb.OrderedRootStoragePagerLeaves && db != nil && db.HasValueLogAppender() {
-		return backenddb.OrderedRootStorageValueLogLeaves, nil
-	}
-	if policy == RootStorageDefault && db != nil && db.HasValueLogAppender() {
+	if (policy == RootStorageDefault || policy == RootStorageFast) && db != nil && db.HasValueLogAppender() {
 		return backenddb.OrderedRootStorageValueLogLeaves, nil
 	}
 	return base, nil
