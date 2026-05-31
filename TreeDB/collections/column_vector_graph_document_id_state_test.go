@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -200,6 +202,68 @@ func TestColumnVectorGraphDocumentIDStateCorruptOffsetsRejected2041(t *testing.T
 	writeColumnVectorGraphAssetRawForTest2041(t, d.ColumnAssetRootDir(), asset.Ref, corrupt)
 	if _, _, err := newColumnVectorGraphDocumentIDStateSourceFromRoot(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, badState); err == nil || (!strings.Contains(err.Error(), "offset") && !strings.Contains(err.Error(), "values")) {
 		t.Fatalf("document-id corrupt offsets err=%v, want offset/value rejection", err)
+	}
+}
+
+func TestColumnVectorGraphDocumentIDStateHeapCopyFallback2041(t *testing.T) {
+	const rows = 2
+	offsetsRaw, err := typedcolumn.EncodeRawBytesOffsetsOffsets(nil, []uint64{0, 5, 9})
+	if err != nil {
+		t.Fatalf("EncodeRawBytesOffsetsOffsets: %v", err)
+	}
+	valuesRaw := []byte("alphabeta")
+	offsetsSection, valuesSection, err := typedcolumn.NewRawBytesOffsetsImageSections(columnVectorGraphDocumentIDStateColumnName, rows, len(offsetsRaw), len(valuesRaw))
+	if err != nil {
+		t.Fatalf("NewRawBytesOffsetsImageSections: %v", err)
+	}
+	certColumn := typedcolumn.ColumnPartLayoutContractColumn{
+		Name:                columnVectorGraphDocumentIDStateColumnName,
+		LogicalType:         columnVectorIndexStateLogicalTypeBytes,
+		Type:                typedcolumn.ColumnTypeBytes,
+		Encoding:            typedcolumn.EncodingRawBytesOffsets,
+		Compression:         typedcolumn.CompressionNone,
+		Rows:                rows,
+		OffsetsSection:      typedcolumn.ColumnPartLayoutContractSection{Length: len(offsetsRaw)},
+		ValuesSection:       typedcolumn.ColumnPartLayoutContractSection{Length: len(valuesRaw)},
+		OffsetsBytes:        len(offsetsRaw),
+		ValuesBytes:         len(valuesRaw),
+		ElementSize:         1,
+		Alignment:           1,
+		Endian:              typedcolumn.ColumnPartLayoutEndianLittle,
+		LengthMultiple:      1,
+		DirectViewCertified: true,
+	}
+	manager := mappedresource.NewManager()
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "document-id-heap-fallback", Namespace: "test", Generation: 1}
+	offsetsKey := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: string(ColumnAssetKindTCS1TypedColumnPart), Generation: 1, PartID: 2, FileID: 3, Length: int64(len(offsetsRaw)), Encoding: typedcolumn.EncodingRawBytesOffsets.String()}
+	valuesKey := offsetsKey
+	valuesKey.Length = int64(len(valuesRaw))
+	offsetsHandle, err := manager.AcquireBytes(offsetsKey, scope, mappedresource.SourceHeapCopy, offsetsRaw, mappedresource.AcquireOptions{Reason: "document-id offsets heap fallback test"})
+	if err != nil {
+		t.Fatalf("AcquireBytes offsets: %v", err)
+	}
+	valuesHandle, err := manager.AcquireBytes(valuesKey, scope, mappedresource.SourceHeapCopy, valuesRaw, mappedresource.AcquireOptions{Reason: "document-id values heap fallback test"})
+	if err != nil {
+		_ = offsetsHandle.Release()
+		t.Fatalf("AcquireBytes values: %v", err)
+	}
+	expectation := columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleDocumentIDs, columnVectorIndexStateAssetRoleDocumentIDs, columnVectorGraphDocumentIDStateColumnName, rows, ColumnAssetRef{Namespace: "test", Kind: ColumnAssetKindTCS1TypedColumnPart, Generation: 1, PartID: 2, FileID: 3})
+	view, err := columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandles(expectation, certColumn, offsetsSection, valuesSection, offsetsHandle, valuesHandle, manager, rows, typeddecode.StreamingStatus(typeddecode.ReasonHandleSourceUnsupported, "heap fallback test"))
+	if err != nil {
+		_ = offsetsHandle.Release()
+		_ = valuesHandle.Release()
+		t.Fatalf("fallback view: %v", err)
+	}
+	if !view.Alive() || view.OffsetsHandle.Source() != mappedresource.SourceHeapCopy || view.ValuesHandle.Source() != mappedresource.SourceHeapCopy {
+		_ = view.Close()
+		t.Fatalf("view alive=%t offsets_source=%s values_source=%s want heap-copy prepared view", view.Alive(), view.OffsetsHandle.Source(), view.ValuesHandle.Source())
+	}
+	if got := string(view.Row(1)); got != "beta" {
+		_ = view.Close()
+		t.Fatalf("view.Row(1)=%q want beta", got)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("view close: %v", err)
 	}
 }
 

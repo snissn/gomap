@@ -412,8 +412,9 @@ func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection s
 		releaseErr := offsetsHandle.Release()
 		return nil, typeddecode.ReasonValidationFailed, errors.Join(err, releaseErr)
 	}
+	expectation := columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleDocumentIDs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref)
 	view, status := typeddecode.CertifyGraphBytesDirectView(typeddecode.GraphBytesDirectViewRequest{
-		Expectation:        columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleDocumentIDs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref),
+		Expectation:        expectation,
 		Certification:      certColumn,
 		OffsetsSection:     offsetsSection,
 		ValuesSection:      valuesSection,
@@ -424,8 +425,12 @@ func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection s
 		Manager:            manager,
 	})
 	if !status.Direct() {
-		releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
-		return nil, status.Reason, errors.Join(fmt.Errorf("collections: column_graph %q document-id state direct-view certification failed: %s", def.Name, status.String()), releaseErr)
+		var fallbackErr error
+		view, fallbackErr = columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandles(expectation, certColumn, offsetsSection, valuesSection, offsetsHandle, valuesHandle, manager, state.RowCount, status)
+		if fallbackErr != nil {
+			releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
+			return nil, status.Reason, errors.Join(fallbackErr, releaseErr)
+		}
 	}
 	source := &columnVectorGraphDocumentIDStateSource{rows: asset.RowCount, view: view, manager: manager}
 	if err := validateColumnVectorGraphDocumentIDPreparedView(def.Name, view, asset.RowCount); err != nil {
@@ -434,6 +439,25 @@ func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection s
 	}
 	source.captureResourceStats()
 	return source, "", nil
+}
+
+func columnVectorGraphDocumentIDStatePreparedViewFromFallbackHandles(expectation typeddecode.GraphDirectViewExpectation, certColumn typedcolumn.ColumnPartLayoutContractColumn, offsetsSection, valuesSection typedcolumn.ColumnPartImageSection, offsetsHandle, valuesHandle *mappedresource.Handle, manager *mappedresource.Manager, rows int, directStatus typeddecode.Status) (typeddecode.PreparedBytesDirectView, error) {
+	if !columnVectorGraphPreparedStateDirectFallbackAllowed(directStatus) {
+		return typeddecode.PreparedBytesDirectView{}, fmt.Errorf("document-id state direct-view certification failed: %s", directStatus.String())
+	}
+	directReq := typeddecode.BytesDirectViewRequest{Plan: typeddecode.BytesPlan(certColumn), Certification: certColumn, Rows: rows, OffsetsBytes: offsetsSection.Length, ValuesBytes: valuesSection.Length, AssetOffset: expectation.AssetOffset, HasAssetOffset: expectation.HasAssetOffset}
+	offsets, values, status := typeddecode.BytesView(manager, offsetsHandle, valuesHandle, directReq, typeddecode.ResourceViewOptions{RequireMapped: false})
+	if status.Direct() {
+		return typeddecode.PreparedBytesDirectView{Expectation: expectation, Rows: rows, Offsets: offsets, Values: values, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle}, nil
+	}
+	if !columnVectorGraphPreparedStateDirectFallbackAllowed(status) {
+		return typeddecode.PreparedBytesDirectView{}, errors.Join(fmt.Errorf("document-id state direct-view certification failed: %s", directStatus.String()), fmt.Errorf("document-id state heap typed-view fallback failed: %s", status.String()))
+	}
+	decoded, err := typedcolumn.DecodeRawBytesOffsetsFallback(nil, nil, offsetsHandle.Bytes(), valuesHandle.Bytes(), rows)
+	if err != nil {
+		return typeddecode.PreparedBytesDirectView{}, errors.Join(fmt.Errorf("document-id state direct-view certification failed: %s", directStatus.String()), fmt.Errorf("document-id state heap typed-view fallback failed: %s", status.String()), err)
+	}
+	return typeddecode.PreparedBytesDirectView{Expectation: expectation, Rows: rows, Offsets: decoded.Offsets, Values: decoded.Values, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle}, nil
 }
 
 func validateColumnVectorGraphDocumentIDPreparedView(indexName string, view typeddecode.PreparedBytesDirectView, rows int) error {

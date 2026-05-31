@@ -577,19 +577,42 @@ func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string,
 	if err != nil {
 		return typeddecode.PreparedInt64DirectView{}, err
 	}
+	expectation := columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleRowRefs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref)
 	view, status := typeddecode.CertifyGraphInt64DirectView(typeddecode.GraphInt64DirectViewRequest{
-		Expectation:   columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleRowRefs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref),
+		Expectation:   expectation,
 		Certification: certColumn,
 		Section:       section,
 		ExpectedKey:   key,
 		Handle:        handle,
 		Manager:       manager,
 	})
-	if !status.Direct() {
-		releaseErr := handle.Release()
-		return typeddecode.PreparedInt64DirectView{}, errors.Join(fmt.Errorf("direct-view certification failed: %s", status.String()), releaseErr)
+	if status.Direct() {
+		return view, nil
 	}
-	return view, nil
+	view, fallbackErr := columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation, manager, handle, state.RowCount, status)
+	if fallbackErr == nil {
+		return view, nil
+	}
+	releaseErr := handle.Release()
+	return typeddecode.PreparedInt64DirectView{}, errors.Join(fallbackErr, releaseErr)
+}
+
+func columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation typeddecode.GraphDirectViewExpectation, manager *mappedresource.Manager, handle *mappedresource.Handle, rows int, directStatus typeddecode.Status) (typeddecode.PreparedInt64DirectView, error) {
+	if !columnVectorGraphPreparedStateDirectFallbackAllowed(directStatus) {
+		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("direct-view certification failed: %s", directStatus.String())
+	}
+	values, status := typeddecode.Int64View(manager, handle, typeddecode.ResourceViewOptions{ExpectedElements: rows, RequireMapped: false})
+	if status.Direct() {
+		return typeddecode.PreparedInt64DirectView{Expectation: expectation, Rows: rows, Values: values, Handle: handle}, nil
+	}
+	if !columnVectorGraphPreparedStateDirectFallbackAllowed(status) {
+		return typeddecode.PreparedInt64DirectView{}, errors.Join(fmt.Errorf("direct-view certification failed: %s", directStatus.String()), fmt.Errorf("heap typed-view fallback failed: %s", status.String()))
+	}
+	decoded, err := decodeColumnVectorGraphRowRefStateInt64Values(handle.Bytes(), rows)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, errors.Join(fmt.Errorf("direct-view certification failed: %s", directStatus.String()), fmt.Errorf("heap typed-view fallback failed: %s", status.String()), err)
+	}
+	return typeddecode.PreparedInt64DirectView{Expectation: expectation, Rows: rows, Values: decoded, Handle: handle}, nil
 }
 
 func columnVectorGraphRowRefFromPreparedValues(ordinal int, generation, partID, rowIndex, appliedLSN int64) (DocumentRowRef, error) {
@@ -837,11 +860,17 @@ func (s *columnVectorGraphRowRefStateSource) preparedViewActive() bool {
 	return s != nil && !s.closed && s.generations.Alive() && s.partIDs.Alive() && s.rowIndexes.Alive() && s.appliedCommandLSNs.Alive() && s.generations.Rows == s.rows && s.partIDs.Rows == s.rows && s.rowIndexes.Rows == s.rows && s.appliedCommandLSNs.Rows == s.rows
 }
 
-func (s *columnVectorGraphRowRefStateSource) preparedFieldCount() uint64 {
+func (s *columnVectorGraphRowRefStateSource) mmapDirectFieldCount() uint64 {
 	if !s.preparedViewActive() {
 		return 0
 	}
-	return uint64(len(columnVectorGraphRowRefStateFields))
+	var count uint64
+	for _, view := range []typeddecode.PreparedInt64DirectView{s.generations, s.partIDs, s.rowIndexes, s.appliedCommandLSNs} {
+		if view.Handle != nil && view.Handle.Source() == mappedresource.SourceMapped {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *columnVectorGraphRowRefStateSource) captureResourceStats() {
@@ -911,7 +940,7 @@ func (r *columnVectorGraphPhysicalRowReader) populateRowRefStateSearchStats(stat
 	if r.rowRefSource != nil {
 		if r.rowRefSource.preparedViewActive() {
 			stats.RowRefStatePreparedViews = 1
-			stats.RowRefStateMmapDirectFields = r.rowRefSource.preparedFieldCount()
+			stats.RowRefStateMmapDirectFields = r.rowRefSource.mmapDirectFieldCount()
 		}
 		return
 	}

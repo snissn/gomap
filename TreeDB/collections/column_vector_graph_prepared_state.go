@@ -61,7 +61,7 @@ func acquireColumnVectorGraphPreparedStateSection(rootDir, collection, scopeID, 
 		Reason:         acquireReason,
 		ValidationMode: mappedresource.ValidationVerify,
 		PreferMapped:   true,
-		AllowHeapCopy:  false,
+		AllowHeapCopy:  true,
 		ResourceRoot:   rootDir,
 		ResourcePath:   path,
 	})
@@ -80,4 +80,13 @@ func checksumColumnVectorGraphPreparedStateSection(handle *mappedresource.Handle
 		return 0
 	}
 	return page.Checksum(handle.Bytes())
+}
+
+func columnVectorGraphPreparedStateDirectFallbackAllowed(status typeddecode.Status) bool {
+	switch status.Reason {
+	case typeddecode.ReasonHandleSourceUnsupported, typeddecode.ReasonActualPointerUnaligned, typeddecode.ReasonUnaligned, typeddecode.ReasonWrongEndian:
+		return true
+	default:
+		return false
+	}
 }
