@@ -33,6 +33,41 @@ type typedColumnLatestCandidate struct {
 	deleted    bool
 }
 
+type typedColumnLatestVisibilityState struct {
+	resolver       *typedColumnLatestRowResolver
+	PhysicalParts  int
+	TombstoneParts int
+	CandidateRows  int
+	DeletedRows    int
+	VisibleRows    int
+}
+
+func buildTypedColumnLatestVisibilityState(view columnPhysicalScanSnapshotView, readCache *columnPhysicalAssetReadCache, diag *TypedColumnInt64PredicateScanDiagnostics) (*typedColumnLatestVisibilityState, error) {
+	resolver, err := buildTypedColumnLatestRowResolver(view, readCache, diag)
+	if err != nil {
+		return nil, err
+	}
+	state := &typedColumnLatestVisibilityState{resolver: resolver, CandidateRows: len(resolver.candidates)}
+	for _, part := range resolver.parts {
+		state.PhysicalParts++
+		if part.Role == ColumnManifestPartRoleTombstone {
+			state.TombstoneParts++
+		}
+		for _, word := range part.visibleBits {
+			for word != 0 {
+				state.VisibleRows++
+				word &= word - 1
+			}
+		}
+	}
+	for _, candidate := range resolver.candidates {
+		if candidate.deleted {
+			state.DeletedRows++
+		}
+	}
+	return state, nil
+}
+
 func buildTypedColumnLatestRowResolver(view columnPhysicalScanSnapshotView, readCache *columnPhysicalAssetReadCache, diag *TypedColumnInt64PredicateScanDiagnostics) (*typedColumnLatestRowResolver, error) {
 	if readCache == nil {
 		return nil, errors.New("collections: typed-column latest-visible resolver requires read cache")
