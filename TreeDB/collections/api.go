@@ -18974,6 +18974,7 @@ func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) 
 type systemTargetEntry struct {
 	key   []byte
 	value []byte
+	flags byte
 }
 
 type systemTargetIterator struct {
@@ -19008,7 +19009,7 @@ func (it *systemTargetIterator) UnsafeKey() []byte {
 }
 
 func (it *systemTargetIterator) UnsafeValue() []byte {
-	if !it.Valid() {
+	if !it.Valid() || it.IsDeleted() {
 		return nil
 	}
 	return it.entries[it.idx].value
@@ -19018,7 +19019,15 @@ func (it *systemTargetIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.Valid() {
 		return nil, page.ValuePtr{}, node.FlagInline
 	}
-	return it.entries[it.idx].value, page.ValuePtr{}, node.FlagInline
+	entry := it.entries[it.idx]
+	if entry.flags&node.FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	flags := entry.flags
+	if flags == 0 {
+		flags = node.FlagInline
+	}
+	return entry.value, page.ValuePtr{}, flags
 }
 
 func (it *systemTargetIterator) Key() []byte {
@@ -19037,14 +19046,14 @@ func (it *systemTargetIterator) KeyCopy(dst []byte) []byte {
 }
 
 func (it *systemTargetIterator) ValueCopy(dst []byte) []byte {
-	if !it.Valid() {
-		return dst
+	if !it.Valid() || it.IsDeleted() {
+		return dst[:0]
 	}
 	return append(dst, it.entries[it.idx].value...)
 }
 
 func (it *systemTargetIterator) IsDeleted() bool {
-	return false
+	return it.Valid() && it.entries[it.idx].flags&node.FlagTombstone != 0
 }
 
 func (it *systemTargetIterator) Error() error {
