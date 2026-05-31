@@ -14,8 +14,8 @@ command contract live in `typed-column-graph-search-benchmark-matrix.md`. This
 table records #2038-admitted adjacency prepared CSR views, #2040-admitted
 base-vector and inverse-norm prepared scoring views, #2041-admitted row-ref and
 document-ID side-channel views, #2045 combined prepared graph-search routing,
-#2042 minimal hot-loop telemetry, and the #2043 closeout decision backed by the
-#2037 benchmark truth matrix.
+minimal hot-loop telemetry from #2042, and the #2043 closeout decision backed by
+the #2037 benchmark truth matrix.
 
 ## Admission status vocabulary
 
@@ -68,7 +68,7 @@ current-format open/search path fails closed or uses an explicitly labeled
 compatibility path; it must not silently dispatch back to graph-row selectors in
 the healthy loop.
 
-#2045 evidence counters:
+Evidence counters for #2045:
 
 - `prepared_graph_search_views/search=1` for healthy current-format searches;
 - `graph_row_fallbacks/search=0`, plus the role-specific fallback counters below

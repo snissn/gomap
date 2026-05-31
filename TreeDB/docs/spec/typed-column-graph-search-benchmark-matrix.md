@@ -173,7 +173,8 @@ Closeout run context:
 
 The current-format rows also emitted zero for
 `typed_column_vector_fallbacks/search`, `adjacency_legacy_fallbacks/search`,
-`adjacency_source_fallbacks/search`, `row_ref_vector_source_legacy_graph_ids`,
+`adjacency_source_fallbacks/search`,
+`row_ref_vector_source_legacy_graph_ids/search`,
 `row_ref_state_source_fallbacks/search`, and `result_id_graph_fallbacks/search`.
 After #2045 the `current_tvis_base_typed_column` label is no longer an
 unprepared hot-loop source route in healthy current-format readers; it is the

@@ -14,8 +14,8 @@ Runtime graph-search admission enforcement is owned by #2044 and benchmark
 truth-matrix reporting by #2037. The reusable #2046 primitive certifier substrate
 lives in `TreeDB/internal/typeddecode` and remains a prerequisite, not
 row-admission evidence by itself. #2038 admits adjacency prepared CSR views,
-#2040 admits base-vector and inverse-norm prepared scoring views, #2041 admits
-row-ref and document-ID side-channel views, and #2045 routes healthy
+while #2040 admits base-vector and inverse-norm prepared scoring views, #2041
+admits row-ref and document-ID side-channel views, and #2045 routes healthy
 current-format search through one combined prepared graph-search view.
 
 ## Scope and ownership
@@ -30,16 +30,18 @@ authoritative typed-column and vector-index state assets
   -> optional final result-ID and document materialization
 ```
 
-#2043 closeout status: the combined prepared view is the admitted primary
-healthy current-format execution route because the final matrix shows prepared
-base-vector, adjacency, inverse-norm, row-ref, and document-ID counters with
-zero current-format graph-row/source fallbacks and `0 B/op`, `0 allocs/op` for
-graph-only search. It is not an unconditional wall-time win over the old legacy
-graph-row direct control: the minimal-stats graph-only row remains slower than
-the legacy control in the closeout run, so #2035 should not be represented as
-"beats legacy direct" unless the coordinator explicitly accepts the
-current-format architecture trade-off. #1980 remains a profile-backed
-frontier/top-k follow-up; #1977 normalized-vector payloads remain deferred.
+## #2043 closeout status
+
+The combined prepared view is the admitted primary healthy current-format
+execution route because the final matrix shows prepared base-vector, adjacency,
+inverse-norm, row-ref, and document-ID counters with zero current-format
+graph-row/source fallbacks and `0 B/op`, `0 allocs/op` for graph-only search. It
+is not an unconditional wall-time win over the old legacy graph-row direct
+control: the minimal-stats graph-only row remains slower than the legacy control
+in the closeout run, so #2035 should not be represented as "beats legacy direct"
+unless the coordinator explicitly accepts the current-format architecture
+trade-off. #1980 remains a profile-backed frontier/top-k follow-up; #1977
+normalized-vector payloads remain deferred.
 
 Normative boundaries:
 
