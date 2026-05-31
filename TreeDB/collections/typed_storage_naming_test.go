@@ -313,6 +313,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_aggregate_metadata_predicate_1951_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 16},
 	{path: "TreeDB/collections/column_aggregate_metadata_typed_column_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 15},
 	{path: "TreeDB/collections/column_asset_gc_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 33, occurrences: 35},
+	{path: "TreeDB/collections/column_asset_lifecycle.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_asset_manager.go", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 20},
 	{path: "TreeDB/collections/column_asset_mappedresource_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 12},
 	{path: "TreeDB/collections/column_asset_reachability_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 28, occurrences: 29},

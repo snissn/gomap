@@ -125,8 +125,8 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanColumnAssetLifecycle with pin: %v", err)
 	}
-	if report.PreparedPins.OpenSessions != 1 || report.PreparedPins.Refs != 1 || report.PreparedPins.Bytes != candidate.Length {
-		t.Fatalf("prepared pin summary=%+v want one pinned ref length=%d", report.PreparedPins, candidate.Length)
+	if report.PinSets.OpenSessions != 1 || report.PinSets.Refs != 1 || report.PinSets.Bytes != candidate.Length {
+		t.Fatalf("pin summary=%+v want one pinned ref length=%d", report.PinSets, candidate.Length)
 	}
 	if report.Roots.LifecyclePinSets != 1 || report.Roots.LifecyclePinnedRefs != 1 || report.Roots.PreparedQueryRefs != 1 || report.Reachability.Sources.PreparedQueryRefs != 1 {
 		t.Fatalf("pin root counts=%+v sources=%+v", report.Roots, report.Reachability.Sources)
@@ -149,8 +149,8 @@ func TestColumnAssetLifecycleReportExplicitPinSetScaffold1954(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanColumnAssetLifecycle after close: %v", err)
 	}
-	if afterClose.PreparedPins.OpenSessions != 0 || afterClose.Roots.PreparedQueryRefs != 0 || afterClose.Reachability.Sources.PreparedQueryRefs != 0 {
-		t.Fatalf("pin still reported after close: pins=%+v roots=%+v sources=%+v", afterClose.PreparedPins, afterClose.Roots, afterClose.Reachability.Sources)
+	if afterClose.PinSets.OpenSessions != 0 || afterClose.Roots.PreparedQueryRefs != 0 || afterClose.Reachability.Sources.PreparedQueryRefs != 0 {
+		t.Fatalf("pin still reported after close: pins=%+v roots=%+v sources=%+v", afterClose.PinSets, afterClose.Roots, afterClose.Reachability.Sources)
 	}
 	entry, ok = columnAssetLifecycleFindEntry(afterClose.Reachability.Entries, candidate)
 	if !ok {
@@ -195,8 +195,8 @@ func TestColumnAssetLifecycleReportPinSetSharedAcrossHandles1954(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanColumnAssetLifecycle from sibling handle: %v", err)
 	}
-	if report.PreparedPins.OpenSessions != 1 || report.Roots.PreparedQueryRefs != 1 || report.Reachability.Sources.PreparedQueryRefs != 1 {
-		t.Fatalf("sibling handle missed lifecycle pin: pins=%+v roots=%+v sources=%+v", report.PreparedPins, report.Roots, report.Reachability.Sources)
+	if report.PinSets.OpenSessions != 1 || report.Roots.PreparedQueryRefs != 1 || report.Reachability.Sources.PreparedQueryRefs != 1 {
+		t.Fatalf("sibling handle missed lifecycle pin: pins=%+v roots=%+v sources=%+v", report.PinSets, report.Roots, report.Reachability.Sources)
 	}
 	entry, ok := columnAssetLifecycleFindEntry(report.Reachability.Entries, candidate)
 	if !ok {

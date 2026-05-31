@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 )
 
@@ -62,6 +63,7 @@ type ColumnAssetLifecyclePinSet struct {
 type columnAssetLifecyclePinSetRecord struct {
 	ID         uint64
 	Collection string
+	Namespace  string
 	Source     ColumnAssetLifecyclePinSource
 	Owner      string
 	Reason     string
@@ -162,6 +164,7 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 	record := columnAssetLifecyclePinSetRecord{
 		ID:         id,
 		Collection: c.meta.Name,
+		Namespace:  columnAssetLifecycleNamespace(c, refs),
 		Source:     opts.Source,
 		Owner:      opts.Owner,
 		Reason:     opts.Reason,
@@ -222,7 +225,7 @@ type ColumnAssetLifecycleReport struct {
 	Roots                ColumnAssetLifecycleRootCounts             `json:"roots"`
 	SnapshotFence        ColumnAssetLifecycleSnapshotFence          `json:"snapshot_fence"`
 	MappedResources      ColumnAssetReachabilityMappedResourceStats `json:"mappedresource"`
-	PreparedPins         ColumnAssetLifecyclePinSummary             `json:"prepared_pins"`
+	PinSets              ColumnAssetLifecyclePinSummary             `json:"pin_sets"`
 	Quarantine           ColumnAssetLifecycleQuarantineSummary      `json:"quarantine"`
 	Actions              ColumnAssetLifecycleActionSummary          `json:"actions"`
 	Reachability         ColumnAssetReachabilityPlan                `json:"reachability"`
@@ -274,8 +277,8 @@ type ColumnAssetLifecycleSnapshotFence struct {
 }
 
 // ColumnAssetLifecyclePinSummary summarizes explicit process-local lifecycle
-// pin sets. The close/leak/expiry counters are scaffolding slots for later
-// durable registries and remain zero in slice 1.
+// pin sets across all lifecycle pin sources. The close/leak/expiry counters are
+// scaffolding slots for later durable registries and remain zero in slice 1.
 type ColumnAssetLifecyclePinSummary struct {
 	OpenSessions  int                                    `json:"open_sessions"`
 	Refs          int                                    `json:"refs"`
@@ -353,7 +356,7 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		Roots:                columnAssetLifecycleRootCounts(plan, opts, pinSummary),
 		SnapshotFence:        fence,
 		MappedResources:      plan.MappedResources,
-		PreparedPins:         pinSummary,
+		PinSets:              pinSummary,
 		Quarantine:           ColumnAssetLifecycleQuarantineSummary{RegistryAvailable: false},
 		Actions: ColumnAssetLifecycleActionSummary{
 			DestructiveActionsEnabled: false,
@@ -376,6 +379,20 @@ type columnAssetLifecycleReachabilityRefSets struct {
 	prepared      []ColumnAssetRef
 	preparedQuery []ColumnAssetRef
 	pinned        []ColumnAssetRef
+}
+
+func columnAssetLifecycleNamespace(c *Collection, refs []ColumnAssetRef) string {
+	if c != nil {
+		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil && cfg.AssetManager.Namespace != "" {
+			return cfg.AssetManager.Namespace
+		}
+	}
+	for _, ref := range refs {
+		if ref.Namespace != "" {
+			return ref.Namespace
+		}
+	}
+	return ""
 }
 
 func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins []columnAssetLifecyclePinSetRecord) columnAssetLifecycleReachabilityRefSets {
@@ -406,6 +423,7 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecycle
 		return nil
 	}
 	collectionName := c.meta.Name
+	namespace := columnAssetLifecycleNamespace(c, nil)
 	c.manager.columnLifecycleMu.Lock()
 	defer c.manager.columnLifecycleMu.Unlock()
 	if len(c.manager.columnLifecyclePins) == 0 {
@@ -413,12 +431,15 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecycle
 	}
 	out := make([]columnAssetLifecyclePinSetRecord, 0, len(c.manager.columnLifecyclePins))
 	for _, record := range c.manager.columnLifecyclePins {
-		if record.Collection != collectionName {
+		if record.Collection != collectionName || record.Namespace != namespace {
 			continue
 		}
 		record.Refs = append([]ColumnAssetRef(nil), record.Refs...)
 		out = append(out, record)
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
