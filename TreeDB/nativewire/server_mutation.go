@@ -1,6 +1,8 @@
 package nativewire
 
 import (
+	"bytes"
+
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -309,8 +311,8 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
-	s.metadataMu.Lock()
-	defer s.metadataMu.Unlock()
+	s.metadataMu.RLock()
+	defer s.metadataMu.RUnlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
 		return nil, err
 	}
@@ -352,18 +354,9 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err := s.admitMutationAck(ack); err != nil {
 		return nil, err
 	}
-	results, err := collection.UpdateBatch(updateBatchItems(ids, docs))
+	matched, modified, err := replaceBatchDocuments(collection, ids, docs)
 	if err != nil {
 		return nil, metadataWrap(err)
-	}
-	matched, modified := 0, 0
-	for _, result := range results {
-		if result.Matched {
-			matched++
-		}
-		if result.Modified {
-			modified++
-		}
 	}
 	actualAck, err := s.satisfyAck(collection, ack)
 	if err != nil {
@@ -374,6 +367,46 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 		responseMetaCount{key: "matched_count", value: matched},
 		responseMetaCount{key: "modified_count", value: modified},
 	)}, nil
+}
+
+func replaceBatchDocuments(collection *collections.Collection, ids, docs [][]byte) (int, int, error) {
+	if len(ids) == 1 && len(docs) == 1 {
+		doc := docs[0]
+		matched, modified, err := collection.Update(ids[0], func(current []byte) ([]byte, bool, error) {
+			if current == nil {
+				return nil, false, nil
+			}
+			if bytes.Equal(current, doc) {
+				return current, false, nil
+			}
+			return doc, true, nil
+		})
+		if err != nil {
+			return 0, 0, err
+		}
+		return boolCount(matched), boolCount(modified), nil
+	}
+	results, err := collection.UpdateBatch(updateBatchItems(ids, docs))
+	if err != nil {
+		return 0, 0, err
+	}
+	matched, modified := 0, 0
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+		if result.Modified {
+			modified++
+		}
+	}
+	return matched, modified, nil
+}
+
+func boolCount(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {

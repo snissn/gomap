@@ -112,7 +112,7 @@ type Server struct {
 	conns               map[net.Conn]struct{}
 	listeners           map[net.Listener]struct{}
 	locals              map[*localEndpoint]struct{}
-	metadataMu          sync.Mutex
+	metadataMu          sync.RWMutex
 	metadataIdempotency map[string]metadataIdempotencyEntry
 	metadataIdemOrder   []string
 
