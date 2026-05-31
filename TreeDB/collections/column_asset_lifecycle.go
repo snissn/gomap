@@ -158,7 +158,10 @@ func (c *Collection) AcquireColumnAssetLifecyclePinSet(opts ColumnAssetLifecycle
 		return nil, errors.New("collections: column asset lifecycle pin set owner is required")
 	}
 	refs := append([]ColumnAssetRef(nil), opts.Refs...)
-	collectionNamespace := columnAssetLifecycleNamespace(c, nil)
+	collectionNamespace := columnAssetLifecycleNamespace(c)
+	if collectionNamespace == "" {
+		return nil, errors.New("collections: column asset lifecycle pin set requires collection asset namespace")
+	}
 	var bytes int64
 	for _, ref := range refs {
 		if err := validateColumnAssetRefForPlan(ref); err != nil {
@@ -468,15 +471,10 @@ type columnAssetLifecycleReachabilityRefSets struct {
 	pinned        []ColumnAssetRef
 }
 
-func columnAssetLifecycleNamespace(c *Collection, refs []ColumnAssetRef) string {
+func columnAssetLifecycleNamespace(c *Collection) string {
 	if c != nil {
 		if cfg := c.meta.Options.ColumnStore; cfg != nil && cfg.AssetManager != nil && cfg.AssetManager.Namespace != "" {
 			return cfg.AssetManager.Namespace
-		}
-	}
-	for _, ref := range refs {
-		if ref.Namespace != "" {
-			return ref.Namespace
 		}
 	}
 	return ""
@@ -513,7 +511,7 @@ func (c *Collection) columnAssetLifecyclePinSetSnapshot() []columnAssetLifecycle
 	if dbID == 0 {
 		return nil
 	}
-	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c, nil)}
+	scope := columnAssetLifecyclePinScope{dbID: dbID, collection: c.meta.Name, namespace: columnAssetLifecycleNamespace(c)}
 	columnAssetLifecycleProcessPins.Lock()
 	defer columnAssetLifecycleProcessPins.Unlock()
 	if len(columnAssetLifecycleProcessPins.pins) == 0 {
