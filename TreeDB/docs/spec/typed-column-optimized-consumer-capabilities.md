@@ -1,0 +1,100 @@
+# Typed-Column Optimized-Consumer Capability Matrix (#2047)
+
+Status: pre-alpha column-store contract for optimized consumers. TreeDB typed-column
+on-disk formats, reader APIs, counters, and graph-search prepared views may still
+change. This document classifies the current logical/physical typed-column pairs
+by their highest committed optimized-consumer tier; it does not implement the
+prepared graph-search views (#2036), graph-search admission enforcement (#2044),
+or reusable direct-view certifier APIs (#2046).
+
+The matrix complements the semantic capability matrix in
+`typed-column-semantics.md`, the physical layout/codec contract in
+`typed-column-layout-capabilities.md`, and the aligned direct-view safety rules in
+`typed-column-direct-view-alignment.md`. The value log remains persistent storage;
+typed-column asset refs are durable typed-storage references, and Value-log
+pointers must not be described as transient or WAL-like storage.
+
+## Tier Vocabulary
+
+| Tier | Direct-view eligibility | Lifetime and ownership | Null/default/fallback behavior | Graph-search suitability | Required tests and benchmark evidence |
+| --- | --- | --- | --- | --- | --- |
+| `mmap_direct` | Open/prepare-time certified typed view over mmap/view-backed bytes, with little-endian, absolute-offset alignment, pointer-alignment, row-count, fixed-width or offsets/value bounds, checksum/read-integrity, and live-handle checks before use. | Borrowed view. The slice aliases mappedresource/read-session/searcher-owned bytes and is valid only until that handle/session/searcher is closed, evicted, or superseded by a newer immutable asset ref. Publishers must be authoritative typed-column owners such as `typed_column_part` or vector-index state. | Current direct rows require non-null, non-default, uncompressed assets. Nullable/default wrappers, compression, stale refs, or failed certification must fail closed or take an explicitly counted fallback; graph-search healthy paths must not silently downgrade. | Default requirement for healthy current-format graph-search hot/state paths under #2044. Per-candidate, per-edge, and per-score state should be admitted only at this tier unless a PR explicitly accepts a weaker tier with evidence. | Conformance must cover reopen/manifest identity, certification failures, wrong endian/length/alignment/null/default cases, stale-handle rejection, and counters such as `mmap_direct_view`, `vector_mmap_direct/search`, `adjacency_typed_list_mmap_direct/search`, and `norm_mmap_direct/search`. Benchmarks are required for tier upgrades or graph admission changes and must report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, memory residency, and tier counters. |
+| `heap_typed_view` | No zero-copy claim. Reader validates the asset at open/prepare time and copies into owned typed slices; steady-state consumers avoid per-query/per-row decode. | Owned by the prepared reader/searcher/session and released with it. The copy may outlive the mapped bytes but must remain tied to the immutable asset identity used to build it. | Null/default/compressed/fallback inputs are allowed only when a concrete reader defines the copied representation. Downgrades from `mmap_direct` must be counted as heap-copy fallbacks. | Not healthy graph-search hot-path state by default. #2044 may admit it only for a named type/role with memory and regression evidence. | Tests must prove copy identity, row-count and bounds validation, lifetime after source release when promised, and counters such as `heap_copy_typed_view` or type-specific heap-copy counters. Benchmark evidence must include setup/open cost, resident bytes, and steady-state `B/op`/`allocs/op`. |
+| `scratch_decode` | No reusable typed view contract. Values are decoded per access, per block, or per query into caller/session scratch. | Scratch belongs to the call, block iterator, or query session and cannot be retained as a stable view. | Safe fallback for compatibility only when the consumer explicitly permits it. Null/default handling must be composed by the decoder or fail closed. | Not acceptable for healthy graph-search traversal/scoring/result-state hot paths; useful only for old fixtures, diagnostics, or non-hot compatibility. | Tests must cover decoder correctness and fallback reason counters such as `scratch_decode` or `streaming_fallback`. Benchmarks are needed only when a PR claims scratch decode is acceptable for a measured consumer. |
+| `predicate_only` | May use prepared predicates, dictionary codes, stats, pruning, or streaming reducers, but does not publish a general typed view for traversal/scoring/materialization. | Predicate/reducer state is owned by the prepared scan/query plan and must not leak as a reusable graph/search view. | Null/default semantics must be explicit in predicate/reducer kernels; unsupported compositions fallback or fail closed instead of treating carrier zeros as values. | Not graph-search state unless a later issue defines a specialized non-traversal predicate role outside the healthy search loop. | Tests must cover the advertised predicate/reducer operations, unsupported/fallback reason codes, and no hidden full-document/materialization fallback. Hot predicate PRs require focused `B/op`/`allocs/op` evidence. |
+| `generic_only` | Correct typed-column storage/reconstruction exists, but no optimized view, predicate, or hot-consumer contract is committed. | The generic decoder/materializer owns returned values. Consumers must not retain raw backing bytes unless another row in this matrix admits them. | Generic reconstruction must preserve values and fail closed on unsupported wrappers or corrupt assets. | Not graph-search healthy-path state. A future graph/search PR must first upgrade the type/role in this matrix. | Existing storage/reconstruction conformance is enough until a PR advertises optimized use. New optimized use must add matrix rows, tests, counters, and benchmarks. |
+| `unsupported/experimental` | The type, encoding, or owner path exists only for legacy compatibility, experiments, or future design; optimized semantics are not committed. | No stable optimized lifetime/ownership contract. | Fallback or rejection must be explicit and counted when reachable. | Not graph-search healthy-path state. New graph-search use must be blocked by #2044 until reclassified. | Tests should assert fail-closed behavior or quarantine wording. Tier upgrades require new conformance and performance evidence. |
+
+## Global Admission Rules
+
+- The tier is the highest tier for the listed logical/physical/encoding pair when
+  the owner, null/default state, compression, endianness, row count, checksum,
+  and lifetime conditions in the row are satisfied. Wrappers or unsupported
+  owners lower the effective tier or fail closed.
+- Graph-search healthy-path use requires `mmap_direct` for all current-format
+  per-candidate, per-edge, and per-score state unless #2044 explicitly admits a
+  weaker tier with benchmark, allocation, and memory evidence. Result-side
+  channels such as row refs and document IDs may be touched only at the documented
+  result/materialization boundary.
+- Reusable direct-view certification and helper API work belongs to #2046. Rows
+  marked `mmap_direct` define the contract #2046 should certify; this PR does
+  not add new certifier implementation.
+- Adding a new `ColumnStoreValueType`, `typedcolumn.ColumnType`, or
+  `typedcolumn.Encoding` must update this document and the docs-lint coverage in
+  `TreeDB/docs/column_store_capability_matrix_test.go` before merge.
+
+## Optimized-Consumer Capability Matrix
+
+| Logical type | Physical typedcolumn type | Encoding/layout | Highest tier | Owners/roles allowed to publish | Null/default and invariants | Optimized consumers and graph-search use | Required tests, counters, and downstream gates |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `bool` | `bool` | `bool_bitpack_rle` | `predicate_only` | `typed_column_part` declared bool fields. | Nullable/default scalar wrappers use `nullable_int64` and lower to the nullable-wrapper row; bool bitpack/RLE has no dense typed slice view. | Bool equality/count predicates and bool-specific scan/reducer kernels only; not graph-search state. | Semantic/conformance tests for bool predicates and counts; no `mmap_direct` counter may be claimed. |
+| `int64` | `int64` | `delta_varint` | `predicate_only` | Default `typed_column_part` int64 fields. | Variable-width streaming codec; row-count and checksum validation required; nullable/default wrappers lower to the nullable-wrapper row. | Ordered predicates, aggregates, stats, and pruning through prepared scan/reducer contracts; not graph-search state. | Semantic/layout tests for streaming reducer, stats/pruning gates, and `streaming_fallback`/decode counters. |
+| `int64` | `int64` | `double_delta_varint` | `generic_only` | Low-level typedcolumn compatibility/experiments; not the collection adapter default. | Variable-width codec without current optimized collection-consumer contract. | Reconstruction/tooling only until a future PR defines semantics and performance evidence. Not graph-search state. | Any optimized use must add conformance, reason codes, and benchmarks before relying on this encoding. |
+| `int64` | `int64` | `raw_int64` | `mmap_direct` | Explicit little-endian `typed_column_part` int64 fields and vector-index `row_refs` state. | Non-null, non-default, uncompressed, little-endian 8-byte elements; exact `rows*8`; 8-byte absolute and pointer alignment; immutable row-count/schema/ref identity. | Generic int64 direct scans and graph-search row-ref side channels. Graph-search may use this for row refs/result document fetch under #2044/#2041, not traversal/scoring. | Reopen, alignment, stale-handle, checksum, and row-count tests; counters include `mmap_direct_view`, row-ref state counters (`row_ref_state_result_refs`, `document_row_ref_state_fetches`), and #2046 certifier coverage. |
+| nullable scalar wrappers | `int64` | `nullable_int64` | `predicate_only` | Nullable/default `bool`, `int64`, `float32`, `double`, and low-cardinality `string` scalar fields. | Null bitmap marks explicit null; default/missing bitmap marks absent values; value semantics require mask composition and must not treat carrier zeros as values. | Count/null predicates only unless a concrete value kernel composes masks. Not graph-search state. | Nullable semantics tests for count/null/value-fallback behavior and fail-closed unsupported predicate/aggregate paths. |
+| `float32` compatibility carrier | `int64` | `raw_int64` | `generic_only` | Legacy/default scalar `float32` reconstruction carriers. | Stores `math.Float32bits` in an int64 carrier; not a native float view, not ordered numeric semantics, and not graph-search inverse-norm state. | Reconstruction only; no float numeric predicate/aggregate/direct scalar claim. | Tests must reject raw-int64 float carriers as native scalar direct views and report `float_raw_int64_bit_pattern` fallback/rejection reasons. |
+| `double` compatibility carrier | `int64` | `raw_int64` | `generic_only` | Legacy/default scalar `double` reconstruction carriers. | Stores `math.Float64bits` in an int64 carrier; not a native double view, not ordered numeric semantics, and not graph-search state. | Reconstruction only; no double numeric predicate/aggregate/direct scalar claim. | Tests must reject raw-int64 double carriers as native scalar direct views and report `float_raw_int64_bit_pattern` fallback/rejection reasons. |
+| `float32` | `float32` | `raw_float32` | `mmap_direct` | Explicit little-endian `typed_column_part` scalar float fields and vector-index `inverse_norm` state. | Non-null, non-default, uncompressed, little-endian IEEE-754 4-byte elements; exact `rows*4`; 4-byte absolute/pointer alignment; preserves NaN payloads and signed zero. Float-domain range/aggregate semantics remain deferred. | Bit-preserving scalar payload views; graph-search may use this for inverse norms under #2044/#2040. Not a general float numeric predicate/aggregate contract. | Native float byte-order fixtures, raw-int64-carrier rejection tests, `norm_mmap_direct/search` or `norm_heap_copy_typed_view/search` counters, and #2046 certifier coverage. |
+| `double` | `float64` | `raw_float64` | `mmap_direct` | Explicit little-endian `typed_column_part` scalar double fields. | Non-null, non-default, uncompressed, little-endian IEEE-754 8-byte elements; exact `rows*8`; 8-byte alignment; preserves NaN payloads and signed zero. Float-domain range/aggregate semantics remain deferred. | Bit-preserving scalar payload views for non-graph consumers. No current graph-search role. | Native float64 byte-order fixtures and direct-view conformance; no graph-search counters unless a future issue admits a role. |
+| `string` | `low_cardinality_code` | `low_cardinality_uint32` | `predicate_only` | `typed_column_part` low-cardinality string fields and dictionary-code sidecars. | Dictionary identity, code bounds, and collation/order proof required for any lexical claim; nullable/default wrappers lower to the nullable-wrapper row. | Dictionary equality, in-list, and group-by predicates. Lexical range/prefix/pruning unsupported without order+collation proof. Not graph-search state. | Semantic tests for dictionary equality and unsupported lexical range/prefix reasons; dictionary-code direct sidecars must use their own sidecar contract, not this string row. |
+| `float32_vector` | `float32_vector` | `raw_float32_vector` | `mmap_direct` | Base `typed_column_part` vector fields; optional vector-index `normalized_vectors` state when explicitly admitted. | Non-null, non-default, uncompressed, little-endian row-major `float32`; exact `rows*dims*4`; fixed `vector_dims`; 4-byte alignment; row count and schema/ref identity must match the manifest. | Vector payload, similarity, dot-product, and vector metric consumers. Graph-search base-vector/scoring use is healthy only through #2044/#2040 admitted direct prepared views. | Dense vector direct-view tests, dimension/row-count/corruption failures, `vector_mmap_direct/search`, `vector_heap_copy_typed_view/search`, and #2046 certifier coverage. |
+| `uint32_list` | `uint32_list` | `raw_uint32_offsets_list` | `mmap_direct` | Generic list typed-column assets and vector-index `adjacency` state. | Non-null, non-default, uncompressed split sections: `offsets []uint64` length `rows+1`, `offsets[0]==0`, monotonic host-int-bounded offsets, final offset equals `values []uint32` count; offsets 8-byte and values 4-byte aligned. | Generic list length/payload views. Graph-search adjacency may use this as CSR-style HNSW state under #2044/#2038; graph ordinal/layer/deleted-row validation remains graph-owned. | Offsets/value validation, reopen/corruption, length-only-vs-value-integrity tests, `offsets_mmap_direct_view`, `values_mmap_direct_view`, `adjacency_typed_list_mmap_direct/search`, and #2046 certifier coverage. |
+| `bytes` | `bytes` | `raw_bytes_offsets` | `mmap_direct` | Generic opaque bytes typed-column assets and vector-index `document_ids` state. | Non-null, non-default, uncompressed split sections: `offsets []uint64` length `rows+1`, `offsets[0]==0`, monotonic host-int-bounded offsets, final offset equals values byte length; values are opaque and may be non-UTF-8. | Opaque bytes views and final result/document-ID materialization. Graph-search may use this for returned IDs/top-k materialization under #2044/#2041, not traversal/scoring. | Bytes offsets/value validation, corrupt-state fail-closed tests, `result_id_typed_bytes_state`, `result_id_state_validation_failures`, and #2046 certifier coverage. |
+| `adjacency_list` legacy dense | `adjacency_list` | `raw_uint32_dense` | `scratch_decode` | Legacy graph-specific compatibility assets only. | Fixed-degree dense graph layout is not the generic list primitive and is not a current direct-view target. | Old fixtures and diagnostics may decode it; new graph-search state must use `uint32_list` vector-index state. | Quarantine tests must keep new rebuilds from publishing this path; fallback counters must distinguish legacy dense use. |
+| `adjacency_list` legacy offsets compatibility | `adjacency_list` | `raw_uint32_offsets_list` | `unsupported/experimental` | Legacy/compatibility adapter path for old graph-specific adjacency sources; not for new optimized consumers. | The same offsets/value primitive mechanics exist, but this logical type is quarantined by #1989 and does not carry a target graph-search optimized-consumer contract. | Do not use for healthy graph search. New traversal state must be `uint32_list`/`raw_uint32_offsets_list`; #2044 should reject this row for healthy current-format search. | Quarantine/fail-closed tests; any future reclassification must update this matrix, #2044 admission, and #2046 certifier scope. |
+
+## Current Graph-Search Typed-Column Admission Baseline
+
+The parent #2035 prepared-view work treats the following roles as the current
+format. #2044 owns enforcement, but descendants should use this table as the
+stable generic column-store contract.
+
+| Graph-search state | Logical/encoding | Required tier for healthy path | Prepared runtime shape | Timing boundary and counters |
+| --- | --- | --- | --- | --- |
+| Base vectors | `float32_vector` / `raw_float32_vector` | `mmap_direct` | Row-major `[]float32` plus dimensions and optional ordinal-to-row mapping. | Per candidate/score; report `vector_mmap_direct/search`, heap-copy/scratch fallback counters, `B/op`, and `allocs/op`. |
+| HNSW adjacency | `uint32_list` / `raw_uint32_offsets_list` | `mmap_direct` | CSR-style `offsets []uint64` plus `values []uint32` per layer/asset. | Per edge/traversal; report `adjacency_typed_list_mmap_direct/search`, heap-copy/scratch fallback counters, candidates/search, and edges/search. |
+| Inverse norms | `float32` / `raw_float32` | `mmap_direct` | `[]float32` indexed by graph ordinal. | Per candidate/score for cosine; report `norm_mmap_direct/search` and fallback counters. |
+| Row refs | `int64` / `raw_int64` | `mmap_direct` | Packed/direct row-ref arrays for ordinal-to-base-row mapping. | Result/doc-fetch side channel; report row-ref state/fallback counters and keep traversal/scoring timing separate. |
+| Document IDs | `bytes` / `raw_bytes_offsets` | `mmap_direct` | Opaque byte offsets plus value bytes for final top-k returned IDs. | Final top-k/materialization only; report `result_id_typed_bytes_state`, graph fallback counters, and document-fetch timing separately. |
+
+Healthy graph-search use of weaker tiers is not forbidden forever, but it is not
+admitted by this generic matrix. A PR that wants `heap_typed_view`,
+`scratch_decode`, or another fallback in healthy graph-search state must update
+#2044 admission docs/tests and provide memory, allocation, and wall-time evidence
+showing why the weaker tier is acceptable.
+
+## Existing Low-Level Encoding Coverage
+
+This matrix intentionally mentions every current `ColumnStoreValueType`,
+`typedcolumn.ColumnType`, and `typedcolumn.Encoding` so docs lint fails when new
+typed-column storage surfaces are added without an optimized-consumer decision.
+Current logical value types covered: `bool`, `int64`, `float32`, `double`,
+`string`, `float32_vector`, `uint32_list`, `bytes`, and `adjacency_list`.
+Current physical typedcolumn types covered: `int64`, `low_cardinality_code`,
+`bool`, `float32`, `float64`, `float32_vector`, `uint32_list`, `bytes`, and
+`adjacency_list`.
+Current encodings covered: `raw_int64`, `delta_varint`,
+`double_delta_varint`, `nullable_int64`, `bool_bitpack_rle`,
+`low_cardinality_uint32`, `raw_float32_vector`, `raw_uint32_dense`,
+`raw_float32`, `raw_float64`, `raw_uint32_offsets_list`, and
+`raw_bytes_offsets`.

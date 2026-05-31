@@ -283,6 +283,7 @@ counters.
 | SIMD/vectorized dense-section kernels are follow-up optimization work. | [#1790](https://github.com/snissn/gomap/issues/1790) |
 | Row+column COW maintenance uses shared reachability and active mappedresource pin protection for typed assets; vector graph bytes remain derived, not authoritative. | [#1788](https://github.com/snissn/gomap/issues/1788), parent [#1736](https://github.com/snissn/gomap/issues/1736), [maintenance spec](../spec/typed-asset-maintenance-1788.md) |
 | Nullable/missing vector and adjacency typed-column support remains staged/fail-closed. | See typed-column adapter/spec caveats and follow-up roadmap. |
+| Graph-search prepared-view admission is tiered by generic typed-column optimized-consumer capability. | See [typed-column optimized-consumer capabilities](../spec/typed-column-optimized-consumer-capabilities.md); #2044 enforces graph-search admission and #2046 owns reusable direct-view certifiers. |
 
 ## Best practices
 
@@ -297,6 +298,10 @@ counters.
 - Treat vector-index `document_ids` bytes state as the healthy returned-ID
   source. Graph row ID bytes are compatibility fallback only and should be
   counted when used.
+- Treat healthy current-format graph-search state as requiring the `mmap_direct`
+  optimized-consumer tier from the typed-column capability matrix unless #2044
+  explicitly admits a weaker tier with benchmark, allocation, and memory
+  evidence.
 - Prefer reusable searchers for serving throughput; use one-shot APIs when you
   intentionally want setup/open included.
 - Run checkpoint/reopen demos when proving durable manifest/root discovery.

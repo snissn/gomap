@@ -10,7 +10,10 @@ little-endian scalar float payload encodings and shared fixed-width helpers.
 Issues #1896 and #1898 added reader consumption for generic typed-column paths
 and the column-graph typed-column vector source. The final issue #1899 evidence
 matrix and deferral closeout is recorded in
-`typed-column-direct-view-closeout-1899.md`.
+`typed-column-direct-view-closeout-1899.md`. The generic optimized-consumer tier
+matrix in `typed-column-optimized-consumer-capabilities.md` now owns the
+cross-type `mmap_direct`/fallback classification that graph-search admission
+(#2044) and reusable direct-view certifiers (#2046) consume.
 
 ## Scope and non-goals
 

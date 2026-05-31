@@ -80,6 +80,13 @@ Legacy graph row ID bytes remain compatibility or quarantine fallback records
 only for old physical graph row assets; current healthy rebuilds return IDs from
 TVIS `document_ids` bytes state.
 
+The optimized-consumer capability tier for each logical/encoding pair is owned by
+`typed-column-optimized-consumer-capabilities.md`. Healthy graph-search admission
+(#2044) should treat these TVIS roles as graph-search consumers of that matrix:
+base vectors, adjacency, inverse norms, row refs, and document IDs require
+`mmap_direct` unless a role-specific PR admits a weaker tier with benchmark and
+memory evidence.
+
 ## Validation and fail-closed behavior
 
 Opening/status validation must reject:

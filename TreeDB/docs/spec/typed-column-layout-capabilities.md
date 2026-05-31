@@ -9,6 +9,13 @@ counter vocabulary are specified in `typed-column-direct-view-alignment.md`. The
 stats envelope and payload contract is specified in `typed-column-stats.md`;
 durable pruning metadata is specified in `typed-column-pruning.md`.
 
+The optimized-consumer tier matrix in
+`typed-column-optimized-consumer-capabilities.md` classifies these layout facts
+into `mmap_direct`, `heap_typed_view`, `scratch_decode`, `predicate_only`,
+`generic_only`, and `unsupported/experimental` consumer contracts. This document
+remains the physical layout/codec source of truth for whether those tiers can be
+certified.
+
 The implementation lives in `TreeDB/internal/columnlayout`. Capability keys are
 not just encodings. A key includes:
 

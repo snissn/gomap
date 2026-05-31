@@ -4,6 +4,10 @@ Status: internal contract for current TreeDB typed-column planning. Capability
 resolution is a prepare-time decision; row/block hot loops dispatch to concrete
 scan/reducer code and must not call generic semantic interfaces per row.
 
+Optimized-consumer tier classification for the same logical/physical pairs lives
+in `typed-column-optimized-consumer-capabilities.md`; semantic support here does
+not by itself admit a type to graph-search healthy paths.
+
 The shared model lives in `TreeDB/internal/columnsemantics` and separates:
 
 - collection logical value type (`bool`, `int64`, `float32`, `double`, `string`,

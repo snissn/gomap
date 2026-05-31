@@ -196,6 +196,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     physical typedcolumn type, encoding, compression, and wrappers; documents
     optional raw int64, validation boundaries, direct-view eligibility metadata,
     and unsupported/fallback reason codes.
+- `TreeDB/docs/spec/typed-column-optimized-consumer-capabilities.md`
+  - issue #2047 optimized-consumer capability tier matrix for every current
+    typed-column logical/physical pair, including graph-search admission baseline
+    links for #2044 and direct-view certifier scope links for #2046.
 - `TreeDB/docs/spec/typed-column-direct-view-alignment.md`
   - issue #1893 aligned fixed-width direct-view safety contract, all-type/storage
     owner classification, absolute-offset alignment rule, fallback/deferred
@@ -263,9 +267,11 @@ recorded in `typed-column-adapter.md`, the #1758 closeout evidence/handoff is
 recorded in `typed-storage-closeout-1758.md`, and current typed-row plus
 typed-column maintenance behavior is recorded in
 `typed-asset-maintenance-1788.md`, typed-column schema/version evolution
-policy is owned by `typed-column-schema-evolution.md`, #1886 direct-view
-closeout evidence is owned by `typed-column-direct-view-closeout-1899.md`, and
-`uint32_list` adjacency quarantine/audit ownership is recorded in
+policy is owned by `typed-column-schema-evolution.md`, optimized-consumer tier
+classification is owned by `typed-column-optimized-consumer-capabilities.md`,
+#1886 direct-view closeout evidence is owned by
+`typed-column-direct-view-closeout-1899.md`, and `uint32_list` adjacency
+quarantine/audit ownership is recorded in
 `typed-column-uint32-list-adjacency-quarantine.md`; first-class
 `uint32_list` logical semantics are owned by
 `typed-column-uint32-list-semantics.md` until #1985 lands runtime primitive
