@@ -7552,6 +7552,264 @@ func TestBufferedPrimaryRunIndexFindsNewestTable(t *testing.T) {
 	}
 }
 
+func TestBufferedIndexedInsertMaintainsPrimaryRunIndexBeforeRead(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2"), []byte("u3")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+			[]byte(`{"email":"linus@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if !collectionHasBufferedPrimaryRunIndexForTest(t, col) {
+		t.Fatal("buffered indexed insert did not maintain primary run index before first read")
+	}
+
+	var rebuilds atomic.Int32
+	restore := setCollectionPrimaryRunIndexRebuildHookForTest(func(string, int, int) {
+		rebuilds.Add(1)
+	})
+	defer restore()
+	got, found, err := col.GetInto([]byte("u2"), nil)
+	if err != nil {
+		t.Fatalf("GetInto: %v", err)
+	}
+	if !found || !bytes.Equal(got, []byte(`{"email":"grace@example.com"}`)) {
+		t.Fatalf("GetInto found=%v value=%q want buffered u2", found, got)
+	}
+	if got := rebuilds.Load(); got != 0 {
+		t.Fatalf("primary run index was rebuilt on read path %d times; want eager maintenance", got)
+	}
+}
+
+func TestBufferedIndexedUpdateMaintainsPrimaryRunIndexBeforeRead(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","city":"hnl"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+
+	results, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			return []byte(`{"email":"ada@example.com","city":"lhr"}`), true, nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("UpdateBatch: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("UpdateBatch results=%+v want one matched modified", results)
+	}
+	if !collectionHasBufferedPrimaryRunIndexForTest(t, col) {
+		t.Fatal("buffered indexed update did not maintain primary run index before first read")
+	}
+
+	var rebuilds atomic.Int32
+	restore := setCollectionPrimaryRunIndexRebuildHookForTest(func(string, int, int) {
+		rebuilds.Add(1)
+	})
+	defer restore()
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("GetInto: %v", err)
+	}
+	if !found || !bytes.Equal(got, []byte(`{"email":"ada@example.com","city":"lhr"}`)) {
+		t.Fatalf("GetInto found=%v value=%q want updated buffered document", found, got)
+	}
+	if got := rebuilds.Load(); got != 0 {
+		t.Fatalf("primary run index was rebuilt on read path %d times; want eager maintenance", got)
+	}
+}
+
+func TestBufferedIndexedUpdateMaterializedOverlayEntersPrimaryRunIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"sfo","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update:     setJSONField("score", 1),
+	}}); err != nil {
+		t.Fatalf("primary-only UpdateBatch: %v", err)
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u2"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			var doc map[string]any
+			if err := json.Unmarshal(current, &doc); err != nil {
+				return nil, false, err
+			}
+			doc["city"] = "sea"
+			next, err := json.Marshal(doc)
+			return next, true, err
+		},
+	}}); err != nil {
+		t.Fatalf("secondary-changing UpdateBatch: %v", err)
+	}
+
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("GetInto u1: %v", err)
+	}
+	if !found || !bytes.Equal(got, []byte(`{"city":"hnl","score":1}`)) {
+		t.Fatalf("GetInto u1 found=%v value=%q want materialized overlay update", found, got)
+	}
+}
+
+func TestBufferedIndexedDeleteTombstoneSurvivesLaterPrimaryRunIndexEnable(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"sfo","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("u1")}); err != nil {
+		t.Fatalf("DeleteBatch: %v", err)
+	} else if deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d want 1", deleted)
+	}
+	if collectionHasBufferedPrimaryRunIndexForTest(t, col) {
+		t.Fatal("delete buffer unexpectedly left primary run index enabled")
+	}
+
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u2"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			var doc map[string]any
+			if err := json.Unmarshal(current, &doc); err != nil {
+				return nil, false, err
+			}
+			doc["city"] = "sea"
+			next, err := json.Marshal(doc)
+			return next, true, err
+		},
+	}}); err != nil {
+		t.Fatalf("secondary-changing UpdateBatch: %v", err)
+	}
+
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("GetInto deleted u1: %v", err)
+	}
+	if found || len(got) != 0 {
+		t.Fatalf("GetInto deleted u1 found=%v value=%q want missing tombstone", found, got)
+	}
+}
+
 func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	opts := CollectionOptions{
 		BufferedIndexedWriteMaxDocuments: 10,
@@ -14397,8 +14655,8 @@ func TestCollectionUpdateBatchBuildsPrimaryRunIndexForBufferedPlanning(t *testin
 	if !batched || len(first) != 1 || !first[0].Matched || !first[0].Modified {
 		t.Fatalf("first results=%+v batched=%v want one modified row", first, batched)
 	}
-	if collectionHasBufferedPrimaryRunIndexForTest(t, col) {
-		t.Fatal("primary run index was built before buffered read planning")
+	if !collectionHasBufferedPrimaryRunIndexForTest(t, col) {
+		t.Fatal("primary run index was not maintained while buffering first update")
 	}
 
 	sawBufferedUpdate := false
