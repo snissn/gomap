@@ -3109,10 +3109,7 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 		_ = snap.Close()
 		return nil, err
 	}
-	existingRuntimes, err := (insertBatchPlanner{
-		collection: baseMeta.Name,
-		indexes:    plannerIndexes(baseMeta.Indexes),
-	}).indexRuntimes()
+	existingRuntimes, err := catalog.cachedIndexRuntimes()
 	if err != nil {
 		_ = snap.Close()
 		return nil, err
@@ -8919,13 +8916,15 @@ func (c *Collection) insertBatchOnceWithLockState(
 		unlockIfLocked()
 	}
 
+	indexRuntimes, indexRuntimesErr := catalog.cachedIndexRuntimes()
 	planner := insertBatchPlanner{
-		collection:     meta.Name,
-		primaryRoot:    collectionPrimaryRootName(meta.Name),
-		templateRoot:   collectionTemplateRootName(meta.Name),
-		indexStateRoot: collectionIndexStateRootName(meta.Name),
-		indexes:        plannerIndexes(meta.Indexes),
-		options:        plannerOptions,
+		collection:             meta.Name,
+		primaryRoot:            catalog.primaryRootName,
+		templateRoot:           catalog.templateRootName,
+		indexStateRoot:         catalog.indexStateRootName,
+		cachedIndexRuntimes:    indexRuntimes,
+		cachedIndexRuntimesErr: indexRuntimesErr,
+		options:                plannerOptions,
 	}
 	if bufferIndexedInserts {
 		planner.buildPrimaryVal = clonePrimaryDocument
@@ -9235,7 +9234,7 @@ func insertBatchPlanRootNamesAndBaseIDs(plan *insertBatchPlan, catalog *collecti
 		return nil, nil
 	}
 	if direct := plan.directBufferedInsert; direct != nil && len(direct.rootNames) > 0 {
-		rootNames := append([]string(nil), direct.rootNames...)
+		rootNames := direct.rootNames
 		baseRootIDs := make(map[string]uint64, len(rootNames))
 		for _, rootName := range rootNames {
 			if catalog != nil {
@@ -9781,10 +9780,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 		return 0, nil
 	}
-	runtimes, err := (insertBatchPlanner{
-		collection: c.meta.Name,
-		indexes:    plannerIndexes(c.meta.Indexes),
-	}).indexRuntimes()
+	runtimes, err := catalog.cachedIndexRuntimes()
 	if err != nil {
 		_ = snap.Close()
 		return 0, err
@@ -10057,10 +10053,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 		}
 		return false, nil
 	}
-	runtimes, err := (insertBatchPlanner{
-		collection: c.meta.Name,
-		indexes:    plannerIndexes(c.meta.Indexes),
-	}).indexRuntimes()
+	runtimes, err := catalog.cachedIndexRuntimes()
 	if err != nil {
 		_ = snap.Close()
 		return false, err
@@ -12539,10 +12532,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	}
 	primaryRoot := catalog.rootID(primaryRootName)
 
-	runtimes, err := (insertBatchPlanner{
-		collection: c.meta.Name,
-		indexes:    plannerIndexes(c.meta.Indexes),
-	}).indexRuntimes()
+	runtimes, err := catalog.cachedIndexRuntimes()
 	if err != nil {
 		_ = snap.Close()
 		return false, false, err
@@ -19547,6 +19537,18 @@ func uniqueIndexRootIDs(catalog *collectionCatalog) map[string]uint64 {
 		return nil
 	}
 	out := make(map[string]uint64)
+	if runtimes, err := catalog.cachedIndexRuntimes(); err == nil && len(runtimes) > 0 {
+		for _, runtime := range runtimes {
+			if !runtime.def.unique {
+				continue
+			}
+			rootID := catalog.rootID(runtimeSecondaryRootName(catalog.meta.Name, runtime))
+			if rootID != 0 {
+				out[runtime.def.name] = rootID
+			}
+		}
+		return out
+	}
 	for _, idx := range catalog.meta.Indexes {
 		if !idx.Unique {
 			continue

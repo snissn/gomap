@@ -79,6 +79,8 @@ type insertBatchPlanner struct {
 	templateRoot           string
 	indexStateRoot         string
 	indexes                []indexDefinition
+	cachedIndexRuntimes    []indexRuntime
+	cachedIndexRuntimesErr error
 	options                collectionOptions
 	buildPrimaryVal        func(documentID, document []byte) ([]byte, error)
 	cloneTemplateRunValues bool
@@ -204,7 +206,11 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 		p.templateRoot = p.collection + "/templates"
 	}
 	persistIndexState := persistIndexStateForOptions(p.options)
-	if len(p.indexes) > 0 && persistIndexState && p.indexStateRoot == "" {
+	runtimes, err := p.indexRuntimes()
+	if err != nil {
+		return nil, err
+	}
+	if len(runtimes) > 0 && persistIndexState && p.indexStateRoot == "" {
 		p.indexStateRoot = p.collection + "/index-state"
 	}
 	if p.buildPrimaryVal == nil {
@@ -212,7 +218,7 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 	stats := CollectionInsertStats{
 		Documents: len(documents),
-		Indexes:   len(p.indexes),
+		Indexes:   len(runtimes),
 	}
 	phaseStart := time.Now()
 	preparedDocuments, templateRecords, templateLearned, templateResolver, err := prepareInsertDocuments(documents, p.options)
@@ -249,10 +255,6 @@ func (p insertBatchPlanner) planInsertBatchWithPreflight(ids, documents [][]byte
 	}
 	stats.DuplicateDocumentPreflight = time.Since(phaseStart)
 
-	runtimes, err := p.indexRuntimes()
-	if err != nil {
-		return nil, err
-	}
 	phaseStart = time.Now()
 	uniqueProbes, err := p.planIndexStateAndUniqueProbes(items, runtimes)
 	stats.IndexStateExtraction = time.Since(phaseStart)
@@ -544,6 +546,9 @@ func rejectDuplicateDocumentIDs(items []insertBatchItem, order []int) error {
 }
 
 func (p insertBatchPlanner) indexRuntimes() ([]indexRuntime, error) {
+	if p.cachedIndexRuntimes != nil || p.cachedIndexRuntimesErr != nil {
+		return p.cachedIndexRuntimes, p.cachedIndexRuntimesErr
+	}
 	runtimes := make([]indexRuntime, len(p.indexes))
 	seen := make(map[string]struct{}, len(p.indexes))
 	for i, idx := range p.indexes {
@@ -773,10 +778,22 @@ func (p insertBatchPlanner) emitTemplateRun(plan *insertBatchPlan, records []tem
 }
 
 func (p insertBatchPlanner) buildDirectBufferedInsertPlan(plan *insertBatchPlan, items []insertBatchItem, primaryOrder []int, runtimes []indexRuntime, persistIndexState bool, templateRecords []templateV1Record) error {
+	rootCap := 1
+	if len(templateRecords) > 0 {
+		rootCap++
+	}
+	if len(runtimes) > 0 {
+		if persistIndexState {
+			rootCap++
+		}
+		rootCap += len(runtimes)
+	}
 	direct := &directBufferedInsertPlan{
 		templateRootName:   p.templateRoot,
 		primaryRootName:    p.primaryRoot,
 		indexStateRootName: p.indexStateRoot,
+		rootNames:          make([]string, 0, rootCap),
+		policies:           make([]backenddb.OrderedRootStoragePolicy, 0, rootCap),
 	}
 	if len(templateRecords) > 0 {
 		phaseStart := time.Now()

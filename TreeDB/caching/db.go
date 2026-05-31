@@ -6406,6 +6406,9 @@ type Options struct {
 	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
 	DisableReadChecksum bool
+	// ValueLogCurrentWritableMmap enables mmap-backed reads for current writable
+	// value-log segments.
+	ValueLogCurrentWritableMmap bool
 	// AllowUnsafe acknowledges unsafe durability options.
 	// When false, Open will reject DisableWAL or RelaxedSync.
 	AllowUnsafe bool
@@ -9326,6 +9329,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
+	reader.SetCurrentWritableMmapEnabled(opts.ValueLogCurrentWritableMmap)
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
