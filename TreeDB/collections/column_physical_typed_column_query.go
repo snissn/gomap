@@ -198,7 +198,7 @@ func runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view columnPhysica
 }
 
 func runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
-	if !columnTypedColumnPhysicalQueryUseDenseLatestVisible(plan, req) {
+	if !columnTypedColumnPhysicalQueryUseDenseLatestVisible(plan, req) && columnPhysicalQueryHasPredicates(req) {
 		return runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view, req, start)
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
@@ -258,7 +258,7 @@ func runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view colum
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
-	result, err := runner.runLatestVisibleDense(view, req, state, visibilityDiag.PhysicalBytesScanned, visibilityNanos)
+	result, err := runner.runLatestVisible(view, req, state, visibilityDiag.PhysicalBytesScanned, visibilityNanos)
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	result.Diagnostics.SegmentFileCacheHits = readCache.hits
 	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
@@ -792,7 +792,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	return result, nil
 }
 
-func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDense(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisible(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
 	if columnTypedColumnPhysicalQueryUseDenseGroupCount(r.plan, req) {
 		return r.runLatestVisibleDenseGroupCount(view, req, state, visibilityBytes, visibilityNanos)
 	}
@@ -801,6 +801,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDense(view column
 	}
 	if columnTypedColumnPhysicalQueryUseDenseInt64Span(r.plan, req) {
 		return r.runLatestVisibleDenseInt64Span(view, req, state, visibilityBytes, visibilityNanos)
+	}
+	if !columnPhysicalQueryHasPredicates(req) {
+		return r.runLatestVisibleGeneric(view, req, state, visibilityBytes, visibilityNanos)
 	}
 	result := ColumnPhysicalQueryResult{Diagnostics: r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, 0, 0, 0, 0)}
 	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
@@ -825,6 +828,43 @@ func (r *columnTypedColumnPhysicalQueryRunner) latestVisibleDiagnostics(view col
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, scanNanos)
 	applyTypedColumnLatestVisibilityDiagnostics(&diag, state, visibilityBytes, visibilityNanos)
 	return diag
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleGeneric(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	acc := newColumnTypedColumnPhysicalQueryAccumulator(req.Kind)
+	rowsScanned := 0
+	for partIdx := range r.parts {
+		part := r.parts[partIdx]
+		visibility, err := r.latestVisiblePartForRunnerPart(part, state)
+		if err != nil {
+			return ColumnPhysicalQueryResult{Diagnostics: r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, acc.reduceRows, time.Since(start).Nanoseconds())}, err
+		}
+		partRows := len(part.RowIndexes)
+		if part.RowIndexes == nil {
+			partRows = part.Rows
+		}
+		for rowIdx := 0; rowIdx < partRows; rowIdx++ {
+			physicalRow := rowIdx
+			if part.RowIndexes != nil {
+				physicalRow = part.RowIndexes[rowIdx]
+			}
+			rowsScanned++
+			if !visibility.rowVisible(physicalRow) {
+				continue
+			}
+			if err := acc.visit(req, part.Values, rowIdx); err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, acc.reduceRows, time.Since(start).Nanoseconds())}, err
+			}
+		}
+	}
+	groups := acc.groups(req, r.resultGroups)
+	r.resultGroups = groups
+	diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, acc.reduceRows, time.Since(start).Nanoseconds())
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseGroupCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {

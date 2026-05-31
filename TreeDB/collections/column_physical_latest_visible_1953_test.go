@@ -142,6 +142,43 @@ func TestColumnPhysicalQ5DenseLatestVisibleMutation1953(t *testing.T) {
 	assertPreparedMutationFailsClosed1953(t, col, req)
 }
 
+func TestColumnPhysicalNonDenseNoPredicateMutationUsesTypedLatestVisible1953(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{{
+		{ID: "a1", TimeUS: 100, Kind: "commit", Operation: "create", Collection: "app.test", Did: "did:a"},
+		{ID: "b1", TimeUS: 200, Kind: "commit", Operation: "create", Collection: "app.test", Did: "did:b"},
+		{ID: "c1", TimeUS: 50, Kind: "commit", Operation: "create", Collection: "app.test", Did: "did:c"},
+	}, {
+		{ID: "a2", TimeUS: 90, Kind: "commit", Operation: "create", Collection: "app.test", Did: "did:a"},
+		{ID: "b2", TimeUS: 210, Kind: "commit", Operation: "create", Collection: "app.test", Did: "did:b"},
+	}}
+	_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
+	defer closeFn()
+	events := flattenColumnPhysicalEvents1950(batches)
+	latest := latestEventMap1953(events)
+	updated := latest["a1"]
+	updated.TimeUS = 80
+	updateTypedColumnEvent1953(t, col, updated)
+	latest[updated.ID] = updated
+	deleteTypedColumnEvent1953(t, col, "c1")
+	delete(latest, "c1")
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupMinInt64, GroupColumn: "did", ValueColumn: "time_us"}
+	result, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(non-dense no-predicate latest-visible): %v", err)
+	}
+	if got, want := columnPhysicalGroupInt64Map1953(result.Groups), didMinTimes1953(latestEvents1953(latest)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("non-dense visibility overlay groups=%v want %v full=%+v", got, want, result.Groups)
+	}
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		t.Fatalf("non-dense diagnostics=%+v want typed-column latest-visible path", result.Diagnostics)
+	}
+	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.VisibilityRows != len(latest) || result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentMaterializations != 0 {
+		t.Fatalf("non-dense visibility diagnostics=%+v want latest-visible typed-column merge without document materialization", result.Diagnostics)
+	}
+	assertPreparedMutationFailsClosed1953(t, col, req)
+}
+
 func TestColumnPhysicalSortedMutationShapesStillFailClosed1953(t *testing.T) {
 	t.Run("q2", func(t *testing.T) {
 		batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
@@ -412,6 +449,25 @@ func columnPhysicalGroupCountMap1953(groups []ColumnPhysicalQueryGroup) map[stri
 	out := make(map[string]int, len(groups))
 	for _, group := range groups {
 		out[group.Key] = group.Count
+	}
+	return out
+}
+
+func columnPhysicalGroupInt64Map1953(groups []ColumnPhysicalQueryGroup) map[string]int64 {
+	out := make(map[string]int64, len(groups))
+	for _, group := range groups {
+		out[group.Key] = group.Int64
+	}
+	return out
+}
+
+func didMinTimes1953(events []columnPhysicalJSONBenchParityEventP0) map[string]int64 {
+	out := make(map[string]int64)
+	for _, event := range events {
+		cur, ok := out[event.Did]
+		if !ok || event.TimeUS < cur {
+			out[event.Did] = event.TimeUS
+		}
 	}
 	return out
 }
