@@ -128,10 +128,6 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
-	stats.AssetsPublished = len(prepared.Assets)
-	stats.AggregateMetadataPublished = columnStoreCompactionAggregateMetadataAssets(prepared.Assets)
-	stats.PublishedRefs = columnStoreCompactionPreparedRefs(prepared.Assets)
-
 	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
 		Collection:        state.meta.Name,
 		ColumnStore:       state.cfg,
@@ -180,6 +176,9 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
 		return stats, unexpectedOrderedRootCountError(state.meta.Name, 1, len(rootIDs))
 	}
+	stats.AssetsPublished = len(prepared.Assets)
+	stats.AggregateMetadataPublished = columnStoreCompactionAggregateMetadataAssets(prepared.Assets)
+	stats.PublishedRefs = columnStoreCompactionPreparedRefs(prepared.Assets)
 	stats.Compacted = true
 	stats.ManifestRoot = rootIDs[0]
 	stats.SystemRoot = newSystemRoot
