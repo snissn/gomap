@@ -205,18 +205,24 @@ func (c *Client) ReplaceBatch(ctx context.Context, collection string, format col
 		c.clearCatalogVersionOnMismatch(err)
 		return 0, 0, err
 	}
+	return c.replaceBatchCountsFromResponse(sections)
+}
+
+func (c *Client) replaceBatchCountsFromResponse(sections []iwire.Section) (int, int, error) {
 	fields, err := responseMetaFieldsFromSections(sections, "matched_count", "modified_count")
 	if err != nil {
 		c.clearCatalogVersionAfterOpaqueMutation()
 		return 0, 0, err
 	}
-	c.updateCatalogVersionFromResponseMetaFields(fields)
 	if !fields.hasCount1 {
+		c.clearCatalogVersionAfterOpaqueMutation()
 		return 0, 0, protocolError(iwire.ErrMalformedFrame, "response_meta missing matched_count")
 	}
 	if !fields.hasCount2 {
+		c.clearCatalogVersionAfterOpaqueMutation()
 		return 0, 0, protocolError(iwire.ErrMalformedFrame, "response_meta missing modified_count")
 	}
+	c.updateCatalogVersionFromResponseMetaFields(fields)
 	return fields.count1, fields.count2, nil
 }
 
@@ -237,15 +243,20 @@ func (c *Client) DeleteBatch(ctx context.Context, collection string, ids [][]byt
 		c.clearCatalogVersionOnMismatch(err)
 		return 0, err
 	}
+	return c.deleteBatchCountFromResponse(sections)
+}
+
+func (c *Client) deleteBatchCountFromResponse(sections []iwire.Section) (int, error) {
 	fields, err := responseMetaFieldsFromSections(sections, "deleted_count", "")
 	if err != nil {
 		c.clearCatalogVersionAfterOpaqueMutation()
 		return 0, err
 	}
-	c.updateCatalogVersionFromResponseMetaFields(fields)
 	if !fields.hasCount1 {
+		c.clearCatalogVersionAfterOpaqueMutation()
 		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta missing deleted_count")
 	}
+	c.updateCatalogVersionFromResponseMetaFields(fields)
 	return fields.count1, nil
 }
 

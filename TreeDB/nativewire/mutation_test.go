@@ -1252,6 +1252,35 @@ func TestMutationCatalogVersionCacheClearsAfterMismatch(t *testing.T) {
 	}
 }
 
+func TestMutationMissingResponseCountsClearCatalogVersionCache(t *testing.T) {
+	client := &Client{}
+	replaceSections := []iwire.Section{{
+		ID: iwire.SectionResponseMeta,
+		Bytes: appendAckMetaPayloadVersion(nil, AckVisible, 42, true,
+			responseMetaCount{key: "matched_count", value: 1},
+		),
+	}}
+	client.catalogVersionPlusOne.Store(99)
+	if _, _, err := client.replaceBatchCountsFromResponse(replaceSections); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("replace count validation err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+	if got := client.catalogVersionPlusOne.Load(); got != 0 {
+		t.Fatalf("replace catalogVersionPlusOne=%d want cleared", got)
+	}
+
+	deleteSections := []iwire.Section{{
+		ID:    iwire.SectionResponseMeta,
+		Bytes: appendAckMetaPayloadVersion(nil, AckVisible, 42, true),
+	}}
+	client.catalogVersionPlusOne.Store(99)
+	if _, err := client.deleteBatchCountFromResponse(deleteSections); nativeCodeOf(err) != iwire.ErrMalformedFrame {
+		t.Fatalf("delete count validation err=%v code=%d want malformed", err, nativeCodeOf(err))
+	}
+	if got := client.catalogVersionPlusOne.Load(); got != 0 {
+		t.Fatalf("delete catalogVersionPlusOne=%d want cleared", got)
+	}
+}
+
 func TestResponseCountRequiresKey(t *testing.T) {
 	_, err := responseCount([]iwire.Section{ackMeta(AckVisible)}, "deleted_count")
 	if nativeCodeOf(err) != iwire.ErrMalformedFrame {
