@@ -802,6 +802,22 @@ Coverage:
   owner/value-type/vector-dim/fixed-width metadata mismatch, and manifest
   identity/ref mismatch in the package that owns the changed decoder.
 
+## 12.6 Typed-Column Optimized-Consumer Capability Matrix
+
+Invariant:
+- Every current collection logical value type constant, `typedcolumn.ColumnType`,
+  and `typedcolumn.Encoding` has an optimized-consumer tier entry or explicit
+  compatibility/experimental classification.
+- Graph-search-relevant typed-column state points to the generic tier matrix,
+  with healthy current-format graph search requiring `mmap_direct` unless #2044
+  admits a weaker tier with benchmark, allocation, and memory evidence.
+
+Coverage:
+- Policy owner: `TreeDB/docs/spec/typed-column-optimized-consumer-capabilities.md`.
+- Docs lint: `TreeDB/docs/column_store_capability_matrix_test.go` fails when a
+  new logical type, physical type, or encoding is added without matrix coverage,
+  or when graph-search-relevant rows lose #2044/#2046 links.
+
 ## 13. Native Wire Protocol
 
 Invariant:
