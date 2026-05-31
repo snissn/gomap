@@ -2,8 +2,14 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T) {
@@ -55,11 +61,15 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 2), true)
-	if got.Stats.RowRefVectorSourceState != 1 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.RowRefStateResultRefs != uint64(len(got.Results)) {
-		_ = d.Close()
-		t.Fatalf("stats=%+v want row-ref vector/result source", got.Stats)
+	wantMmapDirectFields := uint64(len(columnVectorGraphRowRefStateFields))
+	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		wantMmapDirectFields = 0
 	}
-	if got.Stats.ResultIDTypedBytesState != uint64(len(got.Results)) || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
+	if got.Stats.RowRefVectorSourceState != 1 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.RowRefStatePreparedViews != 1 || got.Stats.RowRefStateMmapDirectFields != wantMmapDirectFields || got.Stats.RowRefStateResultRefs != uint64(len(got.Results)) {
+		_ = d.Close()
+		t.Fatalf("stats=%+v want prepared row-ref vector/result source with mmap_direct_fields=%d", got.Stats, wantMmapDirectFields)
+	}
+	if got.Stats.ResultIDPreparedBytesViews != 1 || got.Stats.ResultIDTypedBytesState != uint64(len(got.Results)) || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
 		_ = d.Close()
 		t.Fatalf("stats=%+v want typed bytes result IDs without graph fallback", got.Stats)
 	}
@@ -86,8 +96,119 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 		t.Fatalf("SearchVectorIndex reopen: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, reopenedGot, def.Name, 2)
-	if reopenedGot.Stats.RowRefVectorSourceState != 1 || reopenedGot.Stats.RowRefStateResultRefs != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDTypedBytesState != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDGraphFallbacks != 0 {
-		t.Fatalf("reopen stats=%+v want durable row-ref source plus typed bytes result IDs", reopenedGot.Stats)
+	if reopenedGot.Stats.RowRefVectorSourceState != 1 || reopenedGot.Stats.RowRefStatePreparedViews != 1 || reopenedGot.Stats.RowRefStateMmapDirectFields != wantMmapDirectFields || reopenedGot.Stats.RowRefStateResultRefs != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDPreparedBytesViews != 1 || reopenedGot.Stats.ResultIDTypedBytesState != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("reopen stats=%+v want durable prepared row-ref source plus typed bytes result IDs with mmap_direct_fields=%d", reopenedGot.Stats, wantMmapDirectFields)
+	}
+}
+
+func TestColumnVectorGraphRowRefStateCorruptFieldRejected2041(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, _, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	graph := graphManifestFromRecords1918(t, records, def)
+	assets, found, err := columnVectorGraphRowRefStateAssetsByField(state)
+	if err != nil || !found {
+		t.Fatalf("row-ref assets found=%t err=%v", found, err)
+	}
+	asset := assets[columnVectorGraphRowRefStateFieldRowIndex]
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatalf("read row-ref asset: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	section, err := columnVectorGraphRowRefStateSection(image, columnVectorGraphRowRefStateColumnName(columnVectorGraphRowRefStateFieldRowIndex))
+	if err != nil {
+		t.Fatalf("row-ref section: %v", err)
+	}
+	baseRows, err := columnVectorGraphRowRefBasePartRows(records, graph.BaseManifestGeneration, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("base part rows: %v", err)
+	}
+	outOfBoundsRow := 0
+	for _, rows := range baseRows {
+		if rows > outOfBoundsRow {
+			outOfBoundsRow = rows
+		}
+	}
+	corrupt := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint64(corrupt[section.Offset:], uint64(outOfBoundsRow))
+	badAsset := asset
+	badAsset.Ref.Checksum = page.Checksum(corrupt)
+	badState := replaceColumnVectorIndexStateAssetForTest2041(t, state, badAsset)
+	writeColumnVectorGraphAssetRawForTest2041(t, d.ColumnAssetRootDir(), asset.Ref, corrupt)
+	if _, err := newColumnVectorGraphRowRefStateSourceFromRoot(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, badState, records); err == nil || (!strings.Contains(err.Error(), "outside base rows") && !strings.Contains(err.Error(), "layout certification") && !strings.Contains(err.Error(), "checksum")) {
+		t.Fatalf("row-ref corrupt field err=%v, want field validation rejection", err)
+	}
+}
+
+func TestColumnVectorGraphRowRefStateHeapCopyFallback2041(t *testing.T) {
+	const rows = 2
+	raw := make([]byte, rows*8)
+	binary.LittleEndian.PutUint64(raw[0:], 7)
+	binary.LittleEndian.PutUint64(raw[8:], 11)
+	manager := mappedresource.NewManager()
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: string(ColumnAssetKindTCS1TypedColumnPart), Generation: 1, PartID: 2, FileID: 3, Length: int64(len(raw)), Encoding: typedcolumn.EncodingRawInt64.String()}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "row-ref-heap-fallback", Namespace: "test", Generation: 1}
+	handle, err := manager.AcquireBytes(key, scope, mappedresource.SourceHeapCopy, raw, mappedresource.AcquireOptions{Reason: "row-ref heap fallback test"})
+	if err != nil {
+		t.Fatalf("AcquireBytes: %v", err)
+	}
+	expectation := columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleRowRefs, columnVectorIndexStateAssetRoleRowRefs, columnVectorGraphRowRefStateColumnName(columnVectorGraphRowRefStateFieldRowIndex), rows, ColumnAssetRef{Namespace: "test", Kind: ColumnAssetKindTCS1TypedColumnPart, Generation: 1, PartID: 2, FileID: 3})
+	view, err := columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation, manager, handle, rows, typeddecode.StreamingStatus(typeddecode.ReasonHandleSourceUnsupported, "heap fallback test"))
+	if err != nil {
+		_ = handle.Release()
+		t.Fatalf("fallback view: %v", err)
+	}
+	if !view.Alive() || view.Handle.Source() != mappedresource.SourceHeapCopy {
+		_ = view.Close()
+		t.Fatalf("view alive=%t source=%s want heap-copy prepared view", view.Alive(), view.Handle.Source())
+	}
+	if got, ok := view.Value(1); !ok || got != 11 {
+		_ = view.Close()
+		t.Fatalf("view.Value(1)=%d ok=%t want 11", got, ok)
+	}
+	if err := view.Close(); err != nil {
+		t.Fatalf("view close: %v", err)
+	}
+}
+
+func TestColumnVectorGraphRowRefStateMmapDirectFieldCountTracksCertification2041(t *testing.T) {
+	raw := make([]byte, 8)
+	manager := mappedresource.NewManager()
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: string(ColumnAssetKindTCS1TypedColumnPart), Generation: 1, PartID: 2, FileID: 3, Length: int64(len(raw)), Encoding: typedcolumn.EncodingRawInt64.String()}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "row-ref-mmap-count", Namespace: "test", Generation: 1}
+	handle, err := manager.AcquireBytes(key, scope, mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "row-ref mmap count test"})
+	if err != nil {
+		t.Fatalf("AcquireBytes: %v", err)
+	}
+	view := typeddecode.PreparedInt64DirectView{Rows: 1, Values: []int64{42}, Handle: handle}
+	source := &columnVectorGraphRowRefStateSource{rows: 1, generations: view, partIDs: view, rowIndexes: view, appliedCommandLSNs: view}
+	if got := source.mmapDirectFieldCount(); got != 0 {
+		_ = source.Close()
+		t.Fatalf("mmapDirectFieldCount=%d want 0 for fallback values retained behind a mapped handle", got)
+	}
+	source.mmapDirectFields = 3
+	if got := source.mmapDirectFieldCount(); got != 3 {
+		_ = source.Close()
+		t.Fatalf("mmapDirectFieldCount=%d want explicit certification count 3", got)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("source close: %v", err)
 	}
 }
 
@@ -116,9 +237,9 @@ func TestColumnVectorGraphRowRefStatePreservesOpaqueResultIDs1993(t *testing.T) 
 		_ = d.Close()
 		t.Fatalf("result id=%v want exact opaque bytes %v", got.Results, id)
 	}
-	if got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.RowRefVectorSourceState != 1 {
+	if got.Stats.ResultIDPreparedBytesViews != 1 || got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.RowRefVectorSourceState != 1 || got.Stats.RowRefStatePreparedViews != 1 {
 		_ = d.Close()
-		t.Fatalf("stats=%+v want row-ref state for locators and typed bytes state for opaque returned ID", got.Stats)
+		t.Fatalf("stats=%+v want prepared row-ref state for locators and typed bytes state for opaque returned ID", got.Stats)
 	}
 	_ = d.Close()
 }
@@ -173,8 +294,9 @@ func TestColumnVectorGraphRowRefStateValidationFailures1993(t *testing.T) {
 		var key documentRowPartKey
 		var baseRowCount int
 		for candidate, rows := range baseRows {
-			key, baseRowCount = candidate, rows
-			break
+			if rows > baseRowCount {
+				key, baseRowCount = candidate, rows
+			}
 		}
 		ref := DocumentRowRef{Generation: key.Generation, PartID: key.PartID, RowIndex: baseRowCount, AppliedCommandLSN: 1}
 		if err := validateColumnVectorGraphRowRefStateBounds(def.Name, 0, ref, baseRows); err == nil || !strings.Contains(err.Error(), "outside base rows") {
