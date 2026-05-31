@@ -39,11 +39,13 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 
 	logDebug("handleCreateCollection: creating collection with dataPolicy=%s indexPolicy=%s", meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy)
 
+	before, beforeOK := s.catalogMetadataFingerprint()
 	created, err := s.collections.CreateCollection(&meta)
 	if err != nil {
 		logDebug("handleCreateCollection: CreateCollection failed: %v", err)
 		return nil, metadataWrap(err)
 	}
+	s.bumpCatalogVersionIfCatalogMetadataChanged(before, beforeOK)
 	logDebug("handleCreateCollection: CreateCollection success")
 	return remember([]iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(*created)}}), nil
 }
@@ -97,10 +99,12 @@ func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) (
 			return nil, protocolError(iwire.ErrInvalidCommand, "duplicate index %q", def.Name)
 		}
 	}
+	before, beforeOK := s.catalogMetadataFingerprint()
 	meta, err := collection.CreateIndex(def)
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	s.bumpCatalogVersionIfCatalogMetadataChanged(before, beforeOK)
 	if state != nil {
 		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}
@@ -145,10 +149,12 @@ func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	before, beforeOK := s.catalogMetadataFingerprint()
 	meta, err := collection.DropIndex(indexName)
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
+	s.bumpCatalogVersionIfCatalogMetadataChanged(before, beforeOK)
 	if state != nil {
 		state.cacheCollection(name, collection, s.maxCachedCollections)
 	}

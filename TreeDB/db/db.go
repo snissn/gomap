@@ -2514,10 +2514,12 @@ func (db *DB) Prune() {
 	idx.acquire()
 	defer db.releaseIndex(idx)
 
-	min := idx.registry.MinPinnedSeq()
-	db.mu.RLock()
-	current := db.meta.CommitSeq
-	db.mu.RUnlock()
+	min := db.MinPinnedSnapshotCommitSeq()
+	state := db.state.Load()
+	if state == nil {
+		return
+	}
+	current := state.CommitSeq
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 

@@ -1,12 +1,14 @@
 package nativewire
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -788,20 +790,40 @@ func expectedCatalogVersionFromSections(sections []iwire.Section) (uint64, bool,
 	return version, true, nil
 }
 
+func initialCatalogVersion(db *backenddb.DB) uint64 {
+	if db == nil {
+		return 0
+	}
+	state := db.State()
+	if state == nil {
+		return 0
+	}
+	return state.CommitSeq
+}
+
+func (s *Server) catalogMetadataFingerprint() ([]byte, bool) {
+	if s == nil || s.collections == nil {
+		return nil, false
+	}
+	metas, err := s.collections.ListCollections()
+	if err != nil {
+		return nil, false
+	}
+	return encodeCollectionMetaVector(metas), true
+}
+
+func (s *Server) bumpCatalogVersionIfCatalogMetadataChanged(before []byte, beforeOK bool) {
+	after, afterOK := s.catalogMetadataFingerprint()
+	if !beforeOK || !afterOK || !bytes.Equal(before, after) {
+		s.catalogVersion.Add(1)
+	}
+}
+
 func (s *Server) currentCatalogVersion() (uint64, error) {
 	if s == nil || s.backend == nil {
 		return 0, protocolError(iwire.ErrInvalidCommand, "catalog version guard requires a backend")
 	}
-	snap := s.backend.AcquireSnapshot()
-	if snap == nil {
-		return 0, protocolError(iwire.ErrInternal, "catalog snapshot unavailable")
-	}
-	defer func() { _ = snap.Close() }()
-	state := snap.State()
-	if state == nil {
-		return 0, protocolError(iwire.ErrInternal, "catalog snapshot state unavailable")
-	}
-	return state.CommitSeq, nil
+	return s.catalogVersion.Load(), nil
 }
 
 func (s *Server) checkCatalogGuard(sections []iwire.Section) error {

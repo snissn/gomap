@@ -22,6 +22,8 @@ type rotateSwapValueWriter struct {
 	rotated         bool
 	usedAfterRotate bool
 	appends         int
+	syncCurrent     bool
+	syncCurrentSet  bool
 }
 
 var _ valueWriter = (*rotateSwapValueWriter)(nil)
@@ -65,10 +67,16 @@ func (w *rotateSwapValueWriter) AppendRawFramesWritevInto(records []valuelog.Rec
 }
 
 func (w *rotateSwapValueWriter) RotateTo(path string, fileID uint32) error {
+	return w.RotateToWithSync(path, fileID, true)
+}
+
+func (w *rotateSwapValueWriter) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
 	if w.rotated {
 		return errors.New("test: duplicate rotation")
 	}
 	w.rotated = true
+	w.syncCurrent = syncCurrent
+	w.syncCurrentSet = true
 	w.lane.vlog = &rotateSwapValueWriter{
 		lane: w.lane,
 		size: 0,
@@ -95,11 +103,16 @@ func (w *rotateFailValueWriter) AppendFrame(dictID uint64, dict []byte, records 
 
 func (w *rotateFailValueWriter) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
 }
-func (w *rotateFailValueWriter) RotateTo(path string, fileID uint32) error { return errRotateFailed }
-func (w *rotateFailValueWriter) Size() int64                               { return w.size }
-func (w *rotateFailValueWriter) Flush() error                              { return nil }
-func (w *rotateFailValueWriter) Sync() error                               { return nil }
-func (w *rotateFailValueWriter) Close() error                              { return nil }
+func (w *rotateFailValueWriter) RotateTo(path string, fileID uint32) error {
+	return w.RotateToWithSync(path, fileID, true)
+}
+func (w *rotateFailValueWriter) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
+	return errRotateFailed
+}
+func (w *rotateFailValueWriter) Size() int64  { return w.size }
+func (w *rotateFailValueWriter) Flush() error { return nil }
+func (w *rotateFailValueWriter) Sync() error  { return nil }
+func (w *rotateFailValueWriter) Close() error { return nil }
 
 type rotateFailCommitWriter struct {
 	size int64
@@ -164,6 +177,48 @@ func TestAppendValueLog_ReloadWriterAfterRotation(t *testing.T) {
 		t.Fatalf("ptrs length: got %d want %d", got, want)
 	}
 	putValueLogPtrs(ptrs)
+}
+
+func TestAppendValueLog_RelaxedSyncRotatesWithoutFsync(t *testing.T) {
+	t.Parallel()
+
+	prevMetrics := vlogAutotuneMetricsEnabled.Load()
+	vlogAutotuneMetricsEnabled.Store(false)
+	t.Cleanup(func() { vlogAutotuneMetricsEnabled.Store(prevMetrics) })
+
+	db := &DB{
+		dir:                     t.TempDir(),
+		closeCh:                 make(chan struct{}),
+		valueLogCompressionMode: uint8(vlogCompressionOff),
+		relaxedSync:             true,
+	}
+	db.valueLogMaxSegmentBytes = 1024
+	db.valueLogAutotuneOptions.Mode = valuelog.AutotuneOff
+
+	l := &lane{id: 0}
+	old := &rotateSwapValueWriter{
+		lane: l,
+		size: 900,
+	}
+	l.vlog = old
+
+	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{
+		{RID: 1, Value: bytes.Repeat([]byte("a"), 32)},
+		{RID: 2, Value: bytes.Repeat([]byte("b"), 32)},
+	}, journalDurabilityNone)
+	if err != nil {
+		t.Fatalf("appendValueLog: %v", err)
+	}
+	defer putValueLogPtrs(ptrs)
+	if !old.rotated {
+		t.Fatalf("expected writer rotation")
+	}
+	if !old.syncCurrentSet {
+		t.Fatalf("RotateToWithSync was not called")
+	}
+	if old.syncCurrent {
+		t.Fatalf("relaxed sync rotation used syncCurrent=true")
+	}
 }
 
 func TestRotateValueLogMuHeld_DoesNotAdvanceSeqOnFailure(t *testing.T) {
