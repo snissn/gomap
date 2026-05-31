@@ -5,9 +5,10 @@ on-disk formats, reader APIs, counters, and graph-search prepared views may stil
 change. This document classifies the current logical/physical typed-column pairs
 by their highest committed optimized-consumer tier. The role-specific prepared
 graph-search view policy lives in
-`typed-column-graph-search-prepared-views.md`; this document does not implement
-those views (#2036), graph-search admission enforcement (#2044), or reusable
-direct-view certifier APIs (#2046).
+`typed-column-graph-search-prepared-views.md`, and the #2044 readiness/admission
+table lives in `typed-column-graph-search-admission.md`; this document does not
+implement those views (#2036), graph-search admission enforcement (#2044), or
+reusable direct-view certifier APIs (#2046).
 
 The matrix complements the semantic capability matrix in
 `typed-column-semantics.md`, the physical layout/codec contract in
@@ -68,10 +69,11 @@ pointers must not be described as transient or WAL-like storage.
 ## Current Graph-Search Typed-Column Admission Baseline
 
 The parent #2035 prepared-view work treats the following roles as the current
-format. #2044 owns enforcement, and
-`typed-column-graph-search-prepared-views.md` owns the role-specific runtime
-shape, hot-loop boundary, fallback, and future admission policy; descendants
-should use this table as the stable generic typed-column contract.
+format. `typed-column-graph-search-admission.md` owns #2044 readiness status and
+enforcement fields, while `typed-column-graph-search-prepared-views.md` owns the
+role-specific runtime shape, hot-loop boundary, fallback, and future admission
+policy; descendants should use this table as the stable generic typed-column
+contract.
 
 | Graph-search state | Logical/encoding | Required tier for healthy path | Prepared runtime shape | Timing boundary and counters |
 | --- | --- | --- | --- | --- |
@@ -84,8 +86,8 @@ should use this table as the stable generic typed-column contract.
 Healthy graph-search use of weaker tiers is not forbidden forever, but it is not
 admitted by this generic matrix. A PR that wants `heap_typed_view`,
 `scratch_decode`, or another fallback in healthy graph-search state must update
-#2044 admission docs/tests and provide memory, allocation, and wall-time evidence
-showing why the weaker tier is acceptable.
+`typed-column-graph-search-admission.md` docs/tests and provide memory,
+allocation, and wall-time evidence showing why the weaker tier is acceptable.
 
 ## Existing Low-Level Encoding Coverage
 
