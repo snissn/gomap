@@ -372,6 +372,14 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "only adjacency_list columns may set adjacency_layout",
 		},
 		{
+			name: "bytes requires typed column owner",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{{Name: "opaque_id", Path: "opaque_id", ValueType: ColumnStoreValueBytes}},
+			},
+			want: "bytes requires owner",
+		},
+		{
 			name: "typed column adjacency requires degree",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

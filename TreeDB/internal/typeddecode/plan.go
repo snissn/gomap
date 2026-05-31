@@ -316,6 +316,38 @@ func validateOffsetsListDirectViewCertification(layout columnlayout.Capabilities
 	return DirectStatus()
 }
 
+func validateBytesDirectViewCertification(layout columnlayout.Capabilities, cert typedcolumn.ColumnPartLayoutContractColumn) Status {
+	if !cert.DirectViewCertified {
+		return MaterializeStatus(ReasonNotWriterCertified, "column lacks writer-certified bytes direct-view contract")
+	}
+	if cert.Compression != typedcolumn.CompressionNone {
+		return UnsupportedStatus(ReasonCompressed, fmt.Sprintf("compression=%s", cert.Compression))
+	}
+	if cert.NullMaskPresent || cert.DefaultMaskPresent || cert.NullCount != 0 || cert.DefaultCount != 0 {
+		return UnsupportedStatus(ReasonNullableWrapper, "null/default masks must be separate from bytes direct view")
+	}
+	if cert.Endian != typedcolumn.ColumnPartLayoutEndianLittle {
+		return MaterializeStatus(ReasonWrongEndian, fmt.Sprintf("endian=%s", cert.Endian))
+	}
+	if cert.ElementSize != 1 || cert.Alignment <= 0 || cert.Alignment > 1 {
+		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("element_size=%d alignment=%d", cert.ElementSize, cert.Alignment))
+	}
+	if cert.LengthMultiple != 1 {
+		return MaterializeStatus(ReasonLengthMultipleMismatch, fmt.Sprintf("length_multiple=%d", cert.LengthMultiple))
+	}
+	if cert.FixedWidthElements != 0 {
+		return MaterializeStatus(ReasonDimensionMismatch, fmt.Sprintf("fixed_width_elements=%d want variable-width bytes", cert.FixedWidthElements))
+	}
+	if cap := layout.Supports(columnlayout.OpBytesDirectView); !cap.Supported() {
+		status := statusFromLayoutCapability(cap)
+		if status.Streaming() {
+			return MaterializeStatus(status.Reason, status.Message)
+		}
+		return status
+	}
+	return DirectStatus()
+}
+
 // Float32ScalarPlan selects a direct-view candidate only for writer-certified
 // native raw little-endian float32 scalar sections. Raw-int64 compatibility
 // carriers for logical float32 remain non-native fallback layouts.
@@ -387,6 +419,28 @@ func Uint32ListPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
 	return uint32OffsetsListPlan(cert, columnsemantics.LogicalUint32List, typedcolumn.ColumnTypeUint32List)
 }
 
+// BytesPlan selects a direct-view candidate only for writer-certified generic
+// bytes/raw_bytes_offsets sections: little-endian uint64 offsets plus exact
+// uninterpreted value bytes.
+func BytesPlan(cert typedcolumn.ColumnPartLayoutContractColumn) Plan {
+	plan := Plan{Path: PathDirectView, Reason: ReasonSupported, ElementSize: 1, ElementsPerRow: 0, Alignment: 1, Rows: cert.Rows}
+	if cert.LogicalType != string(columnsemantics.LogicalBytes) || cert.Type != typedcolumn.ColumnTypeBytes || cert.Encoding != typedcolumn.EncodingRawBytesOffsets {
+		return Plan{Path: PathUnsupported, Reason: ReasonValidationFailed, Message: fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalBytes, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets), ElementSize: 1, ElementsPerRow: 0, Alignment: 1, Rows: cert.Rows}
+	}
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{
+		Logical:     columnsemantics.LogicalBytes,
+		Physical:    typedcolumn.ColumnTypeBytes,
+		Encoding:    typedcolumn.EncodingRawBytesOffsets,
+		Compression: cert.Compression,
+		Nullable:    cert.NullMaskPresent || cert.NullCount != 0,
+		Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0,
+	})
+	if status := validateBytesDirectViewCertification(layout, cert); !status.Direct() {
+		return Plan{Path: status.Path, Reason: status.Reason, Message: status.Message, ElementSize: 1, ElementsPerRow: 0, Alignment: 1, Rows: cert.Rows}
+	}
+	return plan
+}
+
 // AdjacencyOffsetsListPlan selects a direct-view candidate for the legacy
 // adjacency_list/raw_uint32_offsets_list compatibility selector. Graph-specific
 // naming is quarantined by #1989; prefer Uint32ListPlan for generic datastore
@@ -424,6 +478,49 @@ type Uint32OffsetsListShapeRequest struct {
 }
 
 func ValidateUint32OffsetsListShape(req Uint32OffsetsListShapeRequest) Status {
+	if req.Rows < 0 {
+		return UnsupportedStatus(ReasonRowCountMismatch, fmt.Sprintf("rows=%d", req.Rows))
+	}
+	maxInt := int(^uint(0) >> 1)
+	if req.Rows == maxInt {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, "row_count+1 overflows int")
+	}
+	wantOffsets := req.Rows + 1
+	if len(req.Offsets) != wantOffsets {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets=%d want row_count+1=%d", len(req.Offsets), wantOffsets))
+	}
+	maxIndex := uint64(maxInt)
+	if req.Offsets[0] != 0 {
+		return UnsupportedStatus(ReasonOffsetsStartMismatch, fmt.Sprintf("offsets[0]=%d want 0", req.Offsets[0]))
+	}
+	if req.Values > maxIndex {
+		return UnsupportedStatus(ReasonOffsetsGoIntRange, fmt.Sprintf("values=%d exceeds max int=%d", req.Values, maxInt))
+	}
+	prev := uint64(0)
+	for i, offset := range req.Offsets {
+		if offset > maxIndex {
+			return UnsupportedStatus(ReasonOffsetsGoIntRange, fmt.Sprintf("offsets[%d]=%d exceeds max int=%d", i, offset, maxInt))
+		}
+		if i > 0 && offset < prev {
+			return UnsupportedStatus(ReasonOffsetsNonMonotonic, fmt.Sprintf("offsets[%d]=%d previous=%d", i, offset, prev))
+		}
+		prev = offset
+	}
+	if final := req.Offsets[req.Rows]; final != req.Values {
+		return UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("final_offset=%d values=%d", final, req.Values))
+	}
+	return DirectStatus()
+}
+
+// BytesShapeRequest validates the bytes/raw_bytes_offsets primitive shape.
+// Values is the number of payload bytes.
+type BytesShapeRequest struct {
+	Rows    int
+	Offsets []uint64
+	Values  uint64
+}
+
+func ValidateBytesShape(req BytesShapeRequest) Status {
 	if req.Rows < 0 {
 		return UnsupportedStatus(ReasonRowCountMismatch, fmt.Sprintf("rows=%d", req.Rows))
 	}
@@ -597,6 +694,23 @@ type Uint32OffsetsListDirectViewRequest struct {
 	HasAssetOffset bool
 }
 
+// BytesDirectViewRequest validates split offsets/value sections for
+// raw_bytes_offsets. OffsetsBytes is the uint64 offsets-section byte length;
+// ValuesBytes is the exact concatenated opaque byte payload length.
+type BytesDirectViewRequest struct {
+	Plan          Plan
+	Certification typedcolumn.ColumnPartLayoutContractColumn
+	Rows          int
+	OffsetsBytes  int
+	ValuesBytes   int
+	// AssetOffset is the absolute byte offset of the containing asset in its
+	// mapped storage segment. Direct-view eligibility checks
+	// AssetOffset+OffsetsSection.Offset against 8-byte alignment. Byte values are
+	// one-byte aligned but still require a known absolute storage identity.
+	AssetOffset    int64
+	HasAssetOffset bool
+}
+
 func ValidateDirectViewColumn(req DirectViewColumnRequest) Status {
 	if !req.Plan.DirectCandidate() {
 		return req.Plan.Status()
@@ -737,6 +851,72 @@ func ValidateUint32OffsetsListDirectViewSections(req Uint32OffsetsListDirectView
 	return DirectStatus()
 }
 
+func ValidateBytesDirectView(req BytesDirectViewRequest, offsets []uint64, values []byte) Status {
+	if status := ValidateBytesDirectViewSections(req); !status.Direct() {
+		return status
+	}
+	return validateBytesDirectViewTypedViews(req, offsets, values)
+}
+
+func validateBytesDirectViewTypedViews(req BytesDirectViewRequest, offsets []uint64, values []byte) Status {
+	if len(offsets) != req.offsetsCount() {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets=%d want row_count+1=%d", len(offsets), req.offsetsCount()))
+	}
+	if len(values) != req.ValuesBytes {
+		return UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("values=%d want values_bytes=%d", len(values), req.ValuesBytes))
+	}
+	return ValidateBytesShape(BytesShapeRequest{Rows: req.Rows, Offsets: offsets, Values: uint64(len(values))})
+}
+
+func ValidateBytesDirectViewSections(req BytesDirectViewRequest) Status {
+	if !req.Plan.DirectCandidate() {
+		return req.Plan.Status()
+	}
+	cert := req.Certification
+	if cert.LogicalType != string(columnsemantics.LogicalBytes) || cert.Type != typedcolumn.ColumnTypeBytes || cert.Encoding != typedcolumn.EncodingRawBytesOffsets {
+		return UnsupportedStatus(ReasonValidationFailed, fmt.Sprintf("logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", cert.LogicalType, cert.Type, cert.Encoding, columnsemantics.LogicalBytes, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets))
+	}
+	layout := columnlayout.CapabilitiesFor(columnlayout.Descriptor{Logical: columnsemantics.LogicalBytes, Physical: typedcolumn.ColumnTypeBytes, Encoding: typedcolumn.EncodingRawBytesOffsets, Compression: cert.Compression, Nullable: cert.NullMaskPresent || cert.NullCount != 0, Defaultable: cert.DefaultMaskPresent || cert.DefaultCount != 0})
+	if status := validateBytesDirectViewCertification(layout, cert); !status.Direct() {
+		return status
+	}
+	if !mappedresource.NativeLittleEndian() {
+		return StreamingStatus(ReasonWrongEndian, "raw_bytes_offsets direct view requires little-endian host for uint64 offsets")
+	}
+	if req.Rows < 0 || cert.Rows != req.Rows {
+		return StreamingStatus(ReasonRowCountMismatch, fmt.Sprintf("cert_rows=%d request_rows=%d", cert.Rows, req.Rows))
+	}
+	if req.Rows == int(^uint(0)>>1) {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, "row_count+1 offsets byte count overflow")
+	}
+	wantOffsets, ok := checkedMul3(req.Rows+1, 8, 1)
+	if !ok {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, "row_count+1 offsets byte count overflow")
+	}
+	if req.OffsetsBytes != cert.OffsetsSection.Length || req.OffsetsBytes != cert.OffsetsBytes {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("offsets_bytes=%d section_length=%d contract_offsets_bytes=%d", req.OffsetsBytes, cert.OffsetsSection.Length, cert.OffsetsBytes))
+	}
+	if req.OffsetsBytes != wantOffsets {
+		return UnsupportedStatus(ReasonOffsetsCountMismatch, fmt.Sprintf("offsets_bytes=%d want (rows+1)*8=%d", req.OffsetsBytes, wantOffsets))
+	}
+	if req.ValuesBytes != cert.ValuesSection.Length || req.ValuesBytes != cert.ValuesBytes {
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("values_bytes=%d section_length=%d contract_values_bytes=%d", req.ValuesBytes, cert.ValuesSection.Length, cert.ValuesBytes))
+	}
+	if req.ValuesBytes < 0 {
+		return UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("values_bytes=%d", req.ValuesBytes))
+	}
+	if cert.OffsetsSection.Offset%8 != 0 {
+		return StreamingStatus(ReasonAbsoluteOffsetUnaligned, fmt.Sprintf("offsets section_offset=%d alignment=8", cert.OffsetsSection.Offset))
+	}
+	if status := validateAbsoluteDirectViewOffset(req.HasAssetOffset, req.AssetOffset, cert.OffsetsSection.Offset, 8, "offsets"); !status.Direct() {
+		return status
+	}
+	if status := validateAbsoluteDirectViewOffset(req.HasAssetOffset, req.AssetOffset, cert.ValuesSection.Offset, 1, "values"); !status.Direct() {
+		return status
+	}
+	return DirectStatus()
+}
+
 func uint32OffsetsListIdentity(cert typedcolumn.ColumnPartLayoutContractColumn) (columnsemantics.LogicalType, typedcolumn.ColumnType, bool) {
 	if cert.Encoding != typedcolumn.EncodingRawUint32OffsetsList {
 		return "", "", false
@@ -762,6 +942,13 @@ func (req Uint32OffsetsListDirectViewRequest) valuesCount() int {
 		return -1
 	}
 	return req.ValuesBytes / 4
+}
+
+func (req BytesDirectViewRequest) offsetsCount() int {
+	if req.Rows < 0 || req.Rows == int(^uint(0)>>1) {
+		return -1
+	}
+	return req.Rows + 1
 }
 
 func ValidateDirectViewBlock(req DirectViewBlockRequest) Status {
@@ -1018,6 +1205,30 @@ func Uint32OffsetsListView(mgr *mappedresource.Manager, offsetsHandle *mappedres
 		return nil, nil, status
 	}
 	if status := validateUint32OffsetsListDirectViewTypedViews(req, offsets, values); !status.Direct() {
+		return nil, nil, status
+	}
+	return offsets, values, DirectStatus()
+}
+
+func BytesView(mgr *mappedresource.Manager, offsetsHandle *mappedresource.Handle, valuesHandle *mappedresource.Handle, req BytesDirectViewRequest, opts ResourceViewOptions) ([]uint64, []byte, Status) {
+	if status := ValidateBytesDirectViewSections(req); !status.Direct() {
+		return nil, nil, status
+	}
+	offsetsOpts := opts
+	offsetsOpts.ExpectedElements = -1
+	offsets, status := Uint64View(mgr, offsetsHandle, offsetsOpts)
+	if !status.Direct() {
+		return nil, nil, status
+	}
+	status = validateHandle(valuesHandle, mappedresource.SourceMapped, opts.RequireMapped)
+	if !status.Direct() {
+		return nil, nil, status
+	}
+	values := valuesHandle.Bytes()
+	if len(values) != req.ValuesBytes {
+		return nil, nil, UnsupportedStatus(ReasonValuesLengthMismatch, fmt.Sprintf("values bytes=%d want %d", len(values), req.ValuesBytes))
+	}
+	if status := validateBytesDirectViewTypedViews(req, offsets, values); !status.Direct() {
 		return nil, nil, status
 	}
 	return offsets, values, DirectStatus()

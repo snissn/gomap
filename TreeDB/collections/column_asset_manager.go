@@ -304,7 +304,7 @@ func columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg ColumnStoreConfig)
 			if column.VectorDims > 0 {
 				return true
 			}
-		case ColumnStoreValueUint32List:
+		case ColumnStoreValueUint32List, ColumnStoreValueBytes:
 			return true
 		case ColumnStoreValueAdjacencyList:
 			if column.AdjacencyLayout == ColumnAdjacencyListLayoutUint32OffsetsList {

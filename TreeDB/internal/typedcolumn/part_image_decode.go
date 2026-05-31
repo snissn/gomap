@@ -495,6 +495,10 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if fixedWidthElements != 0 {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s requires fixed-width elements=0", name, columnType)
 			}
+		case ColumnTypeBytes:
+			if fixedWidthElements != 0 {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s requires fixed-width elements=0", name, columnType)
+			}
 		case ColumnTypeAdjacencyList:
 			if fixedWidthElements < 0 {
 				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: column %s type=%s has negative fixed-width elements %d", name, columnType, fixedWidthElements)
@@ -531,6 +535,9 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			case ColumnTypeUint32List:
 				column.Definition.Encoding = EncodingRawUint32OffsetsList
 				column.Definition.Compression = CompressionNone
+			case ColumnTypeBytes:
+				column.Definition.Encoding = EncodingRawBytesOffsets
+				column.Definition.Compression = CompressionNone
 			case ColumnTypeAdjacencyList:
 				if fixedWidthElements == 0 {
 					column.Definition.Encoding = EncodingRawUint32OffsetsList
@@ -543,10 +550,13 @@ func decodeColumnPartDescriptorSection(data []byte) (ColumnPartDescriptor, map[s
 			if err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
-			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, fixedWidthElements, j, blockDesc); err != nil {
+			if err := validateDecodedColumnBlockGranuleMetadata(name, j, granule); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
-			if err := validateDecodedColumnBlockGranuleMetadata(name, j, granule); err != nil {
+			if columnType == ColumnTypeBytes && blockDesc.Encoding == EncodingRawBytesOffsets && (granule.NullCount != 0 || granule.DefaultCount != 0) {
+				return ColumnPartDescriptor{}, nil, fmt.Errorf("typedcolumn: descriptor column %s block %d bytes null/default count=%d/%d want 0/0", name, j, granule.NullCount, granule.DefaultCount)
+			}
+			if err := validateDecodedColumnBlockDescriptor(desc, name, columnType, cardinality, fixedWidthElements, j, blockDesc); err != nil {
 				return ColumnPartDescriptor{}, nil, err
 			}
 			if blockDesc.FirstRow != expectedFirstRow {
@@ -597,6 +607,21 @@ func validateDecodedColumnFixedWidthElements(name string, columnType ColumnType,
 		for _, block := range blocks {
 			if block.Encoding != EncodingRawUint32OffsetsList {
 				return fmt.Errorf("typedcolumn: column %s type=%s requires encoding=%s", name, columnType, EncodingRawUint32OffsetsList)
+			}
+		}
+	case ColumnTypeBytes:
+		if fixedWidthElements != 0 {
+			return fmt.Errorf("typedcolumn: column %s type=%s requires fixed-width elements=0", name, columnType)
+		}
+		if len(blocks) == 0 {
+			if rows == 0 {
+				return nil
+			}
+			return fmt.Errorf("typedcolumn: column %s type=%s requires blocks for %s", name, columnType, EncodingRawBytesOffsets)
+		}
+		for _, block := range blocks {
+			if block.Encoding != EncodingRawBytesOffsets {
+				return fmt.Errorf("typedcolumn: column %s type=%s requires encoding=%s", name, columnType, EncodingRawBytesOffsets)
 			}
 		}
 	case ColumnTypeAdjacencyList:
@@ -679,6 +704,9 @@ func validateDecodedColumnBlockDescriptor(desc ColumnPartDescriptor, column stri
 	if (columnType == ColumnTypeUint32List || columnType == ColumnTypeAdjacencyList) && block.Encoding == EncodingRawUint32OffsetsList {
 		return validateDecodedOffsetsListColumnBlockDescriptor(column, blockIndex, fixedWidthElements, block)
 	}
+	if columnType == ColumnTypeBytes && block.Encoding == EncodingRawBytesOffsets {
+		return validateDecodedBytesColumnBlockDescriptor(column, blockIndex, fixedWidthElements, block)
+	}
 	maxRawBytes, err := maxDecodedBlockRawBytes(columnType, cardinality, fixedWidthElements, block.Encoding, block.RowCount)
 	if err != nil {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d: %w", column, blockIndex, err)
@@ -742,6 +770,22 @@ func validateDecodedOffsetsListColumnBlockDescriptor(column string, blockIndex i
 	}
 	if block.StoredBytes != block.RawBytes {
 		return fmt.Errorf("typedcolumn: descriptor column %s block %d offsets-list stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
+	}
+	return nil
+}
+
+func validateDecodedBytesColumnBlockDescriptor(column string, blockIndex int, fixedWidthElements int, block ColumnBlockDescriptor) error {
+	if fixedWidthElements != 0 {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d raw_bytes_offsets fixed_width_elements=%d want 0", column, blockIndex, fixedWidthElements)
+	}
+	if block.Compression != CompressionNone {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d bytes compression=%s want %s", column, blockIndex, block.Compression, CompressionNone)
+	}
+	if _, _, err := RawBytesOffsetsBlockPayloadBytes(block.RowCount, block.RawBytes); err != nil {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d bytes raw bytes: %w", column, blockIndex, err)
+	}
+	if block.StoredBytes != block.RawBytes {
+		return fmt.Errorf("typedcolumn: descriptor column %s block %d bytes stored bytes=%d raw bytes=%d", column, blockIndex, block.StoredBytes, block.RawBytes)
 	}
 	return nil
 }
@@ -837,6 +881,8 @@ func maxDecodedBlockRawBytes(columnType ColumnType, cardinality uint32, fixedWid
 		return checkedMulInt(elements, 4, "float32_vector raw bytes")
 	case ColumnTypeUint32List:
 		return 0, fmt.Errorf("unsupported uint32_list encoding %d", encoding)
+	case ColumnTypeBytes:
+		return 0, fmt.Errorf("unsupported bytes encoding %d", encoding)
 	case ColumnTypeAdjacencyList:
 		if encoding != EncodingRawUint32Dense {
 			return 0, fmt.Errorf("unsupported adjacency_list encoding %d", encoding)
@@ -1454,6 +1500,12 @@ func attachColumnPayloadsFromImage(image ColumnPartImage, columns map[string]Col
 			}
 			continue
 		}
+		if column.Definition.Encoding == EncodingRawBytesOffsets {
+			if err := attachBytesColumnPayloadsFromImage(image, name, column, columns); err != nil {
+				return err
+			}
+			continue
+		}
 		section, ok := image.columnDataSection(name)
 		if !ok {
 			return fmt.Errorf("typedcolumn: image missing column data section %s", name)
@@ -1535,6 +1587,62 @@ func attachUint32OffsetsListColumnPayloadsFromImage(image ColumnPartImage, name 
 	return nil
 }
 
+func attachBytesColumnPayloadsFromImage(image ColumnPartImage, name string, column ColumnPartColumn, columns map[string]ColumnPartColumn) error {
+	offsetsSection, valuesSection, ok := image.columnOffsetsListSections(name)
+	if !ok {
+		return fmt.Errorf("typedcolumn: image missing bytes sections %s", name)
+	}
+	offsetsRaw := image.sectionBytes(offsetsSection)
+	valuesRaw := image.sectionBytes(valuesSection)
+	if err := ValidateRawBytesOffsetsSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, image.Rows); err != nil {
+		return err
+	}
+	global, err := DecodeRawBytesOffsetsFallback(nil, nil, offsetsRaw, valuesRaw, image.Rows)
+	if err != nil {
+		return err
+	}
+	expectedFirstRow := 0
+	for i := range column.Blocks {
+		block := &column.Blocks[i]
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return fmt.Errorf("typedcolumn: image column %s block %d first_row=%d want %d", name, i, block.Descriptor.FirstRow, expectedFirstRow)
+		}
+		if block.Descriptor.RowCount <= 0 || block.Descriptor.FirstRow > global.Rows-block.Descriptor.RowCount {
+			return fmt.Errorf("typedcolumn: image column %s block %d row span [%d,%d) outside rows=%d", name, i, block.Descriptor.FirstRow, block.Descriptor.FirstRow+block.Descriptor.RowCount, global.Rows)
+		}
+		first := block.Descriptor.FirstRow
+		begin := global.Offsets[first]
+		end := global.Offsets[first+block.Descriptor.RowCount]
+		if begin > end || end > maxHostIntUint64() {
+			return fmt.Errorf("typedcolumn: image column %s block %d bytes range [%d,%d) invalid", name, i, begin, end)
+		}
+		beginInt := int(begin)
+		endInt := int(end)
+		if beginInt > len(global.Values) || endInt > len(global.Values) {
+			return fmt.Errorf("typedcolumn: image column %s block %d bytes range [%d,%d) outside values=%d", name, i, begin, end, len(global.Values))
+		}
+		localOffsets := resizeFixedWidthValues([]uint64(nil), block.Descriptor.RowCount+1)
+		for row := 0; row <= block.Descriptor.RowCount; row++ {
+			localOffsets[row] = global.Offsets[first+row] - begin
+		}
+		payload, err := EncodeRawBytesOffsetsPayload(nil, block.Descriptor.RowCount, localOffsets, global.Values[beginInt:endInt])
+		if err != nil {
+			return fmt.Errorf("typedcolumn: image column %s block %d bytes payload: %w", name, i, err)
+		}
+		if len(payload) != block.Descriptor.StoredBytes {
+			return fmt.Errorf("typedcolumn: image column %s block %d payload bytes=%d descriptor stored bytes=%d", name, i, len(payload), block.Descriptor.StoredBytes)
+		}
+		block.Granule.Payload = payload
+		block.Granule.PayloadRef = PayloadRef{Kind: PayloadRefInline, Length: len(payload)}
+		expectedFirstRow += block.Descriptor.RowCount
+	}
+	if expectedFirstRow != global.Rows {
+		return fmt.Errorf("typedcolumn: image column %s covers %d rows, want %d", name, expectedFirstRow, global.Rows)
+	}
+	columns[name] = column
+	return nil
+}
+
 func validateColumnDataSectionsForColumns(image ColumnPartImage, columns map[string]ColumnPartColumn) error {
 	required := make(map[string]ColumnPartColumn, len(columns))
 	for name, column := range columns {
@@ -1574,9 +1682,9 @@ func validateColumnDataSectionsForColumns(image ColumnPartImage, columns map[str
 		_, hasData := seenData[name]
 		_, hasOffsets := seenOffsets[name]
 		_, hasValues := seenValues[name]
-		if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+		if column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets {
 			if hasData || !hasOffsets || !hasValues {
-				return fmt.Errorf("typedcolumn: image column %s offsets-list sections data=%v offsets=%v values=%v", name, hasData, hasOffsets, hasValues)
+				return fmt.Errorf("typedcolumn: image column %s offsets/value sections data=%v offsets=%v values=%v", name, hasData, hasOffsets, hasValues)
 			}
 			continue
 		}
@@ -2428,6 +2536,8 @@ func columnTypeFromCode(code uint16) (ColumnType, error) {
 		return ColumnTypeFloat64, nil
 	case 8:
 		return ColumnTypeUint32List, nil
+	case 9:
+		return ColumnTypeBytes, nil
 	default:
 		return "", fmt.Errorf("typedcolumn: unknown column type code %d", code)
 	}

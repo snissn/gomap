@@ -516,9 +516,19 @@ func columnDeclaredValueToJSON(value columnDeclaredValue) (any, error) {
 		return value.Float32Vector, nil
 	case ColumnStoreValueUint32List:
 		return value.Uint32List, nil
+	case ColumnStoreValueBytes:
+		return columnDeclaredBytesToJSONArray(value.Bytes), nil
 	case ColumnStoreValueAdjacencyList:
 		return value.AdjacencyList, nil
 	default:
 		return nil, fmt.Errorf("unsupported declared value type %q", value.Type)
 	}
+}
+
+func columnDeclaredBytesToJSONArray(value []byte) []int {
+	out := make([]int, len(value))
+	for i, b := range value {
+		out[i] = int(b)
+	}
+	return out
 }

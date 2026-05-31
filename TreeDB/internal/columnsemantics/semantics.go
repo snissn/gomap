@@ -19,6 +19,7 @@ const (
 	LogicalString        LogicalType = "string"
 	LogicalFloat32Vector LogicalType = "float32_vector"
 	LogicalUint32List    LogicalType = "uint32_list"
+	LogicalBytes         LogicalType = "bytes"
 	LogicalAdjacencyList LogicalType = "adjacency_list"
 )
 
@@ -46,6 +47,7 @@ const (
 	OpVectorDotProduct         Operation = "vector.dot_product"
 	OpVectorDirectPayload      Operation = "direct.vector_payload"
 	OpUint32ListDirectPayload  Operation = "direct.uint32_list_payload"
+	OpBytesDirectPayload       Operation = "direct.bytes_payload"
 	OpAdjacencyTraversal       Operation = "graph.adjacency_traversal"
 	OpAdjacencyDirectPayload   Operation = "direct.adjacency_payload"
 	OpCountRows                Operation = "aggregate.count_rows"
@@ -120,6 +122,7 @@ const (
 	ReasonNotNullable                          ReasonCode = "not_nullable"
 	ReasonVectorScalarOperationUnsupported     ReasonCode = "vector_scalar_operation_unsupported"
 	ReasonUint32ListScalarOperationUnsupported ReasonCode = "uint32_list_scalar_operation_unsupported"
+	ReasonBytesScalarOperationUnsupported      ReasonCode = "bytes_scalar_operation_unsupported"
 	ReasonAdjacencyScalarOperationUnsupported  ReasonCode = "adjacency_scalar_operation_unsupported"
 	ReasonVectorCapabilityDeferred             ReasonCode = "vector_capability_deferred"
 	ReasonAdjacencyCapabilityDeferred          ReasonCode = "adjacency_capability_deferred"
@@ -178,15 +181,15 @@ func Fallback(op Operation, reason ReasonCode, msg string) Capability {
 }
 
 func LogicalTypes() []LogicalType {
-	return []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalUint32List, LogicalAdjacencyList}
+	return []LogicalType{LogicalBool, LogicalInt64, LogicalFloat32, LogicalDouble, LogicalString, LogicalFloat32Vector, LogicalUint32List, LogicalBytes, LogicalAdjacencyList}
 }
 
 func ColumnTypes() []typedcolumn.ColumnType {
-	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeAdjacencyList}
+	return []typedcolumn.ColumnType{typedcolumn.ColumnTypeInt64, typedcolumn.ColumnTypeLowCardinalityCode, typedcolumn.ColumnTypeBool, typedcolumn.ColumnTypeFloat32, typedcolumn.ColumnTypeFloat64, typedcolumn.ColumnTypeFloat32Vector, typedcolumn.ColumnTypeUint32List, typedcolumn.ColumnTypeBytes, typedcolumn.ColumnTypeAdjacencyList}
 }
 
 func Encodings() []typedcolumn.Encoding {
-	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList}
+	return []typedcolumn.Encoding{typedcolumn.EncodingRawInt64, typedcolumn.EncodingDeltaVarint, typedcolumn.EncodingDoubleDeltaVarint, typedcolumn.EncodingNullableInt64, typedcolumn.EncodingBoolBitpackRLE, typedcolumn.EncodingLowCardinalityUint32, typedcolumn.EncodingRawFloat32Vector, typedcolumn.EncodingRawUint32Dense, typedcolumn.EncodingRawFloat32, typedcolumn.EncodingRawFloat64, typedcolumn.EncodingRawUint32OffsetsList, typedcolumn.EncodingRawBytesOffsets}
 }
 
 func IsKnownLogicalType(t LogicalType) bool {
@@ -258,6 +261,8 @@ func CapabilityFor(desc Descriptor, op Operation) Capability {
 		return vectorCapability(desc, op)
 	case LogicalUint32List:
 		return uint32ListCapability(desc, op)
+	case LogicalBytes:
+		return bytesCapability(desc, op)
 	case LogicalAdjacencyList:
 		return adjacencyCapability(desc, op)
 	default:
@@ -298,6 +303,8 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeUint32List:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32OffsetsList
+	case typedcolumn.ColumnTypeBytes:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawBytesOffsets
 	case typedcolumn.ColumnTypeAdjacencyList:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense || encoding == typedcolumn.EncodingRawUint32OffsetsList
 	}
@@ -484,6 +491,31 @@ func uint32ListCapability(desc Descriptor, op Operation) Capability {
 		return Unsupported(op, ReasonNotNullable, "non-null uint32_list column")
 	default:
 		return Unsupported(op, ReasonOperationUnsupported, "operation is not a uint32_list semantic capability")
+	}
+}
+
+func bytesCapability(desc Descriptor, op Operation) Capability {
+	if desc.Physical != typedcolumn.ColumnTypeBytes || desc.Encoding != typedcolumn.EncodingRawBytesOffsets {
+		return Unsupported(op, ReasonLogicalPhysicalMismatch, "bytes semantics require bytes physical type and raw_bytes_offsets encoding")
+	}
+	if desc.Nullable {
+		return Unsupported(op, ReasonEncodingPhysicalMismatch, "bytes v1 is non-null")
+	}
+	switch op {
+	case OpAllRows:
+		return Supported(op)
+	case OpCountRows, OpCountNonNull:
+		return SupportedResult(op, ResultSemantics{ResultType: "int64", OverflowPolicy: "checked row count"})
+	case OpBytesDirectPayload:
+		return Supported(op)
+	case OpVectorSimilarity, OpVectorDotProduct, OpVectorDirectPayload, OpVectorMetrics, OpAdjacencyTraversal, OpAdjacencyDirectPayload, OpAdjacencyMetrics:
+		return Unsupported(op, ReasonOperationUnsupported, "operation belongs to higher-level consumers, not the generic bytes primitive")
+	case OpEquality, OpInequality, OpOrderedRange, OpInList, OpSum, OpAvg, OpMin, OpMax, OpStatsMinMax, OpStatsSum, OpPruneEquality, OpPruneOrderedRange, OpDirectScalarValueCarrier:
+		return Unsupported(op, ReasonBytesScalarOperationUnsupported, "bytes columns are opaque payloads, not text or scalar comparable values")
+	case OpIsNull, OpIsNotNull:
+		return Unsupported(op, ReasonNotNullable, "non-null bytes column")
+	default:
+		return Unsupported(op, ReasonOperationUnsupported, "operation is not a bytes semantic capability")
 	}
 }
 

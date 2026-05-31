@@ -28,6 +28,7 @@ const (
 	OpScalarNumericAggregate Operation = "aggregate.scalar_numeric"
 	OpVectorDirectView       Operation = "direct.vector_payload"
 	OpUint32ListDirectView   Operation = "direct.uint32_list_payload"
+	OpBytesDirectView        Operation = "direct.bytes_payload"
 	OpAdjacencyDirectView    Operation = "direct.adjacency_payload"
 	OpVectorSimilarity       Operation = "predicate.vector_similarity"
 	OpVectorMetricReducer    Operation = "aggregate.vector_metrics"
@@ -73,6 +74,7 @@ const (
 	ReasonFloatBitPatternNotNumeric              ReasonCode = "layout_float_bit_pattern_not_numeric"
 	ReasonVectorScalarUnsupported                ReasonCode = "layout_vector_scalar_unsupported"
 	ReasonUint32ListScalarUnsupported            ReasonCode = "layout_uint32_list_scalar_unsupported"
+	ReasonBytesScalarUnsupported                 ReasonCode = "layout_bytes_scalar_unsupported"
 	ReasonAdjacencyScalarUnsupported             ReasonCode = "layout_adjacency_scalar_unsupported"
 	ReasonAdjacencyDirectViewDeferred            ReasonCode = "layout_adjacency_direct_view_deferred"
 	ReasonAdjacencyOffsetsListDirectViewDeferred ReasonCode = "layout_adjacency_offsets_list_direct_view_deferred"
@@ -379,6 +381,23 @@ func CapabilitiesFor(desc Descriptor) Capabilities {
 		} else {
 			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 4, AlignmentBytes: 4, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
 		}
+	case typedcolumn.EncodingRawBytesOffsets:
+		caps.Layout.Kind = LayoutVariableWidth
+		caps.Layout.VariableWidth = true
+		caps.Layout.ElementsPerRow = 0
+		caps.Layout.ElementWidthBytes = 1
+		caps.Layout.Endian = EndianLittle
+		caps.Layout.AlignmentBytes = 1
+		caps.Layout.LengthMultipleBytes = 1
+		if desc.Logical == columnsemantics.LogicalBytes && desc.Physical == typedcolumn.ColumnTypeBytes && desc.FixedWidthElements == 0 {
+			caps.DirectView = directView(desc, 1, EndianLittle, 1)
+			caps.DirectView.Lifetime = "caller-owned prepared/session offsets and byte-values resource handles"
+			caps.DirectView.ValidationBoundary = "prepare_and_offsets_values_read"
+		} else if desc.Logical == columnsemantics.LogicalBytes && desc.Physical == typedcolumn.ColumnTypeBytes {
+			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonEncodingPhysicalMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
+		} else {
+			caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonLogicalPhysicalMismatch, Endian: EndianLittle, WidthBytes: 1, AlignmentBytes: 1, RequiresUncompressed: true, RequiresRowCount: true, RequiresNoNulls: true, RequiresNoDefaults: true, ValidationBoundary: "prepare"}
+		}
 	default:
 		caps.DirectView = DirectViewCapability{Eligible: false, Reason: ReasonUnsupportedEncoding, ValidationBoundary: "prepare"}
 	}
@@ -476,6 +495,18 @@ func (c Capabilities) Supports(op Operation) Capability {
 		case OpUint32ListDirectView:
 			if c.Descriptor.FixedWidthElements != 0 {
 				return Unsupported(op, ReasonEncodingPhysicalMismatch, "raw_uint32_offsets_list uint32_list layouts require fixed_width_elements=0")
+			}
+		}
+	}
+	if c.Descriptor.Logical == columnsemantics.LogicalBytes {
+		switch op {
+		case OpInt64NumericReducer, OpInt64RangePredicate, OpMinMaxPruning, OpValueRowPruning, OpMinMaxStats, OpSumStats, OpLexicalRangePredicate, OpScalarNumericAggregate:
+			return Unsupported(op, ReasonBytesScalarUnsupported, "bytes layouts reject scalar aggregate/range shortcuts")
+		case OpDirectView:
+			return Unsupported(op, ReasonOperationUnsupported, "bytes direct views require split offsets/value validation through OpBytesDirectView")
+		case OpBytesDirectView:
+			if c.Descriptor.FixedWidthElements != 0 {
+				return Unsupported(op, ReasonEncodingPhysicalMismatch, "raw_bytes_offsets bytes layouts require fixed_width_elements=0")
 			}
 		}
 	}
@@ -581,6 +612,14 @@ func (c Capabilities) Supports(op Operation) Capability {
 			return Supported(op)
 		}
 		return Unsupported(op, c.DirectView.Reason, "adjacency payload layout is not eligible for direct view")
+	case OpBytesDirectView:
+		if c.Descriptor.Logical != columnsemantics.LogicalBytes {
+			return Unsupported(op, ReasonOperationUnsupported, "layout is not a bytes payload")
+		}
+		if c.DirectView.Eligible {
+			return Supported(op)
+		}
+		return Unsupported(op, c.DirectView.Reason, "bytes payload layout is not eligible for direct view")
 	case OpVectorSimilarity, OpVectorMetricReducer:
 		if c.Reducers.VectorMetrics {
 			return Supported(op)
@@ -615,10 +654,16 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		if c.Descriptor.Logical == columnsemantics.LogicalBool {
 			return c.validateDescriptor(Operation(op))
 		}
+		if c.Descriptor.Logical == columnsemantics.LogicalBytes {
+			return Unsupported(Operation(op), ReasonBytesScalarUnsupported, "bytes layouts are opaque payloads, not scalar predicates")
+		}
 		return c.Supports(OpInt64RangePredicate)
 	case columnsemantics.OpOrderedRange:
 		if c.Descriptor.Logical == columnsemantics.LogicalString {
 			return c.Supports(OpLexicalRangePredicate)
+		}
+		if c.Descriptor.Logical == columnsemantics.LogicalBytes {
+			return Unsupported(Operation(op), ReasonBytesScalarUnsupported, "bytes layouts are opaque payloads, not ordered scalars")
 		}
 		return c.Supports(OpInt64RangePredicate)
 	case columnsemantics.OpSum, columnsemantics.OpAvg, columnsemantics.OpMin, columnsemantics.OpMax:
@@ -654,6 +699,8 @@ func (c Capabilities) SupportsSemanticOperation(op columnsemantics.Operation) Ca
 		return c.Supports(OpVectorDirectView)
 	case columnsemantics.OpUint32ListDirectPayload:
 		return c.Supports(OpUint32ListDirectView)
+	case columnsemantics.OpBytesDirectPayload:
+		return c.Supports(OpBytesDirectView)
 	case columnsemantics.OpVectorSimilarity:
 		return c.Supports(OpVectorSimilarity)
 	case columnsemantics.OpVectorDotProduct, columnsemantics.OpVectorMetrics:
@@ -693,6 +740,8 @@ func (c Capabilities) supportsDirectScalarValueCarrier() Capability {
 		return Unsupported(op, ReasonVectorScalarUnsupported, "vector layouts reject scalar direct-value carriers")
 	case columnsemantics.LogicalUint32List:
 		return Unsupported(op, ReasonUint32ListScalarUnsupported, "uint32_list layouts reject scalar direct-value carriers")
+	case columnsemantics.LogicalBytes:
+		return Unsupported(op, ReasonBytesScalarUnsupported, "bytes layouts reject scalar direct-value carriers")
 	case columnsemantics.LogicalAdjacencyList:
 		return Unsupported(op, ReasonAdjacencyScalarUnsupported, "adjacency layouts reject scalar direct-value carriers")
 	default:
@@ -752,6 +801,8 @@ func validatePhysicalEncoding(physical typedcolumn.ColumnType, encoding typedcol
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawFloat32Vector
 	case typedcolumn.ColumnTypeUint32List:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32OffsetsList
+	case typedcolumn.ColumnTypeBytes:
+		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawBytesOffsets
 	case typedcolumn.ColumnTypeAdjacencyList:
 		return ReasonEncodingPhysicalMismatch, encoding == typedcolumn.EncodingRawUint32Dense || encoding == typedcolumn.EncodingRawUint32OffsetsList
 	}

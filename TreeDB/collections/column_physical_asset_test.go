@@ -80,6 +80,59 @@ func encodeColumnPhysicalAssetV1ForTest(t *testing.T, input columnPhysicalAssetE
 	return b.Bytes()
 }
 
+func TestColumnPhysicalAssetExtractsTypedColumnBytesFromJSON2010(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{{Name: "opaque", Path: "opaque", ValueType: ColumnStoreValueBytes, Owner: TypedStorageOwnerColumnPart}}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = nil
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{
+		{ID: []byte("e1"), Document: []byte(`{"opaque":[0,65,255]}`)},
+		{ID: []byte("e2"), Document: []byte(`{"opaque":[]}`)},
+	})
+	if err != nil {
+		t.Fatalf("extractColumnDeclaredRowsFromJSONDocuments: %v", err)
+	}
+	if got := rows[0].Values[0].Bytes; !bytes.Equal(got, []byte{0x00, 'A', 0xff}) {
+		t.Fatalf("extracted row0 bytes=%v", got)
+	}
+	image, rowCount, err := buildTypedColumnPartImageForDeclaredRows(*normalized, 7, typedColumnPartAssetPartID, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnPartImageForDeclaredRows: %v", err)
+	}
+	if rowCount != 2 || len(image) == 0 {
+		t.Fatalf("typed-column bytes image rows=%d len=%d", rowCount, len(image))
+	}
+	part, err := typedColumnAdapterPartFromBytesForReconstruction(typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(*normalized), SchemaVersion: uint32(normalized.SchemaHash)}, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromBytesForReconstruction: %v", err)
+	}
+	bytesColumn, err := part.Part.BytesColumn("opaque", nil, nil)
+	if err != nil {
+		t.Fatalf("BytesColumn: %v", err)
+	}
+	got0, err := bytesColumn.Row(0)
+	if err != nil {
+		t.Fatalf("BytesColumn.Row(0): %v", err)
+	}
+	got1, err := bytesColumn.Row(1)
+	if err != nil {
+		t.Fatalf("BytesColumn.Row(1): %v", err)
+	}
+	if !bytes.Equal(got0, []byte{0x00, 'A', 0xff}) || len(got1) != 0 {
+		t.Fatalf("decoded typed-column bytes rows=%v/%v", got0, got1)
+	}
+	if _, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{ID: []byte("bad"), Document: []byte(`{"opaque":"not bytes"}`)}}); err == nil || !strings.Contains(err.Error(), "expected bytes array") {
+		t.Fatalf("extract string bytes err=%v want array rejection", err)
+	}
+	if _, err := extractColumnDeclaredRowsFromJSONDocuments(*normalized, []columnWriteDocument{{ID: []byte("bad"), Document: []byte(`{"opaque":[256]}`)}}); err == nil || !strings.Contains(err.Error(), "outside byte range") {
+		t.Fatalf("extract out-of-range bytes err=%v want range rejection", err)
+	}
+}
+
 func TestColumnPhysicalAssetCodecRoundTripM12A(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
@@ -1676,6 +1729,12 @@ func TestColumnAssetTypedColumnPartDirectViewSegmentTriggerAlignment(t *testing.
 			name:       "float32_vector",
 			field:      TypedStorageField{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2},
 			value:      columnDeclaredValue{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{1, 2}},
+			wantDirect: true,
+		},
+		{
+			name:       "bytes",
+			field:      TypedStorageField{Name: "opaque", Path: "opaque", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueBytes},
+			value:      columnDeclaredValue{Type: ColumnStoreValueBytes, Present: true, Bytes: []byte{0, 'A', 255}},
 			wantDirect: true,
 		},
 		{

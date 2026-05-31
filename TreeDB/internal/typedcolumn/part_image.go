@@ -504,6 +504,16 @@ func (b *columnPartImageBuilder) addDescriptorSection() error {
 					return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires encoding=%s", column.Name, column.Type, EncodingRawUint32OffsetsList)
 				}
 			}
+		case ColumnTypeBytes:
+			if column.FixedWidthElements != 0 {
+				return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires fixed-width elements=0", column.Name, column.Type)
+			}
+			if !columnDescriptorAllBlocksEncoding(column, EncodingRawBytesOffsets) {
+				zeroRowBytes := desc.RowCount == 0 && len(column.Blocks) == 0 && partColumn.Definition.Encoding == EncodingRawBytesOffsets
+				if !zeroRowBytes {
+					return fmt.Errorf("typedcolumn: descriptor column %s type=%s requires encoding=%s", column.Name, column.Type, EncodingRawBytesOffsets)
+				}
+			}
 		case ColumnTypeAdjacencyList:
 			if column.FixedWidthElements < 0 {
 				return fmt.Errorf("typedcolumn: descriptor column %s type=%s has negative fixed-width elements=%d", column.Name, column.Type, column.FixedWidthElements)
@@ -802,6 +812,12 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 			}
 			continue
 		}
+		if column.Definition.Encoding == EncodingRawBytesOffsets {
+			if err := b.addBytesColumnSections(columnDescriptor, column); err != nil {
+				return err
+			}
+			continue
+		}
 		totalPayloadBytes := 0
 		for i, block := range column.Blocks {
 			if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
@@ -876,6 +892,67 @@ func (b *columnPartImageBuilder) addUint32OffsetsListColumnSections(columnDescri
 		return err
 	}
 	offsetsSection, valuesSection, err := NewRawUint32OffsetsListImageSections(columnDescriptor.Name, b.part.Descriptor.RowCount, len(offsetsData), len(valuesData))
+	if err != nil {
+		return err
+	}
+	offsetsSection.Granules = len(b.part.Descriptor.Granules)
+	offsetsSection.Blocks = len(column.Blocks)
+	valuesSection.Granules = len(b.part.Descriptor.Granules)
+	valuesSection.Blocks = len(column.Blocks)
+	b.appendSection(offsetsSection, offsetsData)
+	b.appendSection(valuesSection, valuesData)
+	return nil
+}
+
+func (b *columnPartImageBuilder) addBytesColumnSections(columnDescriptor ColumnPartColumnDescriptor, column ColumnPartColumn) error {
+	globalOffsets := resizeFixedWidthValues([]uint64(nil), b.part.Descriptor.RowCount+1)
+	globalValues := make([]byte, 0)
+	expectedFirstRow := 0
+	var reader GranuleReader
+	var offsetsScratch []uint64
+	var valuesScratch []byte
+	for i, block := range column.Blocks {
+		if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
+			return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
+		}
+		if block.Descriptor.FirstRow != expectedFirstRow {
+			return fmt.Errorf("typedcolumn: column %s block %d first_row=%d want %d", columnDescriptor.Name, i, block.Descriptor.FirstRow, expectedFirstRow)
+		}
+		decoded, err := reader.DecodeBytesInto(offsetsScratch[:0], valuesScratch[:0], block.Granule)
+		if err != nil {
+			return fmt.Errorf("typedcolumn: column %s block %d bytes payload: %w", columnDescriptor.Name, i, err)
+		}
+		if decoded.Rows != block.Descriptor.RowCount || len(decoded.Offsets) != block.Descriptor.RowCount+1 {
+			return fmt.Errorf("typedcolumn: column %s block %d bytes rows=%d offsets=%d want rows=%d", columnDescriptor.Name, i, decoded.Rows, len(decoded.Offsets), block.Descriptor.RowCount)
+		}
+		base := uint64(len(globalValues))
+		if base > maxHostIntUint64() || uint64(len(decoded.Values)) > maxHostIntUint64()-base {
+			return fmt.Errorf("typedcolumn: column %s bytes values exceed host int", columnDescriptor.Name)
+		}
+		first := block.Descriptor.FirstRow
+		for row := 0; row <= decoded.Rows; row++ {
+			globalOffsets[first+row] = base + decoded.Offsets[row]
+		}
+		globalValues = append(globalValues, decoded.Values...)
+		offsetsScratch = decoded.Offsets
+		valuesScratch = decoded.Values
+		expectedFirstRow += block.Descriptor.RowCount
+	}
+	if expectedFirstRow != b.part.Descriptor.RowCount {
+		return fmt.Errorf("typedcolumn: column %s bytes covers %d rows, want %d", columnDescriptor.Name, expectedFirstRow, b.part.Descriptor.RowCount)
+	}
+	if err := ValidateRawBytesOffsetsShape(b.part.Descriptor.RowCount, globalOffsets, uint64(len(globalValues))); err != nil {
+		return fmt.Errorf("typedcolumn: column %s bytes global shape: %w", columnDescriptor.Name, err)
+	}
+	offsetsData, err := EncodeRawBytesOffsetsOffsets(nil, globalOffsets)
+	if err != nil {
+		return err
+	}
+	valuesData, err := EncodeRawBytesOffsetsValues(nil, globalValues)
+	if err != nil {
+		return err
+	}
+	offsetsSection, valuesSection, err := NewRawBytesOffsetsImageSections(columnDescriptor.Name, b.part.Descriptor.RowCount, len(offsetsData), len(valuesData))
 	if err != nil {
 		return err
 	}
@@ -1144,6 +1221,8 @@ func columnTypeCode(t ColumnType) (uint16, error) {
 		return 7, nil
 	case ColumnTypeUint32List:
 		return 8, nil
+	case ColumnTypeBytes:
+		return 9, nil
 	default:
 		return 0, fmt.Errorf("typedcolumn: unsupported column type %s", t)
 	}

@@ -23,6 +23,8 @@ func columnStoreSemanticLogicalType(valueType ColumnStoreValueType) (columnseman
 		return columnsemantics.LogicalFloat32Vector, true
 	case ColumnStoreValueUint32List:
 		return columnsemantics.LogicalUint32List, true
+	case ColumnStoreValueBytes:
+		return columnsemantics.LogicalBytes, true
 	case ColumnStoreValueAdjacencyList:
 		return columnsemantics.LogicalAdjacencyList, true
 	default:

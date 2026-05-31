@@ -392,9 +392,9 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 	sectionCompression := column.Definition.Compression
 	sectionRows := 0
 	var sectionContract ColumnPartLayoutContractSection
-	if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+	if column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets {
 		if sections.offsets.section.Kind != ColumnPartImageSectionColumnOffsets || sections.values.section.Kind != ColumnPartImageSectionColumnValues {
-			return ColumnPartLayoutContractColumn{}, fmt.Errorf("typedcolumn: layout contract column %s missing offsets-list sections", columnDesc.Name)
+			return ColumnPartLayoutContractColumn{}, fmt.Errorf("typedcolumn: layout contract column %s missing offsets/value sections", columnDesc.Name)
 		}
 		sectionRows = sections.offsets.section.Rows
 		sectionEncoding = sections.offsets.section.Encoding
@@ -434,7 +434,7 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		DictionaryCollation: dictCollation,
 		Blocks:              make([]ColumnPartLayoutContractBlock, 0, len(column.Blocks)),
 	}
-	if column.Definition.Encoding == EncodingRawUint32OffsetsList {
+	if column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets {
 		contract.OffsetsSection = ColumnPartLayoutContractSection{Offset: sections.offsets.section.Offset, Length: len(sections.offsets.data), Checksum: crc.Checksum(sections.offsets.data)}
 		contract.ValuesSection = ColumnPartLayoutContractSection{Offset: sections.values.section.Offset, Length: len(sections.values.data), Checksum: crc.Checksum(sections.values.data)}
 		contract.OffsetsBytes = len(sections.offsets.data)
@@ -448,7 +448,7 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		contract.PruningCertified = false
 	}
 	payloadOffset := sections.data.section.Offset
-	offsetsList := column.Definition.Encoding == EncodingRawUint32OffsetsList
+	offsetsList := column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets
 	if offsetsList {
 		// Offsets-list images store two discontiguous global sections, so the generic
 		// per-block combined payload offset/length fields are intentionally empty.
@@ -528,6 +528,12 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 		// offsets-section (8-byte) and values-section (4-byte) alignment separately.
 		direct := def.Compression == CompressionNone && def.FixedWidthElements == 0 && ((logicalType == "uint32_list" && def.Type == ColumnTypeUint32List) || (logicalType == "adjacency_list" && def.Type == ColumnTypeAdjacencyList))
 		return columnPartContractLayout{elementSize: 4, alignment: 4, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 4, direct: direct}
+	case EncodingRawBytesOffsets:
+		// The bytes primitive is sectioned into uint64 offsets and uninterpreted
+		// payload bytes. Direct-view validation checks offsets-section alignment;
+		// values are byte-aligned and never reinterpreted as text.
+		direct := def.Compression == CompressionNone && def.FixedWidthElements == 0 && logicalType == "bytes" && def.Type == ColumnTypeBytes
+		return columnPartContractLayout{elementSize: 1, alignment: 1, endian: ColumnPartLayoutEndianLittle, lengthMultiple: 1, direct: direct}
 	case EncodingDeltaVarint, EncodingDoubleDeltaVarint:
 		streaming := def.Compression == CompressionNone && logicalType == "int64"
 		return columnPartContractLayout{endian: ColumnPartLayoutEndianCodecDefined, streaming: streaming, stats: streaming, pruning: streaming}
@@ -547,6 +553,9 @@ func physicalColumnLayoutForContract(logicalType string, def ColumnDefinition) c
 func certifyLayoutContractColumn(image ColumnPartImage, desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn, contract ColumnPartLayoutContractColumn) error {
 	if contract.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawUint32OffsetsList {
 		return certifyLayoutContractOffsetsListColumn(image, desc, columnDesc, column, contract)
+	}
+	if contract.Encoding == EncodingRawBytesOffsets || column.Definition.Encoding == EncodingRawBytesOffsets {
+		return certifyLayoutContractBytesColumn(image, desc, columnDesc, column, contract)
 	}
 	section, ok := image.columnDataSection(columnDesc.Name)
 	if !ok {
@@ -733,6 +742,102 @@ func certifyLayoutContractOffsetsListColumn(image ColumnPartImage, desc ColumnPa
 	return nil
 }
 
+func certifyLayoutContractBytesColumn(image ColumnPartImage, desc ColumnPartDescriptor, columnDesc ColumnPartColumnDescriptor, column ColumnPartColumn, contract ColumnPartLayoutContractColumn) error {
+	offsetsSection, valuesSection, ok := image.columnOffsetsListSections(columnDesc.Name)
+	if !ok {
+		return fmt.Errorf("typedcolumn: layout contract column %s missing bytes image sections", columnDesc.Name)
+	}
+	if contract.Type != columnDesc.Type || contract.Type != column.Definition.Type || contract.Type != ColumnTypeBytes {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes type=%s descriptor=%s definition=%s", columnDesc.Name, contract.Type, columnDesc.Type, column.Definition.Type)
+	}
+	if contract.Encoding != EncodingRawBytesOffsets || column.Definition.Encoding != EncodingRawBytesOffsets || offsetsSection.Encoding != EncodingRawBytesOffsets || valuesSection.Encoding != EncodingRawBytesOffsets {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes encoding contract=%s definition=%s offsets=%s values=%s", columnDesc.Name, contract.Encoding, column.Definition.Encoding, offsetsSection.Encoding, valuesSection.Encoding)
+	}
+	if contract.Compression != CompressionNone || column.Definition.Compression != CompressionNone || offsetsSection.Compression != CompressionNone || valuesSection.Compression != CompressionNone {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes compression contract=%s definition=%s offsets=%s values=%s", columnDesc.Name, contract.Compression, column.Definition.Compression, offsetsSection.Compression, valuesSection.Compression)
+	}
+	if contract.FixedWidthElements != 0 || column.Definition.FixedWidthElements != 0 || columnDesc.FixedWidthElements != 0 {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes fixed_width_elements=(%d,%d,%d) want 0", columnDesc.Name, contract.FixedWidthElements, column.Definition.FixedWidthElements, columnDesc.FixedWidthElements)
+	}
+	if contract.Rows != desc.RowCount || offsetsSection.Rows != desc.RowCount || valuesSection.Rows != desc.RowCount {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes rows=%d offsets_rows=%d values_rows=%d descriptor_rows=%d", columnDesc.Name, contract.Rows, offsetsSection.Rows, valuesSection.Rows, desc.RowCount)
+	}
+	expectedLayout := physicalColumnLayoutForContract(contract.LogicalType, column.Definition)
+	if contract.ElementSize != expectedLayout.elementSize || contract.Alignment != expectedLayout.alignment || contract.Endian != expectedLayout.endian || contract.LengthMultiple != expectedLayout.lengthMultiple {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes element/alignment/endian/length=(%d,%d,%s,%d) want (%d,%d,%s,%d)", columnDesc.Name, contract.ElementSize, contract.Alignment, contract.Endian, contract.LengthMultiple, expectedLayout.elementSize, expectedLayout.alignment, expectedLayout.endian, expectedLayout.lengthMultiple)
+	}
+	if contract.DirectViewCertified != expectedLayout.direct || contract.StreamingCertified != expectedLayout.streaming || contract.StatsCertified != expectedLayout.stats || contract.PruningCertified != expectedLayout.pruning {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes capability flags direct=%v streaming=%v stats=%v pruning=%v want direct=%v streaming=%v stats=%v pruning=%v", columnDesc.Name, contract.DirectViewCertified, contract.StreamingCertified, contract.StatsCertified, contract.PruningCertified, expectedLayout.direct, expectedLayout.streaming, expectedLayout.stats, expectedLayout.pruning)
+	}
+	if contract.Dictionary || contract.DictionarySection != (ColumnPartLayoutContractSection{}) {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes dictionary metadata present", columnDesc.Name)
+	}
+	if err := certifyLayoutContractSection("column "+columnDesc.Name+" offsets", contract.OffsetsSection, offsetsSection, image.sectionBytes(offsetsSection)); err != nil {
+		return err
+	}
+	if err := certifyLayoutContractSection("column "+columnDesc.Name+" values", contract.ValuesSection, valuesSection, image.sectionBytes(valuesSection)); err != nil {
+		return err
+	}
+	if contract.OffsetsBytes != offsetsSection.Length || contract.ValuesBytes != valuesSection.Length {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes bytes offsets=%d/%d values=%d/%d", columnDesc.Name, contract.OffsetsBytes, offsetsSection.Length, contract.ValuesBytes, valuesSection.Length)
+	}
+	if len(contract.Blocks) != len(column.Blocks) || len(contract.Blocks) != len(columnDesc.Blocks) {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes blocks=%d descriptor=%d", columnDesc.Name, len(contract.Blocks), len(column.Blocks))
+	}
+	expectedOffsetCount, err := checkedAddInt(desc.RowCount, 1, "layout contract bytes global offset count")
+	if err != nil {
+		return err
+	}
+	expectedOffsetsBytes, err := checkedMulInt(expectedOffsetCount, 8, "layout contract bytes global offsets bytes")
+	if err != nil {
+		return err
+	}
+	valuesBytes := 0
+	nullCount := 0
+	defaultCount := 0
+	for i, block := range column.Blocks {
+		certified := contract.Blocks[i]
+		want := block.Descriptor
+		if certified.FirstRow != want.FirstRow || certified.RowCount != want.RowCount || certified.FirstGranule != want.FirstGranule || certified.LastGranule != want.LastGranule {
+			return fmt.Errorf("typedcolumn: layout contract column %s block %d row span=(%d,%d,%d,%d) want (%d,%d,%d,%d)", columnDesc.Name, i, certified.FirstRow, certified.RowCount, certified.FirstGranule, certified.LastGranule, want.FirstRow, want.RowCount, want.FirstGranule, want.LastGranule)
+		}
+		if certified.Encoding != want.Encoding || certified.Compression != want.Compression || certified.RawBytes != want.RawBytes || certified.StoredBytes != want.StoredBytes {
+			return fmt.Errorf("typedcolumn: layout contract column %s block %d encoding/compression/raw/stored=(%s,%s,%d,%d) want (%s,%s,%d,%d)", columnDesc.Name, i, certified.Encoding, certified.Compression, certified.RawBytes, certified.StoredBytes, want.Encoding, want.Compression, want.RawBytes, want.StoredBytes)
+		}
+		if certified.PayloadOffset != 0 || certified.PayloadLength != 0 {
+			return fmt.Errorf("typedcolumn: layout contract column %s block %d bytes payload offset/length=(%d,%d) want (0,0)", columnDesc.Name, i, certified.PayloadOffset, certified.PayloadLength)
+		}
+		_, blockValuesBytes, err := RawBytesOffsetsBlockPayloadBytes(block.Descriptor.RowCount, block.Descriptor.StoredBytes)
+		if err != nil {
+			return err
+		}
+		valuesBytes += blockValuesBytes
+		nullCount += block.Granule.NullCount
+		defaultCount += block.Granule.DefaultCount
+		if certified.NullCount != block.Granule.NullCount || certified.DefaultCount != block.Granule.DefaultCount {
+			return fmt.Errorf("typedcolumn: layout contract column %s block %d null/default=(%d,%d) want (%d,%d)", columnDesc.Name, i, certified.NullCount, certified.DefaultCount, block.Granule.NullCount, block.Granule.DefaultCount)
+		}
+	}
+	if expectedOffsetsBytes != offsetsSection.Length || valuesBytes != valuesSection.Length {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes consumed offsets=%d/%d values=%d/%d", columnDesc.Name, expectedOffsetsBytes, offsetsSection.Length, valuesBytes, valuesSection.Length)
+	}
+	if contract.NullCount != nullCount || contract.DefaultCount != defaultCount || contract.NullMaskPresent || contract.DefaultMaskPresent || nullCount != 0 || defaultCount != 0 {
+		return fmt.Errorf("typedcolumn: layout contract column %s bytes null/default counts=(%d,%d) flags=(%v,%v)", columnDesc.Name, contract.NullCount, contract.DefaultCount, contract.NullMaskPresent, contract.DefaultMaskPresent)
+	}
+	if contract.DirectViewCertified {
+		if contract.Endian != ColumnPartLayoutEndianLittle || contract.Compression != CompressionNone {
+			return fmt.Errorf("typedcolumn: layout contract column %s bytes direct-view endian/compression=(%s,%s)", columnDesc.Name, contract.Endian, contract.Compression)
+		}
+		if offsetsSection.Offset%8 != 0 {
+			return fmt.Errorf("typedcolumn: layout contract column %s bytes direct-view offsets alignment=%d", columnDesc.Name, offsetsSection.Offset)
+		}
+		if offsetsSection.Length != expectedOffsetsBytes {
+			return fmt.Errorf("typedcolumn: layout contract column %s bytes direct-view length offsets=%d/%d values=%d", columnDesc.Name, offsetsSection.Length, expectedOffsetsBytes, valuesSection.Length)
+		}
+	}
+	return nil
+}
+
 func certifyLayoutContractBlock(column string, index int, contract ColumnPartLayoutContractColumn, block ColumnBlock, certified ColumnPartLayoutContractBlock, expectedPayloadOffset int) error {
 	want := block.Descriptor
 	if certified.FirstRow != want.FirstRow || certified.RowCount != want.RowCount || certified.FirstGranule != want.FirstGranule || certified.LastGranule != want.LastGranule {
@@ -871,7 +976,7 @@ func encodeColumnPartLayoutContractColumn(enc *columnPartImageEncoder, column Co
 	enc.u32(flags)
 	enc.i64(int64(column.Rows))
 	encodeColumnPartLayoutContractSection(enc, column.Section)
-	if column.Encoding == EncodingRawUint32OffsetsList {
+	if column.Encoding == EncodingRawUint32OffsetsList || column.Encoding == EncodingRawBytesOffsets {
 		encodeColumnPartLayoutContractSection(enc, column.OffsetsSection)
 		encodeColumnPartLayoutContractSection(enc, column.ValuesSection)
 		enc.i64(int64(column.OffsetsBytes))
@@ -947,7 +1052,7 @@ func decodeColumnPartLayoutContractColumn(dec *columnPartImageDecoder) (ColumnPa
 	var valuesSection ColumnPartLayoutContractSection
 	var offsetsBytes int
 	var valuesBytes int
-	if Encoding(encoding) == EncodingRawUint32OffsetsList {
+	if Encoding(encoding) == EncodingRawUint32OffsetsList || Encoding(encoding) == EncodingRawBytesOffsets {
 		offsetsSection, err = decodeColumnPartLayoutContractSection(dec)
 		if err != nil {
 			return ColumnPartLayoutContractColumn{}, err
