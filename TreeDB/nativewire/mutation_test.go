@@ -482,6 +482,42 @@ func TestMutationInsertResponseShapingFlags(t *testing.T) {
 	}
 }
 
+func TestInsertBatchNoResultRetainsCatalogVersionCache(t *testing.T) {
+	client, server, _, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	handle, err := client.OpenCollection(ctx, "users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	if err := client.InsertBatchHandleNoResult(ctx, handle, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("first InsertBatchHandleNoResult: %v", err)
+	}
+	waitForCounter(t, server, "commands.stats.requests_total", 2)
+
+	if err := client.InsertBatchHandleNoResult(ctx, handle, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"x":2}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("second InsertBatchHandleNoResult: %v", err)
+	}
+	if got := server.Stats()[nativeStatsPrefix+"commands.stats.requests_total"]; got != "2" {
+		t.Fatalf("stats requests after cached no-result insert=%s want 2", got)
+	}
+}
+
 func TestMutationInsertRejectsUnsupportedFastFlags(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
