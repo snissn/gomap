@@ -351,6 +351,10 @@ type Collection struct {
 	vectorIndexLoadMu sync.Mutex
 	vectorIndexesMu   sync.RWMutex
 	vectorIndexes     map[string]*VectorIndex
+
+	columnLifecycleMu        sync.Mutex
+	columnLifecycleNextPinID uint64
+	columnLifecyclePins      map[uint64]columnAssetLifecyclePinSetRecord
 }
 
 type CollectionRootOverlayCompactionStats struct {
