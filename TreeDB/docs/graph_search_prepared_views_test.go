@@ -40,7 +40,7 @@ func TestDocs_GraphSearchPreparedViewPolicy(t *testing.T) {
 		fallback string
 	}{
 		{state: "Base vectors", logical: "float32_vector", encoding: "raw_float32_vector", counter: "vector_mmap_direct/search", fallback: "typed_column_vector_fallbacks/search"},
-		{state: "HNSW adjacency", logical: "uint32_list", encoding: "raw_uint32_offsets_list", counter: "adjacency_typed_list_mmap_direct/search", fallback: "adjacency_legacy_fallbacks/search"},
+		{state: "HNSW adjacency", logical: "uint32_list", encoding: "raw_uint32_offsets_list", counter: "adjacency_prepared_csr_mmap_direct/search", fallback: "adjacency_legacy_fallbacks/search"},
 		{state: "Inverse norms", logical: "float32", encoding: "raw_float32", counter: "norm_mmap_direct/search", fallback: "norm_source_fallbacks/search"},
 		{state: "Row refs", logical: "int64", encoding: "raw_int64", counter: "row_ref_state_result_refs", fallback: "row_ref_vector_source_legacy_graph_ids"},
 		{state: "Document IDs", logical: "bytes", encoding: "raw_bytes_offsets", counter: "result_id_typed_bytes_state", fallback: "result_id_graph_fallbacks"},

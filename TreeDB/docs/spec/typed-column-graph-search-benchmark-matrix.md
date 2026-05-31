@@ -97,7 +97,9 @@ must also carry the relevant domain/source counters:
   `vector_heap_copy_typed_view/search`, `vector_scratch_decodes/search`,
   `typed_column_vector_fallbacks/search`, `norm_mmap_direct/search`,
   `norm_heap_copy_typed_view/search`, `norm_scratch_decodes/search`,
-  `norm_source_fallbacks/search`, `adjacency_typed_list_mmap_direct/search`,
+  `norm_source_fallbacks/search`, `adjacency_prepared_csr_mmap_direct/search`,
+  `adjacency_prepared_csr_direct_views/search`,
+  `adjacency_typed_list_mmap_direct/search`,
   `adjacency_typed_list_heap_copy_typed_view/search`,
   `adjacency_typed_list_scratch_decodes/search`,
   `adjacency_legacy_fallbacks/search`, and

@@ -37,6 +37,7 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"row_ref_state_source_fallbacks/search",
 		"vector_mmap_direct/search",
 		"norm_mmap_direct/search",
+		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_typed_list_mmap_direct/search",
 	}
 	for _, needle := range required {

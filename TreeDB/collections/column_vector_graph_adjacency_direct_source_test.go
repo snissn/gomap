@@ -93,9 +93,9 @@ func TestColumnVectorGraphSearchUsesVectorIndexStateAdjacency1988(t *testing.T) 
 	if len(directResults) == 0 {
 		t.Fatal("direct SearchCosine returned no results")
 	}
-	typedDirect := directStats.AdjacencyTypedListMmapDirectViews + directStats.AdjacencyTypedListHeapCopyTypedViews + directStats.AdjacencyTypedListScratchDecodes
-	if typedDirect == 0 || directStats.AdjacencyLegacyFallbacks != 0 || directStats.AdjacencySourceFallbacks != 0 {
-		t.Fatalf("direct stats=%+v want typed-list adjacency state and no legacy fallback", directStats)
+	stateDirect := directStats.AdjacencyPreparedCSRMmapDirectViews + directStats.AdjacencyTypedListMmapDirectViews + directStats.AdjacencyTypedListHeapCopyTypedViews + directStats.AdjacencyTypedListScratchDecodes
+	if stateDirect == 0 || directStats.AdjacencyLegacyFallbacks != 0 || directStats.AdjacencySourceFallbacks != 0 {
+		t.Fatalf("direct stats=%+v want prepared/state adjacency and no legacy fallback", directStats)
 	}
 
 	fallbackReader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
@@ -109,7 +109,7 @@ func TestColumnVectorGraphSearchUsesVectorIndexStateAdjacency1988(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "adjacency graph-row fallback unavailable") {
 		t.Fatalf("fallback SearchCosine err=%v want fail-closed missing TVIS adjacency", err)
 	}
-	if fallbackStats.AdjacencyTypedListMmapDirectViews+fallbackStats.AdjacencyTypedListHeapCopyTypedViews+fallbackStats.AdjacencyTypedListScratchDecodes != 0 || fallbackStats.AdjacencyLegacyFallbacks != 0 || fallbackStats.AdjacencyScratchDecodes != 0 {
+	if fallbackStats.AdjacencyPreparedCSRMmapDirectViews+fallbackStats.AdjacencyTypedListMmapDirectViews+fallbackStats.AdjacencyTypedListHeapCopyTypedViews+fallbackStats.AdjacencyTypedListScratchDecodes != 0 || fallbackStats.AdjacencyLegacyFallbacks != 0 || fallbackStats.AdjacencyScratchDecodes != 0 {
 		t.Fatalf("fallback stats=%+v want no legacy graph row adjacency reads after typed-state source disabled", fallbackStats)
 	}
 }
@@ -132,16 +132,16 @@ func TestColumnVectorGraphLayer0AdjacencySourceCertifiedMmapDirect1919(t *testin
 	if reader.layer0AdjacencySource == nil {
 		t.Fatalf("layer-0 adjacency source missing fallback=%s", reader.layer0AdjacencySourceFallbackReason)
 	}
-	if got := reader.layer0AdjacencySource.outcome; got != columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect {
-		t.Fatalf("source outcome=%s want typed_list_mmap_direct", got)
+	if got := reader.layer0AdjacencySource.outcome; got != columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect {
+		t.Fatalf("source outcome=%s want prepared_csr_mmap_direct", got)
 	}
 	var scratch columnVectorGraphNativeSearchScratch
 	_, stats, err := reader.SearchCosine(input[11].vector, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: 32}, &scratch)
 	if err != nil {
 		t.Fatalf("SearchCosine: %v", err)
 	}
-	if stats.AdjacencyTypedListMmapDirectViews == 0 || stats.AdjacencyTypedListHeapCopyTypedViews != 0 || stats.AdjacencyLegacyFallbacks != 0 {
-		t.Fatalf("stats=%+v want typed-list mmap direct adjacency and no legacy fallback", stats)
+	if stats.AdjacencyPreparedCSRMmapDirectViews == 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyTypedListHeapCopyTypedViews != 0 || stats.AdjacencyTypedListScratchDecodes != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
+		t.Fatalf("stats=%+v want prepared CSR mmap direct adjacency and no typed-list/legacy fallback", stats)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestColumnVectorGraphLayer0AdjacencySourceAbsentFallback1919(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SearchCosine: %v", err)
 	}
-	if len(got) == 0 || stats.AdjacencySourceUnavailable != 1 || stats.AdjacencySourceFallbacks != 1 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyScratchDecodes == 0 || stats.AdjacencyLegacyFallbacks == 0 {
+	if len(got) == 0 || stats.AdjacencySourceUnavailable != 1 || stats.AdjacencySourceFallbacks != 1 || stats.AdjacencyPreparedCSRMmapDirectViews != 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyScratchDecodes == 0 || stats.AdjacencyLegacyFallbacks == 0 {
 		t.Fatalf("results=%d stats=%+v want explicit source-unavailable row fallback", len(got), stats)
 	}
 }
@@ -225,8 +225,8 @@ func TestColumnVectorGraphLegacyAdjacencySourceChecksumIgnoredWithState1989(t *t
 	if err != nil {
 		t.Fatalf("SearchCosine after corrupt compatibility source: %v", err)
 	}
-	if len(got) == 0 || stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
-		t.Fatalf("results=%d stats=%+v want typed adjacency state and quarantined legacy source corruption", len(got), stats)
+	if len(got) == 0 || stats.AdjacencyPreparedCSRMmapDirectViews+stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
+		t.Fatalf("results=%d stats=%+v want prepared/state adjacency and quarantined legacy source corruption", len(got), stats)
 	}
 }
 
@@ -251,7 +251,7 @@ func TestColumnVectorGraphLayer0AdjacencySourceStaleHandlesFallback1919(t *testi
 	if err == nil || !strings.Contains(err.Error(), "adjacency graph-row fallback unavailable") {
 		t.Fatalf("SearchCosine stale handles err=%v want fail-closed missing graph fallback", err)
 	}
-	if len(got) != 0 || stats.AdjacencyStaleHandles == 0 || stats.AdjacencySourceFallbacks == 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencyScratchDecodes != 0 {
+	if len(got) != 0 || stats.AdjacencyStaleHandles == 0 || stats.AdjacencySourceFallbacks == 0 || stats.AdjacencyPreparedCSRMmapDirectViews != 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencyScratchDecodes != 0 {
 		t.Fatalf("results=%d stats=%+v want stale typed-state handles to fail closed without graph row reads", len(got), stats)
 	}
 }
@@ -537,8 +537,8 @@ func TestColumnVectorGraphAllLayerAdjacencySourceMissingLayerFallback1921(t *tes
 	if err != nil {
 		t.Fatalf("SearchCosine with missing optional source: %v", err)
 	}
-	if len(got) == 0 || stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
-		t.Fatalf("results=%d stats=%+v want typed adjacency state after quarantined missing legacy source", len(got), stats)
+	if len(got) == 0 || stats.AdjacencyPreparedCSRMmapDirectViews+stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
+		t.Fatalf("results=%d stats=%+v want prepared/state adjacency after quarantined missing legacy source", len(got), stats)
 	}
 }
 
@@ -590,8 +590,8 @@ func TestColumnVectorGraphAllLayerAdjacencySourceCorruptLayerFallback1921(t *tes
 	if err != nil {
 		t.Fatalf("SearchCosine after corrupt optional source: %v", err)
 	}
-	if len(got) == 0 || stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
-		t.Fatalf("results=%d stats=%+v want typed adjacency state after quarantined corrupt legacy source", len(got), stats)
+	if len(got) == 0 || stats.AdjacencyPreparedCSRMmapDirectViews+stats.AdjacencyTypedListMmapDirectViews+stats.AdjacencyTypedListHeapCopyTypedViews == 0 || stats.AdjacencySourceUnavailable != 0 || stats.AdjacencySourceFallbacks != 0 || stats.AdjacencyLegacyFallbacks != 0 {
+		t.Fatalf("results=%d stats=%+v want prepared/state adjacency after quarantined corrupt legacy source", len(got), stats)
 	}
 }
 

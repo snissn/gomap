@@ -73,8 +73,8 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	if got.Stats.CandidateRows != uint64(len(rows)) || got.Stats.VisitedNodes < got.Stats.Candidates || got.Stats.VisitedEdges != got.Stats.Edges || got.Stats.VectorBytesRead == 0 || got.Stats.AdjacencyBytesRead == 0 {
 		t.Fatalf("stats=%+v want public operation-specific candidate row, non-undercounting visited graph, vector-byte, and adjacency-byte counters", got.Stats)
 	}
-	if got.Stats.AdjacencyTypedListMmapDirectViews+got.Stats.AdjacencyTypedListHeapCopyTypedViews+got.Stats.AdjacencyTypedListScratchDecodes == 0 || got.Stats.AdjacencyLegacyFallbacks != 0 {
-		t.Fatalf("stats=%+v want public search to expose typed-list adjacency and no legacy fallback on healthy state", got.Stats)
+	if got.Stats.AdjacencyPreparedCSRMmapDirectViews+got.Stats.AdjacencyTypedListMmapDirectViews+got.Stats.AdjacencyTypedListHeapCopyTypedViews+got.Stats.AdjacencyTypedListScratchDecodes == 0 || got.Stats.AdjacencyLegacyFallbacks != 0 {
+		t.Fatalf("stats=%+v want public search to expose prepared/state adjacency and no legacy fallback on healthy state", got.Stats)
 	}
 	if got.Stats.GraphRows != 0 || got.Stats.RowFetches != 0 || got.Stats.BatchFetches != 0 || got.Stats.RowsFetched != 0 || got.Stats.PhysicalBytesRead != 0 || got.Stats.OpenPhysicalBytesRead != 0 {
 		t.Fatalf("stats=%+v want zero graph row payload residency/reads on healthy current-format search", got.Stats)
@@ -2086,6 +2086,8 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.AdjacencyDirectViews), "adjacency_direct_views/search")
 	b.ReportMetric(float64(stats.AdjacencyMmapDirectViews), "adjacency_mmap_direct/search")
 	b.ReportMetric(float64(stats.AdjacencyHeapCopyTypedViews), "adjacency_heap_copy_typed_view/search")
+	b.ReportMetric(float64(stats.AdjacencyPreparedCSRDirectViews), "adjacency_prepared_csr_direct_views/search")
+	b.ReportMetric(float64(stats.AdjacencyPreparedCSRMmapDirectViews), "adjacency_prepared_csr_mmap_direct/search")
 	b.ReportMetric(float64(stats.AdjacencyTypedListDirectViews), "adjacency_typed_list_direct_views/search")
 	b.ReportMetric(float64(stats.AdjacencyTypedListMmapDirectViews), "adjacency_typed_list_mmap_direct/search")
 	b.ReportMetric(float64(stats.AdjacencyTypedListHeapCopyTypedViews), "adjacency_typed_list_heap_copy_typed_view/search")
