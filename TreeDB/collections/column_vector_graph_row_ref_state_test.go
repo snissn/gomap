@@ -187,6 +187,31 @@ func TestColumnVectorGraphRowRefStateHeapCopyFallback2041(t *testing.T) {
 	}
 }
 
+func TestColumnVectorGraphRowRefStateMmapDirectFieldCountTracksCertification2041(t *testing.T) {
+	raw := make([]byte, 8)
+	manager := mappedresource.NewManager()
+	key := mappedresource.Key{Class: mappedresource.ClassTypedColumnAsset, Namespace: "test", Kind: string(ColumnAssetKindTCS1TypedColumnPart), Generation: 1, PartID: 2, FileID: 3, Length: int64(len(raw)), Encoding: typedcolumn.EncodingRawInt64.String()}
+	scope := mappedresource.Scope{Kind: mappedresource.ScopeColumnPartReader, ID: "row-ref-mmap-count", Namespace: "test", Generation: 1}
+	handle, err := manager.AcquireBytes(key, scope, mappedresource.SourceMapped, raw, mappedresource.AcquireOptions{Reason: "row-ref mmap count test"})
+	if err != nil {
+		t.Fatalf("AcquireBytes: %v", err)
+	}
+	view := typeddecode.PreparedInt64DirectView{Rows: 1, Values: []int64{42}, Handle: handle}
+	source := &columnVectorGraphRowRefStateSource{rows: 1, generations: view, partIDs: view, rowIndexes: view, appliedCommandLSNs: view}
+	if got := source.mmapDirectFieldCount(); got != 0 {
+		_ = source.Close()
+		t.Fatalf("mmapDirectFieldCount=%d want 0 for fallback values retained behind a mapped handle", got)
+	}
+	source.mmapDirectFields = 3
+	if got := source.mmapDirectFieldCount(); got != 3 {
+		_ = source.Close()
+		t.Fatalf("mmapDirectFieldCount=%d want explicit certification count 3", got)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("source close: %v", err)
+	}
+}
+
 func TestColumnVectorGraphRowRefStatePreservesOpaqueResultIDs1993(t *testing.T) {
 	dir, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, nil)
 	_ = dir

@@ -65,11 +65,12 @@ type columnVectorGraphRowRefStateSource struct {
 	rowIndexes         typeddecode.PreparedInt64DirectView
 	appliedCommandLSNs typeddecode.PreparedInt64DirectView
 
-	manager         *mappedresource.Manager
-	mappedBytes     uint64
-	activeHandles   int64
-	deniedResources uint64
-	closed          bool
+	manager          *mappedresource.Manager
+	mmapDirectFields uint64
+	mappedBytes      uint64
+	activeHandles    int64
+	deniedResources  uint64
+	closed           bool
 }
 
 func columnVectorGraphRowRefStateAssetID(field columnVectorGraphRowRefStateField) string {
@@ -446,9 +447,12 @@ func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, c
 		}
 	}()
 	for _, field := range columnVectorGraphRowRefStateFields {
-		view, err := openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection, cfg, def, state, assets[field], field, manager)
+		view, mmapDirect, err := openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection, cfg, def, state, assets[field], field, manager)
 		if err != nil {
 			return nil, fmt.Errorf("collections: column_graph %q row-ref state %s: %w", def.Name, field, err)
+		}
+		if mmapDirect {
+			source.mmapDirectFields++
 		}
 		source.setFieldView(field, view)
 	}
@@ -524,58 +528,58 @@ func (s *columnVectorGraphRowRefStateSource) setFieldView(field columnVectorGrap
 	}
 }
 
-func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, field columnVectorGraphRowRefStateField, manager *mappedresource.Manager) (typeddecode.PreparedInt64DirectView, error) {
+func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, field columnVectorGraphRowRefStateField, manager *mappedresource.Manager) (typeddecode.PreparedInt64DirectView, bool, error) {
 	sourceCfg, adapterColumn, err := columnVectorGraphRowRefStateColumnStoreConfig(collection, cfg, def, field)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
-		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("schema_hash=%d want %d", asset.SourceSchemaHash, sourceCfg.SchemaHash)
+		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("schema_hash=%d want %d", asset.SourceSchemaHash, sourceCfg.SchemaHash)
 	}
 	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
-		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("bytes=%d manifest=%d ref=%d", len(raw), asset.AssetBytes, asset.Ref.Length)
+		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("bytes=%d manifest=%d ref=%d", len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	if image.PartID != asset.Ref.PartID || image.Rows != asset.RowCount || image.Rows != state.RowCount {
-		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("image part/rows=(%d,%d) asset/state=(%d,%d)", image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
+		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("image part/rows=(%d,%d) asset/state=(%d,%d)", image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
 	}
 	fields := columnStoreTypedColumnPartFields(sourceCfg)
 	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(sourceCfg.SchemaHash)}, image)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	section, err := columnVectorGraphRowRefStateSection(image, adapterColumn.Definition.Name)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("layout certification: %w", err)
+		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("layout certification: %w", err)
 	}
 	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
 	if !ok {
-		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("missing layout certification for column %q", adapterColumn.Definition.Name)
+		return typeddecode.PreparedInt64DirectView{}, false, fmt.Errorf("missing layout certification for column %q", adapterColumn.Definition.Name)
 	}
 	if err := validateColumnVectorGraphRowRefStateSection(adapterPart.Part, section, certColumn, adapterColumn.Definition.Name, state.RowCount); err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	sectionBytes, err := image.SectionBytes(section)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	handle, key, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphRowRefStateScopeID, "column_graph row-ref state", "column_graph row-ref state "+string(field), asset.Ref, image.Version, section, page.Checksum(sectionBytes), manager)
 	if err != nil {
-		return typeddecode.PreparedInt64DirectView{}, err
+		return typeddecode.PreparedInt64DirectView{}, false, err
 	}
 	expectation := columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleRowRefs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref)
 	view, status := typeddecode.CertifyGraphInt64DirectView(typeddecode.GraphInt64DirectViewRequest{
@@ -587,14 +591,14 @@ func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string,
 		Manager:       manager,
 	})
 	if status.Direct() {
-		return view, nil
+		return view, true, nil
 	}
 	view, fallbackErr := columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation, manager, handle, state.RowCount, status)
 	if fallbackErr == nil {
-		return view, nil
+		return view, false, nil
 	}
 	releaseErr := handle.Release()
-	return typeddecode.PreparedInt64DirectView{}, errors.Join(fallbackErr, releaseErr)
+	return typeddecode.PreparedInt64DirectView{}, false, errors.Join(fallbackErr, releaseErr)
 }
 
 func columnVectorGraphRowRefStatePreparedViewFromFallbackHandle(expectation typeddecode.GraphDirectViewExpectation, manager *mappedresource.Manager, handle *mappedresource.Handle, rows int, directStatus typeddecode.Status) (typeddecode.PreparedInt64DirectView, error) {
@@ -864,13 +868,7 @@ func (s *columnVectorGraphRowRefStateSource) mmapDirectFieldCount() uint64 {
 	if !s.preparedViewActive() {
 		return 0
 	}
-	var count uint64
-	for _, view := range []typeddecode.PreparedInt64DirectView{s.generations, s.partIDs, s.rowIndexes, s.appliedCommandLSNs} {
-		if view.Handle != nil && view.Handle.Source() == mappedresource.SourceMapped {
-			count++
-		}
-	}
-	return count
+	return s.mmapDirectFields
 }
 
 func (s *columnVectorGraphRowRefStateSource) captureResourceStats() {
@@ -895,6 +893,7 @@ func (s *columnVectorGraphRowRefStateSource) Close() error {
 	closeErr := errors.Join(s.generations.Close(), s.partIDs.Close(), s.rowIndexes.Close(), s.appliedCommandLSNs.Close())
 	s.rows = 0
 	s.manager = nil
+	s.mmapDirectFields = 0
 	s.mappedBytes = 0
 	s.activeHandles = 0
 	return closeErr
