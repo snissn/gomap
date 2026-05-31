@@ -235,6 +235,41 @@ type columnPhysicalScanSnapshotView struct {
 	AssetNamespace        string
 }
 
+func columnPhysicalScanSnapshotViewAssetRefs(view columnPhysicalScanSnapshotView) []ColumnAssetRef {
+	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs)
+	if expectedRefs == 0 {
+		return nil
+	}
+	refs := make([]ColumnAssetRef, 0, expectedRefs)
+	seen := make(map[ColumnAssetRef]struct{}, expectedRefs)
+	add := func(ref ColumnAssetRef) {
+		if _, ok := seen[ref]; ok {
+			return
+		}
+		seen[ref] = struct{}{}
+		refs = append(refs, ref)
+	}
+	for _, assetRef := range view.AssetRefs {
+		add(assetRef.Ref)
+	}
+	for _, typedPartRef := range view.TypedColumnPartRefs {
+		add(typedPartRef.Ref)
+	}
+	for _, metadataRef := range view.AggregateMetadata {
+		add(metadataRef.AssetRef)
+	}
+	for _, dictionaryRef := range view.DictionaryCodes {
+		add(dictionaryRef.AssetRef)
+	}
+	for _, valuesRef := range view.Int64Values {
+		add(valuesRef.AssetRef)
+	}
+	for _, ref := range view.GraphAssetRefs {
+		add(ref)
+	}
+	return refs
+}
+
 var errColumnPhysicalAssetManifestOperationMismatch = errors.New("collections: column physical asset operation does not match manifest reason")
 
 func (c *Collection) scanColumnPhysicalRows(req columnPhysicalScanRequest) (columnPhysicalScanDiagnostics, error) {
