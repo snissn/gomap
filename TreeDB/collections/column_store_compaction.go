@@ -372,6 +372,7 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 	type cleanupTarget struct {
 		path       string
 		truncateTo int64
+		maxEnd     int64
 		remove     bool
 	}
 	targets := make(map[string]*cleanupTarget)
@@ -386,7 +387,7 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		}
 		target := targets[assetPath]
 		if target == nil {
-			target = &cleanupTarget{path: assetPath, truncateTo: ref.Offset}
+			target = &cleanupTarget{path: assetPath, truncateTo: ref.Offset, maxEnd: ref.Offset + ref.Length}
 			targets[assetPath] = target
 		}
 		if ref.FileID >= columnAssetDirectViewSegmentFileIDBase {
@@ -396,8 +397,24 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		if ref.Offset < target.truncateTo {
 			target.truncateTo = ref.Offset
 		}
+		if end := ref.Offset + ref.Length; end > target.maxEnd {
+			target.maxEnd = end
+		}
 	}
 	for _, target := range targets {
+		info, err := os.Stat(target.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if info.Size() != target.maxEnd {
+			// Another writer appended to the shared segment after these assets were
+			// prepared. Leave the orphaned bytes for reachability/GC rather than
+			// truncating potentially live refs from the winning manifest.
+			continue
+		}
 		if target.remove {
 			if err := os.Remove(target.path); err != nil && !os.IsNotExist(err) {
 				return err
