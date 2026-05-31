@@ -2284,6 +2284,32 @@ func runCollectionWaitIndexedAsyncFlushHook() {
 	}
 }
 
+var collectionPrimaryRunIndexRebuildHook struct {
+	mu sync.Mutex
+	fn func(collection string, tables, entries int)
+}
+
+func setCollectionPrimaryRunIndexRebuildHookForTest(fn func(collection string, tables, entries int)) func() {
+	collectionPrimaryRunIndexRebuildHook.mu.Lock()
+	prev := collectionPrimaryRunIndexRebuildHook.fn
+	collectionPrimaryRunIndexRebuildHook.fn = fn
+	collectionPrimaryRunIndexRebuildHook.mu.Unlock()
+	return func() {
+		collectionPrimaryRunIndexRebuildHook.mu.Lock()
+		collectionPrimaryRunIndexRebuildHook.fn = prev
+		collectionPrimaryRunIndexRebuildHook.mu.Unlock()
+	}
+}
+
+func runCollectionPrimaryRunIndexRebuildHook(collection string, tables, entries int) {
+	collectionPrimaryRunIndexRebuildHook.mu.Lock()
+	fn := collectionPrimaryRunIndexRebuildHook.fn
+	collectionPrimaryRunIndexRebuildHook.mu.Unlock()
+	if fn != nil {
+		fn(collection, tables, entries)
+	}
+}
+
 func setTestBeforeCommandWALBufferedUpdateStageLockForTest(fn func()) func() {
 	testBeforeCommandWALBufferedUpdateStageLockHook.installMu.Lock()
 	prev := testBeforeCommandWALBufferedUpdateStageLockHook.ptr.Load()
@@ -4263,6 +4289,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if domain.uniqueValueIndex == nil {
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
+	ensureBufferedPrimaryRunIndexLocked(domain, len(plan.primaryKeys))
 	if plan.directBufferedInsert != nil {
 		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan)
 	}
@@ -4390,6 +4417,7 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	if domain.uniqueValueIndex == nil {
 		domain.uniqueValueIndex = make(map[string]*bufferedUniqueValueIndex)
 	}
+	ensureBufferedPrimaryRunIndexLocked(domain, len(plan.primaryKeys))
 
 	addedRootRuns := estimateAccumulatedRootRunsForNamesLocked(domain, direct.rootNames)
 	shouldAutoFlushAfterAdding := shouldFlushBufferedIndexedWritesAfterAdding(domain, catalog.meta.Options, len(plan.resultIDs), direct.stagedBytes, addedRootRuns)
@@ -6592,6 +6620,16 @@ func newBufferedPrimaryRunIndex(capacity int) *bufferedPrimaryRunIndex {
 	return newBufferedPrimaryRunIndexWithDirectEntries(capacity, false)
 }
 
+func ensureBufferedPrimaryRunIndexLocked(domain *collectionWriteDomain, capacity int) *bufferedPrimaryRunIndex {
+	if domain == nil {
+		return nil
+	}
+	if domain.primaryRunIndex == nil {
+		domain.primaryRunIndex = newBufferedPrimaryRunIndex(max(1, capacity))
+	}
+	return domain.primaryRunIndex
+}
+
 func newBufferedPrimaryRunIndexWithDirectEntries(capacity int, directEntries bool) *bufferedPrimaryRunIndex {
 	if capacity < 0 {
 		capacity = 0
@@ -6741,7 +6779,9 @@ func rebuildBufferedPrimaryRunIndex(collectionName string, runs map[string][]mem
 	if len(tables) == 0 {
 		return nil, nil
 	}
-	index := newBufferedPrimaryRunIndexWithDirectEntries(bufferedRunLenHint(tables), true)
+	entries := bufferedRunLenHint(tables)
+	runCollectionPrimaryRunIndexRebuildHook(collectionName, len(tables), entries)
+	index := newBufferedPrimaryRunIndexWithDirectEntries(entries, true)
 	for _, table := range tables {
 		if err := addBufferedPrimaryRunIndexEntries(index, table); err != nil {
 			return nil, err
@@ -15416,6 +15456,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	primaryTable := rootTables[direct.primaryRootName]
+	ensureBufferedPrimaryRunIndexLocked(domain, len(direct.primaryEntries))
 	var primaryIndexKeys [][]byte
 	if domain.primaryRunIndex != nil {
 		primaryIndexKeys = make([][]byte, 0, len(direct.primaryEntries))
@@ -15684,6 +15725,7 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
 	materializePrimaryOverlayLocked(domain)
 	clearPrimaryDocumentCacheLocked(domain)
+	ensureBufferedPrimaryRunIndexLocked(domain, modifiedCount)
 	var primaryWriteTable memtable.Table
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
