@@ -695,6 +695,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysi
 	kthTime := int64(0)
 	for r.timeOrderHeap.len() != 0 {
 		iteratorIdx := r.timeOrderHeap.peek()
+		if iteratorIdx < 0 {
+			break
+		}
 		if haveKth && iterators[iteratorIdx].currentTime > kthTime {
 			break
 		}
@@ -823,7 +826,12 @@ type columnTypedColumnTimeOrderTopKHeap struct {
 
 func (h *columnTypedColumnTimeOrderTopKHeap) len() int { return len(h.items) }
 
-func (h *columnTypedColumnTimeOrderTopKHeap) peek() int { return h.items[0] }
+func (h *columnTypedColumnTimeOrderTopKHeap) peek() int {
+	if len(h.items) == 0 {
+		return -1
+	}
+	return h.items[0]
+}
 
 func (h *columnTypedColumnTimeOrderTopKHeap) push(iteratorIdx int, iterators []columnTypedColumnTimeOrderTopKIterator) {
 	h.items = append(h.items, iteratorIdx)
