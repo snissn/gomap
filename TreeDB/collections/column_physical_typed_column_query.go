@@ -288,7 +288,8 @@ func columnTypedColumnPhysicalQueryUseDenseLatestVisible(plan columnTypedColumnP
 
 func columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
 	return columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) ||
-		columnTypedColumnPhysicalQueryUseSortedMarkPrunedTopK(plan, req)
+		columnTypedColumnPhysicalQueryUseSortedMarkPrunedTopK(plan, req) ||
+		columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req)
 }
 
 func columnTypedColumnPhysicalQueryUseSortedMarkPrunedTopK(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
@@ -391,7 +392,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
 			part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
-			part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+			part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
 		default:
 			part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
 		}
@@ -844,6 +845,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisible(view columnPhysi
 	if columnTypedColumnPhysicalQueryUseDenseInt64Span(r.plan, req) {
 		return r.runLatestVisibleDenseInt64Span(view, req, state, visibilityBytes, visibilityNanos)
 	}
+	if columnTypedColumnPhysicalQueryUseTimeOrderTopK(r.plan, req) {
+		return r.runLatestVisibleTimeOrderTopK(view, req, state, visibilityBytes, visibilityNanos)
+	}
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(r.plan, req) {
 		return r.runLatestVisibleSortedGroupedDistinct(view, req, state, visibilityBytes, visibilityNanos)
 	}
@@ -1285,7 +1289,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysi
 			diag.TimeOrderTopKUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: time-order topK missing prepared part %d", partIdx)
 		}
-		iterator, err := newColumnTypedColumnTimeOrderTopKIterator(partIdx, part)
+		iterator, err := newColumnTypedColumnTimeOrderTopKIterator(partIdx, part, nil)
 		if err != nil {
 			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
 			diag := r.timeOrderTopKDiagnostics(view, req, rowsScanned, matchedRows, matchedRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
@@ -1359,9 +1363,105 @@ func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysi
 	return result, nil
 }
 
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleTimeOrderTopK(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.timeOrderMinValues == nil {
+		r.timeOrderMinValues = make(map[string]int64, req.TopK+1)
+	} else {
+		clear(r.timeOrderMinValues)
+	}
+	r.timeOrderHeap.items = r.timeOrderHeap.items[:0]
+	iterators := make([]columnTypedColumnTimeOrderTopKIterator, 0, len(r.parts))
+	reduceRows := 0
+	for partIdx := range r.parts {
+		runnerPart := r.parts[partIdx]
+		part := runnerPart.TimeOrderTopK
+		if part == nil {
+			diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, 0, 0, reduceRows, 0, 0, 0, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: time-order topK missing prepared part %d", partIdx)
+		}
+		visibility, err := r.latestVisiblePartForRunnerPart(runnerPart, state)
+		if err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		iterator, err := newColumnTypedColumnTimeOrderTopKIterator(partIdx, part, visibility)
+		if err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		iterators = append(iterators, iterator)
+		if !iterator.done {
+			r.timeOrderHeap.push(len(iterators)-1, iterators)
+		}
+	}
+
+	// Mutation-bearing sorted parts cannot use the insert-only time-threshold
+	// early stop: a newer visible version may live in any later/delta part. Keep
+	// the logical time-order merge, but scan every non-tombstone candidate and
+	// apply latest-visible physical row identity before predicate/reduce emission.
+	for r.timeOrderHeap.len() != 0 {
+		iteratorIdx := r.timeOrderHeap.pop(iterators)
+		iterator := &iterators[iteratorIdx]
+		visible, err := iterator.currentVisible()
+		if err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		if !visible {
+			if err := iterator.skipCurrent(); err != nil {
+				rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+				diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+			}
+		} else {
+			group, matched, err := iterator.evaluateCurrent(len(r.plan.PredicateSpecs) != 0)
+			if err != nil {
+				rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+				diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+			}
+			if matched {
+				reduceRows++
+				if !(req.SkipEmptyGroupKey && group == "") {
+					if _, exists := r.timeOrderMinValues[group]; !exists {
+						r.timeOrderMinValues[group] = iterator.currentTime
+					}
+				}
+			}
+		}
+		if err := iterator.advance(); err != nil {
+			rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+			diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		if !iterator.done {
+			r.timeOrderHeap.push(iteratorIdx, iterators)
+		}
+	}
+
+	groups := r.resultGroups[:0]
+	for key, value := range r.timeOrderMinValues {
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: key, Int64: value})
+	}
+	r.resultGroups = groups
+	rowsScanned, matchedRows, decodedGranules, decodedBlocks, decodedBytes := columnTypedColumnTimeOrderTopKIteratorTotals(iterators)
+	diag := r.latestVisibleTimeOrderTopKDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, time.Since(start).Nanoseconds())
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
 func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks int, decodedBytes uint64, scanNanos int64) ColumnPhysicalQueryDiagnostics {
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, scanNanos)
 	diag.TimeOrderTopKUsed = true
+	decodedGranules += r.granulesDecoded
+	decodedBlocks += r.decodedBlocks
+	decodedBytes += r.decodedPayloadBytes
 	diag.DecodedGranules = decodedGranules
 	diag.DecodedBlocks = decodedBlocks
 	diag.DirectReduceBlocks = decodedBlocks
@@ -1374,9 +1474,16 @@ func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKDiagnostics(view col
 	return diag
 }
 
+func (r *columnTypedColumnPhysicalQueryRunner) latestVisibleTimeOrderTopKDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks int, decodedBytes uint64, scanNanos int64) ColumnPhysicalQueryDiagnostics {
+	diag := r.timeOrderTopKDiagnostics(view, req, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks, decodedBytes, scanNanos)
+	applyTypedColumnLatestVisibilityDiagnostics(&diag, state, visibilityBytes, visibilityNanos)
+	return diag
+}
+
 type columnTypedColumnTimeOrderTopKIterator struct {
 	partIndex           int
 	part                *columnTypedColumnTimeOrderTopKPart
+	visibility          *typedColumnLatestPhysicalPart
 	granule             int
 	rowInGranule        int
 	currentTime         int64
@@ -1388,13 +1495,65 @@ type columnTypedColumnTimeOrderTopKIterator struct {
 	decodedPayloadBytes uint64
 }
 
-func newColumnTypedColumnTimeOrderTopKIterator(partIndex int, part *columnTypedColumnTimeOrderTopKPart) (columnTypedColumnTimeOrderTopKIterator, error) {
+func newColumnTypedColumnTimeOrderTopKIterator(partIndex int, part *columnTypedColumnTimeOrderTopKPart, visibility *typedColumnLatestPhysicalPart) (columnTypedColumnTimeOrderTopKIterator, error) {
 	part.resetTimeOrderTopKScan()
 	currentTime, ok, err := part.firstTimeOrderTopKTime()
 	if err != nil {
 		return columnTypedColumnTimeOrderTopKIterator{}, err
 	}
-	return columnTypedColumnTimeOrderTopKIterator{partIndex: partIndex, part: part, currentTime: currentTime, done: !ok}, nil
+	return columnTypedColumnTimeOrderTopKIterator{partIndex: partIndex, part: part, visibility: visibility, currentTime: currentTime, done: !ok}, nil
+}
+
+func (it *columnTypedColumnTimeOrderTopKIterator) currentPhysicalRow() (int, error) {
+	if it == nil || it.part == nil {
+		return 0, errors.New("collections: nil time-order topK iterator")
+	}
+	if it.granule < 0 || it.granule >= len(it.part.Granules) {
+		return 0, fmt.Errorf("collections: time-order topK granule %d outside %d", it.granule, len(it.part.Granules))
+	}
+	granule := it.part.Granules[it.granule]
+	if it.rowInGranule < 0 || it.rowInGranule >= granule.RowCount {
+		return 0, fmt.Errorf("collections: time-order topK row_in_granule=%d outside granule rows=%d", it.rowInGranule, granule.RowCount)
+	}
+	sortedRow := granule.FirstRow + it.rowInGranule
+	if sortedRow < 0 || sortedRow >= it.part.Rows {
+		return 0, fmt.Errorf("collections: time-order topK sorted row=%d outside rows=%d", sortedRow, it.part.Rows)
+	}
+	if it.part.PhysicalRows != nil {
+		if sortedRow >= len(it.part.PhysicalRows) {
+			return 0, fmt.Errorf("collections: time-order topK physical row map sorted row=%d outside rows=%d", sortedRow, len(it.part.PhysicalRows))
+		}
+		return it.part.PhysicalRows[sortedRow], nil
+	}
+	return sortedRow, nil
+}
+
+func (it *columnTypedColumnTimeOrderTopKIterator) currentVisible() (bool, error) {
+	if it.visibility == nil {
+		return true, nil
+	}
+	physicalRow, err := it.currentPhysicalRow()
+	if err != nil {
+		return false, err
+	}
+	return it.visibility.rowVisible(physicalRow), nil
+}
+
+func (it *columnTypedColumnTimeOrderTopKIterator) skipCurrent() error {
+	decoded, blocks, decodedBytes, err := it.part.ensureTimeOrderTopKGranuleDecoded(it.granule)
+	if err != nil {
+		return err
+	}
+	if it.rowInGranule < 0 || it.rowInGranule >= len(it.part.timeValues) {
+		return fmt.Errorf("collections: time-order topK row_in_granule=%d outside decoded time rows=%d", it.rowInGranule, len(it.part.timeValues))
+	}
+	it.rowsScanned++
+	if decoded {
+		it.decodedGranules++
+		it.decodedBlocks += blocks
+		it.decodedPayloadBytes += decodedBytes
+	}
+	return nil
 }
 
 func (it *columnTypedColumnTimeOrderTopKIterator) evaluateCurrent(countMatchedRows bool) (string, bool, error) {

@@ -275,15 +275,91 @@ func TestColumnPhysicalQ4BTopKSortedLatestVisibleMutation1953(t *testing.T) {
 	assertPreparedMutationFailsClosed1953(t, col, req)
 }
 
-func TestColumnPhysicalQ4ATimeOrderSortedMutationStillFailsClosed1953(t *testing.T) {
+func TestColumnPhysicalQ4ATimeOrderLatestVisibleMutationReopen1953(t *testing.T) {
+	const base = int64(1_930_000_000_000_000)
+	batches := [][]columnPhysicalJSONBenchParityEventP0{
+		{
+			{ID: "move-new", TimeUS: base + 100, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:new"},
+			{ID: "move-old", TimeUS: base + 6, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:old"},
+			{ID: "promote-predicate", TimeUS: base + 7, Kind: "identity", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:promote"},
+			{ID: "demote-predicate", TimeUS: base + 9, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:demote"},
+		},
+		{
+			{ID: "tie-b", TimeUS: base + 8, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:tie:b"},
+			{ID: "tie-a", TimeUS: base + 8, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:tie:a"},
+			{ID: "delete-me", TimeUS: base + 4, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:delete"},
+			{ID: "stable", TimeUS: base + 12, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:stable"},
+		},
+	}
+	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, []ColumnSortKey{{Column: "time_us"}}, batches)
+	events := flattenColumnPhysicalEvents1950(batches)
+	latest := latestEventMap1953(events)
+
+	movedNew := latest["move-new"]
+	movedNew.TimeUS = base + 5
+	updateTypedColumnEvent1953(t, col, movedNew)
+	latest[movedNew.ID] = movedNew
+
+	movedOld := latest["move-old"]
+	movedOld.TimeUS = base + 1_000
+	updateTypedColumnEvent1953(t, col, movedOld)
+	latest[movedOld.ID] = movedOld
+
+	promoted := latest["promote-predicate"]
+	promoted.Kind = "commit"
+	promoted.TimeUS = base + 8
+	updateTypedColumnEvent1953(t, col, promoted)
+	latest[promoted.ID] = promoted
+
+	demoted := latest["demote-predicate"]
+	demoted.Operation = "delete"
+	demoted.TimeUS = base + 3
+	updateTypedColumnEvent1953(t, col, demoted)
+	latest[demoted.ID] = demoted
+
+	deleteTypedColumnEvent1953(t, col, "delete-me")
+	delete(latest, "delete-me")
+
+	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
+	defer closeFn()
+
+	live := latestEvents1953(latest)
+	req := columnPhysicalQ4ATimeOrderRequest1950()
+	want := columnPhysicalQ4ATimeOrderReferenceGroups1950(live, req.TopK)
+	wantExact := []ColumnPhysicalQueryGroup{
+		{Key: "did:new", Int64: base + 5},
+		{Key: "did:promote", Int64: base + 8},
+		{Key: "did:tie:a", Int64: base + 8},
+	}
+	if !reflect.DeepEqual(want, wantExact) {
+		t.Fatalf("q4a latest-visible reference=%+v want exact %+v", want, wantExact)
+	}
+	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q4a", live)
+	result, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q4a time-order latest-visible): %v diagnostics=%+v", err, result.Diagnostics)
+	}
+	assertTypedColumnQ4BTopKGroups1950(t, "latest-visible q4a", result.Groups, want)
+	assertLatestVisibleQ4ATimeOrderDiagnostics1953(t, result.Diagnostics, len(live), matchedRows, req.TopK, len(want), columnPhysicalQ4AMatchingGroupCandidateCount1953(live), len(events)+4)
+	assertPreparedMutationFailsClosed1953(t, col, req)
+}
+
+func TestColumnPhysicalQ4ATimeOrderMutationUnsupportedSortKey1953(t *testing.T) {
 	batches := columnPhysicalQ4ATimeOrderBatches1950(8)
-	_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, []ColumnSortKey{{Column: "time_us"}}, batches)
+	_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, []ColumnSortKey{{Column: "did"}}, batches)
 	defer closeFn()
 	updated := batches[0][0]
 	updated.Kind = "commit"
 	updated.TimeUS += 19
 	updateTypedColumnEvent1953(t, col, updated)
-	assertSortedMutationUnsupported1953(t, "q4a", col, columnPhysicalQ4ATimeOrderRequest1950())
+
+	result, err := col.RunColumnPhysicalQuery(columnPhysicalQ4ATimeOrderRequest1950())
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "mutation visibility") {
+		t.Fatalf("q4a unsupported-sort mutation err=%v diagnostics=%+v want explicit mutation visibility fail-closed", err, result.Diagnostics)
+	}
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackMutationVisibilityUnsupported || result.Diagnostics.MutationParts == 0 || result.Diagnostics.VisibilityRows == 0 {
+		t.Fatalf("q4a unsupported-sort mutation diagnostics=%+v want typed-column unsupported visibility", result.Diagnostics)
+	}
 }
 
 func BenchmarkColumnPhysicalSortedLatestVisible1953(b *testing.B) {
@@ -291,6 +367,8 @@ func BenchmarkColumnPhysicalSortedLatestVisible1953(b *testing.B) {
 	q4bEvents := typedColumnQ4BTopKTieBreakEvents1950()
 	q4bEventsByID := eventsByID1953(q4bEvents)
 	q4bBatches := splitColumnPhysicalEvents1953(q4bEvents)
+	q4aBatches := columnPhysicalQ4ATimeOrderBatches1950(1024)
+	q4aEventsByID := eventsByID1953(flattenColumnPhysicalEvents1950(q4aBatches))
 	cases := []struct {
 		name    string
 		sortKey []ColumnSortKey
@@ -336,6 +414,28 @@ func BenchmarkColumnPhysicalSortedLatestVisible1953(b *testing.B) {
 				deleteTypedColumnEvent1953(tb, col, "post-2")
 			},
 		},
+		{
+			name:    "q4a_insert_only",
+			sortKey: []ColumnSortKey{{Column: "time_us"}},
+			batches: q4aBatches,
+			req:     columnPhysicalQ4ATimeOrderRequest1950(),
+		},
+		{
+			name:    "q4a_latest_visible",
+			sortKey: []ColumnSortKey{{Column: "time_us"}},
+			batches: q4aBatches,
+			req:     columnPhysicalQ4ATimeOrderRequest1950(),
+			mutate: func(tb testing.TB, col *Collection) {
+				updated := q4aEventsByID["a-m"]
+				updated.TimeUS -= 25
+				updateTypedColumnEvent1953(tb, col, updated)
+				promoted := q4aEventsByID["a-kind-guard"]
+				promoted.Kind = "commit"
+				promoted.TimeUS += 3
+				updateTypedColumnEvent1953(tb, col, promoted)
+				deleteTypedColumnEvent1953(tb, col, "b-b")
+			},
+		},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
@@ -374,6 +474,11 @@ func BenchmarkColumnPhysicalSortedLatestVisible1953(b *testing.B) {
 			b.ReportMetric(float64(last.SortKeyMarkChecks), "mark_checks/op")
 			b.ReportMetric(float64(last.SortKeyMarkSkips), "mark_skips/op")
 			b.ReportMetric(float64(last.TopKCandidates), "topk_candidates/op")
+			if last.TimeOrderTopKUsed {
+				b.ReportMetric(1, "time_order_topk_used/op")
+			} else {
+				b.ReportMetric(0, "time_order_topk_used/op")
+			}
 		})
 	}
 }
@@ -697,6 +802,45 @@ func assertLatestVisibleQ4BTopKDiagnostics1953(tb testing.TB, diag ColumnPhysica
 	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.ReconstructionRows != 0 {
 		tb.Fatalf("q4b materialization diagnostics=%+v want zero row/document reconstruction", diag)
 	}
+}
+
+func assertLatestVisibleQ4ATimeOrderDiagnostics1953(tb testing.TB, diag ColumnPhysicalQueryDiagnostics, visibleRows int, matchedRows int, wantTopK int, wantGroups int, wantCandidates int, wantRowsScanned int) {
+	tb.Helper()
+	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		tb.Fatalf("q4a diagnostics storage/fallback=%+v want latest-visible typed-column path", diag)
+	}
+	if diag.MutationParts == 0 || diag.VisibilityRows != visibleRows || diag.DeletedRows == 0 {
+		tb.Fatalf("q4a visibility diagnostics=%+v want mutation parts, visible=%d, deleted rows", diag, visibleRows)
+	}
+	if !diag.TimeOrderTopKUsed {
+		tb.Fatalf("q4a diagnostics=%+v want time-order topK latest-visible path", diag)
+	}
+	if diag.PredicateCount != 3 || diag.RowsMatched != matchedRows || diag.ReduceRows != matchedRows {
+		tb.Fatalf("q4a predicate diagnostics=%+v want predicates=3 matched/reduced=%d", diag, matchedRows)
+	}
+	if diag.RowsScanned != wantRowsScanned || diag.DecodedPayloadBytes == 0 || diag.DecodedBlocks == 0 {
+		tb.Fatalf("q4a scan diagnostics=%+v want full multipart latest-visible typed-column decode over %d non-tombstone candidates", diag, wantRowsScanned)
+	}
+	if diag.SortKeyMarkChecks == 0 || diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 || diag.PhysicalBytesScanned == 0 {
+		tb.Fatalf("q4a typed-column diagnostics=%+v want sorted typed-column section counters", diag)
+	}
+	if diag.TopKLimit != wantTopK || diag.TopKOrder != string(ColumnPhysicalQueryTopKInt64Asc) || diag.TopKCandidates != wantCandidates || diag.ResultGroups != wantGroups {
+		tb.Fatalf("q4a topK diagnostics=%+v want limit=%d candidates=%d groups=%d", diag, wantTopK, wantCandidates, wantGroups)
+	}
+	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 || diag.ReconstructionRows != 0 {
+		tb.Fatalf("q4a materialization diagnostics=%+v want zero row/document reconstruction", diag)
+	}
+}
+
+func columnPhysicalQ4AMatchingGroupCandidateCount1953(events []columnPhysicalJSONBenchParityEventP0) int {
+	seen := make(map[string]struct{})
+	for _, event := range events {
+		if !columnPhysicalJSONBenchReferenceMatchP0("q4a", event) {
+			continue
+		}
+		seen[event.Did] = struct{}{}
+	}
+	return len(seen)
 }
 
 func assertLatestVisibleDenseDiagnostics1953(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, visibleRows int, matchedRows int, shape string) {
