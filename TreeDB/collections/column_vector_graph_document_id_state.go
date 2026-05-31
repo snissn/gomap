@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
 	columnVectorGraphDocumentIDStateAssetID    = "document_ids"
 	columnVectorGraphDocumentIDStateColumnName = "document_ids"
 	columnVectorGraphDocumentIDStatePathSuffix = "_document_ids"
+	columnVectorGraphDocumentIDStateScopeID    = "column-vector-graph-document-id-state"
 )
 
 type columnVectorGraphPreparedDocumentIDStateAsset struct {
@@ -40,9 +43,14 @@ type columnVectorGraphPreparedDocumentIDStatePayload struct {
 }
 
 type columnVectorGraphDocumentIDStateSource struct {
-	rows   int
-	ids    typedcolumn.RawBytesOffsets
-	closed bool
+	rows int
+	view typeddecode.PreparedBytesDirectView
+
+	manager         *mappedresource.Manager
+	mappedBytes     uint64
+	activeHandles   int64
+	deniedResources uint64
+	closed          bool
 }
 
 func prepareColumnVectorGraphDocumentIDStateAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow) (columnVectorGraphPreparedDocumentIDStateAsset, error) {
@@ -342,85 +350,104 @@ func newColumnVectorGraphDocumentIDStateSourceFromRoot(rootDir, collection strin
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	ids, reason, err := decodeColumnVectorGraphDocumentIDStateFromRaw(def, sourceCfg, adapterColumn, state, asset, raw)
+	source, reason, err := newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection, def, sourceCfg, adapterColumn, state, asset, raw)
 	if err != nil {
 		return nil, reason, err
 	}
-	return &columnVectorGraphDocumentIDStateSource{rows: asset.RowCount, ids: ids}, "", nil
+	return source, "", nil
 }
 
-func decodeColumnVectorGraphDocumentIDStateFromRaw(def VectorIndexDefinition, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, raw []byte) (typedcolumn.RawBytesOffsets, typeddecode.Reason, error) {
+func newColumnVectorGraphDocumentIDStateSourceFromRawImage(rootDir, collection string, def VectorIndexDefinition, sourceCfg ColumnStoreConfig, adapterColumn typedColumnAdapterColumn, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, raw []byte) (*columnVectorGraphDocumentIDStateSource, typeddecode.Reason, error) {
 	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonPayloadLengthMismatch, fmt.Errorf("collections: column_graph %q document-id state bytes=%d manifest=%d ref=%d", def.Name, len(raw), asset.AssetBytes, asset.Ref.Length)
+		return nil, typeddecode.ReasonPayloadLengthMismatch, fmt.Errorf("collections: column_graph %q document-id state bytes=%d manifest=%d ref=%d", def.Name, len(raw), asset.AssetBytes, asset.Ref.Length)
 	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	if image.PartID != asset.Ref.PartID || image.Rows != asset.RowCount || image.Rows != state.RowCount {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonRowCountMismatch, fmt.Errorf("collections: column_graph %q document-id state image part/rows=(%d,%d) asset/state=(%d,%d)", def.Name, image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
+		return nil, typeddecode.ReasonRowCountMismatch, fmt.Errorf("collections: column_graph %q document-id state image part/rows=(%d,%d) asset/state=(%d,%d)", def.Name, image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
 	}
 	fields := columnStoreTypedColumnPartFields(sourceCfg)
 	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(sourceCfg.SchemaHash)}, image)
 	if err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	if adapterPart.Part.Descriptor.SchemaVersion != uint32(sourceCfg.SchemaHash) {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state schema_version=%d want %d", def.Name, adapterPart.Part.Descriptor.SchemaVersion, uint32(sourceCfg.SchemaHash))
+		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state schema_version=%d want %d", def.Name, adapterPart.Part.Descriptor.SchemaVersion, uint32(sourceCfg.SchemaHash))
 	}
 	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections(adapterColumn.Definition.Name)
 	if !ok {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state missing offsets/value sections for column %q", def.Name, adapterColumn.Definition.Name)
+		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state missing offsets/value sections for column %q", def.Name, adapterColumn.Definition.Name)
 	}
 	offsetsRaw, err := image.SectionBytes(offsetsSection)
 	if err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	valuesRaw, err := image.SectionBytes(valuesSection)
 	if err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	if err := typedcolumn.ValidateRawBytesOffsetsSections(offsetsSection, valuesSection, offsetsRaw, valuesRaw, state.RowCount); err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
 	if err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state layout certification: %w", def.Name, err)
+		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state layout certification: %w", def.Name, err)
 	}
 	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
 	if !ok {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state missing layout certification for column %q", def.Name, adapterColumn.Definition.Name)
+		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state missing layout certification for column %q", def.Name, adapterColumn.Definition.Name)
 	}
 	if certColumn.LogicalType != columnVectorIndexStateLogicalTypeBytes || certColumn.Type != typedcolumn.ColumnTypeBytes || certColumn.Encoding != typedcolumn.EncodingRawBytesOffsets || certColumn.Compression != typedcolumn.CompressionNone {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", def.Name, certColumn.LogicalType, certColumn.Type, certColumn.Encoding, columnVectorIndexStateLogicalTypeBytes, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets)
+		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state logical/type/encoding=(%q,%s,%s) want (%q,%s,%s)", def.Name, certColumn.LogicalType, certColumn.Type, certColumn.Encoding, columnVectorIndexStateLogicalTypeBytes, typedcolumn.ColumnTypeBytes, typedcolumn.EncodingRawBytesOffsets)
 	}
-	plan := typeddecode.BytesPlan(certColumn)
-	status := typeddecode.ValidateBytesDirectViewSections(typeddecode.BytesDirectViewRequest{
-		Plan:           plan,
-		Certification:  certColumn,
-		Rows:           state.RowCount,
-		OffsetsBytes:   offsetsSection.Length,
-		ValuesBytes:    valuesSection.Length,
-		AssetOffset:    asset.Ref.Offset,
-		HasAssetOffset: true,
+	manager := mappedresource.NewManager()
+	offsetsHandle, offsetsKey, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphDocumentIDStateScopeID, "column_graph document-id state", "column_graph document-id state offsets", asset.Ref, image.Version, offsetsSection, page.Checksum(offsetsRaw), manager)
+	if err != nil {
+		return nil, typeddecode.ReasonValidationFailed, err
+	}
+	valuesHandle, valuesKey, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphDocumentIDStateScopeID, "column_graph document-id state", "column_graph document-id state values", asset.Ref, image.Version, valuesSection, page.Checksum(valuesRaw), manager)
+	if err != nil {
+		releaseErr := offsetsHandle.Release()
+		return nil, typeddecode.ReasonValidationFailed, errors.Join(err, releaseErr)
+	}
+	view, status := typeddecode.CertifyGraphBytesDirectView(typeddecode.GraphBytesDirectViewRequest{
+		Expectation:        columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleDocumentIDs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref),
+		Certification:      certColumn,
+		OffsetsSection:     offsetsSection,
+		ValuesSection:      valuesSection,
+		ExpectedOffsetsKey: offsetsKey,
+		ExpectedValuesKey:  valuesKey,
+		OffsetsHandle:      offsetsHandle,
+		ValuesHandle:       valuesHandle,
+		Manager:            manager,
 	})
 	if !status.Direct() {
-		return typedcolumn.RawBytesOffsets{}, status.Reason, fmt.Errorf("collections: column_graph %q document-id state direct-view section validation failed: %s", def.Name, status.String())
+		releaseErr := errors.Join(offsetsHandle.Release(), valuesHandle.Release())
+		return nil, status.Reason, errors.Join(fmt.Errorf("collections: column_graph %q document-id state direct-view certification failed: %s", def.Name, status.String()), releaseErr)
 	}
-	ids, err := typedcolumn.DecodeRawBytesOffsetsFallback(nil, nil, offsetsRaw, valuesRaw, state.RowCount)
-	if err != nil {
-		return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+	source := &columnVectorGraphDocumentIDStateSource{rows: asset.RowCount, view: view, manager: manager}
+	if err := validateColumnVectorGraphDocumentIDPreparedView(def.Name, view, asset.RowCount); err != nil {
+		_ = source.Close()
+		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	for ordinal := 0; ordinal < ids.Rows; ordinal++ {
-		id, err := ids.Row(ordinal)
-		if err != nil {
-			return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, err
+	source.captureResourceStats()
+	return source, "", nil
+}
+
+func validateColumnVectorGraphDocumentIDPreparedView(indexName string, view typeddecode.PreparedBytesDirectView, rows int) error {
+	if !view.Alive() || view.Rows != rows || len(view.Offsets) != rows+1 {
+		return fmt.Errorf("collections: column_graph %q document-id prepared view rows=%d offsets=%d want rows=%d offsets=%d", indexName, view.Rows, len(view.Offsets), rows, rows+1)
+	}
+	for ordinal := 0; ordinal < rows; ordinal++ {
+		start := view.Offsets[ordinal]
+		end := view.Offsets[ordinal+1]
+		if start >= end {
+			return fmt.Errorf("collections: column_graph %q document-id state ordinal=%d missing document id", indexName, ordinal)
 		}
-		if len(id) == 0 {
-			return typedcolumn.RawBytesOffsets{}, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q document-id state ordinal=%d missing document id", def.Name, ordinal)
-		}
 	}
-	return ids, "", nil
+	return nil
 }
 
 func (r *columnVectorGraphPhysicalRowReader) documentIDForOrdinal(ordinal int) ([]byte, bool) {
@@ -431,21 +458,39 @@ func (r *columnVectorGraphPhysicalRowReader) documentIDForOrdinal(ordinal int) (
 }
 
 func (s *columnVectorGraphDocumentIDStateSource) documentIDForOrdinal(ordinal int) ([]byte, bool) {
-	if s == nil || s.closed || ordinal < 0 || ordinal >= s.rows || ordinal >= s.ids.Rows {
+	if s == nil || s.closed || !s.view.Alive() || ordinal < 0 || ordinal >= s.rows {
 		return nil, false
 	}
-	id, err := s.ids.Row(ordinal)
-	if err != nil || len(id) == 0 {
+	id := s.view.Row(ordinal)
+	if len(id) == 0 {
 		return nil, false
 	}
 	return id, true
 }
 
 func (s *columnVectorGraphDocumentIDStateSource) documentIDs() (typedcolumn.RawBytesOffsets, bool) {
-	if s == nil || s.closed || s.ids.Rows != s.rows {
+	if s == nil || s.closed || !s.view.Alive() || s.view.Rows != s.rows {
 		return typedcolumn.RawBytesOffsets{}, false
 	}
-	return s.ids, true
+	return typedcolumn.RawBytesOffsets{Rows: s.rows, Offsets: s.view.Offsets, Values: s.view.Values}, true
+}
+
+func (s *columnVectorGraphDocumentIDStateSource) preparedViewActive() bool {
+	return s != nil && !s.closed && s.view.Alive() && s.view.Rows == s.rows
+}
+
+func (s *columnVectorGraphDocumentIDStateSource) captureResourceStats() {
+	if s == nil || s.manager == nil {
+		return
+	}
+	stats := s.manager.Stats()
+	if stats.ActiveMappedBytes > 0 {
+		s.mappedBytes = uint64(stats.ActiveMappedBytes)
+	}
+	s.activeHandles = stats.ActiveHandles
+	for _, count := range stats.DeniedByReason {
+		s.deniedResources += count
+	}
 }
 
 func (s *columnVectorGraphDocumentIDStateSource) Close() error {
@@ -453,7 +498,19 @@ func (s *columnVectorGraphDocumentIDStateSource) Close() error {
 		return nil
 	}
 	s.closed = true
+	closeErr := s.view.Close()
 	s.rows = 0
-	s.ids = typedcolumn.RawBytesOffsets{}
-	return nil
+	s.manager = nil
+	s.mappedBytes = 0
+	s.activeHandles = 0
+	return closeErr
+}
+
+func (r *columnVectorGraphPhysicalRowReader) populateDocumentIDStateSearchStats(stats *columnVectorGraphNativeSearchStats) {
+	if r == nil || stats == nil || r.documentIDSource == nil {
+		return
+	}
+	if r.documentIDSource.preparedViewActive() {
+		stats.ResultIDPreparedBytesViews = 1
+	}
 }

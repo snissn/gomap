@@ -302,12 +302,18 @@ type VectorIndexSearchStats struct {
 	RowRefVectorSourceState uint64 `json:"row_ref_vector_source_state,omitempty"`
 	// RowRefVectorSourceLegacyGraphIDs reports searches whose typed-column vector locator map used legacy graph row ID scans.
 	RowRefVectorSourceLegacyGraphIDs uint64 `json:"row_ref_vector_source_legacy_graph_ids,omitempty"`
+	// RowRefStatePreparedViews reports searches with an open-time certified prepared row-ref view bound to the searcher.
+	RowRefStatePreparedViews uint64 `json:"row_ref_state_prepared_views,omitempty"`
+	// RowRefStateMmapDirectFields counts row-ref coordinate fields admitted as mmap-direct prepared int64 views.
+	RowRefStateMmapDirectFields uint64 `json:"row_ref_state_mmap_direct_fields,omitempty"`
 	// RowRefStateResultRefs counts top-k result row refs served from vector-index row-ref state.
 	RowRefStateResultRefs uint64 `json:"row_ref_state_result_refs,omitempty"`
 	// RowRefStateSourceUnavailable reports that row-ref state was absent and compatibility source selection was used.
 	RowRefStateSourceUnavailable uint64 `json:"row_ref_state_source_unavailable,omitempty"`
 	// RowRefStateSourceFallbacks reports row-ref source fallback/quarantine observations.
 	RowRefStateSourceFallbacks uint64 `json:"row_ref_state_source_fallbacks,omitempty"`
+	// ResultIDPreparedBytesViews reports searches with an open-time certified prepared document-ID bytes view bound to the searcher.
+	ResultIDPreparedBytesViews uint64 `json:"result_id_prepared_bytes_views,omitempty"`
 	// ResultIDTypedBytesState counts returned document IDs copied from vector-index typed-column bytes state.
 	ResultIDTypedBytesState uint64 `json:"result_id_typed_bytes_state,omitempty"`
 	// ResultIDGraphFallbacks counts returned document IDs copied from legacy graph row ID bytes.
@@ -963,9 +969,12 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		TypedColumnFallbacks:                 searchStats.TypedColumnFallbacks,
 		RowRefVectorSourceState:              searchStats.RowRefVectorSourceState,
 		RowRefVectorSourceLegacyGraphIDs:     searchStats.RowRefVectorSourceLegacyGraphIDs,
+		RowRefStatePreparedViews:             searchStats.RowRefStatePreparedViews,
+		RowRefStateMmapDirectFields:          searchStats.RowRefStateMmapDirectFields,
 		RowRefStateResultRefs:                searchStats.RowRefStateResultRefs,
 		RowRefStateSourceUnavailable:         searchStats.RowRefStateSourceUnavailable,
 		RowRefStateSourceFallbacks:           searchStats.RowRefStateSourceFallbacks,
+		ResultIDPreparedBytesViews:           searchStats.ResultIDPreparedBytesViews,
 		ResultIDTypedBytesState:              searchStats.ResultIDTypedBytesState,
 		ResultIDGraphFallbacks:               searchStats.ResultIDGraphFallbacks,
 		ResultIDStateValidationFailures:      searchStats.ResultIDStateValidationFailures,

@@ -2,9 +2,13 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnVectorGraphDocumentIDStatePublishesSearchAndReopen2013(t *testing.T) {
@@ -58,9 +62,9 @@ func TestColumnVectorGraphDocumentIDStatePublishesSearchAndReopen2013(t *testing
 		_ = d.Close()
 		t.Fatalf("result id=%v want exact opaque bytes %v", got.Results, idA)
 	}
-	if got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
+	if got.Stats.ResultIDPreparedBytesViews != 1 || got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
 		_ = d.Close()
-		t.Fatalf("stats=%+v want typed bytes result id without graph fallback", got.Stats)
+		t.Fatalf("stats=%+v want prepared typed bytes result id without graph fallback", got.Stats)
 	}
 	if err := d.Checkpoint(); err != nil {
 		_ = d.Close()
@@ -83,8 +87,8 @@ func TestColumnVectorGraphDocumentIDStatePublishesSearchAndReopen2013(t *testing
 	if len(reopenedGot.Results) != 1 || !bytes.Equal(reopenedGot.Results[0].ID, idA) {
 		t.Fatalf("reopen result id=%v want exact opaque bytes %v", reopenedGot.Results, idA)
 	}
-	if reopenedGot.Stats.ResultIDTypedBytesState != 1 || reopenedGot.Stats.ResultIDGraphFallbacks != 0 || reopenedGot.Stats.ResultIDStateValidationFailures != 0 {
-		t.Fatalf("reopen stats=%+v want typed bytes result id without graph fallback", reopenedGot.Stats)
+	if reopenedGot.Stats.ResultIDPreparedBytesViews != 1 || reopenedGot.Stats.ResultIDTypedBytesState != 1 || reopenedGot.Stats.ResultIDGraphFallbacks != 0 || reopenedGot.Stats.ResultIDStateValidationFailures != 0 {
+		t.Fatalf("reopen stats=%+v want prepared typed bytes result id without graph fallback", reopenedGot.Stats)
 	}
 }
 
@@ -105,7 +109,7 @@ func TestColumnVectorGraphDocumentIDStateMissingFallsBack2013(t *testing.T) {
 		t.Fatalf("results=%d want 2", len(got.Results))
 	}
 	assertSearchResultIDsMatchGraphRows2013(t, got.Results, rows)
-	if got.Stats.ResultIDTypedBytesState != 0 || got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) || got.Stats.ResultIDStateValidationFailures != 0 {
+	if got.Stats.ResultIDPreparedBytesViews != 0 || got.Stats.ResultIDTypedBytesState != 0 || got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) || got.Stats.ResultIDStateValidationFailures != 0 {
 		t.Fatalf("stats=%+v want missing document-id state graph fallback", got.Stats)
 	}
 }
@@ -151,6 +155,51 @@ func TestColumnVectorGraphDocumentIDStateMissingAssetFailsClosed2013(t *testing.
 	}
 	if got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDTypedBytesState != 0 {
 		t.Fatalf("stats=%+v want no graph row result-id fallback", got.Stats)
+	}
+}
+
+func TestColumnVectorGraphDocumentIDStateCorruptOffsetsRejected2041(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+		{id: "doc-c", vector: []float32{0, 0, 1}},
+	}
+	_, d, _, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 2, rows)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	graph := graphManifestFromRecords1918(t, records, def)
+	asset, found, err := findColumnVectorGraphDocumentIDStateAsset(state)
+	if err != nil || !found {
+		t.Fatalf("document-id state asset found=%t err=%v", found, err)
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatalf("read document-id asset: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	offsetsSection, _, ok := image.ColumnOffsetsListSections(columnVectorGraphDocumentIDStateColumnName)
+	if !ok {
+		t.Fatalf("missing document-id offsets section")
+	}
+	corrupt := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint64(corrupt[offsetsSection.Offset+8:], uint64(len(corrupt))*2)
+	badAsset := asset
+	badAsset.Ref.Checksum = page.Checksum(corrupt)
+	badState := replaceColumnVectorIndexStateAssetForTest2041(t, state, badAsset)
+	writeColumnVectorGraphAssetRawForTest2041(t, d.ColumnAssetRootDir(), asset.Ref, corrupt)
+	if _, _, err := newColumnVectorGraphDocumentIDStateSourceFromRoot(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, badState); err == nil || (!strings.Contains(err.Error(), "offset") && !strings.Contains(err.Error(), "values")) {
+		t.Fatalf("document-id corrupt offsets err=%v, want offset/value rejection", err)
 	}
 }
 

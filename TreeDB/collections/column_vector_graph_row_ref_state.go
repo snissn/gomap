@@ -7,12 +7,16 @@ import (
 	"math"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/internal/typeddecode"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 const (
 	columnVectorGraphRowRefStateAssetIDPrefix = "base_row_ref/"
 	columnVectorGraphRowRefStatePathSuffix    = "_base_row_ref_"
+	columnVectorGraphRowRefStateScopeID       = "column-vector-graph-row-ref-state"
 )
 
 const maxColumnVectorGraphRowRefInt64Uint64 = uint64(1<<63 - 1)
@@ -55,9 +59,17 @@ type columnVectorGraphPreparedRowRefStatePayload struct {
 }
 
 type columnVectorGraphRowRefStateSource struct {
-	rows   int
-	refs   []DocumentRowRef
-	closed bool
+	rows               int
+	generations        typeddecode.PreparedInt64DirectView
+	partIDs            typeddecode.PreparedInt64DirectView
+	rowIndexes         typeddecode.PreparedInt64DirectView
+	appliedCommandLSNs typeddecode.PreparedInt64DirectView
+
+	manager         *mappedresource.Manager
+	mappedBytes     uint64
+	activeHandles   int64
+	deniedResources uint64
+	closed          bool
 }
 
 func columnVectorGraphRowRefStateAssetID(field columnVectorGraphRowRefStateField) string {
@@ -425,21 +437,25 @@ func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, c
 	if err != nil {
 		return nil, err
 	}
-	valuesByField := make(map[columnVectorGraphRowRefStateField][]int64, len(columnVectorGraphRowRefStateFields))
-	var rawScratch []byte
+	manager := mappedresource.NewManager()
+	source := &columnVectorGraphRowRefStateSource{rows: state.RowCount, manager: manager}
+	success := false
+	defer func() {
+		if !success {
+			_ = source.Close()
+		}
+	}()
 	for _, field := range columnVectorGraphRowRefStateFields {
-		values, scratch, err := loadColumnVectorGraphRowRefStateValuesInto(rootDir, collection, cfg, def, state, assets[field], field, rawScratch)
+		view, err := openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection, cfg, def, state, assets[field], field, manager)
 		if err != nil {
 			return nil, fmt.Errorf("collections: column_graph %q row-ref state %s: %w", def.Name, field, err)
 		}
-		rawScratch = scratch
-		valuesByField[field] = values
+		source.setFieldView(field, view)
 	}
-	refs := make([]DocumentRowRef, state.RowCount)
-	for ordinal := range refs {
-		ref, err := columnVectorGraphRowRefFromStateValues(valuesByField, ordinal)
-		if err != nil {
-			return nil, err
+	for ordinal := 0; ordinal < state.RowCount; ordinal++ {
+		ref, ok := source.rowRefForOrdinal(ordinal)
+		if !ok {
+			return nil, fmt.Errorf("collections: column_graph %q row-ref state ordinal=%d unavailable", def.Name, ordinal)
 		}
 		if err := validateColumnVectorGraphRowRefForState(ordinal, ref, graph.BaseManifestGeneration); err != nil {
 			return nil, err
@@ -447,9 +463,10 @@ func newColumnVectorGraphRowRefStateSourceFromRoot(rootDir, collection string, c
 		if err := validateColumnVectorGraphRowRefStateBounds(def.Name, ordinal, ref, baseRows); err != nil {
 			return nil, err
 		}
-		refs[ordinal] = ref
 	}
-	return &columnVectorGraphRowRefStateSource{rows: state.RowCount, refs: refs}, nil
+	source.captureResourceStats()
+	success = true
+	return source, nil
 }
 
 func validateColumnVectorGraphRowRefStateBounds(indexName string, ordinal int, ref DocumentRowRef, baseRows map[documentRowPartKey]int) error {
@@ -489,6 +506,100 @@ func columnVectorGraphRowRefBasePartRows(records []columnManifestRecord, generat
 		rows[key] = asset.Rows
 	}
 	return rows, nil
+}
+
+func (s *columnVectorGraphRowRefStateSource) setFieldView(field columnVectorGraphRowRefStateField, view typeddecode.PreparedInt64DirectView) {
+	if s == nil {
+		return
+	}
+	switch field {
+	case columnVectorGraphRowRefStateFieldGeneration:
+		s.generations = view
+	case columnVectorGraphRowRefStateFieldPartID:
+		s.partIDs = view
+	case columnVectorGraphRowRefStateFieldRowIndex:
+		s.rowIndexes = view
+	case columnVectorGraphRowRefStateFieldAppliedCommandLSN:
+		s.appliedCommandLSNs = view
+	}
+}
+
+func openColumnVectorGraphRowRefStateFieldDirectView(rootDir, collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot, asset columnVectorIndexStateAssetSnapshot, field columnVectorGraphRowRefStateField, manager *mappedresource.Manager) (typeddecode.PreparedInt64DirectView, error) {
+	sourceCfg, adapterColumn, err := columnVectorGraphRowRefStateColumnStoreConfig(collection, cfg, def, field)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	if asset.SourceSchemaHash != sourceCfg.SchemaHash {
+		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("schema_hash=%d want %d", asset.SourceSchemaHash, sourceCfg.SchemaHash)
+	}
+	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	raw, err := readColumnPhysicalAssetFromManager(rootDir, asset.Ref)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	if int64(len(raw)) != asset.AssetBytes || int64(len(raw)) != asset.Ref.Length {
+		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("bytes=%d manifest=%d ref=%d", len(raw), asset.AssetBytes, asset.Ref.Length)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	if image.PartID != asset.Ref.PartID || image.Rows != asset.RowCount || image.Rows != state.RowCount {
+		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("image part/rows=(%d,%d) asset/state=(%d,%d)", image.PartID, image.Rows, asset.Ref.PartID, state.RowCount)
+	}
+	fields := columnStoreTypedColumnPartFields(sourceCfg)
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(sourceCfg.SchemaHash)}, image)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	section, err := columnVectorGraphRowRefStateSection(image, adapterColumn.Definition.Name)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("layout certification: %w", err)
+	}
+	certColumn, ok := certification.Column(adapterColumn.Definition.Name)
+	if !ok {
+		return typeddecode.PreparedInt64DirectView{}, fmt.Errorf("missing layout certification for column %q", adapterColumn.Definition.Name)
+	}
+	if err := validateColumnVectorGraphRowRefStateSection(adapterPart.Part, section, certColumn, adapterColumn.Definition.Name, state.RowCount); err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	sectionBytes, err := image.SectionBytes(section)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	handle, key, err := acquireColumnVectorGraphPreparedStateSection(rootDir, collection, columnVectorGraphRowRefStateScopeID, "column_graph row-ref state", "column_graph row-ref state "+string(field), asset.Ref, image.Version, section, page.Checksum(sectionBytes), manager)
+	if err != nil {
+		return typeddecode.PreparedInt64DirectView{}, err
+	}
+	view, status := typeddecode.CertifyGraphInt64DirectView(typeddecode.GraphInt64DirectViewRequest{
+		Expectation:   columnVectorGraphDirectViewExpectation(columnVectorIndexStateAssetRoleRowRefs, asset.Role, adapterColumn.Definition.Name, state.RowCount, asset.Ref),
+		Certification: certColumn,
+		Section:       section,
+		ExpectedKey:   key,
+		Handle:        handle,
+		Manager:       manager,
+	})
+	if !status.Direct() {
+		releaseErr := handle.Release()
+		return typeddecode.PreparedInt64DirectView{}, errors.Join(fmt.Errorf("direct-view certification failed: %s", status.String()), releaseErr)
+	}
+	return view, nil
+}
+
+func columnVectorGraphRowRefFromPreparedValues(ordinal int, generation, partID, rowIndex, appliedLSN int64) (DocumentRowRef, error) {
+	if generation <= 0 || partID <= 0 || appliedLSN <= 0 {
+		return DocumentRowRef{}, fmt.Errorf("collections: column_graph row-ref state ordinal=%d has non-positive coordinate generation=%d part_id=%d applied_lsn=%d", ordinal, generation, partID, appliedLSN)
+	}
+	if rowIndex < 0 || rowIndex > int64(math.MaxInt) {
+		return DocumentRowRef{}, fmt.Errorf("collections: column_graph row-ref state ordinal=%d row_index=%d outside int range", ordinal, rowIndex)
+	}
+	return DocumentRowRef{Generation: uint64(generation), PartID: uint64(partID), RowIndex: int(rowIndex), AppliedCommandLSN: uint64(appliedLSN)}, nil
 }
 
 func columnVectorGraphRowRefFromStateValues(values map[columnVectorGraphRowRefStateField][]int64, ordinal int) (DocumentRowRef, error) {
@@ -681,17 +792,70 @@ func (r *columnVectorGraphPhysicalRowReader) rowRefForOrdinal(ordinal int) (Docu
 }
 
 func (s *columnVectorGraphRowRefStateSource) rowRefForOrdinal(ordinal int) (DocumentRowRef, bool) {
-	if s == nil || s.closed || ordinal < 0 || ordinal >= s.rows || ordinal >= len(s.refs) {
+	if s == nil || s.closed || !s.preparedViewActive() || ordinal < 0 || ordinal >= s.rows {
 		return DocumentRowRef{}, false
 	}
-	return s.refs[ordinal], true
+	generation, ok := s.generations.Value(ordinal)
+	if !ok {
+		return DocumentRowRef{}, false
+	}
+	partID, ok := s.partIDs.Value(ordinal)
+	if !ok {
+		return DocumentRowRef{}, false
+	}
+	rowIndex, ok := s.rowIndexes.Value(ordinal)
+	if !ok {
+		return DocumentRowRef{}, false
+	}
+	appliedLSN, ok := s.appliedCommandLSNs.Value(ordinal)
+	if !ok {
+		return DocumentRowRef{}, false
+	}
+	ref, err := columnVectorGraphRowRefFromPreparedValues(ordinal, generation, partID, rowIndex, appliedLSN)
+	if err != nil {
+		return DocumentRowRef{}, false
+	}
+	return ref, true
 }
 
 func (s *columnVectorGraphRowRefStateSource) rowRefs() ([]DocumentRowRef, bool) {
-	if s == nil || s.closed || len(s.refs) != s.rows {
+	if s == nil || s.closed || !s.preparedViewActive() {
 		return nil, false
 	}
-	return s.refs, true
+	refs := make([]DocumentRowRef, s.rows)
+	for ordinal := range refs {
+		ref, ok := s.rowRefForOrdinal(ordinal)
+		if !ok {
+			return nil, false
+		}
+		refs[ordinal] = ref
+	}
+	return refs, true
+}
+
+func (s *columnVectorGraphRowRefStateSource) preparedViewActive() bool {
+	return s != nil && !s.closed && s.generations.Alive() && s.partIDs.Alive() && s.rowIndexes.Alive() && s.appliedCommandLSNs.Alive() && s.generations.Rows == s.rows && s.partIDs.Rows == s.rows && s.rowIndexes.Rows == s.rows && s.appliedCommandLSNs.Rows == s.rows
+}
+
+func (s *columnVectorGraphRowRefStateSource) preparedFieldCount() uint64 {
+	if !s.preparedViewActive() {
+		return 0
+	}
+	return uint64(len(columnVectorGraphRowRefStateFields))
+}
+
+func (s *columnVectorGraphRowRefStateSource) captureResourceStats() {
+	if s == nil || s.manager == nil {
+		return
+	}
+	stats := s.manager.Stats()
+	if stats.ActiveMappedBytes > 0 {
+		s.mappedBytes = uint64(stats.ActiveMappedBytes)
+	}
+	s.activeHandles = stats.ActiveHandles
+	for _, count := range stats.DeniedByReason {
+		s.deniedResources += count
+	}
 }
 
 func (s *columnVectorGraphRowRefStateSource) Close() error {
@@ -699,9 +863,12 @@ func (s *columnVectorGraphRowRefStateSource) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.refs = nil
+	closeErr := errors.Join(s.generations.Close(), s.partIDs.Close(), s.rowIndexes.Close(), s.appliedCommandLSNs.Close())
 	s.rows = 0
-	return nil
+	s.manager = nil
+	s.mappedBytes = 0
+	s.activeHandles = 0
+	return closeErr
 }
 
 func (c *Collection) assignColumnVectorGraphRowRefsFromBaseManifest(collection string, cfg ColumnStoreConfig, records []columnManifestRecord, generation uint64, rows []columnVectorGraphAssetRow) error {
@@ -742,6 +909,10 @@ func (r *columnVectorGraphPhysicalRowReader) populateRowRefStateSearchStats(stat
 		return
 	}
 	if r.rowRefSource != nil {
+		if r.rowRefSource.preparedViewActive() {
+			stats.RowRefStatePreparedViews = 1
+			stats.RowRefStateMmapDirectFields = r.rowRefSource.preparedFieldCount()
+		}
 		return
 	}
 	if r.rowRefStateUnavailable || r.rowRefStateFallbackReason != "" {

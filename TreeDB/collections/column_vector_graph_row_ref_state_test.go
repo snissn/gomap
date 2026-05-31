@@ -2,8 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T) {
@@ -55,11 +59,11 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 2), true)
-	if got.Stats.RowRefVectorSourceState != 1 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.RowRefStateResultRefs != uint64(len(got.Results)) {
+	if got.Stats.RowRefVectorSourceState != 1 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.RowRefStatePreparedViews != 1 || got.Stats.RowRefStateMmapDirectFields != uint64(len(columnVectorGraphRowRefStateFields)) || got.Stats.RowRefStateResultRefs != uint64(len(got.Results)) {
 		_ = d.Close()
-		t.Fatalf("stats=%+v want row-ref vector/result source", got.Stats)
+		t.Fatalf("stats=%+v want prepared row-ref vector/result source", got.Stats)
 	}
-	if got.Stats.ResultIDTypedBytesState != uint64(len(got.Results)) || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
+	if got.Stats.ResultIDPreparedBytesViews != 1 || got.Stats.ResultIDTypedBytesState != uint64(len(got.Results)) || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
 		_ = d.Close()
 		t.Fatalf("stats=%+v want typed bytes result IDs without graph fallback", got.Stats)
 	}
@@ -86,8 +90,62 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 		t.Fatalf("SearchVectorIndex reopen: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, reopenedGot, def.Name, 2)
-	if reopenedGot.Stats.RowRefVectorSourceState != 1 || reopenedGot.Stats.RowRefStateResultRefs != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDTypedBytesState != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDGraphFallbacks != 0 {
-		t.Fatalf("reopen stats=%+v want durable row-ref source plus typed bytes result IDs", reopenedGot.Stats)
+	if reopenedGot.Stats.RowRefVectorSourceState != 1 || reopenedGot.Stats.RowRefStatePreparedViews != 1 || reopenedGot.Stats.RowRefStateMmapDirectFields != uint64(len(columnVectorGraphRowRefStateFields)) || reopenedGot.Stats.RowRefStateResultRefs != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDPreparedBytesViews != 1 || reopenedGot.Stats.ResultIDTypedBytesState != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("reopen stats=%+v want durable prepared row-ref source plus typed bytes result IDs", reopenedGot.Stats)
+	}
+}
+
+func TestColumnVectorGraphRowRefStateCorruptFieldRejected2041(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{1, 0, 0}},
+		{id: "doc-b", vector: []float32{0, 1, 0}},
+	}
+	_, d, _, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 3, 1, rows)
+	defer func() { _ = d.Close() }()
+	col, err := NewCollectionManager(d).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	state := columnVectorIndexStateFromRecords1987(t, records, def)
+	graph := graphManifestFromRecords1918(t, records, def)
+	assets, found, err := columnVectorGraphRowRefStateAssetsByField(state)
+	if err != nil || !found {
+		t.Fatalf("row-ref assets found=%t err=%v", found, err)
+	}
+	asset := assets[columnVectorGraphRowRefStateFieldRowIndex]
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		t.Fatalf("read row-ref asset: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		t.Fatalf("ParseColumnPartImage: %v", err)
+	}
+	section, err := columnVectorGraphRowRefStateSection(image, columnVectorGraphRowRefStateColumnName(columnVectorGraphRowRefStateFieldRowIndex))
+	if err != nil {
+		t.Fatalf("row-ref section: %v", err)
+	}
+	baseRows, err := columnVectorGraphRowRefBasePartRows(records, graph.BaseManifestGeneration, cfg.AssetManager.Namespace)
+	if err != nil {
+		t.Fatalf("base part rows: %v", err)
+	}
+	var outOfBoundsRow int
+	for _, rows := range baseRows {
+		outOfBoundsRow = rows
+		break
+	}
+	corrupt := append([]byte(nil), raw...)
+	binary.LittleEndian.PutUint64(corrupt[section.Offset:], uint64(outOfBoundsRow))
+	badAsset := asset
+	badAsset.Ref.Checksum = page.Checksum(corrupt)
+	badState := replaceColumnVectorIndexStateAssetForTest2041(t, state, badAsset)
+	writeColumnVectorGraphAssetRawForTest2041(t, d.ColumnAssetRootDir(), asset.Ref, corrupt)
+	if _, err := newColumnVectorGraphRowRefStateSourceFromRoot(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, badState, records); err == nil || (!strings.Contains(err.Error(), "outside base rows") && !strings.Contains(err.Error(), "layout certification") && !strings.Contains(err.Error(), "checksum")) {
+		t.Fatalf("row-ref corrupt field err=%v, want field validation rejection", err)
 	}
 }
 
@@ -116,9 +174,9 @@ func TestColumnVectorGraphRowRefStatePreservesOpaqueResultIDs1993(t *testing.T) 
 		_ = d.Close()
 		t.Fatalf("result id=%v want exact opaque bytes %v", got.Results, id)
 	}
-	if got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.RowRefVectorSourceState != 1 {
+	if got.Stats.ResultIDPreparedBytesViews != 1 || got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.RowRefVectorSourceState != 1 || got.Stats.RowRefStatePreparedViews != 1 {
 		_ = d.Close()
-		t.Fatalf("stats=%+v want row-ref state for locators and typed bytes state for opaque returned ID", got.Stats)
+		t.Fatalf("stats=%+v want prepared row-ref state for locators and typed bytes state for opaque returned ID", got.Stats)
 	}
 	_ = d.Close()
 }

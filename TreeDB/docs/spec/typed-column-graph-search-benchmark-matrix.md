@@ -102,9 +102,12 @@ must also carry the relevant domain/source counters:
   `adjacency_typed_list_scratch_decodes/search`,
   `adjacency_legacy_fallbacks/search`, and
   `adjacency_source_fallbacks/search`;
-- result/document side channels: `result_id_typed_bytes_state/search`,
-  `result_id_graph_fallbacks/search`, `row_ref_vector_source_state/search`,
+- result/document side channels: `result_id_prepared_bytes_views/search`,
+  `result_id_typed_bytes_state/search`, `result_id_graph_fallbacks/search`,
+  `row_ref_vector_source_state/search`,
   `row_ref_vector_source_legacy_graph_ids/search`,
+  `row_ref_state_prepared_views/search`,
+  `row_ref_state_mmap_direct_fields/search`,
   `row_ref_state_result_refs/search`, `row_ref_state_source_fallbacks/search`,
   `docs_fetched/search`, `doc_fetch_ns/search`,
   `doc_row_ref_state_fetches/search`, and

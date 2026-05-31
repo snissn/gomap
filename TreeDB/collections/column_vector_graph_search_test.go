@@ -934,9 +934,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineV3(b *testing.B, shape columnVe
 		searchStats.TypedColumnFallbacks += stats.TypedColumnFallbacks
 		searchStats.RowRefVectorSourceState += stats.RowRefVectorSourceState
 		searchStats.RowRefVectorSourceLegacyGraphIDs += stats.RowRefVectorSourceLegacyGraphIDs
+		searchStats.RowRefStatePreparedViews += stats.RowRefStatePreparedViews
+		searchStats.RowRefStateMmapDirectFields += stats.RowRefStateMmapDirectFields
 		searchStats.RowRefStateResultRefs += stats.RowRefStateResultRefs
 		searchStats.RowRefStateSourceUnavailable += stats.RowRefStateSourceUnavailable
 		searchStats.RowRefStateSourceFallbacks += stats.RowRefStateSourceFallbacks
+		searchStats.ResultIDPreparedBytesViews += stats.ResultIDPreparedBytesViews
 		searchStats.ResultIDTypedBytesState += stats.ResultIDTypedBytesState
 		searchStats.ResultIDGraphFallbacks += stats.ResultIDGraphFallbacks
 		searchStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
@@ -1090,9 +1093,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 	var totalTypedColumnFallbacks atomic.Uint64
 	var totalRowRefVectorSourceState atomic.Uint64
 	var totalRowRefVectorSourceLegacyGraphIDs atomic.Uint64
+	var totalRowRefStatePreparedViews atomic.Uint64
+	var totalRowRefStateMmapDirectFields atomic.Uint64
 	var totalRowRefStateResultRefs atomic.Uint64
 	var totalRowRefStateSourceUnavailable atomic.Uint64
 	var totalRowRefStateSourceFallbacks atomic.Uint64
+	var totalResultIDPreparedBytesViews atomic.Uint64
 	var totalResultIDTypedBytesState atomic.Uint64
 	var totalResultIDGraphFallbacks atomic.Uint64
 	var totalResultIDStateValidationFailures atomic.Uint64
@@ -1196,9 +1202,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 			localStats.TypedColumnFallbacks += stats.TypedColumnFallbacks
 			localStats.RowRefVectorSourceState += stats.RowRefVectorSourceState
 			localStats.RowRefVectorSourceLegacyGraphIDs += stats.RowRefVectorSourceLegacyGraphIDs
+			localStats.RowRefStatePreparedViews += stats.RowRefStatePreparedViews
+			localStats.RowRefStateMmapDirectFields += stats.RowRefStateMmapDirectFields
 			localStats.RowRefStateResultRefs += stats.RowRefStateResultRefs
 			localStats.RowRefStateSourceUnavailable += stats.RowRefStateSourceUnavailable
 			localStats.RowRefStateSourceFallbacks += stats.RowRefStateSourceFallbacks
+			localStats.ResultIDPreparedBytesViews += stats.ResultIDPreparedBytesViews
 			localStats.ResultIDTypedBytesState += stats.ResultIDTypedBytesState
 			localStats.ResultIDGraphFallbacks += stats.ResultIDGraphFallbacks
 			localStats.ResultIDStateValidationFailures += stats.ResultIDStateValidationFailures
@@ -1278,9 +1287,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		totalTypedColumnFallbacks.Add(localStats.TypedColumnFallbacks)
 		totalRowRefVectorSourceState.Add(localStats.RowRefVectorSourceState)
 		totalRowRefVectorSourceLegacyGraphIDs.Add(localStats.RowRefVectorSourceLegacyGraphIDs)
+		totalRowRefStatePreparedViews.Add(localStats.RowRefStatePreparedViews)
+		totalRowRefStateMmapDirectFields.Add(localStats.RowRefStateMmapDirectFields)
 		totalRowRefStateResultRefs.Add(localStats.RowRefStateResultRefs)
 		totalRowRefStateSourceUnavailable.Add(localStats.RowRefStateSourceUnavailable)
 		totalRowRefStateSourceFallbacks.Add(localStats.RowRefStateSourceFallbacks)
+		totalResultIDPreparedBytesViews.Add(localStats.ResultIDPreparedBytesViews)
 		totalResultIDTypedBytesState.Add(localStats.ResultIDTypedBytesState)
 		totalResultIDGraphFallbacks.Add(localStats.ResultIDGraphFallbacks)
 		totalResultIDStateValidationFailures.Add(localStats.ResultIDStateValidationFailures)
@@ -1366,9 +1378,12 @@ func benchmarkColumnVectorGraphNativeSearchCosineParallelV3(b *testing.B, shape 
 		TypedColumnFallbacks:                 totalTypedColumnFallbacks.Load(),
 		RowRefVectorSourceState:              totalRowRefVectorSourceState.Load(),
 		RowRefVectorSourceLegacyGraphIDs:     totalRowRefVectorSourceLegacyGraphIDs.Load(),
+		RowRefStatePreparedViews:             totalRowRefStatePreparedViews.Load(),
+		RowRefStateMmapDirectFields:          totalRowRefStateMmapDirectFields.Load(),
 		RowRefStateResultRefs:                totalRowRefStateResultRefs.Load(),
 		RowRefStateSourceUnavailable:         totalRowRefStateSourceUnavailable.Load(),
 		RowRefStateSourceFallbacks:           totalRowRefStateSourceFallbacks.Load(),
+		ResultIDPreparedBytesViews:           totalResultIDPreparedBytesViews.Load(),
 		ResultIDTypedBytesState:              totalResultIDTypedBytesState.Load(),
 		ResultIDGraphFallbacks:               totalResultIDGraphFallbacks.Load(),
 		ResultIDStateValidationFailures:      totalResultIDStateValidationFailures.Load(),
@@ -1699,9 +1714,12 @@ func reportColumnGraphNativeSearchBenchMetricsV3(b *testing.B, n int, baseStats,
 	b.ReportMetric(float64(searchStats.TypedColumnFallbacks)/float64(n), "typed_column_vector_fallbacks/search")
 	b.ReportMetric(float64(searchStats.RowRefVectorSourceState)/float64(n), "row_ref_vector_source_state/search")
 	b.ReportMetric(float64(searchStats.RowRefVectorSourceLegacyGraphIDs)/float64(n), "row_ref_vector_source_legacy_graph_ids/search")
+	b.ReportMetric(float64(searchStats.RowRefStatePreparedViews)/float64(n), "row_ref_state_prepared_views/search")
+	b.ReportMetric(float64(searchStats.RowRefStateMmapDirectFields)/float64(n), "row_ref_state_mmap_direct_fields/search")
 	b.ReportMetric(float64(searchStats.RowRefStateResultRefs)/float64(n), "row_ref_state_result_refs/search")
 	b.ReportMetric(float64(searchStats.RowRefStateSourceUnavailable)/float64(n), "row_ref_state_source_unavailable/search")
 	b.ReportMetric(float64(searchStats.RowRefStateSourceFallbacks)/float64(n), "row_ref_state_source_fallbacks/search")
+	b.ReportMetric(float64(searchStats.ResultIDPreparedBytesViews)/float64(n), "result_id_prepared_bytes_views/search")
 	b.ReportMetric(float64(searchStats.ResultIDTypedBytesState)/float64(n), "result_id_typed_bytes_state/search")
 	b.ReportMetric(float64(searchStats.ResultIDGraphFallbacks)/float64(n), "result_id_graph_fallbacks/search")
 	b.ReportMetric(float64(searchStats.ResultIDStateValidationFailures)/float64(n), "result_id_state_validation_failures/search")
