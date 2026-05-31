@@ -2164,6 +2164,8 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.ResultIDTypedBytesState), "result_id_typed_bytes_state/search")
 	b.ReportMetric(float64(stats.ResultIDGraphFallbacks), "result_id_graph_fallbacks/search")
 	b.ReportMetric(float64(stats.ResultIDStateValidationFailures), "result_id_state_validation_failures/search")
+	b.ReportMetric(float64(stats.PreparedGraphSearchViews), "prepared_graph_search_views/search")
+	b.ReportMetric(float64(stats.GraphRowFallbacks), "graph_row_fallbacks/search")
 	b.ReportMetric(float64(stats.RowFetches), "row_fetches/search")
 	b.ReportMetric(float64(stats.BatchFetches), "batch_fetches/search")
 	b.ReportMetric(float64(stats.RowsFetched), "rows_fetched/search")

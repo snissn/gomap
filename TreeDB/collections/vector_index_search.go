@@ -25,6 +25,32 @@ const (
 	VectorIndexSearchPathColumnGraphNativeReader VectorIndexSearchPath = "column_graph_native_reader"
 )
 
+// VectorIndexSearchStatsMode selects how much vector graph-search telemetry is
+// collected. The zero value preserves full diagnostics for compatibility; use
+// VectorIndexSearchStatsModeMinimal on steady-state production searches that
+// only need required production/admission counters.
+type VectorIndexSearchStatsMode string
+
+const (
+	VectorIndexSearchStatsModeDefault         VectorIndexSearchStatsMode = ""
+	VectorIndexSearchStatsModeMinimal         VectorIndexSearchStatsMode = "minimal"
+	VectorIndexSearchStatsModeFullDiagnostics VectorIndexSearchStatsMode = "full_diagnostics"
+	VectorIndexSearchStatsModeBenchmarkDebug  VectorIndexSearchStatsMode = "benchmark_debug"
+)
+
+func columnVectorGraphNativeSearchStatsModeFromPublic(mode VectorIndexSearchStatsMode) (columnVectorGraphNativeSearchStatsMode, error) {
+	switch mode {
+	case VectorIndexSearchStatsModeDefault, VectorIndexSearchStatsModeFullDiagnostics:
+		return columnVectorGraphNativeSearchStatsModeFullDiagnostics, nil
+	case VectorIndexSearchStatsModeMinimal:
+		return columnVectorGraphNativeSearchStatsModeMinimal, nil
+	case VectorIndexSearchStatsModeBenchmarkDebug:
+		return columnVectorGraphNativeSearchStatsModeBenchmarkDebug, nil
+	default:
+		return columnVectorGraphNativeSearchStatsModeDefault, fmt.Errorf("collections: vector index search stats mode %q is unsupported", mode)
+	}
+}
+
 // VectorIndexSearcherOptions configures a reusable snapshot-bound vector-index
 // searcher. Reuse this path for steady-state queries when setup/open cost should
 // not be paid on every search.
@@ -50,6 +76,11 @@ type VectorIndexSearcherSearchOptions struct {
 	// DocumentFetchOptions controls optional projected final-fetch materialization.
 	// It is used only when IncludeDocuments is true; the zero value returns full documents.
 	DocumentFetchOptions DocumentFetchOptions
+	// StatsMode selects graph-search telemetry detail. The zero value preserves
+	// full diagnostics; minimal mode avoids per-candidate/per-edge diagnostic
+	// source accounting on the healthy combined prepared path while still
+	// reporting fallback/admission counters.
+	StatsMode VectorIndexSearchStatsMode
 	// scoreBatchMode is an internal test/benchmark hook for exact-order indexed
 	// HNSW scoring. The public zero value follows the default scalar gate.
 	scoreBatchMode columnVectorGraphScoreBatchMode
@@ -336,6 +367,10 @@ type VectorIndexSearchStats struct {
 	ResultIDGraphFallbacks uint64 `json:"result_id_graph_fallbacks,omitempty"`
 	// ResultIDStateValidationFailures counts searches that fell back because present document-ID state failed validation.
 	ResultIDStateValidationFailures uint64 `json:"result_id_state_validation_failures,omitempty"`
+	// PreparedGraphSearchViews reports searches routed through the combined open-time prepared typed-column graph-search view.
+	PreparedGraphSearchViews uint64 `json:"prepared_graph_search_views,omitempty"`
+	// GraphRowFallbacks aggregates compatibility graph-row reads/fallbacks observed during vector/norm/adjacency/result materialization.
+	GraphRowFallbacks uint64 `json:"graph_row_fallbacks,omitempty"`
 	// DocumentRowRefStateFetches counts post-top-k document fetches served with vector-index row-ref state.
 	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
@@ -428,6 +463,7 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 		EfSearch:             opts.EfSearch,
 		IncludeDocuments:     opts.IncludeDocuments,
 		DocumentFetchOptions: opts.DocumentFetchOptions,
+		StatsMode:            opts.StatsMode,
 		scoreBatchMode:       opts.scoreBatchMode,
 	})
 	documentView := searcher.documentView
@@ -595,11 +631,16 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 	if !opts.IncludeDocuments && documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
 		return response, errors.New("collections: vector index document projection requires IncludeDocuments")
 	}
+	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
+	if err != nil {
+		return response, err
+	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:           opts.TopK,
 		EfSearch:       opts.EfSearch,
 		ScoreBatchMode: opts.scoreBatchMode,
+		StatsMode:      statsMode,
 	}, &s.scratch)
 	readerStatsAfter := s.reader.Stats()
 	s.readerLast = readerStatsAfter
@@ -740,11 +781,16 @@ func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOpt
 	if documentFetchOptionsHasProjection(opts.DocumentFetchOptions) {
 		return response, errors.New("collections: vector index document projection requires IncludeDocuments")
 	}
+	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
+	if err != nil {
+		return response, err
+	}
 	readerStatsBefore := s.readerLast
 	results, searchStats, err := s.reader.SearchCosine(opts.Query, columnVectorGraphNativeSearchOptions{
 		TopK:           opts.TopK,
 		EfSearch:       opts.EfSearch,
 		ScoreBatchMode: opts.scoreBatchMode,
+		StatsMode:      statsMode,
 	}, &s.scratch)
 	readerStatsAfter := s.reader.Stats()
 	s.readerLast = readerStatsAfter
@@ -1002,5 +1048,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		ResultIDTypedBytesState:              searchStats.ResultIDTypedBytesState,
 		ResultIDGraphFallbacks:               searchStats.ResultIDGraphFallbacks,
 		ResultIDStateValidationFailures:      searchStats.ResultIDStateValidationFailures,
+		PreparedGraphSearchViews:             searchStats.PreparedGraphSearchViews,
+		GraphRowFallbacks:                    searchStats.GraphRowFallbacks,
 	}
 }

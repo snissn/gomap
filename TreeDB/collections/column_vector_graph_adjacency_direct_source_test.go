@@ -386,6 +386,7 @@ func disableColumnVectorGraphAdjacencyDirectSourcesForTest(tb testing.TB, reader
 		}
 		reader.layer0AdjacencySource = nil
 	}
+	reader.preparedSearch = nil
 	reader.layer0AdjacencySourceUnavailable = true
 	reader.layer0AdjacencySourceFallbackReason = ""
 }
@@ -395,6 +396,7 @@ func releaseColumnVectorGraphAdjacencySourceHandlesForTest(tb testing.TB, reader
 	if reader == nil {
 		return
 	}
+	reader.preparedSearch = nil
 	if reader.adjacencyLayerSources != nil {
 		for layer, source := range reader.adjacencyLayerSources.sources {
 			if source == nil {

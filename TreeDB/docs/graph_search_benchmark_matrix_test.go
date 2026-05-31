@@ -20,14 +20,16 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"mode=<mode>/boundary=<boundary>/concurrency=<serial|parallel>/fixture=<fixture>",
 		"legacy_direct_graph_row",
 		"current_tvis_base_typed_column",
-		"prepared_typed_column_placeholder",
+		"combined_prepared_typed_column",
 		"setup_open_prepare",
 		"graph_only",
 		"result_id",
 		"document_materialization",
 		"production8192",
 		"serving1024",
-		"Skipped placeholders; not performance data",
+		"Supported #2045 combined prepared graph-only rows",
+		"prepared_graph_search_views/search",
+		"graph_row_fallbacks/search",
 		"ops/sec",
 		"graph_rows",
 		"candidates/search",
@@ -46,7 +48,8 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		}
 	}
 	forbidden := []string{
-		"prepared_typed_column_placeholder` | `graph_only` | serial/parallel | `production8192` | Supported",
+		"prepared_typed_column_placeholder",
+		"Skipped placeholders; not performance data",
 		"skipped placeholder is performance data",
 	}
 	for _, needle := range forbidden {

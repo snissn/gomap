@@ -63,10 +63,12 @@ const (
 	// InsertBatch calls from creating one frozen root run per call. Larger
 	// batches already amortize sorted frozen runs well and keep that path.
 	DefaultIndexedWriteMemtableAccumulatorBatchDocuments = 1024
-	// DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments keeps the
-	// single-document accumulator path from reloading collection root metadata
-	// once per insert. Larger calls can release the mutation lock while planning.
+	// DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments lets the
+	// single-document accumulator path keep planning locked while uncontended,
+	// avoiding a relock/catalog-validation round trip once per insert. Larger
+	// calls can release the mutation lock while planning.
 	DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments = 1
+	indexedInsertPlanningUnlockMinWait                            = 10 * time.Microsecond
 	// DefaultIndexedWriteMemtableAsyncFlushMaxQueuedUnits bounds default
 	// background indexed flush work. When the queue reaches this many immutable
 	// flush units, the triggering writer publishes synchronously to cap memory
@@ -119,6 +121,15 @@ var testBeforeCommandWALBufferedUpdateStageLockHook struct {
 }
 
 type testCommandWALBufferedUpdateStageLockHook struct {
+	fn func()
+}
+
+var testBeforeInsertBatchPlanningHook struct {
+	installMu sync.Mutex
+	ptr       atomic.Pointer[testInsertBatchPlanningHook]
+}
+
+type testInsertBatchPlanningHook struct {
 	fn func()
 }
 
@@ -339,6 +350,7 @@ type Collection struct {
 	db                *backenddb.DB
 	manager           *CollectionManager
 	writeDomain       *collectionWriteDomain
+	name              string
 	meta              CollectionMeta
 	catalogMu         sync.RWMutex
 	catalogCommitSeq  uint64
@@ -2698,6 +2710,13 @@ func (c *Collection) lockMutation() collectionMutationUnlock {
 	return lockCollectionDomainMutation(c.writeDomain)
 }
 
+func (c *Collection) tryLockMutation() (collectionMutationUnlock, bool) {
+	if c == nil || c.writeDomain == nil {
+		return collectionMutationUnlock{}, false
+	}
+	return tryLockCollectionDomainMutation(c.writeDomain)
+}
+
 type collectionMutationUnlock struct {
 	domain    *collectionWriteDomain
 	holdStart time.Time
@@ -2713,6 +2732,16 @@ func lockCollectionDomainMutation(domain *collectionWriteDomain) collectionMutat
 	holdStart := time.Now()
 	wait := holdStart.Sub(lockStart)
 	return collectionMutationUnlock{domain: domain, holdStart: holdStart, wait: wait}
+}
+
+func tryLockCollectionDomainMutation(domain *collectionWriteDomain) (collectionMutationUnlock, bool) {
+	if domain == nil {
+		return collectionMutationUnlock{}, false
+	}
+	if !domain.mutationMu.TryLock() {
+		return collectionMutationUnlock{}, false
+	}
+	return collectionMutationUnlock{domain: domain, holdStart: time.Now()}, true
 }
 
 func (unlock collectionMutationUnlock) Unlock() {
@@ -2893,6 +2922,7 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 		db:          m.db,
 		manager:     m,
 		writeDomain: m.writeDomainForCollection(catalog.meta.Name),
+		name:        catalog.meta.Name,
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
 		meta: catalog.meta,
@@ -2952,6 +2982,7 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 		db:          m.db,
 		manager:     m,
 		writeDomain: domain,
+		name:        catalog.meta.Name,
 		// Collection catalogs are immutable once loaded; public Meta returns a
 		// defensive copy, so handles can keep the catalog meta value directly.
 		meta: catalog.meta,
@@ -8702,9 +8733,162 @@ func isRetriableCollectionCatalogReadEOF(err error) bool {
 }
 
 func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
+	if shouldAttemptOptimisticInsertBatchPlanning(documents, templateEncoder, commandWALIntent, c.commandWALActive(commandWALIntent)) {
+		if unlockMutation, locked := c.tryLockMutation(); locked {
+			mutationLocked := true
+			return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, &unlockMutation, &mutationLocked)
+		}
+		if resultIDs, err, attempted := c.insertBatchOnceWithOptimisticPlanning(ids, documents, trustedValidBSON); attempted {
+			return resultIDs, err
+		}
+	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
 	return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, &unlockMutation, &mutationLocked)
+}
+
+func shouldAttemptOptimisticInsertBatchPlanning(documents [][]byte, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, commandWALActive bool) bool {
+	return len(documents) > 0 &&
+		len(documents) <= DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments &&
+		templateEncoder == nil &&
+		commandWALIntent == nil &&
+		!commandWALActive
+}
+
+func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error, bool) {
+	if c == nil || c.db == nil {
+		return nil, nil, false
+	}
+	if c.hasBufferedNoIndexBSONRootRuns() || c.hasBufferedIndexedDeletesOnly() {
+		return nil, nil, false
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, backenddb.ErrClosed, true
+	}
+	closePlanningSnapshot := func() {
+		if snap != nil {
+			_ = snap.Close()
+			snap = nil
+		}
+	}
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		closePlanningSnapshot()
+		return nil, err, true
+	}
+	if catalog == nil {
+		closePlanningSnapshot()
+		return nil, errCollectionNotFound, true
+	}
+	if err := rejectCatalogRootOverlaysForIndexedBufferWrite(catalog); err != nil {
+		closePlanningSnapshot()
+		return nil, err, true
+	}
+	meta := catalog.meta
+	if len(meta.Indexes) == 0 {
+		closePlanningSnapshot()
+		return nil, nil, false
+	}
+	if columnStoreWriteEnabled(meta) {
+		closePlanningSnapshot()
+		return nil, nil, false
+	}
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
+	if err != nil {
+		closePlanningSnapshot()
+		return nil, err, true
+	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		closePlanningSnapshot()
+		return nil, err, true
+	}
+	if normalizedDocumentFormat(plannerOptions.documentFormat) == DocumentFormatTemplateV1 {
+		closePlanningSnapshot()
+		return nil, nil, false
+	}
+	indexedMemtablesEnabled := c.shouldBufferIndexedInserts(meta)
+	bufferIndexedInserts := c.shouldBufferIndexedInsertBatch(meta, len(documents))
+	directBufferedInsertAccumulators := bufferIndexedInserts && shouldUseDirectBufferedInsertAccumulators(len(documents))
+	if !indexedMemtablesEnabled || !bufferIndexedInserts || !directBufferedInsertAccumulators {
+		closePlanningSnapshot()
+		return nil, nil, false
+	}
+
+	baseSystemRoot := snapshotSystemRoot(snap)
+	baseCommitSeq := snapshotCommitSeq(snap)
+	indexRuntimes, indexRuntimesErr := catalog.cachedIndexRuntimes()
+	planner := insertBatchPlanner{
+		collection:             meta.Name,
+		primaryRoot:            catalog.primaryRootName,
+		templateRoot:           catalog.templateRootName,
+		indexStateRoot:         catalog.indexStateRootName,
+		cachedIndexRuntimes:    indexRuntimes,
+		cachedIndexRuntimesErr: indexRuntimesErr,
+		options:                plannerOptions,
+		buildPrimaryVal:        clonePrimaryDocument,
+		cloneTemplateRunValues: true,
+		directBufferedRuns:     true,
+	}
+	runTestBeforeInsertBatchPlanningHook()
+	plan, err := planner.planInsertBatchWithPreflight(ids, documents, persistedConflictPreflightForInsertBatchSnapshot(snap, catalog))
+	if err != nil {
+		closePlanningSnapshot()
+		return nil, err, true
+	}
+	plan.stats.BufferedIndexedBatches = 1
+	if !insertBatchPlanHasRootWork(plan) {
+		closePlanningSnapshot()
+		c.setLastInsertStats(plan.stats.CollectionInsertStats)
+		return plan.resultIDs, nil, true
+	}
+	resultIDs, err := cloneBatchDocumentIDs(plan.resultIDs)
+	if err != nil {
+		closePlanningSnapshot()
+		resetCollectionRunTables(plan.runs)
+		return nil, err, true
+	}
+	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
+
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if c.hasBufferedNoIndexBSONRootRuns() || c.hasBufferedIndexedDeletesOnly() {
+		closePlanningSnapshot()
+		resetCollectionRunTables(plan.runs)
+		return nil, ErrConcurrentMutation, true
+	}
+	c.meta = meta
+	validation := insertBatchValidationContext{
+		snap:                      snap,
+		catalog:                   catalog,
+		meta:                      meta,
+		rootNames:                 rootNames,
+		baseRootIDs:               baseRootIDs,
+		plan:                      plan,
+		allowRootDrift:            true,
+		persistedConflictsChecked: true,
+		preflightBaseCommitSeq:    baseCommitSeq,
+		preflightBaseSystemRoot:   baseSystemRoot,
+	}
+	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(false, validation)
+	snap = nil
+	if err != nil {
+		resetCollectionRunTables(plan.runs)
+		return nil, err, true
+	}
+	updateInsertBatchBaseRootIDs(rootNames, baseRootIDs, currentCatalog)
+	pinCommitSeq := snapshotCommitSeq(pin)
+	pinSystemRoot := snapshotSystemRoot(pin)
+	bufferFlushElapsed, err := c.bufferIndexedInsertPlanLocked(currentCatalog, pinCommitSeq, pinSystemRoot, plan)
+	_ = pin.Close()
+	if err != nil {
+		resetCollectionRunTables(plan.runs)
+		return nil, err, true
+	}
+	plan.stats.Publish += bufferFlushElapsed
+	c.setLastInsertStats(plan.stats.CollectionInsertStats)
+	return resultIDs, nil, true
 }
 
 func (c *Collection) insertBatchOnceWithLockState(
@@ -8914,11 +9098,23 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 
 	directBufferedInsertAccumulators := bufferIndexedInserts && shouldUseDirectBufferedInsertAccumulators(len(documents))
-	keepDirectBufferedInsertPlanningLocked := directBufferedInsertAccumulators && shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(len(documents))
+	mutationLockWait := time.Duration(0)
+	if unlockMutation != nil {
+		mutationLockWait = unlockMutation.wait
+	}
+	keepDirectBufferedInsertPlanningLocked := directBufferedInsertAccumulators && shouldKeepDirectBufferedInsertPlanningLocked(plannerOptions, len(documents), mutationLockWait)
 	unlockForPlanning := shouldUnlockInsertPlanning(plannerOptions, indexedMemtablesEnabled, bufferIndexedInserts, keepDirectBufferedInsertPlanningLocked)
+	preflightPersistedConflicts := false
+	preflight := insertBatchPreflight{}
 	if unlockForPlanning {
-		closePlanningSnapshot()
+		if directBufferedInsertAccumulators && canPreflightInsertBatchPersistedConflicts(snap, catalog) {
+			preflight = persistedConflictPreflightForInsertBatchSnapshot(snap, catalog)
+			preflightPersistedConflicts = true
+		} else {
+			closePlanningSnapshot()
+		}
 		unlockIfLocked()
+		runTestBeforeInsertBatchPlanningHook()
 	}
 
 	indexRuntimes, indexRuntimesErr := catalog.cachedIndexRuntimes()
@@ -8936,7 +9132,12 @@ func (c *Collection) insertBatchOnceWithLockState(
 		planner.cloneTemplateRunValues = true
 		planner.directBufferedRuns = directBufferedInsertAccumulators
 	}
-	plan, err := planner.planInsertBatch(ids, documents)
+	var plan *insertBatchPlan
+	if preflightPersistedConflicts {
+		plan, err = planner.planInsertBatchWithPreflight(ids, documents, preflight)
+	} else {
+		plan, err = planner.planInsertBatch(ids, documents)
+	}
 	if err != nil {
 		closePlanningSnapshot()
 		return nil, err
@@ -8962,7 +9163,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			resetCollectionRunTables(plan.runs)
 			return nil, err
 		}
-		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
 			return nil, err
@@ -9018,7 +9219,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		}
 	}
 
-	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, plan)
+	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
 		return nil, err
@@ -9173,12 +9374,23 @@ func canBufferNoIndexInsertBatchFormat(format DocumentFormat, trustedValidBSON b
 	}
 }
 
-func shouldPlanDirectBufferedInsertAccumulatorsWithMutationLocked(documentCount int) bool {
-	return documentCount > 0 && documentCount <= DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments
+func shouldKeepDirectBufferedInsertPlanningLocked(opts collectionOptions, documentCount int, mutationLockWait time.Duration) bool {
+	if documentCount <= 0 || documentCount > DefaultIndexedWriteMemtableAccumulatorLockedPlanningDocuments {
+		return false
+	}
+	if normalizedDocumentFormat(opts.documentFormat) == DocumentFormatTemplateV1 {
+		return true
+	}
+	// JSON/BSON direct-buffered inserts only pay the unlock/relock validation
+	// path after observing real mutation-lock contention.
+	if mutationLockWait >= indexedInsertPlanningUnlockMinWait {
+		return false
+	}
+	return true
 }
 
 func shouldUnlockInsertPlanning(opts collectionOptions, indexedMemtablesEnabled, bufferIndexedInserts, keepDirectBufferedInsertPlanningLocked bool) bool {
-	if opts.documentFormat == DocumentFormatTemplateV1 {
+	if normalizedDocumentFormat(opts.documentFormat) == DocumentFormatTemplateV1 {
 		return false
 	}
 	if keepDirectBufferedInsertPlanningLocked {
@@ -9281,13 +9493,16 @@ func insertBatchPlanHasRootWork(plan *insertBatchPlan) bool {
 }
 
 type insertBatchValidationContext struct {
-	snap           *backenddb.Snapshot
-	catalog        *collectionCatalog
-	meta           CollectionMeta
-	rootNames      []string
-	baseRootIDs    map[string]uint64
-	plan           *insertBatchPlan
-	allowRootDrift bool
+	snap                      *backenddb.Snapshot
+	catalog                   *collectionCatalog
+	meta                      CollectionMeta
+	rootNames                 []string
+	baseRootIDs               map[string]uint64
+	plan                      *insertBatchPlan
+	allowRootDrift            bool
+	persistedConflictsChecked bool
+	preflightBaseCommitSeq    uint64
+	preflightBaseSystemRoot   uint64
 }
 
 func (c *Collection) lockAndValidateInsertBatchPlan(
@@ -9298,6 +9513,9 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 	meta CollectionMeta,
 	rootNames []string,
 	baseRootIDs map[string]uint64,
+	persistedConflictsChecked bool,
+	preflightBaseCommitSeq uint64,
+	preflightBaseSystemRoot uint64,
 	plan *insertBatchPlan,
 ) (*backenddb.Snapshot, *collectionCatalog, uint64, uint64, error) {
 	plannedWithMutationLocked := *mutationLocked
@@ -9307,13 +9525,16 @@ func (c *Collection) lockAndValidateInsertBatchPlan(
 	}
 	c.meta = meta
 	validation := insertBatchValidationContext{
-		snap:           snap,
-		catalog:        catalog,
-		meta:           meta,
-		rootNames:      rootNames,
-		baseRootIDs:    baseRootIDs,
-		plan:           plan,
-		allowRootDrift: !plannedWithMutationLocked,
+		snap:                      snap,
+		catalog:                   catalog,
+		meta:                      meta,
+		rootNames:                 rootNames,
+		baseRootIDs:               baseRootIDs,
+		plan:                      plan,
+		allowRootDrift:            !plannedWithMutationLocked,
+		persistedConflictsChecked: persistedConflictsChecked,
+		preflightBaseCommitSeq:    preflightBaseCommitSeq,
+		preflightBaseSystemRoot:   preflightBaseSystemRoot,
 	}
 	pin, currentCatalog, err := c.validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked, validation)
 	if err != nil {
@@ -9334,6 +9555,28 @@ func updateInsertBatchBaseRootIDs(rootNames []string, baseRootIDs map[string]uin
 	}
 }
 
+func runTestBeforeInsertBatchPlanningHook() {
+	hook := testBeforeInsertBatchPlanningHook.ptr.Load()
+	if hook != nil && hook.fn != nil {
+		hook.fn()
+	}
+}
+
+func canPreflightInsertBatchPersistedConflicts(snap *backenddb.Snapshot, catalog *collectionCatalog) bool {
+	return snap != nil && catalog != nil && len(catalog.rootOverlays) == 0
+}
+
+func persistedConflictPreflightForInsertBatchSnapshot(snap *backenddb.Snapshot, catalog *collectionCatalog) insertBatchPreflight {
+	if !canPreflightInsertBatchPersistedConflicts(snap, catalog) {
+		return insertBatchPreflight{}
+	}
+	return insertBatchPreflight{
+		snapshot:           snap,
+		primaryRootID:      catalog.rootID(collectionPrimaryRootName(catalog.meta.Name)),
+		uniqueIndexRootIDs: uniqueIndexRootIDs(catalog),
+	}
+}
+
 func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutationLocked bool, validation insertBatchValidationContext) (*backenddb.Snapshot, *collectionCatalog, error) {
 	if plannedWithMutationLocked {
 		if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
@@ -9345,7 +9588,7 @@ func (c *Collection) validateInsertBatchPlanAfterPlanningLocked(plannedWithMutat
 		return validation.snap, validation.catalog, nil
 	}
 	current, currentCatalog, err := c.validateInsertBatchPlanLocked(validation)
-	if validation.snap != nil {
+	if validation.snap != nil && current != validation.snap {
 		_ = validation.snap.Close()
 	}
 	if err != nil {
@@ -9358,11 +9601,20 @@ func (c *Collection) validateInsertBatchPlanLocked(validation insertBatchValidat
 	if c == nil || c.db == nil {
 		return nil, nil, backenddb.ErrClosed
 	}
+	if validation.persistedConflictsChecked && validation.snap != nil && validation.catalog != nil {
+		currentCommitSeq, currentSystemRoot := dbCommitSeqAndSystemRoot(c.db)
+		if currentCommitSeq == validation.preflightBaseCommitSeq && currentSystemRoot == validation.preflightBaseSystemRoot {
+			if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
+				return nil, nil, err
+			}
+			return validation.snap, validation.catalog, nil
+		}
+	}
 	current := c.db.AcquireSnapshot()
 	if current == nil {
 		return nil, nil, backenddb.ErrClosed
 	}
-	catalog, err := loadCollectionCatalog(current, validation.meta.Name)
+	catalog, err := c.catalogForSnapshot(current)
 	if err != nil {
 		_ = current.Close()
 		return nil, nil, err
@@ -9373,6 +9625,7 @@ func (c *Collection) validateInsertBatchPlanLocked(validation insertBatchValidat
 	}
 	validation.snap = current
 	validation.catalog = catalog
+	validation.persistedConflictsChecked = false
 	if err := c.validateInsertBatchPlanWithSnapshotLocked(validation); err != nil {
 		_ = current.Close()
 		return nil, nil, err
@@ -9398,6 +9651,9 @@ func (c *Collection) validateInsertBatchPlanWithSnapshotLocked(validation insert
 		if got := validation.catalog.rootID(rootName); got != want && !validation.allowRootDrift {
 			return errConcurrentRootModification(validation.meta.Name, rootName)
 		}
+	}
+	if validation.persistedConflictsChecked {
+		return nil
 	}
 	return validation.plan.checkPersistedConflicts(validation.snap, validation.catalog)
 }
@@ -16136,12 +16392,22 @@ func (c *Collection) catalogForSnapshotWithWriteDomainLockState(snap *backenddb.
 		return cached, nil
 	}
 
-	catalog, err := loadCollectionCatalog(snap, c.meta.Name)
+	catalog, err := loadCollectionCatalog(snap, c.collectionName())
 	if err != nil {
 		return nil, err
 	}
 	c.rememberCatalog(snap, catalog)
 	return catalog, nil
+}
+
+func (c *Collection) collectionName() string {
+	if c == nil {
+		return ""
+	}
+	if c.name != "" {
+		return c.name
+	}
+	return c.meta.Name
 }
 
 func cachedWriteDomainCatalogForState(domain *collectionWriteDomain, systemRoot, commitSeq uint64) *collectionCatalog {
