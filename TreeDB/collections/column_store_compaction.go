@@ -110,11 +110,11 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	stats.MutationPartsBefore = visibilityDiag.MutationParts
 	stats.RowsScanned = visibilityDiag.RowsScanned
 	stats.DeletedRows = visibilityDiag.DeletedRows
-	stats.RowsCompacted = len(rows)
 	stats.PhysicalBytesRead = visibilityDiag.PhysicalBytesScanned
 	if visibilityDiag.MutationParts == 0 && state.cfg.PhysicalMutationParts == 0 {
 		return stats, nil
 	}
+	stats.RowsCompacted = len(rows)
 	supersededRefs := columnStoreCompactionRefsFromManifestRecords(state.records)
 	if err := ctx.Err(); err != nil {
 		return stats, err
@@ -122,6 +122,9 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 
 	prepared, err := c.prepareColumnStoreCompactionAssets(state, rows)
 	if err != nil {
+		if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
+			return stats, errors.Join(err, cleanupErr)
+		}
 		return stats, err
 	}
 	cleanupPrepared := func(baseErr error) error {
