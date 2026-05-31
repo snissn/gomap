@@ -41,11 +41,10 @@ var (
 // go-ycsb's default workload: one InsertBatch request per document, 16 client
 // connections, a 10x100-byte row, AckVisible, and a unique _ycsb_key index.
 //
-// The JSON case intentionally mirrors the current go-ycsb treedb-native client:
-// json.Marshal(map[string]any) over []byte field values, which stores those
-// fields as base64 JSON strings. BSON and template-v1 are hypothetical native
-// client encodings for the same logical row shape; go-ycsb does not send them
-// today.
+// The JSON case intentionally mirrors the original go-ycsb treedb-native
+// client: json.Marshal(map[string]any) over []byte field values, which stores
+// those fields as base64 JSON strings. BSON and template-v1 cover alternate
+// native encodings for the same logical row shape.
 func BenchmarkNativewireYCSBLoad(b *testing.B) {
 	logOutput := log.Writer()
 	log.SetOutput(io.Discard)
