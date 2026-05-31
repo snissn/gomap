@@ -64,6 +64,7 @@ const (
 	ReasonRoleMismatch               Reason = "role_mismatch"
 	ReasonColumnMismatch             Reason = "column_mismatch"
 	ReasonTypeEncodingMismatch       Reason = "type_encoding_mismatch"
+	ReasonResourceMismatch           Reason = "resource_mismatch"
 )
 
 // Status describes the outcome of planning or validating a fast-decode path.
@@ -192,6 +193,7 @@ func ReasonVocabulary() []Reason {
 		ReasonRoleMismatch,
 		ReasonColumnMismatch,
 		ReasonTypeEncodingMismatch,
+		ReasonResourceMismatch,
 	}
 }
 

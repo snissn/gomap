@@ -240,6 +240,18 @@ func TestGraphDirectViewCertifiersRejectIncompleteResourceIdentity(t *testing.T)
 			t.Fatalf("blank split section status=%+v want %s", status, ReasonColumnMismatch)
 		}
 	})
+
+	t.Run("fixed_width_physical_resource_mismatch", func(t *testing.T) {
+		req := graphFloat32VectorRequest(t, 2, 3, mappedresource.SourceMapped)
+		key := req.ExpectedKey
+		key.Generation++
+		mgr := mappedresource.NewManager()
+		req.Manager = mgr
+		req.Handle = graphAcquireHandle(t, mgr, mappedresource.SourceMapped, req.Handle.Bytes(), key)
+		if _, status := CertifyGraphFloat32VectorDirectView(req); status.Reason != ReasonResourceMismatch {
+			t.Fatalf("physical resource status=%+v want %s", status, ReasonResourceMismatch)
+		}
+	})
 }
 
 func TestGraphFixedWidthDirectViewCertifiersFailClosed(t *testing.T) {
@@ -629,8 +641,9 @@ func graphFloat32VectorRequestWithResourceColumnAndLength(t testing.TB, rows, di
 		binary.LittleEndian.PutUint32(raw[i*4:], math.Float32bits(float32(i+1)))
 	}
 	mgr := mappedresource.NewManager()
+	expectedKey := graphKey("vec", section, typedcolumn.EncodingRawFloat32Vector)
 	h := graphAcquireHandle(t, mgr, source, raw, graphKey(resourceColumn, section, typedcolumn.EncodingRawFloat32Vector))
-	return GraphFloat32VectorDirectViewRequest{Expectation: graphExpectation("vec", rows), Dims: dims, Certification: cert, Section: section, Handle: h, Manager: mgr}
+	return GraphFloat32VectorDirectViewRequest{Expectation: graphExpectation("vec", rows), Dims: dims, Certification: cert, Section: section, ExpectedKey: expectedKey, Handle: h, Manager: mgr}
 }
 
 func graphFloat32Request(t testing.TB, rows int, source mappedresource.Source) GraphFloat32DirectViewRequest {
@@ -642,8 +655,9 @@ func graphFloat32Request(t testing.TB, rows int, source mappedresource.Source) G
 		binary.LittleEndian.PutUint32(raw[i*4:], math.Float32bits(float32(i)+1.5))
 	}
 	mgr := mappedresource.NewManager()
-	h := graphAcquireHandle(t, mgr, source, raw, graphKey(cert.Name, section, typedcolumn.EncodingRawFloat32))
-	return GraphFloat32DirectViewRequest{Expectation: graphExpectation(cert.Name, rows), Certification: cert, Section: section, Handle: h, Manager: mgr}
+	expectedKey := graphKey(cert.Name, section, typedcolumn.EncodingRawFloat32)
+	h := graphAcquireHandle(t, mgr, source, raw, expectedKey)
+	return GraphFloat32DirectViewRequest{Expectation: graphExpectation(cert.Name, rows), Certification: cert, Section: section, ExpectedKey: expectedKey, Handle: h, Manager: mgr}
 }
 
 func graphInt64Request(t testing.TB, rows int, source mappedresource.Source) GraphInt64DirectViewRequest {
@@ -655,8 +669,9 @@ func graphInt64Request(t testing.TB, rows int, source mappedresource.Source) Gra
 		binary.LittleEndian.PutUint64(raw[i*8:], uint64(100+i))
 	}
 	mgr := mappedresource.NewManager()
-	h := graphAcquireHandle(t, mgr, source, raw, graphKey(cert.Name, section, typedcolumn.EncodingRawInt64))
-	return GraphInt64DirectViewRequest{Expectation: graphExpectation(cert.Name, rows), Certification: cert, Section: section, Handle: h, Manager: mgr}
+	expectedKey := graphKey(cert.Name, section, typedcolumn.EncodingRawInt64)
+	h := graphAcquireHandle(t, mgr, source, raw, expectedKey)
+	return GraphInt64DirectViewRequest{Expectation: graphExpectation(cert.Name, rows), Certification: cert, Section: section, ExpectedKey: expectedKey, Handle: h, Manager: mgr}
 }
 
 func graphUint32ListRequest(t testing.TB, offsets []uint64, values []uint32, source mappedresource.Source) GraphUint32ListDirectViewRequest {
@@ -677,9 +692,11 @@ func graphUint32ListRequestWithResourceColumnAndSource(t testing.TB, offsets []u
 	offsetsRaw := encodeUint64Slice(offsets)
 	valuesRaw := encodeUint32Slice(values)
 	mgr := mappedresource.NewManager()
+	expectedOffsetsKey := graphKey("tags", offsetsSection, typedcolumn.EncodingRawUint32OffsetsList)
+	expectedValuesKey := graphKey("tags", valuesSection, typedcolumn.EncodingRawUint32OffsetsList)
 	offsetsHandle := graphAcquireHandle(t, mgr, source, offsetsRaw, graphKey(resourceColumn, offsetsSection, typedcolumn.EncodingRawUint32OffsetsList))
 	valuesHandle := graphAcquireHandle(t, mgr, source, valuesRaw, graphKey(resourceColumn, valuesSection, typedcolumn.EncodingRawUint32OffsetsList))
-	return GraphUint32ListDirectViewRequest{Expectation: graphExpectation("tags", rows), Certification: cert, OffsetsSection: offsetsSection, ValuesSection: valuesSection, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, Manager: mgr}
+	return GraphUint32ListDirectViewRequest{Expectation: graphExpectation("tags", rows), Certification: cert, OffsetsSection: offsetsSection, ValuesSection: valuesSection, ExpectedOffsetsKey: expectedOffsetsKey, ExpectedValuesKey: expectedValuesKey, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, Manager: mgr}
 }
 
 func graphBytesRequest(t testing.TB, offsets []uint64, values []byte, source mappedresource.Source) GraphBytesDirectViewRequest {
@@ -699,9 +716,11 @@ func graphBytesRequestWithResourceColumnAndSource(t testing.TB, offsets []uint64
 	offsetsRaw := encodeUint64Slice(offsets)
 	valuesRaw := append([]byte(nil), values...)
 	mgr := mappedresource.NewManager()
+	expectedOffsetsKey := graphKey("opaque", offsetsSection, typedcolumn.EncodingRawBytesOffsets)
+	expectedValuesKey := graphKey("opaque", valuesSection, typedcolumn.EncodingRawBytesOffsets)
 	offsetsHandle := graphAcquireHandle(t, mgr, source, offsetsRaw, graphKey(resourceColumn, offsetsSection, typedcolumn.EncodingRawBytesOffsets))
 	valuesHandle := graphAcquireHandle(t, mgr, source, valuesRaw, graphKey(resourceColumn, valuesSection, typedcolumn.EncodingRawBytesOffsets))
-	return GraphBytesDirectViewRequest{Expectation: graphExpectation("opaque", rows), Certification: cert, OffsetsSection: offsetsSection, ValuesSection: valuesSection, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, Manager: mgr}
+	return GraphBytesDirectViewRequest{Expectation: graphExpectation("opaque", rows), Certification: cert, OffsetsSection: offsetsSection, ValuesSection: valuesSection, ExpectedOffsetsKey: expectedOffsetsKey, ExpectedValuesKey: expectedValuesKey, OffsetsHandle: offsetsHandle, ValuesHandle: valuesHandle, Manager: mgr}
 }
 
 func graphDataSection(cert typedcolumn.ColumnPartLayoutContractColumn, column string, encoding typedcolumn.Encoding) typedcolumn.ColumnPartImageSection {

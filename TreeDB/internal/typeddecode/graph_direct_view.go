@@ -36,6 +36,7 @@ type GraphFloat32VectorDirectViewRequest struct {
 	Dims          int
 	Certification typedcolumn.ColumnPartLayoutContractColumn
 	Section       typedcolumn.ColumnPartImageSection
+	ExpectedKey   mappedresource.Key
 	Handle        *mappedresource.Handle
 	Manager       *mappedresource.Manager
 }
@@ -44,6 +45,7 @@ type GraphFloat32DirectViewRequest struct {
 	Expectation   GraphDirectViewExpectation
 	Certification typedcolumn.ColumnPartLayoutContractColumn
 	Section       typedcolumn.ColumnPartImageSection
+	ExpectedKey   mappedresource.Key
 	Handle        *mappedresource.Handle
 	Manager       *mappedresource.Manager
 }
@@ -52,28 +54,33 @@ type GraphInt64DirectViewRequest struct {
 	Expectation   GraphDirectViewExpectation
 	Certification typedcolumn.ColumnPartLayoutContractColumn
 	Section       typedcolumn.ColumnPartImageSection
+	ExpectedKey   mappedresource.Key
 	Handle        *mappedresource.Handle
 	Manager       *mappedresource.Manager
 }
 
 type GraphUint32ListDirectViewRequest struct {
-	Expectation    GraphDirectViewExpectation
-	Certification  typedcolumn.ColumnPartLayoutContractColumn
-	OffsetsSection typedcolumn.ColumnPartImageSection
-	ValuesSection  typedcolumn.ColumnPartImageSection
-	OffsetsHandle  *mappedresource.Handle
-	ValuesHandle   *mappedresource.Handle
-	Manager        *mappedresource.Manager
+	Expectation        GraphDirectViewExpectation
+	Certification      typedcolumn.ColumnPartLayoutContractColumn
+	OffsetsSection     typedcolumn.ColumnPartImageSection
+	ValuesSection      typedcolumn.ColumnPartImageSection
+	ExpectedOffsetsKey mappedresource.Key
+	ExpectedValuesKey  mappedresource.Key
+	OffsetsHandle      *mappedresource.Handle
+	ValuesHandle       *mappedresource.Handle
+	Manager            *mappedresource.Manager
 }
 
 type GraphBytesDirectViewRequest struct {
-	Expectation    GraphDirectViewExpectation
-	Certification  typedcolumn.ColumnPartLayoutContractColumn
-	OffsetsSection typedcolumn.ColumnPartImageSection
-	ValuesSection  typedcolumn.ColumnPartImageSection
-	OffsetsHandle  *mappedresource.Handle
-	ValuesHandle   *mappedresource.Handle
-	Manager        *mappedresource.Manager
+	Expectation        GraphDirectViewExpectation
+	Certification      typedcolumn.ColumnPartLayoutContractColumn
+	OffsetsSection     typedcolumn.ColumnPartImageSection
+	ValuesSection      typedcolumn.ColumnPartImageSection
+	ExpectedOffsetsKey mappedresource.Key
+	ExpectedValuesKey  mappedresource.Key
+	OffsetsHandle      *mappedresource.Handle
+	ValuesHandle       *mappedresource.Handle
+	Manager            *mappedresource.Manager
 }
 
 // PreparedFloat32VectorDirectView is a certified row-major graph-search vector
@@ -150,7 +157,7 @@ func CertifyGraphFloat32VectorDirectView(req GraphFloat32VectorDirectViewRequest
 	if status := ValidateDirectViewColumn(directReq); !status.Direct() {
 		return PreparedFloat32VectorDirectView{}, status
 	}
-	if status := validateFixedWidthGraphHandle(req.Handle, exp, req.Section, typedcolumn.EncodingRawFloat32Vector); !status.Direct() {
+	if status := validateFixedWidthGraphHandle(req.Handle, exp, req.Section, typedcolumn.EncodingRawFloat32Vector, req.ExpectedKey); !status.Direct() {
 		return PreparedFloat32VectorDirectView{}, status
 	}
 	expectedElements, ok := checkedMul3(exp.Rows, req.Dims, 1)
@@ -177,7 +184,7 @@ func CertifyGraphFloat32DirectView(req GraphFloat32DirectViewRequest) (PreparedF
 	if status := ValidateDirectViewColumn(directReq); !status.Direct() {
 		return PreparedFloat32DirectView{}, status
 	}
-	if status := validateFixedWidthGraphHandle(req.Handle, exp, req.Section, typedcolumn.EncodingRawFloat32); !status.Direct() {
+	if status := validateFixedWidthGraphHandle(req.Handle, exp, req.Section, typedcolumn.EncodingRawFloat32, req.ExpectedKey); !status.Direct() {
 		return PreparedFloat32DirectView{}, status
 	}
 	values, status := Float32ScalarView(req.Manager, req.Handle, directReq, ResourceViewOptions{ExpectedElements: exp.Rows, RequireMapped: true})
@@ -200,7 +207,7 @@ func CertifyGraphInt64DirectView(req GraphInt64DirectViewRequest) (PreparedInt64
 	if status := ValidateDirectViewColumn(directReq); !status.Direct() {
 		return PreparedInt64DirectView{}, status
 	}
-	if status := validateFixedWidthGraphHandle(req.Handle, exp, req.Section, typedcolumn.EncodingRawInt64); !status.Direct() {
+	if status := validateFixedWidthGraphHandle(req.Handle, exp, req.Section, typedcolumn.EncodingRawInt64, req.ExpectedKey); !status.Direct() {
 		return PreparedInt64DirectView{}, status
 	}
 	values, status := Int64View(req.Manager, req.Handle, ResourceViewOptions{ExpectedElements: exp.Rows, RequireMapped: true})
@@ -223,7 +230,7 @@ func CertifyGraphUint32ListDirectView(req GraphUint32ListDirectViewRequest) (Pre
 	if status := ValidateUint32OffsetsListDirectViewSections(directReq); !status.Direct() {
 		return PreparedUint32ListDirectView{}, status
 	}
-	if status := validateOffsetsValuesGraphHandles(req.OffsetsHandle, req.ValuesHandle, exp, req.OffsetsSection, req.ValuesSection, typedcolumn.EncodingRawUint32OffsetsList); !status.Direct() {
+	if status := validateOffsetsValuesGraphHandles(req.OffsetsHandle, req.ValuesHandle, exp, req.OffsetsSection, req.ValuesSection, typedcolumn.EncodingRawUint32OffsetsList, req.ExpectedOffsetsKey, req.ExpectedValuesKey); !status.Direct() {
 		return PreparedUint32ListDirectView{}, status
 	}
 	offsets, values, status := Uint32ListView(req.Manager, req.OffsetsHandle, req.ValuesHandle, directReq, ResourceViewOptions{RequireMapped: true})
@@ -246,7 +253,7 @@ func CertifyGraphBytesDirectView(req GraphBytesDirectViewRequest) (PreparedBytes
 	if status := ValidateBytesDirectViewSections(directReq); !status.Direct() {
 		return PreparedBytesDirectView{}, status
 	}
-	if status := validateOffsetsValuesGraphHandles(req.OffsetsHandle, req.ValuesHandle, exp, req.OffsetsSection, req.ValuesSection, typedcolumn.EncodingRawBytesOffsets); !status.Direct() {
+	if status := validateOffsetsValuesGraphHandles(req.OffsetsHandle, req.ValuesHandle, exp, req.OffsetsSection, req.ValuesSection, typedcolumn.EncodingRawBytesOffsets, req.ExpectedOffsetsKey, req.ExpectedValuesKey); !status.Direct() {
 		return PreparedBytesDirectView{}, status
 	}
 	offsets, values, status := BytesView(req.Manager, req.OffsetsHandle, req.ValuesHandle, directReq, ResourceViewOptions{RequireMapped: true})
@@ -331,45 +338,58 @@ func validateOffsetsValuesGraphSections(exp GraphDirectViewExpectation, cert typ
 	return DirectStatus()
 }
 
-func validateFixedWidthGraphHandle(h *mappedresource.Handle, exp GraphDirectViewExpectation, section typedcolumn.ColumnPartImageSection, encoding typedcolumn.Encoding) Status {
+func validateFixedWidthGraphHandle(h *mappedresource.Handle, exp GraphDirectViewExpectation, section typedcolumn.ColumnPartImageSection, encoding typedcolumn.Encoding, expectedKey mappedresource.Key) Status {
 	if status := validateHandle(h, mappedresource.SourceMapped, true); !status.Direct() {
 		return status
 	}
-	return validateGraphHandleKey(h, exp, section.Kind, section.Category, section.Length, encoding)
+	return validateGraphHandleKey(h, exp, section.Kind, section.Category, section.Length, encoding, expectedKey)
 }
 
-func validateOffsetsValuesGraphHandles(offsetsHandle, valuesHandle *mappedresource.Handle, exp GraphDirectViewExpectation, offsetsSection, valuesSection typedcolumn.ColumnPartImageSection, encoding typedcolumn.Encoding) Status {
+func validateOffsetsValuesGraphHandles(offsetsHandle, valuesHandle *mappedresource.Handle, exp GraphDirectViewExpectation, offsetsSection, valuesSection typedcolumn.ColumnPartImageSection, encoding typedcolumn.Encoding, expectedOffsetsKey, expectedValuesKey mappedresource.Key) Status {
 	if status := validateHandle(offsetsHandle, mappedresource.SourceMapped, true); !status.Direct() {
 		return status
 	}
 	if status := validateHandle(valuesHandle, mappedresource.SourceMapped, true); !status.Direct() {
 		return status
 	}
-	if status := validateGraphHandleKey(offsetsHandle, exp, offsetsSection.Kind, offsetsSection.Category, offsetsSection.Length, encoding); !status.Direct() {
+	if status := validateGraphHandleKey(offsetsHandle, exp, offsetsSection.Kind, offsetsSection.Category, offsetsSection.Length, encoding, expectedOffsetsKey); !status.Direct() {
 		return status
 	}
-	return validateGraphHandleKey(valuesHandle, exp, valuesSection.Kind, valuesSection.Category, valuesSection.Length, encoding)
+	return validateGraphHandleKey(valuesHandle, exp, valuesSection.Kind, valuesSection.Category, valuesSection.Length, encoding, expectedValuesKey)
 }
 
-func validateGraphHandleKey(h *mappedresource.Handle, exp GraphDirectViewExpectation, kind typedcolumn.ColumnPartImageSectionKind, category typedcolumn.ColumnPartImageSectionCategory, length int, encoding typedcolumn.Encoding) Status {
+func validateGraphHandleKey(h *mappedresource.Handle, exp GraphDirectViewExpectation, kind typedcolumn.ColumnPartImageSectionKind, category typedcolumn.ColumnPartImageSectionCategory, length int, encoding typedcolumn.Encoding, expectedKey mappedresource.Key) Status {
 	key := h.Key()
+	if status := validateGraphHandleKeyLayout(key, exp, kind, category, length, encoding, "resource"); !status.Direct() {
+		return status
+	}
+	if status := validateGraphHandleKeyLayout(expectedKey, exp, kind, category, length, encoding, "expected resource"); !status.Direct() {
+		return status
+	}
+	if key.Namespace != expectedKey.Namespace || key.Kind != expectedKey.Kind || key.Generation != expectedKey.Generation || key.PartID != expectedKey.PartID || key.FileID != expectedKey.FileID || key.Offset != expectedKey.Offset || key.Checksum != expectedKey.Checksum || key.Version != expectedKey.Version || key.Section.Name != expectedKey.Section.Name || key.Section.Ordinal != expectedKey.Section.Ordinal {
+		return UnsupportedStatus(ReasonResourceMismatch, fmt.Sprintf("resource identity namespace/kind/generation/part/file/offset/checksum/version/section_name/section_ordinal=(%q,%q,%d,%d,%d,%d,%d,%d,%q,%d) want (%q,%q,%d,%d,%d,%d,%d,%d,%q,%d)", key.Namespace, key.Kind, key.Generation, key.PartID, key.FileID, key.Offset, key.Checksum, key.Version, key.Section.Name, key.Section.Ordinal, expectedKey.Namespace, expectedKey.Kind, expectedKey.Generation, expectedKey.PartID, expectedKey.FileID, expectedKey.Offset, expectedKey.Checksum, expectedKey.Version, expectedKey.Section.Name, expectedKey.Section.Ordinal))
+	}
+	return DirectStatus()
+}
+
+func validateGraphHandleKeyLayout(key mappedresource.Key, exp GraphDirectViewExpectation, kind typedcolumn.ColumnPartImageSectionKind, category typedcolumn.ColumnPartImageSectionCategory, length int, encoding typedcolumn.Encoding, label string) Status {
 	if key.Class != mappedresource.ClassTypedColumnAsset {
-		return UnsupportedStatus(ReasonOwnerMismatch, fmt.Sprintf("resource class=%s want %s", key.Class, mappedresource.ClassTypedColumnAsset))
+		return UnsupportedStatus(ReasonOwnerMismatch, fmt.Sprintf("%s class=%s want %s", label, key.Class, mappedresource.ClassTypedColumnAsset))
 	}
 	if key.Section.Column != exp.Column {
-		return UnsupportedStatus(ReasonColumnMismatch, fmt.Sprintf("resource column=%q want %q", key.Section.Column, exp.Column))
+		return UnsupportedStatus(ReasonColumnMismatch, fmt.Sprintf("%s column=%q want %q", label, key.Section.Column, exp.Column))
 	}
 	if key.Section.Kind != string(kind) {
-		return UnsupportedStatus(ReasonColumnMismatch, fmt.Sprintf("resource section kind=%q want %q", key.Section.Kind, kind))
+		return UnsupportedStatus(ReasonColumnMismatch, fmt.Sprintf("%s section kind=%q want %q", label, key.Section.Kind, kind))
 	}
 	if key.Section.Category != string(category) {
-		return UnsupportedStatus(ReasonColumnMismatch, fmt.Sprintf("resource section category=%q want %q", key.Section.Category, category))
+		return UnsupportedStatus(ReasonColumnMismatch, fmt.Sprintf("%s section category=%q want %q", label, key.Section.Category, category))
 	}
 	if key.Encoding != encoding.String() {
-		return UnsupportedStatus(ReasonTypeEncodingMismatch, fmt.Sprintf("resource encoding=%q want %q", key.Encoding, encoding.String()))
+		return UnsupportedStatus(ReasonTypeEncodingMismatch, fmt.Sprintf("%s encoding=%q want %q", label, key.Encoding, encoding.String()))
 	}
 	if key.Length != int64(length) {
-		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("resource length=%d want %d", key.Length, length))
+		return UnsupportedStatus(ReasonPayloadLengthMismatch, fmt.Sprintf("%s length=%d want %d", label, key.Length, length))
 	}
 	return DirectStatus()
 }
