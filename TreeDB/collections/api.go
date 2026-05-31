@@ -6627,9 +6627,22 @@ func ensureBufferedPrimaryRunIndexLocked(domain *collectionWriteDomain, capacity
 	if domain == nil {
 		return nil
 	}
-	if domain.primaryRunIndex == nil {
-		domain.primaryRunIndex = newBufferedPrimaryRunIndex(max(1, capacity))
+	if domain.primaryRunIndex != nil {
+		return domain.primaryRunIndex
 	}
+	collectionName := bufferedDomainCollectionName(domain, "")
+	if hasBufferedPrimaryRootRuns(domain, collectionName) {
+		index, err := rebuildBufferedPrimaryRunIndex(collectionName, pendingIndexedRootRunMapLocked(domain))
+		if err != nil {
+			return nil
+		}
+		if index == nil {
+			index = newBufferedPrimaryRunIndex(0)
+		}
+		domain.primaryRunIndex = index
+		return domain.primaryRunIndex
+	}
+	domain.primaryRunIndex = newBufferedPrimaryRunIndex(max(1, capacity))
 	return domain.primaryRunIndex
 }
 

@@ -7741,6 +7741,75 @@ func TestBufferedIndexedUpdateMaterializedOverlayEntersPrimaryRunIndex(t *testin
 	}
 }
 
+func TestBufferedIndexedDeleteTombstoneSurvivesLaterPrimaryRunIndexEnable(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"sfo","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+	if deleted, err := col.DeleteBatch([][]byte{[]byte("u1")}); err != nil {
+		t.Fatalf("DeleteBatch: %v", err)
+	} else if deleted != 1 {
+		t.Fatalf("DeleteBatch deleted=%d want 1", deleted)
+	}
+	if collectionHasBufferedPrimaryRunIndexForTest(t, col) {
+		t.Fatal("delete buffer unexpectedly left primary run index enabled")
+	}
+
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u2"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			var doc map[string]any
+			if err := json.Unmarshal(current, &doc); err != nil {
+				return nil, false, err
+			}
+			doc["city"] = "sea"
+			next, err := json.Marshal(doc)
+			return next, true, err
+		},
+	}}); err != nil {
+		t.Fatalf("secondary-changing UpdateBatch: %v", err)
+	}
+
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("GetInto deleted u1: %v", err)
+	}
+	if found || len(got) != 0 {
+		t.Fatalf("GetInto deleted u1 found=%v value=%q want missing tombstone", found, got)
+	}
+}
+
 func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	opts := CollectionOptions{
 		BufferedIndexedWriteMaxDocuments: 10,
