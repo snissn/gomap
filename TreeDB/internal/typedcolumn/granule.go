@@ -774,7 +774,7 @@ func admitCompressionInto(dst []byte, raw []byte, encoding Encoding, compression
 		report.StoredBytes = len(out)
 		return CompressionSelection{Payload: out, Actual: CompressionLZ4, Scratch: out, Report: report}, nil
 	default:
-		return CompressionSelection{}, fmt.Errorf("typedcolumn: unsupported compression %d", compression)
+		return CompressionSelection{}, fmt.Errorf("typedcolumn: unsupported compression %s", compression)
 	}
 }
 
@@ -807,7 +807,7 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 	case CompressionSnappy:
 		decodedLen, err := snappy.DecodedLen(g.Payload)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("typedcolumn: snappy decoded length: %w", err)
 		}
 		if decodedLen != g.RawBytes {
 			return nil, fmt.Errorf("typedcolumn: snappy decoded length=%d want=%d", decodedLen, g.RawBytes)
@@ -819,7 +819,7 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 		}
 		out, err := snappy.Decode(r.raw, g.Payload)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("typedcolumn: snappy decode: %w", err)
 		}
 		if len(out) != g.RawBytes {
 			return nil, fmt.Errorf("typedcolumn: snappy decoded length=%d want=%d", len(out), g.RawBytes)
@@ -835,14 +835,14 @@ func (r *GranuleReader) decompressPayload(g EncodedGranule) ([]byte, error) {
 		out := r.raw
 		n, err := lz4.UncompressBlock(g.Payload, out)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("typedcolumn: lz4 decode: %w", err)
 		}
 		if n != g.RawBytes {
 			return nil, fmt.Errorf("typedcolumn: lz4 decoded length=%d want=%d", n, g.RawBytes)
 		}
 		return out, nil
 	default:
-		return nil, fmt.Errorf("typedcolumn: unsupported compression %d", g.Compression)
+		return nil, fmt.Errorf("typedcolumn: unsupported compression %s", g.Compression)
 	}
 }
 
@@ -870,7 +870,7 @@ func validateGranule(g EncodedGranule) error {
 	}
 	maxRaw := maxGranuleRawPayloadBytes(g.Encoding, g.Rows)
 	if maxRaw < 0 {
-		return fmt.Errorf("typedcolumn: unsupported encoding %d", g.Encoding)
+		return fmt.Errorf("typedcolumn: unsupported encoding %s", g.Encoding)
 	}
 	if g.RawBytes > maxRaw {
 		return fmt.Errorf("typedcolumn: raw payload length=%d exceeds max=%d", g.RawBytes, maxRaw)
@@ -930,7 +930,7 @@ func maxGranuleStoredPayloadBytes(compression Compression, maxRaw int) (int, err
 	case CompressionLZ4:
 		return lz4.CompressBlockBound(maxRaw), nil
 	default:
-		return 0, fmt.Errorf("typedcolumn: unsupported compression %d", compression)
+		return 0, fmt.Errorf("typedcolumn: unsupported compression %s", compression)
 	}
 }
 
