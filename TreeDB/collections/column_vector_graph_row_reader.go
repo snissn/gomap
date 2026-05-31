@@ -34,12 +34,13 @@ var (
 	errColumnVectorGraphPhysicalRowReaderBatchVisitorNil = errors.New("collections: column_graph physical row reader batch visitor is nil")
 )
 
-// columnVectorGraphPhysicalRowReader fetches graph rows from the persisted
-// column graph asset by ordinal. It is a graph-specific wrapper around the
-// generic physical row reader, not a decoded ColumnVectorGraph.
+// columnVectorGraphPhysicalRowReader binds column_graph search state by ordinal.
+// Current rebuilds use TVIS/base typed-column sources and may have no physical
+// graph row reader; legacy compatibility records still expose graph rows through
+// the generic physical row reader when a physical asset is present.
 //
 // The reader is not concurrency-safe. Parallel native search uses one reader
-// and one scratch per worker over immutable physical graph assets.
+// and one scratch per worker over immutable bound graph state.
 type columnVectorGraphPhysicalRowReader struct {
 	def                                 VectorIndexDefinition
 	graph                               columnVectorGraphManifestSnapshot
@@ -96,21 +97,24 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 		catalog = catalog.copy()
 		view.Catalog = catalog
 	}
-	reader, err := newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{
-		ProjectedColumns: []string{
-			columnVectorGraphVectorColumnName,
-			columnVectorGraphInvNormColumnName,
-			columnVectorGraphAdjacencyColumnName,
-		},
-		MaxDecodedBlocks:  opts.MaxDecodedBlocks,
-		RequireInsertOnly: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if got, want := reader.RowCount(), graph.RowCount; got != want {
-		_ = reader.Close()
-		return nil, fmt.Errorf("collections: column_graph %q manifest row_count=%d physical_row_count=%d: %w", def.Name, want, got, errColumnVectorGraphManifestMismatch)
+	var reader *columnPhysicalRowReader
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		reader, err = newColumnPhysicalRowReaderFromSnapshotView(view, columnPhysicalRowReaderOptions{
+			ProjectedColumns: []string{
+				columnVectorGraphVectorColumnName,
+				columnVectorGraphInvNormColumnName,
+				columnVectorGraphAdjacencyColumnName,
+			},
+			MaxDecodedBlocks:  opts.MaxDecodedBlocks,
+			RequireInsertOnly: true,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if got, want := reader.RowCount(), graph.RowCount; got != want {
+			_ = reader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q manifest row_count=%d physical_row_count=%d: %w", def.Name, want, got, errColumnVectorGraphManifestMismatch)
+		}
 	}
 	graphReader := &columnVectorGraphPhysicalRowReader{
 		def:     def,
@@ -206,6 +210,27 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			} else if fallbackReason != "" {
 				graphReader.typedVectorFallbackReason = fallbackReason
 			}
+		}
+	}
+	if !columnVectorGraphManifestHasPhysicalAsset(graph) && graph.RowCount > 0 {
+		if graphReader.invNormSource == nil {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing required vector-index inverse-norm state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if graphReader.rowRefSource == nil {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing required vector-index row-ref state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if graphReader.documentIDSource == nil {
+			_ = graphReader.Close()
+			return nil, fmt.Errorf("collections: column_graph %q missing required vector-index document-id state source: %w", def.Name, errColumnVectorGraphManifestMismatch)
+		}
+		if graphReader.typedVectorSource == nil {
+			_ = graphReader.Close()
+			if graphReader.typedVectorFallbackReason != "" {
+				return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %s: %w", def.Name, graphReader.typedVectorFallbackReason, errColumnVectorGraphManifestMismatch)
+			}
+			return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
 	}
 	return graphReader, nil
@@ -321,8 +346,10 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if columnVectorGraphManifestMatchStatusWithBaseChecksum(catalog.meta.Name, graph, def, *cfg, baseChecksum) != columnVectorGraphManifestMatchLoaded {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: column_graph %q graph manifest does not match vector index definition: %w", def.Name, errColumnVectorGraphManifestMismatch)
 	}
-	if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
-		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		if err := validateColumnVectorGraphAssetRefAvailable(c.db.ColumnAssetRootDir(), graph.AssetRef); err != nil {
+			return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, err
+		}
 	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(catalog.meta.Name, *cfg, def)
 	if err != nil {
@@ -335,6 +362,13 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	if state == nil {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
+	assetRefs := make([]columnManifestAssetRefForScan, 0, 1)
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		assetRefs = append(assetRefs, columnManifestAssetRefForScan{
+			Ref:    graph.AssetRef,
+			Reason: ColumnPublishOperationInsert,
+		})
+	}
 	view := columnPhysicalScanSnapshotView{
 		CollectionName:        catalog.meta.Name,
 		Catalog:               catalog,
@@ -343,17 +377,14 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 		CommitSeq:             state.CommitSeq,
 		VectorIndexState:      vectorState,
 		VectorIndexStateFound: true,
-		AssetRefs: []columnManifestAssetRefForScan{{
-			Ref:    graph.AssetRef,
-			Reason: ColumnPublishOperationInsert,
-		}},
+		AssetRefs:             assetRefs,
 		Diagnostics: columnPhysicalScanDiagnostics{
 			ManifestRoot:               rootID,
 			ManifestGeneration:         cfg.ActiveManifest.Generation,
 			RecoveryManifestGeneration: cfg.RecoveryAuthoritativeManifest.Generation,
 			AppliedCommandLSN:          cfg.RecoveryAuthoritativeAppliedCommandLSN,
 			ManifestRecords:            len(records),
-			AssetRefs:                  1,
+			AssetRefs:                  len(assetRefs),
 		},
 		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
 		AssetNamespace:     graphCfg.AssetManager.Namespace,
@@ -411,10 +442,13 @@ func (r *columnVectorGraphPhysicalRowReader) Close() error {
 }
 
 func (r *columnVectorGraphPhysicalRowReader) RowCount() int {
-	if r == nil || r.reader == nil {
+	if r == nil {
 		return 0
 	}
-	return r.reader.RowCount()
+	if r.reader != nil {
+		return r.reader.RowCount()
+	}
+	return r.graph.RowCount
 }
 
 func (r *columnVectorGraphPhysicalRowReader) Stats() columnPhysicalRowReaderStats {

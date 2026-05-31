@@ -408,7 +408,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/vector_index_retained_payload_policy_1876_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/vector_index_search_test.go", classification: typedStorageLegacyDerived, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_index_rebuild.go", classification: typedStorageLegacyDerived, matchingLines: 16, occurrences: 18},
-	{path: "TreeDB/collections/vector_index_rebuild_test.go", classification: typedStorageLegacyDerived, matchingLines: 44, occurrences: 51},
+	{path: "TreeDB/collections/vector_index_rebuild_test.go", classification: typedStorageLegacyDerived, matchingLines: 46, occurrences: 54},
 	{path: "TreeDB/docs/guides/collections-quickstart.md", classification: typedStorageLegacyCompatibility, matchingLines: 18, occurrences: 22},
 	{path: "TreeDB/docs/guides/jsonbench-columnstore-clickhouse-experiment.md", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 17},
 	{path: "TreeDB/docs/guides/README.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},

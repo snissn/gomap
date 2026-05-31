@@ -16,8 +16,8 @@ changes.
 | Embedding/vector payload | `typed_column_part` fixed-dimension `float32_vector` | Contiguous row-major `float32` sections can be viewed directly after validation. |
 | Document title/body/source text | Retained document / residual payload | Usually needed only after top-k; keep flexible. |
 | Filter/sort metadata | `typed_row_asset` or scalar `typed_column_part` depending on query shape | Use typed-row for point reconstruction; use typed-column when filtering/scanning dominates. |
-| Vector graph/ANN data | `derived_accelerator` | It accelerates search but is not the authoritative owner of the embedding field. |
-| Adjacency list | typed-column `uint32_list` assets owned by vector-index state | `raw_uint32_offsets_list` is the physical encoding for HNSW adjacency state. Legacy `column_graph` adjacency direct sources and the `adjacency_layout: "uint32_offsets_list"` selector are quarantined compatibility only; new graph builds should not publish those graph-specific source assets. |
+| Vector graph/ANN data | `derived_accelerator` plus TVIS control state | It accelerates search but is not the authoritative owner of the embedding field. Current healthy rebuilds do not publish duplicate physical graph row payloads. |
+| Adjacency list | typed-column `uint32_list` assets owned by vector-index state | `raw_uint32_offsets_list` is the physical encoding for HNSW adjacency state. Legacy `column_graph` adjacency direct sources and the `adjacency_layout: "uint32_offsets_list"` selector are quarantined compatibility only; new graph builds should not publish those graph-specific source assets or legacy graph row adjacency payloads. |
 | Ordinal-to-base-row references | vector-index state `row_refs` assets (`int64` / `raw_int64`) | Search uses row-ref state to map HNSW ordinals to base rows and to materialize documents without an ID-to-row-ref locator lookup. |
 | Returned opaque document IDs | vector-index state `document_ids` asset (`bytes` / `raw_bytes_offsets`) | Exact arbitrary binary IDs are opaque bytes state. Legacy graph row ID bytes are compatibility or quarantine fallback only. |
 
@@ -146,7 +146,7 @@ TreeDB column_graph native-reader demo
 db_dir=/tmp/treedb-column-graph-doc-smoke rows=64 dims=8 degree=4 top_k=5 ef_search=32
 rebuild status=column_graph_loaded loaded=true reason=
 search path=column_graph_native_reader status=column_graph_loaded loaded=true results=5 include_docs=false
-stats candidates=... edges=... row_fetches=... cache_hits=... cache_misses=... decoded_blocks=... granules_touched=... physical_B=... max_resident_B=... docs_fetched=0
+stats candidates=... edges=... row_fetches=0 cache_hits=0 cache_misses=0 decoded_blocks=0 granules_touched=0 physical_B=0 max_resident_B=0 docs_fetched=0
 result[0] id=doc-... ordinal=... score=...
 ```
 
@@ -154,8 +154,9 @@ Interpretation:
 
 - `search path=column_graph_native_reader` means the native reader path was used.
 - `docs_fetched=0` means search/scoring did not materialize final documents.
-- `physical_B` and `max_resident_B` describe physical bytes read/resident for the
-  native reader/cache path.
+- `physical_B=0` and `row_fetches=0` on current healthy rebuilds mean search did
+  not read legacy graph row payloads. Non-zero values indicate an explicit
+  legacy compatibility path or a benchmark using old physical graph fixtures.
 - Add `-include-docs` when you intentionally want final document fetch included;
   then `docs_fetched` should be non-zero.
 
@@ -312,6 +313,6 @@ counters.
 | `docs_fetched` is non-zero in a search-only comparison | You included final document materialization. | Drop `-include-docs` or move document fetch into a separate benchmark row. |
 | Search benchmark allocates heavily | You may be timing setup/open, public document materialization, or fallback decode. | Compare reusable-searcher vs one-shot names and inspect allocation profiles. |
 | Results differ across branches | On-disk formats/APIs are pre-alpha. | Rebuild DB directories and rerun with the same rows/dims/degree/top-k/seed. |
-| Adjacency typed-list counters show scratch decodes or legacy fallback | The vector-index state `uint32_list` direct source is missing, stale, disabled, or failed validation, so search fell back to row-asset adjacency or dense compatibility/corruption recovery. | Rebuild the graph so vector-index state owns certified `uint32_list` / `raw_uint32_offsets_list` adjacency assets. Treat old `column_graph` adjacency-source assets as compatibility-only, not a fix target. |
-| `row_ref_vector_source_legacy_graph_ids` is non-zero | The vector-index row-ref state is missing or stale, so typed-column vector source setup used legacy graph row ID scans. | Rebuild the graph so TVIS publishes `row_refs` assets; keep graph ID reads only as explicit compatibility fallback. |
-| `result_id_graph_fallbacks` is non-zero | The vector-index document-ID bytes state is missing or failed validation, so returned IDs came from legacy graph row ID bytes. | Rebuild the graph so TVIS publishes `document_ids` bytes assets; inspect `result_id_state_validation_failures` for corrupt or stale state. |
+| Adjacency typed-list counters show scratch decodes or legacy fallback | The vector-index state `uint32_list` direct source is missing, stale, disabled, or failed validation. Current healthy indexes fail closed when no legacy graph row asset is available; old fixtures may report explicit compatibility fallback. | Rebuild the graph so vector-index state owns certified `uint32_list` / `raw_uint32_offsets_list` adjacency assets. Treat old `column_graph` adjacency-source assets as compatibility-only, not a fix target. |
+| `row_ref_vector_source_legacy_graph_ids` is non-zero | A legacy physical graph row asset was used to map graph ordinals to base typed-column rows because row-ref state was missing or stale. | Rebuild the graph so TVIS publishes `row_refs` assets; keep graph ID reads only as explicit compatibility fallback. |
+| `result_id_graph_fallbacks` is non-zero | A legacy physical graph row asset supplied returned IDs because vector-index document-ID bytes state was missing or failed validation. Current healthy indexes fail closed instead of silently recanonicalizing graph row IDs. | Rebuild the graph so TVIS publishes `document_ids` bytes assets; inspect `result_id_state_validation_failures` for corrupt or stale state. |

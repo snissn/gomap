@@ -102,28 +102,6 @@ func TestColumnGraphInvNormStateReopenSearchParityAndCounters1992(t *testing.T) 
 		t.Fatalf("state stats=%+v want healthy norm state without fallback", stateStats)
 	}
 
-	legacyReader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
-	if err != nil {
-		t.Fatalf("open legacy reader: %v", err)
-	}
-	defer func() { _ = legacyReader.Close() }()
-	if legacyReader.invNormSource != nil {
-		if err := legacyReader.invNormSource.Close(); err != nil {
-			t.Fatalf("close inv_norm source: %v", err)
-		}
-		legacyReader.invNormSource = nil
-	}
-	legacyReader.invNormStateUnavailable = true
-	var legacyScratch columnVectorGraphNativeSearchScratch
-	legacyResults, legacyStats, err := legacyReader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 8, EfSearch: 24}, &legacyScratch)
-	if err != nil {
-		t.Fatalf("legacy SearchCosine: %v", err)
-	}
-	assertColumnGraphSearchResultsEqual1992(t, stateResults, legacyResults)
-	if legacyStats.NormSourceUnavailable != 1 || legacyStats.NormSourceFallbacks != 1 || legacyStats.NormMmapDirectViews+legacyStats.NormHeapCopyTypedViews+legacyStats.NormScratchDecodes != 0 {
-		t.Fatalf("legacy stats=%+v want explicit graph-row norm fallback/quarantine", legacyStats)
-	}
-
 	publicResponse, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: query, TopK: 8, EfSearch: 24})
 	if err != nil {
 		t.Fatalf("SearchVectorIndex: %v", err)
@@ -287,7 +265,7 @@ func TestColumnGraphInvNormStateMissingFallbackAndCorruptFailClosed1992(t *testi
 		{id: "doc-b", vector: []float32{0, 1, 0}},
 		{id: "doc-c", vector: []float32{0, 0, 1}},
 	}
-	t.Run("missing_state_asset_falls_back_to_graph_rows", func(t *testing.T) {
+	t.Run("missing_state_asset_fails_closed_without_graph_rows", func(t *testing.T) {
 		_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 2, rows)
 		defer func() { _ = d.Close() }()
 		if _, err := col.RebuildVectorIndex(def.Name); err != nil {
@@ -306,12 +284,39 @@ func TestColumnGraphInvNormStateMissingFallbackAndCorruptFailClosed1992(t *testi
 		}
 		reader.invNormStateUnavailable = true
 		var scratch columnVectorGraphNativeSearchScratch
-		_, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 3}, &scratch)
-		if err != nil {
-			t.Fatalf("SearchCosine fallback: %v", err)
+		_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 3}, &scratch)
+		if err == nil || !strings.Contains(err.Error(), "inverse-norm state") {
+			t.Fatalf("SearchCosine err=%v want fail-closed missing inverse-norm state", err)
 		}
-		if stats.NormSourceUnavailable != 1 || stats.NormSourceFallbacks != 1 || stats.NormMmapDirectViews+stats.NormHeapCopyTypedViews+stats.NormScratchDecodes != 0 {
-			t.Fatalf("stats=%+v want missing norm state to use explicit graph-row fallback", stats)
+	})
+
+	t.Run("legacy_physical_asset_norm_fallback_counts", func(t *testing.T) {
+		legacyRows := []columnVectorGraphAssetRow{
+			{ID: []byte("doc-a"), Vector: []float32{1, 0, 0}, InvNorm: 1, Adjacency: []uint32{1, 2}},
+			{ID: []byte("doc-b"), Vector: []float32{0, 1, 0}, InvNorm: 1, Adjacency: []uint32{0, 2}},
+			{ID: []byte("doc-c"), Vector: []float32{0, 0, 1}, InvNorm: 1, Adjacency: []uint32{0, 1}},
+		}
+		d, col, def := publishColumnVectorGraphPhysicalReaderTestAssetV2B(t, legacyRows)
+		defer func() { _ = d.Close() }()
+		reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+		if err != nil {
+			t.Fatalf("open legacy reader: %v", err)
+		}
+		defer func() { _ = reader.Close() }()
+		if reader.invNormSource != nil {
+			if err := reader.invNormSource.Close(); err != nil {
+				t.Fatalf("close inv_norm source: %v", err)
+			}
+			reader.invNormSource = nil
+		}
+		reader.invNormStateUnavailable = true
+		var scratch columnVectorGraphNativeSearchScratch
+		got, stats, err := reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 3}, &scratch)
+		if err != nil {
+			t.Fatalf("legacy SearchCosine fallback: %v", err)
+		}
+		if len(got) == 0 || stats.NormSourceUnavailable != 1 || stats.NormSourceFallbacks != 1 || stats.NormMmapDirectViews+stats.NormHeapCopyTypedViews+stats.NormScratchDecodes != 0 {
+			t.Fatalf("results=%d stats=%+v want explicit legacy graph-row norm fallback", len(got), stats)
 		}
 	})
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -54,18 +55,12 @@ func TestColumnVectorGraphLayer0AdjacencySourceSearchParity1919(t *testing.T) {
 	defer func() { _ = fallbackReader.Close() }()
 	disableColumnVectorGraphAdjacencyDirectSourcesForTest(t, fallbackReader)
 	var fallbackScratch columnVectorGraphNativeSearchScratch
-	fallbackResults, fallbackStats, err := fallbackReader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &fallbackScratch)
-	if err != nil {
-		t.Fatalf("fallback SearchCosine: %v", err)
+	_, fallbackStats, err := fallbackReader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &fallbackScratch)
+	if err == nil || !strings.Contains(err.Error(), "adjacency graph-row fallback unavailable") {
+		t.Fatalf("fallback SearchCosine err=%v want fail-closed missing TVIS adjacency", err)
 	}
-	if mismatch := columnGraphNativeSearchResultsMismatchV3(directResults, fallbackResults); mismatch != "" {
-		t.Fatalf("direct/fallback mismatch: %s", mismatch)
-	}
-	if fallbackStats.AdjacencyMmapDirectViews != 0 || fallbackStats.AdjacencyHeapCopyTypedViews != 0 || fallbackStats.AdjacencySourceUnavailable != 1 {
-		t.Fatalf("fallback stats=%+v want row-asset fallback without adjacency direct views", fallbackStats)
-	}
-	if fallbackStats.AdjacencyScratchDecodes <= directStats.AdjacencyScratchDecodes {
-		t.Fatalf("direct stats=%+v fallback stats=%+v want direct source to reduce scratch decodes", directStats, fallbackStats)
+	if fallbackStats.AdjacencyLegacyFallbacks != 0 || fallbackStats.AdjacencyScratchDecodes != 0 {
+		t.Fatalf("fallback stats=%+v want no graph row adjacency reads after TVIS source disabled", fallbackStats)
 	}
 }
 
@@ -110,15 +105,12 @@ func TestColumnVectorGraphSearchUsesVectorIndexStateAdjacency1988(t *testing.T) 
 	defer func() { _ = fallbackReader.Close() }()
 	disableColumnVectorGraphAdjacencyDirectSourcesForTest(t, fallbackReader)
 	var fallbackScratch columnVectorGraphNativeSearchScratch
-	fallbackResults, fallbackStats, err := fallbackReader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &fallbackScratch)
-	if err != nil {
-		t.Fatalf("fallback SearchCosine: %v", err)
+	_, fallbackStats, err := fallbackReader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 10, EfSearch: 64}, &fallbackScratch)
+	if err == nil || !strings.Contains(err.Error(), "adjacency graph-row fallback unavailable") {
+		t.Fatalf("fallback SearchCosine err=%v want fail-closed missing TVIS adjacency", err)
 	}
-	if mismatch := columnGraphNativeSearchResultsMismatchV3(directResults, fallbackResults); mismatch != "" {
-		t.Fatalf("direct/fallback mismatch: %s", mismatch)
-	}
-	if fallbackStats.AdjacencyTypedListMmapDirectViews+fallbackStats.AdjacencyTypedListHeapCopyTypedViews+fallbackStats.AdjacencyTypedListScratchDecodes != 0 || fallbackStats.AdjacencyLegacyFallbacks == 0 || fallbackStats.AdjacencyScratchDecodes == 0 {
-		t.Fatalf("fallback stats=%+v want explicit legacy row-image fallback after typed-state source disabled", fallbackStats)
+	if fallbackStats.AdjacencyTypedListMmapDirectViews+fallbackStats.AdjacencyTypedListHeapCopyTypedViews+fallbackStats.AdjacencyTypedListScratchDecodes != 0 || fallbackStats.AdjacencyLegacyFallbacks != 0 || fallbackStats.AdjacencyScratchDecodes != 0 {
+		t.Fatalf("fallback stats=%+v want no legacy graph row adjacency reads after typed-state source disabled", fallbackStats)
 	}
 }
 
@@ -256,11 +248,11 @@ func TestColumnVectorGraphLayer0AdjacencySourceStaleHandlesFallback1919(t *testi
 	releaseColumnVectorGraphAdjacencySourceHandlesForTest(t, reader)
 	var scratch columnVectorGraphNativeSearchScratch
 	got, stats, err := reader.SearchCosine(input[9].vector, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: 32}, &scratch)
-	if err != nil {
-		t.Fatalf("SearchCosine with stale source handles: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "adjacency graph-row fallback unavailable") {
+		t.Fatalf("SearchCosine stale handles err=%v want fail-closed missing graph fallback", err)
 	}
-	if len(got) == 0 || stats.AdjacencyStaleHandles == 0 || stats.AdjacencySourceFallbacks == 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyLegacyFallbacks == 0 || stats.AdjacencyScratchDecodes == 0 {
-		t.Fatalf("results=%d stats=%+v want stale typed-state handles to use explicit row fallback", len(got), stats)
+	if len(got) != 0 || stats.AdjacencyStaleHandles == 0 || stats.AdjacencySourceFallbacks == 0 || stats.AdjacencyTypedListMmapDirectViews != 0 || stats.AdjacencyLegacyFallbacks != 0 || stats.AdjacencyScratchDecodes != 0 {
+		t.Fatalf("results=%d stats=%+v want stale typed-state handles to fail closed without graph row reads", len(got), stats)
 	}
 }
 
@@ -333,7 +325,9 @@ func TestColumnVectorGraphLayer0AdjacencySourceBadNeighborOrdinalFails1919(t *te
 	}
 	defer func() { _ = reader.Close() }()
 	disableColumnVectorGraphAdjacencyDirectSourcesForTest(t, reader)
-	reader.layer0AdjacencySource = fakeColumnVectorGraphLayer0AdjacencySource1919(t, reader.RowCount(), uint32(reader.RowCount()))
+	fake := fakeColumnVectorGraphLayer0AdjacencySource1919(t, reader.RowCount(), uint32(reader.RowCount()))
+	reader.layer0AdjacencySource = fake
+	reader.adjacencyLayerSources = &columnVectorGraphAdjacencyDirectSources{sources: []*columnVectorGraphLayer0AdjacencyDirectSource{fake}, allLayers: true}
 	var scratch columnVectorGraphNativeSearchScratch
 	_, _, err = reader.SearchCosine(input[0].vector, columnVectorGraphNativeSearchOptions{TopK: 1, EfSearch: 2}, &scratch)
 	if !errors.Is(err, errColumnVectorGraphAdjacencyOrdinalOutOfBounds) {

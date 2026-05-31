@@ -365,7 +365,7 @@ func demoCollectionMeta(dims, degree int) *collections.CollectionMeta {
 					{Name: "kind", Path: "kind", ValueType: collections.ColumnStoreValueString, Dictionary: true},
 					{Name: "did", Path: "did", ValueType: collections.ColumnStoreValueString, Dictionary: true},
 					{Name: "label", Path: "label", ValueType: collections.ColumnStoreValueString, Dictionary: true, Nullable: true},
-					{Name: "embedding", Path: "embedding", ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dims},
+					{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dims},
 				},
 				SortKey: []collections.ColumnSortKey{{Column: "time_us"}},
 			},
