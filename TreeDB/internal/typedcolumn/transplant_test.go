@@ -411,6 +411,9 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 		// #1993 is the scoped production vector graph writer/reader that publishes
 		// and consumes raw_int64 row-reference state through typed-column assets.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_row_ref_state.go")): {},
+		// #2013 is the scoped production vector graph writer/reader that publishes
+		// and consumes raw_bytes_offsets document-ID state through typed-column assets.
+		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_document_id_state.go")): {},
 		// #1848 keeps vector graph candidate filtering on the shared row-selection
 		// substrate without exposing generic scalar typed-column scans.
 		filepath.Clean(filepath.Join(collectionsDir, "column_vector_graph_search.go")): {},
@@ -437,7 +440,7 @@ func TestTypedColumnTransplantNoProductionPublication(t *testing.T) {
 			if _, ok := allowedImports[filepath.Clean(path)]; ok {
 				continue
 			}
-			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state)", path)
+			t.Fatalf("production collections import typedcolumn in %s; typed-column data-plane imports must stay in approved seams (#1754 adapter, #1782 vector graph, #1949 sort-key pruning, #1993 row-ref state, #2013 document-ID state)", path)
 		}
 		return nil
 	})

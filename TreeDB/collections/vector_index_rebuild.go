@@ -766,6 +766,14 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
+	documentIDPartID := rowRefPartID
+	if len(preparedRowRefs) > 0 {
+		documentIDPartID = nextColumnVectorGraphPartIDAfter(documentIDPartID, preparedRowRefs[len(preparedRowRefs)-1].Ref.PartID)
+	}
+	preparedDocumentIDs, err := prepareColumnVectorGraphDocumentIDStateAsset(assetRootDir, collection, cfg, def, manifest.Generation, documentIDPartID, rows)
+	if err != nil {
+		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	}
 	raw, err := encodeColumnVectorGraphManifestRecord(graph)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -782,6 +790,9 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		state.Assets = append(state.Assets, invNormAsset)
 	}
 	state.Assets = append(state.Assets, columnVectorGraphRowRefStateAssetSnapshots(preparedRowRefs)...)
+	if documentIDAsset, ok := columnVectorGraphDocumentIDStateAssetSnapshot(preparedDocumentIDs); ok {
+		state.Assets = append(state.Assets, documentIDAsset)
+	}
 	stateRaw, err := encodeColumnVectorIndexStateRecord(state)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err

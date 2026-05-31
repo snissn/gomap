@@ -918,6 +918,70 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	}, nil
 }
 
+// decodeTypedColumnPhysicalQueryDenseGroupHourCountPart prepares the q3
+// typed-column section fast path from the adapter seam so production query
+// routing does not import the typedcolumn data plane directly.
+func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+	spanPlan := plan
+	spanPlan.PredicateSpecs = make([]columnPhysicalQueryPredicateSpec, 0, len(plan.PredicateSpecs))
+	var groupPredicate *columnPhysicalQueryPredicateSpec
+	for idx := range plan.PredicateSpecs {
+		spec := plan.PredicateSpecs[idx]
+		if spec.column == plan.GroupColumn {
+			groupPredicate = &plan.PredicateSpecs[idx]
+			continue
+		}
+		spanPlan.PredicateSpecs = append(spanPlan.PredicateSpecs, spec)
+	}
+	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPart(spanPlan, schemaHash, typedRef, physical, raw)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if part.DenseInt64Span == nil {
+		return columnTypedColumnPhysicalQueryPart{}, errors.New("collections: dense typed-column group-hour missing decoded string/int64 payload")
+	}
+	predicates := part.DenseInt64Span.Predicates
+	if groupPredicate != nil {
+		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, *groupPredicate)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates = append(predicates, predicate)
+	}
+	part.DenseGroupHourCount = &columnTypedColumnDenseGroupHourCountPart{
+		Cardinality:      part.DenseInt64Span.Cardinality,
+		DictionaryByCode: part.DenseInt64Span.DictionaryByCode,
+		GroupCodes:       part.DenseInt64Span.GroupCodes,
+		Values:           part.DenseInt64Span.Values,
+		Predicates:       predicates,
+	}
+	part.DenseInt64Span = nil
+	return part, nil
+}
+
+func densePredicateFromDictionaryCodes(codes []uint32, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
+	allowed := make([]uint64, (cardinality+63)/64)
+	matchedLiterals := 0
+	for code := 0; code < cardinality; code++ {
+		value, ok := dictionaryByCode[int64(code)]
+		if !ok {
+			return columnTypedColumnDensePredicatePart{}, fmt.Errorf("collections: dense typed-column predicate dictionary missing local code %d for column %q", code, spec.column)
+		}
+		for _, target := range spec.values {
+			if value != target {
+				continue
+			}
+			allowed[code/64] |= uint64(1) << uint(code%64)
+			matchedLiterals++
+			break
+		}
+	}
+	if matchedLiterals == 0 {
+		return columnTypedColumnDensePredicatePart{RejectsAll: true}, nil
+	}
+	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed}, nil
+}
+
 // decodeTypedColumnPhysicalQueryDenseInt64SpanPart prepares the q5 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
