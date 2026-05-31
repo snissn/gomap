@@ -25,6 +25,108 @@ type columnVectorGraphPreparedSearchView struct {
 	vectorIdentityMapping bool
 }
 
+// maybePrepareColumnVectorGraphPreparedSearchView admits the #2045 combined
+// prepared route only when every required current-format state is already
+// mmap_direct. Non-mmap resource/platform fallbacks keep reader.preparedSearch
+// nil so the existing counted source/compatibility path remains available;
+// nil, stale, or malformed prerequisites intentionally fall through to
+// prepareColumnVectorGraphPreparedSearchView so current-format corruption still
+// fails closed.
+func maybePrepareColumnVectorGraphPreparedSearchView(reader *columnVectorGraphPhysicalRowReader) error {
+	if !columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader) {
+		if reader != nil {
+			reader.preparedSearch = nil
+		}
+		return nil
+	}
+	preparedSearch, err := prepareColumnVectorGraphPreparedSearchView(reader)
+	if err != nil {
+		return err
+	}
+	reader.preparedSearch = preparedSearch
+	return nil
+}
+
+func columnVectorGraphPreparedSearchMmapPrerequisitesPresent(reader *columnVectorGraphPhysicalRowReader) bool {
+	if reader == nil || columnVectorGraphManifestHasPhysicalAsset(reader.graph) || reader.RowCount() <= 0 {
+		return true
+	}
+	if !columnVectorGraphPreparedSearchVectorMmapPrerequisitePresent(reader.typedVectorSource) {
+		return false
+	}
+	if !columnVectorGraphPreparedSearchNormMmapPrerequisitePresent(reader.invNormSource) {
+		return false
+	}
+	if !columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(reader.adjacencyLayerSources) {
+		return false
+	}
+	if reader.rowRefSource != nil && reader.rowRefSource.preparedViewActive() && reader.rowRefSource.mmapDirectFieldCount() != uint64(len(columnVectorGraphRowRefStateFields)) {
+		return false
+	}
+	if reader.documentIDSource != nil && reader.documentIDSource.preparedViewActive() && !columnVectorGraphDocumentIDSourceMmapDirect(reader.documentIDSource) {
+		return false
+	}
+	return true
+}
+
+func columnVectorGraphPreparedSearchVectorMmapPrerequisitePresent(source *columnVectorGraphTypedColumnVectorSource) bool {
+	if source == nil || source.closed {
+		return true
+	}
+	for _, part := range source.parts {
+		if part == nil {
+			return true
+		}
+		switch part.outcome {
+		case columnVectorGraphTypedColumnVectorOutcomeMmapDirect:
+		case columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView, columnVectorGraphTypedColumnVectorOutcomeScratchDecode:
+			return false
+		default:
+			return true
+		}
+		if part.handle == nil || part.handle.Released() {
+			return true
+		}
+	}
+	return true
+}
+
+func columnVectorGraphPreparedSearchNormMmapPrerequisitePresent(source *columnVectorGraphInvNormStateSource) bool {
+	if source == nil || source.closed || (source.handle != nil && source.handle.Released()) {
+		return true
+	}
+	switch source.outcome {
+	case columnVectorGraphInvNormStateOutcomeMmapDirect:
+		return true
+	case columnVectorGraphInvNormStateOutcomeHeapCopyTypedView, columnVectorGraphInvNormStateOutcomeScratchDecode:
+		return false
+	default:
+		return true
+	}
+}
+
+func columnVectorGraphPreparedSearchAdjacencyMmapPrerequisitePresent(group *columnVectorGraphAdjacencyDirectSources) bool {
+	if group == nil || group.closed {
+		return true
+	}
+	for _, source := range group.sources {
+		if source == nil || source.closed {
+			return true
+		}
+		switch source.outcome {
+		case columnVectorGraphLayer0AdjacencySourceOutcomePreparedCSRMmapDirect:
+		case columnVectorGraphLayer0AdjacencySourceOutcomeHeapCopyTypedView, columnVectorGraphLayer0AdjacencySourceOutcomeScratchDecode, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListMmapDirect, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView, columnVectorGraphLayer0AdjacencySourceOutcomeTypedListScratchDecode:
+			return false
+		default:
+			return true
+		}
+		if source.offsetsHandle == nil || source.valuesHandle == nil || source.offsetsHandle.Released() || source.valuesHandle.Released() {
+			return true
+		}
+	}
+	return true
+}
+
 func prepareColumnVectorGraphPreparedSearchView(reader *columnVectorGraphPhysicalRowReader) (*columnVectorGraphPreparedSearchView, error) {
 	if reader == nil {
 		return nil, errNilColumnVectorGraphPhysicalRowReader

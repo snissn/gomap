@@ -98,6 +98,40 @@ func TestColumnVectorGraphPreparedSearchPublicDocumentsReopen2045(t *testing.T) 
 	}
 }
 
+func TestColumnVectorGraphPreparedSearchNonMmapCompatibility2045(t *testing.T) {
+	rows := columnGraphRebuildSyntheticRowsV2A(24, 8)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 8, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatalf("openColumnVectorGraphPhysicalRowReader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	forceColumnVectorGraphPreparedSearchNonMmapCompatibility2045(reader)
+	if err := maybePrepareColumnVectorGraphPreparedSearchView(reader); err != nil {
+		t.Fatalf("maybePrepareColumnVectorGraphPreparedSearchView: %v", err)
+	}
+	if reader.preparedSearch != nil {
+		t.Fatalf("preparedSearch=%v want nil compatibility/source route when mmap-direct prerequisites are unavailable", reader.preparedSearch)
+	}
+	query := append([]float32(nil), rows[5].vector...)
+	var scratch columnVectorGraphNativeSearchScratch
+	got, stats, err := reader.SearchCosine(query, columnVectorGraphNativeSearchOptions{TopK: 5, EfSearch: len(rows)}, &scratch)
+	if err != nil {
+		t.Fatalf("SearchCosine: %v", err)
+	}
+	assertColumnGraphNativeSearchResultsV3(t, got, exactColumnGraphTopKForTest(t, rows, query, 5))
+	if stats.PreparedGraphSearchViews != 0 || stats.GraphRowFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("stats=%+v want source compatibility route without graph-row fallback", stats)
+	}
+	if stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 || stats.NormHeapCopyTypedViews+stats.NormScratchDecodes == 0 || stats.AdjacencyTypedListHeapCopyTypedViews+stats.AdjacencyTypedListScratchDecodes == 0 {
+		t.Fatalf("stats=%+v want non-mmap vector/norm/adjacency compatibility counters", stats)
+	}
+}
+
 func TestColumnVectorGraphPreparedSearchStaleStateFailsClosed2045(t *testing.T) {
 	if !columnGraphTypedColumnMmapDirectViewSupportedForTest() {
 		t.Skip("combined prepared graph-search view requires mmap_direct test support")
@@ -212,6 +246,34 @@ func assertColumnVectorGraphPreparedPublicStats2045(tb testing.TB, stats VectorI
 	}
 	if stats.ResultIDPreparedBytesViews != 1 || stats.ResultIDTypedBytesState != uint64(results) || stats.RowRefStatePreparedViews != 1 || stats.RowRefStateResultRefs != uint64(results) {
 		tb.Fatalf("stats=%+v want prepared result IDs and row refs for %d results", stats, results)
+	}
+}
+
+func forceColumnVectorGraphPreparedSearchNonMmapCompatibility2045(reader *columnVectorGraphPhysicalRowReader) {
+	if reader == nil {
+		return
+	}
+	reader.preparedSearch = nil
+	if reader.typedVectorSource != nil {
+		reader.typedVectorSource.prepared = columnVectorGraphPreparedVectorView{}
+		for _, part := range reader.typedVectorSource.parts {
+			if part != nil {
+				part.outcome = columnVectorGraphTypedColumnVectorOutcomeHeapCopyTypedView
+				part.fallbackReason = ""
+			}
+		}
+	}
+	if reader.invNormSource != nil {
+		reader.invNormSource.prepared = columnVectorGraphPreparedNormView{}
+		reader.invNormSource.outcome = columnVectorGraphInvNormStateOutcomeHeapCopyTypedView
+		reader.invNormSource.fallbackReason = ""
+	}
+	if reader.adjacencyLayerSources != nil {
+		for _, source := range reader.adjacencyLayerSources.sources {
+			if source != nil {
+				source.outcome = columnVectorGraphLayer0AdjacencySourceOutcomeTypedListHeapCopyTypedView
+			}
+		}
 	}
 }
 

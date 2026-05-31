@@ -233,12 +233,10 @@ func (c *Collection) openColumnVectorGraphPhysicalRowReaderAtSnapshot(name strin
 			}
 			return nil, fmt.Errorf("collections: column_graph %q missing required base typed-column vector source: %w", def.Name, errColumnVectorGraphManifestMismatch)
 		}
-		preparedSearch, prepareErr := prepareColumnVectorGraphPreparedSearchView(graphReader)
-		if prepareErr != nil {
+		if prepareErr := maybePrepareColumnVectorGraphPreparedSearchView(graphReader); prepareErr != nil {
 			_ = graphReader.Close()
 			return nil, fmt.Errorf("collections: column_graph %q combined prepared graph-search view: %w: %w", def.Name, prepareErr, errColumnVectorGraphManifestMismatch)
 		}
-		graphReader.preparedSearch = preparedSearch
 	}
 	return graphReader, nil
 }
