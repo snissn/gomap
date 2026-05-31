@@ -294,27 +294,32 @@ func TestColumnPhysicalQ4ATimeOrderLatestVisibleMutationReopen1953(t *testing.T)
 	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, []ColumnSortKey{{Column: "time_us"}}, batches)
 	events := flattenColumnPhysicalEvents1950(batches)
 	latest := latestEventMap1953(events)
+	updateRows := 0
 
 	movedNew := latest["move-new"]
 	movedNew.TimeUS = base + 5
 	updateTypedColumnEvent1953(t, col, movedNew)
+	updateRows++
 	latest[movedNew.ID] = movedNew
 
 	movedOld := latest["move-old"]
 	movedOld.TimeUS = base + 1_000
 	updateTypedColumnEvent1953(t, col, movedOld)
+	updateRows++
 	latest[movedOld.ID] = movedOld
 
 	promoted := latest["promote-predicate"]
 	promoted.Kind = "commit"
 	promoted.TimeUS = base + 8
 	updateTypedColumnEvent1953(t, col, promoted)
+	updateRows++
 	latest[promoted.ID] = promoted
 
 	demoted := latest["demote-predicate"]
 	demoted.Operation = "delete"
 	demoted.TimeUS = base + 3
 	updateTypedColumnEvent1953(t, col, demoted)
+	updateRows++
 	latest[demoted.ID] = demoted
 
 	deleteTypedColumnEvent1953(t, col, "delete-me")
@@ -340,7 +345,7 @@ func TestColumnPhysicalQ4ATimeOrderLatestVisibleMutationReopen1953(t *testing.T)
 		t.Fatalf("RunColumnPhysicalQuery(q4a time-order latest-visible): %v diagnostics=%+v", err, result.Diagnostics)
 	}
 	assertTypedColumnQ4BTopKGroups1950(t, "latest-visible q4a", result.Groups, want)
-	assertLatestVisibleQ4ATimeOrderDiagnostics1953(t, result.Diagnostics, len(live), matchedRows, req.TopK, len(want), columnPhysicalQ4AMatchingGroupCandidateCount1953(live), len(events)+4)
+	assertLatestVisibleQ4ATimeOrderDiagnostics1953(t, result.Diagnostics, len(live), matchedRows, req.TopK, len(want), columnPhysicalQ4AMatchingGroupCandidateCount1953(live), len(events)+updateRows)
 	assertPreparedMutationFailsClosed1953(t, col, req)
 }
 
