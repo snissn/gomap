@@ -128,7 +128,7 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		return stats, err
 	}
 	cleanupPrepared := func(baseErr error) error {
-		if cleanupErr := cleanupColumnStoreCompactionPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
+		if cleanupErr := cleanupColumnPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
 			return errors.Join(baseErr, cleanupErr)
 		}
 		return baseErr
@@ -367,7 +367,7 @@ func columnStoreCompactionManifestRootStoragePolicy(state columnStoreCompactionS
 	return backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
 }
 
-func cleanupColumnStoreCompactionPreparedAssets(rootDir string, assets []ColumnPreparedAsset) error {
+func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) error {
 	type cleanupTarget struct {
 		path       string
 		truncateTo int64
