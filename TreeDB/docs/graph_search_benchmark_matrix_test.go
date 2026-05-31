@@ -41,6 +41,16 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"norm_mmap_direct/search",
 		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_typed_list_mmap_direct/search",
+		"#2043 closeout evidence",
+		"BenchmarkColumnVectorGraphAdjacencyAccessApplesToApples2043",
+		"not an end-to-end search benchmark",
+		"612 edges/search",
+		"3340 edges/search",
+		"not as storage-path proof",
+		"#1979 is the natural owner",
+		"not a full wall-time promotion",
+		"#1980 remains an evidence-backed follow-up",
+		"#1977 remains deferred",
 	}
 	for _, needle := range required {
 		if !strings.Contains(text, needle) {

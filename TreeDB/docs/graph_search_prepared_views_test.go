@@ -26,6 +26,10 @@ func TestDocs_GraphSearchPreparedViewPolicy(t *testing.T) {
 		"Graph-row fallback prohibition",
 		"No future typed-column logical type, physical type, encoding, or wrapper may become a healthy current-format graph-search dependency",
 		"`ns/op`, `ops/sec`, `B/op`, `allocs/op`",
+		"#2043 closeout status",
+		"not an unconditional wall-time win over the old legacy graph-row direct control",
+		"612` versus `3340` visited_edges/search",
+		"#1979 owns the follow-up instrumentation",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("graph-search prepared-view spec missing required contract text %q", want)

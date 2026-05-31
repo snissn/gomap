@@ -871,11 +871,15 @@ Coverage:
 Invariant:
 - Benchmark rows that compare graph-search source paths must carry stable labels
   for mode, timing boundary, concurrency, and fixture so legacy/direct graph-row
-  controls, current TVIS/base typed-column rows, and future prepared typed-column
-  rows are not confused.
-- Prepared typed-column rows remain explicit skipped placeholders until
-  #2038/#2040/#2041/#2045 implement and route them; skipped placeholder rows are
-  not performance evidence.
+  controls, current TVIS/base typed-column routing rows, and combined prepared
+  typed-column rows are not confused.
+- After #2045/#2043, supported prepared typed-column rows are admission and
+  fallback-readiness evidence, not final performance promotion by themselves.
+  The `current_tvis_base_typed_column` label is retained for continuity and
+  proves current-format routing selects the combined prepared view; it is not an
+  unprepared hot-loop source route in healthy current-format readers. The matrix
+  must call out non-apples-to-apples topology/search-work differences such as
+  the #2043 612-versus-3340 visited_edges/search finding.
 - Supported rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, graph rows,
   candidates/search, edges/search, result/document counters, and direct/fallback
   typed-column source counters.
@@ -883,7 +887,7 @@ Invariant:
 Coverage:
 - Policy owner: `TreeDB/docs/spec/typed-column-graph-search-benchmark-matrix.md`.
 - Code/test owner: `TreeDB/collections/vector_graph_search_truth_matrix_2037_test.go`.
-  `TestVectorGraphSearchTruthMatrixRows2037` freezes row labels and placeholder
+  `TestVectorGraphSearchTruthMatrixRows2037` freezes row labels and supported-row
   semantics; `TestVectorGraphSearchTruthMatrixMetricContract2037` freezes the
   required report-counter vocabulary.
 

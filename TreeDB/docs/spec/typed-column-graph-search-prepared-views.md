@@ -14,8 +14,8 @@ Runtime graph-search admission enforcement is owned by #2044 and benchmark
 truth-matrix reporting by #2037. The reusable #2046 primitive certifier substrate
 lives in `TreeDB/internal/typeddecode` and remains a prerequisite, not
 row-admission evidence by itself. #2038 admits adjacency prepared CSR views,
-#2040 admits base-vector and inverse-norm prepared scoring views, #2041 admits
-row-ref and document-ID side-channel views, and #2045 routes healthy
+while #2040 admits base-vector and inverse-norm prepared scoring views, #2041
+admits row-ref and document-ID side-channel views, and #2045 routes healthy
 current-format search through one combined prepared graph-search view.
 
 ## Scope and ownership
@@ -29,6 +29,21 @@ authoritative typed-column and vector-index state assets
   -> zero-allocation HNSW traversal/scoring/top-k loop
   -> optional final result-ID and document materialization
 ```
+
+## #2043 closeout status
+
+The combined prepared view is the admitted primary healthy current-format
+execution route because the final matrix shows prepared base-vector, adjacency,
+inverse-norm, row-ref, and document-ID counters with zero current-format
+graph-row/source fallbacks and `0 B/op`, `0 allocs/op` for graph-only search. It
+is not an unconditional wall-time win over the old legacy graph-row direct
+control and does not close #2035 as fully performance-satisfied: the final matrix
+still shows net throughput gaps, and the legacy/current graph-only rows also
+expose a topology/search-work mismatch (`612` versus `3340` visited_edges/search,
+about 5.5x). #1979 owns the follow-up instrumentation needed to explain that
+work delta; #1980 remains a profile-backed frontier/top-k follow-up if future
+apples-to-apples profiles justify it; #1977 normalized-vector payloads remain
+deferred.
 
 Normative boundaries:
 
