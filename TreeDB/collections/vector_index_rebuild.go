@@ -723,12 +723,20 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
 	}
-	partID := nextColumnVectorGraphPartID(recordsForLSN, graphCfg.AssetManager.Namespace)
-	prepared, err := prepareColumnVectorGraphPhysicalAsset(assetRootDir, collection, cfg, def, manifest.Generation, partID, appliedCommandLSN, rows)
-	if err != nil {
-		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
+	if len(rows) > 0 {
+		if _, _, typedVectorOwner, ownerErr := columnVectorGraphTypedColumnVectorField(cfg, def.Field, def.Dimensions); ownerErr != nil {
+			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, ownerErr
+		} else if !typedVectorOwner {
+			return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, fmt.Errorf("collections: column_graph rebuild for %q requires base float32_vector typed-column owner for field %q; rebuild collection metadata before rebuilding the vector index", def.Name, def.Field)
+		}
 	}
-	invNormPartID := columnVectorGraphNextPartIDAfterPreparedAssets(prepared)
+	partID := nextColumnVectorGraphPartID(recordsForLSN, graphCfg.AssetManager.Namespace)
+	prepared := columnVectorGraphPreparedPhysicalAsset{
+		AssetRootDir: assetRootDir,
+		Config:       graphCfg,
+		RowCount:     len(rows),
+	}
+	invNormPartID := partID
 	preparedInvNorm, err := prepareColumnVectorGraphInvNormStateAsset(assetRootDir, collection, cfg, def, manifest.Generation, invNormPartID, rows)
 	if err != nil {
 		return columnVectorGraphPreparedPhysicalAsset{}, nil, ColumnManifestIdentity{}, err
@@ -747,8 +755,6 @@ func prepareColumnVectorGraphRebuildManifest(collection string, cfg ColumnStoreC
 		BaseSchemaHash:         cfg.SchemaHash,
 		GraphSchemaHash:        graphCfg.SchemaHash,
 		RowCount:               prepared.RowCount,
-		AssetRef:               prepared.Ref,
-		AssetBytes:             prepared.Bytes,
 	}
 	statePartID := invNormPartID
 	if preparedInvNorm.Present {

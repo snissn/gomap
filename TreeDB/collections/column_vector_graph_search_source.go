@@ -70,7 +70,7 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 	}
 	reader := plan.reader
 	physicalReader := plan.physicalReader
-	if physicalReader == nil {
+	if physicalReader == nil && columnVectorGraphManifestHasPhysicalAsset(reader.graph) {
 		var err error
 		physicalReader, err = reader.rowReader()
 		if err != nil {
@@ -80,7 +80,7 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 	}
 	s.reader = reader
 	s.dims = reader.def.Dimensions
-	s.rowCount = physicalReader.totalRows
+	s.rowCount = reader.RowCount()
 	s.vectorKind = columnVectorGraphSearchVectorSourceGraphRows
 	s.normKind = columnVectorGraphSearchNormSourceGraphRows
 
@@ -101,6 +101,14 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		s.invNormFallback = fallbackReason
 	} else if reader.invNormSource != nil {
 		s.normFallbackReason = reason
+	}
+	if physicalReader == nil && s.rowCount > 0 {
+		if s.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn {
+			return fmt.Errorf("collections: column_graph %q search requires base typed-column vectors when graph row fallback is unavailable", reader.def.Name)
+		}
+		if s.normKind != columnVectorGraphSearchNormSourceInvNormByOrdinal {
+			return fmt.Errorf("collections: column_graph %q search requires vector-index inverse-norm state when graph row fallback is unavailable", reader.def.Name)
+		}
 	}
 	return nil
 }
@@ -156,15 +164,19 @@ func (s *columnVectorGraphSearchSource) scoreOrdinal(plan *columnVectorGraphSear
 		}
 		return plan.reader.scoreOrdinalLegacy(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
 	}
-	view := singleBlockView
+	var view *columnVectorGraphBlockView
 	rowIndex := ordinal
-	if view == nil {
-		refView, ref, err := plan.blockViewForOrdinal(ordinal)
-		if err != nil {
-			return 0, err
+	needsGraphRow := s.vectorKind == columnVectorGraphSearchVectorSourceGraphRows || s.normKind == columnVectorGraphSearchNormSourceGraphRows
+	if needsGraphRow {
+		view = singleBlockView
+		if view == nil {
+			refView, ref, err := plan.blockViewForOrdinal(ordinal)
+			if err != nil {
+				return 0, err
+			}
+			view = refView
+			rowIndex = ref.rowIndex
 		}
-		view = refView
-		rowIndex = ref.rowIndex
 	}
 	if stats != nil {
 		recordColumnVectorGraphScoreBatchStats(stats, 1, false, true)
@@ -387,6 +399,9 @@ func (s *columnVectorGraphSearchSource) vectorForOrdinal(view *columnVectorGraph
 			stats.TypedColumnFallbacks = 1
 		}
 	}
+	if view == nil {
+		return nil, fmt.Errorf("collections: column_graph %q vector graph-row fallback unavailable for ordinal=%d", s.reader.def.Name, ordinal)
+	}
 	scratch.scoreScratch.Float32Values = scratch.scoreScratch.Float32Values[:0]
 	var vectorScratch []float32
 	vector, vectorScratch := view.vectorUnchecked(rowIndex, scratch.scoreScratch.Float32Values)
@@ -413,6 +428,9 @@ func (s *columnVectorGraphSearchSource) invNormForOrdinal(view *columnVectorGrap
 		if stats != nil {
 			stats.NormSourceFallbacks++
 		}
+	}
+	if view == nil {
+		return 0, fmt.Errorf("collections: column_graph %q inverse-norm graph-row fallback unavailable for ordinal=%d", s.reader.def.Name, ordinal)
 	}
 	return view.legacyInvNorm(rowIndex)
 }

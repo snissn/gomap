@@ -292,6 +292,9 @@ func validateRetainedColumnManifestVectorGraphRecordForWrite(record columnManife
 	if graph.IndexName != keyIndexName {
 		return false, fmt.Errorf("collections: column vector graph manifest key index=%q does not match record index=%q", keyIndexName, graph.IndexName)
 	}
+	if !columnVectorGraphManifestHasPhysicalAsset(graph) {
+		return graph.BaseManifestGeneration < generation, nil
+	}
 	if graph.AssetRef.Kind != ColumnAssetKindTCS1PartImage {
 		return false, fmt.Errorf("collections: column vector graph asset kind=%q want %q", graph.AssetRef.Kind, ColumnAssetKindTCS1PartImage)
 	}

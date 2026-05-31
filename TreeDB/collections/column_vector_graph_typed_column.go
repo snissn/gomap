@@ -110,7 +110,7 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	if graph.RowCount == 0 {
 		return &columnVectorGraphTypedColumnVectorSource{field: field, column: adapterColumn, dims: graph.Dimensions, manager: mappedresource.NewManager()}, nil
 	}
-	if reader == nil || reader.reader == nil {
+	if reader == nil {
 		return nil, errNilColumnVectorGraphPhysicalRowReader
 	}
 	if graph.BaseManifestGeneration != manifest.Generation || graph.BaseManifestGeneration != cfg.ActiveManifest.Generation || graph.BaseSchemaHash != cfg.SchemaHash {
@@ -146,7 +146,11 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 	// manifest violates that shape.
 	usedGenerations := make(map[uint64]struct{})
 	locationSource := columnVectorGraphTypedColumnVectorLocationSourceUnknown
-	if rowRefs, ok := reader.rowRefSource.rowRefs(); ok {
+	if reader.rowRefSource != nil {
+		rowRefs, ok := reader.rowRefSource.rowRefs()
+		if !ok {
+			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row-ref state unavailable", graph.IndexName)
+		}
 		if len(rowRefs) != graph.RowCount {
 			return nil, fmt.Errorf("collections: column_graph %q typed-column vector source row refs=%d want row_count=%d", graph.IndexName, len(rowRefs), graph.RowCount)
 		}
@@ -168,6 +172,9 @@ func (c *Collection) newColumnVectorGraphTypedColumnVectorSource(catalog *collec
 		}
 		locationSource = columnVectorGraphTypedColumnVectorLocationSourceRowRefState
 	} else {
+		if reader.reader == nil {
+			return nil, errors.New("collections: column_graph typed-column vector source requires row-ref state when graph row fallback is unavailable")
+		}
 		graphIDs, err := columnVectorGraphDocumentIDsFromReader(reader)
 		if err != nil {
 			return nil, err

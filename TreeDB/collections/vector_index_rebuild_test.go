@@ -22,6 +22,9 @@ var columnGraphRebuildBenchSinkV2A VectorIndexStatus
 
 func assertColumnGraphNoLegacyAdjacencySources1989(tb testing.TB, graph columnVectorGraphManifestSnapshot) {
 	tb.Helper()
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		tb.Fatalf("graph manifest has physical row asset %+v; new graph builds must use TVIS/base typed-column state", graph.AssetRef)
+	}
 	if graph.Layer0AdjacencySource.Present || graph.AdjacencyLayerCount != 0 || len(graph.AdjacencyLayerSources) != 0 {
 		tb.Fatalf("graph manifest has legacy adjacency sources layer0=%+v count=%d sources=%d; new graph builds must use vector-index state uint32_list assets", graph.Layer0AdjacencySource, graph.AdjacencyLayerCount, len(graph.AdjacencyLayerSources))
 	}
@@ -790,8 +793,8 @@ func TestColumnGraphRebuildVectorIndexAdjacencyUsesFlattenedNativeGraphV2A(t *te
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
 	graph, scanned := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
-	if graph.AssetRef.Namespace != col.Meta().Options.ColumnStore.AssetManager.Namespace {
-		t.Fatalf("graph namespace=%q want base namespace=%q", graph.AssetRef.Namespace, col.Meta().Options.ColumnStore.AssetManager.Namespace)
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		t.Fatalf("graph manifest has physical row asset %+v; current rebuild should use TVIS/base typed-column state", graph.AssetRef)
 	}
 	wantGraph := columnGraphRebuildNativeGraphLayoutV2A(t, def, rows)
 	for i := range rows {
@@ -816,6 +819,7 @@ func TestColumnGraphRebuildVectorIndexAllocatesPartIDsAcrossGraphIndexesV2A(t *t
 	cfg.Columns = append(cfg.Columns, ColumnStoreColumn{
 		Name:       "other_embedding",
 		Path:       "other_embedding",
+		Owner:      TypedStorageOwnerColumnPart,
 		ValueType:  ColumnStoreValueFloat32Vector,
 		VectorDims: 2,
 	})
@@ -858,11 +862,20 @@ func TestColumnGraphRebuildVectorIndexAllocatesPartIDsAcrossGraphIndexesV2A(t *t
 	}
 	graphA, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", defA)
 	graphB, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", defB)
-	if graphA.AssetRef.Namespace != graphB.AssetRef.Namespace {
-		t.Fatalf("graph namespaces differ %q vs %q, test requires shared namespace", graphA.AssetRef.Namespace, graphB.AssetRef.Namespace)
+	if columnVectorGraphManifestHasPhysicalAsset(graphA) || columnVectorGraphManifestHasPhysicalAsset(graphB) {
+		t.Fatalf("current graph rebuilds should not publish physical row assets: graphA=%+v graphB=%+v", graphA.AssetRef, graphB.AssetRef)
 	}
-	if graphA.AssetRef.PartID == graphB.AssetRef.PartID {
-		t.Fatalf("graph indexes reused part_id=%d in namespace %q", graphA.AssetRef.PartID, graphA.AssetRef.Namespace)
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	stateA := columnVectorIndexStateFromRecords1987(t, records, defA)
+	stateB := columnVectorIndexStateFromRecords1987(t, records, defB)
+	seen := make(map[uint64]string)
+	for _, asset := range stateA.Assets {
+		seen[asset.Ref.PartID] = defA.Name + ":" + asset.Role + ":" + asset.AssetID
+	}
+	for _, asset := range stateB.Assets {
+		if previous := seen[asset.Ref.PartID]; previous != "" {
+			t.Fatalf("vector-index state assets reused part_id=%d between %s and %s:%s:%s", asset.Ref.PartID, previous, defB.Name, asset.Role, asset.AssetID)
+		}
 	}
 }
 
@@ -934,16 +947,26 @@ func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegment
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("first RebuildVectorIndex: %v", err)
 	}
-	first, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
+	firstRecords, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	firstState := columnVectorIndexStateFromRecords1987(t, firstRecords, def)
+	if len(firstState.Assets) == 0 {
+		t.Fatal("first rebuild produced no vector-index state assets")
+	}
+	firstRef := firstState.Assets[0].Ref
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("second RebuildVectorIndex: %v", err)
 	}
-	second, _ := loadAndScanColumnGraphRebuildRowsV2A(t, d, "docs", def)
-	if first.AssetRef == second.AssetRef {
-		t.Fatalf("second rebuild reused graph asset ref %+v", first.AssetRef)
+	secondRecords, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	secondState := columnVectorIndexStateFromRecords1987(t, secondRecords, def)
+	if len(secondState.Assets) == 0 {
+		t.Fatal("second rebuild produced no vector-index state assets")
 	}
-	if first.AssetRef.FileID == second.AssetRef.FileID {
-		t.Fatalf("second rebuild reused graph segment file_id=%d; want fresh segment for whole-segment reclaim", first.AssetRef.FileID)
+	secondRef := secondState.Assets[0].Ref
+	if firstRef == secondRef {
+		t.Fatalf("second rebuild reused vector-index state asset ref %+v", firstRef)
+	}
+	if firstRef.FileID == secondRef.FileID {
+		t.Fatalf("second rebuild reused vector-index state segment file_id=%d; want fresh segment for whole-segment reclaim", firstRef.FileID)
 	}
 
 	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
@@ -953,8 +976,8 @@ func TestColumnGraphRebuildVectorIndexReachabilityReclaimsSupersededGraphSegment
 	if !plan.Complete {
 		t.Fatalf("reachability plan incomplete: refs=%+v segments=%+v", plan.Refs, plan.Segments)
 	}
-	assertColumnGraphReachabilityEntryV2A(t, plan, second.AssetRef)
-	assertColumnGraphSegmentStatusV2A(t, plan, first.AssetRef.FileID, ColumnAssetReachabilitySegmentReclaimable)
+	assertColumnGraphReachabilityEntryV2A(t, plan, secondRef)
+	assertColumnGraphSegmentStatusV2A(t, plan, firstRef.FileID, ColumnAssetReachabilitySegmentReclaimable)
 }
 
 func TestColumnGraphReachabilityPrunesDroppedVectorIndexGraphRefV2A(t *testing.T) {
@@ -1561,6 +1584,7 @@ func columnGraphRebuildColumnStoreConfigV2A(dims int) *ColumnStoreConfig {
 	cfg.Columns = append(append([]ColumnStoreColumn(nil), cfg.Columns...), ColumnStoreColumn{
 		Name:       "embedding",
 		Path:       "embedding",
+		Owner:      TypedStorageOwnerColumnPart,
 		ValueType:  ColumnStoreValueFloat32Vector,
 		VectorDims: dims,
 	})
@@ -1743,6 +1767,9 @@ func loadAndScanColumnGraphRebuildRowsV2A(tb testing.TB, d *backenddb.DB, collec
 	if err != nil {
 		tb.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
 	}
+	if !columnVectorGraphManifestHasPhysicalAsset(graph) {
+		return graph, loadColumnGraphRebuildRowsFromStateV2A(tb, d, collection, cfg, def, graph, records)
+	}
 	graphCfg, err := columnVectorGraphPhysicalColumnStoreConfig(collection, *cfg, def)
 	if err != nil {
 		tb.Fatalf("columnVectorGraphPhysicalColumnStoreConfig: %v", err)
@@ -1787,6 +1814,128 @@ func loadAndScanColumnGraphRebuildRowsV2A(tb testing.TB, d *backenddb.DB, collec
 		}
 	}
 	return graph, rows
+}
+
+func loadColumnGraphRebuildRowsFromStateV2A(tb testing.TB, d *backenddb.DB, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, records []columnManifestRecord) []columnGraphRebuildScannedRowV2A {
+	tb.Helper()
+	state := columnVectorIndexStateFromRecords1987(tb, records, def)
+	documentIDs, _, err := newColumnVectorGraphDocumentIDStateSourceFromRoot(d.ColumnAssetRootDir(), collection, *cfg, def, graph, state)
+	if err != nil {
+		tb.Fatalf("open document-id state source: %v", err)
+	}
+	if documentIDs != nil {
+		defer func() { _ = documentIDs.Close() }()
+	}
+	invNorms, _, err := newColumnVectorGraphInvNormStateSourceFromRoot(d.ColumnAssetRootDir(), collection, *cfg, def, graph, state)
+	if err != nil {
+		tb.Fatalf("open inv_norm state source: %v", err)
+	}
+	if invNorms != nil {
+		defer func() { _ = invNorms.Close() }()
+	}
+	layers := make([]typedcolumn.RawUint32OffsetsList, state.AdjacencyLayerCount)
+	for layer := range layers {
+		layers[layer] = loadColumnVectorIndexStateAdjacencyList1987(tb, d, collection, cfg, def, state, layer)
+	}
+	col, err := NewCollectionManager(d).OpenCollection(collection)
+	if err != nil {
+		tb.Fatalf("OpenCollection for state rows: %v", err)
+	}
+	rows := make([]columnGraphRebuildScannedRowV2A, graph.RowCount)
+	for ordinal := range rows {
+		id, ok := documentIDs.documentIDForOrdinal(ordinal)
+		if !ok {
+			tb.Fatalf("document-id state missing ordinal %d", ordinal)
+		}
+		document, err := col.Get(id)
+		if err != nil {
+			tb.Fatalf("Get %q: %v", string(id), err)
+		}
+		vector := columnGraphRebuildVectorFromDocumentV2A(tb, collection, def, id, document)
+		invNorm, _, _, ok := invNorms.invNormForOrdinal(ordinal)
+		if !ok {
+			tb.Fatalf("inv_norm state missing ordinal %d", ordinal)
+		}
+		rows[ordinal] = columnGraphRebuildScannedRowV2A{
+			id:        string(id),
+			vector:    vector,
+			invNorm:   invNorm,
+			adjacency: columnGraphRebuildAdjacencyFromStateLayersV2A(tb, layers, ordinal),
+		}
+	}
+	return rows
+}
+
+func columnGraphRebuildVectorFromDocumentV2A(tb testing.TB, collection string, def VectorIndexDefinition, id []byte, document []byte) []float32 {
+	tb.Helper()
+	vectorCfg, err := normalizeColumnStoreConfig(collection, &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{{
+			Name:       columnVectorGraphVectorColumnName,
+			Path:       def.Field,
+			ValueType:  ColumnStoreValueFloat32Vector,
+			VectorDims: def.Dimensions,
+		}},
+	})
+	if err != nil {
+		tb.Fatalf("normalize vector config: %v", err)
+	}
+	declared, err := extractColumnDeclaredRowsFromJSONDocuments(*vectorCfg, []columnWriteDocument{{ID: id, Document: document}})
+	if err != nil {
+		tb.Fatalf("extract vector for %q: %v", string(id), err)
+	}
+	if len(declared) != 1 || len(declared[0].Values) != 1 {
+		values := 0
+		if len(declared) != 0 {
+			values = len(declared[0].Values)
+		}
+		tb.Fatalf("extract vector rows=%d values=%d want 1 row and 1 value", len(declared), values)
+	}
+	value := declared[0].Values[0]
+	if !value.Present || value.Null || len(value.Float32Vector) != def.Dimensions {
+		tb.Fatalf("extract vector for %q present/null/dims=(%t,%t,%d) want present non-null dims=%d", string(id), value.Present, value.Null, len(value.Float32Vector), def.Dimensions)
+	}
+	return append([]float32(nil), value.Float32Vector...)
+}
+
+func columnGraphRebuildAdjacencyFromStateLayersV2A(tb testing.TB, layers []typedcolumn.RawUint32OffsetsList, ordinal int) []uint32 {
+	tb.Helper()
+	if len(layers) == 0 {
+		return nil
+	}
+	if len(layers) == 1 {
+		row, err := layers[0].Row(ordinal)
+		if err != nil {
+			tb.Fatalf("adjacency layer 0 row %d: %v", ordinal, err)
+		}
+		return append([]uint32(nil), row...)
+	}
+	maxLayer := 0
+	layerRows := make([][]uint32, len(layers))
+	for layer := range layers {
+		row, err := layers[layer].Row(ordinal)
+		if err != nil {
+			tb.Fatalf("adjacency layer %d row %d: %v", layer, ordinal, err)
+		}
+		layerRows[layer] = row
+		if len(row) > 0 {
+			maxLayer = layer
+		}
+	}
+	if maxLayer == 0 {
+		return append([]uint32(nil), layerRows[0]...)
+	}
+	total := 2 + maxLayer + 1
+	for layer := 0; layer <= maxLayer; layer++ {
+		total += len(layerRows[layer])
+	}
+	encoded := make([]uint32, 0, total)
+	encoded = append(encoded, columnVectorGraphLayeredAdjacencyMagic, uint32(maxLayer))
+	for _, row := range layerRows[:maxLayer+1] {
+		encoded = append(encoded, uint32(len(row)))
+		encoded = append(encoded, row...)
+	}
+	return encoded
 }
 
 func loadColumnGraphLayer0AdjacencySourceList1918(tb testing.TB, d *backenddb.DB, collection string, cfg *ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot) typedcolumn.RawUint32OffsetsList {
@@ -2071,6 +2220,9 @@ func assertColumnGraphRebuildLoadedStatusV2A(tb testing.TB, status VectorIndexSt
 
 func assertColumnAssetReachabilityProtectsGraphRefV2A(tb testing.TB, col *Collection, graphRef ColumnAssetRef) {
 	tb.Helper()
+	if graphRef.Kind == "" {
+		return
+	}
 	plan, err := col.PlanColumnAssetReachability(context.Background(), ColumnAssetReachabilityOptions{Detailed: true})
 	if err != nil {
 		tb.Fatalf("PlanColumnAssetReachability: %v", err)

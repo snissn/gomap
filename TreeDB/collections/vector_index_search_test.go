@@ -55,6 +55,18 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 2)
 	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 2), false)
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, reopened, "docs")
+	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
+	if !ok {
+		t.Fatalf("graph manifest record %q missing", def.Name)
+	}
+	graph, err := decodeColumnVectorGraphManifestRecord(graphRecord.value)
+	if err != nil {
+		t.Fatalf("decodeColumnVectorGraphManifestRecord: %v", err)
+	}
+	if columnVectorGraphManifestHasPhysicalAsset(graph) {
+		t.Fatalf("healthy rebuilt graph has physical row asset %+v; want TVIS/base typed-column state only", graph.AssetRef)
+	}
 	if got.Stats.Candidates == 0 || got.Stats.CandidateFetches == 0 || got.Stats.ResultFetches < uint64(len(got.Results)) {
 		t.Fatalf("stats=%+v want public search to expose non-zero native graph traversal/result accounting", got.Stats)
 	}
@@ -63,6 +75,12 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	}
 	if got.Stats.AdjacencyTypedListMmapDirectViews+got.Stats.AdjacencyTypedListHeapCopyTypedViews+got.Stats.AdjacencyTypedListScratchDecodes == 0 || got.Stats.AdjacencyLegacyFallbacks != 0 {
 		t.Fatalf("stats=%+v want public search to expose typed-list adjacency and no legacy fallback on healthy state", got.Stats)
+	}
+	if got.Stats.RowFetches != 0 || got.Stats.BatchFetches != 0 || got.Stats.RowsFetched != 0 || got.Stats.PhysicalBytesRead != 0 || got.Stats.OpenPhysicalBytesRead != 0 {
+		t.Fatalf("stats=%+v want zero graph row payload reads on healthy current-format search", got.Stats)
+	}
+	if got.Stats.TypedColumnFallbacks != 0 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.NormSourceFallbacks != 0 {
+		t.Fatalf("stats=%+v want TVIS/base typed-column sources without graph row fallback", got.Stats)
 	}
 	if got.Stats.DocumentsFetched != 0 {
 		t.Fatalf("DocumentsFetched=%d want no document fetch without IncludeDocuments", got.Stats.DocumentsFetched)

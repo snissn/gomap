@@ -54,26 +54,13 @@ func TestColumnVectorGraphSearchSourceDisablesUnsupportedTypedVector1968(t *test
 	}
 	reader.typedVectorSource.dims = def.Dimensions + 1
 
-	plan, scratch, queryInvNorm := prepareColumnVectorGraphScoreSourceTestPlan1968(t, reader, rows[3].vector)
-	if plan.scoreSource.vectorKind != columnVectorGraphSearchVectorSourceGraphRows || plan.scoreSource.vectorFallbackReason != typeddecode.ReasonDimensionMismatch {
-		t.Fatalf("vector source kind=%s reason=%s want graph-row fallback from dimension mismatch", plan.scoreSource.vectorKind, plan.scoreSource.vectorFallbackReason)
+	scratch := &columnVectorGraphNativeSearchScratch{}
+	if err := scratch.prepare(reader.RowCount(), reader.def.Dimensions, reader.def.M, 8, 8); err != nil {
+		t.Fatalf("scratch prepare: %v", err)
 	}
-	var stats columnVectorGraphNativeSearchStats
-	got, err := plan.scoreSource.scoreOrdinal(plan, nil, rows[3].vector, queryInvNorm, 3, scratch, &stats)
-	if err != nil {
-		t.Fatalf("score source fallback: %v", err)
-	}
-	if stats.TypedColumnFallbacks != 1 || stats.VectorScratchDecodes != 1 || stats.VectorCertificationFailures == 0 {
-		t.Fatalf("stats=%+v want typed-column fallback, graph-row scratch decode, and certification failure", stats)
-	}
-	legacyReader := *reader
-	legacyReader.typedVectorSource = nil
-	legacy, err := legacyReader.scoreOrdinalLegacy(plan, nil, rows[3].vector, queryInvNorm, 3, scratch, nil)
-	if err != nil {
-		t.Fatalf("legacy graph-row score: %v", err)
-	}
-	if math.Abs(got-legacy) > 1e-6 {
-		t.Fatalf("fallback score=%g legacy=%g", got, legacy)
+	_, err = scratch.prepareSearchPlan(reader)
+	if err == nil || !strings.Contains(err.Error(), "search requires base typed-column vectors") {
+		t.Fatalf("prepareSearchPlan err=%v want fail-closed typed-column vector mismatch without graph row fallback", err)
 	}
 }
 
@@ -113,6 +100,7 @@ func TestColumnVectorGraphSearchSourceScoresMatchLegacyContiguousAndScattered196
 		t.Fatalf("source vector=%s norm=%s want typed vector and inv_norm state", plan.scoreSource.vectorKind, plan.scoreSource.normKind)
 	}
 
+	wantGraph := columnGraphRebuildNativeGraphLayoutV2A(t, def, rows)
 	for _, tc := range []struct {
 		name     string
 		ordinals []int
@@ -127,12 +115,17 @@ func TestColumnVectorGraphSearchSourceScoresMatchLegacyContiguousAndScattered196
 				if err != nil {
 					t.Fatalf("source ordinal %d: %v", ordinal, err)
 				}
-				legacyScore, err := reader.scoreOrdinalLegacy(plan, nil, query, queryInvNorm, ordinal, scratch, nil)
+				input := columnGraphRebuildInputByIDV2B(t, rows, wantGraph.ids[ordinal])
+				wantInvNorm, err := columnVectorGraphInvNorm(input.vector)
 				if err != nil {
-					t.Fatalf("legacy ordinal %d: %v", ordinal, err)
+					t.Fatalf("ordinal %d inv norm: %v", ordinal, err)
 				}
-				if math.Abs(sourceScore-legacyScore) > 1e-6 {
-					t.Fatalf("ordinal %d source=%g legacy=%g", ordinal, sourceScore, legacyScore)
+				wantScore, err := columnVectorGraphNativeCosineScoreVector(query, queryInvNorm, ordinal, input.vector, wantInvNorm)
+				if err != nil {
+					t.Fatalf("ordinal %d expected score: %v", ordinal, err)
+				}
+				if math.Abs(sourceScore-wantScore) > 1e-6 {
+					t.Fatalf("ordinal %d source=%g want=%g", ordinal, sourceScore, wantScore)
 				}
 				if sourceStats.VectorSourceCounters().MmapDirectViews+sourceStats.VectorSourceCounters().HeapCopyTypedViews+sourceStats.VectorSourceCounters().ScratchDecodes != 1 {
 					t.Fatalf("source stats=%+v want one vector source outcome", sourceStats)
@@ -166,9 +159,8 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 			t.Fatalf("query inv norm: %v", err)
 		}
 		_, sourceErr := plan.scoreSource.scoreOrdinal(plan, nil, query, queryInvNorm, 0, scratch, nil)
-		_, legacyErr := reader.scoreOrdinalLegacy(plan, nil, query, queryInvNorm, 0, scratch, nil)
-		if !errors.Is(sourceErr, errColumnVectorGraphNativeSearchCandidateDimensionMismatch) || !errors.Is(legacyErr, errColumnVectorGraphNativeSearchCandidateDimensionMismatch) {
-			t.Fatalf("sourceErr=%v legacyErr=%v want candidate dimension mismatch", sourceErr, legacyErr)
+		if !errors.Is(sourceErr, errColumnVectorGraphNativeSearchCandidateDimensionMismatch) {
+			t.Fatalf("sourceErr=%v want candidate dimension mismatch", sourceErr)
 		}
 	})
 
@@ -211,25 +203,8 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 		fallbackReader.invNormStateUnavailable = true
 		fallbackPlan := *plan
 		fallbackPlan.reader = &fallbackReader
-		if err := fallbackPlan.scoreSource.prepare(&fallbackPlan); err != nil {
-			t.Fatalf("prepare fallback source: %v", err)
-		}
-		query := rows[2].vector
-		queryInvNorm, err := columnVectorGraphInvNorm(query)
-		if err != nil {
-			t.Fatalf("query inv norm: %v", err)
-		}
-		var stats columnVectorGraphNativeSearchStats
-		sourceScore, err := fallbackPlan.scoreSource.scoreOrdinal(&fallbackPlan, nil, query, queryInvNorm, 2, scratch, &stats)
-		if err != nil {
-			t.Fatalf("source fallback score: %v", err)
-		}
-		legacyScore, err := fallbackReader.scoreOrdinalLegacy(&fallbackPlan, nil, query, queryInvNorm, 2, scratch, nil)
-		if err != nil {
-			t.Fatalf("legacy fallback score: %v", err)
-		}
-		if math.Abs(sourceScore-legacyScore) > 1e-6 || stats.NormMmapDirectViews+stats.NormHeapCopyTypedViews+stats.NormScratchDecodes != 0 {
-			t.Fatalf("source=%g legacy=%g stats=%+v want graph-row norm fallback parity", sourceScore, legacyScore, stats)
+		if err := fallbackPlan.scoreSource.prepare(&fallbackPlan); err == nil || !strings.Contains(err.Error(), "search requires vector-index inverse-norm state") {
+			t.Fatalf("prepare fallback source err=%v want fail-closed missing inverse-norm state", err)
 		}
 	})
 
@@ -247,19 +222,12 @@ func TestColumnVectorGraphSearchSourcePolicyMatchesLegacy1968(t *testing.T) {
 			t.Fatalf("close inv_norm source: %v", err)
 		}
 		var stats columnVectorGraphNativeSearchStats
-		sourceScore, err := stalePlan.scoreSource.scoreOrdinal(stalePlan, nil, rows[1].vector, queryInvNorm, 1, staleScratch, &stats)
-		if err != nil {
-			t.Fatalf("stale source score: %v", err)
+		_, err = stalePlan.scoreSource.scoreOrdinal(stalePlan, nil, rows[1].vector, queryInvNorm, 1, staleScratch, &stats)
+		if err == nil || !strings.Contains(err.Error(), "inverse-norm graph-row fallback unavailable") {
+			t.Fatalf("stale source score err=%v want fail-closed missing graph fallback", err)
 		}
-		legacyReader := *staleReader
-		legacyReader.invNormSource = nil
-		legacyReader.invNormStateUnavailable = true
-		legacyScore, err := legacyReader.scoreOrdinalLegacy(stalePlan, nil, rows[1].vector, queryInvNorm, 1, staleScratch, nil)
-		if err != nil {
-			t.Fatalf("stale legacy score: %v", err)
-		}
-		if math.Abs(sourceScore-legacyScore) > 1e-6 || stats.NormSourceFallbacks != 1 || stats.NormStaleHandles != 1 || stats.NormMmapDirectViews+stats.NormHeapCopyTypedViews+stats.NormScratchDecodes != 0 {
-			t.Fatalf("source=%g legacy=%g stats=%+v want stale norm fallback with counters", sourceScore, legacyScore, stats)
+		if stats.NormSourceFallbacks != 1 || stats.NormStaleHandles != 1 || stats.NormMmapDirectViews+stats.NormHeapCopyTypedViews+stats.NormScratchDecodes != 0 {
+			t.Fatalf("stats=%+v want stale norm fallback counters without graph row read", stats)
 		}
 	})
 }
@@ -421,8 +389,10 @@ func prepareColumnVectorGraphScoreSourceTestPlan1968(tb testing.TB, reader *colu
 	if err != nil {
 		tb.Fatalf("prepareSearchPlan: %v", err)
 	}
-	if _, err := plan.blockViewForAssetOrdinal(0); err != nil {
-		tb.Fatalf("warm block view: %v", err)
+	if plan.physicalReader != nil {
+		if _, err := plan.blockViewForAssetOrdinal(0); err != nil {
+			tb.Fatalf("warm block view: %v", err)
+		}
 	}
 	var stats columnVectorGraphNativeSearchStats
 	if _, err := plan.scoreSource.scoreOrdinal(plan, nil, query, queryInvNorm, 0, scratch, &stats); err != nil {
