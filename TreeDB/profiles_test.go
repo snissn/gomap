@@ -49,6 +49,9 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for fast profile")
 	}
+	if !opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected ValueLog.CurrentWritableMmap=true for fast profile")
+	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for fast profile")
 	}
@@ -105,6 +108,9 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for wal_on_fast profile")
+	}
+	if !opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected ValueLog.CurrentWritableMmap=true for wal_on_fast profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for wal_on_fast profile")
@@ -172,6 +178,9 @@ func TestApplyProfile_CommandWALDurableSetsCommandWALAndFastDurablePolicy(t *tes
 	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
 		t.Fatalf("expected command_wal_durable to keep the fast collection/index layout bundle: %+v", opts)
 	}
+	if !opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected command_wal_durable to keep fast value-log mmap policy")
+	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_durable profile")
 	}
@@ -192,6 +201,9 @@ func TestApplyProfile_CommandWALRelaxedSetsCommandWALAndRelaxedPolicy(t *testing
 	}
 	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
 		t.Fatalf("expected command_wal_relaxed to keep the fast collection/index layout bundle: %+v", opts)
+	}
+	if !opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected command_wal_relaxed to keep fast value-log mmap policy")
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_relaxed profile")
@@ -240,6 +252,9 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for bench profile")
 	}
+	if !opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected ValueLog.CurrentWritableMmap=true for bench profile")
+	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for bench profile")
 	}
@@ -277,6 +292,9 @@ func TestApplyProfile_DurableKeepsIndexOptimizationsDisabled(t *testing.T) {
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for durable profile")
+	}
+	if opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected ValueLog.CurrentWritableMmap=false for durable profile")
 	}
 }
 

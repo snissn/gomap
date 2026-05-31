@@ -280,6 +280,7 @@ func applyFastProfile(opts *Options) {
 	if opts.ValueLog.DictProbeIntervalBytes == 0 {
 		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
 	}
+	opts.ValueLog.CurrentWritableMmap = true
 
 	applyIndexOptimizationsProfile(opts)
 }
@@ -296,6 +297,7 @@ func applyWALOnFastProfile(opts *Options) {
 	if opts.ValueLog.DictProbeIntervalBytes == 0 {
 		opts.ValueLog.DictProbeIntervalBytes = 32 << 20
 	}
+	opts.ValueLog.CurrentWritableMmap = true
 
 	applyIndexOptimizationsProfile(opts)
 }

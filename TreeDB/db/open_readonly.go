@@ -62,6 +62,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
@@ -200,6 +201,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
