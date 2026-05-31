@@ -2283,7 +2283,7 @@ func columnStoreQueryCompressionAttribution(planLabel, storageSource, fallbackRe
 		compressionDurationSource = "not_applicable_b_tree_index_no_column_codec"
 		decompressionDurationSource = "not_applicable_b_tree_index_no_column_codec"
 	default:
-		if storageSource == string(collections.ColumnPhysicalQueryStorageSourceRowScan) || storageSource == string(collections.ColumnPhysicalQueryStorageSourceFallback) || fallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+		if storageSource == string(collections.ColumnPhysicalQueryStorageSourceRowScan) || storageSource == string(collections.ColumnPhysicalQueryStorageSourceFallback) {
 			layoutLabel = planLabel + "_fallback_" + storageSource
 			policyLabel = "not_applicable_fallback"
 			supportState = columnStoreCompressionSupportFallback
@@ -2294,6 +2294,8 @@ func columnStoreQueryCompressionAttribution(planLabel, storageSource, fallbackRe
 			ratioSource = "not_applicable_fallback_no_column_codec"
 			compressionDurationSource = "not_applicable_fallback_no_column_codec"
 			decompressionDurationSource = "not_applicable_fallback_no_column_codec"
+		} else if fallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
+			supportReason = fallbackReason
 		}
 	}
 	if strings.TrimSpace(supportReason) == "" && supportState == columnStoreCompressionSupportFallback {

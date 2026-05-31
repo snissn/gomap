@@ -928,6 +928,31 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 	}
 }
 
+func TestColumnStoreQueryCompressionAttributionKeepsPhysicalAggregateRerouteM1952(t *testing.T) {
+	attr := columnStoreQueryCompressionAttribution(
+		columnStorePathSerialColumnScan,
+		string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+		string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported),
+		128,
+	)
+	if attr.SupportState != columnStoreCompressionSupportSupported || attr.CodecLayoutLabel != columnStoreCodecLayoutCurrent || attr.CompressionPolicyLabel != columnStoreCompressionPolicyDefault {
+		t.Fatalf("aggregate metadata physical reroute attribution=%+v, want supported current codec layout", attr)
+	}
+	if attr.SupportReason != string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported) || strings.Contains(attr.RawBytesSource, "fallback_no_column_codec") || strings.Contains(attr.DecompressedBytesSource, "fallback_no_column_codec") {
+		t.Fatalf("aggregate metadata physical reroute sources=%+v, want column codec attribution with reroute reason", attr)
+	}
+
+	rowFallback := columnStoreQueryCompressionAttribution(
+		columnStorePathSerialColumnScan,
+		string(collections.ColumnPhysicalQueryStorageSourceRowScan),
+		string(collections.ColumnPhysicalQueryFallbackDirectAssetReduceUnsupported),
+		128,
+	)
+	if rowFallback.SupportState != columnStoreCompressionSupportFallback || rowFallback.CompressionPolicyLabel != "not_applicable_fallback" || !strings.Contains(rowFallback.RawBytesSource, "fallback") {
+		t.Fatalf("row fallback attribution=%+v, want not-applicable fallback", rowFallback)
+	}
+}
+
 func TestColumnStoreSuiteMarkdownRendersCodecLayoutUnsupportedRowsM1952(t *testing.T) {
 	report := columnStoreSuiteReport{
 		Suite:                 "column_store",
