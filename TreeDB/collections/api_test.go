@@ -3051,6 +3051,52 @@ func TestCollectionInsertBatchBridge_ValidatedBSONReturnedIDsAreOwned(t *testing
 	}
 }
 
+func TestCollectionNativewireInsertBatchNoResultIDsUpdatesVectorIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs"}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	index, err := newVectorIndex(col, VectorIndexOptions{
+		Name:       "embedding",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 2,
+	})
+	if err != nil {
+		t.Fatalf("new vector index: %v", err)
+	}
+	col.RegisterVectorIndex(index)
+
+	inputID := []byte("a")
+	if err := col.NativewireInsertBatchNoResultIDs(
+		[][]byte{inputID},
+		[][]byte{[]byte(`{"embedding":[1,0]}`)},
+		false,
+	); err != nil {
+		t.Fatalf("nativewire insert no result ids: %v", err)
+	}
+	inputID[0] = 'z'
+
+	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+	if err != nil {
+		t.Fatalf("search vector index: %v", err)
+	}
+	requireVectorResultIDs(t, results, "a")
+	if got, err := col.Get([]byte("z")); err != nil || got != nil {
+		t.Fatalf("mutated request id lookup got=%q err=%v want missing", got, err)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexReadsBeforeFlush(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
