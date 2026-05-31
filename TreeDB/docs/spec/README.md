@@ -220,8 +220,8 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     integrated search while removing legacy adjacency-source scratch decodes.
 - `TreeDB/docs/spec/search-native-graph-benchmark-closeout-1970.md`
   - issue #1970 benchmark/threshold closeout for integrated search-native matrix
-    evidence, default decisions (including indexed scoring default-off), and
-    explicit remaining #2010/#2013/#2014 topology debt.
+    evidence and default decisions including indexed scoring default-off. Its
+    result-ID fallback evidence is historical before #2010/#2013.
 - `TreeDB/docs/spec/typed-column-uint32-list-semantics.md`
   - issue #1984 first-class `uint32_list` semantic contract, including
     `uint32[]` / conceptual `Array(UInt32)` aliases, `raw_uint32_offsets_list`

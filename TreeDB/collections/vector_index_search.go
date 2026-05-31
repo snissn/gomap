@@ -305,8 +305,12 @@ type VectorIndexSearchStats struct {
 	RowRefStateSourceUnavailable uint64 `json:"row_ref_state_source_unavailable,omitempty"`
 	// RowRefStateSourceFallbacks reports row-ref source fallback/quarantine observations.
 	RowRefStateSourceFallbacks uint64 `json:"row_ref_state_source_fallbacks,omitempty"`
+	// ResultIDTypedBytesState counts returned document IDs copied from vector-index typed-column bytes state.
+	ResultIDTypedBytesState uint64 `json:"result_id_typed_bytes_state,omitempty"`
 	// ResultIDGraphFallbacks counts returned document IDs copied from legacy graph row ID bytes.
 	ResultIDGraphFallbacks uint64 `json:"result_id_graph_fallbacks,omitempty"`
+	// ResultIDStateValidationFailures counts searches that fell back because present document-ID state failed validation.
+	ResultIDStateValidationFailures uint64 `json:"result_id_state_validation_failures,omitempty"`
 	// DocumentRowRefStateFetches counts post-top-k document fetches served with vector-index row-ref state.
 	DocumentRowRefStateFetches uint64 `json:"document_row_ref_state_fetches,omitempty"`
 	// DocumentRowRefLookupFallbacks counts post-top-k document fetches that fell back to ID-to-row-ref lookup.
@@ -956,6 +960,8 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		RowRefStateResultRefs:                searchStats.RowRefStateResultRefs,
 		RowRefStateSourceUnavailable:         searchStats.RowRefStateSourceUnavailable,
 		RowRefStateSourceFallbacks:           searchStats.RowRefStateSourceFallbacks,
+		ResultIDTypedBytesState:              searchStats.ResultIDTypedBytesState,
 		ResultIDGraphFallbacks:               searchStats.ResultIDGraphFallbacks,
+		ResultIDStateValidationFailures:      searchStats.ResultIDStateValidationFailures,
 	}
 }

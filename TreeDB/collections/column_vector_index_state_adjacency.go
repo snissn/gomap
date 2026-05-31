@@ -412,6 +412,14 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	if err := validateColumnVectorGraphRowRefStateManifestAssets(collection, cfg, def, state); err != nil {
 		return err
 	}
+	if err := validateColumnVectorGraphDocumentIDStateManifestAsset(collection, cfg, def, state); err != nil {
+		return err
+	}
+	if validatePayload {
+		if err := validateColumnVectorGraphDocumentIDStateAssetPayload(rootDir, collection, cfg, def, graph, state); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

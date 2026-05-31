@@ -65,7 +65,7 @@ From the candidate benchmark rows:
 - Document path used row-ref state and no row-ref lookup fallback:
   - `doc_row_ref_state_fetches/search=10`
   - `doc_row_ref_lookup_fallbacks/search=0`
-- Result IDs still sourced from graph row-id fallback path:
+- At the time of #1970, result IDs still sourced from graph row-id fallback path:
   - `result_id_graph_fallbacks/search=10`
 
 ## Indexed scoring decision (#1969)
@@ -90,8 +90,9 @@ Decision: keep indexed scoring default-off.
 
 This closeout does not claim complete topology debt elimination. The following remain explicit and deferred:
 
-- #2010: result identity / row-id topology debt
-- #2013: result ID source and graph-row-ID fallback retirement
-- #2014: row payload compatibility debt retirement
+- #2014: row payload compatibility debt retirement after document-ID state is
+  available.
 
-`result_id_graph_fallbacks/search` remaining non-zero is expected until #2010/#2013 are completed.
+Historical `result_id_graph_fallbacks/search` evidence in this closeout predates
+#2010/#2013. Healthy post-#2013 searches should report typed bytes document-ID
+state and zero graph-row ID fallback when state is present.
