@@ -116,9 +116,6 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		return stats, nil
 	}
 	supersededRefs := columnStoreCompactionRefsFromManifestRecords(state.records)
-	if state.cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
-		return stats, errors.New("collections: column store compaction requires recovery-authoritative AppliedCommandLSN")
-	}
 	if err := ctx.Err(); err != nil {
 		return stats, err
 	}
@@ -255,6 +252,10 @@ func (c *Collection) loadColumnStoreCompactionState(ctx context.Context) (column
 		closeState()
 		return columnStoreCompactionState{}, nil, err
 	}
+	if cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
+		closeState()
+		return columnStoreCompactionState{}, nil, errors.New("collections: column store compaction requires recovery-authoritative AppliedCommandLSN")
+	}
 	records, err := loadColumnManifestRecordsFromRoot(snap, baseRoot)
 	if err != nil {
 		closeState()
@@ -384,7 +385,8 @@ func cleanupColumnPreparedAssets(rootDir string, assets []ColumnPreparedAsset) e
 		}
 		assetPath, err := columnAssetSegmentPath(rootDir, ref)
 		if err != nil {
-			return err
+			cleanupErrs = append(cleanupErrs, err)
+			continue
 		}
 		target := targets[assetPath]
 		if target == nil {
