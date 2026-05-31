@@ -2,10 +2,13 @@
 
 Status: pre-alpha benchmark contract. This document owns the stable labels and
 reporting boundaries for comparing legacy/direct graph-row search, current
-TVIS/base typed-column search, and future prepared typed-column graph search.
-Prepared-view implementations remain owned by #2038/#2040/#2041 and routing by
-#2045; this matrix must not be treated as prepared-path performance evidence
-until those rows stop being skipped placeholders.
+TVIS/base typed-column search, and future fully prepared typed-column graph
+search. #2038 admits prepared adjacency CSR counters, and #2040 admits
+prepared base-vector and inverse-norm scoring counters on the current typed-column
+rows; remaining prepared side-channel work is owned by #2041 with routing by
+#2045. This matrix must not treat the skipped `prepared_typed_column_placeholder`
+rows as full prepared-path performance evidence until those rows stop being
+placeholders.
 
 ## Command
 
@@ -38,10 +41,11 @@ Modes:
   physical graph rows where the fixture can still publish them. Healthy current
   promotion evidence must not rely on this mode.
 - `current_tvis_base_typed_column`: current source path using TVIS/vector-index
-  typed-column state and base typed-column vectors.
+  typed-column state and base typed-column vectors; after #2040, healthy
+  `mmap_direct` base-vector and inverse-norm scoring is reported through
+  prepared direct-view counters on these rows.
 - `prepared_typed_column_placeholder`: future prepared-view path. These rows are
-  skipped with a message naming #2038/#2040/#2041/#2045 and are not performance
-  data.
+  skipped with a message naming #2041/#2045 and are not performance data.
 
 Boundaries:
 
@@ -71,8 +75,8 @@ Fixtures:
 | `current_tvis_base_typed_column` | `setup_open_prepare` | serial | `serving1024` | Supported current row. |
 | `prepared_typed_column_placeholder` | `setup_open_prepare` | serial | `serving1024` | Skipped placeholder; not performance data. |
 | `legacy_direct_graph_row` | `graph_only` | serial/parallel | `production8192` | Supported control rows where explicit graph rows are published by the fixture. |
-| `current_tvis_base_typed_column` | `graph_only` | serial/parallel | `production8192` | Supported current rows. |
-| `prepared_typed_column_placeholder` | `graph_only` | serial/parallel | `production8192` | Skipped placeholders; not performance data. |
+| `current_tvis_base_typed_column` | `graph_only` | serial/parallel | `production8192` | Supported current rows; #2040 vector/norm prepared counters should cover healthy scoring when mmap direct views are available. |
+| `prepared_typed_column_placeholder` | `graph_only` | serial/parallel | `production8192` | Skipped placeholders for remaining prepared side-channel/routing work; not performance data. |
 | `current_tvis_base_typed_column` | `result_id` | serial/parallel | `serving1024` | Supported current rows. |
 | `prepared_typed_column_placeholder` | `result_id` | serial/parallel | `serving1024` | Skipped placeholders; not performance data. |
 | `current_tvis_base_typed_column` | `document_materialization` | serial/parallel | `serving1024` | Supported current rows. |
@@ -95,9 +99,13 @@ must also carry the relevant domain/source counters:
   `edges/search`, `visited_edges/search`, `result_fetches/search`;
 - direct/fallback source counters: `vector_mmap_direct/search`,
   `vector_heap_copy_typed_view/search`, `vector_scratch_decodes/search`,
+  `vector_prepared_direct/search`, `vector_prepared_identity_mapping/search`,
+  `vector_prepared_row_ref_mapping/search`,
   `typed_column_vector_fallbacks/search`, `norm_mmap_direct/search`,
   `norm_heap_copy_typed_view/search`, `norm_scratch_decodes/search`,
-  `norm_source_fallbacks/search`, `adjacency_prepared_csr_mmap_direct/search`,
+  `norm_prepared_direct/search`, `norm_source_fallbacks/search`,
+  `prepared_score_calls/search`, `score_float64_fallbacks/search`,
+  `adjacency_prepared_csr_mmap_direct/search`,
   `adjacency_prepared_csr_direct_views/search`,
   `adjacency_typed_list_mmap_direct/search`,
   `adjacency_typed_list_heap_copy_typed_view/search`,
