@@ -1732,6 +1732,12 @@ func TestColumnAssetTypedColumnPartDirectViewSegmentTriggerAlignment(t *testing.
 			wantDirect: true,
 		},
 		{
+			name:       "bytes",
+			field:      TypedStorageField{Name: "opaque", Path: "opaque", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueBytes},
+			value:      columnDeclaredValue{Type: ColumnStoreValueBytes, Present: true, Bytes: []byte{0, 'A', 255}},
+			wantDirect: true,
+		},
+		{
 			name:       "adjacency_deferred",
 			field:      TypedStorageField{Name: "neighbors", Path: "neighbors", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueAdjacencyList, AdjacencyDegree: 2},
 			value:      columnDeclaredValue{Type: ColumnStoreValueAdjacencyList, Present: true, AdjacencyList: []uint32{3, 4}},
