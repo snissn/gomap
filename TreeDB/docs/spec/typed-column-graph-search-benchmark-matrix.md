@@ -154,14 +154,14 @@ Closeout run context:
 | `legacy graph-row` | `setup_open_prepare` | `serial` | `serving1024` | 351.266 µs | 2,847 | 473,034 | 562 | `graph_rows=1024`, `prepared_graph_search_views=0`, `graph_row_fallbacks=0` |
 | `current TVIS/base typed-column` | `setup_open_prepare` | `serial` | `serving1024` | 1.447 ms | 691 | 1,659,896 | 2,052 | `graph_rows=0`, `prepared_graph_search_views=1`, `graph_row_fallbacks=0` |
 | `combined prepared` | `setup_open_prepare` | `serial` | `serving1024` | 1.149 ms | 870 | 1,673,748 | 2,052 | `graph_rows=0`, `prepared_graph_search_views=1`, `graph_row_fallbacks=0` |
-| `legacy graph-row` | `graph_only` | `serial` | `production8192` | 8.129 µs | 123,015 | 0 | 0 | compatibility control: `graph_rows=8192`, `graph_row_fallbacks=128` |
-| `legacy graph-row` | `graph_only` | `parallel` | `production8192` | 1.967 µs | 508,284 | 0 | 0 | compatibility control: `graph_rows=8192`, `graph_row_fallbacks=128` |
-| `current TVIS/base typed-column` | `graph_only` | `serial` | `production8192` | 15.069 µs | 66,362 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1` |
-| `current TVIS/base typed-column` | `graph_only` | `parallel` | `production8192` | 3.438 µs | 290,868 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1` |
-| `combined prepared` | `graph_only` | `serial` | `production8192` | 14.420 µs | 69,348 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1` |
-| `combined prepared` | `graph_only` | `serial` | `production8192/minimal` | 12.266 µs | 81,527 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1` |
-| `combined prepared` | `graph_only` | `parallel` | `production8192` | 3.384 µs | 295,482 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1` |
-| `combined prepared` | `graph_only` | `parallel` | `production8192/minimal` | 3.229 µs | 309,716 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1` |
+| `legacy graph-row` | `graph_only` | `serial` | `production8192` | 8.129 µs | 123,015 | 0 | 0 | compatibility control: `graph_rows=8192`, `graph_row_fallbacks=128`, `visited_edges=612` |
+| `legacy graph-row` | `graph_only` | `parallel` | `production8192` | 1.967 µs | 508,284 | 0 | 0 | compatibility control: `graph_rows=8192`, `graph_row_fallbacks=128`, `visited_edges=612` |
+| `current TVIS/base typed-column` | `graph_only` | `serial` | `production8192` | 15.069 µs | 66,362 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1`, `visited_edges=3340` |
+| `current TVIS/base typed-column` | `graph_only` | `parallel` | `production8192` | 3.438 µs | 290,868 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1`, `visited_edges=3340` |
+| `combined prepared` | `graph_only` | `serial` | `production8192` | 14.420 µs | 69,348 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1`, `visited_edges=3340` |
+| `combined prepared` | `graph_only` | `serial` | `production8192/minimal` | 12.266 µs | 81,527 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1`, `visited_edges=3340` |
+| `combined prepared` | `graph_only` | `parallel` | `production8192` | 3.384 µs | 295,482 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1`, `visited_edges=3340` |
+| `combined prepared` | `graph_only` | `parallel` | `production8192/minimal` | 3.229 µs | 309,716 | 0 | 0 | `graph_rows=0`, `prepared=1`, `graph_row_fallbacks=0`, `vec/norm=182/182`, `adj=108`, `row_ref=1`, `id_view=1`, `visited_edges=3340` |
 | `current TVIS/base typed-column` | `result_id` | `serial` | `serving1024` | 14.880 µs | 67,206 | 784 | 2 | `graph_rows=0`, `prepared=1`, `result_id_prepared_bytes_views=1`, `result_id_typed_bytes_state=10`, `result_id_graph_fallbacks=0`, `row_ref=1` |
 | `current TVIS/base typed-column` | `result_id` | `parallel` | `serving1024` | 3.430 µs | 291,584 | 784 | 2 | `graph_rows=0`, `prepared=1`, `result_id_prepared_bytes_views=1`, `result_id_typed_bytes_state=10`, `result_id_graph_fallbacks=0`, `row_ref=1` |
 | `combined prepared` | `result_id` | `serial` | `serving1024` | 14.717 µs | 67,951 | 784 | 2 | `graph_rows=0`, `prepared=1`, `result_id_prepared_bytes_views=1`, `result_id_typed_bytes_state=10`, `result_id_graph_fallbacks=0`, `row_ref=1` |
@@ -182,6 +182,43 @@ continuity label proving that current TVIS/base typed-column search now selects
 one combined prepared view. Use the historical #2035/#2040/#2042 artifacts, not
 this final same-codebase row, when comparing against the pre-#2045 unprepared
 source implementation.
+
+The `graph_only/production8192` truth-matrix throughput rows are not
+apples-to-apples storage-path evidence by themselves. The legacy/direct control
+uses the synthetic physical-asset ring fixture and visits 612 edges/search; the
+current-format and combined-prepared rows rebuild HNSW state and visit 3340
+edges/search. Keep those rows as admission/fallback telemetry, not as proof that
+prepared CSR adjacency is slower than graph-row adjacency.
+
+### #2043 adjacency-source apples-to-apples evidence
+
+A focused permanent benchmark holds the fixture, query, traversal settings,
+result-materialization boundary, candidate count, and visited-edge count fixed,
+then varies only adjacency source selection: vector-index-state prepared CSR
+mmap/direct adjacency versus forced graph-row adjacency fallback. This uses the
+same synthetic physical-asset/ring topology on both sides, so both rows report
+128 candidates/search and 612 visited_edges/search.
+
+```sh
+OUT=/tmp/gomap_2043_adjacency_apples_20260531_115817
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkColumnVectorGraphSearchAdjacencySourceApplesToApples2043' \
+  -benchmem -benchtime=1s -count=5 | tee "$OUT/adjacency_apples_to_apples_2043_bench.txt"
+```
+
+| Row | ns/op median | ops/sec median | B/op | allocs/op | candidates/search | visited_edges/search | Adjacency-source counters |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `state_prepared_csr_adjacency` | 8.109 µs | 123,317 | 0 | 0 | 128 | 612 | `prepared_csr_mmap_direct=40`, `scratch_decodes=0`, `legacy_fallbacks=0`, `source_fallbacks=0` |
+| `graph_row_adjacency_fallback` | 8.533 µs | 117,198 | 0 | 0 | 128 | 612 | `prepared_csr_mmap_direct=0`, `scratch_decodes=40`, `legacy_fallbacks=40`, `source_fallbacks=1` |
+
+Interpretation: when topology/visited edges are held constant, prepared CSR
+adjacency is slightly faster than graph-row adjacency fallback in this local run
+(~5% lower median ns/op) and remains zero-allocation. This closes the specific
+adjacency storage-path concern without changing traversal/scoring semantics or
+implementing #1980/#1977. The larger full truth-matrix wall-time gap remains a
+separate topology/search-work comparison, not an adjacency-source throughput
+claim.
 
 ### #2043 profile and allocation evidence
 
@@ -223,24 +260,30 @@ Result-ID materialization reports 784 B/op and 2 allocs/op; document
 materialization reports about 92 KiB/op and 319 allocs/op for ten fetched
 documents.
 
-### #2043 promotion and deferral decision
+### #2043 closeout and follow-up decision
 
 The combined prepared typed-column route is admitted as the primary healthy
-current-format execution route: all required typed-column graph-search roles are
-prepared/direct, graph-only search is zero-allocation, and healthy current-format
-fallback counters are zero. This is not a full wall-time promotion over the old
-legacy graph-row direct control. The minimal-stats combined prepared graph-only
-row is still slower than the legacy control in this run (serial +50.9% ns/op;
-parallel +64.2% ns/op), and setup/open remains slower than the legacy setup row.
-Close #2035 as fully promoted only if the coordinator explicitly accepts that
-architectural/current-format trade-off; otherwise keep the remaining wall-time
-gap tracked separately.
+current-format execution route from an architecture, readiness, and correctness
+standpoint: all required typed-column graph-search roles are prepared/direct,
+graph-only search is zero-allocation, and healthy current-format fallback
+counters are zero. This is not a full wall-time promotion over the old legacy
+graph-row direct control and should not close #2035 as fully performance
+satisfied. The final truth matrix still shows net throughput gaps, and its
+legacy-versus-current graph-only rows also expose the documented topology/search
+work mismatch: legacy/direct visits 612 edges/search while current-format
+prepared rows visit 3340 edges/search, about 5.5x more. Treat that as a finding
+that follow-up benchmarks and instrumentation must explain, not as a blocker to
+merging #2043 and not as storage-path proof.
 
-Conditional follow-ups:
+Follow-ups:
 
-- #1980 remains an evidence-backed follow-up, not a no-op. Frontier/top-k work is
-  not the largest bucket, but the final parallel profile still shows it as a
-  real secondary hotspot. This closeout does not implement it.
+- #1979 is the natural owner for explaining the 5.5x visited-edge mismatch and
+  making HNSW search work/batchability visible before optimizing storage,
+  frontier, or dot-kernel buckets. If exact topology-parity search benchmarks are
+  still needed after #2043, propose them there or in a focused follow-up issue.
+- #1980 remains an evidence-backed follow-up for frontier/top-k scratch
+  optimization if future apples-to-apples profiles continue to justify it. This
+  closeout does not implement runtime optimization.
 - #1977 remains deferred. The current raw-vector plus inverse-norm path is
   admitted and zero-allocation; the final profiles do not prove that derived
   normalized vector payloads would offset their extra storage/rebuild cost or

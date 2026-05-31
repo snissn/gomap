@@ -873,10 +873,13 @@ Invariant:
   for mode, timing boundary, concurrency, and fixture so legacy/direct graph-row
   controls, current TVIS/base typed-column routing rows, and combined prepared
   typed-column rows are not confused.
-- After #2045/#2043, supported prepared typed-column rows are performance
-  evidence. The `current_tvis_base_typed_column` label is retained for continuity
-  and proves current-format routing selects the combined prepared view; it is not
-  an unprepared hot-loop source route in healthy current-format readers.
+- After #2045/#2043, supported prepared typed-column rows are admission and
+  fallback-readiness evidence, not final performance promotion by themselves.
+  The `current_tvis_base_typed_column` label is retained for continuity and
+  proves current-format routing selects the combined prepared view; it is not an
+  unprepared hot-loop source route in healthy current-format readers. The matrix
+  must call out non-apples-to-apples topology/search-work differences such as
+  the #2043 612-versus-3340 visited_edges/search finding.
 - Supported rows report `ns/op`, `ops/sec`, `B/op`, `allocs/op`, graph rows,
   candidates/search, edges/search, result/document counters, and direct/fallback
   typed-column source counters.

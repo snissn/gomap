@@ -80,9 +80,14 @@ Evidence counters for #2045:
 The #2043 closeout run on `af003dfaf255ae217dbec6eb4a3afae08c2aa4aa` keeps all
 required healthy current-format graph-search roles admitted. It records the
 combined prepared route as the primary current-format execution route while also
-recording that the old legacy graph-row direct control remains faster in the
-final graph-only wall-time matrix. Therefore this table is an admission/readiness
-promotion, not an unconditional claim that #2035 beat the legacy control.
+recording that #2035 is not fully performance-satisfied: the final graph-only
+wall-time matrix still has net throughput gaps, and the legacy/current rows are
+not apples-to-apples storage-path evidence because they visit 612 versus 3340
+edges/search (about 5.5x). Therefore this table is an admission/readiness
+promotion, not an unconditional claim that #2035 beat the legacy control. The
+focused #2043 adjacency-source benchmark adds a narrower finding: with topology
+and visited edges held constant, prepared CSR adjacency is zero-allocation and
+slightly faster than forced graph-row adjacency fallback in the local run.
 
 | State role | Logical / physical type | Prepared runtime shape | Admission status | #2043 evidence |
 | --- | --- | --- | --- | --- |

@@ -248,11 +248,15 @@ specified in
 [`typed-column-graph-search-benchmark-matrix.md`](../spec/typed-column-graph-search-benchmark-matrix.md).
 As of #2043, healthy current-format `current_tvis_base_typed_column` rows select
 the combined prepared view rather than an unprepared hot-loop source route. Treat
-that as the admitted current-format route, not proof that the prepared path beats
-the old legacy graph-row direct control: the closeout run kept graph-only search
-zero-allocation and fallback-free, but the minimal-stats prepared row was still
-slower than the legacy control. #1980 remains the frontier/top-k follow-up when a
-coordinator approves optimization work, and #1977 normalized vectors remain
+that as the admitted current-format route for architecture/readiness/correctness,
+not proof that the prepared path beats the old legacy graph-row direct control:
+the closeout run kept graph-only search zero-allocation and fallback-free, but
+#2035 is not fully performance-satisfied. The final matrix legacy/current
+`graph_only` rows are also not apples-to-apples storage-path evidence because
+the legacy control visits 612 edges/search while current prepared rows visit 3340
+edges/search (about 5.5x). Use #1979 to explain search work/batchability and add
+any exact-topology follow-up benchmark, #1980 for frontier/top-k optimization if
+future profiles continue to justify it, and keep #1977 normalized vectors
 deferred until a prototype beats raw vectors plus inverse norms including
 storage/rebuild cost.
 
