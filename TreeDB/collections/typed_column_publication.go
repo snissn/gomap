@@ -99,6 +99,16 @@ func filterColumnAggregateMetadataForColumns(aggregates []ColumnAggregateMetadat
 				continue
 			}
 		}
+		predicateColumnsPresent := true
+		for _, predicate := range aggregate.Predicates {
+			if _, ok := present[predicate.Column]; !ok {
+				predicateColumnsPresent = false
+				break
+			}
+		}
+		if !predicateColumnsPresent {
+			continue
+		}
 		out = append(out, aggregate)
 	}
 	return out
@@ -118,6 +128,16 @@ func columnStoreTypedColumnPartAggregateMetadata(cfg ColumnStoreConfig) []Column
 			continue
 		}
 		if ownerByColumn[aggregate.Column] != TypedStorageOwnerColumnPart || ownerByColumn[aggregate.GroupColumn] != TypedStorageOwnerColumnPart {
+			continue
+		}
+		allPredicateColumnsTyped := true
+		for _, predicate := range aggregate.Predicates {
+			if ownerByColumn[predicate.Column] != TypedStorageOwnerColumnPart {
+				allPredicateColumnsTyped = false
+				break
+			}
+		}
+		if !allPredicateColumnsTyped {
 			continue
 		}
 		out = append(out, aggregate)

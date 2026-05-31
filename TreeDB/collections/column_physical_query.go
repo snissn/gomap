@@ -123,6 +123,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPartSections             int
 	TypedColumnPartSectionBytes         uint64
 	MetadataHits                        int
+	MetadataEntries                     int
 	MetadataMisses                      int
 	DictionaryCodeHits                  int
 	PredicateDictionaryCodeHits         int
@@ -323,9 +324,6 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
 	}
 	if req.AggregateMetadataName != "" {
-		if columnPhysicalQueryHasPredicates(req) {
-			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
-		}
 		return c.runColumnPhysicalQueryAggregateMetadataInSnapshotView(view, req)
 	}
 	return c.runColumnPhysicalQueryInSnapshotView(view, req)
@@ -366,10 +364,6 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	if err != nil {
 		_ = readCache.close()
 		return nil, err
-	}
-	if req.AggregateMetadataName != "" && columnPhysicalQueryHasPredicates(req) {
-		_ = readCache.close()
-		return nil, fmt.Errorf("%w: aggregate metadata physical predicates are not supported", ErrColumnQueryPlanUnsupported)
 	}
 	if typedColumn == nil && req.Kind == ColumnPhysicalQueryHourCount && columnPhysicalQueryHasPredicates(req) {
 		_ = readCache.close()
@@ -414,7 +408,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		_ = readCache.close()
 		return nil, fmt.Errorf("%w: typed-column part physical query was selected but no runner was prepared", ErrColumnQueryPlanUnsupported)
 	}
-	if typedColumn == nil {
+	if typedColumn == nil && metadata == nil {
 		dictCount, err = prepareColumnDictionaryCodeGroupCountRunner(view, req, &readCache)
 		if err != nil {
 			_ = readCache.close()
@@ -576,13 +570,14 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 	acc := newColumnPhysicalQueryMetadataAccumulator(req.Kind)
+	predicateDiagnostics := newColumnPhysicalQueryPredicateDiagnosticPlan(req)
 	var rawScratch []byte
 	start := time.Now()
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.StorageSource = ColumnPhysicalQueryStorageSourceAggregateMetadata
 	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = 2
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(predicateDiagnostics, 2)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
 	diag.ScheduledGranules = len(refs)
 	for _, metadataRef := range refs {
@@ -609,11 +604,16 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 		if asset.GroupColumn != req.GroupColumn || asset.ValueColumn != req.ValueColumn {
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("%w: aggregate metadata %q columns %s/%s do not match query %s/%s", ErrColumnQueryPlanUnsupported, aggregate.Name, asset.GroupColumn, asset.ValueColumn, req.GroupColumn, req.ValueColumn)
 		}
+		if !columnPhysicalQueryPredicatesExactEqual(asset.Predicates, aggregate.Predicates) {
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("%w: aggregate metadata %q predicate coverage does not match declared metadata", ErrColumnQueryPlanUnsupported, aggregate.Name)
+		}
 		acc.add(asset.Entries)
 		diag.MetadataHits++
 	}
 	diag.ScanNanos = time.Since(start).Nanoseconds()
 	diag.ReduceRows = acc.rows
+	diag.MetadataEntries = acc.entries
+	applyColumnPhysicalQueryPredicateDiagnostics(&diag, predicateDiagnostics, acc.rows, 0)
 	shapeStart := time.Now()
 	groups := acc.groups(req)
 	diag.ResultShapeNanos = time.Since(shapeStart).Nanoseconds()
@@ -1300,6 +1300,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPartSections += right.TypedColumnPartSections
 	left.TypedColumnPartSectionBytes += right.TypedColumnPartSectionBytes
 	left.MetadataHits += right.MetadataHits
+	left.MetadataEntries += right.MetadataEntries
 	left.MetadataMisses += right.MetadataMisses
 	left.DictionaryCodeHits += right.DictionaryCodeHits
 	left.PredicateDictionaryCodeHits += right.PredicateDictionaryCodeHits
@@ -1504,6 +1505,15 @@ func columnPhysicalQueryAggregateMetadataConfig(cfg ColumnStoreConfig, req Colum
 		if aggregate.GroupColumn != req.GroupColumn || aggregate.Column != req.ValueColumn {
 			return ColumnAggregateMetadata{}, false
 		}
+		predicateCoverage, err := columnAggregateMetadataCanonicalPredicates(cfg, aggregate.Predicates)
+		if err != nil {
+			return ColumnAggregateMetadata{}, false
+		}
+		reqPredicateCoverage, err := columnAggregateMetadataCanonicalPredicates(cfg, req.Predicates)
+		if err != nil || !columnPhysicalQueryPredicatesExactEqual(predicateCoverage, reqPredicateCoverage) {
+			return ColumnAggregateMetadata{}, false
+		}
+		aggregate.Predicates = predicateCoverage
 		switch req.Kind {
 		case ColumnPhysicalQueryGroupMinInt64:
 			return aggregate, aggregate.Kind == ColumnAggregateMin
@@ -2063,6 +2073,7 @@ type columnPhysicalQueryMetadataAccumulator struct {
 	int64Values map[string]int64
 	spans       map[string]columnPhysicalQuerySpan
 	rows        int
+	entries     int
 }
 
 func newColumnPhysicalQueryMetadataAccumulator(kind ColumnPhysicalQueryKind) *columnPhysicalQueryMetadataAccumulator {
@@ -2078,6 +2089,7 @@ func newColumnPhysicalQueryMetadataAccumulator(kind ColumnPhysicalQueryKind) *co
 
 func (a *columnPhysicalQueryMetadataAccumulator) add(entries []columnAggregateMetadataEntry) {
 	for _, entry := range entries {
+		a.entries++
 		a.rows += entry.Count
 		switch a.kind {
 		case ColumnPhysicalQueryGroupMinInt64:

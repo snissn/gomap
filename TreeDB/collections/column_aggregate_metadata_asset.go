@@ -9,7 +9,7 @@ import (
 
 const (
 	columnAggregateMetadataAssetMagic   = uint32(0x5443414d) // TCAM
-	columnAggregateMetadataAssetVersion = uint16(1)
+	columnAggregateMetadataAssetVersion = uint16(2)
 )
 
 type columnAggregateMetadataEntry struct {
@@ -29,6 +29,7 @@ type columnAggregateMetadataAsset struct {
 	AggregateName     string
 	GroupColumn       string
 	ValueColumn       string
+	Predicates        []ColumnPhysicalQueryPredicate
 	Rows              int
 	Entries           []columnAggregateMetadataEntry
 }
@@ -55,6 +56,21 @@ func encodeColumnAggregateMetadataAsset(asset columnAggregateMetadataAsset) ([]b
 	writeManifestString(&b, asset.AggregateName)
 	writeManifestString(&b, asset.GroupColumn)
 	writeManifestString(&b, asset.ValueColumn)
+	writeManifestUint64(&b, uint64(len(asset.Predicates)))
+	for _, predicate := range asset.Predicates {
+		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
+		writeManifestString(&b, predicate.Column)
+		writeManifestString(&b, string(kind))
+		if kind == ColumnPhysicalQueryPredicateInList {
+			writeManifestUint64(&b, uint64(len(predicate.Values)))
+			for _, value := range predicate.Values {
+				writeManifestString(&b, value)
+			}
+		} else {
+			writeManifestUint64(&b, 1)
+			writeManifestString(&b, predicate.Value)
+		}
+	}
 	writeManifestUint64(&b, uint64(asset.Rows))
 	writeManifestUint64(&b, uint64(len(asset.Entries)))
 	for _, entry := range asset.Entries {
@@ -74,7 +90,8 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 	if magic := cur.u32(); magic != columnAggregateMetadataAssetMagic {
 		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: bad aggregate metadata asset magic=0x%08x", magic)
 	}
-	if version := cur.u16(); version != columnAggregateMetadataAssetVersion {
+	version := cur.u16()
+	if version == 0 || version > columnAggregateMetadataAssetVersion {
 		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: unsupported aggregate metadata asset version=%d", version)
 	}
 	asset := columnAggregateMetadataAsset{
@@ -87,6 +104,44 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 		AggregateName:     cur.string(),
 		GroupColumn:       cur.string(),
 		ValueColumn:       cur.string(),
+	}
+	if version >= 2 {
+		predicateCount := cur.u64()
+		if err := cur.err; err != nil {
+			return columnAggregateMetadataAsset{}, err
+		}
+		if predicateCount > uint64(maxCollectionInt) {
+			return columnAggregateMetadataAsset{}, errors.New("collections: aggregate metadata asset predicate count overflows int")
+		}
+		asset.Predicates = make([]ColumnPhysicalQueryPredicate, 0, int(predicateCount))
+		for i := 0; i < int(predicateCount); i++ {
+			column := cur.string()
+			kind := ColumnPhysicalQueryPredicateKind(cur.string())
+			valueCount := cur.u64()
+			if err := cur.err; err != nil {
+				return columnAggregateMetadataAsset{}, err
+			}
+			if valueCount == 0 || valueCount > uint64(columnPhysicalQueryMaxPredicateValues) {
+				return columnAggregateMetadataAsset{}, errors.New("collections: aggregate metadata asset predicate value count is zero or too large")
+			}
+			values := make([]string, int(valueCount))
+			for valueIdx := range values {
+				values[valueIdx] = cur.string()
+			}
+			if err := cur.err; err != nil {
+				return columnAggregateMetadataAsset{}, err
+			}
+			predicate := ColumnPhysicalQueryPredicate{Column: column, Kind: kind}
+			if kind == ColumnPhysicalQueryPredicateInList {
+				predicate.Values = values
+			} else {
+				if valueCount != 1 {
+					return columnAggregateMetadataAsset{}, errors.New("collections: aggregate metadata asset equality predicate has multiple values")
+				}
+				predicate.Value = values[0]
+			}
+			asset.Predicates = append(asset.Predicates, predicate)
+		}
 	}
 	rows := cur.u64()
 	entryCount := cur.u64()
@@ -138,6 +193,11 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 	if asset.AggregateName != name {
 		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: aggregate metadata asset name=%q want %q", asset.AggregateName, name)
 	}
+	predicateCoverage, err := columnAggregateMetadataCanonicalPredicates(cfg, asset.Predicates)
+	if err != nil {
+		return columnAggregateMetadataAsset{}, fmt.Errorf("collections: aggregate metadata asset predicate coverage is invalid: %w", err)
+	}
+	asset.Predicates = predicateCoverage
 	return asset, nil
 }
 
@@ -172,45 +232,80 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 	if groupIdx < 0 || valueIdx < 0 {
 		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q references unknown column(s)", aggregate.Name)
 	}
-	entriesByGroup := make(map[string]columnAggregateMetadataEntry)
-	for _, row := range rows {
-		if row.Deleted {
-			continue
-		}
-		if groupIdx >= len(row.Values) || valueIdx >= len(row.Values) {
-			return columnAggregateMetadataAsset{}, false, errors.New("collections: aggregate metadata row is missing declared values")
-		}
-		groupValue := row.Values[groupIdx]
-		valueValue := row.Values[valueIdx]
-		if groupValue.Null || !groupValue.Present || valueValue.Null || !valueValue.Present {
-			return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
-		}
-		if groupValue.Type != ColumnStoreValueString || valueValue.Type != ColumnStoreValueInt64 {
-			return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
-		}
-		group := groupValue.String
-		if group == "" && groupValue.StringBytes != nil {
-			group = string(groupValue.StringBytes)
-		}
-		cur, ok := entriesByGroup[group]
-		if !ok {
-			entriesByGroup[group] = columnAggregateMetadataEntry{Group: group, Count: 1, Min: valueValue.Int64, Max: valueValue.Int64}
-			continue
-		}
-		cur.Count++
-		if valueValue.Int64 < cur.Min {
-			cur.Min = valueValue.Int64
-		}
-		if valueValue.Int64 > cur.Max {
-			cur.Max = valueValue.Int64
-		}
-		entriesByGroup[group] = cur
+	predicateSpecs, err := columnAggregateMetadataPredicateSpecs(cfg, aggregate.Predicates)
+	if err != nil {
+		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
 	}
-	entries := make([]columnAggregateMetadataEntry, 0, len(entriesByGroup))
-	for _, entry := range entriesByGroup {
-		entries = append(entries, entry)
+	predicateCoverage, err := columnAggregateMetadataCanonicalPredicates(cfg, aggregate.Predicates)
+	if err != nil {
+		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Group < entries[j].Group })
+	metadataRows, err := columnAggregateMetadataRowsForTypedColumnGranules(cfg, aggregate, rows)
+	if err != nil {
+		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q typed-column granule rows: %w", aggregate.Name, err)
+	}
+	rowsPerMetadataEntrySet := len(metadataRows)
+	if rowsPerMetadataEntrySet == 0 {
+		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
+	}
+	if columnAggregateMetadataUsesTypedColumnGranules(cfg, aggregate) {
+		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
+	}
+	rows = metadataRows
+	entries := make([]columnAggregateMetadataEntry, 0)
+	for start := 0; start < len(rows); start += rowsPerMetadataEntrySet {
+		end := start + rowsPerMetadataEntrySet
+		if end > len(rows) {
+			end = len(rows)
+		}
+		entriesByGroup := make(map[string]columnAggregateMetadataEntry)
+		for _, row := range rows[start:end] {
+			if row.Deleted {
+				continue
+			}
+			if groupIdx >= len(row.Values) || valueIdx >= len(row.Values) {
+				return columnAggregateMetadataAsset{}, false, errors.New("collections: aggregate metadata row is missing declared values")
+			}
+			matched, err := columnAggregateMetadataPredicatesMatchRow(predicateSpecs, row.Values)
+			if err != nil {
+				return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q predicate evaluation: %w", aggregate.Name, err)
+			}
+			if !matched {
+				continue
+			}
+			groupValue := row.Values[groupIdx]
+			valueValue := row.Values[valueIdx]
+			if groupValue.Null || !groupValue.Present || valueValue.Null || !valueValue.Present {
+				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
+			}
+			if groupValue.Type != ColumnStoreValueString || valueValue.Type != ColumnStoreValueInt64 {
+				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
+			}
+			group := groupValue.String
+			if group == "" && groupValue.StringBytes != nil {
+				group = string(groupValue.StringBytes)
+			}
+			cur, ok := entriesByGroup[group]
+			if !ok {
+				entriesByGroup[group] = columnAggregateMetadataEntry{Group: group, Count: 1, Min: valueValue.Int64, Max: valueValue.Int64}
+				continue
+			}
+			cur.Count++
+			if valueValue.Int64 < cur.Min {
+				cur.Min = valueValue.Int64
+			}
+			if valueValue.Int64 > cur.Max {
+				cur.Max = valueValue.Int64
+			}
+			entriesByGroup[group] = cur
+		}
+		granuleEntries := make([]columnAggregateMetadataEntry, 0, len(entriesByGroup))
+		for _, entry := range entriesByGroup {
+			granuleEntries = append(granuleEntries, entry)
+		}
+		sort.Slice(granuleEntries, func(i, j int) bool { return granuleEntries[i].Group < granuleEntries[j].Group })
+		entries = append(entries, granuleEntries...)
+	}
 	return columnAggregateMetadataAsset{
 		Collection:        collection,
 		Namespace:         namespace,
@@ -221,7 +316,131 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 		AggregateName:     aggregate.Name,
 		GroupColumn:       aggregate.GroupColumn,
 		ValueColumn:       aggregate.Column,
+		Predicates:        predicateCoverage,
 		Rows:              len(rows),
 		Entries:           entries,
 	}, true, nil
+}
+
+func columnAggregateMetadataUsesTypedColumnGranules(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
+	columns := []string{aggregate.Column, aggregate.GroupColumn}
+	for _, predicate := range aggregate.Predicates {
+		columns = append(columns, predicate.Column)
+	}
+	for _, name := range columns {
+		col, _, ok := columnPhysicalQueryDeclaredColumn(cfg, name)
+		if !ok || !columnStoreColumnIsTypedColumnPart(col) {
+			return false
+		}
+	}
+	return len(columns) > 0
+}
+
+type columnAggregateMetadataSortRow struct {
+	row    columnDeclaredRow
+	index  int
+	values []columnDeclaredValue
+}
+
+func columnAggregateMetadataRowsForTypedColumnGranules(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata, rows []columnDeclaredRow) ([]columnDeclaredRow, error) {
+	if !columnAggregateMetadataUsesTypedColumnGranules(cfg, aggregate) || len(rows) <= 1 {
+		return rows, nil
+	}
+	sortKey, err := typedColumnPartPublicationSortKey(cfg, columnStoreTypedColumnPartFields(cfg))
+	if err != nil {
+		return nil, err
+	}
+	if len(sortKey) == 0 {
+		return rows, nil
+	}
+	columnIdxByName := make(map[string]int, len(cfg.Columns))
+	columnByName := make(map[string]ColumnStoreColumn, len(cfg.Columns))
+	for idx, col := range cfg.Columns {
+		columnIdxByName[col.Name] = idx
+		columnByName[col.Name] = col
+	}
+	sortRows := make([]columnAggregateMetadataSortRow, len(rows))
+	for rowIdx, row := range rows {
+		sortRows[rowIdx] = columnAggregateMetadataSortRow{row: row, index: rowIdx, values: make([]columnDeclaredValue, len(sortKey))}
+		if len(row.Values) != len(cfg.Columns) {
+			return nil, fmt.Errorf("row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(cfg.Columns))
+		}
+		for keyIdx, key := range sortKey {
+			columnIdx, ok := columnIdxByName[key.Column]
+			if !ok {
+				return nil, fmt.Errorf("sort key references unknown column %q", key.Column)
+			}
+			value := row.Values[columnIdx]
+			if err := columnAggregateMetadataValidateSortValue(columnByName[key.Column], value); err != nil {
+				return nil, fmt.Errorf("row[%d] sort key column %q: %w", rowIdx, key.Column, err)
+			}
+			sortRows[rowIdx].values[keyIdx] = value
+		}
+	}
+	sort.SliceStable(sortRows, func(i, j int) bool {
+		for keyIdx, key := range sortKey {
+			cmp := columnAggregateMetadataCompareSortValues(columnByName[key.Column], sortRows[i].values[keyIdx], sortRows[j].values[keyIdx])
+			if cmp != 0 {
+				return cmp < 0
+			}
+		}
+		return sortRows[i].index < sortRows[j].index
+	})
+	out := make([]columnDeclaredRow, len(rows))
+	for idx, sortRow := range sortRows {
+		out[idx] = sortRow.row
+	}
+	return out, nil
+}
+
+func columnAggregateMetadataValidateSortValue(col ColumnStoreColumn, value columnDeclaredValue) error {
+	if value.Null || !value.Present {
+		return fmt.Errorf("null/default ordering is not defined for typed-column aggregate metadata")
+	}
+	if value.Type != col.ValueType {
+		return fmt.Errorf("value type %q does not match column type %q", value.Type, col.ValueType)
+	}
+	switch col.ValueType {
+	case ColumnStoreValueBool, ColumnStoreValueInt64, ColumnStoreValueString:
+		return nil
+	default:
+		return fmt.Errorf("value_type %q is not supported for typed-column aggregate metadata sort ordering", col.ValueType)
+	}
+}
+
+func columnAggregateMetadataCompareSortValues(col ColumnStoreColumn, left, right columnDeclaredValue) int {
+	switch col.ValueType {
+	case ColumnStoreValueBool:
+		if left.Bool == right.Bool {
+			return 0
+		}
+		if !left.Bool {
+			return -1
+		}
+		return 1
+	case ColumnStoreValueInt64:
+		if left.Int64 < right.Int64 {
+			return -1
+		}
+		if left.Int64 > right.Int64 {
+			return 1
+		}
+		return 0
+	case ColumnStoreValueString:
+		leftString := left.String
+		if leftString == "" && left.StringBytes != nil {
+			leftString = string(left.StringBytes)
+		}
+		rightString := right.String
+		if rightString == "" && right.StringBytes != nil {
+			rightString = string(right.StringBytes)
+		}
+		if leftString < rightString {
+			return -1
+		}
+		if leftString > rightString {
+			return 1
+		}
+	}
+	return 0
 }
