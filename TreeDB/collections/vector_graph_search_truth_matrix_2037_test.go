@@ -2,7 +2,6 @@ package collections
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ type vectorGraphSearchTruthMatrixMode2037 string
 const (
 	vectorGraphSearchTruthMatrixModeLegacyDirectGraphRow2037 vectorGraphSearchTruthMatrixMode2037 = "legacy_direct_graph_row"
 	vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037   vectorGraphSearchTruthMatrixMode2037 = "current_tvis_base_typed_column"
-	vectorGraphSearchTruthMatrixModePreparedPlaceholder2037  vectorGraphSearchTruthMatrixMode2037 = "prepared_typed_column_placeholder"
+	vectorGraphSearchTruthMatrixModeCombinedPrepared2037     vectorGraphSearchTruthMatrixMode2037 = "combined_prepared_typed_column"
 )
 
 type vectorGraphSearchTruthMatrixBoundary2037 string
@@ -37,8 +36,6 @@ const (
 	vectorGraphSearchTruthMatrixFixtureProduction81922037 vectorGraphSearchTruthMatrixFixture2037 = "production8192"
 )
 
-const vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037 = "full prepared typed-column graph-search path is a #2037 placeholder until #2041/#2045 add remaining prepared side-channel views and routing; skipped row is not performance data"
-
 type vectorGraphSearchTruthMatrixRow2037 struct {
 	Mode               vectorGraphSearchTruthMatrixMode2037
 	Boundary           vectorGraphSearchTruthMatrixBoundary2037
@@ -60,24 +57,24 @@ func vectorGraphSearchTruthMatrixRows2037() []vectorGraphSearchTruthMatrixRow203
 	return []vectorGraphSearchTruthMatrixRow2037{
 		{Mode: vectorGraphSearchTruthMatrixModeLegacyDirectGraphRow2037, Boundary: vectorGraphSearchTruthMatrixBoundarySetupOpenPrepare2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037"},
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundarySetupOpenPrepare2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037"},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundarySetupOpenPrepare2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "future BenchmarkColumnVectorGraphSearchTruthMatrix2037 prepared setup row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundarySetupOpenPrepare2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared setup row"},
 
 		{Mode: vectorGraphSearchTruthMatrixModeLegacyDirectGraphRow2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "BenchmarkColumnVectorGraphNativeSearchCosineProduction8192V3 with graph_only_no_result_materialization"},
 		{Mode: vectorGraphSearchTruthMatrixModeLegacyDirectGraphRow2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "BenchmarkColumnVectorGraphNativeSearchCosineParallelProduction8192V3 with graph_only_no_result_materialization"},
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "BenchmarkColumnVectorGraphNativeSearchCosineTypedColumnProduction8192V3 with graph_only_no_result_materialization"},
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "BenchmarkColumnVectorGraphNativeSearchCosineParallelTypedColumnProduction8192V3 with graph_only_no_result_materialization"},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "future prepared graph-only serial row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "future prepared graph-only parallel row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared graph-only serial row"},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundaryGraphOnly2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureProduction81922037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared graph-only parallel row"},
 
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundaryResultID2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderV4"},
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundaryResultID2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4"},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundaryResultID2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "future prepared result-ID serial row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundaryResultID2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "future prepared result-ID parallel row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundaryResultID2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared result-ID serial row"},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundaryResultID2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared result-ID parallel row"},
 
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundaryDocumentMaterialize2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderWithDocumentsV4"},
 		{Mode: vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, Boundary: vectorGraphSearchTruthMatrixBoundaryDocumentMaterialize2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelWithDocumentsV4"},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundaryDocumentMaterialize2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "future prepared document-materialization serial row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
-		{Mode: vectorGraphSearchTruthMatrixModePreparedPlaceholder2037, Boundary: vectorGraphSearchTruthMatrixBoundaryDocumentMaterialize2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "future prepared document-materialization parallel row", UnsupportedReason: vectorGraphSearchTruthMatrixPreparedUnsupportedReason2037},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundaryDocumentMaterialize2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencySerial2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared document-materialization serial row"},
+		{Mode: vectorGraphSearchTruthMatrixModeCombinedPrepared2037, Boundary: vectorGraphSearchTruthMatrixBoundaryDocumentMaterialize2037, Concurrency: vectorGraphSearchTruthMatrixConcurrencyParallel2037, Fixture: vectorGraphSearchTruthMatrixFixtureServing10242037, CanonicalBenchmark: "BenchmarkColumnVectorGraphSearchTruthMatrix2037 combined prepared document-materialization parallel row"},
 	}
 }
 
@@ -105,6 +102,8 @@ func vectorGraphSearchTruthMatrixRequiredMetricLabels2037() []string {
 		"row_ref_state_result_refs/search",
 		"row_ref_state_source_fallbacks/search",
 		"result_id_prepared_bytes_views/search",
+		"prepared_graph_search_views/search",
+		"graph_row_fallbacks/search",
 		"doc_row_ref_state_fetches/search",
 		"doc_row_ref_lookup_fallbacks/search",
 		"vector_mmap_direct/search",
@@ -136,21 +135,21 @@ func TestVectorGraphSearchTruthMatrixRows2037(t *testing.T) {
 	wantNames := []string{
 		"mode=legacy_direct_graph_row/boundary=setup_open_prepare/concurrency=serial/fixture=serving1024",
 		"mode=current_tvis_base_typed_column/boundary=setup_open_prepare/concurrency=serial/fixture=serving1024",
-		"mode=prepared_typed_column_placeholder/boundary=setup_open_prepare/concurrency=serial/fixture=serving1024",
+		"mode=combined_prepared_typed_column/boundary=setup_open_prepare/concurrency=serial/fixture=serving1024",
 		"mode=legacy_direct_graph_row/boundary=graph_only/concurrency=serial/fixture=production8192",
 		"mode=legacy_direct_graph_row/boundary=graph_only/concurrency=parallel/fixture=production8192",
 		"mode=current_tvis_base_typed_column/boundary=graph_only/concurrency=serial/fixture=production8192",
 		"mode=current_tvis_base_typed_column/boundary=graph_only/concurrency=parallel/fixture=production8192",
-		"mode=prepared_typed_column_placeholder/boundary=graph_only/concurrency=serial/fixture=production8192",
-		"mode=prepared_typed_column_placeholder/boundary=graph_only/concurrency=parallel/fixture=production8192",
+		"mode=combined_prepared_typed_column/boundary=graph_only/concurrency=serial/fixture=production8192",
+		"mode=combined_prepared_typed_column/boundary=graph_only/concurrency=parallel/fixture=production8192",
 		"mode=current_tvis_base_typed_column/boundary=result_id/concurrency=serial/fixture=serving1024",
 		"mode=current_tvis_base_typed_column/boundary=result_id/concurrency=parallel/fixture=serving1024",
-		"mode=prepared_typed_column_placeholder/boundary=result_id/concurrency=serial/fixture=serving1024",
-		"mode=prepared_typed_column_placeholder/boundary=result_id/concurrency=parallel/fixture=serving1024",
+		"mode=combined_prepared_typed_column/boundary=result_id/concurrency=serial/fixture=serving1024",
+		"mode=combined_prepared_typed_column/boundary=result_id/concurrency=parallel/fixture=serving1024",
 		"mode=current_tvis_base_typed_column/boundary=document_materialization/concurrency=serial/fixture=serving1024",
 		"mode=current_tvis_base_typed_column/boundary=document_materialization/concurrency=parallel/fixture=serving1024",
-		"mode=prepared_typed_column_placeholder/boundary=document_materialization/concurrency=serial/fixture=serving1024",
-		"mode=prepared_typed_column_placeholder/boundary=document_materialization/concurrency=parallel/fixture=serving1024",
+		"mode=combined_prepared_typed_column/boundary=document_materialization/concurrency=serial/fixture=serving1024",
+		"mode=combined_prepared_typed_column/boundary=document_materialization/concurrency=parallel/fixture=serving1024",
 	}
 	if len(rows) != len(wantNames) {
 		t.Fatalf("rows=%d want %d", len(rows), len(wantNames))
@@ -167,12 +166,8 @@ func TestVectorGraphSearchTruthMatrixRows2037(t *testing.T) {
 		if row.CanonicalBenchmark == "" {
 			t.Fatalf("row %q missing canonical benchmark", row.Name())
 		}
-		if row.Mode == vectorGraphSearchTruthMatrixModePreparedPlaceholder2037 {
-			if row.Supported() || !strings.Contains(row.UnsupportedReason, "not performance data") || !strings.Contains(row.UnsupportedReason, "#2041") {
-				t.Fatalf("prepared placeholder row %q reason=%q", row.Name(), row.UnsupportedReason)
-			}
-		} else if !row.Supported() {
-			t.Fatalf("non-placeholder row %q unexpectedly unsupported: %s", row.Name(), row.UnsupportedReason)
+		if !row.Supported() {
+			t.Fatalf("row %q unexpectedly unsupported: %s", row.Name(), row.UnsupportedReason)
 		}
 	}
 }
@@ -200,6 +195,8 @@ func TestVectorGraphSearchTruthMatrixMetricContract2037(t *testing.T) {
 		"docs_fetched/search",
 		"result_id_typed_bytes_state/search",
 		"result_id_prepared_bytes_views/search",
+		"prepared_graph_search_views/search",
+		"graph_row_fallbacks/search",
 		"row_ref_state_prepared_views/search",
 		"row_ref_state_source_fallbacks/search",
 		"vector_mmap_direct/search",
@@ -289,6 +286,9 @@ func benchmarkVectorGraphSearchTruthMatrixSetup2037(b *testing.B, row vectorGrap
 		OpenPhysicalBytesRead: readerStats.OpenPhysicalBytesRead,
 		MaxResidentBytes:      readerStats.MaxResidentBytes,
 	}
+	if statsSearcher.reader != nil && statsSearcher.reader.preparedSearch != nil {
+		stats.PreparedGraphSearchViews = 1
+	}
 	if err := statsSearcher.Close(); err != nil {
 		b.Fatalf("Close stats searcher: %v", err)
 	}
@@ -315,7 +315,7 @@ func benchmarkVectorGraphSearchTruthMatrixGraphOnly2037(b *testing.B, row vector
 	switch row.Mode {
 	case vectorGraphSearchTruthMatrixModeLegacyDirectGraphRow2037:
 		shape.typedColumnVector = false
-	case vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037:
+	case vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, vectorGraphSearchTruthMatrixModeCombinedPrepared2037:
 		shape.typedColumnVector = true
 	default:
 		b.Fatalf("unsupported graph-only mode %q", row.Mode)
@@ -329,8 +329,8 @@ func benchmarkVectorGraphSearchTruthMatrixGraphOnly2037(b *testing.B, row vector
 
 func benchmarkVectorGraphSearchTruthMatrixResultID2037(b *testing.B, row vectorGraphSearchTruthMatrixRow2037) {
 	b.Helper()
-	if row.Mode != vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037 {
-		b.Fatalf("result-ID boundary currently supports only current typed-column mode, got %q", row.Mode)
+	if row.Mode != vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037 && row.Mode != vectorGraphSearchTruthMatrixModeCombinedPrepared2037 {
+		b.Fatalf("result-ID boundary currently supports only current/combined prepared typed-column modes, got %q", row.Mode)
 	}
 	if row.Concurrency == vectorGraphSearchTruthMatrixConcurrencyParallel2037 {
 		benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, false, DocumentFetchOptions{})
@@ -341,8 +341,8 @@ func benchmarkVectorGraphSearchTruthMatrixResultID2037(b *testing.B, row vectorG
 
 func benchmarkVectorGraphSearchTruthMatrixDocumentMaterialization2037(b *testing.B, row vectorGraphSearchTruthMatrixRow2037) {
 	b.Helper()
-	if row.Mode != vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037 {
-		b.Fatalf("document-materialization boundary currently supports only current typed-column mode, got %q", row.Mode)
+	if row.Mode != vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037 && row.Mode != vectorGraphSearchTruthMatrixModeCombinedPrepared2037 {
+		b.Fatalf("document-materialization boundary currently supports only current/combined prepared typed-column modes, got %q", row.Mode)
 	}
 	if row.Concurrency == vectorGraphSearchTruthMatrixConcurrencyParallel2037 {
 		benchmarkOpenVectorIndexSearcherColumnGraphTypedColumnNativeReaderParallelV4(b, true, DocumentFetchOptions{})
@@ -366,7 +366,7 @@ func openVectorGraphSearchTruthMatrixCollection2037(b *testing.B, row vectorGrap
 	case vectorGraphSearchTruthMatrixModeLegacyDirectGraphRow2037:
 		shape.directPhysicalAsset = true
 		shape.typedColumnVector = false
-	case vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037:
+	case vectorGraphSearchTruthMatrixModeCurrentTypedColumn2037, vectorGraphSearchTruthMatrixModeCombinedPrepared2037:
 		shape.directPhysicalAsset = false
 		shape.typedColumnVector = true
 	default:

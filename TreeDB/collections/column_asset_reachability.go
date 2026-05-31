@@ -31,6 +31,7 @@ type ColumnAssetReachabilityOptions struct {
 	PendingRefs                           []ColumnAssetRef
 	PreparedRefs                          []ColumnAssetRef
 	PreparedQueryRefs                     []ColumnAssetRef
+	QuarantineRefs                        []ColumnAssetRef
 	PinnedRefs                            []ColumnAssetRef
 }
 
@@ -68,6 +69,7 @@ const (
 	ColumnAssetReachabilitySourcePendingPublish    ColumnAssetReachabilitySource = "pending_publish"
 	ColumnAssetReachabilitySourcePreparedAsset     ColumnAssetReachabilitySource = "prepared_asset"
 	ColumnAssetReachabilitySourcePreparedQuery     ColumnAssetReachabilitySource = "prepared_query"
+	ColumnAssetReachabilitySourceQuarantine        ColumnAssetReachabilitySource = "quarantine"
 	ColumnAssetReachabilitySourceMappedResourcePin ColumnAssetReachabilitySource = "mappedresource_pin"
 	columnAssetReachabilitySourceUnknown           ColumnAssetReachabilitySource = "unknown"
 )
@@ -108,6 +110,7 @@ type ColumnAssetReachabilitySourceStats struct {
 	PendingRefs          int
 	PreparedRefs         int
 	PreparedQueryRefs    int
+	QuarantineRefs       int
 	PinnedRefs           int
 	MappedResourcePins   int
 }
@@ -187,6 +190,7 @@ const (
 	columnAssetReachabilitySourcePendingPublishMask
 	columnAssetReachabilitySourcePreparedAssetMask
 	columnAssetReachabilitySourcePreparedQueryMask
+	columnAssetReachabilitySourceQuarantineMask
 	columnAssetReachabilitySourceMappedResourcePinMask
 	columnAssetReachabilitySourceUnknownMask
 )
@@ -197,6 +201,7 @@ const columnAssetReachabilityProtectedSourceMask = columnAssetReachabilitySource
 	columnAssetReachabilitySourcePendingPublishMask |
 	columnAssetReachabilitySourcePreparedAssetMask |
 	columnAssetReachabilitySourcePreparedQueryMask |
+	columnAssetReachabilitySourceQuarantineMask |
 	columnAssetReachabilitySourceMappedResourcePinMask
 
 var columnAssetReachabilitySourceBits = [...]struct {
@@ -210,6 +215,7 @@ var columnAssetReachabilitySourceBits = [...]struct {
 	{ColumnAssetReachabilitySourcePendingPublish, columnAssetReachabilitySourcePendingPublishMask},
 	{ColumnAssetReachabilitySourcePreparedAsset, columnAssetReachabilitySourcePreparedAssetMask},
 	{ColumnAssetReachabilitySourcePreparedQuery, columnAssetReachabilitySourcePreparedQueryMask},
+	{ColumnAssetReachabilitySourceQuarantine, columnAssetReachabilitySourceQuarantineMask},
 	{ColumnAssetReachabilitySourceMappedResourcePin, columnAssetReachabilitySourceMappedResourcePinMask},
 	{columnAssetReachabilitySourceUnknown, columnAssetReachabilitySourceUnknownMask},
 }
@@ -391,6 +397,9 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addRefs(ctx, opts.PreparedQueryRefs, ColumnAssetReachabilitySourcePreparedQuery); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
+	if err := input.addRefs(ctx, opts.QuarantineRefs, ColumnAssetReachabilitySourceQuarantine); err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
 	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
 	input.mappedResources = mappedResourceStats
 	if mappedResourceStats.UnconvertiblePins != 0 {
@@ -417,7 +426,7 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 }
 
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
-	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PreparedQueryRefs) + len(opts.PinnedRefs)
+	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PreparedQueryRefs) + len(opts.QuarantineRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
 		rootDir:          view.ColumnAssetRootDir,
 		collection:       view.CollectionName,
@@ -623,6 +632,8 @@ func (in *columnAssetReachabilityInput) incrementSourceCount(source ColumnAssetR
 		in.sourceCounts.PreparedRefs++
 	case ColumnAssetReachabilitySourcePreparedQuery:
 		in.sourceCounts.PreparedQueryRefs++
+	case ColumnAssetReachabilitySourceQuarantine:
+		in.sourceCounts.QuarantineRefs++
 	case ColumnAssetReachabilitySourcePinnedSnapshot:
 		in.sourceCounts.PinnedRefs++
 	case ColumnAssetReachabilitySourceMappedResourcePin:
@@ -938,6 +949,7 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 			PendingRefs:          input.sourceCounts.PendingRefs,
 			PreparedRefs:         input.sourceCounts.PreparedRefs,
 			PreparedQueryRefs:    input.sourceCounts.PreparedQueryRefs,
+			QuarantineRefs:       input.sourceCounts.QuarantineRefs,
 			PinnedRefs:           input.sourceCounts.PinnedRefs,
 			MappedResourcePins:   input.sourceCounts.MappedResourcePins,
 		},

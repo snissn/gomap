@@ -505,6 +505,9 @@ func typedColumnPreparePartStateFromParsed(ref ColumnAssetRef, physical ColumnAs
 		if err := typedColumnPreparedValidateColumnDefinition(plan.Definition, column.Definition); err != nil {
 			return nil, diag, err
 		}
+		if err := validateTypedColumnProductionPartColumnLayout(plan.Field, column); err != nil {
+			return nil, diag, fmt.Errorf("collections: typed-column prepared state column %q layout validation failed: %w", plan.Definition.Name, err)
+		}
 		section, ok := typedColumnAdapterColumnDataSection(image, plan.Definition.Name)
 		if !ok {
 			return nil, diag, fmt.Errorf("collections: typed-column prepared state missing column data section %q", plan.Definition.Name)
