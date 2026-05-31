@@ -220,6 +220,7 @@ type columnPhysicalScanSnapshotView struct {
 	FullConfig            ColumnStoreConfig
 	ColumnStoreEnabled    bool
 	CommitSeq             uint64
+	SystemRoot            uint64
 	AssetRefs             []columnManifestAssetRefForScan
 	TypedColumnPartRefs   []columnManifestAssetRefForScan
 	AggregateMetadata     []columnManifestAggregateMetadataSnapshot
@@ -413,6 +414,7 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 		FullConfig:         cfg,
 		ColumnStoreEnabled: columnStoreEnabled,
 		CommitSeq:          snapshotState.CommitSeq,
+		SystemRoot:         snapshotState.SystemRootPageID,
 		Diagnostics:        diag,
 		ColumnAssetRootDir: c.db.ColumnAssetRootDir(),
 		AssetNamespace:     cfg.AssetManager.Namespace,
