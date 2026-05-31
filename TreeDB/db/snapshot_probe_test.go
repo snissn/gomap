@@ -148,6 +148,26 @@ func TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot(t *testing.T) {
 	}
 
 	hasPrefixes, err = snap.HasPrefixesAtRoot(rootIDs[0], [][]byte{
+		[]byte("acct/alice/"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot single hit: %v", err)
+	}
+	if want := []bool{true}; !reflect.DeepEqual(hasPrefixes, want) {
+		t.Fatalf("HasPrefixesAtRoot single hit mismatch: got=%v want=%v", hasPrefixes, want)
+	}
+
+	hasPrefixes, err = snap.HasPrefixesAtRoot(rootIDs[0], [][]byte{
+		[]byte("acct/zoe/"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot single miss: %v", err)
+	}
+	if want := []bool{false}; !reflect.DeepEqual(hasPrefixes, want) {
+		t.Fatalf("HasPrefixesAtRoot single miss mismatch: got=%v want=%v", hasPrefixes, want)
+	}
+
+	hasPrefixes, err = snap.HasPrefixesAtRoot(rootIDs[0], [][]byte{
 		[]byte("acct/bob/"),
 		[]byte("acct/alice/doc-1"),
 		[]byte("acct/alice/"),
@@ -647,5 +667,25 @@ func TestSnapshotRootProbesSkipTombstones(t *testing.T) {
 	}
 	if want := []bool{false, true, false}; !reflect.DeepEqual(hasPrefixes, want) {
 		t.Fatalf("HasPrefixesAtRoot tombstone mismatch: got=%v want=%v", hasPrefixes, want)
+	}
+
+	hasPrefixes, err = snap.HasPrefixesAtRoot(rootID, [][]byte{
+		[]byte("acct/alice/doc-1"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot single tombstone exact: %v", err)
+	}
+	if want := []bool{false}; !reflect.DeepEqual(hasPrefixes, want) {
+		t.Fatalf("HasPrefixesAtRoot single tombstone exact mismatch: got=%v want=%v", hasPrefixes, want)
+	}
+
+	hasPrefixes, err = snap.HasPrefixesAtRoot(rootID, [][]byte{
+		[]byte("acct/alice/"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot single tombstone prefix: %v", err)
+	}
+	if want := []bool{true}; !reflect.DeepEqual(hasPrefixes, want) {
+		t.Fatalf("HasPrefixesAtRoot single tombstone prefix mismatch: got=%v want=%v", hasPrefixes, want)
 	}
 }
