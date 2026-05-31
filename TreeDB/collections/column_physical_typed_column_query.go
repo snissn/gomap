@@ -112,12 +112,23 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	if _, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req); err != nil || !candidate {
+	start := time.Now()
+	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
+	if err != nil {
+		if view.MutationParts != 0 && candidate {
+			result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
+			annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+			applyColumnPhysicalQueryPredicateDiagnostics(&result.Diagnostics, newColumnPhysicalQueryPredicateDiagnosticPlan(req), 0, 0)
+			result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+			return result, candidate, err
+		}
 		return ColumnPhysicalQueryResult{}, candidate, err
 	}
-	start := time.Now()
+	if !candidate {
+		return ColumnPhysicalQueryResult{}, false, nil
+	}
 	if view.MutationParts != 0 {
-		return runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view, req, start)
+		return runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view, req, plan, start)
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
@@ -138,11 +149,15 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view co
 	return result, true, err
 }
 
-func runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
+func columnTypedColumnPhysicalMutationDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) ColumnPhysicalQueryDiagnostics {
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
-	result := ColumnPhysicalQueryResult{Diagnostics: diag}
+	return diag
+}
+
+func runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
+	result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
 	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
 	predicateDiagnostics := newColumnPhysicalQueryPredicateDiagnosticPlan(req)
 	applyColumnPhysicalQueryPredicateDiagnostics(&result.Diagnostics, predicateDiagnostics, 0, 0)
@@ -182,6 +197,95 @@ func runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view columnPhysica
 	return result, true, fmt.Errorf("%w: typed-column part physical query with mutation visibility is deferred to multipart reducers", ErrColumnQueryPlanUnsupported)
 }
 
+func runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
+	if !columnTypedColumnPhysicalQueryUseDenseLatestVisible(plan, req) && columnPhysicalQueryHasPredicates(req) {
+		return runColumnPhysicalQueryTypedColumnPartMutationUnsupported(view, req, start)
+	}
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	defer func() { _ = readCache.close() }()
+	refsByGeneration, err := typedColumnPhysicalQueryRefsByGeneration(view)
+	if err != nil {
+		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	if err := validateTypedColumnMultipartAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+
+	visibilityStart := time.Now()
+	var visibilityDiag TypedColumnInt64PredicateScanDiagnostics
+	state, err := buildTypedColumnLatestVisibilityState(view, &readCache, &visibilityDiag)
+	visibilityNanos := time.Since(visibilityStart).Nanoseconds()
+	if err != nil {
+		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+		result.Diagnostics.PhysicalBytesScanned += visibilityDiag.PhysicalBytesScanned
+		result.Diagnostics.SegmentFileCacheHits = visibilityDiag.SegmentFileCacheHits
+		result.Diagnostics.SegmentFileCacheMisses = visibilityDiag.SegmentFileCacheMisses
+		result.Diagnostics.VisibilityNanos = visibilityNanos
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	if typedColumnRefsHaveSortKey(refsByGeneration) {
+		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+		applyColumnPhysicalQueryPredicateDiagnostics(&result.Diagnostics, plan.PredicateDiagnostics, 0, 0)
+		applyTypedColumnLatestVisibilityDiagnostics(&result.Diagnostics, state, visibilityDiag.PhysicalBytesScanned, visibilityNanos)
+		result.Diagnostics.SegmentFileCacheHits = visibilityDiag.SegmentFileCacheHits
+		result.Diagnostics.SegmentFileCacheMisses = visibilityDiag.SegmentFileCacheMisses
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, typedColumnSortedMutationVisibilityUnsupported("typed-column part physical query")
+	}
+
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, &readCache)
+	if err != nil {
+		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
+		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+		applyColumnPhysicalQueryPredicateDiagnostics(&result.Diagnostics, plan.PredicateDiagnostics, 0, 0)
+		applyTypedColumnLatestVisibilityDiagnostics(&result.Diagnostics, state, visibilityDiag.PhysicalBytesScanned, visibilityNanos)
+		result.Diagnostics.SegmentFileCacheHits = readCache.hits
+		result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, err
+	}
+	result, err := runner.runLatestVisible(view, req, state, visibilityDiag.PhysicalBytesScanned, visibilityNanos)
+	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+	result.Diagnostics.SegmentFileCacheHits = readCache.hits
+	result.Diagnostics.SegmentFileCacheMisses = readCache.misses
+	if err != nil {
+		return result, true, err
+	}
+	return result, true, nil
+}
+
+func columnTypedColumnPhysicalQueryUseDenseLatestVisible(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
+	return columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) ||
+		columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req) ||
+		columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req)
+}
+
+func applyTypedColumnLatestVisibilityDiagnostics(diag *ColumnPhysicalQueryDiagnostics, state *typedColumnLatestVisibilityState, physicalBytes int64, visibilityNanos int64) {
+	if diag == nil {
+		return
+	}
+	if state != nil {
+		diag.VisibilityRows = state.VisibleRows
+		diag.DeletedRows = state.DeletedRows
+	}
+	diag.PhysicalBytesScanned += physicalBytes
+	diag.VisibilityNanos = visibilityNanos
+}
+
 func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return nil, false, nil
@@ -200,8 +304,8 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 	if err != nil {
 		return nil, true, err
 	}
-	runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
 	if len(refsByGeneration) == 0 {
+		runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
 		if len(view.AssetRefs) == 0 {
 			return runner, true, nil
 		}
@@ -209,6 +313,24 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 	}
 	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return nil, true, typedColumnPhysicalQueryPairingError(err)
+	}
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache)
+	if err != nil {
+		return nil, true, err
+	}
+	return runner, true, nil
+}
+
+func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, refsByGeneration map[uint64]columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache) (*columnTypedColumnPhysicalQueryRunner, error) {
+	if readCache == nil {
+		return nil, errors.New("collections: typed-column part physical query missing read cache")
+	}
+	runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
+	if len(refsByGeneration) == 0 {
+		if len(view.AssetRefs) == 0 {
+			return runner, nil
+		}
+		return nil, errors.New("collections: missing typed_column_part assets for typed-column part physical query")
 	}
 
 	// Disable returnViews during decode to avoid pinning mmaps/handles for the runner lifetime,
@@ -224,16 +346,16 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		}
 		typedRef, ok := refsByGeneration[physical.Ref.Generation]
 		if !ok {
-			return nil, true, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
+			return nil, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
 		}
 		raw, err := readCache.read(typedRef.Ref, rawScratch)
 		runner.segmentFileCacheHits = readCache.hits
 		runner.segmentFileCacheMisses = readCache.misses
 		if err != nil {
 			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, true, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+				return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 			}
-			return nil, true, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		rawScratch = raw
 		var part columnTypedColumnPhysicalQueryPart
@@ -250,7 +372,7 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 			part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 		}
 		if err != nil {
-			return nil, true, fmt.Errorf("collections: typed-column part physical query decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			return nil, fmt.Errorf("collections: typed-column part physical query decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
 		runner.assetBytes += part.Bytes
 		runner.sections += part.Sections
@@ -267,9 +389,9 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 		runner.parts = append(runner.parts, part)
 	}
 	if len(runner.parts) == 0 && len(view.AssetRefs) != 0 {
-		return nil, true, errors.New("collections: typed-column part physical query has no live typed_column_part assets")
+		return nil, errors.New("collections: typed-column part physical query has no live typed_column_part assets")
 	}
-	return runner, true, nil
+	return runner, nil
 }
 
 func columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) bool {
@@ -665,6 +787,385 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	r.resultGroups = groups
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())
 	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisible(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	if columnTypedColumnPhysicalQueryUseDenseGroupCount(r.plan, req) {
+		return r.runLatestVisibleDenseGroupCount(view, req, state, visibilityBytes, visibilityNanos)
+	}
+	if columnTypedColumnPhysicalQueryUseDenseGroupHourCount(r.plan, req) {
+		return r.runLatestVisibleDenseGroupHourCount(view, req, state, visibilityBytes, visibilityNanos)
+	}
+	if columnTypedColumnPhysicalQueryUseDenseInt64Span(r.plan, req) {
+		return r.runLatestVisibleDenseInt64Span(view, req, state, visibilityBytes, visibilityNanos)
+	}
+	if !columnPhysicalQueryHasPredicates(req) {
+		return r.runLatestVisibleGeneric(view, req, state, visibilityBytes, visibilityNanos)
+	}
+	result := ColumnPhysicalQueryResult{Diagnostics: r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, 0, 0, 0, 0)}
+	annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
+	return result, fmt.Errorf("%w: typed-column part physical query with mutation visibility is deferred to multipart reducers", ErrColumnQueryPlanUnsupported)
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) latestVisiblePartForRunnerPart(part columnTypedColumnPhysicalQueryPart, state *typedColumnLatestVisibilityState) (*typedColumnLatestPhysicalPart, error) {
+	if state == nil || state.resolver == nil {
+		return nil, errors.New("collections: typed-column latest-visible physical state is missing")
+	}
+	visibility, ok := state.resolver.partForGeneration(part.PhysicalRef.Ref.Generation)
+	if !ok {
+		return nil, fmt.Errorf("collections: typed-column latest-visible physical state missing generation=%d", part.PhysicalRef.Ref.Generation)
+	}
+	if visibility.Rows != part.Rows {
+		return nil, fmt.Errorf("collections: typed-column latest-visible rows=%d do not match typed-column part rows=%d for generation=%d", visibility.Rows, part.Rows, part.PhysicalRef.Ref.Generation)
+	}
+	return visibility, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) latestVisibleDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64, rowsScanned, matchedRows, reduceRows int, scanNanos int64) ColumnPhysicalQueryDiagnostics {
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, scanNanos)
+	applyTypedColumnLatestVisibilityDiagnostics(&diag, state, visibilityBytes, visibilityNanos)
+	return diag
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleGeneric(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	acc := newColumnTypedColumnPhysicalQueryAccumulator(req.Kind)
+	rowsScanned := 0
+	for partIdx := range r.parts {
+		part := r.parts[partIdx]
+		visibility, err := r.latestVisiblePartForRunnerPart(part, state)
+		if err != nil {
+			return ColumnPhysicalQueryResult{Diagnostics: r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, acc.reduceRows, time.Since(start).Nanoseconds())}, err
+		}
+		partRows := len(part.RowIndexes)
+		if part.RowIndexes == nil {
+			partRows = part.Rows
+		}
+		for rowIdx := 0; rowIdx < partRows; rowIdx++ {
+			physicalRow := rowIdx
+			if part.RowIndexes != nil {
+				physicalRow = part.RowIndexes[rowIdx]
+			}
+			rowsScanned++
+			if !visibility.rowVisible(physicalRow) {
+				continue
+			}
+			if err := acc.visit(req, part.Values, rowIdx); err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, acc.reduceRows, time.Since(start).Nanoseconds())}, err
+			}
+		}
+	}
+	groups := acc.groups(req, r.resultGroups)
+	r.resultGroups = groups
+	diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, acc.reduceRows, time.Since(start).Nanoseconds())
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseGroupCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.denseGroupCounts == nil {
+		r.denseGroupCounts = make(map[string]int, 16)
+	} else {
+		clear(r.denseGroupCounts)
+	}
+	rowsScanned := 0
+	reduceRows := 0
+	for partIdx := range r.parts {
+		part := r.parts[partIdx]
+		visibility, err := r.latestVisiblePartForRunnerPart(part, state)
+		if err != nil {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		dense := part.DenseGroupCount
+		if dense == nil {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count missing prepared part %d", partIdx)
+		}
+		if dense.Cardinality == 0 && len(dense.Codes) != 0 {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d has empty dictionary", partIdx)
+		}
+		if cap(r.denseLocalCounts) < dense.Cardinality {
+			r.denseLocalCounts = make([]int, dense.Cardinality)
+		} else {
+			r.denseLocalCounts = r.denseLocalCounts[:dense.Cardinality]
+			clear(r.denseLocalCounts)
+		}
+		for rowIdx, code := range dense.Codes {
+			rowsScanned++
+			if !visibility.rowVisible(rowIdx) {
+				continue
+			}
+			localIdx, ok := columnDictionaryCodeIndex(code, len(r.denseLocalCounts))
+			if !ok {
+				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d code[%d]=%d outside cardinality=%d", partIdx, rowIdx, code, len(r.denseLocalCounts))
+			}
+			r.denseLocalCounts[localIdx]++
+			reduceRows++
+		}
+		for localCode, count := range r.denseLocalCounts {
+			if count == 0 {
+				continue
+			}
+			key, ok := dense.DictionaryByCode[int64(localCode)]
+			if !ok {
+				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d dictionary missing local code %d", partIdx, localCode)
+			}
+			r.denseGroupCounts[key] += count
+		}
+	}
+	r.resultGroups = r.resultGroups[:0]
+	for key, count := range r.denseGroupCounts {
+		if count == 0 {
+			continue
+		}
+		r.resultGroups = append(r.resultGroups, ColumnPhysicalQueryGroup{Key: key, Count: count})
+	}
+	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
+	diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, 0, reduceRows, time.Since(start).Nanoseconds())
+	diag.DenseGroupCountUsed = true
+	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseGroupHourCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.denseGroupHourCounts == nil {
+		r.denseGroupHourCounts = make(map[string][24]int, 16)
+	} else {
+		clear(r.denseGroupHourCounts)
+	}
+	rowsScanned := 0
+	matchedRows := 0
+	reduceRows := 0
+	for partIdx := range r.parts {
+		part := r.parts[partIdx]
+		visibility, err := r.latestVisiblePartForRunnerPart(part, state)
+		if err != nil {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		dense := part.DenseGroupHourCount
+		if dense == nil {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour missing prepared part %d", partIdx)
+		}
+		if dense.Cardinality == 0 && len(dense.GroupCodes) != 0 {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d has empty dictionary", partIdx)
+		}
+		if len(dense.GroupCodes) != len(dense.Values) {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseGroupHourCountUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d group/value rows=%d/%d", partIdx, len(dense.GroupCodes), len(dense.Values))
+		}
+		needLocal := dense.Cardinality * 24
+		if cap(r.denseLocalHourCounts) < needLocal {
+			r.denseLocalHourCounts = make([]int, needLocal)
+		} else {
+			r.denseLocalHourCounts = r.denseLocalHourCounts[:needLocal]
+			clear(r.denseLocalHourCounts)
+		}
+		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+			rowsScanned += len(dense.GroupCodes)
+			continue
+		}
+		for rowIdx, code := range dense.GroupCodes {
+			rowsScanned++
+			if !visibility.rowVisible(rowIdx) {
+				continue
+			}
+			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+				continue
+			}
+			if len(dense.Predicates) != 0 {
+				matchedRows++
+			}
+			reduceRows++
+			localIdx, ok := columnDictionaryCodeIndex(code, dense.Cardinality)
+			if !ok {
+				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupHourCountUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d code[%d]=%d outside cardinality=%d", partIdx, rowIdx, code, dense.Cardinality)
+			}
+			hour := columnPhysicalQueryUTCHour(dense.Values[rowIdx])
+			r.denseLocalHourCounts[localIdx*24+hour]++
+		}
+		for localCode := 0; localCode < dense.Cardinality; localCode++ {
+			key := ""
+			var byHour [24]int
+			seen := false
+			base := localCode * 24
+			for hour := 0; hour < 24; hour++ {
+				count := r.denseLocalHourCounts[base+hour]
+				if count == 0 {
+					continue
+				}
+				if !seen {
+					var ok bool
+					key, ok = dense.DictionaryByCode[int64(localCode)]
+					if !ok {
+						diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+						diag.DenseGroupHourCountUsed = true
+						return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-hour part %d dictionary missing local code %d", partIdx, localCode)
+					}
+					byHour = r.denseGroupHourCounts[key]
+					seen = true
+				}
+				byHour[hour] += count
+			}
+			if seen {
+				r.denseGroupHourCounts[key] = byHour
+			}
+		}
+	}
+	r.resultGroups = r.resultGroups[:0]
+	for key, byHour := range r.denseGroupHourCounts {
+		for hour, count := range byHour {
+			if count == 0 {
+				continue
+			}
+			r.resultGroups = append(r.resultGroups, ColumnPhysicalQueryGroup{Key: key, Hour: hour, Count: count})
+		}
+	}
+	sortColumnPhysicalQueryGroupsByKeyHour(r.resultGroups)
+	diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+	diag.DenseGroupHourCountUsed = true
+	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseInt64Span(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	if r.denseSpanValues == nil {
+		r.denseSpanValues = make(map[string]columnPhysicalQuerySpan, 16)
+	} else {
+		clear(r.denseSpanValues)
+	}
+	rowsScanned := 0
+	matchedRows := 0
+	reduceRows := 0
+	for partIdx := range r.parts {
+		part := r.parts[partIdx]
+		visibility, err := r.latestVisiblePartForRunnerPart(part, state)
+		if err != nil {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseInt64SpanUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		dense := part.DenseInt64Span
+		if dense == nil {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseInt64SpanUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span missing prepared part %d", partIdx)
+		}
+		if len(dense.GroupCodes) != len(dense.Values) {
+			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+			diag.DenseInt64SpanUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d group/value rows=%d/%d", partIdx, len(dense.GroupCodes), len(dense.Values))
+		}
+		if cap(r.denseLocalSpans) < dense.Cardinality {
+			r.denseLocalSpans = make([]columnPhysicalQuerySpan, dense.Cardinality)
+			r.denseLocalSpanSeen = make([]bool, dense.Cardinality)
+		} else {
+			r.denseLocalSpans = r.denseLocalSpans[:dense.Cardinality]
+			clear(r.denseLocalSpans)
+			r.denseLocalSpanSeen = r.denseLocalSpanSeen[:dense.Cardinality]
+			clear(r.denseLocalSpanSeen)
+		}
+		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+			rowsScanned += len(dense.GroupCodes)
+			continue
+		}
+		for rowIdx, code := range dense.GroupCodes {
+			rowsScanned++
+			if !visibility.rowVisible(rowIdx) {
+				continue
+			}
+			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+				continue
+			}
+			if len(dense.Predicates) != 0 {
+				matchedRows++
+			}
+			reduceRows++
+			localIdx, ok := columnDictionaryCodeIndex(code, len(r.denseLocalSpans))
+			if !ok {
+				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseInt64SpanUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d code[%d]=%d outside cardinality=%d", partIdx, rowIdx, code, len(r.denseLocalSpans))
+			}
+			value := dense.Values[rowIdx]
+			if !r.denseLocalSpanSeen[localIdx] {
+				r.denseLocalSpans[localIdx] = columnPhysicalQuerySpan{min: value, max: value}
+				r.denseLocalSpanSeen[localIdx] = true
+				continue
+			}
+			span := r.denseLocalSpans[localIdx]
+			if value < span.min {
+				span.min = value
+			}
+			if value > span.max {
+				span.max = value
+			}
+			r.denseLocalSpans[localIdx] = span
+		}
+		for localCode, seen := range r.denseLocalSpanSeen {
+			if !seen {
+				continue
+			}
+			key, ok := dense.DictionaryByCode[int64(localCode)]
+			if !ok {
+				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseInt64SpanUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d dictionary missing local code %d", partIdx, localCode)
+			}
+			partSpan := r.denseLocalSpans[localCode]
+			cur, ok := r.denseSpanValues[key]
+			if !ok {
+				r.denseSpanValues[key] = partSpan
+				continue
+			}
+			if partSpan.min < cur.min {
+				cur.min = partSpan.min
+			}
+			if partSpan.max > cur.max {
+				cur.max = partSpan.max
+			}
+			r.denseSpanValues[key] = cur
+		}
+	}
+	r.resultGroups = r.resultGroups[:0]
+	for key, span := range r.denseSpanValues {
+		r.resultGroups = append(r.resultGroups, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+	}
+	if req.TopK == 0 {
+		sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
+	}
+	diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+	diag.DenseInt64SpanUsed = true
+	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	r.resultGroups = result.Groups
 	return result, nil
