@@ -69,6 +69,9 @@ the exact concatenation of row payloads. Row `i` spans
 length, monotonic host-int-bounded offsets, and final offset equal to the values
 byte length. The values substream is opaque and may contain NUL bytes,
 non-UTF-8 sequences, and any other byte values without normalization.
+Vector-index returned document IDs use this primitive as `document_ids` state;
+legacy graph row ID bytes are compatibility fallback records, not the healthy
+returned-ID source.
 
 ## Scalar float fail-closed policy
 

@@ -193,7 +193,9 @@ type columnVectorGraphNativeSearchStats struct {
 	RowRefStateResultRefs                uint64
 	RowRefStateSourceUnavailable         uint64
 	RowRefStateSourceFallbacks           uint64
+	ResultIDTypedBytesState              uint64
 	ResultIDGraphFallbacks               uint64
+	ResultIDStateValidationFailures      uint64
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -766,21 +768,32 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 	scratch.resultHasRefs = scratch.resultHasRefs[:n]
 	clear(scratch.resultRowRefs)
 	clear(scratch.resultHasRefs)
+	resultIDStateValidationFailure := false
 	for resultPos, topIndex := range scratch.resultOrder {
 		ordinal := scratch.resultOrdinals[resultPos]
-		view := singleBlockView
-		rowIndex := ordinal
-		if view == nil {
-			refView, ref, err := plan.blockViewForOrdinal(ordinal)
+		id, fromDocumentIDState := r.documentIDForOrdinal(ordinal)
+		if !fromDocumentIDState {
+			if r.documentIDStateFallbackReason != "" {
+				resultIDStateValidationFailure = true
+			}
+			view := singleBlockView
+			rowIndex := ordinal
+			if view == nil {
+				refView, ref, err := plan.blockViewForOrdinal(ordinal)
+				if err != nil {
+					return err
+				}
+				view = refView
+				rowIndex = ref.rowIndex
+			}
+			var err error
+			id, err = view.id(rowIndex)
 			if err != nil {
 				return err
 			}
-			view = refView
-			rowIndex = ref.rowIndex
-		}
-		id, err := view.id(rowIndex)
-		if err != nil {
-			return err
+			stats.ResultIDGraphFallbacks++
+		} else {
+			stats.ResultIDTypedBytesState++
 		}
 		if cap(scratch.idBuffers[topIndex]) < len(id) {
 			scratch.idBuffers[topIndex] = make([]byte, len(id))
@@ -797,7 +810,9 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 		}
 	}
 	stats.ResultFetches += uint64(n)
-	stats.ResultIDGraphFallbacks += uint64(n)
+	if resultIDStateValidationFailure {
+		stats.ResultIDStateValidationFailures++
+	}
 	stats.BlockViewHits = plan.hits
 	stats.BlockViewMisses = plan.misses
 	stats.BlockViewBuilds = plan.builds

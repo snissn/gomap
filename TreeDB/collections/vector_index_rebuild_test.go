@@ -1393,6 +1393,7 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 	b.ReportMetric(float64(graph.AssetBytes), "graph_asset_B/op")
 	b.ReportMetric(float64(columnVectorIndexStateAssetsStorageBytes(state)), "state_assets_B/op")
 	reportColumnVectorIndexStateAdjacencyStorageMetrics1990(b, d, state)
+	reportColumnVectorGraphDocumentIDStateStorageMetrics2013(b, d, state)
 	b.ReportMetric(float64(columnVectorGraphStorageBytesWithState(graph, state)), "graph_total_storage_B/op")
 	if len(graph.AdjacencyLayerSources) > 0 {
 		b.ReportMetric(float64(graph.AdjacencyLayerCount), "adjacency_layer_count")
@@ -1417,6 +1418,37 @@ func BenchmarkColumnGraphRebuildVectorIndexV2A(b *testing.B) {
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.OffsetsBytes), "layer0_offsets_B/op")
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.ValuesBytes), "layer0_values_B/op")
 		b.ReportMetric(float64(graph.Layer0AdjacencySource.PaddingBytes), "layer0_padding_B/op")
+	}
+}
+
+func reportColumnVectorGraphDocumentIDStateStorageMetrics2013(b *testing.B, d *backenddb.DB, state columnVectorIndexStateSnapshot) {
+	b.Helper()
+	asset, found, err := findColumnVectorGraphDocumentIDStateAsset(state)
+	if err != nil {
+		b.Fatalf("document-id state asset: %v", err)
+	}
+	if !found {
+		return
+	}
+	raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), asset.Ref)
+	if err != nil {
+		b.Fatalf("read document-id state asset: %v", err)
+	}
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		b.Fatalf("parse document-id state asset: %v", err)
+	}
+	offsetsSection, valuesSection, ok := image.ColumnOffsetsListSections(columnVectorGraphDocumentIDStateColumnName)
+	if !ok {
+		b.Fatalf("document-id state missing offsets/value sections for %q", columnVectorGraphDocumentIDStateColumnName)
+	}
+	b.ReportMetric(float64(asset.AssetBytes), "document_id_state_asset_B/op")
+	b.ReportMetric(float64(offsetsSection.Length), "document_id_state_offsets_B/op")
+	b.ReportMetric(float64(valuesSection.Length), "document_id_state_values_B/op")
+	b.ReportMetric(float64(image.PaddingBytes()), "document_id_state_padding_B/op")
+	if asset.RowCount > 0 {
+		b.ReportMetric(float64(asset.AssetBytes)/float64(asset.RowCount), "document_id_state_asset_B/row")
+		b.ReportMetric(float64(valuesSection.Length)/float64(asset.RowCount), "document_id_state_values_B/row")
 	}
 }
 

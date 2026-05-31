@@ -359,8 +359,10 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	maxAdjacencyLayer := -1
 	var rawScratch []byte
 	for _, asset := range state.Assets {
-		if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
-			return fmt.Errorf("collections: vector-index state asset role=%q id=%q unavailable: %w", asset.Role, asset.AssetID, err)
+		if validatePayload || asset.Role != columnVectorIndexStateAssetRoleDocumentIDs {
+			if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
+				return fmt.Errorf("collections: vector-index state asset role=%q id=%q unavailable: %w", asset.Role, asset.AssetID, err)
+			}
 		}
 		if asset.Role != columnVectorIndexStateAssetRoleAdjacency {
 			continue
@@ -411,6 +413,14 @@ func validateColumnVectorIndexStateAssetsWithMode(rootDir, collection string, cf
 	}
 	if err := validateColumnVectorGraphRowRefStateManifestAssets(collection, cfg, def, state); err != nil {
 		return err
+	}
+	if err := validateColumnVectorGraphDocumentIDStateManifestAsset(collection, cfg, def, state); err != nil {
+		return err
+	}
+	if validatePayload {
+		if err := validateColumnVectorGraphDocumentIDStateAssetPayload(rootDir, collection, cfg, def, graph, state); err != nil {
+			return err
+		}
 	}
 	return nil
 }
