@@ -12,19 +12,22 @@ import (
 )
 
 // ColumnAssetLifecycleIncompleteReason is a stable report label describing why
-// the slice-1 lifecycle report is not complete enough for destructive consumers.
+// the lifecycle report is not complete enough for destructive consumers.
 type ColumnAssetLifecycleIncompleteReason string
 
 const (
-	ColumnAssetLifecycleIncompleteReachabilityPlan         ColumnAssetLifecycleIncompleteReason = "reachability_plan_incomplete"
-	ColumnAssetLifecycleIncompleteUnknownSegments          ColumnAssetLifecycleIncompleteReason = "unknown_segments"
-	ColumnAssetLifecycleIncompleteMissingSegments          ColumnAssetLifecycleIncompleteReason = "missing_segments"
-	ColumnAssetLifecycleIncompleteOutOfBoundsRefs          ColumnAssetLifecycleIncompleteReason = "out_of_bounds_refs"
-	ColumnAssetLifecycleIncompleteMappedResourcePins       ColumnAssetLifecycleIncompleteReason = "mappedresource_unconvertible_pins"
-	ColumnAssetLifecycleIncompletePendingPublishRegistry   ColumnAssetLifecycleIncompleteReason = "pending_publish_registry_unavailable"
-	ColumnAssetLifecycleIncompletePreparedAssetRegistry    ColumnAssetLifecycleIncompleteReason = "prepared_asset_registry_unavailable"
-	ColumnAssetLifecycleIncompleteQuarantineRegistry       ColumnAssetLifecycleIncompleteReason = "quarantine_registry_unavailable"
-	ColumnAssetLifecycleIncompletePinnedSnapshotExactRoots ColumnAssetLifecycleIncompleteReason = "pinned_snapshot_exact_roots_unavailable"
+	ColumnAssetLifecycleIncompleteReachabilityPlan               ColumnAssetLifecycleIncompleteReason = "reachability_plan_incomplete"
+	ColumnAssetLifecycleIncompleteUnknownSegments                ColumnAssetLifecycleIncompleteReason = "unknown_segments"
+	ColumnAssetLifecycleIncompleteMissingSegments                ColumnAssetLifecycleIncompleteReason = "missing_segments"
+	ColumnAssetLifecycleIncompleteOutOfBoundsRefs                ColumnAssetLifecycleIncompleteReason = "out_of_bounds_refs"
+	ColumnAssetLifecycleIncompleteMappedResourcePins             ColumnAssetLifecycleIncompleteReason = "mappedresource_unconvertible_pins"
+	ColumnAssetLifecycleIncompletePendingPublishRegistry         ColumnAssetLifecycleIncompleteReason = "pending_publish_registry_unavailable"
+	ColumnAssetLifecycleIncompletePreparedAssetRegistry          ColumnAssetLifecycleIncompleteReason = "prepared_asset_registry_unavailable"
+	ColumnAssetLifecycleIncompleteQuarantineRegistry             ColumnAssetLifecycleIncompleteReason = "quarantine_registry_unavailable"
+	ColumnAssetLifecycleIncompletePendingPublishProcessLocalOnly ColumnAssetLifecycleIncompleteReason = "pending_publish_registry_process_local_only"
+	ColumnAssetLifecycleIncompletePreparedAssetProcessLocalOnly  ColumnAssetLifecycleIncompleteReason = "prepared_asset_registry_process_local_only"
+	ColumnAssetLifecycleIncompleteQuarantineProcessLocalOnly     ColumnAssetLifecycleIncompleteReason = "quarantine_registry_process_local_only"
+	ColumnAssetLifecycleIncompletePinnedSnapshotExactRoots       ColumnAssetLifecycleIncompleteReason = "pinned_snapshot_exact_roots_unavailable"
 )
 
 // ColumnAssetLifecyclePinSource identifies the logical owner of an explicit
@@ -298,13 +301,14 @@ type ColumnAssetLifecycleOptions struct {
 	PendingRefs       []ColumnAssetRef `json:"pending_refs,omitempty"`
 	PreparedRefs      []ColumnAssetRef `json:"prepared_refs,omitempty"`
 	PreparedQueryRefs []ColumnAssetRef `json:"prepared_query_refs,omitempty"`
+	QuarantineRefs    []ColumnAssetRef `json:"quarantine_refs,omitempty"`
 	PinnedRefs        []ColumnAssetRef `json:"pinned_refs,omitempty"`
 }
 
-// ColumnAssetLifecycleReport is the stable slice-1 JSON/report shape for
-// collection-level lifecycle roots. It is report-only and fail-closed; Complete
-// remains false while durable prepared/quarantine registries and exact pinned
-// snapshot roots are not available to the planner.
+// ColumnAssetLifecycleReport is the stable JSON/report shape for collection-
+// level lifecycle roots. It is report-only and fail-closed; Complete remains
+// false while registries are process-local/non-durable or exact pinned snapshot
+// roots are not available to the planner.
 type ColumnAssetLifecycleReport struct {
 	DryRun               bool                                       `json:"dry_run"`
 	ReportOnly           bool                                       `json:"report_only"`
@@ -316,6 +320,8 @@ type ColumnAssetLifecycleReport struct {
 	SnapshotFence        ColumnAssetLifecycleSnapshotFence          `json:"snapshot_fence"`
 	MappedResources      ColumnAssetReachabilityMappedResourceStats `json:"mappedresource"`
 	PinSets              ColumnAssetLifecyclePinSummary             `json:"pin_sets"`
+	PendingPublish       ColumnAssetLifecycleRegistrySummary        `json:"pending_publish"`
+	PreparedAssets       ColumnAssetLifecycleRegistrySummary        `json:"prepared_assets"`
 	Quarantine           ColumnAssetLifecycleQuarantineSummary      `json:"quarantine"`
 	Actions              ColumnAssetLifecycleActionSummary          `json:"actions"`
 	Reachability         ColumnAssetReachabilityPlan                `json:"reachability"`
@@ -339,21 +345,24 @@ type ColumnAssetLifecycleIdentity struct {
 
 // ColumnAssetLifecycleRootCounts summarizes refs by lifecycle root source.
 type ColumnAssetLifecycleRootCounts struct {
-	ManifestRoots        int `json:"manifest_roots"`
-	ManifestRecords      int `json:"manifest_records"`
-	ActiveManifestRefs   int `json:"active_manifest_refs"`
-	RecoveryManifestRefs int `json:"recovery_manifest_refs"`
-	CandidateRefs        int `json:"candidate_refs"`
-	SupersededRefs       int `json:"superseded_refs"`
-	PendingPublishRefs   int `json:"pending_publish_refs"`
-	PreparedAssetRefs    int `json:"prepared_asset_refs"`
-	PreparedQueryRefs    int `json:"prepared_query_refs"`
-	PinnedSnapshotRefs   int `json:"pinned_snapshot_refs"`
-	MappedResourcePins   int `json:"mappedresource_pins"`
-	LifecyclePinSets     int `json:"lifecycle_pin_sets"`
-	LifecyclePinnedRefs  int `json:"lifecycle_pinned_refs"`
-	QuarantineRefs       int `json:"quarantine_refs"`
-	QuarantineSegments   int `json:"quarantine_segments"`
+	ManifestRoots                 int `json:"manifest_roots"`
+	ManifestRecords               int `json:"manifest_records"`
+	ActiveManifestRefs            int `json:"active_manifest_refs"`
+	RecoveryManifestRefs          int `json:"recovery_manifest_refs"`
+	CandidateRefs                 int `json:"candidate_refs"`
+	SupersededRefs                int `json:"superseded_refs"`
+	PendingPublishRefs            int `json:"pending_publish_refs"`
+	PreparedAssetRefs             int `json:"prepared_asset_refs"`
+	PreparedQueryRefs             int `json:"prepared_query_refs"`
+	PinnedSnapshotRefs            int `json:"pinned_snapshot_refs"`
+	MappedResourcePins            int `json:"mappedresource_pins"`
+	LifecyclePinSets              int `json:"lifecycle_pin_sets"`
+	LifecyclePinnedRefs           int `json:"lifecycle_pinned_refs"`
+	PendingPublishRegistryRecords int `json:"pending_publish_registry_records"`
+	PreparedAssetRegistryRecords  int `json:"prepared_asset_registry_records"`
+	QuarantineRegistryRecords     int `json:"quarantine_registry_records"`
+	QuarantineRefs                int `json:"quarantine_refs"`
+	QuarantineSegments            int `json:"quarantine_segments"`
 }
 
 // ColumnAssetLifecycleSnapshotFence reports the process-local pinned snapshot
@@ -388,15 +397,46 @@ type ColumnAssetLifecyclePinSourceSummary struct {
 	Bytes        int64                         `json:"bytes"`
 }
 
-// ColumnAssetLifecycleQuarantineSummary is report-only scaffolding for the
-// future durable quarantine registry.
-type ColumnAssetLifecycleQuarantineSummary struct {
-	RegistryAvailable bool `json:"registry_available"`
-	Refs              int  `json:"refs"`
-	Segments          int  `json:"segments"`
+// ColumnAssetLifecycleRegistrySummary summarizes process-local explicit
+// registry records that feed lifecycle reports. Durable remains false until a
+// future slice defines on-disk registry storage/recovery semantics.
+type ColumnAssetLifecycleRegistrySummary struct {
+	RegistryAvailable bool                                        `json:"registry_available"`
+	Durable           bool                                        `json:"durable"`
+	ProcessLocal      bool                                        `json:"process_local"`
+	OpenRecords       int                                         `json:"open_records"`
+	Refs              int                                         `json:"refs"`
+	Bytes             int64                                       `json:"bytes"`
+	Sources           []ColumnAssetLifecycleRegistrySourceSummary `json:"sources,omitempty"`
 }
 
-// ColumnAssetLifecycleActionSummary is intentionally non-destructive in slice 1.
+// ColumnAssetLifecycleRegistrySourceSummary is a per-source-label rollup for
+// pending publish, prepared asset, and quarantine registry records.
+type ColumnAssetLifecycleRegistrySourceSummary struct {
+	Source       string `json:"source"`
+	OpenRecords  int    `json:"open_records"`
+	Refs         int    `json:"refs"`
+	Bytes        int64  `json:"bytes"`
+	Segments     int    `json:"segments,omitempty"`
+	SegmentBytes int64  `json:"segment_bytes,omitempty"`
+}
+
+// ColumnAssetLifecycleQuarantineSummary is report-only scaffolding for the
+// future durable quarantine registry. Slice 2 records are process-local logical
+// records only; no asset is moved, renamed, deleted, or truncated.
+type ColumnAssetLifecycleQuarantineSummary struct {
+	RegistryAvailable bool                                        `json:"registry_available"`
+	Durable           bool                                        `json:"durable"`
+	ProcessLocal      bool                                        `json:"process_local"`
+	OpenRecords       int                                         `json:"open_records"`
+	Refs              int                                         `json:"refs"`
+	Bytes             int64                                       `json:"bytes"`
+	Segments          int                                         `json:"segments"`
+	SegmentBytes      int64                                       `json:"segment_bytes"`
+	Sources           []ColumnAssetLifecycleRegistrySourceSummary `json:"sources,omitempty"`
+}
+
+// ColumnAssetLifecycleActionSummary is intentionally non-destructive.
 type ColumnAssetLifecycleActionSummary struct {
 	DestructiveActionsEnabled bool  `json:"destructive_actions_enabled"`
 	GCEligibleSegments        int   `json:"gc_eligible_segments"`
@@ -421,7 +461,9 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		return ColumnAssetLifecycleReport{}, err
 	}
 	pins := c.columnAssetLifecyclePinSetSnapshot()
-	refs := columnAssetLifecycleReachabilityRefs(opts, pins)
+	registryRecords := c.columnAssetLifecycleRegistrySnapshot()
+	registrySummary := summarizeColumnAssetLifecycleRegistries(registryRecords)
+	refs := columnAssetLifecycleReachabilityRefs(opts, pins, registryRecords)
 	plan, err := c.PlanColumnAssetReachability(ctx, ColumnAssetReachabilityOptions{
 		Detailed:                              opts.Detailed,
 		SegmentDetails:                        opts.SegmentDetails,
@@ -430,6 +472,7 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		PendingRefs:                           refs.pending,
 		PreparedRefs:                          refs.prepared,
 		PreparedQueryRefs:                     refs.preparedQuery,
+		QuarantineRefs:                        refs.quarantine,
 		PinnedRefs:                            refs.pinned,
 	})
 	if err != nil {
@@ -443,11 +486,13 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		Complete:             plan.Complete,
 		ReachabilityComplete: plan.Complete,
 		Identity:             columnAssetLifecycleIdentityFromPlan(plan),
-		Roots:                columnAssetLifecycleRootCounts(plan, opts, pinSummary),
+		Roots:                columnAssetLifecycleRootCounts(plan, opts, pinSummary, registrySummary),
 		SnapshotFence:        fence,
 		MappedResources:      plan.MappedResources,
 		PinSets:              pinSummary,
-		Quarantine:           ColumnAssetLifecycleQuarantineSummary{RegistryAvailable: false},
+		PendingPublish:       registrySummary.PendingPublish,
+		PreparedAssets:       registrySummary.PreparedAssets,
+		Quarantine:           registrySummary.Quarantine,
 		Actions: ColumnAssetLifecycleActionSummary{
 			DestructiveActionsEnabled: false,
 			GCEligibleSegments:        plan.Segments.Reclaimable,
@@ -456,7 +501,7 @@ func (c *Collection) PlanColumnAssetLifecycle(ctx context.Context, opts ColumnAs
 		},
 		Reachability: plan,
 	}
-	report.IncompleteReasons = columnAssetLifecycleIncompleteReasons(plan, fence)
+	report.IncompleteReasons = columnAssetLifecycleIncompleteReasons(plan, fence, registrySummary)
 	if len(report.IncompleteReasons) != 0 {
 		report.Complete = false
 	}
@@ -468,6 +513,7 @@ type columnAssetLifecycleReachabilityRefSets struct {
 	pending       []ColumnAssetRef
 	prepared      []ColumnAssetRef
 	preparedQuery []ColumnAssetRef
+	quarantine    []ColumnAssetRef
 	pinned        []ColumnAssetRef
 }
 
@@ -480,13 +526,24 @@ func columnAssetLifecycleNamespace(c *Collection) string {
 	return ""
 }
 
-func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins []columnAssetLifecyclePinSetRecord) columnAssetLifecycleReachabilityRefSets {
+func columnAssetLifecycleReachabilityRefs(opts ColumnAssetLifecycleOptions, pins []columnAssetLifecyclePinSetRecord, registryRecords []columnAssetLifecycleRegistryRecord) columnAssetLifecycleReachabilityRefSets {
 	refs := columnAssetLifecycleReachabilityRefSets{
 		candidate:     append(append([]ColumnAssetRef(nil), opts.CandidateRefs...), opts.SupersededRefs...),
 		pending:       append([]ColumnAssetRef(nil), opts.PendingRefs...),
 		prepared:      append([]ColumnAssetRef(nil), opts.PreparedRefs...),
 		preparedQuery: append([]ColumnAssetRef(nil), opts.PreparedQueryRefs...),
+		quarantine:    append([]ColumnAssetRef(nil), opts.QuarantineRefs...),
 		pinned:        append([]ColumnAssetRef(nil), opts.PinnedRefs...),
+	}
+	for _, record := range registryRecords {
+		switch record.Class {
+		case ColumnAssetLifecycleRegistryPendingPublish:
+			refs.pending = append(refs.pending, record.Refs...)
+		case ColumnAssetLifecycleRegistryPreparedAsset:
+			refs.prepared = append(refs.prepared, record.Refs...)
+		case ColumnAssetLifecycleRegistryQuarantine:
+			refs.quarantine = append(refs.quarantine, record.Refs...)
+		}
 	}
 	for _, pin := range pins {
 		switch pin.Source {
@@ -582,25 +639,30 @@ func columnAssetLifecycleIdentityFromPlan(plan ColumnAssetReachabilityPlan) Colu
 	}
 }
 
-func columnAssetLifecycleRootCounts(plan ColumnAssetReachabilityPlan, opts ColumnAssetLifecycleOptions, pins ColumnAssetLifecyclePinSummary) ColumnAssetLifecycleRootCounts {
+func columnAssetLifecycleRootCounts(plan ColumnAssetReachabilityPlan, opts ColumnAssetLifecycleOptions, pins ColumnAssetLifecyclePinSummary, registries columnAssetLifecycleRegistrySummaries) ColumnAssetLifecycleRootCounts {
 	return ColumnAssetLifecycleRootCounts{
-		ManifestRoots:        plan.Sources.ManifestRoots,
-		ManifestRecords:      plan.Sources.ManifestRecords,
-		ActiveManifestRefs:   plan.Sources.ActiveManifestRefs,
-		RecoveryManifestRefs: plan.Sources.RecoveryManifestRefs,
-		CandidateRefs:        len(opts.CandidateRefs),
-		SupersededRefs:       len(opts.SupersededRefs),
-		PendingPublishRefs:   plan.Sources.PendingRefs,
-		PreparedAssetRefs:    plan.Sources.PreparedRefs,
-		PreparedQueryRefs:    plan.Sources.PreparedQueryRefs,
-		PinnedSnapshotRefs:   plan.Sources.PinnedRefs,
-		MappedResourcePins:   plan.Sources.MappedResourcePins,
-		LifecyclePinSets:     pins.OpenSessions,
-		LifecyclePinnedRefs:  pins.Refs,
+		ManifestRoots:                 plan.Sources.ManifestRoots,
+		ManifestRecords:               plan.Sources.ManifestRecords,
+		ActiveManifestRefs:            plan.Sources.ActiveManifestRefs,
+		RecoveryManifestRefs:          plan.Sources.RecoveryManifestRefs,
+		CandidateRefs:                 len(opts.CandidateRefs),
+		SupersededRefs:                len(opts.SupersededRefs),
+		PendingPublishRefs:            plan.Sources.PendingRefs,
+		PreparedAssetRefs:             plan.Sources.PreparedRefs,
+		PreparedQueryRefs:             plan.Sources.PreparedQueryRefs,
+		PinnedSnapshotRefs:            plan.Sources.PinnedRefs,
+		MappedResourcePins:            plan.Sources.MappedResourcePins,
+		LifecyclePinSets:              pins.OpenSessions,
+		LifecyclePinnedRefs:           pins.Refs,
+		PendingPublishRegistryRecords: registries.PendingPublish.OpenRecords,
+		PreparedAssetRegistryRecords:  registries.PreparedAssets.OpenRecords,
+		QuarantineRegistryRecords:     registries.Quarantine.OpenRecords,
+		QuarantineRefs:                plan.Sources.QuarantineRefs,
+		QuarantineSegments:            registries.Quarantine.Segments,
 	}
 }
 
-func columnAssetLifecycleIncompleteReasons(plan ColumnAssetReachabilityPlan, fence ColumnAssetLifecycleSnapshotFence) []ColumnAssetLifecycleIncompleteReason {
+func columnAssetLifecycleIncompleteReasons(plan ColumnAssetReachabilityPlan, fence ColumnAssetLifecycleSnapshotFence, registries columnAssetLifecycleRegistrySummaries) []ColumnAssetLifecycleIncompleteReason {
 	var reasons []ColumnAssetLifecycleIncompleteReason
 	add := func(reason ColumnAssetLifecycleIncompleteReason) {
 		for _, existing := range reasons {
@@ -625,12 +687,30 @@ func columnAssetLifecycleIncompleteReasons(plan ColumnAssetReachabilityPlan, fen
 	if plan.MappedResources.UnconvertiblePins != 0 {
 		add(ColumnAssetLifecycleIncompleteMappedResourcePins)
 	}
-	// Slice 1 has no durable registries for these root classes. Keep the report
-	// fail-closed for future destructive consumers even when callers supply an
-	// advisory ref set.
-	add(ColumnAssetLifecycleIncompletePendingPublishRegistry)
-	add(ColumnAssetLifecycleIncompletePreparedAssetRegistry)
-	add(ColumnAssetLifecycleIncompleteQuarantineRegistry)
+	// Slice 2 registries are explicit and process-local only. Keep the report
+	// fail-closed for future destructive consumers until a durable registry/root
+	// recovery contract exists.
+	if registries.PendingPublish.RegistryAvailable {
+		if registries.PendingPublish.ProcessLocal && !registries.PendingPublish.Durable {
+			add(ColumnAssetLifecycleIncompletePendingPublishProcessLocalOnly)
+		}
+	} else {
+		add(ColumnAssetLifecycleIncompletePendingPublishRegistry)
+	}
+	if registries.PreparedAssets.RegistryAvailable {
+		if registries.PreparedAssets.ProcessLocal && !registries.PreparedAssets.Durable {
+			add(ColumnAssetLifecycleIncompletePreparedAssetProcessLocalOnly)
+		}
+	} else {
+		add(ColumnAssetLifecycleIncompletePreparedAssetRegistry)
+	}
+	if registries.Quarantine.RegistryAvailable {
+		if registries.Quarantine.ProcessLocal && !registries.Quarantine.Durable {
+			add(ColumnAssetLifecycleIncompleteQuarantineProcessLocalOnly)
+		}
+	} else {
+		add(ColumnAssetLifecycleIncompleteQuarantineRegistry)
+	}
 	if fence.OlderSnapshotPinned && !fence.ExactSnapshotRootsAvailable {
 		add(ColumnAssetLifecycleIncompletePinnedSnapshotExactRoots)
 	}
