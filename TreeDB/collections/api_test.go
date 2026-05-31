@@ -7674,6 +7674,73 @@ func TestBufferedIndexedUpdateMaintainsPrimaryRunIndexBeforeRead(t *testing.T) {
 	}
 }
 
+func TestBufferedIndexedUpdateMaterializedOverlayEntersPrimaryRunIndex(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			BufferedIndexedWrites:            true,
+			BufferedIndexedWriteMaxDocuments: 1024,
+			BufferedIndexedWriteMaxRootRuns:  1024,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+		Indexes: []IndexDefinition{{Name: "city", Field: "city", ValueType: IndexValueString}},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"city":"hnl","score":0}`),
+			[]byte(`{"city":"sfo","score":0}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush seed: %v", err)
+	}
+
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Update:     setJSONField("score", 1),
+	}}); err != nil {
+		t.Fatalf("primary-only UpdateBatch: %v", err)
+	}
+	if _, err := col.UpdateBatch([]UpdateBatchItem{{
+		DocumentID: []byte("u2"),
+		Update: func(current []byte) ([]byte, bool, error) {
+			var doc map[string]any
+			if err := json.Unmarshal(current, &doc); err != nil {
+				return nil, false, err
+			}
+			doc["city"] = "sea"
+			next, err := json.Marshal(doc)
+			return next, true, err
+		},
+	}}); err != nil {
+		t.Fatalf("secondary-changing UpdateBatch: %v", err)
+	}
+
+	got, found, err := col.GetInto([]byte("u1"), nil)
+	if err != nil {
+		t.Fatalf("GetInto u1: %v", err)
+	}
+	if !found || !bytes.Equal(got, []byte(`{"city":"hnl","score":1}`)) {
+		t.Fatalf("GetInto u1 found=%v value=%q want materialized overlay update", found, got)
+	}
+}
+
 func TestShouldFlushBufferedIndexedWritesAfterAddingBoundaries(t *testing.T) {
 	opts := CollectionOptions{
 		BufferedIndexedWriteMaxDocuments: 10,

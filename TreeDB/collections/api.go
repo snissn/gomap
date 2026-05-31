@@ -15424,6 +15424,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 		return buffered, err
 	}
+	ensureBufferedPrimaryRunIndexLocked(domain, len(direct.primaryEntries))
 	materializePrimaryOverlayLocked(domain)
 
 	phaseStart = updateBatchStatsNow(detailedStats)
@@ -15459,7 +15460,6 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		}
 	}
 	primaryTable := rootTables[direct.primaryRootName]
-	ensureBufferedPrimaryRunIndexLocked(domain, len(direct.primaryEntries))
 	var primaryIndexKeys [][]byte
 	if domain.primaryRunIndex != nil {
 		primaryIndexKeys = make([][]byte, 0, len(direct.primaryEntries))
@@ -15726,9 +15726,9 @@ func (c *Collection) bufferUpdateBatchPlanLocked(plan *updateBatchPlan) (bool, e
 	}
 	rollbackGeneration := checkpoint.writeGeneration
 	plan.stats.BufferStageDomainPrepare += updateBatchStatsSince(detailedStats, phaseStart)
+	ensureBufferedPrimaryRunIndexLocked(domain, modifiedCount)
 	materializePrimaryOverlayLocked(domain)
 	clearPrimaryDocumentCacheLocked(domain)
-	ensureBufferedPrimaryRunIndexLocked(domain, modifiedCount)
 	var primaryWriteTable memtable.Table
 	for i, rootName := range plan.rootNames {
 		baseRoot := plan.baseRootIDs[rootName]
