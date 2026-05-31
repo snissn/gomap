@@ -153,6 +153,86 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMutationInsertBatchOmitResultIDsJSONAndBSON(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	jsonDoc := []byte(`{"email":"ada@example.com","name":"Ada"}`)
+	bsonDoc, err := bson.Marshal(bson.D{{Key: "email", Value: "grace@example.com"}, {Key: "name", Value: "Grace"}})
+	if err != nil {
+		t.Fatalf("marshal bson: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		collection string
+		format     collections.DocumentFormat
+		doc        []byte
+	}{
+		{name: "json", collection: "users_json", format: collections.DocumentFormatJSON, doc: jsonDoc},
+		{name: "bson", collection: "users_bson", format: collections.DocumentFormatBSON, doc: bsonDoc},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+				Name: tc.collection,
+				Options: collections.CollectionOptions{
+					DocumentFormat: tc.format,
+				},
+			}); err != nil {
+				t.Fatalf("CreateCollection: %v", err)
+			}
+			guard, err := client.replicatedMutationGuard(ctx, "insert_batch_no_ids_"+tc.name)
+			if err != nil {
+				t.Fatalf("mutation guard: %v", err)
+			}
+			body, err := appendInsertBatchRequestBodyRefFlags(nil, tc.collection, 0, false, tc.format,
+				[][]byte{[]byte("u1")},
+				[][]byte{tc.doc},
+				AckVisible,
+				iwire.CommandFlagOmitResultIDs,
+				guard,
+			)
+			if err != nil {
+				t.Fatalf("append insert: %v", err)
+			}
+			_, response, err := client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+			if err != nil {
+				t.Fatalf("roundTrip omit-result insert: %v", err)
+			}
+			sections, err := iwire.DecodeSections(response, client.limits)
+			if err != nil {
+				t.Fatalf("decode omit-result response: %v", err)
+			}
+			if _, ok, err := singletonSection(sections, iwire.SectionDocumentIDs); err != nil {
+				t.Fatalf("document_ids section: %v", err)
+			} else if ok {
+				t.Fatalf("omit-result response unexpectedly included document_ids")
+			}
+			if inserted, err := responseCount(sections, "inserted_count"); err != nil || inserted != 1 {
+				t.Fatalf("inserted_count=%d err=%v want 1", inserted, err)
+			}
+
+			col, err := mgr.OpenCollection(tc.collection)
+			if err != nil {
+				t.Fatalf("open collection: %v", err)
+			}
+			got, err := col.Get([]byte("u1"))
+			if err != nil {
+				t.Fatalf("get inserted document: %v", err)
+			}
+			if len(got) == 0 {
+				t.Fatal("get inserted document returned empty payload")
+			}
+		})
+	}
+}
+
 func TestMutationSingleReplaceBatchSemantics(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

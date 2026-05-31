@@ -2999,6 +2999,58 @@ func TestCollectionInsertBatchBridge_IndexedReturnedIDsAreOwned(t *testing.T) {
 	}
 }
 
+func TestCollectionInsertBatchBridge_ValidatedBSONReturnedIDsAreOwned(t *testing.T) {
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	inputID := []byte("u1")
+	inputDocument, err := bson.Marshal(bson.D{{Key: "name", Value: "ada"}})
+	if err != nil {
+		t.Fatalf("marshal bson: %v", err)
+	}
+	ids, err := col.InsertBatchValidatedBSON(
+		[][]byte{inputID},
+		[][]byte{inputDocument},
+	)
+	if err != nil {
+		t.Fatalf("insert batch validated bson: %v", err)
+	}
+	inputID[0] = 'x'
+	inputDocument[len(inputDocument)-2] = 'x'
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("returned ids=%q want owned u1", ids)
+	}
+
+	ids[0][0] = 'z'
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get original id after mutating returned id: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("get original id returned empty document")
+	}
+	if got, err := col.Get([]byte("z1")); err != nil || got != nil {
+		t.Fatalf("mutated returned id lookup got=%q err=%v want missing", got, err)
+	}
+}
+
 func TestCollectionSingleInsertBufferedNoIndexReadsBeforeFlush(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

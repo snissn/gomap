@@ -279,7 +279,7 @@ func replayCollectionInsertBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		ids[i] = payload.Documents[i].ID
 		docs[i] = payload.Documents[i].Document
 	}
-	_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, templateV1ReplayStoredDocumentEncoder(collection), intent)
+	_, err = collection.insertBatchWithCommandWALIntent(ids, docs, false, templateV1ReplayStoredDocumentEncoder(collection), intent, insertBatchExecutionOptions{returnResultIDs: true})
 	return err
 }
 

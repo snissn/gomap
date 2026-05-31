@@ -3790,6 +3790,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	snap *backenddb.Snapshot,
 	plannerOptions collectionOptions,
 	ids, documents [][]byte,
+	execOpts insertBatchExecutionOptions,
 ) ([][]byte, bool, error) {
 	if domain == nil || catalog == nil || snap == nil || len(catalog.meta.Indexes) > 0 {
 		return nil, false, nil
@@ -3885,7 +3886,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 		Indexes:   0,
 		Runs:      1,
 	})
-	return resultIDs, true, nil
+	return maybeInsertBatchResultIDs(resultIDs, execOpts), true, nil
 }
 
 func (c *Collection) ensureWriteDomainLocked(domain *collectionWriteDomain) (*collectionCatalog, collectionOptions, bool, error) {
@@ -8687,11 +8688,31 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 	return resultIDs, err
 }
 
-func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
-	return c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, templateEncoder, nil)
+// NativewireInsertBatchNoResultIDs executes an insert batch without cloning
+// response-owned result IDs. It exists for the nativewire gateway omit-result
+// fast path; public callers that need returned IDs should keep using
+// InsertBatch or InsertBatchValidatedBSON.
+func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
+	_, err := c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, nil, nil, insertBatchExecutionOptions{returnResultIDs: false})
+	if err == nil {
+		if trustedValidBSON {
+			err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(ids))
+		} else {
+			err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(ids))
+		}
+	}
+	return err
 }
 
-func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
+func (c *Collection) insertBatch(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder) ([][]byte, error) {
+	return c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, templateEncoder, nil, insertBatchExecutionOptions{returnResultIDs: true})
+}
+
+type insertBatchExecutionOptions struct {
+	returnResultIDs bool
+}
+
+func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -8703,7 +8724,7 @@ func (c *Collection) insertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	}
 
 	return retryInsertBatchMutation(func() ([][]byte, error) {
-		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent)
+		return c.insertBatchOnce(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts)
 	})
 }
 
@@ -8732,19 +8753,19 @@ func isRetriableCollectionCatalogReadEOF(err error) bool {
 	return strings.Contains(err.Error(), "collections: load catalog")
 }
 
-func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
+func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, execOpts insertBatchExecutionOptions) ([][]byte, error) {
 	if shouldAttemptOptimisticInsertBatchPlanning(documents, templateEncoder, commandWALIntent, c.commandWALActive(commandWALIntent)) {
 		if unlockMutation, locked := c.tryLockMutation(); locked {
 			mutationLocked := true
-			return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, &unlockMutation, &mutationLocked)
+			return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts, &unlockMutation, &mutationLocked)
 		}
-		if resultIDs, err, attempted := c.insertBatchOnceWithOptimisticPlanning(ids, documents, trustedValidBSON); attempted {
+		if resultIDs, err, attempted := c.insertBatchOnceWithOptimisticPlanning(ids, documents, trustedValidBSON, execOpts); attempted {
 			return resultIDs, err
 		}
 	}
 	unlockMutation := c.lockMutation()
 	mutationLocked := true
-	return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, &unlockMutation, &mutationLocked)
+	return c.insertBatchOnceWithLockState(ids, documents, trustedValidBSON, templateEncoder, commandWALIntent, execOpts, &unlockMutation, &mutationLocked)
 }
 
 func shouldAttemptOptimisticInsertBatchPlanning(documents [][]byte, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent, commandWALActive bool) bool {
@@ -8755,7 +8776,7 @@ func shouldAttemptOptimisticInsertBatchPlanning(documents [][]byte, templateEnco
 		!commandWALActive
 }
 
-func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]byte, trustedValidBSON bool) ([][]byte, error, bool) {
+func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]byte, trustedValidBSON bool, execOpts insertBatchExecutionOptions) ([][]byte, error, bool) {
 	if c == nil || c.db == nil {
 		return nil, nil, false
 	}
@@ -8841,9 +8862,9 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	if !insertBatchPlanHasRootWork(plan) {
 		closePlanningSnapshot()
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
-		return plan.resultIDs, nil, true
+		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil, true
 	}
-	resultIDs, err := cloneBatchDocumentIDs(plan.resultIDs)
+	resultIDs, err := cloneInsertBatchResultIDs(plan.resultIDs, execOpts)
 	if err != nil {
 		closePlanningSnapshot()
 		resetCollectionRunTables(plan.runs)
@@ -8896,6 +8917,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	trustedValidBSON bool,
 	templateEncoder *TemplateV1Encoder,
 	commandWALIntent *backenddb.CommandWALIntent,
+	execOpts insertBatchExecutionOptions,
 	unlockMutation *collectionMutationUnlock,
 	mutationLocked *bool,
 ) ([][]byte, error) {
@@ -9079,7 +9101,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 		len(meta.Indexes) == 0 &&
 		c.canBufferNoIndexInsertBatchAck() &&
 		canBufferNoIndexInsertBatchFormat(plannerOptions.documentFormat, trustedValidBSON) {
-		if resultIDs, buffered, err := c.bufferNoIndexInsertBatch(c.writeDomain, catalog, snap, plannerOptions, ids, documents); buffered {
+		if resultIDs, buffered, err := c.bufferNoIndexInsertBatch(c.writeDomain, catalog, snap, plannerOptions, ids, documents, execOpts); buffered {
 			closePlanningSnapshot()
 			return resultIDs, err
 		} else if skipInitialNoIndexFlush {
@@ -9093,7 +9115,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	baseCommitSeq := snapshotCommitSeq(snap)
 	if len(meta.Indexes) == 0 {
 		if plannerOptions.documentFormat == DocumentFormatJSON {
-			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent)
+			return c.insertBatchNoIndex(catalog, snap, baseCommitSeq, baseSystemRoot, plannerOptions, ids, documents, commandWALIntent, execOpts)
 		}
 	}
 
@@ -9151,13 +9173,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 		closePlanningSnapshot()
 		templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 		c.setLastInsertStats(plan.stats.CollectionInsertStats)
-		return plan.resultIDs, nil
+		return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 	}
 
 	rootNames, baseRootIDs := insertBatchPlanRootNamesAndBaseIDs(plan, catalog)
 
 	if bufferIndexedInserts {
-		resultIDs, err := cloneBatchDocumentIDs(plan.resultIDs)
+		resultIDs, err := cloneInsertBatchResultIDs(plan.resultIDs, execOpts)
 		if err != nil {
 			closePlanningSnapshot()
 			resetCollectionRunTables(plan.runs)
@@ -9303,7 +9325,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	templateEncoder.learnTemplateV1Templates(c, plan.templateLearned)
 	c.setLastInsertStats(plan.stats.CollectionInsertStats)
-	return plan.resultIDs, nil
+	return maybeInsertBatchResultIDs(plan.resultIDs, execOpts), nil
 }
 
 func (c *Collection) reloadInsertBatchPlanningSnapshot(
@@ -9492,6 +9514,20 @@ func insertBatchPlanHasRootWork(plan *insertBatchPlan) bool {
 	return plan.directBufferedInsert != nil && len(plan.directBufferedInsert.rootNames) > 0
 }
 
+func maybeInsertBatchResultIDs(resultIDs [][]byte, execOpts insertBatchExecutionOptions) [][]byte {
+	if !execOpts.returnResultIDs {
+		return nil
+	}
+	return resultIDs
+}
+
+func cloneInsertBatchResultIDs(resultIDs [][]byte, execOpts insertBatchExecutionOptions) ([][]byte, error) {
+	if !execOpts.returnResultIDs {
+		return nil, nil
+	}
+	return cloneBatchDocumentIDs(resultIDs)
+}
+
 type insertBatchValidationContext struct {
 	snap                      *backenddb.Snapshot
 	catalog                   *collectionCatalog
@@ -9677,6 +9713,7 @@ func (c *Collection) insertBatchNoIndex(
 	plannerOptions collectionOptions,
 	ids, documents [][]byte,
 	commandWALIntent *backenddb.CommandWALIntent,
+	execOpts insertBatchExecutionOptions,
 ) ([][]byte, error) {
 	if len(ids) != len(documents) {
 		_ = snap.Close()
@@ -9829,7 +9866,7 @@ func (c *Collection) insertBatchNoIndex(
 		c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 		c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 		c.setLastInsertStats(stats)
-		return resultIDs, nil
+		return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 	}
 
 	baseRootIDs := map[string]uint64{rootName: baseRoot}
@@ -9857,7 +9894,7 @@ func (c *Collection) insertBatchNoIndex(
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	c.setLastInsertStats(stats)
-	return resultIDs, nil
+	return maybeInsertBatchResultIDs(resultIDs, execOpts), nil
 }
 
 // Delete removes one document. See DeleteDocument for the matched/deleted
