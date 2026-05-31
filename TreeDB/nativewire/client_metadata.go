@@ -140,8 +140,8 @@ func (c *Client) DropIndex(ctx context.Context, collection, index string) (colle
 	return firstMetaFromResponse(sections)
 }
 
-// CurrentCatalogVersion returns the catalog commit sequence advertised by the
-// server for guarded metadata mutations.
+// CurrentCatalogVersion returns the server-advertised catalog/schema version
+// used by guarded replicated mutations.
 func (c *Client) CurrentCatalogVersion(ctx context.Context) (uint64, error) {
 	stats, err := c.Stats(ctx)
 	if err != nil {

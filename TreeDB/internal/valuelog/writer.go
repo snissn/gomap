@@ -716,7 +716,16 @@ func (w *Writer) Flush() error {
 	return nil
 }
 
+// RotateTo flushes and closes the current file, then opens (or creates) the
+// provided path and reuses the writer's buffers for future appends.
 func (w *Writer) RotateTo(path string, fileID uint32) error {
+	return w.RotateToWithSync(path, fileID, true)
+}
+
+// RotateToWithSync flushes and closes the current file, then opens (or creates)
+// the provided path and reuses the writer's buffers for future appends. When
+// syncCurrent is false, the current file is flushed to the OS but not fsynced.
+func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
 	if w == nil {
 		return errors.New("valuelog: nil writer")
 	}
@@ -732,9 +741,11 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		if err != nil {
 			return err
 		}
-		if err := syncDirFn(path); err != nil {
-			_ = f.Close()
-			return err
+		if syncCurrent {
+			if err := syncDirFn(path); err != nil {
+				_ = f.Close()
+				return err
+			}
 		}
 		info, err := f.Stat()
 		if err != nil {
@@ -755,7 +766,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if w.syncFn != nil {
+	if syncCurrent && w.syncFn != nil {
 		if err := w.syncFn(w.f); err != nil {
 			return err
 		}
@@ -770,9 +781,11 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		_ = f.Close()
 		return err
 	}
-	if err := syncDirFn(path); err != nil {
-		_ = f.Close()
-		return err
+	if syncCurrent {
+		if err := syncDirFn(path); err != nil {
+			_ = f.Close()
+			return err
+		}
 	}
 
 	old := w.f

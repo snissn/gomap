@@ -785,21 +785,146 @@ func TestMutationCatalogVersionCacheSurvivesSuccessfulDataMutation(t *testing.T)
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	version := catalogVersion(t, db)
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCommit := catalogVersion(t, db)
 	client.catalogVersionPlusOne.Store(version + 1)
-	deleted, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("missing")}, AckVisible)
+	ids, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	)
 	if err != nil {
-		t.Fatalf("DeleteBatch missing: %v", err)
+		t.Fatalf("InsertBatch: %v", err)
 	}
-	if deleted != 0 {
-		t.Fatalf("deleted=%d want 0", deleted)
+	if len(ids) != 1 || string(ids[0]) != "u1" {
+		t.Fatalf("insert ids=%q want u1", ids)
 	}
-	after := catalogVersion(t, db)
-	if got := client.catalogVersionPlusOne.Load(); got != after+1 {
-		t.Fatalf("catalogVersionPlusOne=%d want %d", got, after+1)
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
 	}
-	if after != version {
-		t.Fatalf("missing delete changed catalog version from %d to %d", version, after)
+	if got := client.catalogVersionPlusOne.Load(); got != version+1 {
+		t.Fatalf("catalogVersionPlusOne=%d want %d", got, version+1)
+	}
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data mutation changed catalog version from %d to %d", version, after)
+	}
+}
+
+func TestMutationCatalogGuardAllowsPriorDataCommitVersion(t *testing.T) {
+	client, _, db := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCommit := catalogVersion(t, db)
+	guardedCtx := WithExpectedCatalogVersion(ctx, version)
+	if _, err := client.InsertBatch(guardedCtx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
+	}
+
+	matched, modified, err := client.ReplaceBatch(guardedCtx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":2}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch with catalog version predating data commit: %v", err)
+	}
+	if matched != 1 || modified != 1 {
+		t.Fatalf("matched=%d modified=%d want 1/1", matched, modified)
+	}
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data mutations changed catalog version from %d to %d", version, after)
+	}
+}
+
+func TestCatalogMetadataVersionIgnoresDataRootChanges(t *testing.T) {
+	client, server, _, db := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCatalog, beforeOK := server.catalogMetadataFingerprint()
+	if !beforeOK {
+		t.Fatalf("catalogMetadataFingerprint before data mutation failed")
+	}
+	beforeCommit := catalogVersion(t, db)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
+	}
+
+	server.bumpCatalogVersionIfCatalogMetadataChanged(beforeCatalog, beforeOK)
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data root change bumped catalog version from %d to %d", version, after)
+	}
+}
+
+func TestMutationCatalogGuardRejectsPriorVersionAfterMetadataChange(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.CreateIndex(WithExpectedCatalogVersion(ctx, version), "users", collections.IndexDefinition{
+		Name:      "email",
+		Field:     "email",
+		ValueType: collections.IndexValueString,
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	after := clientCatalogVersion(t, client, ctx)
+	if after == version {
+		t.Fatalf("metadata mutation did not advance catalog version: %d", after)
+	}
+
+	_, err := client.InsertBatch(WithExpectedCatalogVersion(ctx, version), "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+		t.Fatalf("InsertBatch with stale schema version err=%v want catalog mismatch", err)
+	}
+	if _, err := client.InsertBatch(WithExpectedCatalogVersion(ctx, after), "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch with current schema version: %v", err)
 	}
 }
 
@@ -813,7 +938,8 @@ func TestMutationCatalogVersionCacheClearsAfterMismatch(t *testing.T) {
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	client.catalogVersionPlusOne.Store(1)
+	version := clientCatalogVersion(t, client, ctx)
+	client.catalogVersionPlusOne.Store(version + 2)
 	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
 		[][]byte{[]byte("u1")},
 		[][]byte{[]byte(`{"x":1}`)},

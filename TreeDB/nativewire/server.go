@@ -104,6 +104,7 @@ type Server struct {
 	registry                      *iwire.Registry
 	collections                   *collections.CollectionManager
 	backend                       *backenddb.DB
+	catalogVersion                atomic.Uint64
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
@@ -322,7 +323,7 @@ func NewServer(opts ServerOptions) *Server {
 	if maxMetadataIdempotencyEntries == 0 {
 		maxMetadataIdempotencyEntries = defaultMaxMetadataIdempotencyEntries
 	}
-	return &Server{
+	server := &Server{
 		limits:                        limits,
 		maxInFlight:                   maxInFlight,
 		maxConnections:                maxConnections,
@@ -340,6 +341,8 @@ func NewServer(opts ServerOptions) *Server {
 		backend:                       opts.Backend,
 		cursorReaperDone:              make(chan struct{}),
 	}
+	server.catalogVersion.Store(initialCatalogVersion(opts.Backend))
+	return server
 }
 
 // Close closes all active server connections and rejects new ones.
