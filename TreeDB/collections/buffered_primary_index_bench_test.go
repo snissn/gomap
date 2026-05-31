@@ -50,8 +50,9 @@ func BenchmarkBufferedIndexedFirstGetAfterInsert(b *testing.B) {
 				b.Fatalf("insert batch: %v", err)
 			}
 		}
+		lookupID := fmt.Sprintf("u%06d", entries-1)
 		b.StartTimer()
-		_, found, err := col.GetInto([]byte("u004095"), nil)
+		_, found, err := col.GetInto([]byte(lookupID), nil)
 		b.StopTimer()
 		if err != nil {
 			_ = d.Close()

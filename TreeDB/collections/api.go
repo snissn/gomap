@@ -2285,11 +2285,13 @@ func runCollectionWaitIndexedAsyncFlushHook() {
 }
 
 var collectionPrimaryRunIndexRebuildHook struct {
-	mu sync.Mutex
-	fn func(collection string, tables, entries int)
+	installMu sync.Mutex
+	mu        sync.Mutex
+	fn        func(collection string, tables, entries int)
 }
 
 func setCollectionPrimaryRunIndexRebuildHookForTest(fn func(collection string, tables, entries int)) func() {
+	collectionPrimaryRunIndexRebuildHook.installMu.Lock()
 	collectionPrimaryRunIndexRebuildHook.mu.Lock()
 	prev := collectionPrimaryRunIndexRebuildHook.fn
 	collectionPrimaryRunIndexRebuildHook.fn = fn
@@ -2298,6 +2300,7 @@ func setCollectionPrimaryRunIndexRebuildHookForTest(fn func(collection string, t
 		collectionPrimaryRunIndexRebuildHook.mu.Lock()
 		collectionPrimaryRunIndexRebuildHook.fn = prev
 		collectionPrimaryRunIndexRebuildHook.mu.Unlock()
+		collectionPrimaryRunIndexRebuildHook.installMu.Unlock()
 	}
 }
 
