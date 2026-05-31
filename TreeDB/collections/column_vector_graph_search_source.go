@@ -45,17 +45,21 @@ type columnVectorGraphSearchSource struct {
 	dims     int
 	rowCount int
 
-	vectorKind                columnVectorGraphSearchVectorSourceKind
-	typedVectorSource         *columnVectorGraphTypedColumnVectorSource
-	typedVectorLocations      []columnVectorGraphTypedColumnVectorLocation
-	vectorFallbackReason      typeddecode.Reason
-	vectorFallbackDescription string
+	vectorKind                   columnVectorGraphSearchVectorSourceKind
+	typedVectorSource            *columnVectorGraphTypedColumnVectorSource
+	typedVectorLocations         []columnVectorGraphTypedColumnVectorLocation
+	vectorFallbackReason         typeddecode.Reason
+	vectorFallbackDescription    string
+	preparedVector               columnVectorGraphPreparedVectorView
+	preparedScoreReady           bool
+	preparedScoreIdentityMapping bool
 
 	normKind           columnVectorGraphSearchNormSourceKind
 	invNormSource      *columnVectorGraphInvNormStateSource
 	invNormByOrdinal   []float32
 	invNormOutcome     columnVectorGraphInvNormStateOutcome
 	invNormFallback    typeddecode.Reason
+	preparedNorm       columnVectorGraphPreparedNormView
 	normFallbackReason typeddecode.Reason
 }
 
@@ -88,6 +92,9 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		s.vectorKind = columnVectorGraphSearchVectorSourceTypedColumn
 		s.typedVectorSource = reader.typedVectorSource
 		s.typedVectorLocations = reader.typedVectorSource.locations
+		if reader.typedVectorSource.prepared.ready() {
+			s.preparedVector = reader.typedVectorSource.prepared
+		}
 	} else if reader.typedVectorSource != nil {
 		s.vectorFallbackReason = reason
 		s.vectorFallbackDescription = description
@@ -99,8 +106,15 @@ func (s *columnVectorGraphSearchSource) prepare(plan *columnVectorGraphSearchPla
 		s.invNormByOrdinal = values
 		s.invNormOutcome = outcome
 		s.invNormFallback = fallbackReason
+		if reader.invNormSource.prepared.ready() {
+			s.preparedNorm = reader.invNormSource.prepared
+		}
 	} else if reader.invNormSource != nil {
 		s.normFallbackReason = reason
+	}
+	if s.preparedVector.ready() && s.preparedNorm.ready() {
+		s.preparedScoreReady = true
+		s.preparedScoreIdentityMapping = s.preparedVector.identityMapping()
 	}
 	if physicalReader == nil && s.rowCount > 0 {
 		if s.vectorKind != columnVectorGraphSearchVectorSourceTypedColumn {
@@ -163,6 +177,11 @@ func (s *columnVectorGraphSearchSource) scoreOrdinal(plan *columnVectorGraphSear
 			return 0, errNilColumnVectorGraphPhysicalRowReader
 		}
 		return plan.reader.scoreOrdinalLegacy(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
+	}
+	if s.preparedScoreReady {
+		if score, handled, err := s.scorePreparedOrdinal(plan, query, queryInvNorm, ordinal, stats); handled || err != nil {
+			return score, err
+		}
 	}
 	var view *columnVectorGraphBlockView
 	rowIndex := ordinal
@@ -344,6 +363,9 @@ func (s *columnVectorGraphSearchSource) indexedVectorLocationForOrdinal(ordinal 
 	if s == nil || ordinal < 0 || ordinal >= len(s.typedVectorLocations) || s.dims <= 0 {
 		return columnVectorGraphTypedColumnVectorLocation{}, false
 	}
+	if s.typedVectorSource != nil && s.typedVectorSource.closed {
+		return columnVectorGraphTypedColumnVectorLocation{}, false
+	}
 	loc := s.typedVectorLocations[ordinal]
 	if loc.part == nil || loc.rowIndex < 0 || loc.rowIndex >= loc.part.rows {
 		return columnVectorGraphTypedColumnVectorLocation{}, false
@@ -362,6 +384,9 @@ func (s *columnVectorGraphSearchSource) indexedVectorLocationForOrdinal(ordinal 
 func (s *columnVectorGraphSearchSource) typedVectorForOrdinal(ordinal int) ([]float32, columnVectorGraphTypedColumnVectorOutcome, typeddecode.Reason, bool) {
 	if s == nil || ordinal < 0 || ordinal >= len(s.typedVectorLocations) || s.dims <= 0 {
 		return nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, typeddecode.ReasonRowCountMismatch, false
+	}
+	if s.typedVectorSource != nil && s.typedVectorSource.closed {
+		return nil, columnVectorGraphTypedColumnVectorOutcomeUnknown, typeddecode.ReasonStaleHandle, false
 	}
 	loc := s.typedVectorLocations[ordinal]
 	if loc.part == nil || loc.rowIndex < 0 || loc.rowIndex >= loc.part.rows {

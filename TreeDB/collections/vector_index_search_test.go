@@ -82,6 +82,17 @@ func TestSearchVectorIndexColumnGraphNativeReaderReopenV4(t *testing.T) {
 	if got.Stats.TypedColumnFallbacks != 0 || got.Stats.RowRefVectorSourceLegacyGraphIDs != 0 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.NormSourceFallbacks != 0 {
 		t.Fatalf("stats=%+v want TVIS/base typed-column sources without graph row fallback", got.Stats)
 	}
+	if columnGraphTypedColumnMmapDirectViewSupportedForTest() {
+		if got.Stats.PreparedScoreCalls == 0 || got.Stats.PreparedScoreCalls != got.Stats.CandidateFetches {
+			t.Fatalf("stats=%+v want prepared scoring to cover every candidate fetch", got.Stats)
+		}
+		if got.Stats.VectorPreparedDirectViews != got.Stats.CandidateFetches || got.Stats.NormPreparedDirectViews != got.Stats.CandidateFetches {
+			t.Fatalf("stats=%+v want prepared vector/norm direct views for every scored candidate", got.Stats)
+		}
+		if got.Stats.VectorPreparedIdentityMappings+got.Stats.VectorPreparedRowRefMappings != got.Stats.CandidateFetches || got.Stats.ScoreFloat64Fallbacks != 0 {
+			t.Fatalf("stats=%+v want prepared mapping coverage and no rare float64 score fallback", got.Stats)
+		}
+	}
 	if got.Stats.DocumentsFetched != 0 {
 		t.Fatalf("DocumentsFetched=%d want no document fetch without IncludeDocuments", got.Stats.DocumentsFetched)
 	}
@@ -2069,6 +2080,8 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.ScoreBatchMaxTileSize), "score_batch_max_tile_size")
 	b.ReportMetric(float64(stats.ScoreBatchOptimizedCalls), "score_batch_optimized/search")
 	b.ReportMetric(float64(stats.ScoreBatchScalarFallbackCalls), "score_batch_fallback/search")
+	b.ReportMetric(float64(stats.PreparedScoreCalls), "prepared_score_calls/search")
+	b.ReportMetric(float64(stats.ScoreFloat64Fallbacks), "score_float64_fallbacks/search")
 	if stats.ScoreBatchCalls > 0 {
 		b.ReportMetric(float64(stats.ScoreBatchCandidates)/float64(stats.ScoreBatchCalls), "score_batch_avg_tile_size")
 	}
@@ -2079,6 +2092,9 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.VectorHeapCopyTypedViews), "vector_heap_copy_typed_view/search")
 	b.ReportMetric(float64(stats.VectorScratchDecodes), "vector_scratch_decode/search")
 	b.ReportMetric(float64(stats.VectorScratchDecodes), "vector_scratch_decodes/search")
+	b.ReportMetric(float64(stats.VectorPreparedDirectViews), "vector_prepared_direct/search")
+	b.ReportMetric(float64(stats.VectorPreparedIdentityMappings), "vector_prepared_identity_mapping/search")
+	b.ReportMetric(float64(stats.VectorPreparedRowRefMappings), "vector_prepared_row_ref_mapping/search")
 	b.ReportMetric(float64(stats.VectorCertificationFailures), "vector_certification_failures/search")
 	b.ReportMetric(float64(stats.VectorAbsoluteOffsetUnaligned), "vector_absolute_offset_unaligned/search")
 	b.ReportMetric(float64(stats.VectorActualPointerUnaligned), "vector_actual_pointer_unaligned/search")
@@ -2107,6 +2123,7 @@ func reportVectorIndexSearchBenchMetricsV4(b *testing.B, n int, stats VectorInde
 	b.ReportMetric(float64(stats.NormHeapCopyTypedViews), "norm_heap_copy_typed_view/search")
 	b.ReportMetric(float64(stats.NormScratchDecodes), "norm_scratch_decode/search")
 	b.ReportMetric(float64(stats.NormScratchDecodes), "norm_scratch_decodes/search")
+	b.ReportMetric(float64(stats.NormPreparedDirectViews), "norm_prepared_direct/search")
 	b.ReportMetric(float64(stats.NormSourceUnavailable), "norm_source_unavailable/search")
 	b.ReportMetric(float64(stats.NormSourceFallbacks), "norm_source_fallbacks/search")
 	b.ReportMetric(float64(stats.NormValidationFailures), "norm_validation_failures/search")

@@ -65,6 +65,7 @@ type columnVectorGraphInvNormStateSource struct {
 	values         []float32
 	outcome        columnVectorGraphInvNormStateOutcome
 	fallbackReason typeddecode.Reason
+	prepared       columnVectorGraphPreparedNormView
 
 	manager         *mappedresource.Manager
 	handle          *mappedresource.Handle
@@ -375,7 +376,24 @@ func newColumnVectorGraphInvNormStateSourceFromRoot(rootDir, collection string, 
 	}
 	plan := typeddecode.Float32ScalarPlan(certColumn)
 	directReq := typeddecode.DirectViewColumnRequest{Plan: plan, Certification: certColumn, Rows: asset.RowCount, PayloadBytes: section.Length, AssetOffset: asset.Ref.Offset, HasAssetOffset: true}
-	values, retained, outcome, fallbackReason, err := columnVectorGraphInvNormStateValuesFromHandle(manager, handle, directReq, asset.RowCount)
+	graphReq := typeddecode.GraphFloat32DirectViewRequest{
+		Expectation: typeddecode.GraphDirectViewExpectation{
+			ExpectedOwner:  columnVectorGraphPreparedOwnerVectorIndexState,
+			ActualOwner:    columnVectorGraphPreparedOwnerVectorIndexState,
+			ExpectedRole:   columnVectorIndexStateAssetRoleInverseNorm,
+			ActualRole:     asset.Role,
+			Column:         certColumn.Name,
+			Rows:           asset.RowCount,
+			AssetOffset:    asset.Ref.Offset,
+			HasAssetOffset: true,
+		},
+		Certification: certColumn,
+		Section:       section,
+		ExpectedKey:   handle.Key(),
+		Handle:        handle,
+		Manager:       manager,
+	}
+	values, retained, outcome, fallbackReason, err := columnVectorGraphInvNormStateValuesFromHandle(manager, handle, directReq, asset.RowCount, graphReq)
 	if err != nil {
 		return nil, fallbackReason, err
 	}
@@ -383,6 +401,9 @@ func newColumnVectorGraphInvNormStateSourceFromRoot(rootDir, collection string, 
 	if err := validateColumnVectorGraphInvNormValues(def.Name, values, asset.RowCount); err != nil {
 		_ = source.Close()
 		return nil, typeddecode.ReasonValidationFailed, err
+	}
+	if prepared, _, ok := prepareColumnVectorGraphPreparedNormView(source, asset.RowCount); ok {
+		source.prepared = prepared
 	}
 	if outcome == columnVectorGraphInvNormStateOutcomeScratchDecode {
 		source.decodedBytes = uint64(len(values)) * 4
@@ -519,18 +540,29 @@ func acquireColumnVectorGraphInvNormStateSection(rootDir, collection string, ref
 	return handle, nil
 }
 
-func columnVectorGraphInvNormStateValuesFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, directReq typeddecode.DirectViewColumnRequest, rows int) ([]float32, *mappedresource.Handle, columnVectorGraphInvNormStateOutcome, typeddecode.Reason, error) {
+func columnVectorGraphInvNormStateValuesFromHandle(manager *mappedresource.Manager, handle *mappedresource.Handle, directReq typeddecode.DirectViewColumnRequest, rows int, graphReqs ...typeddecode.GraphFloat32DirectViewRequest) ([]float32, *mappedresource.Handle, columnVectorGraphInvNormStateOutcome, typeddecode.Reason, error) {
 	if handle == nil {
 		status := typeddecode.StreamingStatus(typeddecode.ReasonNilHandle, "nil inv_norm state handle")
 		return nil, nil, columnVectorGraphInvNormStateOutcomeUnknown, status.Reason, fmt.Errorf("collections: column_graph inv_norm state handle validation: %s", status.String())
 	}
-	values, status := typeddecode.Float32ScalarView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: rows, RequireMapped: true})
-	if status.Direct() {
-		return values, handle, columnVectorGraphInvNormStateOutcomeMmapDirect, "", nil
+	var status typeddecode.Status
+	if len(graphReqs) > 0 {
+		view, graphStatus := typeddecode.CertifyGraphFloat32DirectView(graphReqs[0])
+		status = graphStatus
+		if status.Direct() {
+			return view.Values, view.Handle, columnVectorGraphInvNormStateOutcomeMmapDirect, "", nil
+		}
+	} else {
+		values, directStatus := typeddecode.Float32ScalarView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: rows, RequireMapped: true})
+		status = directStatus
+		if status.Direct() {
+			return values, handle, columnVectorGraphInvNormStateOutcomeMmapDirect, "", nil
+		}
 	}
 	firstStatus := status
 	fallbackReason := status.Reason
 	if status.Reason == typeddecode.ReasonHandleSourceUnsupported || status.Reason == typeddecode.ReasonActualPointerUnaligned {
+		var values []float32
 		values, status = typeddecode.Float32ScalarView(manager, handle, directReq, typeddecode.ResourceViewOptions{ExpectedElements: rows, RequireMapped: false})
 		if status.Direct() {
 			return values, handle, columnVectorGraphInvNormStateOutcomeHeapCopyTypedView, "", nil
@@ -646,6 +678,7 @@ func (s *columnVectorGraphInvNormStateSource) Close() error {
 	s.handle = nil
 	s.values = nil
 	s.rows = 0
+	s.prepared = columnVectorGraphPreparedNormView{}
 	s.outcome = columnVectorGraphInvNormStateOutcomeUnknown
 	s.fallbackReason = ""
 	s.activeHandles = 0

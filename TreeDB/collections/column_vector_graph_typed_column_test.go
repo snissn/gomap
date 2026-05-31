@@ -450,7 +450,7 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFal
 	if err != nil {
 		t.Fatalf("ParseColumnPartImage: %v", err)
 	}
-	_, adapterColumn, ok, err := columnVectorGraphTypedColumnVectorField(*cfg, "embedding", 3)
+	field, adapterColumn, ok, err := columnVectorGraphTypedColumnVectorField(*cfg, "embedding", 3)
 	if err != nil || !ok {
 		t.Fatalf("columnVectorGraphTypedColumnVectorField ok=%v err=%v", ok, err)
 	}
@@ -471,7 +471,7 @@ func TestColumnVectorGraphTypedColumnVectorMisalignedMappedSectionUsesScratchFal
 	if !ok {
 		t.Fatalf("missing layout certification for %q", adapterColumn.Definition.Name)
 	}
-	values, handle, outcome, fallbackReason, err := (&Collection{db: d}).acquireColumnVectorGraphTypedColumnDenseVectorValues("docs", ref, image.Version, section, certColumn, page.Checksum(sectionBytes), imageRows, 3, manager)
+	values, handle, outcome, fallbackReason, err := (&Collection{db: d}).acquireColumnVectorGraphTypedColumnDenseVectorValues("docs", ref, image.Version, section, certColumn, page.Checksum(sectionBytes), imageRows, 3, field, manager)
 	if err != nil {
 		t.Fatalf("acquire dense vector values: %v", err)
 	}

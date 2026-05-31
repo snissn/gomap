@@ -152,6 +152,8 @@ type columnVectorGraphNativeSearchStats struct {
 	ScoreBatchMaxTileSize                uint64
 	ScoreBatchOptimizedCalls             uint64
 	ScoreBatchScalarFallbackCalls        uint64
+	PreparedScoreCalls                   uint64
+	ScoreFloat64Fallbacks                uint64
 	BlockViewHits                        uint64
 	BlockViewMisses                      uint64
 	BlockViewBuilds                      uint64
@@ -178,6 +180,7 @@ type columnVectorGraphNativeSearchStats struct {
 	NormMmapDirectViews                  uint64
 	NormHeapCopyTypedViews               uint64
 	NormScratchDecodes                   uint64
+	NormPreparedDirectViews              uint64
 	NormSourceUnavailable                uint64
 	NormSourceFallbacks                  uint64
 	NormValidationFailures               uint64
@@ -193,6 +196,9 @@ type columnVectorGraphNativeSearchStats struct {
 	VectorMmapDirectViews                uint64
 	VectorHeapCopyTypedViews             uint64
 	VectorScratchDecodes                 uint64
+	VectorPreparedDirectViews            uint64
+	VectorPreparedIdentityMappings       uint64
+	VectorPreparedRowRefMappings         uint64
 	VectorCertificationFailures          uint64
 	VectorAbsoluteOffsetUnaligned        uint64
 	VectorActualPointerUnaligned         uint64
