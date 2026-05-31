@@ -13,9 +13,9 @@ reusable #2046 direct-view certifier substrate lives in
 command contract live in `typed-column-graph-search-benchmark-matrix.md`. This
 table records #2038-admitted adjacency prepared CSR views, #2040-admitted
 base-vector and inverse-norm prepared scoring views, #2041-admitted row-ref and
-document-ID side-channel views, and #2045 combined prepared graph-search routing.
-Hot-loop telemetry reduction (#2042) and benchmark truth-matrix collection
-(#2037) remain separate work.
+document-ID side-channel views, #2045 combined prepared graph-search routing,
+#2042 minimal hot-loop telemetry, and the #2043 closeout decision backed by the
+#2037 benchmark truth matrix.
 
 ## Admission status vocabulary
 
@@ -74,6 +74,24 @@ the healthy loop.
 - `graph_row_fallbacks/search=0`, plus the role-specific fallback counters below
   remaining zero;
 - `graph_rows=0` for current-format graph-only/result/document rows.
+
+## #2043 final type readiness summary
+
+The #2043 closeout run on `af003dfaf255ae217dbec6eb4a3afae08c2aa4aa` keeps all
+required healthy current-format graph-search roles admitted. It records the
+combined prepared route as the primary current-format execution route while also
+recording that the old legacy graph-row direct control remains faster in the
+final graph-only wall-time matrix. Therefore this table is an admission/readiness
+promotion, not an unconditional claim that #2035 beat the legacy control.
+
+| State role | Logical / physical type | Prepared runtime shape | Admission status | #2043 evidence |
+| --- | --- | --- | --- | --- |
+| Base vectors | `float32_vector` / `raw_float32_vector` | Row-major direct `[]float32` with optional row-ref mapping. | `admitted` | `vector_prepared_direct/search=182`, `typed_column_vector_fallbacks/search=0`, and `graph_rows=0` on production8192 combined prepared graph-only rows. |
+| HNSW adjacency | `uint32_list` / `raw_uint32_offsets_list` | Prepared CSR offsets/values for every layer. | `admitted` | `adjacency_prepared_csr_mmap_direct/search=108`, `adjacency_typed_list_mmap_direct/search=0`, `adjacency_legacy_fallbacks/search=0`, and `adjacency_source_fallbacks/search=0` on production8192 rows. |
+| Inverse norms | `float32` / `raw_float32` | Direct `[]float32` indexed by graph ordinal. | `admitted` | `norm_prepared_direct/search=182`, `norm_source_fallbacks/search=0`, and zero graph-row fallback on combined prepared graph-only rows. |
+| Row refs | `int64` / `raw_int64` | Direct row-ref arrays assembled only at result/document boundaries. | `admitted` | `row_ref_state_prepared_views/search=1`, `row_ref_state_result_refs/search=10` on result rows, `doc_row_ref_state_fetches/search=10` on document rows, and row-ref source fallbacks zero. |
+| Document IDs | `bytes` / `raw_bytes_offsets` | Direct offsets plus bytes, copied/exposed only for final top-k IDs. | `admitted` | `result_id_prepared_bytes_views/search=1`, `result_id_typed_bytes_state/search=10`, `result_id_graph_fallbacks/search=0`, with 784 B/op and 2 allocs/op at the result-ID API boundary. |
+| Optional normalized vectors | `float32_vector` / `raw_float32_vector` | Future row-major normalized `[]float32` view if admitted. | `deferred` | #2043 profiles do not justify adding derived normalized payload storage over the admitted raw-vector plus inverse-norm scoring path; #1977 remains evidence-gated. |
 
 ## Current graph-search optimized-state readiness table
 

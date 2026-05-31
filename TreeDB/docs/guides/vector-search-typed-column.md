@@ -231,11 +231,11 @@ A `VectorIndexSearchBuffer` is not concurrency-safe, and returned `Results`/`ID`
 slices are valid only until the same buffer is reused or reset.
 
 Use the #2037 truth matrix when comparing legacy/direct graph-row controls,
-current TVIS/base typed-column sources, and future prepared typed-column rows
+current TVIS/base typed-column routing, and combined prepared typed-column rows
 with stable labels:
 
 ```sh
-go test ./TreeDB/collections \
+GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench '^BenchmarkColumnVectorGraphSearchTruthMatrix2037$' \
   -benchmem \
@@ -243,8 +243,19 @@ go test ./TreeDB/collections \
   -count=5
 ```
 
-The truth-matrix row labels and skipped prepared placeholders are specified in
+The truth-matrix row labels, final #2043 evidence table, and profile caveats are
+specified in
 [`typed-column-graph-search-benchmark-matrix.md`](../spec/typed-column-graph-search-benchmark-matrix.md).
+As of #2043, healthy current-format `current_tvis_base_typed_column` rows select
+the combined prepared view rather than an unprepared hot-loop source route. Treat
+that as the admitted current-format route, not proof that the prepared path beats
+the old legacy graph-row direct control: the closeout run kept graph-only search
+zero-allocation and fallback-free, but the minimal-stats prepared row was still
+slower than the legacy control. #1980 remains the frontier/top-k follow-up when a
+coordinator approves optimization work, and #1977 normalized vectors remain
+deferred until a prototype beats raw vectors plus inverse norms including
+storage/rebuild cost.
+
 The broader legacy/canonical matrix remains useful when comparing with older
 artifacts or when you also need one-shot open/setup names:
 

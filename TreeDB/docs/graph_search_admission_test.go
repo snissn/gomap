@@ -27,6 +27,8 @@ func TestDocs_GraphSearchTypedColumnAdmissionGate(t *testing.T) {
 		"Healthy evidence must show no silent graph-row fallback",
 		"Evidence required to promote a row to `admitted`",
 		"`ns/op`, `ops/sec`, `B/op`, `allocs/op`",
+		"#2043 final type readiness summary",
+		"not an unconditional claim that #2035 beat the legacy control",
 	} {
 		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("graph-search admission spec missing required policy text %q", want)

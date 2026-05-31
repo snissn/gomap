@@ -30,6 +30,17 @@ authoritative typed-column and vector-index state assets
   -> optional final result-ID and document materialization
 ```
 
+#2043 closeout status: the combined prepared view is the admitted primary
+healthy current-format execution route because the final matrix shows prepared
+base-vector, adjacency, inverse-norm, row-ref, and document-ID counters with
+zero current-format graph-row/source fallbacks and `0 B/op`, `0 allocs/op` for
+graph-only search. It is not an unconditional wall-time win over the old legacy
+graph-row direct control: the minimal-stats graph-only row remains slower than
+the legacy control in the closeout run, so #2035 should not be represented as
+"beats legacy direct" unless the coordinator explicitly accepts the
+current-format architecture trade-off. #1980 remains a profile-backed
+frontier/top-k follow-up; #1977 normalized-vector payloads remain deferred.
+
 Normative boundaries:
 
 - Typed-column assets remain the canonical persisted state for current-format

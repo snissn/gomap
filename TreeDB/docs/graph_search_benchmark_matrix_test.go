@@ -41,6 +41,10 @@ func TestDocs_GraphSearchBenchmarkTruthMatrix2037(t *testing.T) {
 		"norm_mmap_direct/search",
 		"adjacency_prepared_csr_mmap_direct/search",
 		"adjacency_typed_list_mmap_direct/search",
+		"#2043 closeout evidence",
+		"not a full wall-time promotion",
+		"#1980 remains an evidence-backed follow-up",
+		"#1977 remains deferred",
 	}
 	for _, needle := range required {
 		if !strings.Contains(text, needle) {
