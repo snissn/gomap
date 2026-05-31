@@ -329,9 +329,6 @@ type CollectionManager struct {
 	domains                  map[string]*collectionWriteDomain
 	collectionsMu            sync.RWMutex
 	collections              map[*Collection]struct{}
-	columnLifecycleMu        sync.Mutex
-	columnLifecycleNextPinID uint64
-	columnLifecyclePins      map[uint64]columnAssetLifecyclePinSetRecord
 }
 
 type collectionManagerOptions struct {

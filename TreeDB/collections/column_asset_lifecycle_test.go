@@ -207,6 +207,53 @@ func TestColumnAssetLifecycleReportPinSetSharedAcrossHandles1954(t *testing.T) {
 	}
 }
 
+func TestColumnAssetLifecycleReportPinSetSharedAcrossManagers1954(t *testing.T) {
+	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+	ownerMgr := NewCollectionManager(d)
+	owner, err := ownerMgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection owner: %v", err)
+	}
+	if _, err := owner.Insert([]byte("e1"), []byte(`{"time_us":1,"kind":"like","did":"d1"}`)); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	candidate := writeColumnAssetReachabilityCandidateM15A(t, d, owner, 2, 99)
+	pin, err := owner.AcquireColumnAssetLifecyclePinSet(ColumnAssetLifecyclePinSetOptions{
+		Source: ColumnAssetLifecyclePinSourcePreparedQuery,
+		Owner:  "prepared-runner-owner-manager",
+		Refs:   []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("AcquireColumnAssetLifecyclePinSet: %v", err)
+	}
+	defer func() { _ = pin.Close() }()
+
+	maintenanceMgr := NewCollectionManager(d)
+	maintenance, err := maintenanceMgr.OpenCollection("events")
+	if err != nil {
+		t.Fatalf("OpenCollection maintenance: %v", err)
+	}
+	report, err := maintenance.PlanColumnAssetLifecycle(context.Background(), ColumnAssetLifecycleOptions{
+		Detailed:      true,
+		CandidateRefs: []ColumnAssetRef{candidate},
+	})
+	if err != nil {
+		t.Fatalf("PlanColumnAssetLifecycle from separate manager: %v", err)
+	}
+	if report.PinSets.OpenSessions != 1 || report.Roots.PreparedQueryRefs != 1 || report.Reachability.Sources.PreparedQueryRefs != 1 {
+		t.Fatalf("separate manager missed lifecycle pin: pins=%+v roots=%+v sources=%+v", report.PinSets, report.Roots, report.Reachability.Sources)
+	}
+	entry, ok := columnAssetLifecycleFindEntry(report.Reachability.Entries, candidate)
+	if !ok {
+		t.Fatalf("missing candidate entry")
+	}
+	if entry.Status != ColumnAssetReachabilityProtected || !slices.Contains(entry.Sources, ColumnAssetReachabilitySourcePreparedQuery) {
+		t.Fatalf("separate manager entry=%+v want protected prepared_query", entry)
+	}
+}
+
 func TestColumnAssetLifecycleReportMappedResourceUnconvertibleIncomplete1954(t *testing.T) {
 	dir := prepareColumnAssetReachabilityCommandWALDirM15A(t)
 	d := openCollectionCommandWALDB(t, dir)
