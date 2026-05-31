@@ -19,14 +19,17 @@ func TestColumnPhysicalQ1DenseLatestVisibleMutation1953(t *testing.T) {
 	_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
 	defer closeFn()
 
-	latest := latestEventMap1953(flattenColumnPhysicalEvents1950(batches))
-	updated := latest["doc_00_000000"]
+	events := flattenColumnPhysicalEvents1950(batches)
+	latest := latestEventMap1953(events)
+	updateID := events[0].ID
+	deleteID := events[len(events)-1].ID
+	updated := latest[updateID]
 	updated.Collection = "app.updated"
 	updated.TimeUS += 77
 	updateTypedColumnEvent1953(t, col, updated)
 	latest[updated.ID] = updated
-	deleteTypedColumnEvent1953(t, col, "doc_01_000001")
-	delete(latest, "doc_01_000001")
+	deleteTypedColumnEvent1953(t, col, deleteID)
+	delete(latest, deleteID)
 
 	want := collectionCounts1953(latestEvents1953(latest))
 	result, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"})
@@ -43,9 +46,13 @@ func TestColumnPhysicalQ1DenseLatestVisibleMutation1953(t *testing.T) {
 func TestColumnPhysicalQ3DenseLatestVisibleMutationReopen1953(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
 	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
-	latest := latestEventMap1953(flattenColumnPhysicalEvents1950(batches))
+	events := flattenColumnPhysicalEvents1950(batches)
+	latest := latestEventMap1953(events)
 
-	promoted := latest["a-kind-guard"]
+	promoteID := pickEventID1953(t, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+		return event.Kind == "identity" && event.Operation == "create" && event.Collection == "app.bsky.feed.post"
+	})
+	promoted := latest[promoteID]
 	promoted.Kind = "commit"
 	promoted.Operation = "create"
 	promoted.Collection = "app.bsky.feed.post"
@@ -53,14 +60,20 @@ func TestColumnPhysicalQ3DenseLatestVisibleMutationReopen1953(t *testing.T) {
 	updateTypedColumnEvent1953(t, col, promoted)
 	latest[promoted.ID] = promoted
 
-	demoted := latest["b-post-1"]
+	demoteID := pickEventID1953(t, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+		return event.ID != promoteID && columnPhysicalJSONBenchReferenceMatchP0("q3", event) && event.Collection == "app.bsky.feed.post"
+	})
+	demoted := latest[demoteID]
 	demoted.Operation = "delete"
 	demoted.TimeUS += 13
 	updateTypedColumnEvent1953(t, col, demoted)
 	latest[demoted.ID] = demoted
 
-	deleteTypedColumnEvent1953(t, col, "a-like-1")
-	delete(latest, "a-like-1")
+	deleteID := pickEventID1953(t, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+		return event.ID != promoteID && event.ID != demoteID && columnPhysicalJSONBenchReferenceMatchP0("q3", event)
+	})
+	deleteTypedColumnEvent1953(t, col, deleteID)
+	delete(latest, deleteID)
 
 	_, col, closeFn = checkpointAndReopenTypedColumnLatestVisibleFixture1953(t, dir, d, closeFn)
 	defer closeFn()
@@ -83,9 +96,13 @@ func TestColumnPhysicalQ5DenseLatestVisibleMutation1953(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBatchA1950(), columnPhysicalQ5DenseBatchB1950()}
 	_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
 	defer closeFn()
-	latest := latestEventMap1953(flattenColumnPhysicalEvents1950(batches))
+	events := flattenColumnPhysicalEvents1950(batches)
+	latest := latestEventMap1953(events)
 
-	promoted := latest["a-kind-guard"]
+	promoteID := pickEventID1953(t, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+		return event.Kind == "identity" && event.Collection == "app.bsky.feed.post"
+	})
+	promoted := latest[promoteID]
 	promoted.Kind = "commit"
 	promoted.Operation = "create"
 	promoted.Collection = "app.bsky.feed.post"
@@ -94,15 +111,21 @@ func TestColumnPhysicalQ5DenseLatestVisibleMutation1953(t *testing.T) {
 	updateTypedColumnEvent1953(t, col, promoted)
 	latest[promoted.ID] = promoted
 
-	moved := latest["a-collection-guard"]
+	moveID := pickEventID1953(t, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+		return event.ID != promoteID && event.Kind == "commit" && event.Operation == "create" && event.Collection != "app.bsky.feed.post"
+	})
+	moved := latest[moveID]
 	moved.Collection = "app.bsky.feed.post"
 	moved.Did = "did:epsilon"
 	moved.TimeUS += 300
 	updateTypedColumnEvent1953(t, col, moved)
 	latest[moved.ID] = moved
 
-	deleteTypedColumnEvent1953(t, col, "b-m-3")
-	delete(latest, "b-m-3")
+	deleteID := pickEventID1953(t, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+		return event.ID != promoteID && event.ID != moveID && columnPhysicalJSONBenchReferenceMatchP0("q5", event)
+	})
+	deleteTypedColumnEvent1953(t, col, deleteID)
+	delete(latest, deleteID)
 
 	live := latestEvents1953(latest)
 	req := columnPhysicalQ5DenseRequest1950()
@@ -157,7 +180,7 @@ func BenchmarkColumnPhysicalDenseLatestVisible1953(b *testing.B) {
 		name    string
 		batches [][]columnPhysicalJSONBenchParityEventP0
 		req     ColumnPhysicalQueryRequest
-		mutate  func(testing.TB, *Collection)
+		mutate  func(testing.TB, *Collection, [][]columnPhysicalJSONBenchParityEventP0)
 	}{
 		{
 			name:    "q1_insert_only",
@@ -168,9 +191,12 @@ func BenchmarkColumnPhysicalDenseLatestVisible1953(b *testing.B) {
 			name:    "q1_latest_visible",
 			batches: columnPhysicalQ1DenseEventBatches1950([][]string{{"app.m", "app.z", "app.m", "app.z"}, {"app.a", "app.m", "app.a", "app.m"}}),
 			req:     ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"},
-			mutate: func(tb testing.TB, col *Collection) {
-				updateTypedColumnEvent1953(tb, col, columnPhysicalJSONBenchParityEventP0{ID: "doc_00_000000", TimeUS: 1_900_000_000_000_000, Kind: "commit", Operation: "create", Collection: "app.updated", Did: "did:q1:000000"})
-				deleteTypedColumnEvent1953(tb, col, "doc_01_000001")
+			mutate: func(tb testing.TB, col *Collection, batches [][]columnPhysicalJSONBenchParityEventP0) {
+				events := flattenColumnPhysicalEvents1950(batches)
+				updated := events[0]
+				updated.Collection = "app.updated"
+				updateTypedColumnEvent1953(tb, col, updated)
+				deleteTypedColumnEvent1953(tb, col, events[len(events)-1].ID)
 			},
 		},
 		{
@@ -182,9 +208,19 @@ func BenchmarkColumnPhysicalDenseLatestVisible1953(b *testing.B) {
 			name:    "q3_latest_visible",
 			batches: [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBenchmarkEvents1950(2048)},
 			req:     columnPhysicalQ3DenseRequest1950(),
-			mutate: func(tb testing.TB, col *Collection) {
-				updateTypedColumnEvent1953(tb, col, columnPhysicalJSONBenchParityEventP0{ID: "q3-bench-000019", TimeUS: 1_960_000_000_000_000, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:q3:0019"})
-				deleteTypedColumnEvent1953(tb, col, "q3-bench-000001")
+			mutate: func(tb testing.TB, col *Collection, batches [][]columnPhysicalJSONBenchParityEventP0) {
+				events := flattenColumnPhysicalEvents1950(batches)
+				byID := eventsByID1953(events)
+				updateID := pickEventID1953(tb, events, func(event columnPhysicalJSONBenchParityEventP0) bool { return event.Kind == "identity" })
+				updated := byID[updateID]
+				updated.Kind = "commit"
+				updated.Operation = "create"
+				updated.Collection = "app.bsky.feed.post"
+				updateTypedColumnEvent1953(tb, col, updated)
+				deleteID := pickEventID1953(tb, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+					return event.ID != updateID && columnPhysicalJSONBenchReferenceMatchP0("q3", event)
+				})
+				deleteTypedColumnEvent1953(tb, col, deleteID)
 			},
 		},
 		{
@@ -196,9 +232,20 @@ func BenchmarkColumnPhysicalDenseLatestVisible1953(b *testing.B) {
 			name:    "q5_latest_visible",
 			batches: [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBenchmarkEvents1950(2048)},
 			req:     columnPhysicalQ5DenseRequest1950(),
-			mutate: func(tb testing.TB, col *Collection) {
-				updateTypedColumnEvent1953(tb, col, columnPhysicalJSONBenchParityEventP0{ID: "q5-bench-000023", TimeUS: 1_950_000_000_999_999, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:q5:0023"})
-				deleteTypedColumnEvent1953(tb, col, "q5-bench-000001")
+			mutate: func(tb testing.TB, col *Collection, batches [][]columnPhysicalJSONBenchParityEventP0) {
+				events := flattenColumnPhysicalEvents1950(batches)
+				byID := eventsByID1953(events)
+				updateID := pickEventID1953(tb, events, func(event columnPhysicalJSONBenchParityEventP0) bool { return event.Kind == "identity" })
+				updated := byID[updateID]
+				updated.Kind = "commit"
+				updated.Operation = "create"
+				updated.Collection = "app.bsky.feed.post"
+				updated.TimeUS += 999_999
+				updateTypedColumnEvent1953(tb, col, updated)
+				deleteID := pickEventID1953(tb, events, func(event columnPhysicalJSONBenchParityEventP0) bool {
+					return event.ID != updateID && columnPhysicalJSONBenchReferenceMatchP0("q5", event)
+				})
+				deleteTypedColumnEvent1953(tb, col, deleteID)
 			},
 		},
 	}
@@ -207,7 +254,7 @@ func BenchmarkColumnPhysicalDenseLatestVisible1953(b *testing.B) {
 			_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(b, nil, tc.batches)
 			defer closeFn()
 			if tc.mutate != nil {
-				tc.mutate(b, col)
+				tc.mutate(b, col, tc.batches)
 			}
 			preview, err := col.RunColumnPhysicalQuery(tc.req)
 			if err != nil {
@@ -322,11 +369,26 @@ func deleteTypedColumnEvent1953(tb testing.TB, col *Collection, id string) {
 }
 
 func latestEventMap1953(events []columnPhysicalJSONBenchParityEventP0) map[string]columnPhysicalJSONBenchParityEventP0 {
-	latest := make(map[string]columnPhysicalJSONBenchParityEventP0, len(events))
+	return eventsByID1953(events)
+}
+
+func eventsByID1953(events []columnPhysicalJSONBenchParityEventP0) map[string]columnPhysicalJSONBenchParityEventP0 {
+	out := make(map[string]columnPhysicalJSONBenchParityEventP0, len(events))
 	for _, event := range events {
-		latest[event.ID] = event
+		out[event.ID] = event
 	}
-	return latest
+	return out
+}
+
+func pickEventID1953(tb testing.TB, events []columnPhysicalJSONBenchParityEventP0, match func(columnPhysicalJSONBenchParityEventP0) bool) string {
+	tb.Helper()
+	for _, event := range events {
+		if match(event) {
+			return event.ID
+		}
+	}
+	tb.Fatalf("no generated fixture event matched predicate")
+	return ""
 }
 
 func latestEvents1953(latest map[string]columnPhysicalJSONBenchParityEventP0) []columnPhysicalJSONBenchParityEventP0 {
