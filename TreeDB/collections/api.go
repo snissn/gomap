@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"runtime/pprof"
 	"sort"
@@ -8626,7 +8627,7 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		resultIDs, err := run()
-		if errors.Is(err, ErrConcurrentMutation) {
+		if isRetriableCollectionMutationError(err) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
@@ -8634,6 +8635,17 @@ func retryInsertBatchMutation(run func() ([][]byte, error)) ([][]byte, error) {
 		return resultIDs, err
 	}
 	return nil, collectionMutationRetryExhausted(lastErr)
+}
+
+func isRetriableCollectionMutationError(err error) bool {
+	return errors.Is(err, ErrConcurrentMutation) || isRetriableCollectionCatalogReadEOF(err)
+}
+
+func isRetriableCollectionCatalogReadEOF(err error) bool {
+	if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	return strings.Contains(err.Error(), "collections: load catalog")
 }
 
 func (c *Collection) insertBatchOnce(ids, documents [][]byte, trustedValidBSON bool, templateEncoder *TemplateV1Encoder, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
@@ -18533,6 +18545,9 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {
 	raw, ok, err := getSystemValue(snap, systemCollectionMetaKey(name))
 	if err != nil || !ok {
+		if err != nil {
+			return nil, fmt.Errorf("collections: load catalog %q meta: %w", name, err)
+		}
 		return nil, err
 	}
 	meta, err := decodeCollectionMeta(raw)
@@ -18544,7 +18559,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	for _, rootName := range rootNames {
 		rawRoot, ok, err := getSystemValue(snap, systemCollectionRootKey(rootName))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("collections: load catalog %q root %q: %w", name, rootName, err)
 		}
 		if !ok {
 			continue
@@ -18557,7 +18572,7 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	}
 	rootOverlays, err := loadCollectionCatalogRootOverlays(snap, rootNames)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("collections: load catalog %q root overlays: %w", name, err)
 	}
 	catalog := newCollectionCatalogWithOverlays(meta, roots, rootOverlays)
 	if err := validateColumnStoreCatalogRoot(snap, catalog); err != nil {
