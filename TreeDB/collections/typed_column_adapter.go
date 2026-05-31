@@ -18,6 +18,10 @@ import (
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
+func typedColumnDefaultRowsPerGranule() int {
+	return typedcolumn.DefaultRowsPerGranule
+}
+
 const (
 	typedColumnAdapterPrimaryIDColumn                 = "__treedb_primary_id"
 	typedColumnAdapterMetadataDictionary              = "__treedb_adapter_metadata"

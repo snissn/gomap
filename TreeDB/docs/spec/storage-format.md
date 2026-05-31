@@ -943,7 +943,10 @@ control-plane state, not a sidecar hint. Current normalized fields are:
 
 - `enabled`: column storage is enabled for the collection.
 - `columns`, `sort_key`, and `aggregate_metadata`: declared projection schema,
-  analytical ordering, and aggregate metadata definitions.
+  analytical ordering, and aggregate metadata definitions. Aggregate metadata
+  definitions may include exact string predicate coverage; metadata assets are
+  only eligible for matching physical queries with identical predicate, group,
+  value, and aggregate shape.
 - `retained_payload` and `reconstruction`: how non-column row bytes and column
   values reconstruct full documents. The current default retained-payload policy
   is `non-column`.

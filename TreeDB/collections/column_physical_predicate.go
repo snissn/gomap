@@ -22,10 +22,10 @@ const columnPhysicalQueryMaxPredicateValues = 64
 // Values so callers can distinguish an empty-string member from a missing
 // literal. Predicates are combined with AND.
 type ColumnPhysicalQueryPredicate struct {
-	Column string
-	Kind   ColumnPhysicalQueryPredicateKind
-	Value  string
-	Values []string
+	Column string                           `json:"column"`
+	Kind   ColumnPhysicalQueryPredicateKind `json:"kind,omitempty"`
+	Value  string                           `json:"value,omitempty"`
+	Values []string                         `json:"values,omitempty"`
 }
 
 type columnPhysicalQueryPredicateSpec struct {

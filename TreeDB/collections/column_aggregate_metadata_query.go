@@ -20,6 +20,7 @@ type columnAggregateMetadataRunner struct {
 	mappedBytes              uint64
 	heapCopyBytes            uint64
 	metadataHits             int
+	metadataEntries          int
 	rows                     int
 	scheduledGranules        int
 	groupKeys                []string
@@ -31,6 +32,7 @@ type columnAggregateMetadataRunner struct {
 	maxs                     []int64
 	resultGroups             []ColumnPhysicalQueryGroup
 	columnAssetReadIntegrity string
+	predicateDiagnostics     columnPhysicalQueryPredicateDiagnosticPlan
 }
 
 func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache) (*columnAggregateMetadataRunner, error) {
@@ -56,6 +58,7 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		kind:                     req.Kind,
 		scheduledGranules:        len(refs),
 		columnAssetReadIntegrity: columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity),
+		predicateDiagnostics:     newColumnPhysicalQueryPredicateDiagnosticPlan(req),
 	}
 	groupCodes := make(map[string]int)
 	var rawScratch []byte
@@ -74,6 +77,9 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		if asset.GroupColumn != req.GroupColumn || asset.ValueColumn != req.ValueColumn {
 			return nil, fmt.Errorf("%w: aggregate metadata %q columns %s/%s do not match query %s/%s", ErrColumnQueryPlanUnsupported, aggregate.Name, asset.GroupColumn, asset.ValueColumn, req.GroupColumn, req.ValueColumn)
 		}
+		if !columnPhysicalQueryPredicatesExactEqual(asset.Predicates, aggregate.Predicates) {
+			return nil, fmt.Errorf("%w: aggregate metadata %q predicate coverage does not match declared metadata", ErrColumnQueryPlanUnsupported, aggregate.Name)
+		}
 		runner.metadataHits++
 		for _, entry := range asset.Entries {
 			code, ok := groupCodes[entry.Group]
@@ -87,6 +93,7 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 				min:       entry.Min,
 				max:       entry.Max,
 			})
+			runner.metadataEntries++
 			runner.rows += entry.Count
 		}
 	}
@@ -123,14 +130,16 @@ func (r *columnAggregateMetadataRunner) run(view columnPhysicalScanSnapshotView,
 
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = 2
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 2)
 	diag.MetadataHits = r.metadataHits
+	diag.MetadataEntries = r.metadataEntries
 	diag.ScheduledGranules = r.scheduledGranules
 	diag.PhysicalBytesScanned = r.assetBytes
 	diag.DecodedMetadataBytes = r.decodedMetadataBytes
 	diag.MappedBytes = r.mappedBytes
 	diag.HeapCopyBytes = r.heapCopyBytes
 	diag.ReduceRows = r.rows
+	applyColumnPhysicalQueryPredicateDiagnostics(&diag, r.predicateDiagnostics, r.rows, 0)
 	diag.ResultGroups = len(r.resultGroups)
 	diag.TopKLimit = req.TopK
 	diag.TopKCandidates = columnPhysicalTopKCandidates(req, r.touchedCodes, r.groupKeys)

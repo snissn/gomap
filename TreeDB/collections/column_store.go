@@ -215,10 +215,11 @@ type ColumnSortKey struct {
 }
 
 type ColumnAggregateMetadata struct {
-	Name        string              `json:"name"`
-	Column      string              `json:"column,omitempty"`
-	GroupColumn string              `json:"group_column,omitempty"`
-	Kind        ColumnAggregateKind `json:"kind"`
+	Name        string                         `json:"name"`
+	Column      string                         `json:"column,omitempty"`
+	GroupColumn string                         `json:"group_column,omitempty"`
+	Kind        ColumnAggregateKind            `json:"kind"`
+	Predicates  []ColumnPhysicalQueryPredicate `json:"predicates,omitempty"`
 }
 
 type ColumnAssetManagerConfig struct {
@@ -651,6 +652,9 @@ func validateColumnStoreConfig(collection string, cfg ColumnStoreConfig) error {
 		if err := validateColumnAggregateMetadataPhysicalSpec(aggregate, columnTypes); err != nil {
 			return err
 		}
+		if _, err := columnAggregateMetadataCanonicalPredicates(cfg, aggregate.Predicates); err != nil {
+			return fmt.Errorf("collections: invalid aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
+		}
 		if _, ok := aggregateNames[aggregate.Name]; ok {
 			return fmt.Errorf("collections: duplicate aggregate metadata %q", aggregate.Name)
 		}
@@ -1043,7 +1047,7 @@ func (cfg ColumnStoreConfig) copy() ColumnStoreConfig {
 	out := cfg
 	out.Columns = append([]ColumnStoreColumn(nil), cfg.Columns...)
 	out.SortKey = append([]ColumnSortKey(nil), cfg.SortKey...)
-	out.AggregateMetadata = append([]ColumnAggregateMetadata(nil), cfg.AggregateMetadata...)
+	out.AggregateMetadata = cloneColumnAggregateMetadata(cfg.AggregateMetadata)
 	if cfg.AssetManager != nil {
 		assetManager := *cfg.AssetManager
 		out.AssetManager = &assetManager
@@ -1127,7 +1131,7 @@ func columnStoreConfigEqual(a, b *ColumnStoreConfig) bool {
 		}
 	}
 	for i := range a.AggregateMetadata {
-		if a.AggregateMetadata[i] != b.AggregateMetadata[i] {
+		if !columnAggregateMetadataEqual(a.AggregateMetadata[i], b.AggregateMetadata[i]) {
 			return false
 		}
 	}

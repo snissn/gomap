@@ -577,8 +577,9 @@ Production compatibility asset shape:
 - format magic: `TCAM`
 - stored as a byte range in a column asset segment file
 - grouped by one string column and one int64 value column
-- current entries store group, count, min, and max
-- current metadata is per part, not per granule
+- v2 stores exact predicate coverage for equality and small IN-list string predicates
+- entries store group, count, min, and max
+- typed-column-owned aggregate metadata is emitted per typed-column granule; older v1/no-predicate assets were per part
 
 Rows and size:
 
@@ -625,10 +626,11 @@ Rows:
 - source row count remains the typed-column part or granule row count
 - matched row count is the number of rows satisfying the metadata predicate
 
-Current production limitation:
+Current production status:
 
-- production aggregate metadata has no predicate declaration
-- production aggregate metadata queries currently reject physical predicates
+- `ColumnAggregateMetadata` can declare exact predicate coverage.
+- Production aggregate metadata assets persist predicate coverage and query planning only uses them when runtime predicates, group key, value column, and aggregate kind match exactly.
+- Metadata diagnostics report metadata entries read separately from matched source-row counts; metadata paths keep `RowsScanned == 0` because they do not decode data rows.
 
 Important code:
 
@@ -813,7 +815,7 @@ Draft label mapping:
 | Sectioned column part image | One row-aligned image contains descriptors, marks, locators, dictionaries, metadata, and payloads. | Present, with extra stats/pruning/layout sections. | Published for `typed_column_part` owners, but JSONBench string/int64 production query paths still largely use compatibility per-column assets. |
 | Encodings and compression | Delta, double-delta, nullable, bool bitpack/RLE, compact string codes, adaptive codec block sizing, Snappy/LZ4 keep-if-smaller. | Mostly present or extended. | Production JSONBench-style physical queries do not consistently consume the typed-column codec/block model. |
 | q1-q5 kernels | Dense low-allocation kernels, fused q2, q2 sorted-prefix grouped distinct, q4 time-order early stop, q4 prefix-pruned scan, q4/q5 metadata paths. | General primitives exist, but JSONBench kernels are not production APIs. | Typed-column direct q1/q2/q3/q4a/q4b/q5 now execute over typed-column sections with explicit diagnostics: q1 uses dense dictionary-code grouped count for predicate-free event/collection counts, q2 uses sorted grouped-distinct streaming over `(collection,did)` when the physical SortKey validates, q3 uses dense dictionary-code/int64 grouped-hour reduction with real predicates, q4a uses `time_us` physical order to decode only the Top-K prefix granules, q4b uses sorted-prefix mark pruning plus TopK shaping, and q5 uses dense dictionary-code/int64 span reduction with TopK shaping. |
-| Predicate-qualified aggregate metadata | Per-granule metadata can be built only for rows matching declared predicates. | Present in the data plane. | Production `ColumnAggregateMetadata` has no predicate declaration and aggregate metadata queries reject physical predicates. |
+| Predicate-qualified aggregate metadata | Per-granule metadata can be built only for rows matching declared predicates. | Present in the data plane. | Production `ColumnAggregateMetadata` declares exact predicate coverage; v2 aggregate metadata assets persist that coverage, emit typed-column-owned summaries per granule, and direct/prepared q4/q5 metadata paths require exact predicate/group/measure compatibility before scanning metadata entries. |
 | Multipart visibility and compaction | Base/delta/tombstones, latest-row visibility, part-set scans, compaction planning. | Data-plane subset exists. | Production has mutation manifests and visibility fallback, but optimized physical predicates, aggregate metadata, and prepared paths are mostly insert-only. |
 | Lifecycle control plane | Workspace inventory, prepared assets, reachability/reclaim/rewrite debt/quarantine planning. | Mostly deferred from internal typedcolumn. | Production has real asset manager/publish/GC/rewrite plumbing, but not a sorted typed-column part-set lifecycle model with full JSONBench diagnostics. |
 
@@ -953,6 +955,8 @@ Acceptance criteria:
 - Each query has parity tests, allocation benchmarks, and CPU/alloc profiles.
 
 ### P5: Add predicate-qualified aggregate metadata to production
+
+Status: implemented for #1951. Production `ColumnAggregateMetadata` supports exact predicate declarations, v2 `TCAM` assets persist predicate coverage, typed-column-owned metadata is built per granule, and direct/prepared q4/q5 metadata requests fail closed unless predicates/group/value/aggregate shape match exactly.
 
 Deliverables:
 
