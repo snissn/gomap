@@ -66,14 +66,16 @@ Defined v1 roles and type contracts are:
 | `inverse_norm` | `float32` | `raw_float32` | cosine inverse norms (#1992). |
 | `normalized_vectors` | `float32_vector` | `raw_float32_vector` | optional derived normalized vectors (#1977). |
 | `row_refs` | `int64` | `raw_int64` | ordinal-to-base-row `DocumentRowRef` coordinates (#1993). |
+| `document_ids` | `bytes` | `raw_bytes_offsets` | ordinal-to-exact returned document ID bytes (#2013). |
 
 The role contract deliberately names generic typed-column primitives. HNSW layer
-semantics, neighbor ordinal bounds, graph traversal, deleted-row policy, and row
-ref interpretation stay above the typed-column datastore layer. Row-ref state
-uses multiple `row_refs` assets distinguished by asset id (for generation,
-part id, row index, and applied command LSN); returned opaque document IDs remain
-legacy graph-row ID compatibility data until a first-class typed-column bytes
-primitive exists.
+semantics, neighbor ordinal bounds, graph traversal, deleted-row policy, row ref
+interpretation, and returned-ID semantics stay above the typed-column datastore
+layer. Row-ref state uses multiple `row_refs` assets distinguished by asset id
+(for generation, part id, row index, and applied command LSN). Document-ID state
+uses one `document_ids` asset with one opaque byte value per graph ordinal.
+Legacy graph row ID bytes remain compatibility or quarantine fallback records
+until graph-row payload retirement work removes or shrinks them.
 
 ## Validation and fail-closed behavior
 

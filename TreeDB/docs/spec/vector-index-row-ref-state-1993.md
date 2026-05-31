@@ -1,7 +1,8 @@
 # Vector-index row reference state (#1993)
 
-TreeDB column-graph search now publishes vector-index state for ordinal-to-base-row
-references. This is separate from returned document IDs.
+TreeDB column-graph search publishes vector-index state for ordinal-to-base-row
+references. This remains separate from returned document IDs, which are now
+owned by vector-index `document_ids` bytes state.
 
 ## Healthy path
 
@@ -28,15 +29,15 @@ The typed-column vector source first uses `row_refs` state to map HNSW ordinals
 to base typed-column rows. If row-ref state is absent, legacy graph row ID scans
 remain an explicit compatibility fallback.
 
-Top-K result fetches still copy returned IDs from graph row ID bytes. This
-preserves exact opaque binary document IDs without redefining arbitrary bytes as
-strings. When documents are materialized, row refs from vector-index state are
-used directly when available, avoiding an ID-to-row-ref locator lookup.
+Top-K document materialization uses row refs from vector-index state directly
+when available, avoiding an ID-to-row-ref locator lookup. Returned IDs are
+fetched from `document_ids` typed-column bytes state on the healthy path; legacy
+graph row ID bytes are compatibility fallback only.
 
 ## Opaque document IDs
 
-TreeDB does not currently have a first-class typed-column opaque `bytes` scalar
-for exact binary document IDs. Until that exists, graph row ID bytes remain the
-compatibility source for returned IDs. A follow-up should add a generic opaque
-bytes primitive before vector-index state attempts to own exact arbitrary binary
-IDs.
+Document IDs are opaque bytes, not strings. The document-ID state consumer uses
+the generic `bytes` / `raw_bytes_offsets` primitive so non-UTF-8 bytes and
+embedded NUL bytes stay exact at the typed-column layer. Graph row ID bytes
+remain compatibility or quarantine records until #2014 can retire or shrink that
+old payload dependency.

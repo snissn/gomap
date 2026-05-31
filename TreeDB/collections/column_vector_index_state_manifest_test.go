@@ -481,7 +481,8 @@ func columnVectorIndexStateTypedColumnEncodingNamesMatchConstants() bool {
 	return columnVectorIndexStateEncodingRawUint32List == typedcolumn.EncodingRawUint32OffsetsList.String() &&
 		columnVectorIndexStateEncodingRawInt64 == typedcolumn.EncodingRawInt64.String() &&
 		columnVectorIndexStateEncodingRawFloat32 == typedcolumn.EncodingRawFloat32.String() &&
-		columnVectorIndexStateEncodingRawFloat32Vector == typedcolumn.EncodingRawFloat32Vector.String()
+		columnVectorIndexStateEncodingRawFloat32Vector == typedcolumn.EncodingRawFloat32Vector.String() &&
+		columnVectorIndexStateEncodingRawBytesOffsets == typedcolumn.EncodingRawBytesOffsets.String()
 }
 
 func testColumnVectorIndexStateSnapshot1986(cfg ColumnStoreConfig, def VectorIndexDefinition, generation uint64, rows int) columnVectorIndexStateSnapshot {
@@ -507,6 +508,7 @@ func testColumnVectorIndexStateSnapshot1986(cfg ColumnStoreConfig, def VectorInd
 			columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleInverseNorm, "inv_norm_by_ordinal", mkRef(22), rows, cfg.SchemaHash+2),
 			columnVectorIndexStateAssetSnapshotForTest(columnVectorIndexStateAssetRoleNormalizedVectors, "normalized_vectors", mkRef(23), rows, cfg.SchemaHash+3),
 			{Role: columnVectorIndexStateAssetRoleRowRefs, AssetID: "row_refs", LogicalType: "int64", PhysicalEncoding: "raw_int64", RowCount: rows, SourceSchemaHash: cfg.SchemaHash + 4, Ref: mkRef(24), AssetBytes: mkRef(24).Length},
+			{Role: columnVectorIndexStateAssetRoleDocumentIDs, AssetID: "document_ids", LogicalType: "bytes", PhysicalEncoding: "raw_bytes_offsets", RowCount: rows, SourceSchemaHash: cfg.SchemaHash + 5, Ref: mkRef(25), AssetBytes: mkRef(25).Length},
 		},
 	}
 }

@@ -59,9 +59,9 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 		_ = d.Close()
 		t.Fatalf("stats=%+v want row-ref vector/result source", got.Stats)
 	}
-	if got.Stats.ResultIDGraphFallbacks != uint64(len(got.Results)) {
+	if got.Stats.ResultIDTypedBytesState != uint64(len(got.Results)) || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.ResultIDStateValidationFailures != 0 {
 		_ = d.Close()
-		t.Fatalf("stats=%+v want explicit graph-ID result fallback", got.Stats)
+		t.Fatalf("stats=%+v want typed bytes result IDs without graph fallback", got.Stats)
 	}
 	if got.Stats.DocumentRowRefStateFetches != uint64(len(got.Results)) || got.Stats.DocumentRowRefLookupFallbacks != 0 || got.Stats.DocumentRowLocatorBuilds != 0 {
 		_ = d.Close()
@@ -86,8 +86,8 @@ func TestColumnVectorGraphRowRefStatePublishesReopenAndSources1993(t *testing.T)
 		t.Fatalf("SearchVectorIndex reopen: %v", err)
 	}
 	assertColumnGraphSearchResponseLoadedV4(t, reopenedGot, def.Name, 2)
-	if reopenedGot.Stats.RowRefVectorSourceState != 1 || reopenedGot.Stats.RowRefStateResultRefs != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDGraphFallbacks != uint64(len(reopenedGot.Results)) {
-		t.Fatalf("reopen stats=%+v want durable row-ref source plus explicit graph ID fallback", reopenedGot.Stats)
+	if reopenedGot.Stats.RowRefVectorSourceState != 1 || reopenedGot.Stats.RowRefStateResultRefs != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDTypedBytesState != uint64(len(reopenedGot.Results)) || reopenedGot.Stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("reopen stats=%+v want durable row-ref source plus typed bytes result IDs", reopenedGot.Stats)
 	}
 }
 
@@ -116,9 +116,9 @@ func TestColumnVectorGraphRowRefStatePreservesOpaqueResultIDs1993(t *testing.T) 
 		_ = d.Close()
 		t.Fatalf("result id=%v want exact opaque bytes %v", got.Results, id)
 	}
-	if got.Stats.ResultIDGraphFallbacks != 1 || got.Stats.RowRefVectorSourceState != 1 {
+	if got.Stats.ResultIDTypedBytesState != 1 || got.Stats.ResultIDGraphFallbacks != 0 || got.Stats.RowRefVectorSourceState != 1 {
 		_ = d.Close()
-		t.Fatalf("stats=%+v want row-ref state for locators and graph ID fallback for opaque returned ID", got.Stats)
+		t.Fatalf("stats=%+v want row-ref state for locators and typed bytes state for opaque returned ID", got.Stats)
 	}
 	_ = d.Close()
 }

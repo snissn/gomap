@@ -17,15 +17,18 @@ const (
 	columnVectorIndexStateAssetRoleInverseNorm       = "inverse_norm"
 	columnVectorIndexStateAssetRoleNormalizedVectors = "normalized_vectors"
 	columnVectorIndexStateAssetRoleRowRefs           = "row_refs"
+	columnVectorIndexStateAssetRoleDocumentIDs       = "document_ids"
 
 	columnVectorIndexStateLogicalTypeUint32List    = "uint32_list"
 	columnVectorIndexStateLogicalTypeInt64         = "int64"
 	columnVectorIndexStateLogicalTypeFloat32       = "float32"
 	columnVectorIndexStateLogicalTypeFloat32Vector = "float32_vector"
+	columnVectorIndexStateLogicalTypeBytes         = "bytes"
 	columnVectorIndexStateEncodingRawUint32List    = "raw_uint32_offsets_list"
 	columnVectorIndexStateEncodingRawInt64         = "raw_int64"
 	columnVectorIndexStateEncodingRawFloat32       = "raw_float32"
 	columnVectorIndexStateEncodingRawFloat32Vector = "raw_float32_vector"
+	columnVectorIndexStateEncodingRawBytesOffsets  = "raw_bytes_offsets"
 )
 
 var columnVectorIndexStateRecordPrefixBytes = []byte(columnVectorIndexStateRecordPrefix)
@@ -377,6 +380,8 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 		return columnVectorIndexStateLogicalTypeFloat32Vector, columnVectorIndexStateEncodingRawFloat32Vector, true
 	case columnVectorIndexStateAssetRoleRowRefs:
 		return columnVectorIndexStateLogicalTypeInt64, columnVectorIndexStateEncodingRawInt64, true
+	case columnVectorIndexStateAssetRoleDocumentIDs:
+		return columnVectorIndexStateLogicalTypeBytes, columnVectorIndexStateEncodingRawBytesOffsets, true
 	default:
 		return "", "", false
 	}
@@ -387,7 +392,8 @@ func columnVectorIndexStateAssetRoleKnown(role string) bool {
 	case columnVectorIndexStateAssetRoleAdjacency,
 		columnVectorIndexStateAssetRoleInverseNorm,
 		columnVectorIndexStateAssetRoleNormalizedVectors,
-		columnVectorIndexStateAssetRoleRowRefs:
+		columnVectorIndexStateAssetRoleRowRefs,
+		columnVectorIndexStateAssetRoleDocumentIDs:
 		return true
 	default:
 		return false
