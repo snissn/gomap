@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -148,6 +149,267 @@ func TestMutationCommandsRoundTrip(t *testing.T) {
 	}
 	if stats := db.Stats(); len(stats) == 0 {
 		t.Fatalf("empty backend stats after checkpoint")
+	}
+}
+
+func TestMutationSingleReplaceBatchSemantics(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name:    "users",
+		Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"Ada"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"Ada Lovelace"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch existing: %v", err)
+	}
+	if matched != 1 || modified != 1 {
+		t.Fatalf("existing matched=%d modified=%d want 1/1", matched, modified)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Contains(doc, []byte(`"Ada Lovelace"`)) {
+		t.Fatalf("u1 doc=%s", doc)
+	}
+
+	matched, modified, err = client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com","name":"Ada Lovelace"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch identical: %v", err)
+	}
+	if matched != 1 || modified != 0 {
+		t.Fatalf("identical matched=%d modified=%d want 1/0", matched, modified)
+	}
+
+	matched, modified, err = client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("missing")},
+		[][]byte{[]byte(`{"email":"missing@example.com","name":"Missing"}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch missing: %v", err)
+	}
+	if matched != 0 || modified != 0 {
+		t.Fatalf("missing matched=%d modified=%d want 0/0", matched, modified)
+	}
+}
+
+func TestMutationSingleReplaceBatchSharesMetadataReadLock(t *testing.T) {
+	client, server, _, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"before"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	server.metadataMu.RLock()
+	locked := true
+	unlock := func() {
+		if locked {
+			server.metadataMu.RUnlock()
+			locked = false
+		}
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		matched, modified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+			[][]byte{[]byte("u1")},
+			[][]byte{[]byte(`{"name":"after"}`)},
+			AckVisible,
+		)
+		if err == nil && (matched != 1 || modified != 1) {
+			err = errors.New("unexpected replace counts")
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReplaceBatch: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("ReplaceBatch blocked behind metadata read lock")
+	}
+}
+
+func TestMutationInsertBatchSharesMetadataReadLock(t *testing.T) {
+	client, server, mgr, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	server.metadataMu.RLock()
+	locked := true
+	unlock := func() {
+		if locked {
+			server.metadataMu.RUnlock()
+			locked = false
+		}
+	}
+	defer unlock()
+
+	done := make(chan error, 1)
+	go func() {
+		ids, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+			[][]byte{[]byte("u1")},
+			[][]byte{[]byte(`{"name":"Ada"}`)},
+			AckVisible,
+		)
+		if err == nil && (len(ids) != 1 || string(ids[0]) != "u1") {
+			err = errors.New("unexpected insert IDs")
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("InsertBatch: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		unlock()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("InsertBatch blocked behind metadata read lock")
+	}
+
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	doc, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Contains(doc, []byte(`"Ada"`)) {
+		t.Fatalf("u1 doc=%s", doc)
+	}
+}
+
+func TestMutationConcurrentSingleReplaceBatch(t *testing.T) {
+	client, server, mgr, _ := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name:    "users",
+		Indexes: []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true}},
+	}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	const workers = 32
+	ids := make([][]byte, workers)
+	docs := make([][]byte, workers)
+	for i := range ids {
+		n := strconv.Itoa(i)
+		ids[i] = []byte("u" + n)
+		docs[i] = []byte(`{"email":"u` + n + `@example.com","name":"before"}`)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, ids, docs, AckVisible); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+
+	errCh := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := range ids {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, cleanup, err := NewInProcessClient(ctx, server)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer func() { _ = cleanup() }()
+			n := strconv.Itoa(i)
+			matched, modified, err := c.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+				[][]byte{[]byte("u" + n)},
+				[][]byte{[]byte(`{"email":"u` + n + `@example.com","name":"after` + n + `"}`)},
+				AckVisible,
+			)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if matched != 1 || modified != 1 {
+				errCh <- errors.New("unexpected replace counts")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("concurrent ReplaceBatch: %v", err)
+		}
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	for i := range ids {
+		doc, err := col.Get(ids[i])
+		if err != nil {
+			t.Fatalf("Get %s: %v", ids[i], err)
+		}
+		want := []byte(`"name":"after` + strconv.Itoa(i) + `"`)
+		if !bytes.Contains(doc, want) {
+			t.Fatalf("%s doc=%s want %s", ids[i], doc, want)
+		}
 	}
 }
 
@@ -785,21 +1047,146 @@ func TestMutationCatalogVersionCacheSurvivesSuccessfulDataMutation(t *testing.T)
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	version := catalogVersion(t, db)
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCommit := catalogVersion(t, db)
 	client.catalogVersionPlusOne.Store(version + 1)
-	deleted, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("missing")}, AckVisible)
+	ids, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	)
 	if err != nil {
-		t.Fatalf("DeleteBatch missing: %v", err)
+		t.Fatalf("InsertBatch: %v", err)
 	}
-	if deleted != 0 {
-		t.Fatalf("deleted=%d want 0", deleted)
+	if len(ids) != 1 || string(ids[0]) != "u1" {
+		t.Fatalf("insert ids=%q want u1", ids)
 	}
-	after := catalogVersion(t, db)
-	if got := client.catalogVersionPlusOne.Load(); got != after+1 {
-		t.Fatalf("catalogVersionPlusOne=%d want %d", got, after+1)
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
 	}
-	if after != version {
-		t.Fatalf("missing delete changed catalog version from %d to %d", version, after)
+	if got := client.catalogVersionPlusOne.Load(); got != version+1 {
+		t.Fatalf("catalogVersionPlusOne=%d want %d", got, version+1)
+	}
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data mutation changed catalog version from %d to %d", version, after)
+	}
+}
+
+func TestMutationCatalogGuardAllowsPriorDataCommitVersion(t *testing.T) {
+	client, _, db := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCommit := catalogVersion(t, db)
+	guardedCtx := WithExpectedCatalogVersion(ctx, version)
+	if _, err := client.InsertBatch(guardedCtx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
+	}
+
+	matched, modified, err := client.ReplaceBatch(guardedCtx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":2}`)},
+		AckVisible,
+	)
+	if err != nil {
+		t.Fatalf("ReplaceBatch with catalog version predating data commit: %v", err)
+	}
+	if matched != 1 || modified != 1 {
+		t.Fatalf("matched=%d modified=%d want 1/1", matched, modified)
+	}
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data mutations changed catalog version from %d to %d", version, after)
+	}
+}
+
+func TestCatalogMetadataVersionIgnoresDataRootChanges(t *testing.T) {
+	client, server, _, db := serveCollectionPipeWithServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	beforeCatalog, beforeOK := server.catalogMetadataFingerprint()
+	if !beforeOK {
+		t.Fatalf("catalogMetadataFingerprint before data mutation failed")
+	}
+	beforeCommit := catalogVersion(t, db)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"x":1}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	afterCommit := catalogVersion(t, db)
+	if afterCommit <= beforeCommit {
+		t.Fatalf("backend commit seq did not advance after data mutation: before=%d after=%d", beforeCommit, afterCommit)
+	}
+
+	server.bumpCatalogVersionIfCatalogMetadataChanged(beforeCatalog, beforeOK)
+	if after := clientCatalogVersion(t, client, ctx); after != version {
+		t.Fatalf("data root change bumped catalog version from %d to %d", version, after)
+	}
+}
+
+func TestMutationCatalogGuardRejectsPriorVersionAfterMetadataChange(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.CreateIndex(WithExpectedCatalogVersion(ctx, version), "users", collections.IndexDefinition{
+		Name:      "email",
+		Field:     "email",
+		ValueType: collections.IndexValueString,
+	}); err != nil {
+		t.Fatalf("CreateIndex: %v", err)
+	}
+	after := clientCatalogVersion(t, client, ctx)
+	if after == version {
+		t.Fatalf("metadata mutation did not advance catalog version: %d", after)
+	}
+
+	_, err := client.InsertBatch(WithExpectedCatalogVersion(ctx, version), "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrCatalogVersionMismatch) {
+		t.Fatalf("InsertBatch with stale schema version err=%v want catalog mismatch", err)
+	}
+	if _, err := client.InsertBatch(WithExpectedCatalogVersion(ctx, after), "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch with current schema version: %v", err)
 	}
 }
 
@@ -813,7 +1200,8 @@ func TestMutationCatalogVersionCacheClearsAfterMismatch(t *testing.T) {
 	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection: %v", err)
 	}
-	client.catalogVersionPlusOne.Store(1)
+	version := clientCatalogVersion(t, client, ctx)
+	client.catalogVersionPlusOne.Store(version + 2)
 	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
 		[][]byte{[]byte("u1")},
 		[][]byte{[]byte(`{"x":1}`)},

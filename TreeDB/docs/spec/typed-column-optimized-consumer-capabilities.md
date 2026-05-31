@@ -7,8 +7,9 @@ by their highest committed optimized-consumer tier. The role-specific prepared
 graph-search view policy lives in
 `typed-column-graph-search-prepared-views.md`, and the #2044 readiness/admission
 table lives in `typed-column-graph-search-admission.md`; this document does not
-implement those views (#2036), graph-search admission enforcement (#2044), or
-reusable direct-view certifier APIs (#2046).
+implement those views (#2036) or graph-search admission enforcement (#2044). The
+reusable #2046 direct-view certifier substrate lives in
+`TreeDB/internal/typeddecode` and consumes the `mmap_direct` row contracts here.
 
 The matrix complements the semantic capability matrix in
 `typed-column-semantics.md`, the physical layout/codec contract in
@@ -40,8 +41,10 @@ pointers must not be described as transient or WAL-like storage.
   channels such as row refs and document IDs may be touched only at the documented
   result/materialization boundary.
 - Reusable direct-view certification and helper API work belongs to #2046. Rows
-  marked `mmap_direct` define the contract #2046 should certify; this PR does
-  not add new certifier implementation.
+  marked `mmap_direct` define the contract certified by the shared #2046
+  `typeddecode` substrate; type-specific graph-search tickets must still provide
+  role-specific prepared views, counters, and admission evidence before changing
+  #2044 row status.
 - Adding a new collection logical value type, `typedcolumn.ColumnType`, or
   `typedcolumn.Encoding` must update this document and the docs-lint coverage in
   `TreeDB/docs/column_store_capability_matrix_test.go` before merge.

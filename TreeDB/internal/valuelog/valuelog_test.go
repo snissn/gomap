@@ -95,6 +95,71 @@ func TestWriterRotateTo_FlushesSinkBufferBeforeSwitchingToFileBacked(t *testing.
 	}
 }
 
+func TestWriterRotateToWithSyncFalseSkipsRotateSync(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	path3 := filepath.Join(dir, "value-l0-000003.log")
+
+	origSyncDir := syncDirFn
+	defer func() { syncDirFn = origSyncDir }()
+	var dirSyncs int
+	syncDirFn = func(string) error {
+		dirSyncs++
+		return nil
+	}
+
+	writer, err := NewWriter(path1, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() {
+		if err := writer.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	var fileSyncs int
+	writer.syncFn = func(*os.File) error {
+		fileSyncs++
+		return nil
+	}
+
+	dirSyncs = 0
+	if _, err := writer.Append(0, nil, 1, []byte("value-1")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := writer.RotateToWithSync(path2, page.ValueLogFileID(2), false); err != nil {
+		t.Fatalf("RotateToWithSync(false): %v", err)
+	}
+	if fileSyncs != 0 {
+		t.Fatalf("fileSyncs after relaxed rotate=%d want 0", fileSyncs)
+	}
+	if dirSyncs != 0 {
+		t.Fatalf("dirSyncs after relaxed rotate=%d want 0", dirSyncs)
+	}
+
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if fileSyncs != 1 {
+		t.Fatalf("fileSyncs after explicit Sync=%d want 1", fileSyncs)
+	}
+
+	if _, err := writer.Append(0, nil, 2, []byte("value-2")); err != nil {
+		t.Fatalf("Append second: %v", err)
+	}
+	if err := writer.RotateToWithSync(path3, page.ValueLogFileID(3), true); err != nil {
+		t.Fatalf("RotateToWithSync(true): %v", err)
+	}
+	if fileSyncs != 2 {
+		t.Fatalf("fileSyncs after synced rotate=%d want 2", fileSyncs)
+	}
+	if dirSyncs != 1 {
+		t.Fatalf("dirSyncs after synced rotate=%d want 1", dirSyncs)
+	}
+}
+
 func TestValueLogAppendRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")

@@ -1691,6 +1691,9 @@ func insertColumnGraphRebuildRowsV2A(tb testing.TB, col *Collection, rows []colu
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		tb.Fatalf("InsertBatch: %v", err)
 	}
+	if err := col.Flush(); err != nil {
+		tb.Fatalf("Flush: %v", err)
+	}
 }
 
 func insertColumnGraphRebuildDualVectorRowsV2A(tb testing.TB, col *Collection, rows []columnGraphRebuildDualInputRowV2A) {
@@ -1713,6 +1716,9 @@ func insertColumnGraphRebuildDualVectorRowsV2A(tb testing.TB, col *Collection, r
 	}
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		tb.Fatalf("InsertBatch: %v", err)
+	}
+	if err := col.Flush(); err != nil {
+		tb.Fatalf("Flush: %v", err)
 	}
 }
 

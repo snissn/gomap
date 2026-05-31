@@ -45,7 +45,7 @@ func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
 	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "prepared", prepared.Diagnostics, len(events), matchedRows, true)
 }
 
-func TestTypedColumnQ2MutationVisibilityFailsClosedC1(t *testing.T) {
+func TestTypedColumnQ2MutationVisibilityLatestVisibleC3(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, typedColumnQ2ClickHouseSortKey1950(), batches)
 	defer closeFn()
@@ -59,19 +59,17 @@ func TestTypedColumnQ2MutationVisibilityFailsClosedC1(t *testing.T) {
 		t.Fatalf("insert-only diagnostics=%+v want optimized typed-column q2 path", insertOnly.Diagnostics)
 	}
 
-	_, modified, err := col.Update([]byte("a-post-shared"), func([]byte) ([]byte, bool, error) {
-		return []byte(`{"time_us":1800000000000040,"kind":"commit","operation":"create","collection":"app.bsky.feed.like","did":"did:shared"}`), true, nil
-	})
-	if err != nil || !modified {
-		t.Fatalf("Update modified=%t err=%v", modified, err)
-	}
+	updated := typedColumnQ2SortedBatchA1950()[0]
+	updated.Collection = "app.bsky.feed.like"
+	updated.TimeUS += 10
+	updateTypedColumnEvent1953(t, col, updated)
 
 	result, err := col.RunColumnPhysicalQuery(req)
-	if !errors.Is(err, ErrColumnQueryPlanUnsupported) || !strings.Contains(err.Error(), "typed-column") || !strings.Contains(err.Error(), "mutation visibility") {
-		t.Fatalf("mutation q2 err=%v diagnostics=%+v want explicit typed-column mutation-visibility failure", err, result.Diagnostics)
+	if err != nil {
+		t.Fatalf("mutation q2 RunColumnPhysicalQuery: %v diagnostics=%+v", err, result.Diagnostics)
 	}
-	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackMutationVisibilityUnsupported {
-		t.Fatalf("mutation q2 diagnostics=%+v want typed-column mutation-visibility unsupported route", result.Diagnostics)
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone || !result.Diagnostics.SortedGroupedDistinctUsed {
+		t.Fatalf("mutation q2 diagnostics=%+v want latest-visible sorted grouped-distinct path", result.Diagnostics)
 	}
 	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.VisibilityRows == 0 || result.Diagnostics.DocumentMaterializations != 0 || result.Diagnostics.RowMaterializations != 0 {
 		t.Fatalf("mutation q2 diagnostics=%+v want latest-visible physical state without document fallback", result.Diagnostics)

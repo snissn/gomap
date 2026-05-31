@@ -11,9 +11,11 @@ The #2044 readiness/admission table and docs-lint enforcement live in
 `typed-column-graph-search-admission.md`; the #2037 benchmark truth-matrix labels
 and command contract live in `typed-column-graph-search-benchmark-matrix.md`.
 This document does not implement runtime graph-search admission enforcement
-(#2044), reusable direct-view certifiers (#2046), type-specific prepared views
-(#2038/#2040/#2041), or the benchmark truth matrix (#2037). It defines the
-contract those issues must satisfy.
+(#2044), type-specific prepared views (#2038/#2040/#2041), graph-search routing,
+or the benchmark truth matrix (#2037). The reusable #2046 primitive certifier
+substrate lives in `TreeDB/internal/typeddecode` and remains a prerequisite, not
+row-admission evidence by itself. This document defines the contract those
+issues must satisfy.
 
 ## Scope and ownership
 
@@ -39,8 +41,11 @@ Normative boundaries:
   state listed below unless `typed-column-graph-search-admission.md` admits a
   weaker tier for one named role with tests, counters, allocation evidence,
   memory evidence, and benchmark evidence.
-- #2046 owns reusable certifier APIs. This spec names the role-specific facts
-  those certifiers must prove before prepared views are trusted.
+- #2046 owns reusable certifier APIs. The shared `typeddecode` substrate
+  certifies primitive owner/role/column identity, logical type and encoding,
+  row counts, endian, wrapper, offset/bounds, alignment, direct-view handle, and
+  lifetime conditions; this spec names the additional role-specific facts those
+  certifiers and callers must prove before prepared views are trusted.
 - #2037 owns the benchmark matrix. This spec defines the timing boundaries and
   counters that benchmark matrix must report.
 

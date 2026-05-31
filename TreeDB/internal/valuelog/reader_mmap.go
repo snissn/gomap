@@ -163,6 +163,9 @@ func (f *File) currentWritablePersistentMmapEnabled() bool {
 	if f == nil || !f.currentWritable.Load() {
 		return false
 	}
+	if f.manager != nil && f.manager.currentWritableMmap.Load() {
+		return true
+	}
 	if enableCurrentWritableMmap {
 		return true
 	}

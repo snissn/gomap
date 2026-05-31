@@ -38,9 +38,9 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 		return nil, err
 	}
 
-	lengths := make([]int, len(ids))
-	presence := make([]byte, (len(ids)+7)/8)
-	payload := make([]byte, 0, getManyPayloadCapacityHint(len(ids), s.limits))
+	lengths := getManyLengthsScratch(state, len(ids))
+	presence := getManyPresenceScratch(state, len(ids))
+	payload := getManyPayloadScratch(state, len(ids), s.limits)
 	for i, id := range ids {
 		start := len(payload)
 		doc, found, err := collection.GetInto(id, payload[start:start])
@@ -102,7 +102,12 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err != nil {
 		return nil, err
 	}
-	return iwire.AppendByteVectorPayload(body, lengths, payload)
+	body, err = iwire.AppendByteVectorPayload(body, lengths, payload)
+	if err != nil {
+		return nil, err
+	}
+	retainGetManyScratch(state, lengths, presence, payload)
+	return body, nil
 }
 
 func (s *Server) checkResponseSectionLen(name string, sectionLen int) error {
@@ -164,6 +169,68 @@ func getManyPayloadCapacityHint(count int, limits iwire.Limits) int {
 		return int(maxBytes)
 	}
 	return hint
+}
+
+const (
+	maxRetainedGetManyScratchItems = 4096
+	maxRetainedGetManyPayloadBytes = maxBufferedWriteFrameBody
+)
+
+func getManyLengthsScratch(state *connState, count int) []int {
+	if count <= 0 {
+		return nil
+	}
+	if state != nil && count <= cap(state.getManyLengths) {
+		out := state.getManyLengths[:count]
+		clear(out)
+		return out
+	}
+	return make([]int, count)
+}
+
+func getManyPresenceScratch(state *connState, idCount int) []byte {
+	count := (idCount + 7) / 8
+	if count <= 0 {
+		return nil
+	}
+	if state != nil && count <= cap(state.getManyPresence) {
+		out := state.getManyPresence[:count]
+		clear(out)
+		return out
+	}
+	return make([]byte, count)
+}
+
+func getManyPayloadScratch(state *connState, idCount int, limits iwire.Limits) []byte {
+	hint := getManyPayloadCapacityHint(idCount, limits)
+	if hint <= 0 {
+		return nil
+	}
+	if state != nil && hint <= cap(state.getManyPayload) {
+		return state.getManyPayload[:0]
+	}
+	return make([]byte, 0, hint)
+}
+
+func retainGetManyScratch(state *connState, lengths []int, presence []byte, payload []byte) {
+	if state == nil {
+		return
+	}
+	if cap(lengths) <= maxRetainedGetManyScratchItems {
+		state.getManyLengths = lengths[:0]
+	} else {
+		state.getManyLengths = nil
+	}
+	if cap(presence) <= (maxRetainedGetManyScratchItems+7)/8 {
+		state.getManyPresence = presence[:0]
+	} else {
+		state.getManyPresence = nil
+	}
+	if cap(payload) <= maxRetainedGetManyPayloadBytes {
+		state.getManyPayload = payload[:0]
+	} else {
+		state.getManyPayload = nil
+	}
 }
 
 func (s *Server) getManyDocuments(state *connState, sections []iwire.Section) ([][]byte, [][]byte, []bool, error) {

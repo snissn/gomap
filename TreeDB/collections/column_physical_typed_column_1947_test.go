@@ -298,7 +298,7 @@ func TestColumnPhysicalJSONBenchTypedColumnPartDecodeMismatchesFailClosed1947(t 
 	t.Run("typed_ref_row_count_mismatch", func(t *testing.T) {
 		staleTypedRef := typedRef
 		staleTypedRef.Rows++
-		_, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, staleTypedRef, physicalRef, raw)
+		_, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, staleTypedRef, physicalRef, raw, false)
 		if err == nil || !strings.Contains(err.Error(), "image/ref mismatch") {
 			t.Fatalf("decode row-count mismatch err=%v want image/ref mismatch", err)
 		}
@@ -306,13 +306,13 @@ func TestColumnPhysicalJSONBenchTypedColumnPartDecodeMismatchesFailClosed1947(t 
 	t.Run("physical_ref_row_count_mismatch", func(t *testing.T) {
 		stalePhysicalRef := physicalRef
 		stalePhysicalRef.Rows++
-		_, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, stalePhysicalRef, raw)
+		_, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, stalePhysicalRef, raw, false)
 		if err == nil || !strings.Contains(err.Error(), "do not match physical rows") {
 			t.Fatalf("decode physical row-count mismatch err=%v want physical row mismatch", err)
 		}
 	})
 	t.Run("schema_hash_mismatch", func(t *testing.T) {
-		_, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash+1, typedRef, physicalRef, raw)
+		_, err := decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash+1, typedRef, physicalRef, raw, false)
 		if err == nil || !strings.Contains(err.Error(), "schema_version") {
 			t.Fatalf("decode schema mismatch err=%v want schema_version mismatch", err)
 		}

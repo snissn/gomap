@@ -54,8 +54,13 @@ func (w *vlogDirtyOrderWriter) AppendFrame(dictID uint64, dict []byte, records [
 
 func (w *vlogDirtyOrderWriter) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
 }
-func (w *vlogDirtyOrderWriter) RotateTo(path string, fileID uint32) error { return nil }
-func (w *vlogDirtyOrderWriter) Size() int64                               { return w.size }
+func (w *vlogDirtyOrderWriter) RotateTo(path string, fileID uint32) error {
+	return w.RotateToWithSync(path, fileID, true)
+}
+func (w *vlogDirtyOrderWriter) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
+	return nil
+}
+func (w *vlogDirtyOrderWriter) Size() int64 { return w.size }
 func (w *vlogDirtyOrderWriter) Flush() error {
 	w.flushes.Add(1)
 	return nil

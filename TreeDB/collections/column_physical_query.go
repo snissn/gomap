@@ -284,9 +284,10 @@ func validateColumnPhysicalTopKRequest(req ColumnPhysicalQueryRequest) error {
 }
 
 // RunColumnPhysicalQuery executes an explicit serial physical column query over
-// the recovery-authoritative manifest. Insert-only manifests use the direct
-// scanner path; mutation-bearing manifests fall back to the M13C visibility
-// overlay before reducing.
+// the recovery-authoritative manifest. Insert-only manifests use direct physical
+// reducers. Supported dense typed-column mutation queries use latest-visible
+// typed-column reducers; unsupported mutation-bearing shapes fail closed or use
+// the legacy typed-row visibility overlay only where explicitly routed.
 func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	if err := validateColumnPhysicalQueryRequest(req); err != nil {
 		return ColumnPhysicalQueryResult{}, err
@@ -303,19 +304,19 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		if err != nil {
 			return ColumnPhysicalQueryResult{}, err
 		}
-		if columnPhysicalQueryHasPredicates(req) {
-			if columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg, req) {
-				view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
-				if closeView != nil {
-					defer closeView()
-				}
-				if err != nil {
-					return ColumnPhysicalQueryResult{}, err
-				}
-				if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
-					return result, err
-				}
+		if columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg, req) {
+			view, closeView, err := c.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
+			if closeView != nil {
+				defer closeView()
 			}
+			if err != nil {
+				return ColumnPhysicalQueryResult{}, err
+			}
+			if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
+				return result, err
+			}
+		}
+		if columnPhysicalQueryHasPredicates(req) {
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
 		return c.runColumnPhysicalQueryWithVisibility(cfg, req)
@@ -331,10 +332,10 @@ func (c *Collection) RunColumnPhysicalQuery(req ColumnPhysicalQueryRequest) (Col
 		if req.AggregateMetadataName != "" {
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: aggregate metadata physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
+		if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
+			return result, err
+		}
 		if columnPhysicalQueryHasPredicates(req) {
-			if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
-				return result, err
-			}
 			return ColumnPhysicalQueryResult{}, fmt.Errorf("%w: physical predicates require insert-only manifest", ErrColumnQueryPlanUnsupported)
 		}
 		return c.runColumnPhysicalQueryWithVisibility(view.Config, req)
@@ -367,7 +368,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 		}
 	}()
 	if view.MutationParts > 0 {
-		return nil, fmt.Errorf("%w: prepared physical column query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
+		return nil, fmt.Errorf("%w: prepared physical column query requires insert-only manifest until typed-column asset lifecycle/pinning is available", ErrColumnQueryPlanUnsupported)
 	}
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {

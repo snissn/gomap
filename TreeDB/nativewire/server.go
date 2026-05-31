@@ -104,6 +104,7 @@ type Server struct {
 	registry                      *iwire.Registry
 	collections                   *collections.CollectionManager
 	backend                       *backenddb.DB
+	catalogVersion                atomic.Uint64
 
 	closed              atomic.Bool
 	connMu              sync.Mutex
@@ -111,7 +112,7 @@ type Server struct {
 	conns               map[net.Conn]struct{}
 	listeners           map[net.Listener]struct{}
 	locals              map[*localEndpoint]struct{}
-	metadataMu          sync.Mutex
+	metadataMu          sync.RWMutex
 	metadataIdempotency map[string]metadataIdempotencyEntry
 	metadataIdemOrder   []string
 
@@ -148,13 +149,16 @@ type connState struct {
 	handleCols  map[CollectionHandle]*collections.Collection
 	collections map[string]*collections.Collection
 
-	readBody       []byte
-	writeBody      []byte
-	responseBody   []byte
-	sections       []iwire.Section
-	commandScratch iwire.CommandScratch
-	idsScratch     [][]byte
-	docsScratch    [][]byte
+	readBody        []byte
+	writeBody       []byte
+	responseBody    []byte
+	sections        []iwire.Section
+	commandScratch  iwire.CommandScratch
+	idsScratch      [][]byte
+	docsScratch     [][]byte
+	getManyLengths  []int
+	getManyPresence []byte
+	getManyPayload  []byte
 }
 
 func (s *connState) addCollectionHandle(name string, collection *collections.Collection, handleLimit, cacheLimit int) (CollectionHandle, error) {
@@ -322,7 +326,7 @@ func NewServer(opts ServerOptions) *Server {
 	if maxMetadataIdempotencyEntries == 0 {
 		maxMetadataIdempotencyEntries = defaultMaxMetadataIdempotencyEntries
 	}
-	return &Server{
+	server := &Server{
 		limits:                        limits,
 		maxInFlight:                   maxInFlight,
 		maxConnections:                maxConnections,
@@ -340,6 +344,8 @@ func NewServer(opts ServerOptions) *Server {
 		backend:                       opts.Backend,
 		cursorReaperDone:              make(chan struct{}),
 	}
+	server.catalogVersion.Store(initialCatalogVersion(opts.Backend))
+	return server
 }
 
 // Close closes all active server connections and rejects new ones.

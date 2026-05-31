@@ -18,6 +18,17 @@ func serveCollectionPipe(t *testing.T) (*Client, *collections.CollectionManager,
 
 func serveCollectionPipeWithOptions(t *testing.T, opts ServerOptions) (*Client, *collections.CollectionManager, *backenddb.DB) {
 	t.Helper()
+	client, _, mgr, db := serveCollectionPipeWithServerAndOptions(t, opts)
+	return client, mgr, db
+}
+
+func serveCollectionPipeWithServer(t *testing.T) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
+	return serveCollectionPipeWithServerAndOptions(t, ServerOptions{})
+}
+
+func serveCollectionPipeWithServerAndOptions(t *testing.T, opts ServerOptions) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -28,7 +39,7 @@ func serveCollectionPipeWithOptions(t *testing.T, opts ServerOptions) (*Client, 
 	server := NewServer(opts)
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() { _ = db.Close() })
-	return client, mgr, db
+	return client, server, mgr, db
 }
 
 func serveCommandWALCollectionPipe(t *testing.T) (*Client, *collections.CollectionManager, *backenddb.DB) {
@@ -218,7 +229,7 @@ func TestDecodeCollectionRefPreservesRawNameCompatibility(t *testing.T) {
 }
 
 func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
-	client, _, db := serveCollectionPipe(t)
+	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -235,7 +246,7 @@ func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 		t.Fatalf("OpenCollection by handle err=%v want invalid command", err)
 	}
 
-	version := catalogVersion(t, db)
+	version := clientCatalogVersion(t, client, ctx)
 	createIndexReq := append(replicatedTestGuard("create_index_handle", version),
 		collectionHandleRef(handle),
 		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
@@ -248,7 +259,7 @@ func TestMetadataHandleRefsWorkForIndexMetadata(t *testing.T) {
 		t.Fatalf("CreateIndex by handle: %v", err)
 	}
 
-	version = catalogVersion(t, db)
+	version = clientCatalogVersion(t, client, ctx)
 	dropIndexReq := append(replicatedTestGuard("drop_index_handle", version),
 		collectionHandleRef(handle),
 		iwire.Section{ID: iwire.SectionIndexName, Bytes: encodeIndexName("email")},
@@ -280,14 +291,14 @@ func TestMetadataUnsupportedCatalogCommandsReturnUnsupportedFeature(t *testing.T
 }
 
 func TestMetadataCatalogGuard(t *testing.T) {
-	client, _, db := serveCollectionPipe(t)
+	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
 
-	version := catalogVersion(t, db)
+	version := clientCatalogVersion(t, client, ctx)
 	createStaleReq := append(replicatedTestGuard("create_collection_stale", version+1),
 		iwire.Section{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: "users"})},
 	)
@@ -301,7 +312,7 @@ func TestMetadataCatalogGuard(t *testing.T) {
 		t.Fatalf("CreateCollection guarded: %v", err)
 	}
 
-	version = catalogVersion(t, db)
+	version = clientCatalogVersion(t, client, ctx)
 	indexStaleReq := append(replicatedTestGuard("create_index_stale", version+1),
 		collectionNameRef("users"),
 		iwire.Section{ID: iwire.SectionIndexDefinition, Bytes: encodeIndexDefinition(collections.IndexDefinition{
@@ -327,7 +338,7 @@ func TestMetadataCatalogGuard(t *testing.T) {
 }
 
 func TestMetadataClientAllowsCallerSuppliedGuards(t *testing.T) {
-	client, _, db := serveCollectionPipe(t)
+	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
@@ -335,7 +346,7 @@ func TestMetadataClientAllowsCallerSuppliedGuards(t *testing.T) {
 	}
 
 	key := []byte("stable-create-users")
-	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, key), catalogVersion(t, db))
+	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, key), clientCatalogVersion(t, client, ctx))
 	key[0] = 'X'
 	if _, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"}); err != nil {
 		t.Fatalf("CreateCollection guarded: %v", err)
@@ -350,8 +361,9 @@ func TestMetadataClientAllowsCallerSuppliedGuards(t *testing.T) {
 	}
 	rawVersion := sectionBytes(t, sections, iwire.SectionExpectedCatalogVersion)
 	version, n := binary.Uvarint(rawVersion)
-	if n != len(rawVersion) || version+1 != catalogVersion(t, db) {
-		t.Fatalf("expected version raw=%v decoded=%d n=%d current=%d", rawVersion, version, n, catalogVersion(t, db))
+	current := clientCatalogVersion(t, client, ctx)
+	if n != len(rawVersion) || version+1 != current {
+		t.Fatalf("expected version raw=%v decoded=%d n=%d current=%d", rawVersion, version, n, current)
 	}
 }
 
@@ -381,19 +393,19 @@ func TestMetadataClientRejectsInvalidCollectionNamesBeforeSend(t *testing.T) {
 }
 
 func TestMetadataIdempotencyReplayPrecedesCatalogGuard(t *testing.T) {
-	client, _, db := serveCollectionPipe(t)
+	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
 
-	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("create-users-once")), catalogVersion(t, db))
+	guardedCtx := WithExpectedCatalogVersion(WithIdempotencyKey(ctx, []byte("create-users-once")), clientCatalogVersion(t, client, ctx))
 	first, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"})
 	if err != nil {
 		t.Fatalf("CreateCollection first: %v", err)
 	}
-	if got, want := catalogVersion(t, db), guardedCatalogVersion(t, guardedCtx)+1; got != want {
+	if got, want := clientCatalogVersion(t, client, ctx), guardedCatalogVersion(t, guardedCtx)+1; got != want {
 		t.Fatalf("catalog version after first=%d want %d", got, want)
 	}
 	second, err := client.CreateCollection(guardedCtx, collections.CollectionMeta{Name: "users"})
@@ -466,6 +478,15 @@ func catalogVersion(t *testing.T, db *backenddb.DB) uint64 {
 	}
 	defer func() { _ = snap.Close() }()
 	return snap.State().CommitSeq
+}
+
+func clientCatalogVersion(t *testing.T, client *Client, ctx context.Context) uint64 {
+	t.Helper()
+	version, err := client.CurrentCatalogVersion(ctx)
+	if err != nil {
+		t.Fatalf("CurrentCatalogVersion: %v", err)
+	}
+	return version
 }
 
 func guardedCatalogVersion(t *testing.T, ctx context.Context) uint64 {

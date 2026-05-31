@@ -1003,6 +1003,7 @@ type columnTypedColumnTimeOrderTopKPart struct {
 	Rows           int
 	Granules       []typedcolumn.GranuleDescriptor
 	Marks          []typedcolumn.SortKeyMark
+	PhysicalRows   []int
 	ValueColumn    typedcolumn.ColumnPartColumn
 	Group          columnTypedColumnTimeOrderCodeColumn
 	Predicates     []columnTypedColumnTimeOrderPredicateColumn
@@ -1016,7 +1017,7 @@ type columnTypedColumnTimeOrderTopKPart struct {
 // typed-column section fast path. It keeps the encoded per-granule payloads and
 // validates time_us sort-key marks, then the query runner decodes group and
 // predicate code granules only until the Top-K time threshold is closed.
-func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, error) {
 	// Unlike the dense q1/q3/q5 decoders, the time-order runner keeps encoded
 	// granule payloads and decodes only the prefix needed by Top-K. The physical
 	// query prepare loop reuses its read scratch between parts, so take ownership
@@ -1098,6 +1099,15 @@ func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysi
 		})
 	}
 
+	var physicalRows []int
+	var primaryDiag columnTypedColumnPhysicalRowIndexDiagnostics
+	if includePhysicalRows {
+		physicalRows, primaryDiag, err = typedColumnPhysicalQueryPhysicalRows(adapterPart, nil, summary.Rows)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+	}
+
 	return columnTypedColumnPhysicalQueryPart{
 		Ref:                 typedRef,
 		PhysicalRef:         physical,
@@ -1106,12 +1116,15 @@ func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysi
 		Sections:            summary.Sections,
 		SectionBytes:        summary.SectionBytes,
 		GranulesConsidered:  len(adapterPart.Part.Descriptor.Granules),
+		GranulesDecoded:     primaryDiag.GranulesDecoded,
+		DecodedBlocks:       primaryDiag.BlocksDecoded,
 		SortKeyMarkChecks:   len(adapterPart.Part.Marks),
-		DecodedPayloadBytes: 0,
+		DecodedPayloadBytes: uint64(primaryDiag.BytesDecoded),
 		TimeOrderTopK: &columnTypedColumnTimeOrderTopKPart{
 			Rows:           summary.Rows,
 			Granules:       append([]typedcolumn.GranuleDescriptor(nil), adapterPart.Part.Descriptor.Granules...),
 			Marks:          append([]typedcolumn.SortKeyMark(nil), adapterPart.Part.Marks...),
+			PhysicalRows:   physicalRows,
 			ValueColumn:    valuePartColumn,
 			Group:          group,
 			Predicates:     predicates,

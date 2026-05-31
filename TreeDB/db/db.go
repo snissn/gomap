@@ -561,6 +561,10 @@ type ValueLogOptions struct {
 
 	// ReadIntegrity configures checksum verification on value-log reads.
 	ReadIntegrity IntegrityMode
+	// CurrentWritableMmap enables mmap-backed reads for current writable
+	// value-log segments. This reduces random-read ReadAt syscall pressure at
+	// the cost of a larger mapped virtual-address window.
+	CurrentWritableMmap bool
 
 	// MaxRetainedBytes emits a warning when retained value-log bytes exceed this
 	// threshold (0 disables warnings). Cached mode only.
@@ -1405,6 +1409,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, err
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
+	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
 	vm.SetDictLookup(opts.ValueLog.DictLookup)
 	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
 
@@ -2514,10 +2519,12 @@ func (db *DB) Prune() {
 	idx.acquire()
 	defer db.releaseIndex(idx)
 
-	min := idx.registry.MinPinnedSeq()
-	db.mu.RLock()
-	current := db.meta.CommitSeq
-	db.mu.RUnlock()
+	min := db.MinPinnedSnapshotCommitSeq()
+	state := db.state.Load()
+	if state == nil {
+		return
+	}
+	current := state.CommitSeq
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 

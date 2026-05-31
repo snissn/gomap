@@ -269,6 +269,72 @@ func TestCurrentWritableMmapTargetMapsAheadWithinLeafSegment(t *testing.T) {
 	}
 }
 
+func TestManagerCurrentWritableMmapOptionMapsNormalSegment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	prevCurrent := enableCurrentWritableMmap
+	prevLeaf := enableCurrentLeafWritableMmap
+	enableCurrentWritableMmap = false
+	enableCurrentLeafWritableMmap = false
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
+	defer func() {
+		enableCurrentWritableMmap = prevCurrent
+		enableCurrentLeafWritableMmap = prevLeaf
+	}()
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, 0, 1)
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	value := bytes.Repeat([]byte("n"), 1024)
+	ptr, err := w.Append(0, nil, 1, value)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	mgr.SetCurrentWritableMmapEnabled(true)
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment: %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("PromoteCurrentWritable: %v", err)
+	}
+
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("read mismatch")
+	}
+
+	f, err := mgr.fileFor(fileID)
+	if err != nil {
+		t.Fatalf("fileFor: %v", err)
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if gotLen := len(data); gotLen < 64<<10 {
+		t.Fatalf("mapped length=%d, want at least target", gotLen)
+	}
+	if fallbacks := f.mmapReadFallbackReadAt.Load(); fallbacks != 0 {
+		t.Fatalf("manager current writable mmap should avoid ReadAt fallback, got=%d", fallbacks)
+	}
+}
+
 func TestCurrentWritableMmapTargetSizeMapsAheadAtBoundary(t *testing.T) {
 	withCurrentWritableMmapTargetBytes(t, 64)
 

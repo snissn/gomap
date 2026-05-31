@@ -2,10 +2,14 @@ package db
 
 import (
 	"math"
+	"path/filepath"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
@@ -144,6 +148,44 @@ func TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire(t *testing.T)
 	db.snapshotAcquireRO[0].Store(0)
 	if got := db.MinPinnedSnapshotCommitSeq(); got != math.MaxUint64 {
 		t.Fatalf("MinPinnedSnapshotCommitSeq after acquire drain=%d, want MaxUint64", got)
+	}
+}
+
+func TestPruneSomeProtectsInFlightSnapshotAcquire(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), int64(page.PageSize*16))
+	if err != nil {
+		t.Fatalf("open pager: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatalf("alloc pages: %v", err)
+	}
+	idx := newIndexGen(1, p, freelist.New(p, 0), nil)
+	db := &DB{
+		keepRecent: 1,
+		snapPool:   NewSnapshotPool(),
+	}
+	db.idx.Store(idx)
+	db.state.Store(&DBState{CommitSeq: 10})
+	idx.graveyard.Add(1, []uint64{2})
+
+	db.snapshotAcquireRO[0].Store(1)
+	freed, err := db.pruneSome(make(chan struct{}), 10, 0)
+	if err != nil {
+		t.Fatalf("pruneSome with in-flight acquire: %v", err)
+	}
+	if freed != 0 {
+		t.Fatalf("pruneSome freed %d pages during in-flight acquire, want 0", freed)
+	}
+
+	db.snapshotAcquireRO[0].Store(0)
+	freed, err = db.pruneSome(make(chan struct{}), 10, 0)
+	if err != nil {
+		t.Fatalf("pruneSome after acquire drain: %v", err)
+	}
+	if freed != 1 {
+		t.Fatalf("pruneSome freed %d pages after acquire drain, want 1", freed)
 	}
 }
 
