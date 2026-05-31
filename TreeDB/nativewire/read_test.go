@@ -77,6 +77,16 @@ func TestReadCommandsParity(t *testing.T) {
 	if !bytes.Contains(handleDocs[0], []byte(`"Ada"`)) || len(handleDocs[1]) != 0 {
 		t.Fatalf("handle docs=%q", handleDocs)
 	}
+	missingDocs, missingPresent, err := client.GetManyHandle(ctx, handle, [][]byte{[]byte("missing")})
+	if err != nil {
+		t.Fatalf("GetManyHandle missing after present: %v", err)
+	}
+	if got, want := missingPresent, []bool{false}; !boolSlicesEqual(got, want) {
+		t.Fatalf("missing present after present=%v want %v", got, want)
+	}
+	if len(missingDocs) != 1 || len(missingDocs[0]) != 0 {
+		t.Fatalf("missing docs after present=%q", missingDocs)
+	}
 
 	ids, truncated, err := client.IndexLookup(ctx, "users", "email", "ada@example.com", CursorLimits{MaxItems: 10})
 	if err != nil {
