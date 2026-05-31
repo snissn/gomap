@@ -497,7 +497,7 @@ func TestTypedColumnPartSortKeyQueryValidationFailsClosed1948(t *testing.T) {
 	}
 	_, err = decodeTypedColumnPhysicalQueryPart(plan, normalized.SchemaHash,
 		columnManifestAssetRefForScan{Ref: ref, Rows: rowCount, SortKey: nil},
-		columnManifestAssetRefForScan{Rows: rowCount}, raw)
+		columnManifestAssetRefForScan{Rows: rowCount}, raw, false)
 	if err == nil || !strings.Contains(err.Error(), "sort metadata mismatch") {
 		t.Fatalf("decodeTypedColumnPhysicalQueryPart err=%v want sort metadata mismatch", err)
 	}
