@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -125,8 +127,14 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 	if err != nil {
 		return stats, err
 	}
+	cleanupPrepared := func(baseErr error) error {
+		if cleanupErr := cleanupColumnStoreCompactionPreparedAssets(c.db.ColumnAssetRootDir(), prepared.Assets); cleanupErr != nil {
+			return errors.Join(baseErr, cleanupErr)
+		}
+		return baseErr
+	}
 	if err := ctx.Err(); err != nil {
-		return stats, err
+		return stats, cleanupPrepared(err)
 	}
 	manifest, err := encodeColumnManifestForWrite(ColumnPublishManifestEncodeInput{
 		Collection:        state.meta.Name,
@@ -137,21 +145,21 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		Prepared:          prepared,
 	})
 	if err != nil {
-		return stats, fmt.Errorf("collections: column store compaction manifest encode failed: %w", err)
+		return stats, cleanupPrepared(fmt.Errorf("collections: column store compaction manifest encode failed: %w", err))
 	}
 	stats.NewGeneration = manifest.Identity.Generation
 	stats.ManifestRecordsAfter = len(manifest.Records)
 
 	updatedMeta, err := columnStoreCompactionUpdatedMeta(state.meta, manifest.Identity)
 	if err != nil {
-		return stats, err
+		return stats, cleanupPrepared(err)
 	}
 	policy, err := columnStoreCompactionManifestRootStoragePolicy(state)
 	if err != nil {
-		return stats, err
+		return stats, cleanupPrepared(err)
 	}
 	if err := ctx.Err(); err != nil {
-		return stats, err
+		return stats, cleanupPrepared(err)
 	}
 	identityRecord := encodeColumnManifestIdentityRecordArray(manifest.Identity)
 	deltaIter := columnStoreCompactionManifestDeltaIterator(identityRecord, state.records, manifest.Records)
@@ -171,6 +179,9 @@ func (c *Collection) columnStoreCompact(ctx context.Context, opts ColumnStoreCom
 		},
 	)
 	if err != nil {
+		if columnAssetRewritePublishFailedBeforeApply(err) {
+			return stats, cleanupPrepared(err)
+		}
 		return stats, err
 	}
 	if len(rootIDs) != 1 || rootIDs[0] == 0 {
@@ -354,6 +365,50 @@ func columnStoreCompactionManifestRootStoragePolicy(state columnStoreCompactionS
 		return backenddb.OrderedRootStorageDefault, nil
 	}
 	return backendRootStoragePolicy(state.cfg.ManifestRoot.StoragePolicy)
+}
+
+func cleanupColumnStoreCompactionPreparedAssets(rootDir string, assets []ColumnPreparedAsset) error {
+	type cleanupTarget struct {
+		path       string
+		truncateTo int64
+		remove     bool
+	}
+	targets := make(map[string]*cleanupTarget)
+	for _, asset := range assets {
+		ref := asset.Ref
+		if ref.Namespace == "" || ref.FileID == 0 {
+			continue
+		}
+		assetPath, err := columnAssetSegmentPath(rootDir, ref)
+		if err != nil {
+			return err
+		}
+		target := targets[assetPath]
+		if target == nil {
+			target = &cleanupTarget{path: assetPath, truncateTo: ref.Offset}
+			targets[assetPath] = target
+		}
+		if ref.FileID >= columnAssetDirectViewSegmentFileIDBase {
+			target.remove = true
+			continue
+		}
+		if ref.Offset < target.truncateTo {
+			target.truncateTo = ref.Offset
+		}
+	}
+	for _, target := range targets {
+		if target.remove {
+			if err := os.Remove(target.path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		} else if err := os.Truncate(target.path, target.truncateTo); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := syncColumnAssetDir(filepath.Dir(target.path)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Collection) columnStoreCompactionRootDescriptorPreflight(state columnStoreCompactionState, rootNames []string, baseRootIDs map[string]uint64) backenddb.OrderedRootGroupPreflight {
