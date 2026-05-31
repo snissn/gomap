@@ -7,10 +7,12 @@ It consumes the tier vocabulary and generic type matrix in
 `mmap_direct`, `heap_typed_view`, `scratch_decode`, `predicate_only`,
 `generic_only`, or `unsupported/experimental` tiers.
 
-This document does not implement graph-search admission enforcement (#2044),
-reusable direct-view certifiers (#2046), type-specific prepared views
-(#2038/#2040/#2041), or the benchmark truth matrix (#2037). It defines the
-contract those issues must satisfy.
+The #2044 readiness/admission table and docs-lint enforcement live in
+`typed-column-graph-search-admission.md`. This document does not implement
+runtime graph-search admission enforcement (#2044), reusable direct-view
+certifiers (#2046), type-specific prepared views (#2038/#2040/#2041), or the
+benchmark truth matrix (#2037). It defines the contract those issues must
+satisfy.
 
 ## Scope and ownership
 
@@ -33,8 +35,9 @@ Normative boundaries:
   certification per candidate or per edge.
 - Healthy current-format graph-search state requires the #2047 `mmap_direct`
   tier for every current per-candidate, per-edge, per-score, and result-side
-  state listed below unless #2044 admits a weaker tier for one named role with
-  tests, counters, allocation evidence, memory evidence, and benchmark evidence.
+  state listed below unless `typed-column-graph-search-admission.md` admits a
+  weaker tier for one named role with tests, counters, allocation evidence,
+  memory evidence, and benchmark evidence.
 - #2046 owns reusable certifier APIs. This spec names the role-specific facts
   those certifiers must prove before prepared views are trusted.
 - #2037 owns the benchmark matrix. This spec defines the timing boundaries and
@@ -120,7 +123,8 @@ following are true:
    persisted format, certification rules, prepared runtime shape, hot-loop
    boundary, fallback behavior, and graph-row prohibition for the role.
 3. #2044 enforcement recognizes the role and fails closed when the documented
-   optimized state is absent, stale, corrupt, or below the admitted tier.
+   optimized state is absent, stale, corrupt, or below the admitted tier; the
+   role/status row lives in `typed-column-graph-search-admission.md`.
 4. Counters exist for direct/prepared use, heap/scratch/generic fallback,
    graph-row fallback, validation failures, and stale/lifetime failures.
 5. Tests cover reopen, manifest/ref mismatch, corrupt payload, unsupported

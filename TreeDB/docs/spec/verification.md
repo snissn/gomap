@@ -826,9 +826,9 @@ Invariant:
   shape, hot-loop boundary, fallback/fail-closed rule, graph-row fallback
   prohibition, counters, tests, and benchmark evidence plan.
 - Future typed-column graph-search dependencies cannot enter the healthy
-  current-format path until their optimized runtime state is documented and
-  admitted, #2044 enforcement fails closed, counters/tests exist, and #2037-style
-  benchmarks prove no unaccepted material regression.
+  current-format path until their optimized runtime state is documented in the
+  #2044 admission table, runtime enforcement fails closed, counters/tests exist,
+  and #2037-style benchmarks prove no unaccepted material regression.
 
 Coverage:
 - Policy owner: `TreeDB/docs/spec/typed-column-graph-search-prepared-views.md`.
@@ -836,8 +836,35 @@ Coverage:
   current base-vector, adjacency, inverse-norm, row-ref, and document-ID rows,
   the future type admission gate, graph-row fallback prohibition, and owner-doc
   links.
-- Runtime enforcement remains owned by #2044; reusable certifier implementation
-  remains owned by #2046; benchmark matrix evidence remains owned by #2037.
+- The #2044 readiness/admission table is verified separately below; reusable
+  certifier implementation remains owned by #2046; benchmark matrix evidence
+  remains owned by #2037.
+
+## 12.8 Graph-Search Typed-Column Optimized-State Admission Gate
+
+Invariant:
+- Every current graph-search optimized-state role has a readiness/admission row
+  with status, #2047 tier, owner or manifest role, prepared runtime shape,
+  hot-loop boundary, fallback/fail-closed rule, counters/tests, and benchmark or
+  admission evidence fields.
+- Current healthy base-vector, HNSW adjacency, inverse-norm, row-ref, and
+  document-ID roles require `mmap_direct` unless the admission table explicitly
+  admits a weaker tier with benchmark, allocation, memory, and wall-time
+  evidence.
+- Vector-index state roles added to `column_vector_index_state_manifest.go`
+  cannot bypass the table; legacy graph-row and adjacency compatibility rows
+  must remain fallback-only or fail closed.
+
+Coverage:
+- Policy owner: `TreeDB/docs/spec/typed-column-graph-search-admission.md`.
+- Docs lint: `TreeDB/docs/graph_search_admission_test.go`:
+  - `TestDocs_GraphSearchTypedColumnAdmissionGate`
+  - `TestDocs_GraphSearchAdmissionCoversVectorIndexStateRoles`
+  - `TestDocs_GraphSearchAdmissionHealthyRowsRequireMmapDirect`
+  - `TestDocs_GraphSearchAdmissionLinkedFromOwners`
+- Runtime prepared-view implementation remains owned by #2038/#2040/#2041 and
+  combined routing remains owned by #2045; this section enforces the documented
+  admission gate and fail-closed readiness fields.
 
 ## 13. Native Wire Protocol
 
