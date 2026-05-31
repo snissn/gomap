@@ -282,6 +282,7 @@ func TestColumnGraphInvNormStateMissingFallbackAndCorruptFailClosed1992(t *testi
 			}
 			reader.invNormSource = nil
 		}
+		reader.preparedSearch = nil
 		reader.invNormStateUnavailable = true
 		var scratch columnVectorGraphNativeSearchScratch
 		_, _, err = reader.SearchCosine([]float32{1, 0, 0}, columnVectorGraphNativeSearchOptions{TopK: 2, EfSearch: 3}, &scratch)

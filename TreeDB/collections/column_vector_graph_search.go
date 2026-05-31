@@ -30,10 +30,19 @@ var (
 
 type columnVectorGraphScoreBatchMode uint8
 
+type columnVectorGraphNativeSearchStatsMode uint8
+
 const (
 	columnVectorGraphScoreBatchModeDefault columnVectorGraphScoreBatchMode = iota
 	columnVectorGraphScoreBatchModeScalar
 	columnVectorGraphScoreBatchModeIndexed
+)
+
+const (
+	columnVectorGraphNativeSearchStatsModeDefault columnVectorGraphNativeSearchStatsMode = iota
+	columnVectorGraphNativeSearchStatsModeMinimal
+	columnVectorGraphNativeSearchStatsModeFullDiagnostics
+	columnVectorGraphNativeSearchStatsModeBenchmarkDebug
 )
 
 var columnVectorGraphIndexedScoringDefaultEnabled = false
@@ -63,11 +72,40 @@ func (m columnVectorGraphScoreBatchMode) String() string {
 	}
 }
 
+func (m columnVectorGraphNativeSearchStatsMode) normalized() columnVectorGraphNativeSearchStatsMode {
+	switch m {
+	case columnVectorGraphNativeSearchStatsModeMinimal, columnVectorGraphNativeSearchStatsModeFullDiagnostics, columnVectorGraphNativeSearchStatsModeBenchmarkDebug:
+		return m
+	default:
+		return columnVectorGraphNativeSearchStatsModeFullDiagnostics
+	}
+}
+
+func (m columnVectorGraphNativeSearchStatsMode) minimal() bool {
+	return m.normalized() == columnVectorGraphNativeSearchStatsModeMinimal
+}
+
+func (m columnVectorGraphNativeSearchStatsMode) String() string {
+	switch m.normalized() {
+	case columnVectorGraphNativeSearchStatsModeMinimal:
+		return "minimal"
+	case columnVectorGraphNativeSearchStatsModeBenchmarkDebug:
+		return "benchmark_debug"
+	default:
+		return "full_diagnostics"
+	}
+}
+
 type columnVectorGraphNativeSearchOptions struct {
 	TopK     int
 	EfSearch int
 
 	ScoreBatchMode columnVectorGraphScoreBatchMode
+	// StatsMode selects how much graph-search telemetry is collected. The zero
+	// value preserves full diagnostics; minimal mode keeps production/admission
+	// counters while avoiding per-candidate source/outcome accounting on the
+	// healthy combined prepared path.
+	StatsMode columnVectorGraphNativeSearchStatsMode
 
 	// OmitResultMaterialization is an internal benchmark/profiling hook for the
 	// graph-only boundary. It preserves traversal/scoring/top-k work but skips
@@ -220,6 +258,144 @@ type columnVectorGraphNativeSearchStats struct {
 	ResultIDTypedBytesState              uint64
 	ResultIDGraphFallbacks               uint64
 	ResultIDStateValidationFailures      uint64
+	PreparedGraphSearchViews             uint64
+	GraphRowFallbacks                    uint64
+}
+
+type columnVectorGraphNativeSearchLoopCounters struct {
+	Candidates   uint64
+	Edges        uint64
+	VisitedEdges uint64
+}
+
+func (c *columnVectorGraphNativeSearchLoopCounters) recordEdge() {
+	if c == nil {
+		return
+	}
+	c.Edges++
+	c.VisitedEdges++
+}
+
+func (c *columnVectorGraphNativeSearchLoopCounters) recordCandidate() {
+	if c == nil {
+		return
+	}
+	c.Candidates++
+}
+
+func (c *columnVectorGraphNativeSearchLoopCounters) publish(stats *columnVectorGraphNativeSearchStats) {
+	if c == nil || stats == nil {
+		return
+	}
+	stats.Candidates += c.Candidates
+	stats.Edges += c.Edges
+	stats.VisitedEdges += c.VisitedEdges
+}
+
+type columnVectorGraphPreparedMinimalSearchCounters struct {
+	dims                  int
+	vectorIdentityMapping bool
+
+	ScoreBatches                        uint64
+	OrdinalsGrouped                     uint64
+	ScoreBatchCalls                     uint64
+	ScoreBatchCandidates                uint64
+	ScoreBatchMaxTileSize               uint64
+	ScoreBatchScalarFallbackCalls       uint64
+	PreparedScoreCalls                  uint64
+	AdjacencyBytesRead                  uint64
+	ExpansionFetches                    uint64
+	AdjacencyExpansions                 uint64
+	AdjacencyDirectViews                uint64
+	AdjacencyMmapDirectViews            uint64
+	AdjacencyPreparedCSRDirectViews     uint64
+	AdjacencyPreparedCSRMmapDirectViews uint64
+}
+
+func newColumnVectorGraphPreparedMinimalSearchCounters(view *columnVectorGraphPreparedSearchView) *columnVectorGraphPreparedMinimalSearchCounters {
+	if view == nil {
+		return nil
+	}
+	return &columnVectorGraphPreparedMinimalSearchCounters{dims: view.dims, vectorIdentityMapping: view.vectorIdentityMapping}
+}
+
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedScores(count int, scalarFallback bool) {
+	if c == nil || count <= 0 {
+		return
+	}
+	count64 := uint64(count)
+	c.ScoreBatches++
+	c.OrdinalsGrouped += count64
+	c.ScoreBatchCalls++
+	c.ScoreBatchCandidates += count64
+	if count64 > c.ScoreBatchMaxTileSize {
+		c.ScoreBatchMaxTileSize = count64
+	}
+	if scalarFallback {
+		c.ScoreBatchScalarFallbackCalls++
+	}
+	c.PreparedScoreCalls += count64
+}
+
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordPreparedAdjacency(adjacencyLen int) {
+	if c == nil {
+		return
+	}
+	c.ExpansionFetches++
+	c.AdjacencyExpansions++
+	c.AdjacencyBytesRead += uint64(adjacencyLen) * 4
+	c.AdjacencyDirectViews++
+	c.AdjacencyMmapDirectViews++
+	c.AdjacencyPreparedCSRDirectViews++
+	c.AdjacencyPreparedCSRMmapDirectViews++
+}
+
+func (c *columnVectorGraphPreparedMinimalSearchCounters) recordAdjacencyCounterSnapshot(counters columnVectorGraphAdjacencySourceCounterSnapshot) {
+	if c == nil {
+		return
+	}
+	c.AdjacencyBytesRead += counters.AdjacencyBytesRead
+	c.AdjacencyDirectViews += counters.AdjacencyDirectViews
+	c.AdjacencyMmapDirectViews += counters.AdjacencyMmapDirectViews
+	c.AdjacencyPreparedCSRDirectViews += counters.AdjacencyPreparedCSRDirectViews
+	c.AdjacencyPreparedCSRMmapDirectViews += counters.AdjacencyPreparedCSRMmapDirectViews
+}
+
+func (c *columnVectorGraphPreparedMinimalSearchCounters) publish(stats *columnVectorGraphNativeSearchStats) {
+	if c == nil || stats == nil {
+		return
+	}
+	stats.ScoreBatches += c.ScoreBatches
+	stats.OrdinalsGrouped += c.OrdinalsGrouped
+	stats.ScoreBatchCalls += c.ScoreBatchCalls
+	stats.ScoreBatchCandidates += c.ScoreBatchCandidates
+	if c.ScoreBatchMaxTileSize > stats.ScoreBatchMaxTileSize {
+		stats.ScoreBatchMaxTileSize = c.ScoreBatchMaxTileSize
+	}
+	stats.ScoreBatchScalarFallbackCalls += c.ScoreBatchScalarFallbackCalls
+	stats.PreparedScoreCalls += c.PreparedScoreCalls
+	stats.VisitedNodes += c.PreparedScoreCalls
+	stats.VectorBytesRead += c.PreparedScoreCalls * uint64(c.dims) * 4
+	stats.NormBytesRead += c.PreparedScoreCalls * 4
+	stats.AdjacencyBytesRead += c.AdjacencyBytesRead
+	stats.CandidateFetches += c.PreparedScoreCalls
+	stats.ExpansionFetches += c.ExpansionFetches
+	stats.AdjacencyExpansions += c.AdjacencyExpansions
+	stats.AdjacencyDirectViews += c.AdjacencyDirectViews
+	stats.AdjacencyMmapDirectViews += c.AdjacencyMmapDirectViews
+	stats.AdjacencyPreparedCSRDirectViews += c.AdjacencyPreparedCSRDirectViews
+	stats.AdjacencyPreparedCSRMmapDirectViews += c.AdjacencyPreparedCSRMmapDirectViews
+	stats.VectorDirectViews += c.PreparedScoreCalls
+	stats.VectorMmapDirectViews += c.PreparedScoreCalls
+	stats.VectorPreparedDirectViews += c.PreparedScoreCalls
+	if c.vectorIdentityMapping {
+		stats.VectorPreparedIdentityMappings += c.PreparedScoreCalls
+	} else {
+		stats.VectorPreparedRowRefMappings += c.PreparedScoreCalls
+	}
+	stats.NormDirectViews += c.PreparedScoreCalls
+	stats.NormMmapDirectViews += c.PreparedScoreCalls
+	stats.NormPreparedDirectViews += c.PreparedScoreCalls
 }
 
 // columnVectorGraphNativeSearchResult aliases buffers owned by the search
@@ -515,8 +691,15 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 		return nil, columnVectorGraphNativeSearchStats{}, fmt.Errorf("collections: column_graph %q native search scratch prepare: %w", r.def.Name, err)
 	}
 
+	statsMode := opts.StatsMode.normalized()
 	var plan *columnVectorGraphSearchPlan
+	var loopCounters columnVectorGraphNativeSearchLoopCounters
+	var preparedMinimalCounters *columnVectorGraphPreparedMinimalSearchCounters
 	defer func() {
+		loopCounters.publish(&stats)
+		if preparedMinimalCounters != nil {
+			preparedMinimalCounters.publish(&stats)
+		}
 		r.populateTypedColumnVectorSearchStats(&stats)
 		r.populateInvNormStateSearchStats(&stats)
 		r.populateRowRefStateSearchStats(&stats)
@@ -526,11 +709,21 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			plan.scoreSource.populateConstructionStats(&stats)
 		}
 	}()
-	plan, err = scratch.prepareSearchPlan(r)
+	plan, err = scratch.prepareSearchPlanForNativeSearch(r)
 	if err != nil {
 		return nil, stats, err
 	}
 	plan.scoreBatchMode = opts.ScoreBatchMode
+	if plan.preparedSearch != nil {
+		stats.PreparedGraphSearchViews = 1
+		if statsMode.minimal() {
+			preparedMinimalCounters = newColumnVectorGraphPreparedMinimalSearchCounters(plan.preparedSearch)
+		}
+	}
+	hotStats := &stats
+	if preparedMinimalCounters != nil {
+		hotStats = nil
+	}
 	var singleBlockView *columnVectorGraphBlockView
 	if plan.physicalReader != nil && len(plan.physicalReader.ranges) == 1 && (plan.scoreSource.vectorKind == columnVectorGraphSearchVectorSourceGraphRows || plan.scoreSource.normKind == columnVectorGraphSearchNormSourceGraphRows) {
 		singleBlockView, err = plan.blockViewForAssetOrdinal(0)
@@ -544,22 +737,23 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 	if !ok {
 		return scratch.results, stats, nil
 	}
-	maxLayer, err := r.maxAdjacencyLayer(plan, singleBlockView, entryOrdinal, scratch, &stats)
+	maxLayer, err := r.maxAdjacencyLayer(plan, singleBlockView, entryOrdinal, scratch, hotStats, preparedMinimalCounters)
 	if err != nil {
 		return nil, stats, err
 	}
 	for layer := maxLayer; layer > 0; layer-- {
-		entryOrdinal, err = r.greedyNearestAtLayer(plan, singleBlockView, query, queryInvNorm, entryOrdinal, layer, candidateRows, hasCandidateRows, scratch, &stats)
+		entryOrdinal, err = r.greedyNearestAtLayer(plan, singleBlockView, query, queryInvNorm, entryOrdinal, layer, candidateRows, hasCandidateRows, scratch, hotStats, &loopCounters, preparedMinimalCounters)
 		if err != nil {
 			return nil, stats, err
 		}
 	}
 	visitMarks[entryOrdinal] = visitEpoch
-	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, topK, scratch, &stats); err != nil {
+	if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, entryOrdinal, topK, scratch, hotStats, &loopCounters, preparedMinimalCounters); err != nil {
 		return nil, stats, err
 	}
 	nextSeed := 0
-	for stats.Candidates < uint64(efSearch) {
+	candidateLimit := uint64(efSearch)
+	for loopCounters.Candidates < candidateLimit {
 		candidate, ok := scratch.popFrontier()
 		if !ok {
 			seed, ok := columnVectorGraphNextCandidateSeed(nextSeed, rowCount, candidateRows, hasCandidateRows, visitMarks, visitEpoch)
@@ -568,18 +762,18 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 			}
 			nextSeed = seed + 1
 			visitMarks[seed] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, seed, topK, scratch, hotStats, &loopCounters, preparedMinimalCounters); err != nil {
 				return nil, stats, err
 			}
 			continue
 		}
-		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, &stats)
+		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, candidate.ordinal, 0, scratch, hotStats, preparedMinimalCounters)
 		if err != nil {
 			return nil, stats, err
 		}
 		if plan.scoreBatchMode.indexedEnabled() {
-			for i := 0; i < len(adjacency) && stats.Candidates < uint64(efSearch); {
-				remaining := int(uint64(efSearch) - stats.Candidates)
+			for i := 0; i < len(adjacency) && loopCounters.Candidates < candidateLimit; {
+				remaining := int(candidateLimit - loopCounters.Candidates)
 				if remaining <= 0 {
 					break
 				}
@@ -593,8 +787,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 					neighborIndex := i
 					neighbor := adjacency[i]
 					i++
-					stats.Edges++
-					stats.VisitedEdges++
+					loopCounters.recordEdge()
 					if uint64(neighbor) >= uint64(rowCount) {
 						return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, neighborIndex, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 					}
@@ -612,18 +805,17 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				if len(tile) == 0 {
 					continue
 				}
-				if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, &stats); err != nil {
+				if err := r.scoreAndPushFrontierVisitedTile(plan, singleBlockView, query, queryInvNorm, tile, topK, scratch, hotStats, &loopCounters, preparedMinimalCounters); err != nil {
 					return nil, stats, err
 				}
 			}
 			continue
 		}
 		for i, neighbor := range adjacency {
-			if stats.Candidates >= uint64(efSearch) {
+			if loopCounters.Candidates >= candidateLimit {
 				break
 			}
-			stats.Edges++
-			stats.VisitedEdges++
+			loopCounters.recordEdge()
 			if uint64(neighbor) >= uint64(rowCount) {
 				return nil, stats, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, candidate.ordinal, i, neighbor, rowCount, errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
@@ -636,7 +828,7 @@ func (r *columnVectorGraphPhysicalRowReader) SearchCosine(query []float32, opts 
 				continue
 			}
 			visitMarks[neighborOrdinal] = visitEpoch
-			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, topK, scratch, &stats); err != nil {
+			if err := r.scoreAndPushFrontierVisited(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, topK, scratch, hotStats, &loopCounters, preparedMinimalCounters); err != nil {
 				return nil, stats, err
 			}
 		}
@@ -702,7 +894,16 @@ func columnVectorGraphNextCandidateSeed(start int, rowCount int, selection typed
 	return 0, false
 }
 
-func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters) (int, error) {
+	if plan != nil && plan.preparedSearch != nil {
+		layer, counters, err := plan.preparedSearch.maxAdjacencyLayerForOrdinal(ordinal)
+		if preparedMinimal != nil {
+			preparedMinimal.recordAdjacencyCounterSnapshot(counters)
+		} else {
+			recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
+		}
+		return layer, err
+	}
 	if layer, _, counters, fallbackReason, ok := r.maxDirectAdjacencyLayerForOrdinal(ordinal); ok {
 		recordColumnVectorGraphAdjacencySourceCounterSnapshotStats(stats, counters)
 		return layer, nil
@@ -721,16 +922,19 @@ func (r *columnVectorGraphPhysicalRowReader) maxAdjacencyLayer(plan *columnVecto
 	return columnVectorGraphAdjacencyMaxLayer(adjacency)
 }
 
-func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, entryOrdinal int, layer int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (int, error) {
+func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, entryOrdinal int, layer int, candidateRows typedcolumn.RowSelection, hasCandidateRows bool, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, loopCounters *columnVectorGraphNativeSearchLoopCounters, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters) (int, error) {
 	best := entryOrdinal
 	bestScore, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, best, scratch, stats)
 	if err != nil {
 		return 0, err
 	}
+	if preparedMinimal != nil {
+		preparedMinimal.recordPreparedScores(1, true)
+	}
 	changed := true
 	for changed {
 		changed = false
-		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, best, layer, scratch, stats)
+		adjacency, err := r.expandCandidateAdjacencyLayer(plan, singleBlockView, best, layer, scratch, stats, preparedMinimal)
 		if err != nil {
 			return 0, err
 		}
@@ -738,10 +942,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 			scratch.scoreTileOrdinals = ensureColumnVectorGraphNativeIntScratch(scratch.scoreTileOrdinals, len(adjacency))
 			tile := scratch.scoreTileOrdinals[:0]
 			for i, neighbor := range adjacency {
-				if stats != nil {
-					stats.Edges++
-					stats.VisitedEdges++
-				}
+				loopCounters.recordEdge()
 				if uint64(neighbor) >= uint64(r.RowCount()) {
 					return 0, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, best, i, neighbor, r.RowCount(), errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 				}
@@ -755,9 +956,12 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 				continue
 			}
 			scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(tile))
-			scores, err := plan.scoreSource.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, tile, scratch.scoreTileScores, scratch, stats)
+			scores, err := r.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, tile, scratch.scoreTileScores, scratch, stats)
 			if err != nil {
 				return 0, err
+			}
+			if preparedMinimal != nil {
+				preparedMinimal.recordPreparedScores(len(tile), len(tile) <= 1)
 			}
 			for i, neighborOrdinal := range tile {
 				score := scores[i]
@@ -770,10 +974,7 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 			continue
 		}
 		for i, neighbor := range adjacency {
-			if stats != nil {
-				stats.Edges++
-				stats.VisitedEdges++
-			}
+			loopCounters.recordEdge()
 			if uint64(neighbor) >= uint64(r.RowCount()) {
 				return 0, fmt.Errorf("collections: column_graph %q ordinal=%d adjacency[%d]=%d outside row_count=%d: %w", r.def.Name, best, i, neighbor, r.RowCount(), errColumnVectorGraphAdjacencyOrdinalOutOfBounds)
 			}
@@ -784,6 +985,9 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 			score, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, neighborOrdinal, scratch, stats)
 			if err != nil {
 				return 0, err
+			}
+			if preparedMinimal != nil {
+				preparedMinimal.recordPreparedScores(1, true)
 			}
 			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
 				best = neighborOrdinal
@@ -796,6 +1000,9 @@ func (r *columnVectorGraphPhysicalRowReader) greedyNearestAtLayer(plan *columnVe
 }
 
 func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if plan != nil && plan.preparedSearch != nil {
+		return r.fetchTopPreparedSearchResults(plan.preparedSearch, plan, scratch, stats)
+	}
 	n := len(scratch.top)
 	scratch.resultOrder = scratch.resultOrder[:n]
 	scratch.resultOrdinals = scratch.resultOrdinals[:n]
@@ -837,6 +1044,7 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 				return err
 			}
 			stats.ResultIDGraphFallbacks++
+			stats.GraphRowFallbacks++
 		} else {
 			stats.ResultIDTypedBytesState++
 		}
@@ -873,6 +1081,63 @@ func (r *columnVectorGraphPhysicalRowReader) fetchTopSearchResults(plan *columnV
 	return nil
 }
 
+func (r *columnVectorGraphPhysicalRowReader) fetchTopPreparedSearchResults(view *columnVectorGraphPreparedSearchView, plan *columnVectorGraphSearchPlan, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+	if view == nil || !view.ready() {
+		return errors.New("collections: column_graph prepared result view is unavailable")
+	}
+	n := len(scratch.top)
+	scratch.resultOrder = scratch.resultOrder[:n]
+	scratch.resultOrdinals = scratch.resultOrdinals[:n]
+	for i := 0; i < n; i++ {
+		scratch.resultOrder[i] = i
+	}
+	sortColumnVectorGraphResultOrderByOrdinal(scratch.resultOrder, scratch.top)
+	for fetchPos, topIndex := range scratch.resultOrder {
+		scratch.resultOrdinals[fetchPos] = scratch.top[topIndex].ordinal
+	}
+	scratch.resultRowRefs = scratch.resultRowRefs[:n]
+	scratch.resultHasRefs = scratch.resultHasRefs[:n]
+	clear(scratch.resultRowRefs)
+	clear(scratch.resultHasRefs)
+	for resultPos, topIndex := range scratch.resultOrder {
+		ordinal := scratch.resultOrdinals[resultPos]
+		id, ok := view.documentIDForOrdinal(ordinal)
+		if !ok {
+			return fmt.Errorf("collections: column_graph %q prepared result-id unavailable for ordinal=%d", r.def.Name, ordinal)
+		}
+		if cap(scratch.idBuffers[topIndex]) < len(id) {
+			scratch.idBuffers[topIndex] = make([]byte, len(id))
+		} else if columnVectorGraphNativeScratchCapOversized(cap(scratch.idBuffers[topIndex]), len(id)) {
+			scratch.idBuffers[topIndex] = make([]byte, len(id))
+		}
+		scratch.idBuffers[topIndex] = scratch.idBuffers[topIndex][:len(id)]
+		copy(scratch.idBuffers[topIndex], id)
+		stats.ResultIDTypedBytesState++
+		if rowRef, ok := view.rowRefForOrdinal(ordinal); ok {
+			rowRef.DocumentID = scratch.idBuffers[topIndex]
+			scratch.resultRowRefs[topIndex] = rowRef
+			scratch.resultHasRefs[topIndex] = true
+			stats.RowRefStateResultRefs++
+		} else {
+			return fmt.Errorf("collections: column_graph %q prepared row-ref unavailable for ordinal=%d", r.def.Name, ordinal)
+		}
+	}
+	stats.ResultFetches += uint64(n)
+	stats.BlockViewHits = plan.hits
+	stats.BlockViewMisses = plan.misses
+	stats.BlockViewBuilds = plan.builds
+	for i, candidate := range scratch.top {
+		scratch.results = append(scratch.results, columnVectorGraphNativeSearchResult{
+			Ordinal:   candidate.ordinal,
+			ID:        scratch.idBuffers[i],
+			RowRef:    scratch.resultRowRefs[i],
+			HasRowRef: scratch.resultHasRefs[i],
+			Score:     candidate.score,
+		})
+	}
+	return nil
+}
+
 func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGraphSearchCandidate) {
 	if len(order) <= columnVectorGraphNativeResultOrderInsertionSortLimit {
 		for i := 1; i < len(order); i++ {
@@ -892,12 +1157,15 @@ func sortColumnVectorGraphResultOrderByOrdinal(order []int, top []columnVectorGr
 	})
 }
 
-func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, loopCounters *columnVectorGraphNativeSearchLoopCounters, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters) error {
 	score, err := r.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
 	if err != nil {
 		return err
 	}
-	stats.Candidates++
+	if preparedMinimal != nil {
+		preparedMinimal.recordPreparedScores(1, true)
+	}
+	loopCounters.recordCandidate()
 	candidate := columnVectorGraphSearchCandidate{
 		ordinal: ordinal,
 		score:   score,
@@ -907,17 +1175,20 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisited(plan *c
 	return nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) error {
+func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, topK int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, loopCounters *columnVectorGraphNativeSearchLoopCounters, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters) error {
 	if len(ordinals) == 0 {
 		return nil
 	}
 	scratch.scoreTileScores = ensureColumnVectorGraphNativeFloat64Scratch(scratch.scoreTileScores, len(ordinals))
-	scores, err := plan.scoreSource.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, ordinals, scratch.scoreTileScores, scratch, stats)
+	scores, err := r.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, ordinals, scratch.scoreTileScores, scratch, stats)
 	if err != nil {
 		return err
 	}
+	if preparedMinimal != nil {
+		preparedMinimal.recordPreparedScores(len(ordinals), len(ordinals) <= 1)
+	}
 	for i, ordinal := range ordinals {
-		stats.Candidates++
+		loopCounters.recordCandidate()
 		candidate := columnVectorGraphSearchCandidate{ordinal: ordinal, score: scores[i]}
 		scratch.insertTop(topK, candidate)
 		scratch.pushFrontier(candidate)
@@ -926,10 +1197,23 @@ func (r *columnVectorGraphPhysicalRowReader) scoreAndPushFrontierVisitedTile(pla
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinal(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
+	if plan != nil && plan.preparedSearch != nil {
+		return plan.preparedSearch.scoreOrdinal(plan, query, queryInvNorm, ordinal, stats)
+	}
 	if plan != nil && plan.scoreSource.reader != nil {
 		return plan.scoreSource.scoreOrdinal(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
 	}
 	return r.scoreOrdinalLegacy(plan, singleBlockView, query, queryInvNorm, ordinal, scratch, stats)
+}
+
+func (r *columnVectorGraphPhysicalRowReader) scoreOrdinals(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinals []int, dst []float64, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]float64, error) {
+	if plan != nil && plan.preparedSearch != nil {
+		return plan.preparedSearch.scoreOrdinals(plan, query, queryInvNorm, ordinals, dst, scratch, stats)
+	}
+	if plan == nil {
+		return nil, errNilColumnVectorGraphPhysicalRowReader
+	}
+	return plan.scoreSource.scoreOrdinals(plan, singleBlockView, query, queryInvNorm, ordinals, dst, scratch, stats)
 }
 
 func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, query []float32, queryInvNorm float32, ordinal int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) (float64, error) {
@@ -964,6 +1248,7 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 		scratch.scoreScratch.Float32Values = vectorScratch
 		if stats != nil {
 			stats.VectorScratchDecodes++
+			stats.GraphRowFallbacks++
 		}
 	}
 	invNorm, normOutcome, normFallbackReason, normOK := r.invNormForOrdinal(ordinal)
@@ -978,6 +1263,9 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 		}
 		var err error
 		invNorm, err = view.legacyInvNorm(rowIndex)
+		if stats != nil {
+			stats.GraphRowFallbacks++
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -997,7 +1285,24 @@ func (r *columnVectorGraphPhysicalRowReader) scoreOrdinalLegacy(plan *columnVect
 	return score, nil
 }
 
-func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats) ([]uint32, error) {
+func (r *columnVectorGraphPhysicalRowReader) expandCandidateAdjacencyLayer(plan *columnVectorGraphSearchPlan, singleBlockView *columnVectorGraphBlockView, ordinal int, layer int, scratch *columnVectorGraphNativeSearchScratch, stats *columnVectorGraphNativeSearchStats, preparedMinimal *columnVectorGraphPreparedMinimalSearchCounters) ([]uint32, error) {
+	if plan != nil && plan.preparedSearch != nil {
+		layerAdjacency, outcome, err := plan.preparedSearch.adjacencyLayerForOrdinal(ordinal, layer)
+		if err != nil {
+			return nil, err
+		}
+		if preparedMinimal != nil {
+			preparedMinimal.recordPreparedAdjacency(len(layerAdjacency))
+		} else if stats != nil {
+			stats.ExpansionFetches++
+			stats.AdjacencyExpansions++
+			recordColumnVectorGraphAdjacencySourceOutcomeStats(stats, len(layerAdjacency), outcome)
+			stats.BlockViewHits = plan.hits
+			stats.BlockViewMisses = plan.misses
+			stats.BlockViewBuilds = plan.builds
+		}
+		return layerAdjacency, nil
+	}
 	if layerAdjacency, outcome, fallbackReason, ok := r.directAdjacencyLayerForOrdinal(ordinal, layer); ok {
 		if stats != nil {
 			stats.ExpansionFetches++
@@ -1107,6 +1412,7 @@ func recordColumnVectorGraphAdjacencySourceStats(stats *columnVectorGraphNativeS
 	}
 	stats.AdjacencyBytesRead += uint64(adjacencyLen) * 4
 	stats.AdjacencyLegacyFallbacks++
+	stats.GraphRowFallbacks++
 	if adjacencyLen == 0 {
 		return
 	}

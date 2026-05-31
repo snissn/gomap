@@ -10,14 +10,13 @@ It consumes the tier vocabulary and generic type matrix in
 The #2044 readiness/admission table and docs-lint enforcement live in
 `typed-column-graph-search-admission.md`; the #2037 benchmark truth-matrix labels
 and command contract live in `typed-column-graph-search-benchmark-matrix.md`.
-This document does not implement runtime graph-search admission enforcement
-(#2044), remaining side-channel prepared views (#2041), graph-search routing, or
-the benchmark truth matrix (#2037). The reusable #2046 primitive certifier
-substrate lives in `TreeDB/internal/typeddecode` and remains a prerequisite, not
-row-admission evidence by itself. #2038 admits adjacency prepared CSR views and
-#2040 admits the base-vector and inverse-norm rows in
-`typed-column-graph-search-admission.md`; this document defines the broader
-contract those rows and remaining issues must satisfy.
+Runtime graph-search admission enforcement is owned by #2044 and benchmark
+truth-matrix reporting by #2037. The reusable #2046 primitive certifier substrate
+lives in `TreeDB/internal/typeddecode` and remains a prerequisite, not
+row-admission evidence by itself. #2038 admits adjacency prepared CSR views,
+#2040 admits base-vector and inverse-norm prepared scoring views, #2041 admits
+row-ref and document-ID side-channel views, and #2045 routes healthy
+current-format search through one combined prepared graph-search view.
 
 ## Scope and ownership
 
@@ -26,7 +25,7 @@ The healthy current-format graph-search path is:
 ```text
 authoritative typed-column and vector-index state assets
   -> open/searcher-time certification against one immutable manifest identity
-  -> prepared graph-search runtime views
+  -> one combined prepared graph-search runtime view (#2045)
   -> zero-allocation HNSW traversal/scoring/top-k loop
   -> optional final result-ID and document materialization
 ```
@@ -103,8 +102,10 @@ used as healthy-path evidence.
 
 For healthy current-format graph-search evidence, all graph-row fallback counters
 MUST be zero and graph-row physical assets MUST NOT be the source of vectors,
-adjacency, inverse norms, row refs, or returned IDs. Benchmark and status output
-must make this visible with counters such as:
+adjacency, inverse norms, row refs, or returned IDs. #2045 additionally reports
+`prepared_graph_search_views/search=1` and `graph_row_fallbacks/search=0` for the
+combined prepared route. Benchmark and status output must make this visible with
+counters such as:
 
 - `graph_rows=0` and no graph-row `physical_B/search` for search-only typed-column
   runs;
@@ -112,7 +113,8 @@ must make this visible with counters such as:
   `adjacency_source_fallbacks/search=0`;
 - `typed_column_vector_fallbacks/search=0`;
 - `row_ref_vector_source_legacy_graph_ids=0`;
-- `result_id_graph_fallbacks=0`.
+- `result_id_graph_fallbacks=0`;
+- `prepared_graph_search_views/search=1` and `graph_row_fallbacks/search=0`.
 
 Old fixtures may continue to exercise explicit compatibility readers, but those
 runs must be labeled legacy/compatibility, excluded from healthy current-format
