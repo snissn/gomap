@@ -24,7 +24,7 @@ const columnPhysicalQueryMaxPredicateValues = 64
 type ColumnPhysicalQueryPredicate struct {
 	Column string                           `json:"column"`
 	Kind   ColumnPhysicalQueryPredicateKind `json:"kind,omitempty"`
-	Value  string                           `json:"value,omitempty"`
+	Value  string                           `json:"value"`
 	Values []string                         `json:"values,omitempty"`
 }
 

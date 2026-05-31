@@ -1203,6 +1203,25 @@ func hashColumnStoreSchema(cfg *ColumnStoreConfig) uint64 {
 		writeHashString(&d, aggregate.Column)
 		writeHashString(&d, aggregate.GroupColumn)
 		writeHashString(&d, string(aggregate.Kind))
+		predicateCoverage, err := columnAggregateMetadataCanonicalPredicates(*cfg, aggregate.Predicates)
+		if err != nil {
+			predicateCoverage = aggregate.Predicates
+		}
+		writeHashUint64(&d, uint64(len(predicateCoverage)))
+		for _, predicate := range predicateCoverage {
+			kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
+			writeHashString(&d, predicate.Column)
+			writeHashString(&d, string(kind))
+			if kind == ColumnPhysicalQueryPredicateInList {
+				writeHashUint64(&d, uint64(len(predicate.Values)))
+				for _, value := range predicate.Values {
+					writeHashString(&d, value)
+				}
+			} else {
+				writeHashUint64(&d, 1)
+				writeHashString(&d, predicate.Value)
+			}
+		}
 	}
 	if cfg.AssetManager != nil {
 		writeHashString(&d, string(cfg.AssetManager.Kind))

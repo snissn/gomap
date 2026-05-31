@@ -29,14 +29,32 @@ func TestPredicateQualifiedAggregateMetadataBuildsPerTypedGranule1951(t *testing
 	if got, want := asset.Rows, len(rows); got != want {
 		t.Fatalf("asset rows=%d want %d", got, want)
 	}
-	if got, want := len(asset.Entries), 2; got != want {
-		t.Fatalf("asset entries=%+v want one summary per typed-column granule", asset.Entries)
+	granuleSize := typedColumnDefaultRowsPerGranule()
+	expectedGranules := (len(rows) + granuleSize - 1) / granuleSize
+	if got, want := len(asset.Entries), expectedGranules; got != want {
+		t.Fatalf("asset entries=%+v want %d summaries (one per typed-column granule)", asset.Entries, want)
 	}
-	if asset.Entries[0].Group != "did:one" || asset.Entries[0].Count != typedColumnDefaultRowsPerGranule() || asset.Entries[1].Group != "did:one" || asset.Entries[1].Count != 1 {
-		t.Fatalf("asset entries=%+v want split counts across typed-column granules", asset.Entries)
+	for idx, entry := range asset.Entries {
+		expectedCount := granuleSize
+		if idx == len(asset.Entries)-1 && len(rows)%granuleSize != 0 {
+			expectedCount = len(rows) % granuleSize
+		}
+		if entry.Group != "did:one" || entry.Count != expectedCount {
+			t.Fatalf("asset entries=%+v want entry %d count=%d", asset.Entries, idx, expectedCount)
+		}
 	}
-	if got, want := len(asset.Predicates), 3; got != want {
+	if got, want := len(asset.Predicates), len(cfg.AggregateMetadata[0].Predicates); got != want {
 		t.Fatalf("asset predicate coverage=%+v want %d predicates", asset.Predicates, want)
+	}
+}
+
+func TestPredicateQualifiedAggregateMetadataSchemaHashIncludesPredicates1951(t *testing.T) {
+	left := *predicateAggregateMetadataConfig1951()
+	right := *predicateAggregateMetadataConfig1951()
+	right.AggregateMetadata = cloneColumnAggregateMetadata(right.AggregateMetadata)
+	right.AggregateMetadata[0].Predicates[2].Value = "app.bsky.feed.like"
+	if leftHash, rightHash := hashColumnStoreSchema(&left), hashColumnStoreSchema(&right); leftHash == rightHash {
+		t.Fatalf("schema hash did not change when aggregate predicate coverage changed: %d", leftHash)
 	}
 }
 
@@ -392,8 +410,17 @@ func assertPredicateAggregateMetadataResult1951(tb testing.TB, label string, res
 	if diag.RowsScanned != 0 || diag.DecodedBlocks != 0 || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
 		tb.Fatalf("%s metadata path scanned/materialized data rows: %+v", label, diag)
 	}
-	if diag.PredicateCount != 3 || diag.PredicateLiterals != 3 || diag.RowsMatched != matchedRows || diag.ReduceRows != matchedRows {
-		tb.Fatalf("%s predicate/source-row diagnostics=%+v want matched/reduced=%d", label, diag, matchedRows)
+	expectedPredicates := columnPredicateAggregateMetadataPostPredicates1951()
+	expectedLiterals := 0
+	for _, predicate := range expectedPredicates {
+		if columnPhysicalQueryPredicateKindOrDefault(predicate.Kind) == ColumnPhysicalQueryPredicateInList {
+			expectedLiterals += len(predicate.Values)
+		} else {
+			expectedLiterals++
+		}
+	}
+	if diag.PredicateCount != len(expectedPredicates) || diag.PredicateLiterals != expectedLiterals || diag.RowsMatched != matchedRows || diag.ReduceRows != matchedRows {
+		tb.Fatalf("%s predicate/source-row diagnostics=%+v want predicates=%d literals=%d matched/reduced=%d", label, diag, len(expectedPredicates), expectedLiterals, matchedRows)
 	}
 	if diag.MetadataHits == 0 || diag.MetadataEntries == 0 || diag.DecodedMetadataBytes == 0 || diag.PhysicalBytesScanned <= 0 {
 		tb.Fatalf("%s metadata diagnostics=%+v want metadata entries/hits/bytes", label, diag)
