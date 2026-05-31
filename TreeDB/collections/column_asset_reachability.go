@@ -30,6 +30,7 @@ type ColumnAssetReachabilityOptions struct {
 	CandidateRefs                         []ColumnAssetRef
 	PendingRefs                           []ColumnAssetRef
 	PreparedRefs                          []ColumnAssetRef
+	PreparedQueryRefs                     []ColumnAssetRef
 	PinnedRefs                            []ColumnAssetRef
 }
 
@@ -66,6 +67,7 @@ const (
 	ColumnAssetReachabilitySourcePinnedSnapshot    ColumnAssetReachabilitySource = "pinned_snapshot"
 	ColumnAssetReachabilitySourcePendingPublish    ColumnAssetReachabilitySource = "pending_publish"
 	ColumnAssetReachabilitySourcePreparedAsset     ColumnAssetReachabilitySource = "prepared_asset"
+	ColumnAssetReachabilitySourcePreparedQuery     ColumnAssetReachabilitySource = "prepared_query"
 	ColumnAssetReachabilitySourceMappedResourcePin ColumnAssetReachabilitySource = "mappedresource_pin"
 	columnAssetReachabilitySourceUnknown           ColumnAssetReachabilitySource = "unknown"
 )
@@ -75,8 +77,14 @@ type ColumnAssetReachabilityPlan struct {
 	Complete                   bool
 	Collection                 string
 	Namespace                  string
+	ManifestRootName           string
+	ManifestRootID             uint64
+	SystemRoot                 uint64
+	PlanCommitSeq              uint64
 	ActiveManifestGeneration   uint64
+	ActiveManifestChecksum     uint64
 	RecoveryManifestGeneration uint64
+	RecoveryManifestChecksum   uint64
 	Sources                    ColumnAssetReachabilitySourceStats
 	Refs                       ColumnAssetReachabilityRefStats
 	Segments                   ColumnAssetReachabilitySegmentStats
@@ -99,6 +107,7 @@ type ColumnAssetReachabilitySourceStats struct {
 	CandidateRefs        int
 	PendingRefs          int
 	PreparedRefs         int
+	PreparedQueryRefs    int
 	PinnedRefs           int
 	MappedResourcePins   int
 }
@@ -177,6 +186,7 @@ const (
 	columnAssetReachabilitySourcePinnedSnapshotMask
 	columnAssetReachabilitySourcePendingPublishMask
 	columnAssetReachabilitySourcePreparedAssetMask
+	columnAssetReachabilitySourcePreparedQueryMask
 	columnAssetReachabilitySourceMappedResourcePinMask
 	columnAssetReachabilitySourceUnknownMask
 )
@@ -186,6 +196,7 @@ const columnAssetReachabilityProtectedSourceMask = columnAssetReachabilitySource
 	columnAssetReachabilitySourcePinnedSnapshotMask |
 	columnAssetReachabilitySourcePendingPublishMask |
 	columnAssetReachabilitySourcePreparedAssetMask |
+	columnAssetReachabilitySourcePreparedQueryMask |
 	columnAssetReachabilitySourceMappedResourcePinMask
 
 var columnAssetReachabilitySourceBits = [...]struct {
@@ -198,6 +209,7 @@ var columnAssetReachabilitySourceBits = [...]struct {
 	{ColumnAssetReachabilitySourcePinnedSnapshot, columnAssetReachabilitySourcePinnedSnapshotMask},
 	{ColumnAssetReachabilitySourcePendingPublish, columnAssetReachabilitySourcePendingPublishMask},
 	{ColumnAssetReachabilitySourcePreparedAsset, columnAssetReachabilitySourcePreparedAssetMask},
+	{ColumnAssetReachabilitySourcePreparedQuery, columnAssetReachabilitySourcePreparedQueryMask},
 	{ColumnAssetReachabilitySourceMappedResourcePin, columnAssetReachabilitySourceMappedResourcePinMask},
 	{columnAssetReachabilitySourceUnknown, columnAssetReachabilitySourceUnknownMask},
 }
@@ -376,6 +388,9 @@ func (c *Collection) planColumnAssetReachability(ctx context.Context, opts colum
 	if err := input.addRefs(ctx, opts.PreparedRefs, ColumnAssetReachabilitySourcePreparedAsset); err != nil {
 		return columnAssetReachabilityPlanIdentity(input), input.refs, err
 	}
+	if err := input.addRefs(ctx, opts.PreparedQueryRefs, ColumnAssetReachabilitySourcePreparedQuery); err != nil {
+		return columnAssetReachabilityPlanIdentity(input), input.refs, err
+	}
 	activePinnedRefs, mappedResourceStats := columnAssetReachabilityMappedResourcePins(input.rootDir, input.namespace)
 	input.mappedResources = mappedResourceStats
 	if mappedResourceStats.UnconvertiblePins != 0 {
@@ -402,18 +417,24 @@ func (c *Collection) columnAssetReachabilityOlderSnapshotPinned(planCommitSeq ui
 }
 
 func columnAssetReachabilityInputFromSnapshotView(view columnPhysicalScanSnapshotView, opts columnAssetReachabilityOptionsInternal) columnAssetReachabilityInput {
-	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PinnedRefs)
+	expectedRefs := len(view.AssetRefs) + len(view.TypedColumnPartRefs) + len(view.AggregateMetadata) + len(view.DictionaryCodes) + len(view.Int64Values) + len(view.GraphAssetRefs) + len(opts.CandidateRefs) + len(opts.PendingRefs) + len(opts.PreparedRefs) + len(opts.PreparedQueryRefs) + len(opts.PinnedRefs)
 	input := columnAssetReachabilityInput{
-		rootDir:        view.ColumnAssetRootDir,
-		collection:     view.CollectionName,
-		namespace:      view.AssetNamespace,
-		activeGen:      view.Diagnostics.ManifestGeneration,
-		recoveryGen:    view.Diagnostics.RecoveryManifestGeneration,
-		manifestRecs:   view.Diagnostics.ManifestRecords,
-		detailed:       opts.Detailed,
-		segmentDetails: opts.Detailed || opts.SegmentDetails,
-		omitSources:    opts.omitDetailedEntrySources,
-		omitSort:       opts.omitDetailedEntrySort,
+		rootDir:          view.ColumnAssetRootDir,
+		collection:       view.CollectionName,
+		namespace:        view.AssetNamespace,
+		manifestRootName: view.Diagnostics.ManifestRootName,
+		manifestRootID:   view.Diagnostics.ManifestRoot,
+		systemRoot:       view.SystemRoot,
+		planCommitSeq:    view.CommitSeq,
+		activeGen:        view.Diagnostics.ManifestGeneration,
+		activeChecksum:   view.Diagnostics.ActiveManifestChecksum,
+		recoveryGen:      view.Diagnostics.RecoveryManifestGeneration,
+		recoveryChecksum: view.Diagnostics.RecoveryManifestChecksum,
+		manifestRecs:     view.Diagnostics.ManifestRecords,
+		detailed:         opts.Detailed,
+		segmentDetails:   opts.Detailed || opts.SegmentDetails,
+		omitSources:      opts.omitDetailedEntrySources,
+		omitSort:         opts.omitDetailedEntrySort,
 	}
 	if expectedRefs > 0 {
 		input.refs = make(map[ColumnAssetRef]columnAssetReachabilitySourceMask, expectedRefs)
@@ -553,8 +574,14 @@ type columnAssetReachabilityInput struct {
 	rootDir            string
 	collection         string
 	namespace          string
+	manifestRootName   string
+	manifestRootID     uint64
+	systemRoot         uint64
+	planCommitSeq      uint64
 	activeGen          uint64
+	activeChecksum     uint64
 	recoveryGen        uint64
+	recoveryChecksum   uint64
 	manifestRecs       int
 	activeRefs         int
 	recoveryRefs       int
@@ -594,6 +621,8 @@ func (in *columnAssetReachabilityInput) incrementSourceCount(source ColumnAssetR
 		in.sourceCounts.PendingRefs++
 	case ColumnAssetReachabilitySourcePreparedAsset:
 		in.sourceCounts.PreparedRefs++
+	case ColumnAssetReachabilitySourcePreparedQuery:
+		in.sourceCounts.PreparedQueryRefs++
 	case ColumnAssetReachabilitySourcePinnedSnapshot:
 		in.sourceCounts.PinnedRefs++
 	case ColumnAssetReachabilitySourceMappedResourcePin:
@@ -874,8 +903,14 @@ func columnAssetReachabilityPlanIdentity(input columnAssetReachabilityInput) Col
 		Complete:                   false,
 		Collection:                 input.collection,
 		Namespace:                  input.namespace,
+		ManifestRootName:           input.manifestRootName,
+		ManifestRootID:             input.manifestRootID,
+		SystemRoot:                 input.systemRoot,
+		PlanCommitSeq:              input.planCommitSeq,
 		ActiveManifestGeneration:   input.activeGen,
+		ActiveManifestChecksum:     input.activeChecksum,
 		RecoveryManifestGeneration: input.recoveryGen,
+		RecoveryManifestChecksum:   input.recoveryChecksum,
 		MappedResources:            input.mappedResources,
 	}
 }
@@ -886,8 +921,14 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 		Complete:                   !input.pinStateIncomplete,
 		Collection:                 input.collection,
 		Namespace:                  input.namespace,
+		ManifestRootName:           input.manifestRootName,
+		ManifestRootID:             input.manifestRootID,
+		SystemRoot:                 input.systemRoot,
+		PlanCommitSeq:              input.planCommitSeq,
 		ActiveManifestGeneration:   input.activeGen,
+		ActiveManifestChecksum:     input.activeChecksum,
 		RecoveryManifestGeneration: input.recoveryGen,
+		RecoveryManifestChecksum:   input.recoveryChecksum,
 		Sources: ColumnAssetReachabilitySourceStats{
 			ManifestRoots:        1,
 			ManifestRecords:      input.manifestRecs,
@@ -896,6 +937,7 @@ func columnAssetReachabilityPlanWithStats(input columnAssetReachabilityInput) Co
 			CandidateRefs:        input.sourceCounts.CandidateRefs,
 			PendingRefs:          input.sourceCounts.PendingRefs,
 			PreparedRefs:         input.sourceCounts.PreparedRefs,
+			PreparedQueryRefs:    input.sourceCounts.PreparedQueryRefs,
 			PinnedRefs:           input.sourceCounts.PinnedRefs,
 			MappedResourcePins:   input.sourceCounts.MappedResourcePins,
 		},
